@@ -11,7 +11,6 @@ import copy
 import datetime
 import json
 import random
-import re
 import threading
 import time
 import urllib.parse
@@ -171,7 +170,13 @@ def untrack_objects_in_schemas(exe: Executor, schemas: set[Schema]) -> None:
     with exe.db.lock:
         exe.db.tables[:] = [t for t in exe.db.tables if t.schema not in schemas]
         exe.db.views[:] = [v for v in exe.db.views if v.schema not in schemas]
-        exe.db.indexes = {i for i in exe.db.indexes if i.schema not in schemas}
+        # NOTE: Removed in place, like the lists above. DropIndexAction
+        # discards from this set holding only the index's own lock, so
+        # rebinding the attribute would resurrect an index that was dropped
+        # between building the replacement set and assigning it.
+        exe.db.indexes.difference_update(
+            {i for i in exe.db.indexes if i.schema in schemas}
+        )
         # Close the executor connections of the ingestion sources being
         # untracked so they don't leak.
         connected_sources = (
@@ -303,11 +308,6 @@ class Action:
                     # removed a non-empty database, so this could not arise.
                     "unknown database",
                     "invalid database",  # CREATE SCHEMA wording for a vanished database
-                    # The Pg/MySql/SqlServer source executor connects to the
-                    # source's target database. A concurrent DropDatabaseCascade
-                    # leaves that session with no schema, so the unqualified
-                    # CREATE SECRET/CONNECTION it runs fails to resolve one.
-                    "no valid schema selected",
                     "the transaction's active cluster has been dropped",  # cluster was dropped
                     "was removed",  # dependency was removed, started with moving optimization off main thread, see database-issues#7285
                     "real-time source dropped before ingesting the upstream system's visible frontier",  # Expected, see https://buildkite.com/materialize/nightly/builds/9399#0191be17-1f4c-4321-9b51-edc4b08b71c5
@@ -379,20 +379,15 @@ class Action:
             )
         if exe.db.scenario == Scenario.Rename:
             result.extend(["unknown schema", "ambiguous reference to schema name"])
-        # Negative multiplicities arise two ways: `repeat_row` with a negative
-        # count (RepeatRow scenario), and `DELETE .. USING`, which lowers to a
-        # semijoin whose DistinctBy can leave a table with a net-negative row
-        # (database-issues#9308). DELETE .. USING runs in the DML and DDL
-        # complexities, and the corruption it leaves is then observed by any
-        # later reader of that table (e.g. a COPY of a SELECT over it), not just
-        # by the DELETE itself. So tolerate the whole class wherever either
-        # source is active. Read and DDLOnly run neither, so a negative-
-        # accumulation error there is still a genuine finding. The central list
-        # lives in `negative_accumulation_errors.py`.
-        if exe.db.scenario == Scenario.RepeatRow or exe.db.complexity in (
-            Complexity.DML,
-            Complexity.DDL,
-        ):
+        # RepeatRow is the only scenario that deliberately produces negative
+        # multiplicities (`repeat_row` with a negative count), and the
+        # corruption is observed by any later reader of the affected
+        # collection, not just by the statement that created it. So the whole
+        # class is tolerated for the entire scenario, not per action. Every
+        # other scenario stays strict, a negative-accumulation error there is a
+        # genuine finding. The central list lives in
+        # `negative_accumulation_errors.py`.
+        if exe.db.scenario == Scenario.RepeatRow:
             result.extend(NEGATIVE_ACCUMULATION_ERRORS)
         if materialize.parallel_workload.column.NAUGHTY_IDENTIFIERS:
             result.extend(["identifier length exceeds 255 bytes"])
@@ -456,6 +451,9 @@ class Action:
         # db_objects_without_views() can momentarily be empty if a CASCADE drop
         # removed the last table/source/MV, leaving only plain views. Fall back
         # to obj (only used for an optional join, which is skipped for views).
+        # The list is taken once and reused below: recomputing it can return an
+        # empty list even though it was non-empty here, and rng.choice on that
+        # raises IndexError, which fails the whole run.
         objs_without_views = exe.db.db_objects_without_views()
         obj2 = self.rng.choice(objs_without_views) if objs_without_views else obj
         obj_name = str(obj)
@@ -489,9 +487,9 @@ class Action:
 
         # Explicit LATERAL derived table correlated on a matching-type column.
         # Exercises correlated-subquery decorrelation.
-        if self.rng.random() < 0.08:
+        if objs_without_views and self.rng.random() < 0.08:
             outer_col = self.rng.choice(obj.columns)
-            inner_obj = self.rng.choice(exe.db.db_objects_without_views())
+            inner_obj = self.rng.choice(objs_without_views)
             match_cols = [
                 c
                 for c in inner_obj.columns
@@ -553,8 +551,8 @@ class Action:
             parts = []
             if self.rng.choice([True, False]):
                 parts.append(expression(Boolean, all_columns, self.rng, expr_kind))
-            if self.rng.random() < 0.2:
-                obj3 = self.rng.choice(exe.db.db_objects_without_views())
+            if objs_without_views and self.rng.random() < 0.2:
+                obj3 = self.rng.choice(objs_without_views)
                 sub_columns = [
                     c
                     for c in obj3.columns
@@ -596,10 +594,14 @@ class Action:
         if group_by:
             num_group = self.rng.randint(1, len(exprs))
             select_list = [expr for _, expr in exprs[:num_group]]
+            # Only the group keys come from exprs. The aggregates that follow
+            # get None, their result type is not exprs[i]'s.
+            select_types: list[type | None] = [dt for dt, _ in exprs[:num_group]]
             for i in range(self.rng.randint(1, 3)):
                 agg_column = self.rng.choice(all_columns)
                 fn = self.rng.choice(self.aggregate_fns(agg_column))
                 select_list.append(fn.format(agg_column))
+                select_types.append(None)
             group_clause = (
                 f" GROUP BY {', '.join(str(i + 1) for i in range(num_group))}"
             )
@@ -608,10 +610,13 @@ class Action:
                 group_clause += f" HAVING count(*) >= {self.rng.randint(0, 10)}"
             if self.rng.random() < 0.3:
                 group_clause += f" OPTIONS (AGGREGATE INPUT GROUP SIZE = {self.rng.randint(1, 1000)})"
-            arity = len(select_list)
             distinct_clause = ""
         else:
             select_list = [expr for _, expr in exprs] if exprs else ["*"]
+            # `*` expands to every column, so the output types are the columns'.
+            select_types = (
+                [dt for dt, _ in exprs] if exprs else [c.data_type for c in all_columns]
+            )
             group_clause = ""
             distinct_clause = ""
             distinct_on_expr = None
@@ -633,7 +638,7 @@ class Action:
                 select_list.append(
                     f"{window_fn.format(column1)} OVER (PARTITION BY {column2} ORDER BY {column3})"
                 )
-            arity = len(select_list) if exprs else len(all_columns)
+                select_types.append(None)
 
         expressions = ", ".join(select_list)
         query = f"SELECT {distinct_clause}{expressions} FROM {obj_name}"
@@ -653,11 +658,9 @@ class Action:
 
         # Ordinals keep ORDER BY valid across set operations. Map-typed
         # output columns are skipped, same as in the join column selection.
-        orderable = [
-            i + 1
-            for i in range(arity)
-            if not exprs or i >= len(exprs) or exprs[i][0] != TextTextMap
-        ]
+        # NOTE: select_types is indexed by output position, which is not
+        # exprs' indexing once a GROUP BY appends aggregates after the keys.
+        orderable = [i + 1 for i, dt in enumerate(select_types) if dt != TextTextMap]
         if distinct_on_expr is not None:
             order_by = [distinct_on_expr]
             for i in self.rng.sample(orderable, self.rng.randint(0, len(orderable))):
@@ -729,8 +732,9 @@ class FetchAction(Action):
         )
         # NOTE: A bounded SUBSCRIBE (UP TO) over an object whose as_of has
         # advanced to the end of time (e.g. a finished bounded load generator
-        # source) soft-panics the optimizer (CLU-169). See FINDINGS-BUGS.md. Left out
-        # until that is fixed. AS OF AT LEAST 0 below is safe (empty until).
+        # source) soft-panics the optimizer
+        # (https://linear.app/materializeinc/issue/CLU-169). Left out until that
+        # is fixed. AS OF AT LEAST 0 below is safe (empty until).
         query = "SUBSCRIBE "
         envelope_used = False
         if self.rng.choice([True, False]):
@@ -972,8 +976,8 @@ class CopyFromS3Action(Action):
                 "violates not-null constraint",
                 "timeout: error trying to connect",
                 # COPY TO CSV writes a large-year date that COPY FROM CSV then
-                # fails to parse back (SS-345). See FINDINGS-BUGS.md ("COPY FROM CSV
-                # cannot decode a large-year date written by COPY TO").
+                # fails to parse back.
+                # See https://linear.app/materializeinc/issue/SS-345
                 "expected_dur_like_tokens can only be called with",
                 # TODO: Reenable when SS-361 is fixed. A COPY FROM without a
                 # column list plans every target column as its DEFAULT, and
@@ -1438,18 +1442,9 @@ class ReadThenWriteCounterUpdateAction(Action):
 
 class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
-        errors = (
-            [
-                "canceling statement due to statement timeout",
-                # DELETE .. USING lowers to a semijoin whose DistinctBy can surface
-                # negative-accumulation errors for some generated WHERE clauses,
-                # outside the RepeatRow scenario. This is the known class tracked in
-                # database-issues#9308. See FINDINGS-BUGS.md ("DELETE .. USING
-                # surfaces a negative-accumulation error").
-            ]
-            + NEGATIVE_ACCUMULATION_ERRORS
-            + super().errors_to_ignore(exe)
-        )
+        errors = [
+            "canceling statement due to statement timeout",
+        ] + super().errors_to_ignore(exe)
         if exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
         return errors
@@ -1470,7 +1465,18 @@ class DeleteAction(Action):
             for t in exe.db.tables
             if t != table and (not t.temp or t in exe.temp_objects)
         ]
-        if using_tables and self.rng.random() < 0.2:
+        # TODO: Drop the RepeatRow gate once database-issues#9308 is fixed.
+        # DELETE .. USING lowers to a semijoin whose DistinctBy can leave the
+        # target table with a net-negative row, and every later reader of that
+        # table then surfaces the corruption. Tolerating that class outside
+        # RepeatRow would blind the DML and DDL complexities to every genuine
+        # negative-accumulation finding, so the variant only runs in the one
+        # scenario that already expects negative multiplicities.
+        if (
+            using_tables
+            and exe.db.scenario == Scenario.RepeatRow
+            and self.rng.random() < 0.2
+        ):
             using_table = self.rng.choice(using_tables)
             all_columns = list(table.columns) + list(using_table.columns)
             query += f" USING {using_table}"
@@ -1499,57 +1505,74 @@ class CommentAction(Action):
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
+        # Only the snapshot needs the global lock. Rendering the candidate
+        # names is O(tracked objects) with a naughtify each, and holding the
+        # lock across that serializes every other worker behind this action.
         with exe.db.lock:
-            candidates: list[tuple[str, str]] = []
-            for table in exe.db.tables:
-                candidates.append(("TABLE", str(table)))
-                candidates.append(("COLUMN", str(self.rng.choice(table.columns))))
-            for view in exe.db.views:
-                candidates.append(
-                    (
-                        "MATERIALIZED VIEW" if view.materialized else "VIEW",
-                        str(view),
-                    )
-                )
-            # Kafka and webhook source objects are readable directly, the
-            # others follow the source-table model: str(obj) names the table,
-            # the ingestion source is a separate catalog item.
-            for source in exe.db.kafka_sources + exe.db.webhook_sources:
-                candidates.append(("SOURCE", str(source)))
-            for source in (
+            tables = list(exe.db.tables)
+            views = list(exe.db.views)
+            direct_sources = exe.db.kafka_sources + exe.db.webhook_sources
+            table_sources = (
                 exe.db.postgres_sources
                 + exe.db.mysql_sources
                 + exe.db.sql_server_sources
-            ):
-                candidates.append(("TABLE", str(source)))
-                candidates.append(
-                    (
-                        "SOURCE",
-                        f"{source.schema}.{identifier(source.executor.source)}",
-                    )
+            )
+            loadgen_sources = list(exe.db.loadgen_sources)
+            sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks
+            indexes = list(exe.db.indexes)
+            schemas = list(exe.db.schemas)
+            dbs = list(exe.db.dbs)
+            clusters = list(exe.db.clusters)
+            roles = list(exe.db.roles)
+
+        candidates: list[tuple[str, str]] = []
+        for table in tables:
+            candidates.append(("TABLE", str(table)))
+            # Columns are only ever appended, never removed, so picking one
+            # off the snapshot cannot index past the end.
+            candidates.append(("COLUMN", str(self.rng.choice(table.columns))))
+        for view in views:
+            candidates.append(
+                (
+                    "MATERIALIZED VIEW" if view.materialized else "VIEW",
+                    str(view),
                 )
-            for source in exe.db.loadgen_sources:
-                candidates.append(("TABLE", str(source)))
-                candidates.append(
-                    ("SOURCE", f"{source.schema}.{identifier(source.source_name())}")
+            )
+        # Kafka and webhook source objects are readable directly, the
+        # others follow the source-table model: str(obj) names the table,
+        # the ingestion source is a separate catalog item.
+        for source in direct_sources:
+            candidates.append(("SOURCE", str(source)))
+        for source in table_sources:
+            candidates.append(("TABLE", str(source)))
+            candidates.append(
+                (
+                    "SOURCE",
+                    f"{source.schema}.{identifier(source.executor.source)}",
                 )
-            for sink in exe.db.kafka_sinks + exe.db.iceberg_sinks:
-                candidates.append(("SINK", str(sink)))
-            for index in exe.db.indexes:
-                candidates.append(("INDEX", str(index)))
-            for schema in exe.db.schemas:
-                candidates.append(("SCHEMA", str(schema)))
-            for db in exe.db.dbs:
-                candidates.append(("DATABASE", str(db)))
-            for cluster in exe.db.clusters:
-                candidates.append(("CLUSTER", str(cluster)))
-            for role in exe.db.roles:
-                candidates.append(("ROLE", str(role)))
-            candidates.append(("SECRET", "materialize.public.pgpass"))
-            candidates.append(("CONNECTION", "materialize.public.kafka_conn"))
-            if not candidates:
-                return False
-            kind, name = self.rng.choice(candidates)
+            )
+        for source in loadgen_sources:
+            candidates.append(("TABLE", str(source)))
+            candidates.append(
+                ("SOURCE", f"{source.schema}.{identifier(source.source_name())}")
+            )
+        for sink in sinks:
+            candidates.append(("SINK", str(sink)))
+        for index in indexes:
+            candidates.append(("INDEX", str(index)))
+        for schema in schemas:
+            candidates.append(("SCHEMA", str(schema)))
+        for db in dbs:
+            candidates.append(("DATABASE", str(db)))
+        for cluster in clusters:
+            candidates.append(("CLUSTER", str(cluster)))
+        for role in roles:
+            candidates.append(("ROLE", str(role)))
+        candidates.append(("SECRET", "materialize.public.pgpass"))
+        candidates.append(("CONNECTION", "materialize.public.kafka_conn"))
+        if not candidates:
+            return False
+        kind, name = self.rng.choice(candidates)
 
         comment = self.rng.choice([f"'{Text.random_value(self.rng)}'", "NULL"])
         query = f"COMMENT ON {kind} {name} IS {comment}"
@@ -1964,8 +1987,7 @@ class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewA
         # concurrently cascade-dropped (database-issues#9820), so bound it
         # with a statement timeout.
         exe.execute("SET statement_timeout = '60s'")
-        # Statement timeouts on this session are expected from here on, an
-        # in-flight statement can still hit the old timeout after RESET.
+        # A timeout is expected for as long as this one is configured.
         exe.statement_timeout_set = True
         try:
             exe.execute(
@@ -1975,7 +1997,13 @@ class ApplyReplacementMaterializedViewAction(ResolveReplacementMaterializedViewA
             try:
                 exe.execute("RESET statement_timeout")
             except QueryError:
+                # The timeout is still configured, so keep tolerating it.
                 pass
+            else:
+                # Back at the default timeout, so a timeout is a genuine
+                # finding again. The worker's statements are sequential,
+                # nothing from the window above can still be in flight.
+                exe.statement_timeout_set = False
         return True
 
 
@@ -1996,6 +2024,63 @@ class DropReplacementMaterializedViewAction(ResolveReplacementMaterializedViewAc
         # IF EXISTS, a concurrent apply or drop may have resolved it already.
         exe.execute(f"DROP MATERIALIZED VIEW IF EXISTS {replacement}")
         return True
+
+
+def plan_user_input_ids(plan: str) -> list[str]:
+    """User collection ids that an `EXPLAIN .. AS JSON` dataflow plan reads.
+
+    Raises on a plan whose shape it cannot read, rather than returning an empty
+    list. Constant folding legitimately produces plans that read nothing, so
+    "reads nothing" and "no longer understands the plan" are indistinguishable
+    to a caller, and treating the second as the first retires whatever the
+    caller checks without a trace. Only accepts dataflow (MIR) plans, a
+    fast-path peek plan carries its inputs elsewhere and is rejected.
+    """
+    try:
+        parsed = json.loads(plan)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"EXPLAIN .. AS JSON output does not parse ({e}): {plan}")
+
+    # `Constant` and `Get` are the only leaves of MirRelationExpr, so a plan
+    # with neither is not a shape this can read. Global ids outside `Get` are
+    # not inputs, e.g. the index an `access_strategy` picked.
+    get_ids: list = []
+    constant = False
+
+    def walk(node: object) -> None:
+        nonlocal constant
+        if isinstance(node, dict):
+            get = node.get("Get")
+            if isinstance(get, dict) and "id" in get:
+                get_ids.append(get["id"])
+            if "Constant" in node:
+                constant = True
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(parsed)
+    if not get_ids and not constant:
+        raise ValueError(f"plan has no Get or Constant leaf: {plan}")
+
+    user_ids = set()
+    for get_id in get_ids:
+        match get_id:
+            case {"Global": {"User": int(gid)}}:
+                user_ids.add(f"u{gid}")
+            case {"Local": _} | {
+                "Global": {"System": _}
+                | {"Transient": _}
+                | {"IntrospectionSourceIndex": _}
+            }:
+                # A Let binding or a non-user namespace, neither is a user
+                # collection with a frontier to check.
+                pass
+            case _:
+                raise ValueError(f"unrecognized Get id {get_id!r} in plan: {plan}")
+    return sorted(user_ids)
 
 
 class SealedCollectionCheckAction(Action):
@@ -2052,7 +2137,7 @@ class SealedCollectionCheckAction(Action):
                 # Dropped concurrently, so its shard is allowed to seal.
                 return True
             raise
-        input_ids = sorted({f"u{m}" for m in re.findall(r'"User"\s*:\s*(\d+)', plan)})
+        input_ids = plan_user_input_ids(plan)
         if not input_ids:
             return True
         id_list = ", ".join(f"'{i}'" for i in input_ids)
@@ -2516,7 +2601,8 @@ class BoundedStalenessReadAction(Action):
     """A read under `bounded staleness` isolation, a distinct timestamp-
     selection path that never blocks and returns 40001 when the freshness
     bound cannot be met. The isolation is set transiently around the read and
-    reset, since bounded staleness is read-only and would break writes."""
+    restored afterwards, since bounded staleness is read-only and would break
+    writes."""
 
     def applicable(self, exe: Executor) -> bool:
         return exe.db.flags.get("enable_bounded_staleness_isolation", "FALSE") == "TRUE"
@@ -2546,6 +2632,7 @@ class BoundedStalenessReadAction(Action):
 
     def run(self, exe: Executor) -> bool:
         bound = self.rng.choice(["1s", "5s", "30s"])
+        restore = f"SET TRANSACTION_ISOLATION TO '{exe.isolation}'"
         exe.execute(
             f"SET TRANSACTION_ISOLATION TO 'bounded staleness {bound}'",
             explainable=False,
@@ -2553,11 +2640,20 @@ class BoundedStalenessReadAction(Action):
         try:
             query = self.generate_select_query(exe, ExprKind.ALL)
             exe.execute(query, http=Http.NO, fetch=True)
-        finally:
-            exe.execute(
-                "SET TRANSACTION_ISOLATION TO 'strict serializable'",
-                explainable=False,
-            )
+        except QueryError:
+            # The restore must not raise on top of the read's error, e.g. on a
+            # killed or cancelled session, that error would replace the read's
+            # and hide the real failure. A leaked bounded staleness isolation
+            # makes later actions fail with errors only this action ignores, so
+            # a failed restore forces a reconnect rather than being swallowed.
+            try:
+                exe.execute(restore, explainable=False)
+            except QueryError:
+                exe.reconnect_next = True
+            raise
+        # No error is being masked here, so a failing restore is a genuine
+        # failure and propagates.
+        exe.execute(restore, explainable=False)
         return True
 
 
@@ -2591,9 +2687,21 @@ class ReadOnlyTransactionAction(Action):
             for _ in range(self.rng.randint(1, 3)):
                 query = self.generate_select_query(exe, ExprKind.ALL)
                 exe.execute(query, http=Http.NO, fetch=True)
-        finally:
-            end = "COMMIT" if self.rng.choice([True, False]) else "ROLLBACK"
-            exe.execute(end, http=Http.NO)
+        except QueryError:
+            # The transaction still has to end, an open one wedges every later
+            # action on this session, but ending it must not raise over the
+            # read's error and hide the real failure. COMMIT on a failed
+            # transaction is turned into a rollback by the coordinator anyway,
+            # so always rolling back here loses no coverage.
+            try:
+                exe.execute("ROLLBACK", http=Http.NO)
+            except QueryError:
+                exe.reconnect_next = True
+            raise
+        # Outside the error path both endings are worth exercising, and a
+        # failure of the end statement itself is a genuine one.
+        end = "COMMIT" if self.rng.choice([True, False]) else "ROLLBACK"
+        exe.execute(end, http=Http.NO)
         return True
 
 
@@ -2813,8 +2921,8 @@ class FlipFlagsAction(Action):
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
         # NOTE: enable_frontend_peek_sequencing is pinned off in
         # ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS (frontend-peek read-hold vs
-        # compaction race, SQL-520, see FINDINGS-BUGS.md), so it is not flipped
-        # here.
+        # compaction race, https://linear.app/materializeinc/issue/SQL-520), so
+        # it is not flipped here.
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -3849,7 +3957,13 @@ class GrantRoleAction(Action):
             if len(exe.db.roles) < 2:
                 return False
             role1, role2 = self.rng.sample(exe.db.roles, 2)
-        with role1.lock, role2.lock:
+            # Both locks are held across the round trip below, so take them in
+            # a fixed order. Two workers that sampled the same pair in
+            # opposite orders would otherwise deadlock. The GRANT operands
+            # keep the sampled order, so memberships still form in both
+            # directions, including the cycles this action provokes.
+            first, second = sorted((role1, role2), key=lambda role: role.role_id)
+        with first.lock, second.lock:
             if role1 not in exe.db.roles or role2 not in exe.db.roles:
                 return False
             exe.execute(f"GRANT {role1} TO {role2}", http=Http.RANDOM)
@@ -3867,7 +3981,11 @@ class RevokeRoleAction(Action):
             if len(exe.db.roles) < 2:
                 return False
             role1, role2 = self.rng.sample(exe.db.roles, 2)
-        with role1.lock, role2.lock:
+            # Fixed lock order, as in GrantRoleAction: the sampled order
+            # deadlocks two workers that picked the same pair, and the REVOKE
+            # operands have to stay in the sampled order.
+            first, second = sorted((role1, role2), key=lambda role: role.role_id)
+        with first.lock, second.lock:
             if role1 not in exe.db.roles or role2 not in exe.db.roles:
                 return False
             exe.execute(f"REVOKE {role1} FROM {role2}", http=Http.RANDOM)
@@ -3885,60 +4003,71 @@ class AlterOwnerAction(Action):
         return result
 
     def run(self, exe: Executor) -> bool:
+        # Only the snapshot needs the global lock, see CommentAction.
         with exe.db.lock:
             if not exe.db.roles:
                 return False
             role = self.rng.choice(exe.db.roles)
-            candidates: list[tuple[str, str]] = []
-            # Temp objects cannot change owner, they die with the session.
-            for table in exe.db.tables:
-                if not table.temp:
-                    candidates.append(("TABLE", str(table)))
-            for view in exe.db.views:
-                if not view.temp:
-                    candidates.append(
-                        (
-                            "MATERIALIZED VIEW" if view.materialized else "VIEW",
-                            str(view),
-                        )
-                    )
-            # Kafka and webhook source objects are readable directly, the
-            # others follow the source-table model: str(obj) names the table,
-            # the ingestion source is a separate catalog item.
-            for source in exe.db.kafka_sources + exe.db.webhook_sources:
-                candidates.append(("SOURCE", str(source)))
-            for source in (
+            tables = list(exe.db.tables)
+            views = list(exe.db.views)
+            direct_sources = exe.db.kafka_sources + exe.db.webhook_sources
+            table_sources = (
                 exe.db.postgres_sources
                 + exe.db.mysql_sources
                 + exe.db.sql_server_sources
-            ):
-                candidates.append(("TABLE", str(source)))
+            )
+            loadgen_sources = list(exe.db.loadgen_sources)
+            sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks
+            schemas = list(exe.db.schemas)
+            dbs = list(exe.db.dbs)
+            clusters = list(exe.db.clusters)
+
+        candidates: list[tuple[str, str]] = []
+        # Temp objects cannot change owner, they die with the session.
+        for table in tables:
+            if not table.temp:
+                candidates.append(("TABLE", str(table)))
+        for view in views:
+            if not view.temp:
                 candidates.append(
                     (
-                        "SOURCE",
-                        f"{source.schema}.{identifier(source.executor.source)}",
+                        "MATERIALIZED VIEW" if view.materialized else "VIEW",
+                        str(view),
                     )
                 )
-            for source in exe.db.loadgen_sources:
-                candidates.append(("TABLE", str(source)))
-                candidates.append(
-                    ("SOURCE", f"{source.schema}.{identifier(source.source_name())}")
+        # Kafka and webhook source objects are readable directly, the
+        # others follow the source-table model: str(obj) names the table,
+        # the ingestion source is a separate catalog item.
+        for source in direct_sources:
+            candidates.append(("SOURCE", str(source)))
+        for source in table_sources:
+            candidates.append(("TABLE", str(source)))
+            candidates.append(
+                (
+                    "SOURCE",
+                    f"{source.schema}.{identifier(source.executor.source)}",
                 )
-            for sink in exe.db.kafka_sinks + exe.db.iceberg_sinks:
-                candidates.append(("SINK", str(sink)))
-            for schema in exe.db.schemas:
-                candidates.append(("SCHEMA", str(schema)))
-            for db in exe.db.dbs:
-                candidates.append(("DATABASE", str(db)))
-            for cluster in exe.db.clusters:
-                candidates.append(("CLUSTER", str(cluster)))
-            candidates.append(("SECRET", "materialize.public.pgpass"))
-            # NOTE: No CONNECTION target. Changing a connection's owner emits a
-            # Connection(Altered) implication, which re-alters every dependent
-            # sink's export connection; that re-alter can fail with InvalidAlter
-            # and panic the coordinator (SQL-517). See FINDINGS-BUGS.md ("Coordinator
-            # panic re-altering a dependent sink's export connection").
-            kind, name = self.rng.choice(candidates)
+            )
+        for source in loadgen_sources:
+            candidates.append(("TABLE", str(source)))
+            candidates.append(
+                ("SOURCE", f"{source.schema}.{identifier(source.source_name())}")
+            )
+        for sink in sinks:
+            candidates.append(("SINK", str(sink)))
+        for schema in schemas:
+            candidates.append(("SCHEMA", str(schema)))
+        for db in dbs:
+            candidates.append(("DATABASE", str(db)))
+        for cluster in clusters:
+            candidates.append(("CLUSTER", str(cluster)))
+        candidates.append(("SECRET", "materialize.public.pgpass"))
+        # NOTE: No CONNECTION target. Changing a connection's owner emits a
+        # Connection(Altered) implication, which re-alters every dependent
+        # sink's export connection; that re-alter can fail with InvalidAlter
+        # and panic the coordinator.
+        # See https://linear.app/materializeinc/issue/SQL-517
+        kind, name = self.rng.choice(candidates)
         with role.lock:
             if role not in exe.db.roles:
                 return False
@@ -3984,8 +4113,7 @@ class AlterDefaultPrivilegesAction(Action):
                 return False
             role = self.rng.choice(exe.db.roles)
             for_clause = self.rng.choice(
-                ["FOR ALL ROLES"]
-                + [f"FOR ROLE {r}" for r in self.rng.sample(exe.db.roles, 1)]
+                ["FOR ALL ROLES"] + [f"FOR ROLE {r}" for r in exe.db.roles]
             )
             in_clause = ""
             if allows_in_schema and exe.db.schemas and self.rng.random() < 0.3:
@@ -4029,9 +4157,8 @@ class BroadPrivilegesAction(Action):
                 # NOTE: No CONNECTION target. GRANT/REVOKE on a connection emits
                 # a Connection(Altered) implication, which re-alters every
                 # dependent sink's export connection; that re-alter can fail
-                # with InvalidAlter and panic the coordinator (SQL-517). See
-                # FINDINGS-BUGS.md ("Coordinator panic re-altering a dependent
-                # sink's export connection").
+                # with InvalidAlter and panic the coordinator.
+                # See https://linear.app/materializeinc/issue/SQL-517
             ]
             if exe.db.schemas:
                 targets.append(
@@ -4124,55 +4251,65 @@ class ShowAction(Action):
             else:
                 query = self.rng.choice(other)
         else:
+            # Only the snapshot needs the global lock, see CommentAction.
             with exe.db.lock:
-                candidates: list[tuple[str, str]] = [
-                    ("CONNECTION", "materialize.public.kafka_conn"),
-                    ("CONNECTION", "materialize.public.csr_conn"),
-                ]
-                for table in exe.db.tables:
-                    candidates.append(("TABLE", str(table)))
-                for view in exe.db.views:
-                    candidates.append(
-                        (
-                            "MATERIALIZED VIEW" if view.materialized else "VIEW",
-                            str(view),
-                        )
-                    )
-                # Kafka and webhook sources are readable directly; the others
-                # follow the source-table model where str() is the table and
-                # the ingestion source is a separate catalog item.
-                for source in exe.db.kafka_sources + exe.db.webhook_sources:
-                    candidates.append(("SOURCE", str(source)))
-                for source in (
+                tables = list(exe.db.tables)
+                views = list(exe.db.views)
+                direct_sources = exe.db.kafka_sources + exe.db.webhook_sources
+                table_sources = (
                     exe.db.postgres_sources
                     + exe.db.mysql_sources
                     + exe.db.sql_server_sources
-                ):
-                    candidates.append(("TABLE", str(source)))
-                    candidates.append(
-                        (
-                            "SOURCE",
-                            f"{source.schema}.{identifier(source.executor.source)}",
-                        )
+                )
+                loadgen_sources = list(exe.db.loadgen_sources)
+                sinks = exe.db.kafka_sinks + exe.db.iceberg_sinks
+                indexes = list(exe.db.indexes)
+                clusters = list(exe.db.clusters)
+
+            candidates: list[tuple[str, str]] = [
+                ("CONNECTION", "materialize.public.kafka_conn"),
+                ("CONNECTION", "materialize.public.csr_conn"),
+            ]
+            for table in tables:
+                candidates.append(("TABLE", str(table)))
+            for view in views:
+                candidates.append(
+                    (
+                        "MATERIALIZED VIEW" if view.materialized else "VIEW",
+                        str(view),
                     )
-                for source in exe.db.loadgen_sources:
-                    candidates.append(("TABLE", str(source)))
-                    candidates.append(
-                        (
-                            "SOURCE",
-                            f"{source.schema}.{identifier(source.source_name())}",
-                        )
+                )
+            # Kafka and webhook sources are readable directly; the others
+            # follow the source-table model where str() is the table and
+            # the ingestion source is a separate catalog item.
+            for source in direct_sources:
+                candidates.append(("SOURCE", str(source)))
+            for source in table_sources:
+                candidates.append(("TABLE", str(source)))
+                candidates.append(
+                    (
+                        "SOURCE",
+                        f"{source.schema}.{identifier(source.executor.source)}",
                     )
-                for sink in exe.db.kafka_sinks + exe.db.iceberg_sinks:
-                    candidates.append(("SINK", str(sink)))
-                for index in exe.db.indexes:
-                    candidates.append(("INDEX", str(index)))
-                for cluster in exe.db.clusters:
-                    # SHOW CREATE CLUSTER is not supported for unmanaged
-                    # clusters.
-                    if cluster.managed:
-                        candidates.append(("CLUSTER", str(cluster)))
-                kind, name = self.rng.choice(candidates)
+                )
+            for source in loadgen_sources:
+                candidates.append(("TABLE", str(source)))
+                candidates.append(
+                    (
+                        "SOURCE",
+                        f"{source.schema}.{identifier(source.source_name())}",
+                    )
+                )
+            for sink in sinks:
+                candidates.append(("SINK", str(sink)))
+            for index in indexes:
+                candidates.append(("INDEX", str(index)))
+            for cluster in clusters:
+                # SHOW CREATE CLUSTER is not supported for unmanaged
+                # clusters.
+                if cluster.managed:
+                    candidates.append(("CLUSTER", str(cluster)))
+            kind, name = self.rng.choice(candidates)
             # SHOW REDACTED CREATE CLUSTER is not supported
             redacted = (
                 "REDACTED "
@@ -4208,16 +4345,25 @@ class SetSessionVariableAction(Action):
 
     def run(self, exe: Executor) -> bool:
         var = self.rng.choice(list(self.vars_with_values.keys()))
+        # statement_timeout is tracked on the executor, and only a statement on
+        # the worker's own session can change what that session times out at.
+        # Over the HTTP endpoint the SET or RESET lands on a one-shot session
+        # instead, leaving the tracking describing a value nothing has.
+        http = Http.NO if var == "statement_timeout" else Http.RANDOM
         if self.rng.random() < 0.2:
-            exe.execute(f"RESET {var}", http=Http.RANDOM)
+            exe.execute(f"RESET {var}", http=http)
+            if var == "statement_timeout":
+                # Back at the default timeout, so a timeout is a genuine
+                # finding again.
+                exe.statement_timeout_set = False
             return True
         value = self.rng.choice(self.vars_with_values[var])
         local = "LOCAL " if self.rng.random() < 0.1 else ""
-        exe.execute(f"SET {local}{var} = {value}", http=Http.RANDOM)
+        exe.execute(f"SET {local}{var} = {value}", http=http)
         if var == "statement_timeout":
-            # Statement timeouts on this session are expected from here on.
-            # Kept sticky even across RESET, an in-flight statement can still
-            # hit the old timeout.
+            # A timeout is expected for as long as this one is configured. A
+            # SET LOCAL keeps this set past the transaction that discards the
+            # value, which only errs towards tolerating more.
             exe.statement_timeout_set = True
         return True
 
@@ -4261,8 +4407,9 @@ class ValidateConnectionAction(Action):
             # A concurrent ALTER SECRET rotation (the workload only rotates a
             # secret to its own value) can transiently expose an empty secret,
             # so VALIDATE CONNECTION sends an empty password and Postgres
-            # rejects it (secret-rotation atomicity). See FINDINGS-BUGS.md.
-            # TODO: Remove when SS-347 is fixed.
+            # rejects it (secret-rotation atomicity).
+            # TODO: Remove when https://linear.app/materializeinc/issue/SS-347
+            # is fixed.
             "empty password returned by client",
         ] + super().errors_to_ignore(exe)
 
@@ -4437,6 +4584,10 @@ class ReconnectAction(Action):
                 exe.set_isolation("SERIALIZABLE")
                 cur.execute("SET auto_route_catalog_queries TO false")
                 conn.autocommit = exe.autocommit
+                # A statement_timeout set on the old session died with it, so
+                # timeouts are genuine findings again unless a role default
+                # carries one over.
+                exe.statement_timeout_set = False
                 try:
                     cur.execute("SELECT pg_backend_pid()")
                 except Exception as e:
@@ -5501,9 +5652,9 @@ class AlterClusterSetAction(Action):
         return True
 
     def _resize_replicas(self, cluster: Cluster, count: int) -> None:
-        # Managed cluster replicas are server-named (r1..rN). We keep the
-        # tracked list at the right length only so the replica-targeted-MV
-        # picker sees the right count.
+        # Managed cluster replicas are server-named (r1..rN), so the tracked
+        # list is rebuilt from scratch to match: the ids are what
+        # `ClusterReplica.name()` derives those names from.
         cluster.replicas = [
             ClusterReplica(i, cluster.size, cluster) for i in range(count)
         ]
@@ -5645,11 +5796,11 @@ class AlterNetworkPolicyAction(Action):
         with policy.lock:
             if policy not in exe.db.network_policies:
                 return False
-            policy.num_rules = self.rng.randint(1, 3)
             exe.execute(
                 f"ALTER NETWORK POLICY {policy} SET ({policy.rules_clause()})",
                 http=Http.RANDOM,
             )
+            policy.num_rules = self.rng.randint(1, 3)
         return True
 
 
@@ -5984,8 +6135,8 @@ read_action_list = ActionList(
         # coordinator when a referenced compute collection is concurrently
         # dropped. sequence_explain_pushdown -> acquire_read_holds().expect(
         # "missing compute collection") at read_policy.rs:389 (normal peeks and
-        # EXPLAIN ANALYZE handle the drop gracefully). See SQL-519 /
-        # FINDINGS-BUGS.md.
+        # EXPLAIN ANALYZE handle the drop gracefully).
+        # See https://linear.app/materializeinc/issue/SQL-519
         # (ExplainFilterPushdownAction, 5),
         # PREPARED BUT DISABLED (see class docstrings): enabling these now just
         # re-detects known-unfixed coordinator bugs rather than finding new ones.
@@ -6102,9 +6253,8 @@ ddl_action_list = ActionList(
         # TODO: Reenable once altering a connection that sinks or sources depend
         # on can no longer panic the coordinator. Re-altering a dependent sink's
         # export connection after the txn fails with InvalidAlter, which
-        # unwrap_or_terminate turns into a panic (SQL-517). See FINDINGS-BUGS.md
-        # ("Coordinator panic re-altering a dependent sink's export
-        # connection").
+        # unwrap_or_terminate turns into a panic.
+        # See https://linear.app/materializeinc/issue/SQL-517
         # (AlterConnectionAction, 2),
         (AlterSecretAction, 2),
         (ReconnectAction, 1),
@@ -6115,8 +6265,8 @@ ddl_action_list = ActionList(
         # CREATE SECRET) whose target database is dropped between staging and
         # finish hits resolve_full_name -> get_database (panicking OrdMap index)
         # in catalog transact_op. Only CASCADE can drop a non-empty database,
-        # so this is the precise trigger (SQL-518). See FINDINGS-BUGS.md ("Coordinator
-        # panic resolving a name whose database was concurrently dropped").
+        # so this is the precise trigger.
+        # See https://linear.app/materializeinc/issue/SQL-518
         # (DropDatabaseCascadeAction, 1),
         (CreateSchemaAction, 1),
         (DropSchemaAction, 1),
@@ -6127,8 +6277,8 @@ ddl_action_list = ActionList(
         # TODO: Reenable once ALTER NETWORK POLICY resolves quoted (e.g.
         # hyphenated) names. It looks the policy up by its quoted display form,
         # so it fails with "unknown network policy" for any name that requires
-        # quoting, even though CREATE and DROP work (CLO-143). See FINDINGS-BUGS.md
-        # ("ALTER NETWORK POLICY cannot resolve a quoted (hyphenated) name").
+        # quoting, even though CREATE and DROP work.
+        # See https://linear.app/materializeinc/issue/CLO-143
         # (AlterNetworkPolicyAction, 1),
         (DropNetworkPolicyAction, 1),
         (RenameSchemaAction, 10),
@@ -6148,8 +6298,8 @@ ddl_action_list = ActionList(
         (SystemCatalogReadAction, 4),
         (ExplainAnalyzeAction, 4),
         # TODO: Reenable with EXPLAIN FILTER PUSHDOWN's coordinator panic on a
-        # concurrently-dropped compute collection (read_policy.rs:389,
-        # SQL-519). See FINDINGS-BUGS.md.
+        # concurrently-dropped compute collection (read_policy.rs:389).
+        # See https://linear.app/materializeinc/issue/SQL-519
         # (ExplainFilterPushdownAction, 2),
         (FlipFlagsAction, 2),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.

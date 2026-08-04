@@ -61,13 +61,7 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 50
 MAX_INCLUDE_HEADERS = 5
-# Kept small on purpose. Views can nest (a view's inputs may themselves be
-# views), so a peek flattens into a deep join whose intermediate row count
-# scales as MAX_ROWS ** join_depth. On the 24 GiB CI agent this let a single
-# quickstart clusterd balloon past the cgroup and get OOM-killed (SIGKILL). A
-# stress test that hunts panics and unexpected errors cares about query shapes,
-# not data volume, so a small bound keeps coverage while capping the blow-up.
-MAX_ROWS = 10
+MAX_ROWS = 500
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
 MAX_DBS = 50
@@ -1252,6 +1246,12 @@ class ClusterReplica:
         self.lock = threading.Lock()
 
     def name(self) -> str:
+        # A managed cluster's replicas are named by the controller as r1..rN,
+        # never by us, so neither the rename counter nor naughtify applies.
+        # Rendering our own name there would make every reference to the
+        # replica, e.g. a replica-targeted materialized view, fail to resolve.
+        if self.cluster.managed:
+            return f"r{self.replica_id+1}"
         if self.rename:
             return naughtify(f"r-{self.replica_id+1}-{self.rename}")
         return naughtify(f"r-{self.replica_id+1}")
@@ -1323,6 +1323,7 @@ class Type:
     schema: Schema
     kind: str
     lock: threading.Lock
+    rng: random.Random
 
     def __init__(self, type_id: int, schema: Schema, rng: random.Random):
         self.type_id = type_id
@@ -1593,8 +1594,9 @@ class Database:
     ]:
         """Objects usable as a sink's input (base object or ALTER SINK SET
         FROM target). Load generator source tables are excluded: an
-        ALTER SINK .. SET FROM one can trigger the SS-344 sink stall (see
-        FINDINGS-BUGS.md), which is worse for a continuously-producing input."""
+        ALTER SINK .. SET FROM one can trigger the sink stall of
+        https://linear.app/materializeinc/issue/SS-344, which is worse for a
+        continuously-producing input."""
         return [
             obj
             for obj in self.db_objects_without_views()

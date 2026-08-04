@@ -88,7 +88,11 @@ class Column:
         return result
 
 
-class WebhookColumn(Column):
+class SourceColumn(Column):
+    """Column of a source, taking its name from the upstream schema instead of
+    generating one. The per-source subclasses only exist to keep the column
+    lists of the different source kinds distinct in type annotations."""
+
     def __init__(
         self,
         name: str,
@@ -105,86 +109,25 @@ class WebhookColumn(Column):
         return identifier(self.raw_name) if in_query else self.raw_name
 
 
-class KafkaColumn(Column):
-    def __init__(
-        self,
-        name: str,
-        data_type: type[DataType],
-        nullable: bool,
-        db_object: "DBObject",
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
+class WebhookColumn(SourceColumn):
+    pass
 
 
-class LoadGeneratorColumn(Column):
-    def __init__(
-        self,
-        name: str,
-        data_type: type[DataType],
-        nullable: bool,
-        db_object: "DBObject",
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
+class KafkaColumn(SourceColumn):
+    pass
 
 
-class MySqlColumn(Column):
-    def __init__(
-        self,
-        name: str,
-        data_type: type[DataType],
-        nullable: bool,
-        db_object: "DBObject",
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
+class LoadGeneratorColumn(SourceColumn):
+    pass
 
 
-class PostgresColumn(Column):
-    def __init__(
-        self,
-        name: str,
-        data_type: type[DataType],
-        nullable: bool,
-        db_object: "DBObject",
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
-
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
+class MySqlColumn(SourceColumn):
+    pass
 
 
-class SqlServerColumn(Column):
-    def __init__(
-        self,
-        name: str,
-        data_type: type[DataType],
-        nullable: bool,
-        db_object: "DBObject",
-    ):
-        self.raw_name = name
-        self.data_type = data_type
-        self.nullable = nullable
-        self.db_object = db_object
+class PostgresColumn(SourceColumn):
+    pass
 
-    def name(self, in_query: bool = False) -> str:
-        return identifier(self.raw_name) if in_query else self.raw_name
+
+class SqlServerColumn(SourceColumn):
+    pass

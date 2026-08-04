@@ -9,6 +9,7 @@
 
 import argparse
 import datetime
+import faulthandler
 import gc
 import os
 import random
@@ -28,6 +29,10 @@ from materialize.parallel_workload.action import (
     BackupRestoreAction,
     CancelAction,
     CreateReplacementMaterializedViewAction,
+    DropClusterAction,
+    DropDatabaseAction,
+    DropRoleAction,
+    DropSchemaAction,
     ExplainAnalyzeAction,
     KillAction,
     SealedCollectionCheckAction,
@@ -413,11 +418,24 @@ def run(
         if all([not thread.is_alive() for thread in threads]):
             break
     else:
-        for worker, thread in zip(workers, threads):
-            if thread.is_alive():
-                print(
-                    f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
-                )
+        alive = [(w, t) for w, t in zip(workers, threads) if t.is_alive()]
+        for worker, thread in alive:
+            if worker.exe is None:
+                # Still in the initial connect retry loop.
+                print(f"{thread.name} still connecting")
+                continue
+            print(
+                f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
+            )
+        # Workers are daemon threads, so a wedged one cannot keep the process
+        # alive and has to be caught here or it silently costs the run its
+        # remaining workload. A worker waiting on the server is a server-side
+        # hang (DB-118) and is tolerated. One that is not waiting on the server
+        # is stuck in the workload's own code, e.g. deadlocked on two object
+        # locks taken in opposite orders, which no timeout ever clears. Nothing
+        # legitimate pauses without a round trip for the 300s above, the longest
+        # such pause is BackupRestoreAction's 240s sleep.
+        wedged = [t.name for w, t in alive if w.exe.last_status != "running"]
         merge_num_queries(num_queries, workers)
         print_stats(num_queries, workers, num_threads, scenario)
 
@@ -445,9 +463,13 @@ def run(
             # environmentd will be stuck forever, the promoted environmentd can
             # take > 10 minutes to become responsive as well
             os._exit(0)
-        # TODO: Reenable when https://linear.app/materializeinc/issue/DB-118 is fixed
-        # print("Threads have not stopped within 5 minutes, exiting hard")
-        # os._exit(1)
+        if wedged:
+            faulthandler.dump_traceback()
+            print(
+                "^^^ +++ Threads have not stopped within 5 minutes and are not"
+                f" waiting on the server, exiting hard: {', '.join(wedged)}"
+            )
+            os._exit(1)
         os._exit(0)
 
     try:
@@ -615,17 +637,31 @@ def print_stats(
         for action_list in action_lists
         for action_class in action_list.action_classes
     }
-    # A given churny seed can legitimately see zero successes for two families,
-    # so the broken-action assertion must not fire on them:
-    #   * Drop* actions: RESTRICT rejections (targets usually contain objects),
-    #     or a concurrent CASCADE untrack/drop removes the target first, or the
-    #     dependency-free precondition (roles after AlterOwner) is never met.
+    # A given churny seed can legitimately see zero successes for these, so the
+    # broken-action assertion must not fire on them:
+    #   * DropCluster/DropDatabase/DropSchema: RESTRICT rejections. Their
+    #     targets practically always contain objects, and the rejection message
+    #     is class-specific, so `noise` above cannot cover it without excusing
+    #     it for every other action too.
+    #   * DropRoleAction: needs a dependency-free role, but AlterOwnerAction
+    #     keeps reassigning object ownership to random roles.
     #   * ExplainAnalyzeAction: needs a hydrated MV/index on the active cluster,
     #     which renames/drops keep retiring.
-    # These succeed in normal runs, so they aren't broken. The assertion below
-    # then targets CREATE/ALTER/write actions, where never-succeeding does mean
-    # broken SQL or an impossible precondition.
-    excluded: set[type[Action]] = {ExplainAnalyzeAction}
+    # These succeed in normal runs, so they aren't broken.
+    #
+    # NOTE: listed by name rather than matched on a Drop* name prefix. The other
+    # Drop* actions pick an existing object and are expected to succeed
+    # constantly, and a broken one (wrong quoting or qualification) fails with
+    # `unknown catalog item`, which the base errors_to_ignore tolerates and
+    # `noise` does not list. That is exactly what the assertion is meant to
+    # catch, so a prefix would silently exempt the failure mode it exists for.
+    excluded: set[type[Action]] = {
+        DropClusterAction,
+        DropDatabaseAction,
+        DropRoleAction,
+        DropSchemaAction,
+        ExplainAnalyzeAction,
+    }
     if scenario == Scenario.Rename:
         # CreateReplacementMaterializedViewAction re-renders the view's SELECT
         # with the object names captured at creation. Renames invalidate them,
@@ -637,11 +673,6 @@ def print_stats(
         # there.
         excluded.add(CreateReplacementMaterializedViewAction)
         excluded.add(ApplyReplacementMaterializedViewAction)
-    action_classes = {
-        c
-        for c in action_classes
-        if not c.__name__.startswith("Drop") and c not in excluded
-    }
     never_succeeded = []
     for action_class in sorted(action_classes, key=lambda cls: cls.__name__):
         successes = num_successes[action_class]
@@ -675,7 +706,7 @@ def print_stats(
         always_erroring = [
             action_class.__name__
             for action_class, skips, errored in never_succeeded
-            if num_errored_real[action_class] > 0
+            if num_errored_real[action_class] > 0 and action_class not in excluded
         ]
         assert (
             not always_erroring
@@ -715,13 +746,12 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
-    # Default 1: a multi-replica quickstart is the workload's peek/index target,
-    # and every replica independently maintains the same (possibly join-heavy)
-    # dataflows, so N replicas multiply clusterd memory N-fold. On the 24 GiB CI
-    # agent 2 replicas were the confirmed cause of the recurring clusterd OOM
-    # (both quickstart replicas SIGKILL'd). Multi-replica behavior is still
-    # exercised via the workload's user clusters (MAX_CLUSTER_REPLICAS).
-    parser.add_argument("--replicas", type=int, default=1, help="use multiple replicas")
+    parser.add_argument(
+        "--replicas",
+        type=int,
+        default=1,
+        help="default replica number for quickstart cluster",
+    )
 
 
 def main() -> int:
