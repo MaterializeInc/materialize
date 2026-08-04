@@ -525,7 +525,7 @@ impl<'a> SchemaResolver<'a> {
                 } else {
                     return Err(SchemaResolutionError::new(format!(
                         "Fixed schema {:?}: sizes don't match ({}, {}) for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wsz,
                         rsz,
                         self.get_current_human_readable_path(),
@@ -548,7 +548,7 @@ impl<'a> SchemaResolver<'a> {
                 if wp != rp {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: precisions don't match: {}, {} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wp,
                         rp,
                         self.get_current_human_readable_path(),
@@ -558,7 +558,7 @@ impl<'a> SchemaResolver<'a> {
                 if wscale != rscale {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: sizes don't match: {}, {} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wscale,
                         rscale,
                         self.get_current_human_readable_path(),
@@ -568,7 +568,7 @@ impl<'a> SchemaResolver<'a> {
                 if wsz != rsz {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: sizes don't match: {:?}, {:?} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wsz,
                         rsz,
                         self.get_current_human_readable_path(),

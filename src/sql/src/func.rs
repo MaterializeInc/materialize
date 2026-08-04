@@ -1451,7 +1451,7 @@ impl PolymorphicSolution {
                 assert_eq!(
                     c, &compat_class,
                     "do not know how to correlate polymorphic classes {:?} and {:?}",
-                    c, &compat_class,
+                    c, compat_class,
                 )
             }
         };
