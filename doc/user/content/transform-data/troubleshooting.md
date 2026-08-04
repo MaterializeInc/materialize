@@ -232,6 +232,8 @@ on diagnosing a slow snapshot and sizing a cluster appropriately for
 snapshotting, follow the [`Ingest data`
 troubleshooting](/ingest-data/troubleshooting) guide.
 
+For upsert and Debezium sources, see also [Hydrating objects](#hydrating-objects).
+
 ### Hydrating objects
 
 Queries that depend on objects that are hydrating **block until hydration is
