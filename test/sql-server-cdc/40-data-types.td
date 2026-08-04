@@ -115,8 +115,33 @@ ALTER SYSTEM SET log_filter = 'mz_storage::source::sql_server=debug,mz_sql_serve
   );
 
 > CREATE SOURCE test_40_data_types
-  FROM SQL SERVER CONNECTION sql_server_test_40_connection
-  FOR ALL TABLES;
+  FROM SQL SERVER CONNECTION sql_server_test_40_connection;
+
+# One DDL transaction, so the source is only restarted once rather than once per
+# table. Naming every reference explicitly also keeps this file from picking up
+# CDC-enabled tables that other files left behind in the `test` database.
+> BEGIN
+> CREATE TABLE table_tinyint FROM SOURCE test_40_data_types (REFERENCE dbo.table_tinyint);
+> CREATE TABLE table_smallint FROM SOURCE test_40_data_types (REFERENCE dbo.table_smallint);
+> CREATE TABLE table_int FROM SOURCE test_40_data_types (REFERENCE dbo.table_int);
+> CREATE TABLE table_bigint FROM SOURCE test_40_data_types (REFERENCE dbo.table_bigint);
+> CREATE TABLE table_bit FROM SOURCE test_40_data_types (REFERENCE dbo.table_bit);
+> CREATE TABLE table_decimal FROM SOURCE test_40_data_types (REFERENCE dbo.table_decimal);
+> CREATE TABLE table_money FROM SOURCE test_40_data_types (REFERENCE dbo.table_money);
+> CREATE TABLE table_smallmoney FROM SOURCE test_40_data_types (REFERENCE dbo.table_smallmoney);
+> CREATE TABLE table_date FROM SOURCE test_40_data_types (REFERENCE dbo.table_date);
+> CREATE TABLE table_time FROM SOURCE test_40_data_types (REFERENCE dbo.table_time);
+> CREATE TABLE table_datetime2 FROM SOURCE test_40_data_types (REFERENCE dbo.table_datetime2);
+> CREATE TABLE table_datetime FROM SOURCE test_40_data_types (REFERENCE dbo.table_datetime);
+> CREATE TABLE table_datetimeoffset FROM SOURCE test_40_data_types (REFERENCE dbo.table_datetimeoffset);
+> CREATE TABLE table_smalldatetime FROM SOURCE test_40_data_types (REFERENCE dbo.table_smalldatetime);
+> CREATE TABLE table_char FROM SOURCE test_40_data_types (REFERENCE dbo.table_char);
+> CREATE TABLE table_char_utf8 FROM SOURCE test_40_data_types (REFERENCE dbo.table_char_utf8);
+> CREATE TABLE table_varchar FROM SOURCE test_40_data_types (REFERENCE dbo.table_varchar);
+> CREATE TABLE table_nchar FROM SOURCE test_40_data_types (REFERENCE dbo.table_nchar);
+> CREATE TABLE table_nvarchar FROM SOURCE test_40_data_types (REFERENCE dbo.table_nvarchar);
+> CREATE TABLE table_floats FROM SOURCE test_40_data_types (REFERENCE dbo.table_floats);
+> COMMIT
 
 > SELECT * FROM table_tinyint ORDER BY val ASC;
 0
