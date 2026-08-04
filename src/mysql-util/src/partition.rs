@@ -84,7 +84,14 @@ async fn partition<D: PartitionDb>(
     }
     let estimated_row_count = f64::cast_lossy(estimated_row_count.max(1));
     let min_bucket_rows = f64::cast_lossy(min_bucket_rows.max(1));
+    let target_rows_per_bucket = bucket_target_rows(workers, estimated_row_count, min_bucket_rows);
+    let ranges = split_into_ranges(db, estimated_row_count, target_rows_per_bucket).await?;
+    Ok(assign_boundaries(&ranges, workers))
+}
 
+/// The estimated row count a range should be split down to before it stops
+/// being subdivided.
+fn bucket_target_rows(workers: usize, estimated_row_count: f64, min_bucket_rows: f64) -> f64 {
     // Aim for more buckets than workers. With exactly one bucket per worker
     // an under-estimated table size could make the whole table look too small
     // to split. Small buckets are recombined when boundaries are assigned.
@@ -100,7 +107,16 @@ async fn partition<D: PartitionDb>(
         target_rows_per_bucket,
         "partitioning key space by prefix"
     );
+    target_rows_per_bucket
+}
 
+/// Splits the whole key space into ranges of at most roughly
+/// `target_rows_per_bucket` estimated rows each, returned in key order.
+async fn split_into_ranges<D: PartitionDb>(
+    db: &mut D,
+    estimated_row_count: f64,
+    target_rows_per_bucket: f64,
+) -> Result<Vec<Range>, MySqlError> {
     let mut ranges = vec![Range {
         start: None,
         end: None,
@@ -125,9 +141,14 @@ async fn partition<D: PartitionDb>(
             break;
         }
     }
+    Ok(ranges)
+}
 
-    // Ranges are in key order. Emit a boundary each time the cumulative
-    // estimated rows pass the next worker's share.
+/// Accumulates `ranges` (in key order) into `workers` buckets of roughly
+/// equal estimated rows and returns the bucket edges as boundaries.
+fn assign_boundaries(ranges: &[Range], workers: usize) -> Vec<String> {
+    // Emit a boundary each time the cumulative estimated rows pass the next
+    // worker's share.
     let total: f64 = ranges.iter().map(|r| r.estimated_rows).sum();
     let per_worker = total / f64::cast_lossy(workers);
     tracing::debug!(
@@ -138,7 +159,7 @@ async fn partition<D: PartitionDb>(
     );
     let mut boundaries: Vec<String> = Vec::with_capacity(workers - 1);
     let mut rows_seen = 0.0;
-    for range in &ranges {
+    for range in ranges {
         if boundaries.len() == workers - 1 {
             break;
         }
@@ -146,16 +167,16 @@ async fn partition<D: PartitionDb>(
         if rows_seen >= f64::cast_lossy(boundaries.len() + 1) * per_worker {
             // The final range's end is None (open), it can never be a boundary.
             if let Some(end) = &range.end {
-                // Only a misbehaving server can repeat an end (the walk stops
-                // on non-advancing prefixes). Skip it, a duplicate boundary
-                // would fail the strict monotonicity check downstream.
+                // A server returning non-advancing prefixes can repeat an
+                // end. Skip it, a duplicate boundary would fail the strict
+                // monotonicity check downstream.
                 if boundaries.last() != Some(end) {
                     boundaries.push(end.clone());
                 }
             }
         }
     }
-    Ok(boundaries)
+    boundaries
 }
 
 /// Splits `parent` at every distinct key prefix one character longer than the
