@@ -137,8 +137,8 @@ resources rather than the Helm release status.
 
 ![Image of Grafana](/images/self-managed/grafana-monitoring-success.png)
 
-For what each dashboard covers, see the [dashboard documentation
-⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/).
+For the list of dashboards and what each one covers, see [Grafana dashboards
+⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/grafana/importing/).
 
 ## Connect existing tooling
 
