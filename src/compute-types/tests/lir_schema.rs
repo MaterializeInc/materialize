@@ -29,6 +29,7 @@
 //! Notes in error messages and implementations should help you diagnose any issues
 //! that may arise as types change.
 
+use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
 use mz_compute_types::plan::join::JoinPlan;
@@ -55,8 +56,55 @@ use serde_reflection::{ContainerFormat, Registry, Samples, Tracer, TracerConfig}
 
 const SNAPSHOT_DIR: &str = "tests/snapshots";
 
+/// The freshly traced schema, rewritten on every run, complete or not.
+/// Gitignored. Diff against the checked-in snapshot to see exactly what
+/// changed, or grep it for what references an unexpected type, without
+/// rerunning anything.
+const CURRENT_PATH: &str = "tests/snapshots/lir_current.json";
+
 fn snapshot_path() -> String {
     format!("{SNAPSHOT_DIR}/lir_v{LIR_VERSION}.json")
+}
+
+/// Serializes a registry exactly as the checked-in snapshot stores it.
+fn registry_json(registry: &Registry) -> String {
+    let mut json = serde_json::to_string_pretty(registry).expect("registry serializes to JSON");
+    // Lint requires text files to end with a newline.
+    json.push('\n');
+    json
+}
+
+/// Like [`registry_json`], but tolerates a partially traced registry.
+///
+/// A container still mid-trace holds unresolved variables whose serde impl
+/// errors, so serialize per container and fall back to the debug
+/// representation, as a JSON string, for those. The output is always valid
+/// JSON.
+fn partial_registry_json(registry: &Registry) -> String {
+    let map: BTreeMap<&String, serde_json::Value> = registry
+        .iter()
+        .map(|(name, container)| {
+            let value = serde_json::to_value(container).unwrap_or_else(|_| {
+                serde_json::Value::String(format!("<mid-trace: {container:?}>"))
+            });
+            (name, value)
+        })
+        .collect();
+    let mut json = serde_json::to_string_pretty(&map).expect("values are pre-validated JSON");
+    json.push('\n');
+    json
+}
+
+/// Writes the traced schema to [`CURRENT_PATH`].
+///
+/// The three tests trace concurrently in separate processes and write
+/// identical bytes, so each write goes to a per-process temp file first and
+/// then renames into place to avoid interleaving.
+fn write_current(contents: &str) {
+    let tmp = format!("{CURRENT_PATH}.tmp.{}", std::process::id());
+    std::fs::create_dir_all(SNAPSHOT_DIR).expect("create snapshot dir");
+    std::fs::write(&tmp, contents).expect("write dump");
+    std::fs::rename(&tmp, CURRENT_PATH).expect("move dump into place");
 }
 
 /// Panics with the tracing error and the remedy for its failure class.
@@ -108,16 +156,44 @@ fn diagnose(context: &str, err: serde_reflection::Error) -> ! {
              representation to something traceable."
         }
     };
-    panic!("failed to trace {context}: {err}\n\n{remedy}\n");
+    panic!(
+        "failed to trace {context}: {err}\n\n{remedy}\n\n\
+         The partially traced registry is at '{CURRENT_PATH}'.\n"
+    );
 }
 
 /// Traces the full serde type graph reachable from [`LirRelationExpr`].
 ///
-/// serde_reflection drives `Deserialize` impls with synthesized default
-/// values (0, "", etc.). Types whose `Deserialize` checks invariants reject
-/// those defaults, so we record a valid sample for each such type up front
-/// and configure the tracer to replay recorded samples.
+/// Whatever happens, the traced state lands at [`CURRENT_PATH`]: the complete
+/// schema on success, the partial registry on failure. Failures panic with
+/// the remedy for their error class, see [`diagnose`].
 fn trace_lir_registry() -> Registry {
+    let mut tracer = new_tracer();
+    let mut samples = Samples::new();
+
+    if let Err((context, err)) = run_traces(&mut tracer, &mut samples) {
+        write_current(&partial_registry_json(&tracer.registry_unchecked()));
+        diagnose(&context, err);
+    }
+    match tracer.registry() {
+        Ok(registry) => {
+            write_current(&registry_json(&registry));
+            registry
+        }
+        Err(err) => {
+            // The failed registry() call consumed the tracer, so retrace to
+            // recover the partial registry for the dump. This path is about
+            // to panic, the extra half second does not matter.
+            let mut tracer = new_tracer();
+            let mut samples = Samples::new();
+            let _ = run_traces(&mut tracer, &mut samples);
+            write_current(&partial_registry_json(&tracer.registry_unchecked()));
+            diagnose("the completed registry", err);
+        }
+    }
+}
+
+fn new_tracer() -> Tracer {
     // The synthesized string is "UTC" instead of the default "" because
     // chrono_tz::Tz (inside Timezone) parses the string it deserializes and
     // rejects "". Sample replay cannot help enums like Timezone, because
@@ -129,9 +205,19 @@ fn trace_lir_registry() -> Registry {
         .record_samples_for_tuple_structs(true)
         .default_borrowed_str_value("UTC")
         .default_string_value("UTC".to_string());
-    let mut tracer = Tracer::new(config);
-    let mut samples = Samples::new();
+    Tracer::new(config)
+}
 
+/// Runs every trace step, stopping at the first failure.
+///
+/// serde_reflection drives `Deserialize` impls with synthesized default
+/// values (0, "", etc.). Types whose `Deserialize` checks invariants reject
+/// those defaults, so we record a valid sample for each such type up front
+/// and configure the tracer to replay recorded samples.
+fn run_traces(
+    tracer: &mut Tracer,
+    samples: &mut Samples,
+) -> Result<(), (String, serde_reflection::Error)> {
     // NOTE: keep the recorded samples to a minimum. A recorded sample is
     // replayed wherever the container appears, which prevents synthesis from
     // exploring the container's full structure (and mismatched replays fail
@@ -145,8 +231,8 @@ fn trace_lir_registry() -> Registry {
         return_at_limit: false,
     };
     tracer
-        .trace_value(&mut samples, &limit)
-        .unwrap_or_else(|err| diagnose("LetRecLimit sample", err));
+        .trace_value(samples, &limit)
+        .map_err(|err| ("LetRecLimit sample".to_string(), err))?;
 
     // TimezoneTime stores a chrono NaiveDateTime, which deserializes by
     // parsing a string and rejects the synthesized default "". The sample
@@ -158,12 +244,12 @@ fn trace_lir_registry() -> Registry {
         wall_time: chrono::NaiveDateTime::default(),
     };
     tracer
-        .trace_value(&mut samples, &timezone_time)
-        .unwrap_or_else(|err| diagnose("TimezoneTime sample", err));
+        .trace_value(samples, &timezone_time)
+        .map_err(|err| ("TimezoneTime sample".to_string(), err))?;
 
     tracer
-        .trace_type::<LirRelationExpr>(&samples)
-        .unwrap_or_else(|err| diagnose("LirRelationExpr", err));
+        .trace_type::<LirRelationExpr>(samples)
+        .map_err(|err| ("LirRelationExpr".to_string(), err))?;
 
     // Tracing a struct explores nested enums one variant per pass, so every
     // enum in the graph needs its own trace_type call to cover all variants.
@@ -173,8 +259,8 @@ fn trace_lir_registry() -> Registry {
         ($($ty:ty),* $(,)?) => {
             $(
                 tracer
-                    .trace_type::<$ty>(&samples)
-                    .unwrap_or_else(|err| diagnose(stringify!($ty), err));
+                    .trace_type::<$ty>(samples)
+                    .map_err(|err| (stringify!($ty).to_string(), err))?;
             )*
         };
     }
@@ -215,7 +301,6 @@ fn trace_lir_registry() -> Registry {
         WindowFrameBound,
         WindowFrameUnits,
         Timezone,
-        // Reachable via SqlScalarType's List/Map/Record custom_id fields.
         CatalogItemId,
     ];
 
@@ -229,11 +314,11 @@ fn trace_lir_registry() -> Registry {
     // registry() call below fails and names the incomplete enum.
     for _ in 0..128 {
         tracer
-            .trace_type::<Matcher>(&samples)
-            .unwrap_or_else(|err| diagnose("Matcher", err));
+            .trace_type::<Matcher>(samples)
+            .map_err(|err| ("Matcher".to_string(), err))?;
         tracer
-            .trace_type::<ToCharTimestamp>(&samples)
-            .unwrap_or_else(|err| diagnose("ToCharTimestamp", err));
+            .trace_type::<ToCharTimestamp>(samples)
+            .map_err(|err| ("ToCharTimestamp".to_string(), err))?;
         for private_enum in [
             "MatcherImpl",
             "DateTimeField",
@@ -244,35 +329,74 @@ fn trace_lir_registry() -> Registry {
         }
     }
 
-    // Debug aid: dump the partial registry to a file to see every traced
-    // container, for example to find what references an unexpected type.
-    if std::env::var_os("DUMP_UNCHECKED").is_some() {
-        let registry = tracer.registry_unchecked();
-        std::fs::write(
-            std::env::var("DUMP_UNCHECKED").unwrap(),
-            format!("{registry:#?}"),
+    Ok(())
+}
+
+/// Summarizes what changed between two schema JSON documents, per container.
+///
+/// For changed enums, names the added and removed variants. For other
+/// changes, names the container. The full detail is always available by
+/// diffing the snapshot against [`CURRENT_PATH`].
+fn schema_diff(expected: &str, actual: &str) -> String {
+    fn containers(json: &str) -> BTreeMap<String, serde_json::Value> {
+        serde_json::from_str(json).expect("schema files are JSON objects")
+    }
+    fn variant_names(container: &serde_json::Value) -> Option<Vec<&str>> {
+        let variants = container.get("ENUM")?.as_object()?;
+        Some(
+            variants
+                .values()
+                .filter_map(|v| v.as_object()?.keys().next().map(String::as_str))
+                .collect(),
         )
-        .unwrap();
-        panic!("dumped unchecked registry");
     }
 
-    tracer
-        .registry()
-        .unwrap_or_else(|err| diagnose("the completed registry", err))
+    let expected = containers(expected);
+    let actual = containers(actual);
+    let mut lines = Vec::new();
+    for name in actual.keys() {
+        if !expected.contains_key(name) {
+            lines.push(format!("  added container: {name}"));
+        }
+    }
+    for name in expected.keys() {
+        if !actual.contains_key(name) {
+            lines.push(format!("  removed container: {name}"));
+        }
+    }
+    for (name, new) in &actual {
+        let Some(old) = expected.get(name) else {
+            continue;
+        };
+        if old == new {
+            continue;
+        }
+        match (variant_names(old), variant_names(new)) {
+            (Some(old_vs), Some(new_vs)) => {
+                let added: Vec<_> = new_vs.iter().filter(|v| !old_vs.contains(v)).collect();
+                let removed: Vec<_> = old_vs.iter().filter(|v| !new_vs.contains(v)).collect();
+                if added.is_empty() && removed.is_empty() {
+                    lines.push(format!("  changed container: {name} (variant contents)"));
+                } else {
+                    lines.push(format!(
+                        "  changed container: {name} (variants added: {added:?}, removed: {removed:?})"
+                    ));
+                }
+            }
+            _ => lines.push(format!("  changed container: {name}")),
+        }
+    }
+    lines.join("\n")
 }
 
 /// The traced schema must match the checked-in snapshot for [`LIR_VERSION`].
 ///
 /// Run with `REWRITE=1` to regenerate the current version's snapshot. The
 /// rewrite never touches other versions' snapshots.
-///
-/// Run with `DUMP_UNCHECKED=/path/to/dump.txt` to dump the current schema to file for inspection.
 #[mz_ore::test]
 fn lir_schema_snapshot() {
     let registry = trace_lir_registry();
-    let mut actual = serde_json::to_string_pretty(&registry).expect("registry serializes to JSON");
-    // Lint requires text files to end with a newline.
-    actual.push('\n');
+    let actual = registry_json(&registry);
     let path = snapshot_path();
 
     if std::env::var_os("REWRITE").is_some() {
@@ -293,12 +417,16 @@ fn lir_schema_snapshot() {
             "The serialized stable LIR schema changed!\n\n\
              The serde type graph reachable from LirRelationExpr no longer matches\n\
              '{path}'. This affects any durably stored LIR plan.\n\n\
+             What changed:\n{diff}\n\n\
+             Full detail: diff '{path}' against the freshly traced schema at\n\
+             '{CURRENT_PATH}'.\n\n\
              If LIR version {LIR_VERSION} has already shipped, bump LIR_VERSION in\n\
              src/compute-types/src/plan.rs so the change lands as a new version.\n\
              If version {LIR_VERSION} is unshipped, regenerating in place is fine.\n\n\
              Then regenerate the snapshot and review the diff:\n\n    \
              REWRITE=1 cargo test -p mz-compute-types --test lir_schema\n\n\
-             See doc/developer/design/20260311_optimizer_customer_tradeoff.md.\n"
+             See doc/developer/design/20260311_optimizer_customer_tradeoff.md.\n",
+            diff = schema_diff(&expected, &actual),
         );
     }
 }
