@@ -230,9 +230,9 @@ impl WorkloadRunner {
 
         let mut per_config = Vec::new();
         let mut realized_cells = BTreeSet::new();
-        for config in &configs {
+        for (config_index, config) in configs.iter().enumerate() {
             let (result, cells) = self
-                .run_one_config(workload, config)
+                .run_one_config(workload, config_index, config)
                 .await
                 .map_err(|e| anyhow::anyhow!("config {:?}: {e}", config.name))?;
             // The plan is the same under every configuration, so the realized
@@ -296,6 +296,7 @@ impl WorkloadRunner {
     async fn run_one_config(
         &mut self,
         workload: &Workload,
+        config_index: usize,
         config: &NamedConfig,
     ) -> anyhow::Result<(ReadResult, BTreeSet<SurfaceCell>)> {
         self.reset_instance(config).await?;
@@ -316,7 +317,7 @@ impl WorkloadRunner {
         let mut cells = BTreeSet::new();
         let mut plan_type = None;
         for export in &workload.exports {
-            let (df, typ) = self.build_dataflow(workload, *export, ts, upper)?;
+            let (df, typ) = self.build_dataflow(workload, config_index, *export, ts, upper)?;
             cells.extend(
                 df.objects_to_build
                     .iter()
@@ -324,7 +325,7 @@ impl WorkloadRunner {
             );
             plan_type = Some(typ);
 
-            let id = GlobalId::User(export_id(*export));
+            let id = GlobalId::User(export_id(config_index, *export));
             self.driver.submit_dataflow(df)?;
             if *export == WorkloadExport::Subscribe {
                 // Register before scheduling, so the response pump is accumulating
@@ -355,7 +356,7 @@ impl WorkloadRunner {
         });
         for export in &read_order {
             let m = self
-                .read_export(*export, &result_desc, ts)
+                .read_export(config_index, *export, &result_desc, ts)
                 .await
                 .map_err(|e| anyhow::anyhow!("reading {export:?} export: {e}"))?;
             by_export.insert(*export, m);
@@ -378,7 +379,7 @@ impl WorkloadRunner {
             check_fold_constants(workload, ts, &canonical)?;
         }
         if workload.oracles.contains(&Oracle::Incremental) {
-            self.check_incremental(workload, ts, upper, &canonical)
+            self.check_incremental(workload, config_index, ts, upper, &canonical)
                 .await?;
         }
 
@@ -417,6 +418,7 @@ impl WorkloadRunner {
     fn build_dataflow(
         &mut self,
         workload: &Workload,
+        config_index: usize,
         export: WorkloadExport,
         as_of: u64,
         upper: u64,
@@ -442,7 +444,7 @@ impl WorkloadRunner {
                 },
             );
         }
-        let plan_id = GlobalId::User(ids::plan(export));
+        let plan_id = GlobalId::User(ids::plan(config_index, export));
         let plan_type = workload.plan.typ();
         builder.build(plan_id, workload.plan.clone());
 
@@ -453,13 +455,13 @@ impl WorkloadRunner {
                 // regardless of the plan's arity, so the same workload shape
                 // works for any output width, and it keeps the peek a full
                 // scan rather than a lookup.
-                builder.export_index(GlobalId::User(ids::INDEX), plan_id, vec![]);
+                builder.export_index(GlobalId::User(ids::index(config_index)), plan_id, vec![]);
             }
             WorkloadExport::MaterializedView => {
                 let shard = ShardId::new();
                 self.mv_shard = Some(shard);
                 builder.export_materialized_view(
-                    GlobalId::User(ids::MV_SINK),
+                    GlobalId::User(ids::mv_sink(config_index)),
                     plan_id,
                     result_desc,
                     PersistSink {
@@ -470,7 +472,7 @@ impl WorkloadRunner {
             }
             WorkloadExport::Subscribe => {
                 builder.export_subscribe(
-                    GlobalId::User(ids::SUBSCRIBE_SINK),
+                    GlobalId::User(ids::subscribe_sink(config_index)),
                     plan_id,
                     result_desc,
                     // Complete one past the assertion timestamp, so the
@@ -487,13 +489,14 @@ impl WorkloadRunner {
     /// Read one export's contents at `ts`.
     async fn read_export(
         &self,
+        config_index: usize,
         export: WorkloadExport,
         result_desc: &RelationDesc,
         ts: u64,
     ) -> anyhow::Result<ReadResult> {
         match export {
             WorkloadExport::Index => {
-                let id = GlobalId::User(ids::INDEX);
+                let id = GlobalId::User(ids::index(config_index));
                 self.driver
                     .expect_frontier(id, Timestamp::from(ts).step_forward(), FRONTIER_TIMEOUT)
                     .await?;
@@ -517,7 +520,7 @@ impl WorkloadRunner {
                     .driver
                     .peek_result(
                         PeekTarget::Persist {
-                            id: GlobalId::User(ids::MV_SINK),
+                            id: GlobalId::User(ids::mv_sink(config_index)),
                             metadata: CollectionMetadata {
                                 persist_location: self.loc.clone(),
                                 data_shard: shard,
@@ -535,7 +538,7 @@ impl WorkloadRunner {
                 let read = self
                     .driver
                     .await_subscribe_result(
-                        GlobalId::User(ids::SUBSCRIBE_SINK),
+                        GlobalId::User(ids::subscribe_sink(config_index)),
                         Timestamp::from(ts + 1),
                         FRONTIER_TIMEOUT,
                     )
@@ -555,6 +558,7 @@ impl WorkloadRunner {
     async fn check_incremental(
         &mut self,
         workload: &Workload,
+        config_index: usize,
         ts: u64,
         upper: u64,
         maintained: &ReadResult,
@@ -574,10 +578,10 @@ impl WorkloadRunner {
                 },
             );
         }
-        let plan_id = GlobalId::User(ids::RECOMPUTE_PLAN);
+        let plan_id = GlobalId::User(ids::recompute_plan(config_index));
         let plan_type = workload.plan.typ();
         builder.build(plan_id, workload.plan.clone());
-        let index_id = GlobalId::User(ids::RECOMPUTE_INDEX);
+        let index_id = GlobalId::User(ids::recompute_index(config_index));
         builder.export_index(index_id, plan_id, vec![]);
         builder.as_of(Timestamp::from(ts));
         let df = builder.finish()?;
@@ -642,11 +646,11 @@ impl WorkloadRunner {
 }
 
 /// The global id an export is built under.
-fn export_id(export: WorkloadExport) -> u64 {
+fn export_id(config_index: usize, export: WorkloadExport) -> u64 {
     match export {
-        WorkloadExport::Index => ids::INDEX,
-        WorkloadExport::MaterializedView => ids::MV_SINK,
-        WorkloadExport::Subscribe => ids::SUBSCRIBE_SINK,
+        WorkloadExport::Index => ids::index(config_index),
+        WorkloadExport::MaterializedView => ids::mv_sink(config_index),
+        WorkloadExport::Subscribe => ids::subscribe_sink(config_index),
     }
 }
 

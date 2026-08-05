@@ -325,17 +325,17 @@ fn realized_cells(workload: &Workload) -> anyhow::Result<Option<BTreeSet<Surface
                 },
             );
         }
-        let plan_id = GlobalId::User(ids::plan(*export));
+        let plan_id = GlobalId::User(ids::plan(0, *export));
         let plan_type = workload.plan.typ();
         builder.build(plan_id, workload.plan.clone());
         let result_desc = desc_from_repr(&plan_type);
         match export {
             WorkloadExport::Index => {
-                builder.export_index(GlobalId::User(ids::INDEX), plan_id, vec![]);
+                builder.export_index(GlobalId::User(ids::index(0)), plan_id, vec![]);
             }
             WorkloadExport::MaterializedView => {
                 builder.export_materialized_view(
-                    GlobalId::User(ids::MV_SINK),
+                    GlobalId::User(ids::mv_sink(0)),
                     plan_id,
                     result_desc,
                     crate::dataflow::PersistSink {
@@ -346,7 +346,7 @@ fn realized_cells(workload: &Workload) -> anyhow::Result<Option<BTreeSet<Surface
             }
             WorkloadExport::Subscribe => {
                 builder.export_subscribe(
-                    GlobalId::User(ids::SUBSCRIBE_SINK),
+                    GlobalId::User(ids::subscribe_sink(0)),
                     plan_id,
                     result_desc,
                     timely::progress::Antichain::from_elem(Timestamp::from(

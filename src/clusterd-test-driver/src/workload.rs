@@ -264,33 +264,76 @@ pub enum Oracle {
 ///
 /// The layout is fixed rather than allocated so a JSON plan can name its inputs
 /// by id without the generator and the runner having to agree on an allocator.
+///
+/// # Per-configuration ids
+///
+/// Everything the runner *creates* is offset by the configuration index, so no
+/// two configurations of the same workload ever name the same collection. Only
+/// the input ids are shared, and those are imports rather than creations, which
+/// any number of dataflows may hold at once.
+///
+/// This is not tidiness. Each configuration reconnects to drop the previous one's
+/// dataflows, and the replica's teardown of the old session is not synchronous
+/// with the new session's commands. Reusing ids across configurations puts a
+/// newly created collection and a dying one of the same name in the same window,
+/// which showed up as a dataflow that never reported a frontier, intermittently
+/// and more often the further into the configuration matrix a workload got.
+/// Offsetting the ids removes the window rather than trying to time it.
 pub mod ids {
     use super::WorkloadExport;
 
-    /// The first id of a workload's input sources.
+    /// The first id of a workload's input sources. Not offset per configuration:
+    /// inputs are imported, not created, and their shards are written once for
+    /// the whole workload.
     pub const INPUT_BASE: u64 = 100;
-    /// The exported index's id.
-    pub const INDEX: u64 = 201;
-    /// The materialized-view sink's id.
-    pub const MV_SINK: u64 = 202;
-    /// The subscribe sink's id.
-    pub const SUBSCRIBE_SINK: u64 = 203;
-    /// The id of the recompute dataflow's computation, for the incremental oracle.
-    pub const RECOMPUTE_PLAN: u64 = 300;
-    /// The id of the recompute dataflow's index.
-    pub const RECOMPUTE_INDEX: u64 = 301;
 
-    /// The id the computation is bound to inside `export`'s own dataflow.
+    /// How far apart successive configurations' id ranges sit. Larger than the
+    /// number of ids any one configuration uses, with room to spare.
+    pub const CONFIG_STRIDE: u64 = 1000;
+
+    /// The base of configuration `config`'s id range.
+    pub fn config_base(config: usize) -> u64 {
+        1000 + u64::try_from(config).expect("config count fits u64") * CONFIG_STRIDE
+    }
+
+    /// The exported index's id, within configuration `config`.
+    pub fn index(config: usize) -> u64 {
+        config_base(config) + 1
+    }
+
+    /// The materialized-view sink's id, within configuration `config`.
+    pub fn mv_sink(config: usize) -> u64 {
+        config_base(config) + 2
+    }
+
+    /// The subscribe sink's id, within configuration `config`.
+    pub fn subscribe_sink(config: usize) -> u64 {
+        config_base(config) + 3
+    }
+
+    /// The recompute dataflow's computation id, for the incremental oracle.
+    pub fn recompute_plan(config: usize) -> u64 {
+        config_base(config) + 4
+    }
+
+    /// The recompute dataflow's index id, for the incremental oracle.
+    pub fn recompute_index(config: usize) -> u64 {
+        config_base(config) + 5
+    }
+
+    /// The id the computation is bound to inside `export`'s own dataflow, within
+    /// configuration `config`.
     ///
     /// Each export gets its own dataflow, hence its own binding for the same
     /// computation. Sharing one id across dataflows is not an option: a global id
     /// names one collection in the instance.
-    pub fn plan(export: WorkloadExport) -> u64 {
-        match export {
-            WorkloadExport::Index => 210,
-            WorkloadExport::MaterializedView => 211,
-            WorkloadExport::Subscribe => 212,
-        }
+    pub fn plan(config: usize, export: WorkloadExport) -> u64 {
+        let offset = match export {
+            WorkloadExport::Index => 10,
+            WorkloadExport::MaterializedView => 11,
+            WorkloadExport::Subscribe => 12,
+        };
+        config_base(config) + offset
     }
 
     /// The global id of input `i`.
