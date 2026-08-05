@@ -84,9 +84,50 @@ fn int64(v: i64) -> MirScalarExpr {
     MirScalarExpr::literal_ok(Datum::Int64(v), ReprScalarType::Int64)
 }
 
+/// A literal lookup into a locally-arranged collection.
+///
+/// `Let l = ArrangeBy(input, [#0]) in Filter(Get(l), #0 = k)`. Lowering turns a
+/// filter that pins an arrangement key to a literal into a seek rather than a
+/// scan.
+///
+/// This reaches the lookup cells without index imports, which the workload format
+/// does not have. `LiteralConstraints` handles only `Get`s of *global* ids, so
+/// lowering keeps its own literal-constraint path for local ids, and that is the
+/// one a `Let` binding takes.
+fn arrangement_lookup() -> Shape {
+    let schema = vec![Ty::Int64, Ty::Int64];
+    let local = LocalId::new(0);
+    let typ = nullable_relation_type(&schema);
+    let arranged = MirRelationExpr::ArrangeBy {
+        input: Box::new(get(0, &schema)),
+        keys: vec![vec![MirScalarExpr::column(0)]],
+    };
+    let body = MirRelationExpr::Get {
+        id: Id::Local(local),
+        typ,
+        access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+    }
+    .filter(vec![
+        MirScalarExpr::column(0).call_binary(int64(1), func::Eq),
+    ]);
+    Shape {
+        name: "shape-arrangement-lookup",
+        inputs: vec![schema],
+        input_mode: ShapeInputs::Retracting,
+        optimize: false,
+        plan: MirRelationExpr::Let {
+            id: local,
+            value: Box::new(arranged),
+            body: Box::new(body),
+        },
+        targets: "Get/ArrangementLookup",
+    }
+}
+
 /// Every targeted shape.
 pub fn all() -> Vec<Shape> {
     let mut shapes = vec![
+        arrangement_lookup(),
         constant_error(),
         flat_map_plain(),
         flat_map_with_mfp(),

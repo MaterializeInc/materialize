@@ -493,14 +493,11 @@ fn into_input_spec(
 /// because it argues against work already done.
 pub const KNOWN_GAPS: &[(&str, &str)] = &[
     (
-        "Get/ArrangementLookup",
-        "needs literal constraints over an imported index key. The workload format \
-         has no index imports: every input is a persist source, so no Get carries \
-         a key to seek into",
-    ),
-    (
         "Mfp/Plain/Lookup",
-        "same as Get/ArrangementLookup, no keyed input to seek into",
+        "a leftover MFP that seeks an arrangement. `shape-arrangement-lookup` \
+         reaches the equivalent `Get` cell, but there the filter fuses into the \
+         Get rather than surviving as its own Mfp node, and a plan that forces the \
+         split has not been found",
     ),
     (
         "Mfp/Temporal",
@@ -533,8 +530,10 @@ pub const KNOWN_GAPS: &[(&str, &str)] = &[
     ),
     (
         "FlatMap/Arranged",
-        "needs a table function reading an arrangement rather than a stream, which \
-         requires an index import (see Get/ArrangementLookup)",
+        "a table function reading an arrangement rather than a stream. Putting a \
+         FlatMap over a Let-bound ArrangeBy does not do it: lowering still hands \
+         the table function the raw collection, so the arrangement goes to the Get \
+         and the FlatMap stays streamed",
     ),
     (
         "FlatMap/Lookup",
