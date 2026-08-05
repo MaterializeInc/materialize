@@ -256,24 +256,42 @@ mod tests {
         let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
-        assert_eq!(first(p, "", None, 1).await, some("a"));
-        assert_eq!(next(p, "a", None, 1).await, some("b"));
-        assert_eq!(next(p, "b", None, 1).await, some("c"));
-        assert_eq!(next(p, "c", None, 1).await, None);
+        assert_eq!(first_key_in_range(p, "", None, 1).await, some("a"));
+        assert_eq!(
+            first_row_not_matching_prefix(p, "a", None, 1).await,
+            some("b")
+        );
+        assert_eq!(
+            first_row_not_matching_prefix(p, "b", None, 1).await,
+            some("c")
+        );
+        assert_eq!(first_row_not_matching_prefix(p, "c", None, 1).await, None);
 
-        assert_eq!(first(p, "a", Some("b"), 2).await, some("aa"));
-        assert_eq!(next(p, "aa", Some("b"), 2).await, some("ab"));
-        assert_eq!(next(p, "ab", Some("b"), 2).await, None);
+        assert_eq!(first_key_in_range(p, "a", Some("b"), 2).await, some("aa"));
+        assert_eq!(
+            first_row_not_matching_prefix(p, "aa", Some("b"), 2).await,
+            some("ab")
+        );
+        assert_eq!(
+            first_row_not_matching_prefix(p, "ab", Some("b"), 2).await,
+            None
+        );
 
         // Bounds are exclusive: the exact key "b" is skipped as a split
         // point, and its extensions surface as their own prefixes.
-        assert_eq!(first(p, "b", Some("c"), 2).await, some("bb"));
-        assert_eq!(next(p, "bb", Some("c"), 2).await, None);
+        assert_eq!(first_key_in_range(p, "b", Some("c"), 2).await, some("bb"));
+        assert_eq!(
+            first_row_not_matching_prefix(p, "bb", Some("c"), 2).await,
+            None
+        );
         // The anchor for "b" covers every key matching 'b%', so the walk
         // reports no further prefix inside this range.
-        assert_eq!(next(p, "b", Some("c"), 2).await, None);
+        assert_eq!(
+            first_row_not_matching_prefix(p, "b", Some("c"), 2).await,
+            None
+        );
 
-        assert_eq!(first(p, "c", None, 2).await, None);
+        assert_eq!(first_key_in_range(p, "c", None, 2).await, None);
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -376,7 +394,7 @@ mod tests {
 
     /// [`KeyProber::prefix_of_first_key_in_range`], unwrapped so assertions
     /// stay one-liners.
-    async fn first(
+    async fn first_key_in_range(
         prober: &mut KeyProber<'_>,
         lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
@@ -394,7 +412,7 @@ mod tests {
 
     /// [`KeyProber::prefix_of_first_row_not_matching_prefix`], unwrapped so
     /// assertions stay one-liners.
-    async fn next(
+    async fn first_row_not_matching_prefix(
         prober: &mut KeyProber<'_>,
         prefix: &str,
         upper_bound_exclusive: Option<&str>,
@@ -410,8 +428,9 @@ mod tests {
             .expect("prefix_of_first_row_not_matching_prefix failed")
     }
 
-    /// `Some` for comparing against [`first`]/[`next`] results without
-    /// `as_deref` noise at every assertion.
+    /// `Some` for comparing against [`first_key_in_range`] and
+    /// [`first_row_not_matching_prefix`] results without `as_deref` noise at
+    /// every assertion.
     fn some(s: &str) -> Option<String> {
         Some(s.into())
     }
