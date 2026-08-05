@@ -13,6 +13,7 @@ workspace = true
 anyhow.workspace = true
 deadpool.workspace = true
 deadpool-postgres.workspace = true
+futures.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes"] }
 mz-tls-util = { path = "../tls-util" }
 prometheus.workspace = true

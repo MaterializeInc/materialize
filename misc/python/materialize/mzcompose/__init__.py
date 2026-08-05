@@ -620,6 +620,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_write_combine_inline_writes",
     "persist_reader_lease_duration",
     "persist_consensus_connection_pool_max_size",
+    "persist_consensus_connection_pool_min_idle",
     "persist_consensus_connection_pool_max_wait",
     "persist_consensus_connection_pool_ttl",
     "persist_consensus_connection_pool_ttl_stagger",

@@ -2106,6 +2106,7 @@ class FlipFlagsAction(Action):
             "storage_source_decode_fuel",
             "persist_reader_lease_duration",
             "persist_consensus_connection_pool_max_size",
+            "persist_consensus_connection_pool_min_idle",
             "persist_consensus_connection_pool_max_wait",
             "persist_consensus_connection_pool_ttl",
             "persist_consensus_connection_pool_ttl_stagger",

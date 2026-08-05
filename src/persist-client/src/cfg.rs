@@ -300,6 +300,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_CONNECT_TIMEOUT)
         .add(&BLOB_READ_TIMEOUT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MIN_IDLE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL)
@@ -393,6 +394,18 @@ pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
     "The maximum size the connection pool to Postgres/CRDB will grow to.",
+);
+
+/// Sets the number of idle connections the consensus pool proactively keeps
+/// ready, so that a burst of demand after connections are lost (e.g. a CRDB
+/// node drain closing its share of the pool) does not pay connection
+/// establishment on the acquire path. Zero disables pre-warming.
+///
+/// Applies to existing pools without a restart.
+pub const CONSENSUS_CONNECTION_POOL_MIN_IDLE: Config<usize> = Config::new(
+    "persist_consensus_connection_pool_min_idle",
+    0,
+    "The number of idle connections the Postgres/CRDB pool proactively maintains.",
 );
 
 /// Sets the maximum amount of time we'll wait to acquire a connection from
@@ -599,6 +612,10 @@ pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
 impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
         CONSENSUS_CONNECTION_POOL_MAX_SIZE.get(self)
+    }
+
+    fn connection_pool_min_idle(&self) -> usize {
+        CONSENSUS_CONNECTION_POOL_MIN_IDLE.get(self)
     }
 
     fn connection_pool_max_wait(&self) -> Option<Duration> {

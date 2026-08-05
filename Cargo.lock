@@ -8082,6 +8082,7 @@ dependencies = [
  "anyhow",
  "deadpool",
  "deadpool-postgres",
+ "futures",
  "mz-ore",
  "mz-tls-util",
  "prometheus",
