@@ -512,7 +512,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                             return Err(format!(
                                 "since update didn't match: {:?} vs {:?}",
                                 self.collections.trace.since(),
-                                &from
+                                from
                             ));
                         }
                         trace.downgrade_since(&to);
@@ -588,7 +588,7 @@ fn apply_diff_single_option<X: PartialEq + Debug>(
             if single.as_ref() != Some(&from) {
                 return Err(format!(
                     "{} update didn't match: {:?} vs {:?}",
-                    name, single, &from
+                    name, single, from
                 ));
             }
             *single = Some(to)
@@ -603,7 +603,7 @@ fn apply_diff_single_option<X: PartialEq + Debug>(
             if single.as_ref() != Some(&from) {
                 return Err(format!(
                     "{} delete didn't match: {:?} vs {:?}",
-                    name, single, &from
+                    name, single, from
                 ));
             }
             *single = None
@@ -633,7 +633,7 @@ fn apply_diff_single<X: PartialEq + Debug>(
             if single != &from {
                 return Err(format!(
                     "{} update didn't match: {:?} vs {:?}",
-                    name, single, &from
+                    name, single, from
                 ));
             }
             *single = to

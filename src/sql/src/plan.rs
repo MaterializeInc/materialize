@@ -1863,7 +1863,7 @@ impl TryFrom<&str> for NetworkPolicyRuleDirection {
 pub struct PolicyAddress(pub IpNet);
 impl std::fmt::Display for PolicyAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 impl From<String> for PolicyAddress {
@@ -1885,7 +1885,7 @@ impl Serialize for PolicyAddress {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&format!("{}", &self.0))
+        serializer.serialize_str(&format!("{}", self.0))
     }
 }
 

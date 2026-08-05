@@ -716,7 +716,10 @@ class CopyFromS3Action(Action):
                 return False
             s3_obj = self.rng.choice(candidates)
         table = s3_obj.table
-        from_query = f"COPY INTO {table} FROM 's3://{s3_obj.bucket}/{s3_obj.key}' (FORMAT {s3_obj.format.upper()}, AWS CONNECTION = aws_conn)"
+        # TODO: Reenable the implicit column list when SS-361 is fixed:
+        # https://linear.app/materializeinc/issue/SS-361
+        columns = ", ".join(column.name(True) for column in s3_obj.columns)
+        from_query = f"COPY INTO {table} ({columns}) FROM 's3://{s3_obj.bucket}/{s3_obj.key}' (FORMAT {s3_obj.format.upper()}, AWS CONNECTION = aws_conn)"
         exe.execute(from_query, explainable=False, http=Http.NO, fetch=False)
         # We don't know how many rows the file contained, resync the estimate
         # from the table itself.

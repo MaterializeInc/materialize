@@ -20,6 +20,3 @@ name="installation-landing-guides-helm" %}}
 
 {{% include-from-yaml data="self_managed/installation"
 name="installation-landing-guides-unified" %}}
-
-{{% include-from-yaml data="self_managed/installation"
-name="installation-landing-guides-legacy" %}}

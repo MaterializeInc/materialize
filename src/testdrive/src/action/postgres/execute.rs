@@ -66,7 +66,7 @@ pub async fn run_execute(
             let client = state
                 .postgres_clients
                 .get(&connection)
-                .ok_or_else(|| anyhow!("connection '{}' not found", &connection))?;
+                .ok_or_else(|| anyhow!("connection '{}' not found", connection))?;
             execute_input(cmd, client).await?;
         }
     }

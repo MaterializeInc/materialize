@@ -710,7 +710,7 @@ async fn upgrade_check(
     let msg = format!(
         "catalog upgrade from {} to {} would succeed in about {} ms",
         last_seen_version,
-        &BUILD_INFO.human_version(None),
+        BUILD_INFO.human_version(None),
         dur.as_millis(),
     );
     println!("{msg}");
@@ -839,6 +839,6 @@ struct UnescapedDebug(String);
 
 impl std::fmt::Debug for UnescapedDebug {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "'{}'", &self.0)
+        write!(f, "'{}'", self.0)
     }
 }

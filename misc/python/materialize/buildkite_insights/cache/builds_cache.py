@@ -39,7 +39,7 @@ def get_or_query_builds(
     max_fetches: int,
     branch: str | None,
     build_states: list[str] | None,
-    items_per_page: int = 50,
+    items_per_page: int = 100,
     first_page: int = 1,
 ) -> list[Any]:
     meta_data = f"{branch}-{build_states}"
@@ -67,7 +67,7 @@ def get_or_query_builds_for_all_pipelines(
     max_fetches: int,
     branch: str | None,
     build_states: list[str] | None,
-    items_per_page: int = 50,
+    items_per_page: int = 100,
     first_page: int = 1,
 ) -> list[Any]:
     meta_data = f"{branch}-{build_states}"
