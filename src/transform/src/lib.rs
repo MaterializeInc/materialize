@@ -80,6 +80,8 @@ pub mod fusion;
 pub mod join_implementation;
 pub mod literal_constraints;
 pub mod literal_lifting;
+#[cfg(feature = "mirgen")]
+pub mod mirgen;
 pub mod monotonic;
 pub mod movement;
 pub mod non_null_requirements;

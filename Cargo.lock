@@ -6721,6 +6721,7 @@ dependencies = [
  "mz-storage-types",
  "mz-transform",
  "serde",
+ "serde_json",
  "tempfile",
  "timely",
  "tokio",
@@ -9168,6 +9169,8 @@ dependencies = [
  "paste",
  "proptest",
  "proptest-derive",
+ "rand 0.9.4",
+ "rand_chacha 0.9.0",
  "serde",
  "tracing",
 ]
