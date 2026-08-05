@@ -300,6 +300,10 @@ impl WorkloadRunner {
         config: &NamedConfig,
     ) -> anyhow::Result<(ReadResult, BTreeSet<SurfaceCell>)> {
         self.reset_instance(config).await?;
+        if std::env::var_os("DRIVER_DEBUG_RESPONSES").is_some() {
+            self.driver
+                .log_raw_responses(&format!("{}/{}", workload.name, config.name));
+        }
 
         let ts = workload.assert_ts();
         let upper = workload.upper();
@@ -333,9 +337,29 @@ impl WorkloadRunner {
                 self.driver.register_subscribe(id);
             }
             self.driver.schedule(id)?;
+        }
+
+        // Close the reconciliation window only now, with this configuration's
+        // dataflows already declared inside it.
+        //
+        // This ordering is what a controller does on reconnect: re-create the
+        // instance, replay the dataflows it wants the replica to be running, then
+        // send `InitializationComplete`. Closing the window first and creating
+        // dataflows afterwards looks equivalent, since creating a dataflow in the
+        // steady state is perfectly normal, but it is not: after a reconnect that
+        // reconciled to zero collections, dataflows created afterwards were
+        // installed and then never reported a frontier. The first configuration
+        // (which does not reconnect) was always fine, and every later one could
+        // hang. `scripts/reconciliation.spec` is the worked example of the correct
+        // order.
+        self.driver.send(ComputeCommand::InitializationComplete)?;
+
+        // Take the materialized-view sinks out of read-only mode. After the
+        // window, so the command applies to a live collection rather than being
+        // folded into reconciliation.
+        for export in &workload.exports {
             if *export == WorkloadExport::MaterializedView {
-                // Every dataflow starts read-only; a persist sink withholds all
-                // writes until this arrives.
+                let id = GlobalId::User(export_id(config_index, *export));
                 self.driver.send(ComputeCommand::AllowWrites(id))?;
             }
         }
@@ -409,7 +433,9 @@ impl WorkloadRunner {
         // The same settings at create time and at render time; see the module docs.
         self.driver.create_instance(None, false, updates.clone())?;
         self.driver.update_configuration(updates)?;
-        self.driver.send(ComputeCommand::InitializationComplete)?;
+        // The reconciliation window stays OPEN. The caller creates this
+        // configuration's dataflows inside it and closes it afterwards; see
+        // `run_one_config`.
         Ok(())
     }
 

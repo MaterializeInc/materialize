@@ -131,7 +131,14 @@ impl Responses {
                 if f.output_frontier.is_some() {
                     cur.output_frontier = f.output_frontier;
                 }
-                let _ = tx.send(cur);
+                // `send_replace`, not `send`: `send` fails when no receiver
+                // exists yet and, crucially, leaves the stored value unchanged.
+                // Responses routinely arrive before anything awaits them (a
+                // dataflow can hydrate while the caller is still reading another
+                // export), and dropping those updates makes a later waiter block
+                // on a frontier the replica already reported. `send_replace`
+                // always stores, so a late subscriber sees the latest value.
+                let _ = tx.send_replace(cur);
             }
             ComputeResponse::PeekResponse(uuid, pr, _otel) => {
                 if let Some(tx) = g.peeks.remove(&uuid) {
@@ -168,7 +175,11 @@ impl Responses {
                     // as the final upper so a waiter unblocks.
                     SubscribeResponse::DroppedAt(frontier) => frontier,
                 };
-                let _ = state.upper_tx.send(upper);
+                // `send_replace` for the same reason as the frontier above: a
+                // subscribe that completes before `await_subscribe` is called
+                // would otherwise leave its final upper unrecorded, and the
+                // waiter would block forever on an already-finished subscribe.
+                let _ = state.upper_tx.send_replace(upper);
             }
             _ => {}
         }
@@ -322,5 +333,73 @@ mod tests {
             Some(Antichain::from_elem(Timestamp::from(3)))
         );
         assert!(raw_rx.try_recv().is_ok());
+    }
+
+    /// A frontier that arrives before anything subscribes must still be visible
+    /// to a later subscriber.
+    ///
+    /// This is the ordering the existing tests miss: they create the receiver
+    /// first, which is the easy case. A real run routinely dispatches a frontier
+    /// while the caller is still reading a different export, and with
+    /// `watch::Sender::send` that update was dropped on the floor (send fails
+    /// with no receivers and leaves the value unchanged), so the later waiter
+    /// blocked forever on a frontier the replica had already reported.
+    #[mz_ore::test]
+    fn frontier_dispatched_before_subscribe_is_retained() {
+        let shared = empty_shared();
+        let id = GlobalId::User(7);
+
+        // Dispatch with no receiver in existence.
+        Responses::dispatch(
+            &shared,
+            ComputeResponse::Frontiers(
+                id,
+                FrontiersResponse {
+                    write_frontier: None,
+                    input_frontier: None,
+                    output_frontier: Some(Antichain::from_elem(Timestamp::from(5))),
+                },
+            ),
+        );
+
+        // Subscribe afterwards, as `expect_frontier` does.
+        let responses = Responses { shared };
+        let mut rx = responses.frontier(id);
+        assert_eq!(
+            rx.borrow_and_update().output_frontier,
+            Some(Antichain::from_elem(Timestamp::from(5))),
+            "a frontier reported before anyone subscribed must not be lost"
+        );
+    }
+
+    /// The same ordering hazard for a subscribe's upper: a subscribe that
+    /// completes before `await_subscribe` is called must still report its final
+    /// upper, or the waiter blocks on an already-finished subscribe.
+    #[mz_ore::test]
+    fn subscribe_upper_dispatched_before_subscribe_is_retained() {
+        use mz_compute_client::protocol::response::SubscribeBatch;
+
+        let shared = empty_shared();
+        let id = GlobalId::User(8);
+
+        Responses::dispatch(
+            &shared,
+            ComputeResponse::SubscribeResponse(
+                id,
+                SubscribeResponse::Batch(SubscribeBatch {
+                    lower: Antichain::from_elem(Timestamp::from(0)),
+                    // The empty antichain: the subscribe completed.
+                    upper: Antichain::new(),
+                    updates: Ok(Vec::new()),
+                }),
+            ),
+        );
+
+        let responses = Responses { shared };
+        let mut rx = responses.ensure_subscribe(id);
+        assert!(
+            rx.borrow_and_update().is_empty(),
+            "a completed subscribe's final upper must not be lost"
+        );
     }
 }

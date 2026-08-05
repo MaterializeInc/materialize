@@ -120,6 +120,33 @@ impl Driver {
         )))
     }
 
+    /// Log every `ComputeResponse` the replica sends, for diagnosing a dataflow
+    /// that is installed but never reports progress.
+    ///
+    /// Frontier and subscribe waits report only that they timed out, which cannot
+    /// distinguish "the replica said nothing" from "the replica reported a
+    /// frontier that never advanced". Those have different causes, so the raw
+    /// stream is the only way to tell them apart. Enabled by
+    /// `DRIVER_DEBUG_RESPONSES`; the task ends when the connection does.
+    pub fn log_raw_responses(&self, label: &str) {
+        let mut rx = self.responses.subscribe_raw();
+        let label = label.to_string();
+        mz_ore::task::spawn(|| "driver-response-log", async move {
+            while let Ok(response) = rx.recv().await {
+                // Peek responses carry whole result sets; log only their shape.
+                let rendered = match &response {
+                    mz_compute_client::protocol::response::ComputeResponse::PeekResponse(
+                        uuid,
+                        _,
+                        _,
+                    ) => format!("PeekResponse({uuid})"),
+                    other => format!("{other:?}"),
+                };
+                tracing::info!(target: "driver_responses", "[{label}] {rendered}");
+            }
+        });
+    }
+
     /// Sends a raw `ComputeCommand`. The primitive behind every interaction;
     /// use cases drive side effects (`AllowCompaction`, `CancelPeek`, ...) through
     /// this without the mechanism interpreting them.
@@ -156,14 +183,20 @@ impl Driver {
     ) -> anyhow::Result<()> {
         let mut rx = self.responses.frontier(id);
         let want = Antichain::from_elem(target);
-        tokio::time::timeout(timeout, async {
+        // Remember what was last observed, so a timeout can say whether the
+        // replica reported nothing at all or reported a frontier that stopped
+        // short. Those have entirely different causes, and a bare "did not reach
+        // X in time" cannot tell them apart.
+        let last_seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen = std::sync::Arc::clone(&last_seen);
+        let result = tokio::time::timeout(timeout, async move {
             loop {
-                let reached = rx
-                    .borrow_and_update()
-                    .output_frontier
+                let observed = rx.borrow_and_update().output_frontier.clone();
+                *seen.lock().expect("lock") = observed.clone();
+                if observed
                     .as_ref()
-                    .is_some_and(|of| timely::PartialOrder::less_equal(&want, of));
-                if reached {
+                    .is_some_and(|of| timely::PartialOrder::less_equal(&want, of))
+                {
                     return;
                 }
                 if rx.changed().await.is_err() {
@@ -174,8 +207,20 @@ impl Driver {
                 }
             }
         })
-        .await
-        .map_err(|_| anyhow::anyhow!("frontier for {id} did not reach {target:?} in time"))
+        .await;
+        result.map_err(|_| {
+            let seen = last_seen.lock().expect("lock").clone();
+            match seen {
+                Some(of) => anyhow::anyhow!(
+                    "frontier for {id} did not reach {target:?} in time; last \
+                     reported output frontier was {of:?}"
+                ),
+                None => anyhow::anyhow!(
+                    "frontier for {id} did not reach {target:?} in time; the \
+                     replica never reported an output frontier for it"
+                ),
+            }
+        })
     }
 
     /// Peeks `target` at `ts`, returning the decoded rows. The target is an index
