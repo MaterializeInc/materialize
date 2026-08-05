@@ -242,8 +242,8 @@
 
     {% set result = run_query("SELECT current_user, now();") %}
     {% if result is not none and result.rows|length > 0 %}
-        {% set db_user = result.columns[0][0] %}
-        {% set deploy_time = result.columns[0][1] %}
+        {% set db_user = result.rows[0][0] %}
+        {% set deploy_time = result.rows[0][1] %}
     {% else %}
         {% set db_user = "unknown" %}
         {% set deploy_time = "unknown" %}
