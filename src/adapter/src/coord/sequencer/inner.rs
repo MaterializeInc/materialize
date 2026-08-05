@@ -130,6 +130,7 @@ pub(crate) use cluster::cancel_carried_reconfiguration;
 mod copy_from;
 mod create_index;
 mod create_materialized_view;
+mod create_metric_sink;
 mod create_view;
 mod explain_timestamp;
 mod peek;

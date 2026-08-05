@@ -31,7 +31,7 @@ use mz_catalog::expr_cache::LocalExpressions;
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, CommentsMap,
-    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView,
+    Connection, DataSourceDesc, Database, DefaultPrivileges, Index, MaterializedView, MetricSink,
     NetworkPolicy, Role, RoleAuth, Schema, Secret, Sink, Source, SourceReferences, Table,
     TableDataSource, Type, View,
 };
@@ -74,9 +74,9 @@ use mz_sql::names::{
     ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateSecretPlan,
-    CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan, CreateViewPlan, Params,
-    Plan, PlanContext,
+    CreateConnectionPlan, CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan,
+    CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan, CreateTypePlan,
+    CreateViewPlan, Params, Plan, PlanContext,
 };
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
@@ -454,6 +454,12 @@ impl CatalogState {
                 }
                 CatalogItem::Sink(sink) => {
                     let from_item_id = self.get_entry_by_global_id(&sink.from).id();
+                    if seen.insert(from_item_id) {
+                        queue.push_back(from_item_id);
+                    }
+                }
+                CatalogItem::MetricSink(metric_sink) => {
+                    let from_item_id = self.get_entry_by_global_id(&metric_sink.from).id();
                     if seen.insert(from_item_id) {
                         queue.push_back(from_item_id);
                     }
@@ -1503,6 +1509,18 @@ impl CatalogState {
                 physical_plan: None,
                 dataflow_metainfo: None,
             }),
+            Plan::CreateMetricSink(CreateMetricSinkPlan { metric_sink, .. }) => {
+                CatalogItem::MetricSink(MetricSink {
+                    create_sql: metric_sink.create_sql,
+                    global_id,
+                    from: metric_sink.from,
+                    resolved_ids,
+                    cluster_id: metric_sink.cluster_id,
+                    optimized_plan: None,
+                    physical_plan: None,
+                    dataflow_metainfo: None,
+                })
+            }
             Plan::CreateSink(CreateSinkPlan {
                 sink,
                 with_snapshot,
@@ -1918,6 +1936,7 @@ impl CatalogState {
             CatalogItemType::Table
             | CatalogItemType::Source
             | CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Index
@@ -2740,6 +2759,7 @@ impl CatalogState {
             | CommentObjectId::MaterializedView(id)
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
+            | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
@@ -2769,6 +2789,7 @@ impl CatalogState {
             | CommentObjectId::MaterializedView(id)
             | CommentObjectId::Source(id)
             | CommentObjectId::Sink(id)
+            | CommentObjectId::MetricSink(id)
             | CommentObjectId::Index(id)
             | CommentObjectId::Func(id)
             | CommentObjectId::Connection(id)
