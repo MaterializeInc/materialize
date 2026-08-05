@@ -430,17 +430,17 @@ impl Codec {
                 dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
-                if params.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                if params.len() > usize::from(u16::MAX) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
                             "{} params in parameter description, which exceeds {}",
                             params.len(),
-                            i16::MAX
+                            u16::MAX
                         ),
                     ));
                 }
-                dst.put_length_i16(params.len())?;
+                dst.put_length_u16(params.len())?;
                 for param in params {
                     dst.put_u32(param.oid());
                 }
@@ -792,8 +792,12 @@ fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?;
     let sql = buf.read_cstr()?;
 
+    // NOTE: the protocol calls the counts that precede repeated groups `Int16`,
+    // but PostgreSQL decodes them as unsigned, so they reach 65535. Reading one
+    // as signed makes it negative, which drops the group and leaves the cursor
+    // misaligned for the rest of the message.
     let mut param_types = vec![];
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         param_types.push(buf.read_u32()?);
     }
 
@@ -833,13 +837,15 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
+    // The three counts below are `Int16` in the protocol but decoded as
+    // unsigned, for the reason spelled out in `decode_parse`.
     let mut param_formats = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         param_formats.push(buf.read_format()?);
     }
 
     let mut raw_params = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         let len = buf.read_i32()?;
         if len == -1 {
             raw_params.push(None); // NULL
@@ -854,7 +860,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     }
 
     let mut result_formats = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         result_formats.push(buf.read_format()?);
     }
 
