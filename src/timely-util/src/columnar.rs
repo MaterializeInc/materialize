@@ -373,6 +373,7 @@ mod tests {
     /// The ship signal is monotone: once it fires it stays fired, even when
     /// a single wide record steps far past the 2 MiB boundary in one push.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn ship_threshold_monotone() {
         use columnar::Push;
         let mut container = <Vec<u64> as Columnar>::Container::default();
