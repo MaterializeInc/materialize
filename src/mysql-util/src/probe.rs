@@ -174,7 +174,14 @@ impl<'a> KeyProber<'a> {
             .conn
             .exec_first(sql, Params::Positional(params))
             .await?;
-        Ok(row.and_then(|mut row| row.take_opt::<String, _>(0).and_then(Result::ok)))
+        match row.and_then(|mut row| row.take_opt::<String, _>(0)) {
+            None => Ok(None),
+            Some(Ok(value)) => Ok(Some(value)),
+            Some(Err(_)) => Err(MySqlError::NonUtf8KeyValue {
+                qualified_table_name: self.table.clone(),
+                column_name: self.col.clone(),
+            }),
+        }
     }
 }
 

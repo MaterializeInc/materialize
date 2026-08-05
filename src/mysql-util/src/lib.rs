@@ -102,6 +102,11 @@ pub enum MySqlError {
         qualified_table_name: String,
         error: String,
     },
+    #[error("non-UTF-8 key value in {qualified_table_name} column {column_name}")]
+    NonUtf8KeyValue {
+        qualified_table_name: String,
+        column_name: String,
+    },
     #[error("unsupported data types: {columns:?}")]
     UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },
     #[error("duplicated column names in table '{qualified_table_name}': {columns:?}")]
