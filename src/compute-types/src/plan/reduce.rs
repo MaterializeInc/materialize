@@ -371,46 +371,6 @@ pub struct SingleBasicPlan {
     pub fused_unnest_list: bool,
 }
 
-/// Plan for collating the results of computing multiple aggregation
-/// types.
-///
-/// TODO: could we express this as a delta join
-#[derive(
-    Clone,
-    Debug,
-    Default,
-    Serialize,
-    Deserialize,
-    Eq,
-    PartialEq,
-    Ord,
-    PartialOrd
-)]
-pub struct CollationPlan {
-    /// Accumulable aggregation results to collate, if any.
-    pub accumulable: Option<AccumulablePlan>,
-    /// Hierarchical aggregation results to collate, if any.
-    pub hierarchical: Option<HierarchicalPlan>,
-    /// Basic aggregation results to collate, if any.
-    pub basic: Option<BasicPlan>,
-    /// When we get results back from each of the different
-    /// aggregation types, they will be subsequences of
-    /// the sequence aggregations in the original reduce expression.
-    /// We keep a map from output position -> reduction type
-    /// to easily merge results back into the requested order.
-    pub aggregate_types: Vec<ReductionType>,
-}
-
-impl CollationPlan {
-    /// Upgrades the hierarchical component of the collation plan to monotonic, if necessary,
-    /// and sets consolidation requirements.
-    pub fn as_monotonic(&mut self, must_consolidate: bool) {
-        self.hierarchical
-            .as_mut()
-            .map(|plan| plan.as_monotonic(must_consolidate));
-    }
-}
-
 impl ReducePlan {
     /// Generate a plan for computing the supplied aggregations.
     ///
