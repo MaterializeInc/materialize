@@ -20,10 +20,11 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.36.0
-*Released to Materialize Cloud: 2026-08-06* <br>
-*Released to Materialize Self-Managed: 2026-08-07* <br>
+*Released to Materialize Cloud: 2026-08-05* <br>
+*Released to Materialize Self-Managed: 2026-08-06* <br>
 
 ### Improvements {#v26.36-improvements}
+- **`dbt-materialize`: `AUTO SCALING STRATEGY` support**: The dbt adapter can now set, reset, and disable a cluster's hydration-burst autoscaling strategy, and `deploy_init` copies the production cluster's strategy to the `_dbt_deploy` cluster so blue/green deployment environments hydrate faster ahead of cutover.
 - **Updated timezone data**: The IANA timezone database has been updated from 2022g to 2025b, correcting timezone rules for Egypt, Kazakhstan, Paraguay, and Greenland that changed since 2023. Numeric timezone abbreviations (e.g., `+05`) now render correctly in `pg_timezone_names`.
 - **Self-Managed: Automatic rollouts on GKE node pool upgrades**: The Materialize operator can now detect GKE node pool upgrades and automatically trigger rollouts to move workloads onto the new nodes, preventing outages from automatic node evictions.
 
