@@ -51,10 +51,11 @@ impl<'a> KeyProber<'a> {
     /// as the sampled range shrinks on a static table.
     pub async fn estimate_range_rows(
         &mut self,
-        start: &str,
-        end: Option<&str>,
+        lower_bound_exclusive: &str,
+        upper_bound_exclusive: Option<&str>,
     ) -> Result<Option<u64>, MySqlError> {
-        let (clause, params) = self.range_filter(Some(start), end);
+        let (clause, params) =
+            self.range_filter(Some(lower_bound_exclusive), upper_bound_exclusive);
         let select = format!(
             "SELECT {col} FROM {table} WHERE {clause}",
             col = self.col,
@@ -65,8 +66,7 @@ impl<'a> KeyProber<'a> {
 
     /// Grabs a prefix of up to `max_prefix_length` characters for the first
     /// key in the given range. If the key is shorter than `max_prefix_length`,
-    /// it returns that shorter value. The lower bound is exclusive, a key
-    /// exactly equal to it is skipped.
+    /// it returns that shorter value.
     ///
     /// The query will generally look something like:
     ///
@@ -79,10 +79,10 @@ impl<'a> KeyProber<'a> {
     pub async fn prefix_of_first_key_in_range(
         &mut self,
         lower_bound_exclusive: Option<&str>,
-        upper_bound: Option<&str>,
+        upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Result<Option<String>, MySqlError> {
-        let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound);
+        let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound_exclusive);
         let sql = format!(
             "SELECT LEFT({col}, {max_prefix_length}) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
             col = self.col,
@@ -92,7 +92,7 @@ impl<'a> KeyProber<'a> {
     }
 
     /// Returns the prefix of up to `max_prefix_length` characters of the first key after `prefix`,
-    /// but below `upper_bound`. Returns None if no key matching these conditions exists.
+    /// but below `upper_bound_exclusive`. Returns None if no key matching these conditions exists.
     ///
     /// NOTE: Run this inside a REPEATABLE READ transaction. It issues two
     /// probes, and each statement otherwise reads its own snapshot: a key
@@ -102,48 +102,53 @@ impl<'a> KeyProber<'a> {
     pub async fn prefix_of_first_row_not_matching_prefix(
         &mut self,
         prefix: &str,
-        upper_bound: Option<&str>,
+        upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Result<Option<String>, MySqlError> {
-        let Some(max_key) = self.max_key_with_prefix(prefix, upper_bound).await? else {
+        let Some(max_key) = self
+            .max_key_with_prefix(prefix, upper_bound_exclusive)
+            .await?
+        else {
             return Ok(None);
         };
-        self.prefix_of_first_key_in_range(Some(&max_key), upper_bound, max_prefix_length)
+        self.prefix_of_first_key_in_range(Some(&max_key), upper_bound_exclusive, max_prefix_length)
             .await
     }
 
-    /// Quick way to grab the maximum key matching the prefix within the given upper bound.
+    /// Quick way to grab the maximum key matching the prefix below the
+    /// exclusive upper bound.
     ///
     /// The query will generally look something like:
     ///
     /// ```sql
     ///     SELECT pk_col FROM table
-    ///     WHERE pk_col LIKE /* prefix% */ 'abc%'  AND pk_col < /* upper_bound */ 'ac'
+    ///     WHERE pk_col LIKE /* prefix% */ 'abc%'  AND pk_col < /* upper_bound_exclusive */ 'ac'
     ///     ORDER BY pk_col DESC
     ///     LIMIT 1
     /// ```
     async fn max_key_with_prefix(
         &mut self,
         prefix: &str,
-        upper_bound: Option<&str>,
+        upper_bound_exclusive: Option<&str>,
     ) -> Result<Option<String>, MySqlError> {
         let col = &self.col;
         let table = &self.table;
         let mut sql =
             format!("SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}'");
         let mut params: Vec<Value> = vec![like_prefix_pattern(prefix).into()];
-        self.less_than_end(&mut sql, &mut params, upper_bound);
+        self.less_than_end(&mut sql, &mut params, upper_bound_exclusive);
         sql.push_str(&format!(" ORDER BY {col} DESC LIMIT 1"));
         self.query_string(sql, params).await
     }
 
-    /// WHERE clause and params selecting keys in `(lower_bound_exclusive, upper_bound)`.
-    /// Both bounds are optional, an unbounded side falls away and a fully
-    /// unbounded filter becomes `TRUE`.
+    /// WHERE clause and params selecting keys in the open interval
+    /// `(lower_bound_exclusive, upper_bound_exclusive)`. Both bounds are
+    /// optional, an unbounded side falls away and a fully unbounded filter
+    /// becomes `TRUE`.
     fn range_filter(
         &self,
         lower_bound_exclusive: Option<&str>,
-        upper_bound: Option<&str>,
+        upper_bound_exclusive: Option<&str>,
     ) -> (String, Vec<Value>) {
         let col = &self.col;
         let mut conditions = Vec::new();
@@ -152,7 +157,7 @@ impl<'a> KeyProber<'a> {
             conditions.push(format!("{col} > ?"));
             params.push(lower.into());
         }
-        if let Some(upper) = upper_bound {
+        if let Some(upper) = upper_bound_exclusive {
             conditions.push(format!("{col} < ?"));
             params.push(upper.into());
         }
@@ -163,11 +168,16 @@ impl<'a> KeyProber<'a> {
         }
     }
 
-    fn less_than_end(&self, sql: &mut String, params: &mut Vec<Value>, end: Option<&str>) {
-        if let Some(end) = end {
+    fn less_than_end(
+        &self,
+        sql: &mut String,
+        params: &mut Vec<Value>,
+        upper_bound_exclusive: Option<&str>,
+    ) {
+        if let Some(upper) = upper_bound_exclusive {
             let col = &self.col;
             sql.push_str(&format!(" AND {col} < ?"));
-            params.push(end.into());
+            params.push(upper.into());
         }
     }
 
@@ -369,13 +379,13 @@ mod tests {
     async fn first(
         prober: &mut KeyProber<'_>,
         lower_bound_exclusive: &str,
-        upper_bound: Option<&str>,
+        upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Option<String> {
         prober
             .prefix_of_first_key_in_range(
                 Some(lower_bound_exclusive),
-                upper_bound,
+                upper_bound_exclusive,
                 max_prefix_length,
             )
             .await
@@ -387,11 +397,15 @@ mod tests {
     async fn next(
         prober: &mut KeyProber<'_>,
         prefix: &str,
-        upper_bound: Option<&str>,
+        upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Option<String> {
         prober
-            .prefix_of_first_row_not_matching_prefix(prefix, upper_bound, max_prefix_length)
+            .prefix_of_first_row_not_matching_prefix(
+                prefix,
+                upper_bound_exclusive,
+                max_prefix_length,
+            )
             .await
             .expect("prefix_of_first_row_not_matching_prefix failed")
     }
