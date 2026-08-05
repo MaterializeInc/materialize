@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import pytest
-from dbt.tests.util import run_dbt
+from dbt.tests.util import run_dbt, run_dbt_and_capture
 
 # Source materialization in dedicated schema (for non-strict tests)
 load_gen_source = """
@@ -282,6 +282,14 @@ class TestStrictModeViewBlocked:
         """With strict_mode, mixing view and source_table in same schema fails at compile time."""
         run_dbt(["run"], expect_pass=False)
 
+    def test_view_alone_blocked_by_source_table_in_schema(self, project):
+        """Building only the view must still fail, since the source_table's own
+        validation does not run. This pins the view side of the check."""
+        _, output = run_dbt_and_capture(
+            ["run", "--select", "test_view"], expect_pass=False
+        )
+        assert "Schema contains source_table objects" in output
+
 
 class TestStrictModeSourceTablesCanCoexist:
     """Test that multiple source_tables can coexist in the same schema (strict_mode enabled)."""
@@ -353,6 +361,14 @@ class TestStrictModeViewBlockedBySink:
         """With strict_mode, mixing view and sink in same schema fails at compile time."""
         run_dbt(["run"], expect_pass=False)
 
+    def test_view_alone_blocked_by_sink_in_schema(self, project):
+        """Building only the view must still fail, since the sink's own
+        validation does not run. This pins the view side of the check."""
+        _, output = run_dbt_and_capture(
+            ["run", "--select", "test_view"], expect_pass=False
+        )
+        assert "Schema contains sink objects" in output
+
 
 class TestStrictModeSinksCanCoexist:
     """Test that multiple sinks can coexist in the same schema (strict_mode enabled)."""
@@ -422,6 +438,14 @@ class TestStrictModeViewBlockedBySource:
     def test_view_blocked_in_schema_with_source(self, project):
         """With strict_mode, mixing view and source in same schema fails at compile time."""
         run_dbt(["run"], expect_pass=False)
+
+    def test_view_alone_blocked_by_source_in_schema(self, project):
+        """Building only the view must still fail, since the source's own
+        validation does not run. This pins the view side of the check."""
+        _, output = run_dbt_and_capture(
+            ["run", "--select", "test_view"], expect_pass=False
+        )
+        assert "Schema contains source objects" in output
 
 
 class TestStrictModeSourcesCanCoexist:
