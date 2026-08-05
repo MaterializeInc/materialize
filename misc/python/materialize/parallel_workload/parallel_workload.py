@@ -438,12 +438,19 @@ def run(
         # opposite orders, which no timeout ever clears. Nothing legitimate
         # pauses without a round trip for the 300s above (the longest such
         # pause is BackupRestoreAction's 240s sleep), but a single sample can
-        # catch a worker between round trips or queued on another worker's
-        # object lock (ReconfigureClusterAction holds a cluster lock across
-        # its poll). So only call a worker wedged if it stays off the server
-        # for a whole confirmation window: a lock waiter eventually gets the
-        # lock and makes a round trip or exits, a deadlocked worker never
-        # does either.
+        # catch a worker between round trips, so only call a worker wedged if
+        # it stays off the server for a whole confirmation window.
+        #
+        # A tolerated server-side hang also explains every other worker: the
+        # hung statement holds its actions' object locks (an `ALTER SINK ...
+        # SET FROM` waits unboundedly for the sink's frontier to catch up,
+        # database-issues#9820, while holding both the sink's and the new base
+        # object's lock), and a worker queued on such a lock can no more reach
+        # the server than a deadlocked one can. Telling the two apart from
+        # outside is not possible, so a workload-side deadlock is only
+        # diagnosed when no worker is on the server at all. Waiters and
+        # deadlocks both resolve when the statement does, and calling a waiter
+        # deadlocked costs the run its final checks.
         def not_on_server() -> set[str]:
             return {
                 t.name
@@ -451,11 +458,21 @@ def run(
                 if t.is_alive() and w.exe is not None and w.exe.last_status != "running"
             }
 
+        def on_server() -> set[str]:
+            return {
+                t.name
+                for w, t in alive
+                if t.is_alive() and w.exe is not None and w.exe.last_status == "running"
+            }
+
         wedged = not_on_server()
         confirm_until = time.time() + 60
         while wedged and time.time() < confirm_until:
             time.sleep(1)
             wedged &= not_on_server()
+            if on_server():
+                wedged = set()
+                break
         merge_num_queries(num_queries, workers)
         print_stats(num_queries, workers, num_threads, complexity, scenario)
 

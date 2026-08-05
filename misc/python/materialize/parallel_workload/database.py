@@ -61,7 +61,18 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 50
 MAX_INCLUDE_HEADERS = 5
-MAX_ROWS = 500
+# The row count a view's join squares. A view over two tables joins them on a
+# random boolean predicate, so the join is a cross product and every read of
+# that view builds MAX_ROWS**2 wide intermediate rows, whatever LIMIT the
+# reading query carries. Measured at 500 with only four columns, one
+# `COPY (SELECT * FROM view WHERE .. LIMIT 100) TO 's3://..'` cost ~450 MiB of
+# replica RSS, and pw tables carry up to MAX_COLUMNS of them. A handful of such
+# reads at once is what grew a clusterd to 19 GiB and had the kernel OOM-killer
+# take it, plus environmentd and the Kafka broker, out of the one cgroup all of
+# a run's containers share (nightlies 17660-17701). 100 keeps enough rows for
+# the DML, persist and index paths to be interesting while cutting the
+# intermediate 25-fold.
+MAX_ROWS = 100
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
 MAX_DBS = 50

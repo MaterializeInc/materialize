@@ -35,7 +35,14 @@ NEGATIVE_ACCUMULATION_ERRORS: list[str] = [
     # from the internal ReduceAccumulable log text. Seen in repeat_row (#8106).
     "with non-zero accumulation in accumulable aggregate",
     "Non-positive multiplicity in DistinctBy",
+    # Covers the `ReduceInaccumulable`, `ReduceInaccumulable DISTINCT` and
+    # `ReduceMinsMaxes` sites, which surface their internal log text verbatim.
     "Non-positive accumulation",
+    # The hierarchical min/max stage words its client-facing error differently
+    # from its "Non-positive accumulation in MinsMaxesHierarchical" log line
+    # (reduce.rs `build_bucketed_stage`), so the entry above does not cover it.
+    # Seen in repeat_row (build 17664).
+    "saw non-positive accumulation",
     "Invalid negative unsigned aggregation in ReduceAccumulable",
     "saw negative accumulation",
     # Peek handling

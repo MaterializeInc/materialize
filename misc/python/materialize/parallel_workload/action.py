@@ -2944,11 +2944,17 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
+        # Fractions of the *cgroup* memory limit, which under mzcompose's
+        # process orchestrator is the whole container budget shared by
+        # environmentd and every replica, not one replica's allowance. A
+        # process-singleton pool at 0.25 is 6 GiB per clusterd on the 24 GiB CI
+        # agent, so the values stay small enough that all replicas together
+        # cannot claim the budget. Small pools also fill up sooner, which
+        # exercises the paging and compression paths more, not less.
         self.flags_with_values["column_paged_batcher_budget_fraction"] = [
             "0.0",
             "0.01",
-            "0.05",
-            "0.25",
+            "0.02",
         ]
         self.flags_with_values["column_paged_batcher_lz4"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["column_paged_batcher_swap_pageout"] = (
@@ -2962,10 +2968,14 @@ class FlipFlagsAction(Action):
         self.flags_with_values["column_paged_batcher_eager_backing"] = (
             BOOLEAN_FLAG_VALUES
         )
+        # Same shared-budget reasoning as the budget fraction above. Sharing its
+        # value set keeps all three orderings against the budget covered: a
+        # target of 0 collapses the compressed tier, a target below the budget
+        # pages out above it, and a target above the budget pages nothing out.
         self.flags_with_values["column_paged_batcher_pool_rss_target_fraction"] = [
             "0.0",
-            "0.25",
-            "0.5",
+            "0.01",
+            "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
         # 0 forces the estimated-size path for every table, the default forces
