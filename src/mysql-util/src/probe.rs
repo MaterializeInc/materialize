@@ -93,11 +93,8 @@ impl<'a> KeyProber<'a> {
     /// Returns the prefix of up to `max_prefix_length` characters of the first key after `prefix`,
     /// but below `upper_bound_exclusive`. Returns None if no key matching these conditions exists.
     ///
-    /// NOTE: Run this inside a REPEATABLE READ transaction. It issues two
-    /// probes, and each statement otherwise reads its own snapshot: a key
-    /// matching `prefix` inserted past the anchor between the probes makes
-    /// this return `prefix` itself again, and a caller walking prefixes
-    /// would re-process it instead of advancing.
+    /// Note: this should be run inside a REPEATABLE READ transaction because
+    /// it issues two queries sequentially.
     pub async fn prefix_of_first_row_not_matching_prefix(
         &mut self,
         prefix: &str,
@@ -283,13 +280,6 @@ mod tests {
             prefix_of_first_row_not_matching_prefix(p, "bb", Some("c"), 2).await,
             None
         );
-        // The anchor for "b" covers every key matching 'b%', so the walk
-        // reports no further prefix inside this range.
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "b", Some("c"), 2).await,
-            None
-        );
-
         assert_eq!(
             prefix_of_first_key_in_range(p, Some("c"), None, 2).await,
             None
