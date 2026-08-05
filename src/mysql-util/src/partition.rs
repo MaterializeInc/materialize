@@ -68,7 +68,7 @@ struct Range {
     depth: usize,
 }
 
-async fn partition<D: PartitionDb>(
+async fn partition<D: PrimaryKeyProber>(
     db: &mut D,
     workers: usize,
     estimated_row_count: u64,
@@ -109,7 +109,7 @@ fn get_target_max_rows_per_range(
     target_rows_per_range
 }
 
-async fn split_into_ranges<D: PartitionDb>(
+async fn split_into_ranges<D: PrimaryKeyProber>(
     db: &mut D,
     estimated_row_count: f64,
     target_rows_per_bucket: f64,
@@ -172,7 +172,7 @@ fn assign_boundaries(ranges: &[Range], workers: usize) -> Vec<String> {
 /// Splits `parent` at every distinct key prefix one character longer than the
 /// prefix `parent`, i.e. "a" depth: 1 for a table with keys "a", "aa", "aaa", "ab" would be split to
 /// "a" depth: 2 estimate 1, "aa" depth: 2 estimate 2, "ab" depth 2, estimate 1.
-async fn split_range<D: PartitionDb>(
+async fn split_range<D: PrimaryKeyProber>(
     db: &mut D,
     parent: &Range,
     target_rows: f64,
@@ -247,7 +247,7 @@ async fn split_range<D: PartitionDb>(
 }
 
 /// Wrapper around KeyProber for testing purposes.
-trait PartitionDb {
+trait PrimaryKeyProber {
     async fn estimate_range_rows(
         &mut self,
         start: Option<&str>,
@@ -272,7 +272,7 @@ trait PartitionDb {
     ) -> Result<Option<String>, MySqlError>;
 }
 
-impl<'a> PartitionDb for KeyProber<'a> {
+impl<'a> PrimaryKeyProber for KeyProber<'a> {
     async fn estimate_range_rows(
         &mut self,
         start: Option<&str>,
