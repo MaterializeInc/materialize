@@ -63,6 +63,9 @@ SECRETS_DIR = env("SECRETS_DIR", "/tmp/clusterd-test-driver-secrets")
 # Path to the JSON-line command script the driver runs. Relative paths are
 # resolved against the repo root. Defaults to the `index` scenario script.
 SCRIPT = env("SCRIPT", "test/clusterd-test-driver/scripts/index.spec")
+# Directory of generated JSON workloads. When set, the driver runs the generated
+# corpus instead of `SCRIPT`. Relative paths resolve against the repo root.
+WORKLOADS = env("WORKLOADS", "")
 RUN_CLUSTERD = env("RUN_CLUSTERD", "1") == "1"
 # Command prepended to clusterd, e.g. "heaptrack" or "perf record -g --".
 WRAPPER = env("WRAPPER", "")
@@ -287,7 +290,6 @@ def main() -> int:
         script_path = Path(SCRIPT)
         if not script_path.is_absolute():
             script_path = ROOT / script_path
-        print(f"  DRIVER_SCRIPT={script_path}")
         driver_env = dict(
             os.environ,
             CLUSTERD_COMPUTE_ADDR=COMPUTE_ADDR,
@@ -296,6 +298,16 @@ def main() -> int:
             DRIVER_PUBSUB_BIND=f"0.0.0.0:{PUBSUB_PORT}",
             DRIVER_SCRIPT=str(script_path),
         )
+        if WORKLOADS:
+            workloads_path = Path(WORKLOADS)
+            if not workloads_path.is_absolute():
+                workloads_path = ROOT / workloads_path
+            # The driver prefers `DRIVER_WORKLOADS` over `DRIVER_SCRIPT`, so
+            # setting it selects the generated-corpus suite.
+            driver_env["DRIVER_WORKLOADS"] = str(workloads_path)
+            print(f"  DRIVER_WORKLOADS={workloads_path}")
+        else:
+            print(f"  DRIVER_SCRIPT={script_path}")
         result = subprocess.run(
             [str(ROOT / "target" / PROFILE_DIR / "headless-driver")],
             env=driver_env,

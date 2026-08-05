@@ -99,7 +99,17 @@ SCRIPTS = [
 ]
 
 
+# Where the mounted generated workload corpus lands inside the driver container.
+WORKLOADS_DIR = "/workdir/workloads"
+
+
 def workflow_default(c: Composition) -> None:
+    workflow_scripts(c)
+    workflow_workloads(c)
+
+
+def workflow_scripts(c: Composition) -> None:
+    """The hand-written scenarios, each asserting its own golden blocks."""
     c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
     for i, script in enumerate(SCRIPTS):
         # Buildkite collapsible section per scenario.
@@ -117,3 +127,33 @@ def workflow_default(c: Composition) -> None:
             env_extra={"DRIVER_SCRIPT": f"{SCRIPTS_DIR}/{script}"},
             use_aliases=True,
         )
+
+
+def workflow_workloads(c: Composition) -> None:
+    """The generated corpus, checked by its own oracles.
+
+    Runs twice, at one and at two timely workers. Multi-worker is not a nice-to-have
+    here: with a single worker no data is ever exchanged, so the key-routing
+    exchanges the renderer inserts, and the multi-worker response merging in
+    `PartitionedComputeState`, are never executed. Every operator in the corpus
+    covers different code at the two widths.
+    """
+    c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
+    for workers in (1, 2):
+        ui.section(f"Running generated workloads ({workers} worker(s))")
+        # A fresh clusterd per width. The workload runner reconciles compute state
+        # per configuration, but the worker count is fixed at process start.
+        c.kill("clusterd")
+        with c.override(Clusterd(mz_service="headless-driver", workers=workers)):
+            c.up("clusterd")
+            c.run(
+                "headless-driver",
+                env_extra={"DRIVER_WORKLOADS": WORKLOADS_DIR},
+                use_aliases=True,
+            )
+
+
+# NOTE: drift between the generator and the committed corpus is checked by
+# `corpus_matches_committed_files` in `mz-clusterd-test-driver`, not here. It needs
+# only cargo, so making it a Rust test keeps it in the fast pre-merge suite instead
+# of a nightly composition.

@@ -189,6 +189,26 @@ impl Driver {
         result_desc: RelationDesc,
         ts: Timestamp,
     ) -> anyhow::Result<Vec<Row>> {
+        match self.peek_result(target, result_desc, ts).await? {
+            Ok(rows) => Ok(rows),
+            Err(e) => anyhow::bail!("peek error: {e}"),
+        }
+    }
+
+    /// Like [`Self::peek`], but reports a collection error as a value rather than
+    /// as a failure.
+    ///
+    /// `Ok(Err(msg))` means the peek succeeded and the collection it read holds an
+    /// error, which is a legitimate result: a computation over erroring input
+    /// *should* produce that error, and a caller comparing against a reference
+    /// needs to see it rather than have it collapsed into the same channel as a
+    /// timeout or a dropped connection. Those stay `Err`.
+    pub async fn peek_result(
+        &self,
+        target: PeekTarget,
+        result_desc: RelationDesc,
+        ts: Timestamp,
+    ) -> anyhow::Result<Result<Vec<Row>, String>> {
         let uuid = uuid::Uuid::new_v4();
         let rx = self.responses.register_peek(uuid);
         let arity = result_desc.arity();
@@ -218,9 +238,9 @@ impl Driver {
                         rows.push(row_ref.to_owned());
                     }
                 }
-                Ok(rows)
+                Ok(Ok(rows))
             }
-            PeekResponse::Error(e) => anyhow::bail!("peek error: {e}"),
+            PeekResponse::Error(e) => Ok(Err(e)),
             PeekResponse::Canceled => anyhow::bail!("peek canceled"),
             PeekResponse::Stashed(_) => anyhow::bail!("unexpected stashed peek result"),
         }
@@ -251,6 +271,20 @@ impl Driver {
         up_to: Timestamp,
         timeout: Duration,
     ) -> anyhow::Result<Vec<(Row, Timestamp, i64)>> {
+        match self.await_subscribe_result(id, up_to, timeout).await? {
+            Ok(updates) => Ok(updates),
+            Err(e) => anyhow::bail!("subscribe {id} reported an error: {e}"),
+        }
+    }
+
+    /// Like [`Self::await_subscribe`], but reports a subscribe error as a value
+    /// rather than as a failure. See [`Self::peek_result`].
+    pub async fn await_subscribe_result(
+        &self,
+        id: GlobalId,
+        up_to: Timestamp,
+        timeout: Duration,
+    ) -> anyhow::Result<Result<Vec<(Row, Timestamp, i64)>, String>> {
         let mut rx = self.responses.ensure_subscribe(id);
         let want = Antichain::from_elem(up_to);
         tokio::time::timeout(timeout, async {
@@ -270,6 +304,6 @@ impl Driver {
         })
         .await
         .map_err(|_| anyhow::anyhow!("subscribe {id} did not reach {up_to:?} in time"))?;
-        self.responses.drain_subscribe(id)
+        self.responses.drain_subscribe_result(id)
     }
 }

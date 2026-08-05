@@ -1,0 +1,451 @@
+{
+  "name": "gen-00005eed",
+  "seed": 24301,
+  "inputs": [
+    {
+      "schema": [
+        "int32",
+        "bool"
+      ],
+      "batches": [
+        {
+          "updates": [
+            {
+              "values": [
+                {
+                  "int32": -543406503
+                },
+                "null"
+              ],
+              "diff": 1
+            }
+          ]
+        },
+        {
+          "updates": [
+            {
+              "values": [
+                {
+                  "int32": -543406503
+                },
+                "null"
+              ],
+              "diff": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "plan": {
+    "Get": {
+      "id": {
+        "Global": {
+          "User": 100
+        }
+      },
+      "typ": {
+        "column_types": [
+          {
+            "scalar_type": "Int32",
+            "nullable": true
+          },
+          {
+            "scalar_type": "Bool",
+            "nullable": true
+          }
+        ],
+        "keys": []
+      },
+      "access_strategy": "UnknownOrLocal"
+    }
+  },
+  "exports": [
+    "index",
+    "materialized-view",
+    "subscribe"
+  ],
+  "configs": [
+    {
+      "name": "matrix-0",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "name": "matrix-1",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "name": "matrix-2",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "name": "matrix-3",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "name": "matrix-4",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "name": "matrix-5",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "name": "matrix-6",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "name": "matrix-7",
+      "settings": [
+        {
+          "name": "enable_mz_join_core",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_half_join2",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_column_paged_batcher",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_correction_v2",
+          "type": "bool",
+          "value": "true"
+        },
+        {
+          "name": "enable_compute_temporal_bucketing",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_arrangement_dictionary_compression_alpha",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "compute_apply_column_demands",
+          "type": "bool",
+          "value": "false"
+        },
+        {
+          "name": "enable_compute_sync_mv_sink",
+          "type": "bool",
+          "value": "false"
+        }
+      ]
+    }
+  ],
+  "claims": [
+    {
+      "get": {
+        "kind": "pass-raw"
+      }
+    },
+    {
+      "arrange-by": {
+        "forms": "empty-key",
+        "strategy": "direct",
+        "input": "stream"
+      }
+    }
+  ],
+  "oracles": [
+    "export-invariance",
+    "incremental",
+    "strategy-invariance",
+    "fold-constants"
+  ],
+  "optimize": false
+}

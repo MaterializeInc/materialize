@@ -176,6 +176,47 @@ pub async fn write_rows_single_ts(
     Ok(())
 }
 
+/// Writes explicit `(row, ts, diff)` updates to `shard`, sealing `[lower, upper)`.
+///
+/// The general write, and the only one that can retract: [`write_rows_single_ts`]
+/// and [`write_rows_spread`] hardcode diff `+1`, which cannot exercise the
+/// correction and consolidation paths that only negative diffs reach. All
+/// `updates` must have timestamps within `[lower, upper)`, else persist rejects
+/// the append.
+pub async fn write_updates(
+    client: &PersistClient,
+    shard: ShardId,
+    desc: &RelationDesc,
+    updates: &[(Row, Timestamp, i64)],
+    lower: Timestamp,
+    upper: Timestamp,
+) -> anyhow::Result<()> {
+    let mut writer = client
+        .open_writer::<SourceData, (), Timestamp, StorageDiff>(
+            shard,
+            Arc::new(desc.clone()),
+            Arc::new(UnitSchema),
+            Diagnostics {
+                shard_name: "driver-data".to_string(),
+                handle_purpose: "headless driver update write".to_string(),
+            },
+        )
+        .await?;
+    let updates: Vec<_> = updates
+        .iter()
+        .map(|(row, ts, diff)| ((SourceData(Ok(row.clone())), ()), *ts, *diff))
+        .collect();
+    writer
+        .compare_and_append(
+            &updates,
+            Antichain::from_elem(lower),
+            Antichain::from_elem(upper),
+        )
+        .await?
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+    Ok(())
+}
+
 /// Writes `rows` spread across timestamps `0..n_ts` (row `i` at time `i % n_ts`)
 /// in a single append that seals `[0, n_ts)`. All rows are inserted with diff
 /// `+1`. This is one `compare_and_append` regardless of `n_ts` — persist accepts

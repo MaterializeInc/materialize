@@ -223,6 +223,27 @@ impl Responses {
         }
         Ok(std::mem::take(&mut state.updates))
     }
+
+    /// Like [`Self::drain_subscribe`], but reports a subscribe error as a value.
+    ///
+    /// `Ok(Err(msg))` means the subscribe ran and its collection holds an error,
+    /// which a caller comparing against a reference needs to distinguish from the
+    /// subscribe never having been registered. See `Driver::peek_result` for the
+    /// same split on the peek path.
+    pub fn drain_subscribe_result(
+        &self,
+        id: GlobalId,
+    ) -> anyhow::Result<Result<Vec<(Row, Timestamp, i64)>, String>> {
+        let mut g = self.shared.lock().expect("lock");
+        let state = g
+            .subscribes
+            .get_mut(&id)
+            .ok_or_else(|| anyhow::anyhow!("no subscribe registered for {id}"))?;
+        if let Some(e) = &state.error {
+            return Ok(Err(e.clone()));
+        }
+        Ok(Ok(std::mem::take(&mut state.updates)))
+    }
 }
 
 /// Send half: forwards commands into the pump task that owns the client.
