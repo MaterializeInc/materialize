@@ -93,6 +93,12 @@ impl<'a> KeyProber<'a> {
 
     /// Returns the prefix of up to length `len` of the first key after `prefix`, but below `upper_bound`.
     /// Returns None if no key matching these conditions exists.
+    ///
+    /// NOTE: Run this inside a REPEATABLE READ transaction. It issues two
+    /// probes, and each statement otherwise reads its own snapshot: a key
+    /// matching `prefix` inserted past the anchor between the probes makes
+    /// this return `prefix` itself again, and a caller walking prefixes
+    /// would re-process it instead of advancing.
     pub async fn prefix_of_first_row_not_matching_prefix(
         &mut self,
         prefix: &str,
