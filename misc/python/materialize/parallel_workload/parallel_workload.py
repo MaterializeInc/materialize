@@ -9,6 +9,7 @@
 
 import argparse
 import datetime
+import faulthandler
 import gc
 import os
 import random
@@ -24,12 +25,17 @@ from materialize.mzcompose.composition import Composition
 from materialize.parallel_workload.action import (
     Action,
     ActionList,
+    ApplyReplacementMaterializedViewAction,
     BackupRestoreAction,
     CancelAction,
+    CreateReplacementMaterializedViewAction,
     DropClusterAction,
     DropDatabaseAction,
+    DropRoleAction,
     DropSchemaAction,
+    ExplainAnalyzeAction,
     KillAction,
+    SealedCollectionCheckAction,
     StatisticsAction,
     ZeroDowntimeDeployAction,
     action_lists,
@@ -45,6 +51,7 @@ from materialize.parallel_workload.database import (
     MAX_KAFKA_SINKS,
     MAX_KAFKA_SOURCES,
     MAX_MYSQL_SOURCES,
+    MAX_NETWORK_POLICIES,
     MAX_POSTGRES_SOURCES,
     MAX_ROLES,
     MAX_SCHEMAS,
@@ -65,6 +72,23 @@ from materialize.parallel_workload.worker_exception import WorkerFailedException
 
 SEED_RANGE = 1_000_000
 REPORT_TIME = 10
+
+
+def run_final_sealed_check(
+    rng: random.Random, database: Database, cur: psycopg.Cursor
+) -> None:
+    """Guaranteed final oracle pass, before the objects are dropped.
+
+    The finalize task seals a wrongly finalized shard only ~5s after the
+    triggering DROP, so damage from the run's last actions is not visible
+    immediately, and a run whose random scheduling never picked
+    SealedCollectionCheckAction would otherwise end without any pass.
+    """
+    exe = Executor(rng, cur, None, database)
+    sealed_check = SealedCollectionCheckAction(rng, None)
+    if sealed_check.applicable(exe):
+        time.sleep(10)
+        sealed_check.run(exe)
 
 
 def run(
@@ -124,6 +148,9 @@ def run(
             f"ALTER SYSTEM SET max_roles = {MAX_ROLES * 1000 + num_threads}"
         )
         system_exe.execute(
+            f"ALTER SYSTEM SET max_network_policies = {MAX_NETWORK_POLICIES + num_threads}"
+        )
+        system_exe.execute(
             f"ALTER SYSTEM SET max_clusters = {MAX_CLUSTERS * 40 + num_threads}"
         )
         system_exe.execute(
@@ -163,7 +190,7 @@ def run(
             system_exe.execute("DROP CLUSTER quickstart CASCADE")
             replica_names = [f"r{replica_id}" for replica_id in range(0, replicas)]
             replica_string = ",".join(
-                f"{replica_name} (SIZE 'scale=1,workers=4')"
+                f"{replica_name} (SIZE 'scale=1,workers=1')"
                 for replica_name in replica_names
             )
             system_exe.execute(
@@ -228,10 +255,17 @@ def run(
         )
         workers.append(worker)
 
+        # Daemon threads, so that a worker still stuck in a long-running query
+        # cannot block interpreter shutdown. The clean paths below join
+        # explicitly, and a WorkerFailedException propagates out of `run` past
+        # those joins. Without this a single wedged worker keeps the process
+        # alive until the CI step timeout kills it, which reports the timeout
+        # instead of the failure that actually happened.
         thread = threading.Thread(
             name=thread_name,
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -252,6 +286,7 @@ def run(
             name="cancel",
             target=worker.run,
             args=(host, ports["mz_system"], ports["http"], "mz_system", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -272,6 +307,7 @@ def run(
             name="kill",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -299,6 +335,7 @@ def run(
             name="zero-downtime-deploy",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -319,6 +356,7 @@ def run(
             name="kill",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -343,6 +381,7 @@ def run(
             name="statistics",
             target=worker.run,
             args=(host, ports["mz_system"], ports["http"], "mz_system", database),
+            daemon=True,
         )
         thread.start()
         threads.append(thread)
@@ -379,13 +418,79 @@ def run(
         if all([not thread.is_alive() for thread in threads]):
             break
     else:
-        for worker, thread in zip(workers, threads):
-            if thread.is_alive():
-                print(
-                    f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
-                )
+        alive = [(w, t) for w, t in zip(workers, threads) if t.is_alive()]
+        for worker, thread in alive:
+            if worker.exe is None:
+                # Still in the initial connect retry loop.
+                print(f"{thread.name} still connecting")
+                continue
+            print(
+                f"{thread.name} still running ({worker.exe.mz_service}): {worker.exe.last_log} ({worker.exe.last_status})"
+            )
+
+        # Workers are daemon threads, so a wedged one cannot keep the process
+        # alive and has to be caught here or it silently costs the run its
+        # remaining workload. A worker waiting on the server is a server-side
+        # hang (DB-118) and is tolerated, as is one still in its connect retry
+        # loop (exe is None), which can only be hanging inside a connect call
+        # to the server. One that never waits on the server is stuck in the
+        # workload's own code, e.g. deadlocked on two object locks taken in
+        # opposite orders, which no timeout ever clears. Nothing legitimate
+        # pauses without a round trip for the 300s above (the longest such
+        # pause is BackupRestoreAction's 240s sleep), but a single sample can
+        # catch a worker between round trips, so only call a worker wedged if
+        # it stays off the server for a whole confirmation window.
+        #
+        # A tolerated server-side hang also explains every other worker: the
+        # hung statement holds its actions' object locks (an `ALTER SINK ...
+        # SET FROM` waits unboundedly for the sink's frontier to catch up,
+        # database-issues#9820, while holding both the sink's and the new base
+        # object's lock), and a worker queued on such a lock can no more reach
+        # the server than a deadlocked one can. Telling the two apart from
+        # outside is not possible, so a workload-side deadlock is only
+        # diagnosed when no worker is on the server at all. Waiters and
+        # deadlocks both resolve when the statement does, and calling a waiter
+        # deadlocked costs the run its final checks.
+        def not_on_server() -> set[str]:
+            return {
+                t.name
+                for w, t in alive
+                if t.is_alive() and w.exe is not None and w.exe.last_status != "running"
+            }
+
+        def on_server() -> set[str]:
+            return {
+                t.name
+                for w, t in alive
+                if t.is_alive() and w.exe is not None and w.exe.last_status == "running"
+            }
+
+        wedged = not_on_server()
+        confirm_until = time.time() + 60
+        while wedged and time.time() < confirm_until:
+            time.sleep(1)
+            wedged &= not_on_server()
+            if on_server():
+                wedged = set()
+                break
         merge_num_queries(num_queries, workers)
-        print_stats(num_queries, workers, num_threads, scenario)
+        print_stats(num_queries, workers, num_threads, complexity, scenario)
+
+        # A wedged worker must not mask damage, so run the final oracle pass
+        # on a fresh connection before exiting. Skipped for 0dt deploys,
+        # where connecting to the fenced-out environmentd can hang forever.
+        if scenario != Scenario.ZeroDowntimeDeploy:
+            try:
+                check_conn = psycopg.connect(
+                    host=host, port=ports["materialized"], user="materialize"
+                )
+            except Exception as e:
+                print(f"Skipping final sealed-collection check: {e}")
+            else:
+                check_conn.autocommit = True
+                with check_conn.cursor() as cur:
+                    run_final_sealed_check(rng, database, cur)
+                check_conn.close()
 
         if num_threads >= 50:
             # Under high load some queries can't finish quickly, especially UPDATE/DELETE
@@ -395,9 +500,13 @@ def run(
             # environmentd will be stuck forever, the promoted environmentd can
             # take > 10 minutes to become responsive as well
             os._exit(0)
-        # TODO: Reenable when https://linear.app/materializeinc/issue/DB-118 is fixed
-        # print("Threads have not stopped within 5 minutes, exiting hard")
-        # os._exit(1)
+        if wedged:
+            faulthandler.dump_traceback()
+            print(
+                "^^^ +++ Threads have not stopped within 5 minutes and are not"
+                f" waiting on the server, exiting hard: {', '.join(sorted(wedged))}"
+            )
+            os._exit(1)
         os._exit(0)
 
     try:
@@ -421,6 +530,8 @@ def run(
         # Before the drop, and only now that every worker has joined, so that no
         # increment can still be in flight.
         database.read_then_write_counter.validate(exe)
+
+        run_final_sealed_check(rng, database, cur)
 
         # Dropping the database also releases the long running connections
         # used by database objects.
@@ -446,7 +557,7 @@ def run(
     conn.close()
 
     merge_num_queries(num_queries, workers)
-    print_stats(num_queries, workers, num_threads, scenario)
+    print_stats(num_queries, workers, num_threads, complexity, scenario)
 
 
 def merge_num_queries(
@@ -474,6 +585,7 @@ def print_stats(
     num_queries: defaultdict[ActionList, Counter[type[Action]]],
     workers: list[Worker],
     num_threads: int,
+    complexity: Complexity,
     scenario: Scenario,
 ) -> None:
     ignored_errors: defaultdict[str, Counter[type[Action]]] = defaultdict(Counter)
@@ -527,7 +639,11 @@ def print_stats(
     # (ReplaceMaterializedView, whose replacements pile up unfinalized in the
     # workload). "unknown cluster 'dont_exist'" comes from FlipFlags setting the
     # default cluster to a nonexistent one to hunt for panics, so any action
-    # needing a cluster fails with it while that flag is live. Tracked
+    # needing a cluster fails with it while that flag is live. "cannot be
+    # dropped because some objects depend on it" is the same rejection for
+    # DROP ROLE: AlterOwnerAction reassigns object ownership to random roles,
+    # so a role usually owns something and a short run can see DropRoleAction
+    # never land a dependency-free role. Tracked
     # separately so such actions don't trip the broken-action assertion below.
     noise = {
         "must be owner of",
@@ -537,14 +653,26 @@ def print_stats(
         "because it already has a replacement",
         "is sealed and thus cannot be replaced",
         "unknown cluster 'dont_exist'",
+        "cannot be dropped because some objects depend on it",
     }
+    if complexity in (Complexity.DDL, Complexity.DDLOnly):
+        # CreateTableAction and CreateViewAction make half their objects TEMP,
+        # and those land in the shared table and view lists every worker samples
+        # from. A temporary schema belongs to the session that created it, so
+        # any other worker resolving "db"."mz_temp"."name" fails with "unknown
+        # schema 'mz_temp'". That is roughly half the attempts of an action
+        # picking a random table or view, which an action as low-weight as
+        # RevokePrivilegesAction can spend a whole run on. Concurrent schema
+        # drops and renames land here too. Only DDL complexity creates temp
+        # objects or touches schemas, so elsewhere this stays a genuine signal.
+        noise.add("unknown schema")
     if scenario == Scenario.Rename:
         # Concurrent renames invalidate the qualified names an action captured
         # earlier (a stored SELECT it re-renders, a target it resolved before
         # the rename), so a rare action can fail on every attempt with a
         # name-resolution race. Expected only in this scenario. In Regression,
         # where nothing renames, these would be a genuine signal.
-        noise |= {"does not exist", "unknown schema", "unknown catalog item"}
+        noise |= {"does not exist", "unknown catalog item"}
     num_errored_real: Counter[type[Action]] = Counter()
     for worker in workers:
         num_successes.update(worker.num_successes)
@@ -558,11 +686,42 @@ def print_stats(
         for action_list in action_lists
         for action_class in action_list.action_classes
     }
-    # These use RESTRICT and their targets practically always contain
-    # objects (schemas and databases their items, clusters their sources,
-    # sinks, and indexes), so they exercise the rejection path and are not
-    # expected to ever succeed.
-    action_classes -= {DropClusterAction, DropDatabaseAction, DropSchemaAction}
+    # A given churny seed can legitimately see zero successes for these, so the
+    # broken-action assertion must not fire on them:
+    #   * DropCluster/DropDatabase/DropSchema: RESTRICT rejections. Their
+    #     targets practically always contain objects, and the rejection message
+    #     is class-specific, so `noise` above cannot cover it without excusing
+    #     it for every other action too.
+    #   * DropRoleAction: needs a dependency-free role, but AlterOwnerAction
+    #     keeps reassigning object ownership to random roles.
+    #   * ExplainAnalyzeAction: needs a hydrated MV/index on the active cluster,
+    #     which renames/drops keep retiring.
+    # These succeed in normal runs, so they aren't broken.
+    #
+    # NOTE: listed by name rather than matched on a Drop* name prefix. The other
+    # Drop* actions pick an existing object and are expected to succeed
+    # constantly, and a broken one (wrong quoting or qualification) fails with
+    # `unknown catalog item`, which the base errors_to_ignore tolerates and
+    # `noise` does not list. That is exactly what the assertion is meant to
+    # catch, so a prefix would silently exempt the failure mode it exists for.
+    excluded: set[type[Action]] = {
+        DropClusterAction,
+        DropDatabaseAction,
+        DropRoleAction,
+        DropSchemaAction,
+        ExplainAnalyzeAction,
+    }
+    if scenario == Scenario.Rename:
+        # CreateReplacementMaterializedViewAction re-renders the view's SELECT
+        # with the object names captured at creation. Renames invalidate them,
+        # so CREATE REPLACEMENT fails with a tolerated "does not exist"/"unknown
+        # schema", and a churny rename seed can legitimately never land a clean
+        # attempt. With no replacement ever created,
+        # ApplyReplacementMaterializedViewAction then has nothing to apply
+        # either. Both succeed in the other scenarios, so they stay checked
+        # there.
+        excluded.add(CreateReplacementMaterializedViewAction)
+        excluded.add(ApplyReplacementMaterializedViewAction)
     never_succeeded = []
     for action_class in sorted(action_classes, key=lambda cls: cls.__name__):
         successes = num_successes[action_class]
@@ -596,7 +755,7 @@ def print_stats(
         always_erroring = [
             action_class.__name__
             for action_class, skips, errored in never_succeeded
-            if num_errored_real[action_class] > 0
+            if num_errored_real[action_class] > 0 and action_class not in excluded
         ]
         assert (
             not always_erroring
@@ -636,7 +795,12 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--azurite", action="store_true", help="Use Azurite as blob store instead of S3"
     )
-    parser.add_argument("--replicas", type=int, default=2, help="use multiple replicas")
+    parser.add_argument(
+        "--replicas",
+        type=int,
+        default=1,
+        help="default replica number for quickstart cluster",
+    )
 
 
 def main() -> int:

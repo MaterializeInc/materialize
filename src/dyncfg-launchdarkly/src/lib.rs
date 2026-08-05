@@ -82,7 +82,7 @@ where
             let max_backoff = Duration::from_secs(60);
             let mut backoff = Duration::from_secs(5);
 
-            // TODO(materialize#32030): fix retry logic
+            // TODO(materialize#38055): fix retry logic
             loop {
                 match client.wait_for_initialization(config_sync_timeout).await {
                     Some(true) => break,

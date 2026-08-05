@@ -357,13 +357,11 @@ impl PersistClient {
         let gc = GarbageCollector::new(machine.clone(), Arc::clone(&self.isolated_runtime));
 
         let reader_id = LeasedReaderId::new();
-        let heartbeat_ts = (self.cfg.now)();
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &reader_id,
                 &diagnostics.handle_purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
-                heartbeat_ts,
                 use_critical_since,
             )
             .await;

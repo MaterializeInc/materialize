@@ -1220,6 +1220,7 @@ mod test {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_packed_naive_date_time_sort_order() {
         let strat = proptest::collection::vec(arb_naive_date_time(), 0..128);
         proptest!(|(mut times in strat)| {
