@@ -18,6 +18,23 @@ from dbt.tests.adapter.unit_testing.test_case_insensitivity import (
 )
 from dbt.tests.adapter.unit_testing.test_invalid_input import BaseUnitTestInvalidInput
 from dbt.tests.adapter.unit_testing.test_types import BaseUnitTestingTypes
+from dbt.tests.util import run_dbt, run_dbt_and_capture
+
+my_model = """
+{{ config(materialized='view') }}
+
+SELECT 1 AS id
+"""
+
+my_model_unit_test_yml = """
+unit_tests:
+  - name: test_my_model
+    model: my_model
+    given: []
+    expect:
+      rows:
+        - {id: 1}
+"""
 
 
 class TestMaterializeUnitTestingTypes(BaseUnitTestingTypes):
@@ -57,3 +74,36 @@ class TestMaterializeUnitTestCaseInsensitivity(BaseUnitTestCaseInsensivity):
 
 class TestMaterializeUnitTestInvalidInput(BaseUnitTestInvalidInput):
     pass
+
+
+class TestMaterializeUnitTestCluster:
+    """The unit test materialization must run its query against the configured
+    cluster, like the data test materialization does. Unit test queries only
+    reference fixtures, so Materialize answers them without a cluster, which is
+    why this checks the statement dbt issues rather than the query result."""
+
+    @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+            "cluster": "quickstart",
+        }
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {
+            "my_model.sql": my_model,
+            "my_model_unit_test.yml": my_model_unit_test_yml,
+        }
+
+    def test_unit_test_sets_configured_cluster(self, project):
+        run_dbt(["run"])
+
+        _, output = run_dbt_and_capture(["--debug", "test"])
+        assert "set cluster = quickstart" in output

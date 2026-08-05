@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Apply the `cluster` configuration to unit tests. The unit test
+  materialization never passed the cluster on to the macro that sets it, so
+  unit test queries always ran against the session default cluster instead of
+  the one configured for the model or in `profiles.yml`.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)

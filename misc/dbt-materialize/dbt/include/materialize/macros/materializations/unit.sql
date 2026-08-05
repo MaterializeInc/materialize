@@ -40,7 +40,13 @@
     {% set expected_sql = get_expected_sql(expected_rows, column_name_to_data_types, column_name_to_quoted) %}
   {% endif %}
 
-  {% set unit_test_sql = get_unit_test_sql(sql, expected_sql, tested_expected_column_names) %}
+  -- Unit tests compile to ad-hoc queries, which need a cluster to run against.
+  -- If no cluster is configured, use the target cluster from `profiles.yml`. If
+  -- none exists, fall back to the default cluster configured for the connected
+  -- user, matching the data test materialization.
+  {%- set cluster = adapter.generate_final_cluster_name(config.get('cluster', target.cluster)) %}
+
+  {% set unit_test_sql = get_unit_test_sql(sql, expected_sql, tested_expected_column_names, cluster) %}
 
   {% call statement('main', fetch_result=True) -%}
     {{ unit_test_sql }}
