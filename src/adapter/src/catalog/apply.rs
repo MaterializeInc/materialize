@@ -281,7 +281,7 @@ impl CatalogState {
         }
 
         if update_system_config {
-            self.system_configuration.dyncfg_updates();
+            self.system_configuration.sync_dyncfgs();
         }
 
         Ok((builtin_table_updates, catalog_updates))
