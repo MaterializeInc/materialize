@@ -48,12 +48,13 @@ use mz_compute_client::protocol::command::{ComputeCommand, PeekTarget};
 use mz_dyncfg::ConfigUpdates;
 use mz_persist_client::PersistClient;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Diff, GlobalId, RelationDesc, ReprRelationType, Row, SqlRelationType, Timestamp};
+use mz_repr::{Diff, GlobalId, RelationDesc, Row, Timestamp};
 use mz_storage_types::controller::CollectionMetadata;
+use timely::progress::Antichain;
 
 use crate::data::write_updates;
-use crate::dataflow::{DataflowBuilder, PersistSink, PersistSource};
 use crate::driver::Driver;
+use crate::responses::SubscribePoison;
 use crate::script::parse_config_val;
 use crate::surface::{SurfaceCell, cells_of_plan, render_cells};
 use crate::workload::{NamedConfig, Oracle, Workload, WorkloadExport, ids};
@@ -92,7 +93,15 @@ impl ReadResult {
             ReadResult::Error(e) => format!("<error: {e}>"),
         }
     }
+
+    /// Whether the collection held an error rather than rows.
+    pub fn is_error(&self) -> bool {
+        matches!(self, ReadResult::Error(_))
+    }
 }
+
+/// What one export held at each asserted timestamp.
+pub type Timeline = BTreeMap<u64, ReadResult>;
 
 /// The outcome of running one workload.
 #[derive(Debug, Clone)]
@@ -101,14 +110,24 @@ pub struct WorkloadOutcome {
     pub name: String,
     /// The surface cells the realized plan actually exercised.
     pub realized_cells: BTreeSet<SurfaceCell>,
-    /// One result multiset per configuration, in `configs` order.
-    pub per_config: Vec<(String, ReadResult)>,
+    /// One result timeline per configuration, in `configs` order.
+    pub per_config: Vec<(String, Timeline)>,
     /// Oracle comparisons that could not render a verdict, with the reason.
     ///
     /// Surfaced rather than dropped: a check that quietly stops answering looks
     /// exactly like one that passes, and the count is how a reader knows how much
     /// of the run actually concluded anything.
     pub inconclusive: Vec<String>,
+    /// Whether any asserted timestamp produced something to compare: rows, or an
+    /// error.
+    ///
+    /// A workload empty at every timestamp passes every oracle without comparing
+    /// anything, since an empty reference and an empty read agree. That is not a
+    /// failure (an empty collection is a legitimate answer, and some shapes exist to
+    /// test it), but a run made mostly of them tests far less than its cell count
+    /// suggests, so it is reported rather than left invisible. An error counts: it
+    /// is a verdict the oracles check against.
+    pub produced_output: bool,
 }
 
 /// Render a multiset as deterministic text, for failure messages and goldens.
@@ -128,19 +147,6 @@ pub fn render_multiset(m: &Multiset) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// A `RelationDesc` for a computed relation type, with synthetic column names.
-///
-/// Peeks and sink exports need a `RelationDesc`, but a built object only carries a
-/// `ReprRelationType`. Column names are display-only here, so `c0..cN` suffices.
-fn desc_from_repr(typ: &ReprRelationType) -> RelationDesc {
-    let sql = SqlRelationType::from_repr(typ);
-    let mut builder = RelationDesc::builder();
-    for (i, ct) in sql.column_types.iter().enumerate() {
-        builder = builder.with_column(format!("c{i}"), ct.clone());
-    }
-    builder.finish()
 }
 
 /// Lift a read that may have surfaced a collection error into a [`ReadResult`].
@@ -189,12 +195,11 @@ pub struct WorkloadRunner {
     loc: PersistLocation,
     /// One shard per input, allocated once and reused across configurations.
     input_shards: Vec<ShardId>,
-    /// The materialized-view sink's output shard, if the workload exports one.
+    /// One materialized-view output shard per configuration.
     ///
-    /// Allocated per configuration: a persist sink appends to its shard, so
-    /// reusing one across configurations would make the second run read the
-    /// first's output.
-    mv_shard: Option<ShardId>,
+    /// Per configuration because a persist sink appends to its shard, so reusing one
+    /// would make the second configuration read the first's output.
+    mv_shard: Vec<ShardId>,
     /// Whether an instance has been opened on the current connection yet.
     ///
     /// The first configuration reuses the connection `Driver::connect` already
@@ -214,7 +219,7 @@ impl WorkloadRunner {
             client,
             loc,
             input_shards: Vec::new(),
-            mv_shard: None,
+            mv_shard: Vec::new(),
             instance_open: false,
         })
     }
@@ -222,6 +227,18 @@ impl WorkloadRunner {
     /// Run `workload`: write its inputs, then render and check it under each
     /// configuration, then compare across configurations.
     pub async fn run(&mut self, workload: &Workload) -> anyhow::Result<WorkloadOutcome> {
+        // The incremental oracle builds one recompute dataflow per asserted
+        // timestamp, striding its ids by the timestamp, so a workload with enough
+        // batches would run into the next configuration's id range. Nothing
+        // generated comes close, and a collision would show up as a dataflow
+        // mysteriously standing in for another rather than as a clean failure.
+        anyhow::ensure!(
+            ids::recompute_index(0, workload.assert_ts()) < ids::config_base(1),
+            "{} asserts at {} timestamps, which overruns the per-configuration id \
+             range; raise ids::CONFIG_STRIDE",
+            workload.name,
+            workload.assert_ts() + 1
+        );
         self.write_inputs(workload).await?;
 
         // An empty `configs` means one run at the replica's defaults.
@@ -234,7 +251,11 @@ impl WorkloadRunner {
             workload.configs.clone()
         };
 
-        let mut per_config = Vec::new();
+        // One output shard per configuration, allocated up front so the dataflow
+        // builders can be handed a complete shard set.
+        self.mv_shard = configs.iter().map(|_| ShardId::new()).collect();
+
+        let mut per_config: Vec<(String, Timeline)> = Vec::new();
         let mut realized_cells = BTreeSet::new();
         let mut inconclusive: Vec<String> = Vec::new();
         for (config_index, config) in configs.iter().enumerate() {
@@ -267,11 +288,17 @@ impl WorkloadRunner {
             check_strategy_invariance(workload, &per_config)?;
         }
 
+        let produced_output = per_config.iter().any(|(_, timeline)| {
+            timeline
+                .values()
+                .any(|r| !matches!(r, ReadResult::Rows(m) if m.is_empty()))
+        });
         Ok(WorkloadOutcome {
             name: workload.name.clone(),
             realized_cells,
             per_config,
             inconclusive,
+            produced_output,
         })
     }
 
@@ -282,7 +309,11 @@ impl WorkloadRunner {
         self.input_shards = (0..workload.inputs.len()).map(|_| ShardId::new()).collect();
         for (i, input) in workload.inputs.iter().enumerate() {
             let desc = input.relation_desc();
-            let updates = input.updates()?;
+            let mut updates = input.updates()?;
+            // The synthesized rows go in the same append as the declared batches,
+            // so a volume input is one `compare_and_append` rather than one per
+            // thousand rows.
+            updates.extend(input.volume_updates(workload.volume)?);
             // Seal to the workload-wide upper even when this input has fewer
             // batches, so a shorter input does not hold the dataflow's frontier
             // back below the assertion timestamp.
@@ -307,7 +338,7 @@ impl WorkloadRunner {
         workload: &Workload,
         config_index: usize,
         config: &NamedConfig,
-    ) -> anyhow::Result<(ReadResult, BTreeSet<SurfaceCell>, Vec<String>)> {
+    ) -> anyhow::Result<(Timeline, BTreeSet<SurfaceCell>, Vec<String>)> {
         self.reset_instance(config).await?;
         if std::env::var_os("DRIVER_DEBUG_RESPONSES").is_some() {
             self.driver
@@ -315,22 +346,28 @@ impl WorkloadRunner {
         }
 
         let ts = workload.assert_ts();
-        let upper = workload.upper();
+        let timestamps: Vec<u64> = workload.timestamps().collect();
 
-        // One dataflow per export, which is how the real system renders these: an
-        // index, a materialized view, and a subscribe over the same view are three
-        // separate dataflows, never three exports of one. Building them as one
-        // dataflow is not just unfaithful, it does not work. A subscribe carries a
-        // finite `up_to` while a persist sink requires an empty one, and a
-        // `DataflowDescription` holding both stalls the subscribe.
-        //
-        // Rendering each export separately also strengthens export invariance:
-        // it then compares three independently rendered dataflows rather than
-        // three read paths out of one shared computation.
+        // Every export starts at `as_of = 0` and is maintained forward through the
+        // input's batches. That is what makes this an incremental test at all: an
+        // export created at the assertion timestamp reads one snapshot and stops,
+        // and then every later timestamp the oracles look at is a state no dataflow
+        // ever passed through.
+        const EXPORT_AS_OF: u64 = 0;
+
+        // One dataflow per export. Rendering each export separately also
+        // strengthens export invariance: it compares three independently rendered
+        // dataflows rather than three read paths out of one shared computation. See
+        // `Workload::export_dataflow` for why one dataflow cannot serve all three.
         let mut cells = BTreeSet::new();
         let mut plan_type = None;
         for export in &workload.exports {
-            let (df, typ) = self.build_dataflow(workload, config_index, *export, ts, upper)?;
+            let (df, typ) = workload.export_dataflow(
+                config_index,
+                *export,
+                EXPORT_AS_OF,
+                &self.shards(config_index),
+            )?;
             cells.extend(
                 df.objects_to_build
                     .iter()
@@ -375,8 +412,9 @@ impl WorkloadRunner {
         let plan_type =
             plan_type.ok_or_else(|| anyhow::anyhow!("workload has no exports to render"))?;
 
-        let result_desc = desc_from_repr(&plan_type);
-        let mut by_export: BTreeMap<WorkloadExport, ReadResult> = BTreeMap::new();
+        let result_desc = crate::workload::desc_from_repr(&plan_type);
+        let mut by_export: BTreeMap<WorkloadExport, Timeline> = BTreeMap::new();
+        let mut subscribe_poison = None;
         // Read the subscribe first. It is the one export with a finite `up_to`, so
         // it completes on its own and then stops being observable; the index and
         // materialized-view reads block until their collection catches up, and
@@ -388,14 +426,15 @@ impl WorkloadRunner {
             WorkloadExport::MaterializedView => 2,
         });
         for export in &read_order {
-            let m = self
-                .read_export(config_index, *export, &result_desc, ts)
+            let (timeline, poison) = self
+                .read_export(config_index, *export, &result_desc, &timestamps)
                 .await
                 .map_err(|e| anyhow::anyhow!("reading {export:?} export: {e}"))?;
-            by_export.insert(*export, m);
+            subscribe_poison = subscribe_poison.or(poison);
+            by_export.insert(*export, timeline);
         }
 
-        // Every oracle compares against one canonical result. Prefer the index
+        // Every oracle compares against one canonical timeline. Prefer the index
         // (the cheapest and most direct read of the maintained arrangement) and
         // fall back to whichever export the workload does have.
         let canonical = by_export
@@ -405,21 +444,33 @@ impl WorkloadRunner {
             .ok_or_else(|| anyhow::anyhow!("workload has no exports to read"))?
             .clone();
 
-        if workload.oracles.contains(&Oracle::ExportInvariance) {
-            check_export_invariance(&by_export)?;
-        }
         let mut inconclusive = Vec::new();
-        if workload.oracles.contains(&Oracle::FoldConstants) {
-            if let Some(reason) = check_fold_constants(workload, ts, &canonical)? {
+        if workload.oracles.contains(&Oracle::ExportInvariance) {
+            for reason in check_export_invariance(&by_export, subscribe_poison.as_ref())? {
                 inconclusive.push(format!("{}: {reason}", config.name));
             }
         }
         if workload.oracles.contains(&Oracle::Incremental) {
-            self.check_incremental(workload, config_index, ts, upper, &canonical)
+            self.check_incremental(workload, config_index, &canonical)
+                .await?;
+        }
+        self.check_compaction(workload, config_index, &result_desc, ts, &canonical)
+            .await?;
+        if workload.oracles.contains(&Oracle::Reconciliation) {
+            self.check_reconciliation(workload, config_index, config, &result_desc, &canonical)
                 .await?;
         }
 
         Ok((canonical, cells, inconclusive))
+    }
+
+    /// Where this workload's collections live, for the dataflow builders.
+    fn shards(&self, config_index: usize) -> crate::workload::WorkloadShards<'_> {
+        crate::workload::WorkloadShards {
+            location: &self.loc,
+            inputs: &self.input_shards,
+            sink: self.mv_shard[config_index],
+        }
     }
 
     /// Drop the previous configuration's dataflows and open a fresh instance
@@ -451,203 +502,284 @@ impl WorkloadRunner {
         Ok(())
     }
 
-    /// Assemble the dataflow for one export, returning it and the computation's
-    /// output relation type.
-    fn build_dataflow(
-        &mut self,
-        workload: &Workload,
-        config_index: usize,
-        export: WorkloadExport,
-        as_of: u64,
-        upper: u64,
-    ) -> anyhow::Result<(
-        mz_compute_types::dataflows::DataflowDescription<
-            mz_compute_types::plan::render_plan::RenderPlan,
-            CollectionMetadata,
-        >,
-        ReprRelationType,
-    )> {
-        let mut builder = DataflowBuilder::new(format!("workload-{}-{export:?}", workload.name));
-        if workload.optimize {
-            builder.optimize();
-        }
-        for (i, input) in workload.inputs.iter().enumerate() {
-            builder.import_persist(
-                GlobalId::User(ids::input(i)),
-                PersistSource {
-                    shard: self.input_shards[i],
-                    location: self.loc.clone(),
-                    desc: input.relation_desc(),
-                    upper: Timestamp::from(upper),
-                },
-            );
-        }
-        let plan_id = GlobalId::User(ids::plan(config_index, export));
-        let plan_type = workload.plan.typ();
-        builder.build(plan_id, workload.plan.clone());
-
-        let result_desc = desc_from_repr(&plan_type);
-        match export {
-            WorkloadExport::Index => {
-                // Key the index by no columns. An empty key always exists
-                // regardless of the plan's arity, so the same workload shape
-                // works for any output width, and it keeps the peek a full
-                // scan rather than a lookup.
-                builder.export_index(GlobalId::User(ids::index(config_index)), plan_id, vec![]);
-            }
-            WorkloadExport::MaterializedView => {
-                let shard = ShardId::new();
-                self.mv_shard = Some(shard);
-                builder.export_materialized_view(
-                    GlobalId::User(ids::mv_sink(config_index)),
-                    plan_id,
-                    result_desc,
-                    PersistSink {
-                        shard,
-                        location: self.loc.clone(),
-                    },
-                );
-            }
-            WorkloadExport::Subscribe => {
-                builder.export_subscribe(
-                    GlobalId::User(ids::subscribe_sink(config_index)),
-                    plan_id,
-                    result_desc,
-                    // Complete one past the assertion timestamp, so the
-                    // subscribe's contents at `as_of` are final.
-                    timely::progress::Antichain::from_elem(Timestamp::from(as_of + 1)),
-                );
-            }
-        }
-        builder.as_of(Timestamp::from(as_of));
-        let df = builder.finish()?;
-        Ok((df, plan_type))
-    }
-
-    /// Read one export's contents at `ts`.
+    /// Read one export's contents at every timestamp in `tss`.
+    ///
+    /// The exports are maintained from `as_of = 0`, so every one of these
+    /// timestamps is a state the dataflow passed through rather than a snapshot it
+    /// started at. The arrangement is never allowed to compact below `0` until
+    /// [`Self::check_compaction`], which is what keeps the historical peeks legal.
     async fn read_export(
         &self,
         config_index: usize,
         export: WorkloadExport,
         result_desc: &RelationDesc,
-        ts: u64,
-    ) -> anyhow::Result<ReadResult> {
+        tss: &[u64],
+    ) -> anyhow::Result<(Timeline, Option<SubscribePoison>)> {
+        let last = tss.last().copied().unwrap_or(0);
+        let mut timeline = Timeline::new();
+        let mut subscribe_poison = None;
         match export {
             WorkloadExport::Index => {
                 let id = GlobalId::User(ids::index(config_index));
+                // One wait, for the last timestamp: an arrangement that has caught
+                // up to the last is readable at all of them.
                 self.driver
-                    .expect_frontier(id, Timestamp::from(ts).step_forward(), FRONTIER_TIMEOUT)
+                    .expect_frontier(id, Timestamp::from(last).step_forward(), FRONTIER_TIMEOUT)
                     .await?;
-                let read = self
-                    .driver
-                    .peek_result(
-                        PeekTarget::Index { id },
-                        result_desc.clone(),
-                        Timestamp::from(ts),
-                    )
-                    .await?;
-                Ok(read_result(read.map(multiset_from_rows)))
+                for ts in tss {
+                    let read = self
+                        .driver
+                        .peek_result(
+                            PeekTarget::Index { id },
+                            result_desc.clone(),
+                            Timestamp::from(*ts),
+                        )
+                        .await?;
+                    timeline.insert(*ts, read_result(read.map(multiset_from_rows)));
+                }
             }
             WorkloadExport::MaterializedView => {
-                let shard = self
-                    .mv_shard
-                    .ok_or_else(|| anyhow::anyhow!("no materialized-view shard allocated"))?;
-                // A persist peek blocks until the shard seals through `ts`, so it
-                // doubles as the wait for the sink to catch up.
-                let read = self
-                    .driver
-                    .peek_result(
-                        PeekTarget::Persist {
-                            id: GlobalId::User(ids::mv_sink(config_index)),
-                            metadata: CollectionMetadata {
-                                persist_location: self.loc.clone(),
-                                data_shard: shard,
-                                relation_desc: result_desc.clone(),
-                                txns_shard: None,
+                let metadata = CollectionMetadata {
+                    persist_location: self.loc.clone(),
+                    data_shard: self.mv_shard[config_index],
+                    relation_desc: result_desc.clone(),
+                    txns_shard: None,
+                };
+                for ts in tss {
+                    // A persist peek blocks until the shard seals through `ts`, so
+                    // it doubles as the wait for the sink to catch up.
+                    let read = self
+                        .driver
+                        .peek_result(
+                            PeekTarget::Persist {
+                                id: GlobalId::User(ids::mv_sink(config_index)),
+                                metadata: metadata.clone(),
                             },
-                        },
-                        result_desc.clone(),
-                        Timestamp::from(ts),
-                    )
-                    .await?;
-                Ok(read_result(read.map(multiset_from_rows)))
+                            result_desc.clone(),
+                            Timestamp::from(*ts),
+                        )
+                        .await?;
+                    timeline.insert(*ts, read_result(read.map(multiset_from_rows)));
+                }
             }
             WorkloadExport::Subscribe => {
-                let read = self
+                // One await: the change log through the last timestamp accumulates
+                // to every earlier one.
+                let outcome = self
                     .driver
                     .await_subscribe_result(
                         GlobalId::User(ids::subscribe_sink(config_index)),
-                        Timestamp::from(ts + 1),
+                        Timestamp::from(last + 1),
                         FRONTIER_TIMEOUT,
                     )
                     .await?;
-                Ok(read_result(read.map(|u| multiset_from_subscribe(u, ts))))
+                // An error poisons the subscribe from the batch it arrived in
+                // onwards, so it is a property of a suffix of the timeline rather
+                // than of one timestamp. Before that suffix the subscribe reported
+                // ordinary updates and they are compared as usual.
+                let poisoned_from = outcome
+                    .poison
+                    .as_ref()
+                    .map_or(u64::MAX, |p| p.lower.map_or(0, u64::from));
+                for ts in tss {
+                    let result = match &outcome.poison {
+                        Some(poison) if *ts >= poisoned_from => {
+                            ReadResult::Error(poison.message.clone())
+                        }
+                        _ => {
+                            ReadResult::Rows(multiset_from_subscribe(outcome.updates.clone(), *ts))
+                        }
+                    };
+                    timeline.insert(*ts, result);
+                }
+                subscribe_poison = outcome.poison;
             }
         }
+        Ok((timeline, subscribe_poison))
     }
 
-    /// The incremental oracle: build a second dataflow whose `as_of` is already
-    /// `ts`, so it computes the answer in one shot from the snapshot rather than
-    /// by maintaining it forward from `0`, and require the two to agree.
+    /// The incremental oracle: at each asserted timestamp, build a dataflow whose
+    /// `as_of` is already that timestamp, so it computes the answer in one shot from
+    /// the snapshot rather than by maintaining it forward from `0`, and require the
+    /// two to agree.
     ///
     /// Where the fold oracle is live this is a cross-check. Where it is not
     /// (`LetRec`, which the constant folder cannot see through) this is the only
     /// oracle that distinguishes a correct incremental update from a wrong one.
     async fn check_incremental(
+        &self,
+        workload: &Workload,
+        config_index: usize,
+        maintained: &Timeline,
+    ) -> anyhow::Result<()> {
+        for (ts, expected) in maintained {
+            let (df, plan_type) =
+                workload.recompute_dataflow(config_index, *ts, &self.shards(config_index))?;
+            let index_id = GlobalId::User(ids::recompute_index(config_index, *ts));
+            self.driver.submit_dataflow(df)?;
+            self.driver.schedule(index_id)?;
+            self.driver
+                .expect_frontier(
+                    index_id,
+                    Timestamp::from(*ts).step_forward(),
+                    FRONTIER_TIMEOUT,
+                )
+                .await?;
+            let read = self
+                .driver
+                .peek_result(
+                    PeekTarget::Index { id: index_id },
+                    crate::workload::desc_from_repr(&plan_type),
+                    Timestamp::from(*ts),
+                )
+                .await?;
+            let recomputed = read_result(read.map(multiset_from_rows));
+            if &recomputed != expected {
+                anyhow::bail!(
+                    "incremental oracle at ts {ts}: the maintained collection differs \
+                     from a fresh computation at the same as_of\nmaintained:\n{}\n\
+                     recomputed:\n{}",
+                    expected.render(),
+                    recomputed.render()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Reconnect and replay the dataflows that are already installed, as a
+    /// controller does when a replica reconnects, then read again and require the
+    /// answer to be unchanged.
+    ///
+    /// Reconciliation matches the replayed descriptions against what the replica is
+    /// running and keeps the ones that match, rather than rebuilding them. Nothing
+    /// else in the suite exercises that: `reset_instance` reconciles to *zero*
+    /// dataflows between configurations, which takes the drop-everything path. The
+    /// keep path is where a mismatched description silently substitutes one
+    /// collection for another, and where a kept dataflow has to resume reporting
+    /// frontiers to a connection that never saw it start.
+    ///
+    /// The replay is byte-identical to what was installed, which is the case a
+    /// controller actually produces and the case that must keep the dataflow.
+    async fn check_reconciliation(
         &mut self,
         workload: &Workload,
         config_index: usize,
-        ts: u64,
-        upper: u64,
-        maintained: &ReadResult,
+        config: &NamedConfig,
+        result_desc: &RelationDesc,
+        before: &Timeline,
     ) -> anyhow::Result<()> {
-        let mut builder = DataflowBuilder::new(format!("workload-{}-recompute", workload.name));
-        if workload.optimize {
-            builder.optimize();
+        if !workload.exports.contains(&WorkloadExport::Index) {
+            return Ok(());
         }
-        for (i, input) in workload.inputs.iter().enumerate() {
-            builder.import_persist(
-                GlobalId::User(ids::input(i)),
-                PersistSource {
-                    shard: self.input_shards[i],
-                    location: self.loc.clone(),
-                    desc: input.relation_desc(),
-                    upper: Timestamp::from(upper),
-                },
+        let ts = workload.assert_ts();
+        let Some(expected) = before.get(&ts) else {
+            return Ok(());
+        };
+
+        self.driver.reconnect().await?;
+        let mut updates = ConfigUpdates::default();
+        for setting in &config.settings {
+            updates.add_dynamic(
+                &setting.name,
+                parse_config_val(&setting.ty, &setting.value)?,
             );
         }
-        let plan_id = GlobalId::User(ids::recompute_plan(config_index));
-        let plan_type = workload.plan.typ();
-        builder.build(plan_id, workload.plan.clone());
-        let index_id = GlobalId::User(ids::recompute_index(config_index));
-        builder.export_index(index_id, plan_id, vec![]);
-        builder.as_of(Timestamp::from(ts));
-        let df = builder.finish()?;
+        self.driver.create_instance(None, false, updates.clone())?;
+        self.driver.update_configuration(updates)?;
 
-        self.driver.submit_dataflow(df)?;
-        self.driver.schedule(index_id)?;
+        // Replay every export inside the reconciliation window, then close it. A
+        // subscribe is not replayed: its `up_to` has already been reached, so the
+        // replica has dropped it and a replay would install a second one.
+        //
+        // Each replayed dataflow is scheduled as well as created. A controller
+        // replays both commands for everything it expects to be running, and the
+        // replica holds a collection back until it is scheduled, whether or not
+        // reconciliation matched it to a live dataflow. Omitting it leaves the
+        // index installed and silent, which surfaces as a frontier that never
+        // arrives rather than as anything naming the missing command.
+        for export in &workload.exports {
+            if *export == WorkloadExport::Subscribe {
+                continue;
+            }
+            let (df, _) =
+                workload.export_dataflow(config_index, *export, 0, &self.shards(config_index))?;
+            self.driver.submit_dataflow(df)?;
+            self.driver
+                .schedule(GlobalId::User(export_id(config_index, *export)))?;
+        }
+        self.driver.send(ComputeCommand::InitializationComplete)?;
+
+        let id = GlobalId::User(ids::index(config_index));
         self.driver
-            .expect_frontier(
-                index_id,
-                Timestamp::from(ts).step_forward(),
-                FRONTIER_TIMEOUT,
-            )
+            .expect_frontier(id, Timestamp::from(ts).step_forward(), FRONTIER_TIMEOUT)
             .await?;
         let read = self
             .driver
             .peek_result(
-                PeekTarget::Index { id: index_id },
-                desc_from_repr(&plan_type),
+                PeekTarget::Index { id },
+                result_desc.clone(),
                 Timestamp::from(ts),
             )
             .await?;
-        let recomputed = read_result(read.map(multiset_from_rows));
-        if &recomputed != maintained {
+        let after = read_result(read.map(multiset_from_rows));
+        if &after != expected {
             anyhow::bail!(
-                "incremental oracle: the maintained collection differs from a fresh \
-                 computation at the same as_of\nmaintained:\n{}\nrecomputed:\n{}",
-                maintained.render(),
-                recomputed.render()
+                "reconciliation oracle: the index read differently at ts {ts} after \
+                 replaying the installed dataflows\nbefore:\n{}\nafter:\n{}",
+                expected.render(),
+                after.render()
+            );
+        }
+        Ok(())
+    }
+
+    /// Allow the index to compact up to the last asserted timestamp, then read it
+    /// there again and require the answer not to have changed.
+    ///
+    /// Compaction is the one thing a maintained arrangement does that no reference
+    /// implementation models: batches merge, historical detail is discarded, and the
+    /// result at the remaining frontier has to survive it. Nothing else in the suite
+    /// advances a `since`, so without this the merge path is never entered.
+    ///
+    /// `AllowCompaction` only relaxes the read capability, so the replica is free to
+    /// do the work whenever it likes. This is therefore a check that compaction does
+    /// not corrupt what remains readable, not a guarantee that any compaction
+    /// happened.
+    async fn check_compaction(
+        &self,
+        workload: &Workload,
+        config_index: usize,
+        result_desc: &RelationDesc,
+        ts: u64,
+        before: &Timeline,
+    ) -> anyhow::Result<()> {
+        if !workload.exports.contains(&WorkloadExport::Index) {
+            return Ok(());
+        }
+        let Some(expected) = before.get(&ts) else {
+            return Ok(());
+        };
+        let id = GlobalId::User(ids::index(config_index));
+        self.driver.send(ComputeCommand::AllowCompaction {
+            id,
+            frontier: Antichain::from_elem(Timestamp::from(ts)),
+        })?;
+        let read = self
+            .driver
+            .peek_result(
+                PeekTarget::Index { id },
+                result_desc.clone(),
+                Timestamp::from(ts),
+            )
+            .await?;
+        let after = read_result(read.map(multiset_from_rows));
+        if &after != expected {
+            anyhow::bail!(
+                "compaction oracle: the index read differently at ts {ts} after \
+                 AllowCompaction\nbefore:\n{}\nafter:\n{}",
+                expected.render(),
+                after.render()
             );
         }
         Ok(())
@@ -692,103 +824,108 @@ fn export_id(config_index: usize, export: WorkloadExport) -> u64 {
     }
 }
 
-/// The fold oracle: evaluate the same plan with its inputs substituted as literal
-/// constants, using the optimizer's constant folder, and require agreement.
-///
-/// The folder is an independent implementation of the same semantics, which is
-/// what makes this a real oracle rather than a self-consistency check.
-///
-/// A plan the folder cannot reduce to a constant yields no verdict. That is the
-/// dangerous case: an oracle that silently declines is indistinguishable from one
-/// that passes, and the whole check would rot unnoticed. So declining is an error
-/// here, and a workload whose plan cannot fold must not request this oracle. The
-/// generator knows which plans those are (any containing a `LetRec`) and selects
-/// oracles accordingly.
-fn check_fold_constants(
-    workload: &Workload,
-    ts: u64,
-    actual: &ReadResult,
-) -> anyhow::Result<Option<String>> {
-    use mz_transform::mirgen::FoldOutcome;
-
-    let reference_plan = workload.plan_with_constants(ts)?;
-    let expected = match mz_transform::mirgen::fold_outcome(reference_plan) {
-        FoldOutcome::Rows(m) => ReadResult::Rows(m),
-        // Spell the error the way the renderer will. The renderer surfaces an
-        // `EvalError` wrapped in a `DataflowError`, whose `Display` prepends
-        // "Evaluation error: ", so wrapping it here makes the comparison exact
-        // instead of a substring match that would pass on a genuinely different
-        // error that merely shares a prefix.
-        FoldOutcome::Error(err) => ReadResult::Error(
-            mz_storage_types::errors::DataflowError::EvalError(Box::new(err)).to_string(),
-        ),
-        FoldOutcome::Unfoldable => anyhow::bail!(
-            "fold oracle is inert: the plan did not reduce to a constant, so this \
-             workload must not request the fold-constants oracle"
-        ),
-    };
-    match (&expected, actual) {
-        (ReadResult::Rows(e), ReadResult::Rows(a)) if e == a => Ok(None),
-        // The finding this oracle exists for: both sides computed a result and
-        // they disagree.
-        (ReadResult::Rows(e), ReadResult::Rows(a)) => anyhow::bail!(
-            "fold oracle: rendered output differs from the constant-folded \
-             reference\nexpected:\n{}\nactual:\n{}",
-            render_multiset(e),
-            render_multiset(a)
-        ),
-        (ReadResult::Error(e), ReadResult::Error(a)) if e == a => Ok(None),
-        (ReadResult::Error(e), ReadResult::Error(a)) => anyhow::bail!(
-            "fold oracle: both sides errored, but with different errors\n\
-             expected: {e}\nactual:   {a}"
-        ),
-        // Rows on one side and an error on the other is not a verdict this oracle
-        // can render, so it is reported rather than judged.
-        //
-        // Errors travel in a dataflow's `err` collection, which is unioned through
-        // operators independently of the `ok` collection. A join with an empty
-        // input therefore still forwards its inputs' errors, while constant
-        // folding computes the join, gets no rows, and drops the error with them.
-        // Neither side is obviously wrong: Materialize does not promise that
-        // optimization preserves errors exactly, so a difference here is expected
-        // behaviour often enough that failing on it would bury the real
-        // divergences this oracle exists to catch.
-        //
-        // Counted and named rather than silently skipped. A skip is
-        // indistinguishable from a pass, and an oracle that quietly stops
-        // answering is the failure mode this suite is built to avoid.
-        (ReadResult::Rows(_), ReadResult::Error(a)) => Ok(Some(format!(
-            "folder produced rows, renderer produced an error ({a}); errors survive \
-             row elimination in dataflow but not in constant folding"
-        ))),
-        (ReadResult::Error(e), ReadResult::Rows(_)) => Ok(Some(format!(
-            "folder produced an error ({e}), renderer produced rows"
-        ))),
-    }
-}
-
-/// The export-invariance oracle: every export of the same collection must hold
-/// the same contents.
+/// The export-invariance oracle: every export of the same collection must hold the
+/// same contents at every timestamp.
 ///
 /// Needs at least two exports to say anything. With fewer it yields no verdict,
-/// which is fine here (unlike the fold oracle) because the condition is visible
-/// in the workload itself rather than depending on plan structure.
-fn check_export_invariance(by_export: &BTreeMap<WorkloadExport, ReadResult>) -> anyhow::Result<()> {
-    let mut iter = by_export.iter();
-    let Some((first_kind, first)) = iter.next() else {
-        return Ok(());
+/// which is fine here (unlike the fold oracle) because the condition is visible in
+/// the workload itself rather than depending on plan structure.
+///
+/// # The subscribe does not compare like the others
+///
+/// A subscribe is poisoned by the first error it observes and reports that same
+/// error in every later batch, even after the error is retracted, while an index
+/// and a persist sink both stop reporting an error the moment it goes away. That is
+/// the protocol working as designed: a client already told the collection is in
+/// error cannot be told to forget it.
+///
+/// So the subscribe is held to the reference *made sticky*: from the first
+/// timestamp at which the reference errors, an error is expected forever after.
+/// Comparing it directly would report intended behaviour as a divergence, and
+/// skipping the subscribe once it errors would stop checking the export whose error
+/// behaviour is the most intricate of the three.
+///
+/// Returns the comparisons that reached no verdict, which is only ever the
+/// timestamps inside the batch that carried the error: the protocol's `Err` variant
+/// has no timestamps, so when a replica batches several together, which of them
+/// first errored cannot be recovered from the response.
+fn check_export_invariance(
+    by_export: &BTreeMap<WorkloadExport, Timeline>,
+    poison: Option<&SubscribePoison>,
+) -> anyhow::Result<Vec<String>> {
+    // Prefer a non-subscribe reference, since the subscribe is the one carrying the
+    // sticky rule.
+    let Some((ref_kind, reference)) = by_export
+        .iter()
+        .find(|(kind, _)| **kind != WorkloadExport::Subscribe)
+        .or_else(|| by_export.iter().next())
+    else {
+        return Ok(Vec::new());
     };
-    for (kind, m) in iter {
-        if m != first {
+
+    let sticky = sticky_errors(reference);
+    let mut inconclusive = Vec::new();
+    for (kind, timeline) in by_export {
+        if kind == ref_kind {
+            continue;
+        }
+        let subscribe = *kind == WorkloadExport::Subscribe;
+        for (ts, result) in timeline {
+            let expected = if subscribe { &sticky } else { reference }
+                .get(ts)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("{ref_kind:?} has no read at ts {ts} but {kind:?} does")
+                })?;
+            if result == expected {
+                continue;
+            }
+            // Inside the batch that carried the error, the subscribe cannot say
+            // which timestamp the error belonged to. Tolerated only if the reference
+            // really does error somewhere in that batch: a subscribe erroring where
+            // the collection never does is a divergence whatever the batching.
+            if subscribe
+                && poison.is_some_and(|p| {
+                    covers(p, *ts) && reference.iter().any(|(t, r)| covers(p, *t) && r.is_error())
+                })
+            {
+                inconclusive.push(format!(
+                    "subscribe at ts {ts}: the error arrived in a batch spanning \
+                     several timestamps, so which one first errored cannot be \
+                     recovered from the response"
+                ));
+                continue;
+            }
             anyhow::bail!(
-                "export invariance: {kind:?} differs from {first_kind:?}\n\
-                 {first_kind:?}:\n{}\n{kind:?}:\n{}",
-                first.render(),
-                m.render()
+                "export invariance at ts {ts}: {kind:?} differs from {ref_kind:?}\n\
+                 {ref_kind:?}:\n{}\n{kind:?}:\n{}",
+                expected.render(),
+                result.render()
             );
         }
     }
-    Ok(())
+    Ok(inconclusive)
+}
+
+/// Whether the batch that poisoned a subscribe covers `ts`.
+fn covers(poison: &SubscribePoison, ts: u64) -> bool {
+    let lower = poison.lower.map_or(0, u64::from);
+    let upper = poison.upper.map_or(u64::MAX, u64::from);
+    lower <= ts && ts < upper
+}
+
+/// `timeline` with the first error carried forward through every later timestamp.
+///
+/// What a subscribe is expected to report, given that its first error poisons it.
+fn sticky_errors(timeline: &Timeline) -> Timeline {
+    let mut out = Timeline::new();
+    let mut poison: Option<ReadResult> = None;
+    for (ts, result) in timeline {
+        if poison.is_none() && result.is_error() {
+            poison = Some(result.clone());
+        }
+        out.insert(*ts, poison.clone().unwrap_or_else(|| result.clone()));
+    }
+    out
 }
 
 /// The strategy-invariance oracle: the same workload under different dyncfg
@@ -800,7 +937,7 @@ fn check_export_invariance(by_export: &BTreeMap<WorkloadExport, ReadResult>) -> 
 /// which strategy computed it.
 fn check_strategy_invariance(
     workload: &Workload,
-    per_config: &[(String, ReadResult)],
+    per_config: &[(String, Timeline)],
 ) -> anyhow::Result<()> {
     let Some((base_name, base)) = per_config.first() else {
         return Ok(());
@@ -813,14 +950,19 @@ fn check_strategy_invariance(
             per_config.len()
         );
     }
-    for (name, m) in &per_config[1..] {
-        if m != base {
-            anyhow::bail!(
-                "strategy invariance: config {name:?} differs from {base_name:?}\n\
-                 {base_name:?}:\n{}\n{name:?}:\n{}",
-                base.render(),
-                m.render()
-            );
+    for (name, timeline) in &per_config[1..] {
+        for (ts, result) in timeline {
+            let expected = base.get(ts).ok_or_else(|| {
+                anyhow::anyhow!("config {base_name:?} has no read at ts {ts} but {name:?} does")
+            })?;
+            if result != expected {
+                anyhow::bail!(
+                    "strategy invariance at ts {ts}: config {name:?} differs from \
+                     {base_name:?}\n{base_name:?}:\n{}\n{name:?}:\n{}",
+                    expected.render(),
+                    result.render()
+                );
+            }
         }
     }
     Ok(())
@@ -852,6 +994,7 @@ mod tests {
             name: "t".into(),
             seed: None,
             inputs: vec![input],
+            volume: 0,
             plan: MirRelationExpr::global_get(GlobalId::User(ids::input(0)), typ),
             exports: vec![WorkloadExport::Index],
             configs,
@@ -859,78 +1002,6 @@ mod tests {
             oracles,
             optimize: false,
         }
-    }
-
-    /// The fold oracle refuses to be inert: a plan it cannot reduce yields an
-    /// error, not a silent pass. Without this, an unfoldable plan would look
-    /// exactly like a correct one.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
-    fn fold_oracle_refuses_to_be_inert() {
-        use mz_expr::{Id, LocalId, MirRelationExpr};
-
-        // A `LetRec` the constant folder cannot see through.
-        let typ = mz_transform::mirgen::nullable_relation_type(&[mz_transform::mirgen::Ty::Int64]);
-        let mut workload = one_input_workload(vec![Oracle::FoldConstants], vec![]);
-        workload.plan = MirRelationExpr::LetRec {
-            ids: vec![LocalId::new(0)],
-            values: vec![MirRelationExpr::global_get(
-                GlobalId::User(ids::input(0)),
-                typ.clone(),
-            )],
-            limits: vec![None],
-            body: Box::new(MirRelationExpr::Get {
-                id: Id::Local(LocalId::new(0)),
-                typ,
-                access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
-            }),
-        };
-
-        let err = check_fold_constants(&workload, 0, &ReadResult::Rows(Multiset::new()))
-            .expect_err("an unfoldable plan must not silently pass");
-        assert!(
-            err.to_string().contains("inert"),
-            "expected an inertness error, got: {err}"
-        );
-    }
-
-    /// The fold oracle agrees with a correct result and rejects a wrong one, so
-    /// it is live in both directions.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
-    fn fold_oracle_is_live() {
-        let workload = one_input_workload(vec![Oracle::FoldConstants], vec![]);
-
-        // The correct answer: the one row that was written.
-        let mut correct: Multiset = BTreeMap::new();
-        let mut row = Row::default();
-        row.packer().push(mz_repr::Datum::Int64(7));
-        correct.insert(row.clone(), Diff::from(1));
-        assert_eq!(
-            check_fold_constants(&workload, 0, &ReadResult::Rows(correct.clone()))
-                .expect("the correct result must pass"),
-            None,
-            "an agreeing comparison reaches a verdict, so reports no reason"
-        );
-
-        // A wrong multiplicity must be caught.
-        let mut wrong = correct.clone();
-        wrong.insert(row, Diff::from(2));
-        let err = check_fold_constants(&workload, 0, &ReadResult::Rows(wrong))
-            .expect_err("a wrong result must be rejected");
-        assert!(err.to_string().contains("fold oracle"));
-
-        // Rows on one side and an error on the other yields no verdict, and says
-        // so. It must not read as a pass: an oracle that quietly stops answering
-        // is indistinguishable from one that agrees, which is the failure mode
-        // this suite exists to avoid.
-        let verdict = check_fold_constants(&workload, 0, &ReadResult::Error("boom".into()))
-            .expect("a mixed rows/error comparison is reported, not an error");
-        let reason = verdict.expect("the mixed case must report a reason");
-        assert!(
-            reason.contains("renderer produced an error"),
-            "expected a named reason, got: {reason}"
-        );
     }
 
     /// Strategy invariance catches a divergence between configurations, and
@@ -951,10 +1022,7 @@ mod tests {
             ],
         );
 
-        let mut row = Row::default();
-        row.packer().push(mz_repr::Datum::Int64(7));
-        let a = ReadResult::Rows([(row.clone(), Diff::from(1))].into_iter().collect());
-        let b = ReadResult::Rows([(row, Diff::from(2))].into_iter().collect());
+        let (a, b) = (timeline_at(1), timeline_at(2));
 
         check_strategy_invariance(
             &workload,
@@ -973,29 +1041,69 @@ mod tests {
         assert!(err.to_string().contains("at least two"));
     }
 
+    /// A single-timestamp timeline holding one row at multiplicity `diff`.
+    fn timeline_at(diff: i64) -> Timeline {
+        let mut row = Row::default();
+        row.packer().push(mz_repr::Datum::Int64(7));
+        [(
+            0,
+            ReadResult::Rows([(row, Diff::from(diff))].into_iter().collect()),
+        )]
+        .into_iter()
+        .collect()
+    }
+
     /// Export invariance catches a divergence between two exports of the same
     /// collection.
     #[mz_ore::test]
     fn export_invariance_is_live() {
-        let mut row = Row::default();
-        row.packer().push(mz_repr::Datum::Int64(7));
-        let a = ReadResult::Rows([(row.clone(), Diff::from(1))].into_iter().collect());
-        let b = ReadResult::Rows([(row, Diff::from(3))].into_iter().collect());
+        let (a, b) = (timeline_at(1), timeline_at(3));
 
-        let same: BTreeMap<WorkloadExport, ReadResult> = [
+        let same: BTreeMap<WorkloadExport, Timeline> = [
             (WorkloadExport::Index, a.clone()),
             (WorkloadExport::Subscribe, a.clone()),
         ]
         .into_iter()
         .collect();
-        check_export_invariance(&same).expect("identical exports must pass");
+        check_export_invariance(&same, None).expect("identical exports must pass");
 
-        let differing: BTreeMap<WorkloadExport, ReadResult> =
+        let differing: BTreeMap<WorkloadExport, Timeline> =
             [(WorkloadExport::Index, a), (WorkloadExport::Subscribe, b)]
                 .into_iter()
                 .collect();
-        let err =
-            check_export_invariance(&differing).expect_err("diverging exports must be rejected");
+        let err = check_export_invariance(&differing, None)
+            .expect_err("diverging exports must be rejected");
         assert!(err.to_string().contains("export invariance"));
+    }
+
+    /// A divergence at an intermediate timestamp is caught even when the two
+    /// timelines agree at the last one.
+    ///
+    /// This is the case the suite could not see when it read only the final state: a
+    /// collection that passes through a wrong intermediate value and then converges
+    /// looks identical to a correct one.
+    #[mz_ore::test]
+    fn invariance_catches_an_intermediate_divergence() {
+        let mut row = Row::default();
+        row.packer().push(mz_repr::Datum::Int64(7));
+        let rows =
+            |diff: i64| ReadResult::Rows([(row.clone(), Diff::from(diff))].into_iter().collect());
+
+        let good: Timeline = [(0, rows(1)), (1, rows(2))].into_iter().collect();
+        // Same answer at ts 1, wrong on the way there.
+        let bad: Timeline = [(0, rows(5)), (1, rows(2))].into_iter().collect();
+
+        let by_export: BTreeMap<WorkloadExport, Timeline> = [
+            (WorkloadExport::Index, good),
+            (WorkloadExport::Subscribe, bad),
+        ]
+        .into_iter()
+        .collect();
+        let err = check_export_invariance(&by_export, None)
+            .expect_err("a divergence at ts 0 must be rejected");
+        assert!(
+            err.to_string().contains("at ts 0"),
+            "the failure must name the timestamp, got: {err}"
+        );
     }
 }

@@ -2903,6 +2903,27 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  # The workloads step above renders the same plans on every run, by design: it is
+  # the regression suite, and a fixed seed is what makes a change in behaviour
+  # attributable. This step is the other half. It seeds from the build number, so
+  # every night renders plans nothing has rendered before, which is the only way
+  # this suite finds a bug it was not already written to catch.
+  #
+  # No `inputs:` filter. Step trimming exists to skip work a diff cannot affect,
+  # and that reasoning does not apply here: the point is to explore new plans
+  # against whatever is on main, so it should run whether or not the compute or
+  # driver sources were touched.
+  - id: clusterd-test-driver-soak
+    label: Clusterd test driver (soak, new plans each run)
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: clusterd-test-driver
+          run: soak
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - id: dbt-materialize
     topics: [kafka]
     label: dbt-materialize

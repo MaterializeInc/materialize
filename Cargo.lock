@@ -6707,6 +6707,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "futures",
+ "itertools 0.14.0",
  "mz-compute-client",
  "mz-compute-types",
  "mz-dyncfg",

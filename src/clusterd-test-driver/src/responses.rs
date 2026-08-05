@@ -30,9 +30,40 @@ use crate::ctp::ComputeCtpClient;
 type FrontierTx = watch::Sender<FrontiersResponse>;
 type FrontierRx = watch::Receiver<FrontiersResponse>;
 
+/// The first error a subscribe reported, and the batch it arrived in.
+///
+/// A subscribe is *poisoned* by its first error: `SubscribeProtocol` records it and
+/// returns the same error in every later batch, whether or not the error is
+/// retracted afterwards. An error is therefore a property of the subscribe from
+/// some point onwards, not of the collection at one timestamp, and a caller
+/// comparing a subscribe against another export has to account for that or it will
+/// read intended behaviour as a divergence.
+///
+/// The batch bounds are kept because the protocol's `Err` variant carries no
+/// timestamps. All that is known is that the error belongs to some timestamp in
+/// `[lower, upper)`: a replica is free to batch several timestamps together, and
+/// then which one first errored is not recoverable from the response.
+#[derive(Debug, Clone)]
+pub struct SubscribePoison {
+    /// The lower bound of the batch carrying the first error.
+    pub lower: Option<Timestamp>,
+    /// The upper bound of that batch. `None` for an empty (final) upper.
+    pub upper: Option<Timestamp>,
+    /// The error, as the replica spelled it.
+    pub message: String,
+}
+
+/// What a subscribe produced: its accumulated updates and its poison, if any.
+#[derive(Debug, Clone, Default)]
+pub struct SubscribeOutcome {
+    /// Updates from every batch before the subscribe was poisoned.
+    pub updates: Vec<(Row, Timestamp, i64)>,
+    /// The first error, if the subscribe was poisoned.
+    pub poison: Option<SubscribePoison>,
+}
+
 /// Buffered state for one subscribe sink: its accumulated updates, a watch on its
-/// upper frontier (so a waiter can block until it reaches a target), and the first
-/// error the replica reported, if any.
+/// upper frontier (so a waiter can block until it reaches a target), and its poison.
 ///
 /// Subscribe batches arrive asynchronously and out of band of the command that
 /// created the sink, so the pump accumulates them here as they land; the
@@ -40,7 +71,7 @@ type FrontierRx = watch::Receiver<FrontiersResponse>;
 struct SubscribeState {
     updates: Vec<(Row, Timestamp, i64)>,
     upper_tx: watch::Sender<Antichain<Timestamp>>,
-    error: Option<String>,
+    poison: Option<SubscribePoison>,
 }
 
 impl SubscribeState {
@@ -48,7 +79,7 @@ impl SubscribeState {
         SubscribeState {
             updates: Vec::new(),
             upper_tx: watch::channel(Antichain::from_elem(Timestamp::default())).0,
-            error: None,
+            poison: None,
         }
     }
 }
@@ -161,11 +192,17 @@ impl Responses {
                                     }
                                 }
                             }
-                            // Record the first error; the size-limit / internal error
-                            // path replaces the updates with a message.
+                            // Record the first error along with the batch it arrived
+                            // in, which is as precisely as it can be placed in time.
+                            // Later batches repeat it (the sink is poisoned), so only
+                            // the first one carries information.
                             Err(e) => {
-                                if state.error.is_none() {
-                                    state.error = Some(e);
+                                if state.poison.is_none() {
+                                    state.poison = Some(SubscribePoison {
+                                        lower: batch.lower.as_option().copied(),
+                                        upper: batch.upper.as_option().copied(),
+                                        message: e,
+                                    });
                                 }
                             }
                         }
@@ -224,36 +261,29 @@ impl Responses {
     /// error (e.g. a result-size overflow), so the assertion fails loudly rather
     /// than on a silently truncated batch.
     pub fn drain_subscribe(&self, id: GlobalId) -> anyhow::Result<Vec<(Row, Timestamp, i64)>> {
-        let mut g = self.shared.lock().expect("lock");
-        let state = g
-            .subscribes
-            .get_mut(&id)
-            .ok_or_else(|| anyhow::anyhow!("no subscribe registered for {id}"))?;
-        if let Some(e) = &state.error {
-            anyhow::bail!("subscribe {id} reported an error: {e}");
+        let outcome = self.drain_subscribe_result(id)?;
+        if let Some(poison) = outcome.poison {
+            anyhow::bail!("subscribe {id} reported an error: {}", poison.message);
         }
-        Ok(std::mem::take(&mut state.updates))
+        Ok(outcome.updates)
     }
 
-    /// Like [`Self::drain_subscribe`], but reports a subscribe error as a value.
+    /// Like [`Self::drain_subscribe`], but reports a subscribe error as a value
+    /// rather than as a failure, with the batch bounds needed to place it in time.
     ///
-    /// `Ok(Err(msg))` means the subscribe ran and its collection holds an error,
-    /// which a caller comparing against a reference needs to distinguish from the
-    /// subscribe never having been registered. See `Driver::peek_result` for the
-    /// same split on the peek path.
-    pub fn drain_subscribe_result(
-        &self,
-        id: GlobalId,
-    ) -> anyhow::Result<Result<Vec<(Row, Timestamp, i64)>, String>> {
+    /// A caller comparing against a reference needs to see the error: a computation
+    /// over erroring input *should* error. See [`SubscribePoison`] for why it comes
+    /// with bounds rather than as a plain message.
+    pub fn drain_subscribe_result(&self, id: GlobalId) -> anyhow::Result<SubscribeOutcome> {
         let mut g = self.shared.lock().expect("lock");
         let state = g
             .subscribes
             .get_mut(&id)
             .ok_or_else(|| anyhow::anyhow!("no subscribe registered for {id}"))?;
-        if let Some(e) = &state.error {
-            return Ok(Err(e.clone()));
-        }
-        Ok(Ok(std::mem::take(&mut state.updates)))
+        Ok(SubscribeOutcome {
+            updates: std::mem::take(&mut state.updates),
+            poison: state.poison.clone(),
+        })
     }
 }
 

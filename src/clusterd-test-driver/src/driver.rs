@@ -316,20 +316,22 @@ impl Driver {
         up_to: Timestamp,
         timeout: Duration,
     ) -> anyhow::Result<Vec<(Row, Timestamp, i64)>> {
-        match self.await_subscribe_result(id, up_to, timeout).await? {
-            Ok(updates) => Ok(updates),
-            Err(e) => anyhow::bail!("subscribe {id} reported an error: {e}"),
+        let outcome = self.await_subscribe_result(id, up_to, timeout).await?;
+        if let Some(poison) = outcome.poison {
+            anyhow::bail!("subscribe {id} reported an error: {}", poison.message);
         }
+        Ok(outcome.updates)
     }
 
     /// Like [`Self::await_subscribe`], but reports a subscribe error as a value
-    /// rather than as a failure. See [`Self::peek_result`].
+    /// rather than as a failure. See [`Self::peek_result`] and
+    /// [`crate::responses::SubscribePoison`].
     pub async fn await_subscribe_result(
         &self,
         id: GlobalId,
         up_to: Timestamp,
         timeout: Duration,
-    ) -> anyhow::Result<Result<Vec<(Row, Timestamp, i64)>, String>> {
+    ) -> anyhow::Result<crate::responses::SubscribeOutcome> {
         let mut rx = self.responses.ensure_subscribe(id);
         let want = Antichain::from_elem(up_to);
         tokio::time::timeout(timeout, async {

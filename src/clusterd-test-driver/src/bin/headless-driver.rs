@@ -80,9 +80,23 @@ async fn main() -> anyhow::Result<()> {
             seed.parse()
                 .with_context(|| format!("DRIVER_WORKLOAD_SEED {seed:?} is not a u64"))?
         };
-        let corpus = mz_clusterd_test_driver::generate::default_corpus(seed)?;
+        // `DRIVER_WORKLOAD_SOAK=N` keeps every one of N draws at the replica's
+        // defaults instead of selecting by surface coverage under the configuration
+        // matrix. See `generate::soak_corpus` for the trade.
+        let corpus = match std::env::var("DRIVER_WORKLOAD_SOAK") {
+            Ok(count) => {
+                let count: usize = count
+                    .parse()
+                    .with_context(|| format!("DRIVER_WORKLOAD_SOAK {count:?} is not a count"))?;
+                mz_clusterd_test_driver::generate::soak_corpus(seed, count)?
+            }
+            Err(_) => mz_clusterd_test_driver::generate::default_corpus(seed)?,
+        };
+        // The seed is the whole replay recipe, so print it before running anything:
+        // a run that dies mid-way still tells the reader what to re-run.
         println!(
-            "generated {} workloads from seed {seed} ({} draws, {} surface cells)",
+            "generated {} workloads from seed {seed} ({} draws, {} surface cells)\n\
+             replay this run with DRIVER_WORKLOAD_SEED={seed}",
             corpus.workloads.len(),
             corpus.drawn,
             corpus.covered.len()
@@ -153,19 +167,38 @@ async fn run_workloads(
 ) -> anyhow::Result<()> {
     let mut runner = WorkloadRunner::new(driver, loc).await?;
     let mut covered = std::collections::BTreeSet::new();
+    // Cells exercised by a workload that produced something to compare. The
+    // difference from `covered` is what was rendered but never had data flow through
+    // it.
+    let mut covered_with_data = std::collections::BTreeSet::new();
     let mut failures = Vec::new();
     let mut inconclusive: Vec<String> = Vec::new();
+    let mut empty_workloads = Vec::new();
     for workload in &workloads {
         match runner.run(workload).await {
             Ok(outcome) => {
-                covered.extend(outcome.realized_cells);
+                covered.extend(outcome.realized_cells.iter().cloned());
+                if outcome.produced_output {
+                    covered_with_data.extend(outcome.realized_cells);
+                } else {
+                    empty_workloads.push(outcome.name.clone());
+                }
                 for reason in &outcome.inconclusive {
                     inconclusive.push(format!("{}/{reason}", outcome.name));
                 }
                 println!(
-                    "ok: {} ({} config(s){})",
+                    "ok: {} ({} config(s), {} timestamp(s){}{})",
                     outcome.name,
                     outcome.per_config.len(),
+                    outcome
+                        .per_config
+                        .first()
+                        .map_or(0, |(_, timeline)| timeline.len()),
+                    if outcome.produced_output {
+                        ""
+                    } else {
+                        ", EMPTY at every timestamp"
+                    },
                     if outcome.inconclusive.is_empty() {
                         String::new()
                     } else {
@@ -185,6 +218,24 @@ async fn run_workloads(
 
     println!("\nsurface cells covered by this run ({}):", covered.len());
     println!("{}", render_cells(&covered));
+
+    // A cell only ever rendered over an empty collection is not tested, however
+    // clearly it appears in the coverage list above. Naming those is the difference
+    // between a coverage report and a coverage claim.
+    let empty_only: std::collections::BTreeSet<_> =
+        covered.difference(&covered_with_data).cloned().collect();
+    if !empty_only.is_empty() {
+        println!(
+            "\n{} cell(s) were only ever exercised over an empty collection, so \
+             nothing flowed through them:",
+            empty_only.len()
+        );
+        println!("{}", render_cells(&empty_only));
+        println!(
+            "  workloads empty at every timestamp: {}",
+            empty_workloads.join(", ")
+        );
+    }
 
     if !inconclusive.is_empty() {
         println!(

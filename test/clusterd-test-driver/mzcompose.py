@@ -11,6 +11,9 @@
 clusterd, with no environmentd. The driver hosts persist PubSub; clusterd is
 pointed at it via `mz_service`."""
 
+import os
+import random
+
 from materialize import ui
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.composition import Service as ServiceName
@@ -103,6 +106,11 @@ SCRIPTS = [
 # seed does not have to be duplicated between Rust and Python.
 WORKLOAD_SEED = ""
 
+# How many plans a soak run draws. Sized so the step lands well inside its CI
+# timeout at one configuration, which is where the budget goes instead of the
+# eight-row strategy matrix.
+SOAK_DRAWS = 250
+
 
 def workflow_default(c: Composition) -> None:
     """Run every workflow, each as its own test case.
@@ -154,8 +162,46 @@ def workflow_workloads(c: Composition) -> None:
     `PartitionedComputeState`, are never executed. Every operator in the corpus
     covers different code at the two widths.
     """
+    run_generated(c, {"DRIVER_WORKLOAD_SEED": WORKLOAD_SEED}, (1, 2))
+
+
+def workflow_soak(c: Composition) -> None:
+    """The same generator, drawing new plans on every run.
+
+    `workloads` is the regression suite: a fixed seed, so it renders the same plans
+    forever and any change to their behaviour is a regression. That is also its
+    ceiling. Once green it stays green, because it never asks a question it has not
+    already asked.
+
+    This workflow makes the other trade. The seed comes from the build, so each run
+    explores plans no run has rendered before, and the budget goes into plan variety
+    rather than into repeating each plan across the strategy matrix. A failure is
+    replayable: the driver prints its seed before running anything, and every
+    workload carries the seed it was drawn from.
+    """
+    # Derived from the build number so consecutive nightlies do not repeat, and
+    # random off CI so a developer running this twice sees two different corpora.
+    build = os.environ.get("BUILDKITE_BUILD_NUMBER")
+    seed = int(build) if build and build.isdigit() else random.randrange(2**32)
+    ui.section(f"Soaking {SOAK_DRAWS} generated plans from seed {seed}")
+    run_generated(
+        c,
+        {
+            "DRIVER_WORKLOAD_SEED": str(seed),
+            "DRIVER_WORKLOAD_SOAK": str(SOAK_DRAWS),
+        },
+        # One width: the budget buys plans here, and `workloads` already covers both
+        # widths for the plans it renders.
+        (2,),
+    )
+
+
+def run_generated(
+    c: Composition, env_extra: dict[str, str], widths: tuple[int, ...]
+) -> None:
+    """Run the generated corpus described by `env_extra` at each timely width."""
     c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
-    for i, workers in enumerate((1, 2)):
+    for i, workers in enumerate(widths):
         ui.section(f"Running generated workloads ({workers} worker(s))")
         # A fresh clusterd per width. The workload runner reconciles compute state
         # per configuration, but the worker count is fixed at process start.
@@ -167,11 +213,7 @@ def workflow_workloads(c: Composition) -> None:
             c.kill("clusterd")
         with c.override(Clusterd(mz_service="headless-driver", workers=workers)):
             c.up("clusterd")
-            c.run(
-                "headless-driver",
-                env_extra={"DRIVER_WORKLOAD_SEED": WORKLOAD_SEED},
-                use_aliases=True,
-            )
+            c.run("headless-driver", env_extra=env_extra, use_aliases=True)
 
 
 # NOTE: the corpus itself is checked by `default_corpus_is_self_consistent` and

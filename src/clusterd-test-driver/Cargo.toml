@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 futures.workspace = true
+itertools.workspace = true
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }

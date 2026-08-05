@@ -25,6 +25,10 @@ Run via the repo virtualenv so the `materialize` helpers are importable:
     # the generated compute-surface corpus
     WORKLOAD_SEED=default bin/pyactivate test/clusterd-test-driver/run-local.py
 
+    # soak: 250 freshly drawn plans, every one kept, at one configuration
+    WORKLOAD_SEED=12345 WORKLOAD_SOAK=250 \
+        bin/pyactivate test/clusterd-test-driver/run-local.py
+
 `SCRIPT=all` exists because the scenarios assert on driver output, including
 error messages, so a change to one can break a golden in a scenario nobody
 thought to re-run. Running a single scenario is the fast loop; run them all
@@ -79,6 +83,10 @@ SCRIPT = env("SCRIPT", "test/clusterd-test-driver/scripts/index.spec")
 # the corpus in process and runs it instead of `SCRIPT`. Set to "default" to use
 # the generator's own fixed seed.
 WORKLOAD_SEED = env("WORKLOAD_SEED", "")
+# Number of plans to draw in soak mode. When set, every draw is kept and run at the
+# replica's defaults, instead of selecting by surface coverage across the strategy
+# matrix. Pair it with a WORKLOAD_SEED nobody has run before.
+WORKLOAD_SOAK = env("WORKLOAD_SOAK", "")
 # Directory of JSON workloads, for replaying a hand-written or dumped one. Takes
 # effect only when WORKLOAD_SEED is unset. Relative paths resolve against the repo
 # root.
@@ -86,6 +94,11 @@ WORKLOADS = env("WORKLOADS", "")
 RUN_CLUSTERD = env("RUN_CLUSTERD", "1") == "1"
 # Command prepended to clusterd, e.g. "heaptrack" or "perf record -g --".
 WRAPPER = env("WRAPPER", "")
+# Timely workers for the local clusterd. Above one, the renderer's key-routing
+# exchanges and the multi-worker response merging actually run, which is where a
+# whole class of rendering bugs lives. The mzcompose `workloads` workflow covers
+# both widths for the same reason.
+WORKERS = int(env("WORKERS", "1"))
 # Cargo profile; `optimized` is release-like with debug symbols.
 PROFILE = env("PROFILE", "optimized")
 PROFILE_DIR = "debug" if PROFILE == "dev" else PROFILE
@@ -185,10 +198,10 @@ def cargo_build() -> None:
 
 def clusterd_command() -> list[str]:
     compute_tc = timely_config(
-        ["127.0.0.1"], 2102, 1, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
+        ["127.0.0.1"], 2102, WORKERS, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
     )
     storage_tc = timely_config(
-        ["127.0.0.1"], 2103, 1, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
+        ["127.0.0.1"], 2103, WORKERS, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
     )
     return [
         *shlex.split(WRAPPER),
@@ -373,6 +386,9 @@ def main() -> int:
             seed = "" if WORKLOAD_SEED == "default" else WORKLOAD_SEED
             driver_env["DRIVER_WORKLOAD_SEED"] = seed
             print(f"  DRIVER_WORKLOAD_SEED={seed or '(generator default)'}")
+            if WORKLOAD_SOAK:
+                driver_env["DRIVER_WORKLOAD_SOAK"] = WORKLOAD_SOAK
+                print(f"  DRIVER_WORKLOAD_SOAK={WORKLOAD_SOAK}")
         elif WORKLOADS:
             workloads_path = Path(WORKLOADS)
             if not workloads_path.is_absolute():

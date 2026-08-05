@@ -18,13 +18,18 @@
 //! ```text
 //! gen-workloads --out test/clusterd-test-driver/workloads [--seed N]
 //!               [--max-draws N] [--patience N] [--no-config-matrix]
+//!               [--soak N]
 //! ```
+//!
+//! `--soak N` dumps what a soak run of `N` draws from `--seed` would execute,
+//! which is how a soak failure gets from a seed in a CI log to a plan you can
+//! read.
 
 use std::path::PathBuf;
 
 use mz_clusterd_test_driver::generate::{
     DEFAULT_MAX_DRAWS, DEFAULT_PATIENCE, DEFAULT_SEED, STRATEGY_FLAGS, coverage_report, generate,
-    pairwise_configs,
+    pairwise_configs, soak_corpus,
 };
 
 fn main() -> anyhow::Result<()> {
@@ -33,6 +38,7 @@ fn main() -> anyhow::Result<()> {
     let mut max_draws = DEFAULT_MAX_DRAWS;
     let mut patience = DEFAULT_PATIENCE;
     let mut config_matrix = true;
+    let mut soak: Option<usize> = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -42,6 +48,7 @@ fn main() -> anyhow::Result<()> {
             "--max-draws" => max_draws = next_arg(&mut args, "--max-draws")?.parse()?,
             "--patience" => patience = next_arg(&mut args, "--patience")?.parse()?,
             "--no-config-matrix" => config_matrix = false,
+            "--soak" => soak = Some(next_arg(&mut args, "--soak")?.parse()?),
             other => anyhow::bail!("unknown argument {other:?}"),
         }
     }
@@ -53,7 +60,10 @@ fn main() -> anyhow::Result<()> {
         Vec::new()
     };
 
-    let corpus = generate(seed, max_draws, patience, &configs)?;
+    let corpus = match soak {
+        Some(count) => soak_corpus(seed, count)?,
+        None => generate(seed, max_draws, patience, &configs)?,
+    };
 
     // Clear any previously generated workloads, so a run that produces fewer
     // files does not leave stale ones behind to be executed.
@@ -70,8 +80,7 @@ fn main() -> anyhow::Result<()> {
 
     for workload in &corpus.workloads {
         let path = out.join(format!("{}.json", workload.name));
-        // Pretty-printed with a trailing newline: the corpus is committed, so it
-        // has to be reviewable in a diff.
+        // Pretty-printed: these are read by a person diagnosing a failure.
         let mut json = serde_json::to_string_pretty(workload)?;
         json.push('\n');
         std::fs::write(&path, json)?;
