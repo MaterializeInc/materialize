@@ -63,10 +63,10 @@ impl<'a> KeyProber<'a> {
         explain_row_estimate(&mut *self.conn, &select, Params::Positional(params)).await
     }
 
-    /// Grabs a prefix of `prefix_len` characters for the first key in the
-    /// given range. If the key is shorter than `prefix_len`, it returns that
-    /// shorter value. The lower bound is exclusive, a key exactly equal to it
-    /// is skipped.
+    /// Grabs a prefix of up to `max_prefix_length` characters for the first
+    /// key in the given range. If the key is shorter than `max_prefix_length`,
+    /// it returns that shorter value. The lower bound is exclusive, a key
+    /// exactly equal to it is skipped.
     ///
     /// The query will generally look something like:
     ///
@@ -80,19 +80,19 @@ impl<'a> KeyProber<'a> {
         &mut self,
         lower_bound_exclusive: Option<&str>,
         upper_bound: Option<&str>,
-        prefix_len: usize,
+        max_prefix_length: usize,
     ) -> Result<Option<String>, MySqlError> {
         let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound);
         let sql = format!(
-            "SELECT LEFT({col}, {prefix_len}) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
+            "SELECT LEFT({col}, {max_prefix_length}) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
             col = self.col,
             table = self.table,
         );
         self.query_string(sql, params).await
     }
 
-    /// Returns the prefix of up to length `len` of the first key after `prefix`, but below `upper_bound`.
-    /// Returns None if no key matching these conditions exists.
+    /// Returns the prefix of up to `max_prefix_length` characters of the first key after `prefix`,
+    /// but below `upper_bound`. Returns None if no key matching these conditions exists.
     ///
     /// NOTE: Run this inside a REPEATABLE READ transaction. It issues two
     /// probes, and each statement otherwise reads its own snapshot: a key
@@ -103,12 +103,12 @@ impl<'a> KeyProber<'a> {
         &mut self,
         prefix: &str,
         upper_bound: Option<&str>,
-        len: usize,
+        max_prefix_length: usize,
     ) -> Result<Option<String>, MySqlError> {
         let Some(max_key) = self.max_key_with_prefix(prefix, upper_bound).await? else {
             return Ok(None);
         };
-        self.prefix_of_first_key_in_range(Some(&max_key), upper_bound, len)
+        self.prefix_of_first_key_in_range(Some(&max_key), upper_bound, max_prefix_length)
             .await
     }
 
@@ -370,10 +370,14 @@ mod tests {
         prober: &mut KeyProber<'_>,
         lower_bound_exclusive: &str,
         upper_bound: Option<&str>,
-        len: usize,
+        max_prefix_length: usize,
     ) -> Option<String> {
         prober
-            .prefix_of_first_key_in_range(Some(lower_bound_exclusive), upper_bound, len)
+            .prefix_of_first_key_in_range(
+                Some(lower_bound_exclusive),
+                upper_bound,
+                max_prefix_length,
+            )
             .await
             .expect("prefix_of_first_key_in_range failed")
     }
@@ -382,12 +386,12 @@ mod tests {
     /// assertions stay one-liners.
     async fn next(
         prober: &mut KeyProber<'_>,
-        cur: &str,
-        end: Option<&str>,
-        len: usize,
+        prefix: &str,
+        upper_bound: Option<&str>,
+        max_prefix_length: usize,
     ) -> Option<String> {
         prober
-            .prefix_of_first_row_not_matching_prefix(cur, end, len)
+            .prefix_of_first_row_not_matching_prefix(prefix, upper_bound, max_prefix_length)
             .await
             .expect("prefix_of_first_row_not_matching_prefix failed")
     }
