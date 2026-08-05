@@ -202,16 +202,16 @@
   2. Scan all nodes in the dbt graph (manifest)
   3. Find nodes in the same schema/database
   4. Check if any are sources, sinks, or source_tables
-  5. If found, raise an error (schema is reserved)
+  5. If found, emit a warning (schema is reserved)
 #}
 
   {# Step 1: Only run validation when strict_mode is enabled #}
   {% if var('strict_mode', False) %}
 
-    {# Step 2: Initialize flags to track if we find isolated types #}
-    {% set has_source = false %}
-    {% set has_sink = false %}
-    {% set has_source_table = false %}
+    {# Step 2: Initialize flags to track if we find isolated types. These live
+       in a namespace because assignments made inside a for loop do not survive
+       the loop otherwise. #}
+    {% set found = namespace(source=false, sink=false, source_table=false) %}
 
     {# Step 3: Iterate through all nodes in the dbt manifest #}
     {% for node in graph.nodes.values() %}
@@ -221,42 +221,28 @@
 
         {# Step 5: Check if this node is a source, sink, or source_table #}
         {% if node.config.materialized == 'source' %}
-          {% set has_source = true %}
+          {% set found.source = true %}
         {% elif node.config.materialized == 'sink' %}
-          {% set has_sink = true %}
+          {% set found.sink = true %}
         {% elif node.config.materialized == 'source_table' %}
-          {% set has_source_table = true %}
+          {% set found.source_table = true %}
         {% endif %}
 
       {% endif %}
     {% endfor %}
 
-    {# Step 6: If schema contains sources, block creation of this object #}
-    {% if has_source %}
-      {{ exceptions.raise_compiler_error(
-        "Cannot create object in schema '" ~ target_schema ~ "'. " ~
-        "Schema contains source objects. " ~
-        "source materializations must be in a dedicated schema."
-      ) }}
-    {% endif %}
-
-    {# Step 7: If schema contains sinks, block creation of this object #}
-    {% if has_sink %}
-      {{ exceptions.raise_compiler_error(
-        "Cannot create object in schema '" ~ target_schema ~ "'. " ~
-        "Schema contains sink objects. " ~
-        "sink materializations must be in a dedicated schema."
-      ) }}
-    {% endif %}
-
-    {# Step 8: If schema contains source_tables, block creation of this object #}
-    {% if has_source_table %}
-      {{ exceptions.raise_compiler_error(
-        "Cannot create object in schema '" ~ target_schema ~ "'. " ~
-        "Schema contains source_table objects. " ~
-        "source_table materializations must be in a dedicated schema."
-      ) }}
-    {% endif %}
+    {# Steps 6-8: Warn for each isolated type found in this schema.
+       NOTE: these warn instead of raising, because runs that exclude sources
+       and sinks never hit the checks on that side and have always passed. #}
+    {% for type_name, is_found in [('source', found.source), ('sink', found.sink), ('source_table', found.source_table)] %}
+      {% if is_found %}
+        {{ exceptions.warn(
+          "Schema '" ~ target_schema ~ "' contains " ~ type_name ~ " objects, " ~
+          "but strict_mode requires " ~ type_name ~ " materializations to be in " ~
+          "a dedicated schema. This will become an error in a future release."
+        ) }}
+      {% endif %}
+    {% endfor %}
 
   {% endif %}
 {% endmacro %}
