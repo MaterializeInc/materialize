@@ -293,8 +293,8 @@ def get_console_app_config(namespace="materialize-environment") -> dict[str, Any
 def ensure_kind_version() -> None:
     kind_version = Version.parse(spawn.capture(["kind", "version"]).split(" ")[1][1:])
     assert kind_version >= Version.parse(
-        "0.29.0"
-    ), f"kind >= v0.29.0 required, while you are on {kind_version}"
+        "0.32.0"
+    ), f"kind >= v0.32.0 required, while you are on {kind_version}"
 
 
 def stop_and_remove_container(container_name: str) -> None:
