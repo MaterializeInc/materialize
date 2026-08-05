@@ -51,11 +51,10 @@ impl<'a> KeyProber<'a> {
     /// as the sampled range shrinks on a static table.
     pub async fn estimate_range_rows(
         &mut self,
-        lower_bound_exclusive: &str,
+        lower_bound_exclusive: Option<&str>,
         upper_bound_exclusive: Option<&str>,
     ) -> Result<Option<u64>, MySqlError> {
-        let (clause, params) =
-            self.range_filter(Some(lower_bound_exclusive), upper_bound_exclusive);
+        let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound_exclusive);
         let select = format!(
             "SELECT {col} FROM {table} WHERE {clause}",
             col = self.col,
@@ -245,7 +244,7 @@ mod tests {
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
         assert_eq!(
-            prefix_of_first_key_in_range(p, "", None, 1).await,
+            prefix_of_first_key_in_range(p, None, None, 1).await,
             some("a")
         );
         assert_eq!(
@@ -262,7 +261,7 @@ mod tests {
         );
 
         assert_eq!(
-            prefix_of_first_key_in_range(p, "a", Some("b"), 2).await,
+            prefix_of_first_key_in_range(p, Some("a"), Some("b"), 2).await,
             some("aa")
         );
         assert_eq!(
@@ -277,7 +276,7 @@ mod tests {
         // Bounds are exclusive: the exact key "b" is skipped as a split
         // point, and its extensions surface as their own prefixes.
         assert_eq!(
-            prefix_of_first_key_in_range(p, "b", Some("c"), 2).await,
+            prefix_of_first_key_in_range(p, Some("b"), Some("c"), 2).await,
             some("bb")
         );
         assert_eq!(
@@ -291,7 +290,10 @@ mod tests {
             None
         );
 
-        assert_eq!(prefix_of_first_key_in_range(p, "c", None, 2).await, None);
+        assert_eq!(
+            prefix_of_first_key_in_range(p, Some("c"), None, 2).await,
+            None
+        );
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -311,14 +313,17 @@ mod tests {
 
         // Estimates are index dives, near reality but never exact by
         // contract, so the bounds are deliberately loose.
-        let all = p.estimate_range_rows("", None).await?.expect("estimate");
+        let all = p.estimate_range_rows(None, None).await?.expect("estimate");
         assert!((500..=2000).contains(&all), "all={all}");
         let half = p
-            .estimate_range_rows("a00500", None)
+            .estimate_range_rows(Some("a00500"), None)
             .await?
             .expect("estimate");
         assert!((250..=1000).contains(&half), "half={half}");
-        let none = p.estimate_range_rows("zzz", None).await?.expect("estimate");
+        let none = p
+            .estimate_range_rows(Some("zzz"), None)
+            .await?
+            .expect("estimate");
         assert!(none <= 5, "none={none}");
 
         drop_db(&mut conn, DB).await?;
@@ -395,13 +400,13 @@ mod tests {
     // Wrapped to limit boilerplate
     async fn prefix_of_first_key_in_range(
         prober: &mut KeyProber<'_>,
-        lower_bound_exclusive: &str,
+        lower_bound_exclusive: Option<&str>,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Option<String> {
         prober
             .prefix_of_first_key_in_range(
-                Some(lower_bound_exclusive),
+                lower_bound_exclusive,
                 upper_bound_exclusive,
                 max_prefix_length,
             )
