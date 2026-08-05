@@ -566,6 +566,7 @@ pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
     pub workload_class: Option<String>,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -597,6 +598,7 @@ pub struct CreateClusterReplicaPlan {
     pub cluster_id: ClusterId,
     pub name: String,
     pub config: ReplicaConfig,
+    pub if_not_exists: bool,
 }
 
 /// Configuration of introspection for a cluster replica.

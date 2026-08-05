@@ -404,6 +404,13 @@ impl Cluster {
         }
     }
 
+    /// Builds the plan that a `CREATE CLUSTER` statement for this cluster would
+    /// have produced.
+    ///
+    /// Clusters are stored as a structured config, not as SQL text, so `SHOW
+    /// CREATE CLUSTER` cannot just print a stored statement. It rebuilds one,
+    /// and this is the first half of that: config to plan. `unplan_create_cluster`
+    /// then turns the plan back into a statement.
     pub fn try_to_plan(&self) -> Result<CreateClusterPlan, PlanError> {
         let name = self.name.clone();
         let variant = match &self.config.variant {
@@ -462,6 +469,10 @@ impl Cluster {
             name,
             variant,
             workload_class,
+            // Nothing about `IF NOT EXISTS` is stored. It only ever affected how
+            // the original statement handled a name collision, so the rebuilt
+            // statement never shows it.
+            if_not_exists: false,
         })
     }
 }

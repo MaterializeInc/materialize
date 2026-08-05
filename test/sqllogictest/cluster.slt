@@ -1041,3 +1041,153 @@ u3  NULL
 
 statement ok
 DROP CLUSTER c1
+
+# `IF NOT EXISTS`
+
+statement ok
+CREATE CLUSTER ine1 (SIZE 'scale=1,workers=1')
+
+# Skipping leaves the existing cluster untouched: the configuration in the
+# statement is not applied.
+statement ok
+CREATE CLUSTER IF NOT EXISTS ine1 (SIZE 'scale=1,workers=2', REPLICATION FACTOR 2)
+
+query TIT
+SELECT name, replication_factor, size FROM mz_clusters WHERE name = 'ine1'
+----
+ine1  1  scale=1,workers=1
+
+# The statement is validated in full before the collision is reported, exactly
+# as it is without `IF NOT EXISTS`. A typo must not hide behind the clause.
+statement error unknown cluster replica size
+CREATE CLUSTER IF NOT EXISTS ine1 (SIZE 'lol')
+
+statement error cluster 'ine1' already exists
+CREATE CLUSTER ine1 (SIZE 'scale=1,workers=2')
+
+# The unmanaged variant takes the clause too.
+statement ok
+CREATE CLUSTER ineu REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement ok
+CREATE CLUSTER IF NOT EXISTS ineu REPLICAS (r2 (SIZE 'scale=1,workers=1'))
+
+query T rowsort
+SELECT r.name
+FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'ineu'
+----
+r1
+
+statement ok
+DROP CLUSTER ineu
+
+# `IF NOT EXISTS` still creates the cluster when the name is free.
+statement ok
+CREATE CLUSTER IF NOT EXISTS ine3 (SIZE 'scale=1,workers=1')
+
+query T
+SELECT name FROM mz_clusters WHERE name = 'ine3'
+----
+ine3
+
+# Cluster names are case sensitive, so an unquoted `INE3` is `ine3` but a
+# quoted `INE3` is a distinct, free name.
+statement ok
+CREATE CLUSTER IF NOT EXISTS INE3 (SIZE 'scale=1,workers=1')
+
+statement ok
+CREATE CLUSTER IF NOT EXISTS "INE3" (SIZE 'scale=1,workers=1')
+
+query T rowsort
+SELECT name FROM mz_clusters WHERE name ILIKE 'ine3'
+----
+INE3
+ine3
+
+# `FEATURES` is system-user only, and it is the shape with the most plan/unplan
+# roundtrip surface, so cover it with the clause too.
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER IF NOT EXISTS inef (SIZE 'scale=1,workers=1') FEATURES (ENABLE EAGER DELTA JOINS = true)
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER IF NOT EXISTS inef (SIZE 'scale=1,workers=2') FEATURES (ENABLE EAGER DELTA JOINS = false)
+----
+COMPLETE 0
+
+query TT
+SHOW CREATE CLUSTER inef
+----
+inef  CREATE␠CLUSTER␠"inef"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠false,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)␠FEATURES␠(ENABLE␠EAGER␠DELTA␠JOINS␠=␠true)
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER inef
+----
+COMPLETE 0
+
+# `IF NOT EXISTS` is not part of the cluster's definition, so it does not show
+# up here.
+query TT
+SHOW CREATE CLUSTER ine3
+----
+ine3  CREATE␠CLUSTER␠"ine3"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠false,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+# A reserved name is rejected before the name is ever checked for a collision,
+# so `IF NOT EXISTS` must report the reserved name rather than a skip.
+statement error cluster name "mz_system" is reserved
+CREATE CLUSTER IF NOT EXISTS mz_system (SIZE 'scale=1,workers=1')
+
+statement error cluster name "mz_nope" is reserved
+CREATE CLUSTER IF NOT EXISTS mz_nope (SIZE 'scale=1,workers=1')
+
+statement ok
+DROP CLUSTER ine1
+
+statement ok
+DROP CLUSTER ine3
+
+statement ok
+DROP CLUSTER "INE3"
+
+# `IF NOT EXISTS` for cluster replicas.
+
+statement ok
+CREATE CLUSTER iner REPLICAS (r1 (SIZE 'scale=1,workers=1'))
+
+statement error cannot create multiple replicas named 'r1' on cluster 'iner'
+CREATE CLUSTER REPLICA iner.r1 SIZE 'scale=1,workers=2'
+
+statement ok
+CREATE CLUSTER REPLICA IF NOT EXISTS iner.r1 SIZE 'scale=1,workers=2'
+
+statement ok
+CREATE CLUSTER REPLICA IF NOT EXISTS iner.r2 SIZE 'scale=1,workers=1'
+
+query TT rowsort
+SELECT r.name, r.size
+FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'iner'
+----
+r1  scale=1,workers=1
+r2  scale=1,workers=1
+
+# `IF NOT EXISTS` covers the replica name only, the cluster must exist.
+statement error unknown cluster 'nope'
+CREATE CLUSTER REPLICA IF NOT EXISTS nope.r1 SIZE 'scale=1,workers=1'
+
+# Replicas cannot be added to a managed cluster at all, and `IF NOT EXISTS`
+# does not soften that: the rejection happens at plan time, before the replica
+# name is ever considered.
+statement ok
+CREATE CLUSTER inem (SIZE 'scale=1,workers=1')
+
+statement error cannot modify managed cluster inem
+CREATE CLUSTER REPLICA IF NOT EXISTS inem.r1 SIZE 'scale=1,workers=1'
+
+statement ok
+DROP CLUSTER inem
+
+statement ok
+DROP CLUSTER iner

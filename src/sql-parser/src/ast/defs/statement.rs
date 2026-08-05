@@ -2467,11 +2467,15 @@ pub struct CreateClusterStatement<T: AstInfo> {
     pub options: Vec<ClusterOption<T>>,
     /// The comma-separated features enabled on the cluster.
     pub features: Vec<ClusterFeature<T>>,
+    pub if_not_exists: bool,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
         f.write_node(&self.name);
         if !self.options.is_empty() {
             f.write_str(" (");
@@ -2566,11 +2570,15 @@ pub struct CreateClusterReplicaStatement<T: AstInfo> {
     pub of_cluster: Ident,
     /// The replica's definition.
     pub definition: ReplicaDefinition<T>,
+    pub if_not_exists: bool,
 }
 
 impl<T: AstInfo> AstDisplay for CreateClusterReplicaStatement<T> {
     fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
         f.write_str("CREATE CLUSTER REPLICA ");
+        if self.if_not_exists {
+            f.write_str("IF NOT EXISTS ");
+        }
         f.write_node(&self.of_cluster);
         f.write_str(".");
         f.write_node(&self.definition.name);
