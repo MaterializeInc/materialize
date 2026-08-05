@@ -500,10 +500,16 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                     Some(mz_sql_parser::ast::SourceEnvelope::Debezium)
                 );
 
-                // Kafka defaults to ENVELOPE NONE when the clause is omitted, and
-                // the pre-MV packer reported 'none' rather than NULL for that case.
-                // Other source types carry no envelope, so theirs stays absent
-                // (SQL NULL). See the `mz_sources.envelope_type` column.
+                // An old-syntax kafka source ingests into its own relation, so an
+                // omitted ENVELOPE means the default ENVELOPE NONE and the pre-MV
+                // packer reported 'none'. A new-syntax source (no progress
+                // subsource, hence no EXPOSE PROGRESS AS in create_sql) ingests
+                // nothing itself. Its envelopes live on the per-table exports, so
+                // its own envelope_type stays absent (SQL NULL), matching released
+                // behavior. `progress_subsource.is_some()` is the planner's own
+                // old-vs-new discriminator (see `OldSyntaxIngestion` in
+                // plan_create_source). Non-kafka sources carry no envelope either.
+                // See the `mz_sources.envelope_type` column.
                 let envelope_type = match &stmt.envelope {
                     Some(envelope) => {
                         use mz_sql_parser::ast::SourceEnvelope::*;
@@ -514,7 +520,9 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                             CdcV2 => "materialize",
                         })
                     }
-                    None if source_type == "kafka" => Some("none"),
+                    None if source_type == "kafka" && stmt.progress_subsource.is_some() => {
+                        Some("none")
+                    }
                     None => None,
                 };
                 if let Some(envelope_type) = envelope_type {
@@ -1644,25 +1652,40 @@ mod tests {
     // --- parse_catalog_create_sql envelope_type ------------------------------
 
     #[mz_ore::test]
-    fn catalog_kafka_source_omitted_envelope_defaults_none() {
-        // Kafka defaults to ENVELOPE NONE when the clause is omitted, and the
-        // pre-MV path reported 'none', not NULL.
+    fn catalog_kafka_old_syntax_omitted_envelope_defaults_none() {
+        // An old-syntax kafka source (carries EXPOSE PROGRESS AS) ingests into
+        // its own relation, so an omitted ENVELOPE means the default NONE, which
+        // the pre-MV packer reported as 'none'.
         let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
              IN CLUSTER [u42] \
              FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
-             (TOPIC 'test') FORMAT TEXT";
+             (TOPIC 'test') FORMAT TEXT \
+             EXPOSE PROGRESS AS [u12 AS \"materialize\".\"public\".\"k_progress\"]";
         let out = super::parse_catalog_create_sql(sql).expect("ok");
         assert_eq!(as_serde(out)["envelope_type"], json!("none"));
     }
 
     #[mz_ore::test]
-    fn catalog_kafka_source_explicit_envelope() {
+    fn catalog_kafka_old_syntax_explicit_envelope() {
         let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
              IN CLUSTER [u42] \
              FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
-             (TOPIC 'test') FORMAT BYTES ENVELOPE UPSERT";
+             (TOPIC 'test') FORMAT BYTES ENVELOPE UPSERT \
+             EXPOSE PROGRESS AS [u12 AS \"materialize\".\"public\".\"k_progress\"]";
         let out = super::parse_catalog_create_sql(sql).expect("ok");
         assert_eq!(as_serde(out)["envelope_type"], json!("upsert"));
+    }
+
+    #[mz_ore::test]
+    fn catalog_kafka_new_syntax_source_omits_envelope_type() {
+        // A new-syntax kafka source has no progress subsource (no EXPOSE PROGRESS
+        // AS). It ingests nothing itself. Envelopes live on the per-table exports,
+        // so its own envelope_type stays absent (SQL NULL).
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"]";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out).get("envelope_type"), None);
     }
 
     #[mz_ore::test]

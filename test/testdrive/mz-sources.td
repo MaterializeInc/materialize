@@ -190,3 +190,9 @@ testdrive-upsert-topic-${testdrive.seed}   upsert          avro         avro
   JOIN mz_tables t ON t.id = kst.id
   WHERE t.name = 'table_omit_envelope'
 none
+
+# A new-syntax kafka source ingests nothing into its own relation (envelopes are
+# defined per table), so mz_sources.envelope_type is NULL for it, even though its
+# tables report their own envelopes above.
+> SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
+<null>
