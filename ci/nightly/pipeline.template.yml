@@ -2869,10 +2869,37 @@ steps:
     label: Clusterd test driver
     depends_on: build-aarch64
     timeout_in_minutes: 20
-    inputs: [test/clusterd-test-driver]
+    inputs: [test/clusterd-test-driver, src/clusterd-test-driver]
     plugins:
       - ./ci/plugins/mzcompose:
           composition: clusterd-test-driver
+          run: scripts
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  # Split from the scenarios above rather than run as one `default` workflow: a
+  # failure in either would otherwise mask the other entirely, and a scenario
+  # failure has already hidden a whole run of this suite once.
+  #
+  # The `inputs` are wider because the corpus is generated in process from the
+  # LIR surface and the shared MIR generator, so a change to compute's plan types
+  # or to the generator changes what this runs, with nothing under
+  # `test/clusterd-test-driver` touched.
+  - id: clusterd-test-driver-workloads
+    label: Clusterd test driver (generated workloads)
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs:
+      [
+        test/clusterd-test-driver,
+        src/clusterd-test-driver,
+        src/compute-types,
+        src/transform/src/mirgen.rs,
+      ]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: clusterd-test-driver
+          run: workloads
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 

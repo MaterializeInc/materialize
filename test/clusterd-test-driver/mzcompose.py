@@ -105,8 +105,18 @@ WORKLOAD_SEED = ""
 
 
 def workflow_default(c: Composition) -> None:
-    workflow_scripts(c)
-    workflow_workloads(c)
+    """Run every workflow, each as its own test case.
+
+    CI runs `scripts` and `workloads` as separate steps so one cannot mask the
+    other, but a developer wants a single command for the lot. `test_case` keeps
+    the workflows independent here too: a failing one is reported and the rest
+    still run, rather than the first failure hiding everything after it.
+    """
+    for name in c.workflows:
+        if name == "default":
+            continue
+        with c.test_case(name):
+            c.workflow(name)
 
 
 def workflow_scripts(c: Composition) -> None:
@@ -145,11 +155,16 @@ def workflow_workloads(c: Composition) -> None:
     covers different code at the two widths.
     """
     c.up(METADATA_STORE, "minio", ServiceName("headless-driver", idle=True))
-    for workers in (1, 2):
+    for i, workers in enumerate((1, 2)):
         ui.section(f"Running generated workloads ({workers} worker(s))")
         # A fresh clusterd per width. The workload runner reconciles compute state
         # per configuration, but the worker count is fixed at process start.
-        c.kill("clusterd")
+        #
+        # Skip the kill on the first pass: this workflow runs as its own CI step,
+        # so nothing has started clusterd yet and killing a service with no
+        # container is not something to rely on.
+        if i > 0:
+            c.kill("clusterd")
         with c.override(Clusterd(mz_service="headless-driver", workers=workers)):
             c.up("clusterd")
             c.run(

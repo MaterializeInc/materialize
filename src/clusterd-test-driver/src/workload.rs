@@ -291,9 +291,21 @@ pub mod ids {
     /// number of ids any one configuration uses, with room to spare.
     pub const CONFIG_STRIDE: u64 = 1000;
 
+    /// Where the workload id space starts.
+    ///
+    /// Far above the ids the hand-written `.spec` scenarios use (1000-2001), so a
+    /// workload never names a collection a scenario left behind. That matters when
+    /// both suites run against one replica, as the `default` mzcompose workflow
+    /// does: reconciliation matches the dataflows it is asked to keep *by id*, so
+    /// a collision would let a leftover scenario dataflow stand in for a
+    /// workload's, and the workload would then be checking the wrong collection.
+    /// Separating the ranges removes the possibility rather than relying on the
+    /// replica being torn down in between.
+    pub const WORKLOAD_ID_BASE: u64 = 100_000;
+
     /// The base of configuration `config`'s id range.
     pub fn config_base(config: usize) -> u64 {
-        1000 + u64::try_from(config).expect("config count fits u64") * CONFIG_STRIDE
+        WORKLOAD_ID_BASE + u64::try_from(config).expect("config count fits u64") * CONFIG_STRIDE
     }
 
     /// The exported index's id, within configuration `config`.
