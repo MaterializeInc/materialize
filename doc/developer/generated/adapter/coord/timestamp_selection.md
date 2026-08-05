@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/timestamp_selection.rs
-revision: 1c17d34993
+revision: 253293ef87
 ---
 
 # adapter::coord::timestamp_selection

@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/error.rs
-revision: 74f18a3354
+revision: 5b0bee10fd
 ---
 
 # mz-sql::plan::error

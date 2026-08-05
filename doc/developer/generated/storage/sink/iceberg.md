@@ -1,11 +1,11 @@
 ---
 source: src/storage/src/sink/iceberg.rs
-revision: cd0f3534ba
+revision: 3f85e4828a
 ---
 
 # mz-storage::sink::iceberg
 
-Renders an Iceberg sink dataflow comprising three operators: `mint_batch_descriptions` (single worker, determines time-based batch boundaries and loads/creates the Iceberg table), `write_data_files` (all workers, receives the raw `SinkBatchStream`, stashes `Rc<OrdValBatch>` batches until their batch description arrives, then reads rows via `for_each_diff_pair_async` and writes Parquet data files to object storage), and `commit_to_iceberg` (single worker, commits file metadata as Iceberg snapshots).
+Renders an Iceberg sink dataflow comprising four operators: `walk_sink_arrangement` (all workers, walks arrangement batches and emits one `DiffPair` per `(key, timestamp)`), `mint_batch_descriptions` (single worker, determines time-based batch boundaries and loads/creates the Iceberg table), `write_data_files` (all workers, receives rows and stashes `Rc<OrdValBatch>` batches until their batch description arrives, then reads rows via `for_each_diff_pair_async` and writes Parquet data files to object storage), and `commit_to_iceberg` (single worker, commits file metadata as Iceberg snapshots).
 Implements the `SinkRender` trait for `IcebergSinkConnection`.
 The batch minting operator maintains a sliding window of future batch descriptions (controlled by `INITIAL_DESCRIPTIONS_TO_MINT`) so writers can start streaming data before earlier batches complete.
 When a sink begins from a source snapshot (resume upper is `Timestamp::minimum()`), the mint operator immediately emits a snapshot batch description covering `[as_of, as_of + 1)` before entering its main loop, so the write operator can begin streaming snapshot data without waiting for the frontier to advance.

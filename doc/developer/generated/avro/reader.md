@@ -1,6 +1,6 @@
 ---
 source: src/avro/src/reader.rs
-revision: 18d73eb54d
+revision: 253293ef87
 ---
 
 Provides the high-level `Reader` type for reading Avro Object Container Files (OCF).

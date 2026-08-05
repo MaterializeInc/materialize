@@ -1,6 +1,6 @@
 ---
 source: src/testdrive/src/action/postgres/execute.rs
-revision: 5b2cefc829
+revision: 253293ef87
 ---
 
 # testdrive::action::postgres::execute
