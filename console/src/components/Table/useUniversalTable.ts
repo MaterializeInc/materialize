@@ -9,10 +9,14 @@
 
 import {
   ColumnDef,
+  ColumnFiltersState,
+  ExpandedState,
   getCoreRowModel,
+  getExpandedRowModel,
   getFilteredRowModel,
   getPaginationRowModel,
   getSortedRowModel,
+  OnChangeFn,
   PaginationState,
   SortingState,
   TableOptions,
@@ -36,11 +40,18 @@ export const useUniversalTable = <TData>(
     initialSorting?: SortingState;
     /** Convenience shorthand for `initialState.pagination.pageSize`. Defaults to 25. */
     pageSize?: number;
+    /**
+     * Convenience shorthand for `initialState.expanded`. Only meaningful for
+     * group tables, i.e. when `getSubRows` is also passed. `true` expands
+     * every group.
+     */
+    initialExpanded?: ExpandedState;
   },
 ) => {
   const {
     initialSorting,
     pageSize = DEFAULT_PAGE_SIZE,
+    initialExpanded,
     ...tableOptions
   } = options;
 
@@ -50,10 +61,33 @@ export const useUniversalTable = <TData>(
   const [globalFilter, setGlobalFilter] = React.useState<string>(
     (tableOptions.initialState?.globalFilter as string) ?? "",
   );
+  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
+    tableOptions.initialState?.columnFilters ?? [],
+  );
   const [pagination, setPagination] = React.useState<PaginationState>({
     pageIndex: tableOptions.initialState?.pagination?.pageIndex ?? 0,
     pageSize,
   });
+  const [expanded, setExpanded] = React.useState<ExpandedState>(
+    initialExpanded ?? {},
+  );
+
+  const onPaginationChange = tableOptions.onPaginationChange ?? setPagination;
+  // With autoResetPageIndex off (see below), TanStack no longer resets the
+  // page when a filter changes, which can strand the user on a page past the
+  // end of the filtered results. Reset explicitly for both filter kinds.
+  const resetPageIndex = () =>
+    onPaginationChange((prev) =>
+      prev.pageIndex === 0 ? prev : { ...prev, pageIndex: 0 },
+    );
+  const onGlobalFilterChange: OnChangeFn<string> = (updater) => {
+    (tableOptions.onGlobalFilterChange ?? setGlobalFilter)(updater);
+    resetPageIndex();
+  };
+  const onColumnFiltersChange: OnChangeFn<ColumnFiltersState> = (updater) => {
+    (tableOptions.onColumnFiltersChange ?? setColumnFilters)(updater);
+    resetPageIndex();
+  };
 
   return useReactTable({
     ...tableOptions,
@@ -62,20 +96,37 @@ export const useUniversalTable = <TData>(
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
     globalFilterFn: tableOptions.globalFilterFn ?? "includesString",
     state: {
       sorting,
       globalFilter,
+      columnFilters,
       pagination,
+      expanded,
       ...tableOptions.state,
     },
     onSortingChange: tableOptions.onSortingChange ?? setSorting,
-    onGlobalFilterChange: tableOptions.onGlobalFilterChange ?? setGlobalFilter,
-    onPaginationChange: tableOptions.onPaginationChange ?? setPagination,
+    onGlobalFilterChange,
+    onColumnFiltersChange,
+    onPaginationChange,
+    onExpandedChange: tableOptions.onExpandedChange ?? setExpanded,
     // Background data refreshes (e.g., react-query polls) shouldn't snap
     // the user back to page 1. Auto-reset only fires when the user
     // explicitly changes filters/sorts via TanStack's defaults.
     autoResetPageIndex: tableOptions.autoResetPageIndex ?? false,
+    // Page size counts group rows only. `false` defers child-row expansion
+    // to the pagination model so children render on their parent's page.
+    // With manualPagination that model is bypassed entirely, so expansion
+    // must happen in the expanded row model instead (`true`).
+    paginateExpandedRows:
+      tableOptions.paginateExpandedRows ??
+      Boolean(tableOptions.manualPagination),
+    // Group tables filter from leaf rows: a matching child keeps its parent
+    // group visible instead of the whole group being dropped. Scoped to
+    // getSubRows tables since leaf filtering re-allocates every row.
+    filterFromLeafRows:
+      tableOptions.filterFromLeafRows ?? Boolean(tableOptions.getSubRows),
   });
 };
 
