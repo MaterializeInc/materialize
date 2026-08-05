@@ -572,8 +572,8 @@ impl Coordinator {
             let creates_temp_item = ops.iter().any(
                 |op| matches!(op, catalog::Op::CreateItem { item, .. } if item.is_temporary()),
             );
-            if creates_temp_item && !catalog.state().is_ephemeral_owner(conn.conn_id()) {
-                catalog.register_ephemeral_owner(conn.uuid(), conn.conn_id().clone());
+            if creates_temp_item && !catalog.state().has_temporary_namespace(conn.conn_id()) {
+                catalog.register_temporary_namespace(conn.conn_id(), conn.uuid());
             }
         }
 

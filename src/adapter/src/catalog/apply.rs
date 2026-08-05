@@ -1166,7 +1166,7 @@ impl CatalogState {
         };
         match update.diff {
             // An addition is local when the owning session is connected here.
-            StateDiff::Addition => !self.ephemeral_owner_conns_by_uuid.contains_key(&owner),
+            StateDiff::Addition => !self.temporary_namespaces.contains_uuid(&owner),
             // A retraction must be applied iff the matching addition was
             // applied here, and entry presence records exactly that. A
             // read-only catalog never reaches this arm: it only applies its
@@ -1207,32 +1207,25 @@ impl CatalogState {
                 // session's connection, not in the schema named by
                 // `schema_id` (which is the temporary schema sentinel).
                 // Updates for sessions not connected to this process are
-                // filtered out in `apply_updates_inner`, so the mapping must
-                // exist here.
+                // filtered out in `apply_updates_inner`, so the namespace
+                // (registered before the transaction that created the item)
+                // must exist here. Its schema materializes in `insert_entry`.
                 let conn_id = ephemeral_owner_session.map(|owner| {
-                    self.ephemeral_owner_conns_by_uuid
-                        .get(&owner)
+                    self.temporary_namespaces
+                        .conn_for_uuid(&owner)
                         .cloned()
                         .unwrap_or_else(|| {
                             panic!("no session record applied for temporary item owner {owner}")
                         })
                 });
                 let name = match &conn_id {
-                    Some(conn_id) => {
-                        // Lazily create the temporary schema if it doesn't
-                        // exist yet.
-                        if !self.temporary_schemas.contains_key(conn_id) {
-                            self.create_temporary_schema(conn_id, owner_id)
-                                .expect("failed to create temporary schema");
-                        }
-                        QualifiedItemName {
-                            qualifiers: ItemQualifiers {
-                                database_spec: ResolvedDatabaseSpecifier::Ambient,
-                                schema_spec: SchemaSpecifier::Temporary,
-                            },
-                            item: name.clone(),
-                        }
-                    }
+                    Some(_) => QualifiedItemName {
+                        qualifiers: ItemQualifiers {
+                            database_spec: ResolvedDatabaseSpecifier::Ambient,
+                            schema_spec: SchemaSpecifier::Temporary,
+                        },
+                        item: name.clone(),
+                    },
                     None => {
                         let schema = self.find_non_temp_schema(&schema_id);
                         QualifiedItemName {
@@ -1698,8 +1691,8 @@ impl CatalogState {
         // Keep in sync with `get_schemas`
         match (database_spec, schema_spec) {
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Temporary) => self
-                .temporary_schemas
-                .get_mut(conn_id)
+                .temporary_namespaces
+                .schema_mut(conn_id)
                 .expect("catalog out of sync"),
             (ResolvedDatabaseSpecifier::Ambient, SchemaSpecifier::Id(id)) => self
                 .ambient_schemas_by_id
@@ -2004,13 +1997,12 @@ impl CatalogState {
             self.entry_by_global_id.insert(gid, entry.id());
         }
         let conn_id = entry.item().conn_id().unwrap_or(&SYSTEM_CONN_ID);
-        // Lazily create the temporary schema if this is a temporary item and the schema
-        // doesn't exist yet.
-        if entry.name().qualifiers.schema_spec == SchemaSpecifier::Temporary
-            && !self.temporary_schemas.contains_key(conn_id)
-        {
-            self.create_temporary_schema(conn_id, entry.owner_id)
-                .expect("failed to create temporary schema");
+        // Materialize the temporary schema at the first applied temporary
+        // item. The owning session's namespace was registered before the
+        // transaction that created the item.
+        if entry.name().qualifiers.schema_spec == SchemaSpecifier::Temporary {
+            self.temporary_namespaces
+                .ensure_schema(conn_id, entry.owner_id);
         }
         let schema = self.get_schema_mut(
             &entry.name().qualifiers.database_spec,

@@ -1774,16 +1774,16 @@ impl Catalog {
                         "temporary item connection must match the creating session"
                     );
                     // The apply pass resolves the item's owner through the
-                    // ephemeral-owner mapping and silently skips the addition
-                    // as non-local when the mapping is absent, so fail loudly
-                    // here instead. The coordinator registers the session as
-                    // an ephemeral owner before the transaction that creates
-                    // its first temporary item.
-                    if state.ephemeral_owner_uuids_by_conn.get(session.conn_id())
-                        != Some(&owner_session)
+                    // temporary namespace and silently skips the addition
+                    // as non-local when the namespace is absent, so fail
+                    // loudly here instead. The coordinator creates the
+                    // session's temporary namespace before the transaction
+                    // that creates its first temporary item.
+                    if state.temporary_namespaces.uuid_for_conn(session.conn_id())
+                        != Some(owner_session)
                     {
                         return Err(AdapterError::Internal(format!(
-                            "connection {} is not registered as an ephemeral owner while creating temporary item {}",
+                            "connection {} has no temporary namespace while creating temporary item {}",
                             session.conn_id(),
                             name.item,
                         )));

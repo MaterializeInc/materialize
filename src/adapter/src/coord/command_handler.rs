@@ -2042,21 +2042,17 @@ impl Coordinator {
                 warn!(%conn_id, "failed to drop temporary items: {err:?}");
             }
         }
-        // Only call catalog_mut() if a temporary schema actually exists for this connection.
-        // This avoids an expensive Arc::make_mut clone for the common case where the connection
-        // never created any temporary objects.
-        if self.catalog().state().has_temporary_schema(&conn_id) {
-            if let Err(err) = self.catalog_mut().drop_temporary_schema(&conn_id) {
-                warn!(%conn_id, "failed to drop temporary schema: {err:?}");
+        // A connection has a temporary namespace only if it created
+        // temporary items, so gating on it avoids an expensive Arc::make_mut
+        // clone for the common case. The transaction dropping the session's
+        // temporary items has been applied, so the namespace is safe to
+        // remove. If that transaction failed to commit, the namespace still
+        // holds items and is left in place, so that a late retraction can
+        // still resolve its owning connection.
+        if self.catalog().state().has_temporary_namespace(&conn_id) {
+            if let Err(err) = self.catalog_mut().drop_temporary_namespace(&conn_id) {
+                warn!(%conn_id, "failed to drop temporary namespace: {err:?}");
             }
-        }
-        // A session is registered as an ephemeral owner only if it created
-        // temporary items, so gating on it avoids an Arc::make_mut clone for
-        // the common case, like the temporary schema gate above. The
-        // transaction dropping the session's temporary items has been
-        // applied, so the registration is safe to remove.
-        if self.catalog().state().is_ephemeral_owner(&conn_id) {
-            self.catalog_mut().unregister_ephemeral_owner(&conn_id);
         }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());
