@@ -99,8 +99,9 @@ SCRIPTS = [
 ]
 
 
-# Where the mounted generated workload corpus lands inside the driver container.
-WORKLOADS_DIR = "/workdir/workloads"
+# An empty seed tells the driver to use the generator's own fixed default, so the
+# seed does not have to be duplicated between Rust and Python.
+WORKLOAD_SEED = ""
 
 
 def workflow_default(c: Composition) -> None:
@@ -132,6 +133,11 @@ def workflow_scripts(c: Composition) -> None:
 def workflow_workloads(c: Composition) -> None:
     """The generated corpus, checked by its own oracles.
 
+    The driver generates the corpus in process from a fixed seed rather than
+    reading committed files, so there is one source of truth for what the suite
+    runs and nothing to keep in step. `gen-workloads` dumps a corpus to disk when
+    a failure needs its plan and inputs in readable form.
+
     Runs twice, at one and at two timely workers. Multi-worker is not a nice-to-have
     here: with a single worker no data is ever exchanged, so the key-routing
     exchanges the renderer inserts, and the multi-worker response merging in
@@ -148,12 +154,11 @@ def workflow_workloads(c: Composition) -> None:
             c.up("clusterd")
             c.run(
                 "headless-driver",
-                env_extra={"DRIVER_WORKLOADS": WORKLOADS_DIR},
+                env_extra={"DRIVER_WORKLOAD_SEED": WORKLOAD_SEED},
                 use_aliases=True,
             )
 
 
-# NOTE: drift between the generator and the committed corpus is checked by
-# `corpus_matches_committed_files` in `mz-clusterd-test-driver`, not here. It needs
-# only cargo, so making it a Rust test keeps it in the fast pre-merge suite instead
-# of a nightly composition.
+# NOTE: the corpus itself is checked by `default_corpus_is_self_consistent` and
+# `known_gaps_are_still_gaps` in `mz-clusterd-test-driver`. Those need only cargo,
+# so they stay in the fast pre-merge suite rather than a nightly composition.

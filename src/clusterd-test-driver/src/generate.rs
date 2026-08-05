@@ -48,6 +48,34 @@ use crate::workload::{
     Batch, ColumnTy, InputSpec, NamedConfig, Oracle, Update, Value, Workload, WorkloadExport, ids,
 };
 
+/// The corpus seed. Fixed, so a run is reproducible from the code alone: the
+/// corpus is generated on demand rather than committed, and this is what makes
+/// two runs of the same commit compare the same plans.
+pub const DEFAULT_SEED: u64 = 0x5EED;
+
+/// How many candidates to draw before giving up on finding new coverage.
+pub const DEFAULT_MAX_DRAWS: usize = 6000;
+
+/// How many consecutive draws may add nothing before generation stops.
+///
+/// Set generously: greedy set cover's tail is long, and a small patience stops
+/// while cells are still being found. The loop is cheap (lowering only, no
+/// rendering), so over-drawing costs little.
+pub const DEFAULT_PATIENCE: usize = 1500;
+
+/// The corpus a run executes: the targeted shapes plus set-covering draws, under
+/// the pairwise strategy-flag matrix.
+///
+/// Generated rather than read from disk. A committed corpus has to be kept in step
+/// with the generator by a lint, and the two drift the moment someone changes
+/// generation without regenerating; deriving it from a fixed seed removes the
+/// second source of truth entirely. Reproducibility is unaffected, and is pinned
+/// by `generation_is_reproducible`.
+pub fn default_corpus(seed: u64) -> anyhow::Result<Corpus> {
+    let configs = pairwise_configs(STRATEGY_FLAGS);
+    generate(seed, DEFAULT_MAX_DRAWS, DEFAULT_PATIENCE, &configs)
+}
+
 /// How deep a generated MIR plan may nest.
 ///
 /// Matches what the fuzz targets use, so both consumers see the same plan
@@ -817,105 +845,34 @@ mod tests {
 mod corpus_tests {
     use super::*;
 
-    /// The directory the committed corpus lives in, relative to the repo root.
-    const CORPUS_DIR: &str = "test/clusterd-test-driver/workloads";
-
-    /// The repo root, derived from this crate's manifest directory.
-    fn repo_root() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .canonicalize()
-            .expect("repo root")
-    }
-
-    /// Regenerating the corpus must reproduce the committed files exactly.
+    /// The corpus a run will execute is self-consistent: every workload's claimed
+    /// cells match what its plan lowers to, and its oracle selection matches what
+    /// those oracles can actually check.
     ///
-    /// The corpus is committed so nightly runs are deterministic and a failure is
-    /// bisectable, but it is generated, not maintained by hand. Without this check
-    /// the two drift apart invisibly: the committed workloads keep passing while
-    /// no longer reflecting what the generator produces, so a coverage regression
-    /// in the generator never surfaces.
-    ///
-    /// On failure, regenerate with:
-    /// `cargo run -p mz-clusterd-test-driver --bin gen-workloads -- --out test/clusterd-test-driver/workloads`
+    /// The corpus is generated on demand rather than committed, so this checks the
+    /// thing a run will really use. The oracle check is the point: a workload
+    /// requesting the fold oracle over a plan that does not fold would make that
+    /// oracle inert, and the runner turns inertness into a failure, so catching it
+    /// here is both cheaper and clearer than at run time.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
-    fn corpus_matches_committed_files() {
-        // Must match `gen-workloads`'s defaults, else this compares against a
-        // corpus nobody generates.
-        let configs = pairwise_configs(STRATEGY_FLAGS);
-        let corpus = generate(0x5EED, 6000, 1500, &configs).expect("generate");
-
-        let dir = repo_root().join(CORPUS_DIR);
-        let mut committed: Vec<String> = std::fs::read_dir(&dir)
-            .expect("corpus directory exists")
-            .map(|e| {
-                e.expect("dir entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .filter(|n| n.ends_with(".json"))
-            .collect();
-        committed.sort();
-
-        let mut expected: Vec<String> = corpus
-            .workloads
-            .iter()
-            .map(|w| format!("{}.json", w.name))
-            .collect();
-        expected.sort();
-        assert_eq!(
-            committed, expected,
-            "the committed corpus does not match a fresh generation; regenerate it"
+    fn default_corpus_is_self_consistent() {
+        let corpus = default_corpus(DEFAULT_SEED).expect("generate");
+        assert!(
+            !corpus.workloads.is_empty(),
+            "the corpus is empty; a run over it would check nothing"
         );
 
         for workload in &corpus.workloads {
-            let path = dir.join(format!("{}.json", workload.name));
-            let json = std::fs::read_to_string(&path).expect("read committed workload");
-            let parsed: Workload = serde_json::from_str(&json).expect("committed workload parses");
-            assert_eq!(
-                &parsed,
-                workload,
-                "committed {} differs from a fresh generation; regenerate the corpus",
-                path.display()
-            );
-        }
-    }
-
-    /// Every committed workload's claimed cells match what its plan lowers to, and
-    /// its oracle selection is consistent with what those oracles can check.
-    ///
-    /// This catches a corpus edited by hand, and it catches the specific footgun
-    /// of a workload requesting the fold oracle over a plan the folder cannot
-    /// reduce, which would make that workload silently check nothing.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
-    fn committed_workloads_are_self_consistent() {
-        let dir = repo_root().join(CORPUS_DIR);
-        let mut checked = 0usize;
-        for entry in std::fs::read_dir(&dir).expect("corpus directory exists") {
-            let path = entry.expect("dir entry").path();
-            if path.extension().is_none_or(|e| e != "json") {
-                continue;
-            }
-            let json = std::fs::read_to_string(&path).expect("read workload");
-            let workload: Workload = serde_json::from_str(&json).expect("parse workload");
-
-            let cells = realized_cells(&workload)
+            let cells = realized_cells(workload)
                 .expect("lowering")
-                .unwrap_or_else(|| panic!("{} does not lower", path.display()));
+                .unwrap_or_else(|| panic!("{} does not lower", workload.name));
             assert_eq!(
-                workload.claims,
-                cells,
+                workload.claims, cells,
                 "{}: claimed cells do not match the lowered plan",
-                path.display()
+                workload.name
             );
 
-            // A workload asking for the fold oracle must reach a verdict, which
-            // means rows *or* an error. Only `Unfoldable` leaves the oracle inert,
-            // and the runner turns that into a run-time failure rather than a
-            // silent pass, so catching it here is the cheaper place.
             if workload.oracles.contains(&Oracle::FoldConstants) {
                 let reference = workload
                     .plan_with_constants(workload.assert_ts())
@@ -927,26 +884,36 @@ mod corpus_tests {
                     ),
                     "{}: requests the fold oracle but its plan does not fold to \
                      rows or an error, so the oracle would be inert",
-                    path.display()
+                    workload.name
                 );
             }
 
-            // Strategy invariance needs at least two configurations to compare.
             if workload.oracles.contains(&Oracle::StrategyInvariance) {
                 assert!(
                     workload.configs.len() >= 2,
                     "{}: requests strategy invariance with {} config(s)",
-                    path.display(),
+                    workload.name,
                     workload.configs.len()
                 );
             }
-            checked += 1;
         }
-        assert!(
-            checked > 0,
-            "no committed workloads were checked; a vacuous pass here would hide an \
-             empty or misplaced corpus"
-        );
+    }
+
+    /// Every workload survives a JSON round trip.
+    ///
+    /// Nothing in a run serializes a workload any more, but the format is still
+    /// how `gen-workloads` dumps one for inspection and how a hand-written repro
+    /// is fed back in. A type that stops round-tripping would break both, quietly,
+    /// at the moment somebody needs them most.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
+    fn workloads_round_trip_through_json() {
+        let corpus = default_corpus(DEFAULT_SEED).expect("generate");
+        for workload in &corpus.workloads {
+            let json = serde_json::to_string(workload).expect("serialize");
+            let back: Workload = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(&back, workload, "{} did not round trip", workload.name);
+        }
     }
 
     /// No `KNOWN_GAPS` entry may name a cell the corpus actually covers.
@@ -958,8 +925,7 @@ mod corpus_tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
     fn known_gaps_are_still_gaps() {
-        let configs = pairwise_configs(STRATEGY_FLAGS);
-        let corpus = generate(0x5EED, 6000, 1500, &configs).expect("generate");
+        let corpus = default_corpus(DEFAULT_SEED).expect("generate");
         let covered: Vec<String> = corpus.covered.iter().map(|c| c.to_string()).collect();
 
         let mut stale = Vec::new();

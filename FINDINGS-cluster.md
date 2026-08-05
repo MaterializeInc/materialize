@@ -1,18 +1,15 @@
 # Findings from building the compute surface suite
 
 Observations from building the generated compute-workload suite
-(`src/clusterd-test-driver`, `src/transform/src/mirgen.rs`,
-`test/clusterd-test-driver/workloads`).
+(`src/clusterd-test-driver`, `src/transform/src/mirgen.rs`).
 
-**No product bugs found.** The suite has not yet completed a full end-to-end run:
-the runner stalls waiting on the index export's frontier on its first workload,
-and that is a bug in the new harness, not in compute. The same `clusterd` and
-persist setup runs the hand-written `index.spec` scenario green, which is what
-rules out the environment and points at `runner.rs`. So nothing below was found by
-the suite *running*; all four were found by *building* it.
+**No product bugs found.** The suite now runs green end to end: 23 workloads, 8
+dyncfg configurations each, 35 surface cells, against a real `clusterd`.
 
-Each entry is labelled with what it actually is, because three of the four are not
-product defects and it would be misleading to file them as though they were.
+Everything below is either dead code, a defect in the test driver itself, or a
+legitimate semantic asymmetry that the oracle was wrong about. Each entry says
+which, because filing any of them as a compute bug would be misleading. Findings 1
+through 4 came from *building* the suite; 5 and 6 came from *running* it.
 
 ---
 
@@ -76,11 +73,11 @@ mixed-type reduce, without `optimize`, aborts the driver process instead of
 reporting `error: ...` in its golden block. The panic is inside `compute-types`
 lowering, so `finish` cannot catch it.
 
-**Suggested action:** either have `ReducePlan::create_from` return a `Result` (a
-wider change, it is on the optimizer's hot path), or screen for the shape in the
-driver before lowering. The suite's generator currently screens for it
-(`needs_optimizer` in `src/clusterd-test-driver/src/generate.rs`), which fixes the
-generated corpus but not the hand-written script path.
+**Status:** fixed in "clusterd-test-driver: reject a mixed-reduction-type Reduce
+instead of aborting". `DataflowBuilder::finish` now screens for the shape and
+returns an error naming both reduction types, with a regression test. The fix
+stays in the driver rather than making `create_from` fallible on the optimizer's
+hot path for a case SQL cannot reach.
 
 ---
 
@@ -110,42 +107,28 @@ error case and assert on it; they do not yet.
 
 ---
 
-## 6. Dataflow keeps errors that constant folding eliminates
+## 4. Error-propagating plans are now result-checked
 
-**Kind:** a real semantic asymmetry between two evaluation paths. **Not a bug**,
-and the oracle was adjusted rather than the product.
+**Kind:** a gap in the new suite, since closed.
 
-The first corpus run to get past the harness bugs produced two result mismatches
-of the same shape: the constant folder returned `<empty>` while the renderer
-returned `Evaluation error: division by zero`. The plan explains it:
+A plan whose scalars evaluate to an error folds to an `EvalError`, and the
+renderer routes it to the `err` collection so the read reports it. Both sides
+agree, but the runner originally treated a failed read as a harness failure, so
+those workloads could not carry the fold oracle.
 
-```
-Threshold(Map(Join(Negate(Project(Get input0)), Reduce(Filter(...)), ...)))
-```
+`Driver::peek_result` and `Driver::await_subscribe_result` now report a collection
+error as a value (`ReadResult::Error`) while leaving genuine failures (timeouts,
+dropped connections, a cancelled peek) in the error channel. The fold oracle
+requires an erroring plan to produce that same error rather than rows, and reports
+a message difference between the folder and the renderer as its own case, since
+the renderer wraps an `EvalError` in a `DataflowError` and the two spellings can
+legitimately differ. All 16 corpus workloads now carry the fold oracle, up from
+15.
 
-`input0` holds zero rows, so the join produces nothing and the folder correctly
-returns an empty collection. In dataflow, errors travel in a separate `err`
-collection that is unioned through operators independently of the `ok`
-collection, so the join still forwards its inputs' errors even though it emits no
-rows. The error survives row elimination that constant folding performs.
-
-Neither side is wrong. Materialize does not promise that optimization preserves
-errors exactly, so this difference is expected often enough that failing on it
-would bury the genuine divergences the oracle exists to catch.
-
-**Resolution:** a mixed rows-versus-error comparison is now an explicit
-*inconclusive* verdict. It is counted, named with its reason, and printed in the
-run summary, rather than silently skipped: a check that quietly stops answering
-is indistinguishable from one that agrees, which is the failure mode this suite
-is built to avoid. A rows-versus-rows disagreement remains a hard failure, which
-is the case worth waking somebody for.
-
-A third mismatch in the same run, `expected: "division by zero"` versus
-`actual: "Evaluation error: division by zero"`, was purely the oracle's fault:
-the renderer surfaces an `EvalError` wrapped in a `DataflowError`, whose `Display`
-prepends `"Evaluation error: "`. The oracle now builds the expected string by
-wrapping the same way and compares exactly, rather than substring-matching, which
-would pass on a genuinely different error that happened to share a prefix.
+The remaining gaps are listed with causes in `KNOWN_GAPS` in
+`src/clusterd-test-driver/src/generate.rs`, and `known_gaps_are_still_gaps` fails
+the build if any of them names a cell the corpus actually covers, so the list
+cannot rot into a set of lies as `shapes` closes gaps.
 
 ---
 
@@ -191,25 +174,39 @@ against `send` and pass against `send_replace`.
 
 ---
 
-## 4. Error-propagating plans are now result-checked
+## 6. Dataflow keeps errors that constant folding eliminates
 
-**Kind:** a gap in the new suite, since closed.
+**Kind:** a real semantic asymmetry between two evaluation paths. **Not a bug**,
+and the oracle was adjusted rather than the product.
 
-A plan whose scalars evaluate to an error folds to an `EvalError`, and the
-renderer routes it to the `err` collection so the read reports it. Both sides
-agree, but the runner originally treated a failed read as a harness failure, so
-those workloads could not carry the fold oracle.
+The first corpus run to get past the harness bugs produced two result mismatches
+of the same shape: the constant folder returned `<empty>` while the renderer
+returned `Evaluation error: division by zero`. The plan explains it:
 
-`Driver::peek_result` and `Driver::await_subscribe_result` now report a collection
-error as a value (`ReadResult::Error`) while leaving genuine failures (timeouts,
-dropped connections, a cancelled peek) in the error channel. The fold oracle
-requires an erroring plan to produce that same error rather than rows, and reports
-a message difference between the folder and the renderer as its own case, since
-the renderer wraps an `EvalError` in a `DataflowError` and the two spellings can
-legitimately differ. All 16 corpus workloads now carry the fold oracle, up from
-15.
+```
+Threshold(Map(Join(Negate(Project(Get input0)), Reduce(Filter(...)), ...)))
+```
 
-The remaining gaps are listed with causes in `KNOWN_GAPS` in
-`src/clusterd-test-driver/src/generate.rs`, and a test fails the build if any of
-them names a cell the corpus actually covers, so the list cannot rot into a set of
-lies as `shapes` closes gaps.
+`input0` holds zero rows, so the join produces nothing and the folder correctly
+returns an empty collection. In dataflow, errors travel in a separate `err`
+collection that is unioned through operators independently of the `ok`
+collection, so the join still forwards its inputs' errors even though it emits no
+rows. The error survives row elimination that constant folding performs.
+
+Neither side is wrong. Materialize does not promise that optimization preserves
+errors exactly, so this difference is expected often enough that failing on it
+would bury the genuine divergences the oracle exists to catch.
+
+**Resolution:** a mixed rows-versus-error comparison is now an explicit
+*inconclusive* verdict. It is counted, named with its reason, and printed in the
+run summary, rather than silently skipped: a check that quietly stops answering
+is indistinguishable from one that agrees, which is the failure mode this suite
+is built to avoid. A rows-versus-rows disagreement remains a hard failure, which
+is the case worth waking somebody for.
+
+A third mismatch in the same run, `expected: "division by zero"` versus
+`actual: "Evaluation error: division by zero"`, was purely the oracle's fault:
+the renderer surfaces an `EvalError` wrapped in a `DataflowError`, whose `Display`
+prepends `"Evaluation error: "`. The oracle now builds the expected string by
+wrapping the same way and compares exactly, rather than substring-matching, which
+would pass on a genuinely different error that happened to share a prefix.

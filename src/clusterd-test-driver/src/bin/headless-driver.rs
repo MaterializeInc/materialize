@@ -67,11 +67,31 @@ async fn main() -> anyhow::Result<()> {
 
     let (loc, driver) = setup().await?;
 
-    // `DRIVER_WORKLOADS` selects the generated-corpus mode: a directory of JSON
-    // workloads, each rendered and checked by its own oracles. It takes precedence
-    // over `DRIVER_SCRIPT` so a single image serves both suites.
+    // Generated-corpus mode, in either of two forms, both ahead of
+    // `DRIVER_SCRIPT` so one image serves both suites.
+    //
+    // `DRIVER_WORKLOAD_SEED` is what runs use: generate the corpus in process from
+    // a seed. `DRIVER_WORKLOADS` points at a directory of JSON workloads instead,
+    // for replaying a hand-written or dumped one while debugging.
+    if let Ok(seed) = std::env::var("DRIVER_WORKLOAD_SEED") {
+        let seed: u64 = if seed.is_empty() {
+            mz_clusterd_test_driver::generate::DEFAULT_SEED
+        } else {
+            seed.parse()
+                .with_context(|| format!("DRIVER_WORKLOAD_SEED {seed:?} is not a u64"))?
+        };
+        let corpus = mz_clusterd_test_driver::generate::default_corpus(seed)?;
+        println!(
+            "generated {} workloads from seed {seed} ({} draws, {} surface cells)",
+            corpus.workloads.len(),
+            corpus.drawn,
+            corpus.covered.len()
+        );
+        return run_workloads(driver, loc, corpus.workloads).await;
+    }
     if let Ok(dir) = std::env::var("DRIVER_WORKLOADS") {
-        return run_workloads(driver, loc, std::path::Path::new(&dir)).await;
+        let workloads = read_workload_dir(std::path::Path::new(&dir))?;
+        return run_workloads(driver, loc, workloads).await;
     }
 
     // Read the script from `DRIVER_SCRIPT` if set, else stdin. The path is passed
@@ -91,19 +111,8 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Run every JSON workload in `dir`, reporting per-workload results and the
-/// surface cells the run covered.
-///
-/// All workloads run against one connection: the runner reconciles to an empty
-/// compute state per configuration anyway, so a fresh process per workload would
-/// only cost startup. Every failure is collected rather than aborting on the
-/// first, so one run reports the full set of broken workloads instead of hiding
-/// the rest behind the earliest.
-async fn run_workloads(
-    driver: Driver,
-    loc: PersistLocation,
-    dir: &std::path::Path,
-) -> anyhow::Result<()> {
+/// Read a directory of JSON workloads, for replaying one while debugging.
+fn read_workload_dir(dir: &std::path::Path) -> anyhow::Result<Vec<Workload>> {
     let mut paths: Vec<_> = std::fs::read_dir(dir)
         .with_context(|| format!("reading workload directory {}", dir.display()))?
         .collect::<Result<Vec<_>, _>>()?
@@ -119,17 +128,35 @@ async fn run_workloads(
          than a failing one",
         dir.display()
     );
+    paths
+        .iter()
+        .map(|path| {
+            let json = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            serde_json::from_str(&json).with_context(|| format!("parsing {}", path.display()))
+        })
+        .collect()
+}
 
+/// Run every workload, reporting per-workload results and the surface cells the
+/// run covered.
+///
+/// All workloads run against one connection: the runner reconciles to an empty
+/// compute state per configuration anyway, so a fresh process per workload would
+/// only cost startup. Every failure is collected rather than aborting on the
+/// first, so one run reports the full set of broken workloads instead of hiding
+/// the rest behind the earliest.
+async fn run_workloads(
+    driver: Driver,
+    loc: PersistLocation,
+    workloads: Vec<Workload>,
+) -> anyhow::Result<()> {
     let mut runner = WorkloadRunner::new(driver, loc).await?;
     let mut covered = std::collections::BTreeSet::new();
     let mut failures = Vec::new();
     let mut inconclusive: Vec<String> = Vec::new();
-    for path in &paths {
-        let json =
-            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let workload: Workload =
-            serde_json::from_str(&json).with_context(|| format!("parsing {}", path.display()))?;
-        match runner.run(&workload).await {
+    for workload in &workloads {
+        match runner.run(workload).await {
             Ok(outcome) => {
                 covered.extend(outcome.realized_cells);
                 for reason in &outcome.inconclusive {

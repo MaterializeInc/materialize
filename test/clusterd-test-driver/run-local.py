@@ -63,8 +63,13 @@ SECRETS_DIR = env("SECRETS_DIR", "/tmp/clusterd-test-driver-secrets")
 # Path to the JSON-line command script the driver runs. Relative paths are
 # resolved against the repo root. Defaults to the `index` scenario script.
 SCRIPT = env("SCRIPT", "test/clusterd-test-driver/scripts/index.spec")
-# Directory of generated JSON workloads. When set, the driver runs the generated
-# corpus instead of `SCRIPT`. Relative paths resolve against the repo root.
+# Seed for the generated compute-surface corpus. When set, the driver generates
+# the corpus in process and runs it instead of `SCRIPT`. Set to "default" to use
+# the generator's own fixed seed.
+WORKLOAD_SEED = env("WORKLOAD_SEED", "")
+# Directory of JSON workloads, for replaying a hand-written or dumped one. Takes
+# effect only when WORKLOAD_SEED is unset. Relative paths resolve against the repo
+# root.
 WORKLOADS = env("WORKLOADS", "")
 RUN_CLUSTERD = env("RUN_CLUSTERD", "1") == "1"
 # Command prepended to clusterd, e.g. "heaptrack" or "perf record -g --".
@@ -298,12 +303,16 @@ def main() -> int:
             DRIVER_PUBSUB_BIND=f"0.0.0.0:{PUBSUB_PORT}",
             DRIVER_SCRIPT=str(script_path),
         )
-        if WORKLOADS:
+        if WORKLOAD_SEED:
+            # An empty value tells the driver to use its own default seed, which is
+            # how "default" is passed through without duplicating the constant here.
+            seed = "" if WORKLOAD_SEED == "default" else WORKLOAD_SEED
+            driver_env["DRIVER_WORKLOAD_SEED"] = seed
+            print(f"  DRIVER_WORKLOAD_SEED={seed or '(generator default)'}")
+        elif WORKLOADS:
             workloads_path = Path(WORKLOADS)
             if not workloads_path.is_absolute():
                 workloads_path = ROOT / workloads_path
-            # The driver prefers `DRIVER_WORKLOADS` over `DRIVER_SCRIPT`, so
-            # setting it selects the generated-corpus suite.
             driver_env["DRIVER_WORKLOADS"] = str(workloads_path)
             print(f"  DRIVER_WORKLOADS={workloads_path}")
         else:

@@ -7,14 +7,13 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Generates the workload corpus, as one JSON file per workload plus a coverage
-//! report.
+//! Dumps a corpus to disk, as one JSON file per workload plus a coverage report.
 //!
-//! The corpus is committed so nightly runs are deterministic and a failure is
-//! bisectable, but it is *generated* from the checked-in taxonomy rather than
-//! hand-maintained. Re-running with the same arguments must reproduce it
-//! byte-for-byte, which is what lets CI lint the committed corpus against a fresh
-//! generation and catch drift.
+//! Runs do not use this: `headless-driver` generates the corpus in process from a
+//! seed. This exists to *look at* what a seed produces, which is what you want
+//! when a workload fails and you need its plan and inputs in a readable form, or
+//! when checking what a generator change did to coverage. The written files are a
+//! debugging artifact, not an input, so nothing has to keep them in step.
 //!
 //! ```text
 //! gen-workloads --out test/clusterd-test-driver/workloads [--seed N]
@@ -24,19 +23,9 @@
 use std::path::PathBuf;
 
 use mz_clusterd_test_driver::generate::{
-    STRATEGY_FLAGS, coverage_report, generate, pairwise_configs,
+    DEFAULT_MAX_DRAWS, DEFAULT_PATIENCE, DEFAULT_SEED, STRATEGY_FLAGS, coverage_report, generate,
+    pairwise_configs,
 };
-
-/// The default seed. Fixed, because the committed corpus must be reproducible.
-const DEFAULT_SEED: u64 = 0x5EED;
-/// How many candidates to draw before giving up on finding new coverage.
-const DEFAULT_MAX_DRAWS: usize = 6000;
-/// How many consecutive draws may add nothing before generation stops.
-///
-/// Set generously: greedy set cover's tail is long, and a small patience stops
-/// while cells are still being found. The loop is cheap (lowering only, no
-/// rendering), so over-drawing costs little.
-const DEFAULT_PATIENCE: usize = 1500;
 
 fn main() -> anyhow::Result<()> {
     let mut out: Option<PathBuf> = None;
