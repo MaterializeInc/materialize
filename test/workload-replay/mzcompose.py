@@ -420,6 +420,10 @@ def workflow_console_scalability(
         help="random seed",
     )
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
+    # One fixed workload rather than all: console query cost scales with
+    # catalog shape (object counts), not data content, and night-over-night
+    # timing trends are only comparable against a stable shape.
+    # prod-analytics is the largest capture.
     parser.add_argument(
         "files",
         nargs="*",
