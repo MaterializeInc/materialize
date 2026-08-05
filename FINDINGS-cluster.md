@@ -110,6 +110,87 @@ error case and assert on it; they do not yet.
 
 ---
 
+## 6. Dataflow keeps errors that constant folding eliminates
+
+**Kind:** a real semantic asymmetry between two evaluation paths. **Not a bug**,
+and the oracle was adjusted rather than the product.
+
+The first corpus run to get past the harness bugs produced two result mismatches
+of the same shape: the constant folder returned `<empty>` while the renderer
+returned `Evaluation error: division by zero`. The plan explains it:
+
+```
+Threshold(Map(Join(Negate(Project(Get input0)), Reduce(Filter(...)), ...)))
+```
+
+`input0` holds zero rows, so the join produces nothing and the folder correctly
+returns an empty collection. In dataflow, errors travel in a separate `err`
+collection that is unioned through operators independently of the `ok`
+collection, so the join still forwards its inputs' errors even though it emits no
+rows. The error survives row elimination that constant folding performs.
+
+Neither side is wrong. Materialize does not promise that optimization preserves
+errors exactly, so this difference is expected often enough that failing on it
+would bury the genuine divergences the oracle exists to catch.
+
+**Resolution:** a mixed rows-versus-error comparison is now an explicit
+*inconclusive* verdict. It is counted, named with its reason, and printed in the
+run summary, rather than silently skipped: a check that quietly stops answering
+is indistinguishable from one that agrees, which is the failure mode this suite
+is built to avoid. A rows-versus-rows disagreement remains a hard failure, which
+is the case worth waking somebody for.
+
+A third mismatch in the same run, `expected: "division by zero"` versus
+`actual: "Evaluation error: division by zero"`, was purely the oracle's fault:
+the renderer surfaces an `EvalError` wrapped in a `DataflowError`, whose `Display`
+prepends `"Evaluation error: "`. The oracle now builds the expected string by
+wrapping the same way and compares exactly, rather than substring-matching, which
+would pass on a genuinely different error that happened to share a prefix.
+
+---
+
+## 5. The response pump dropped any response that arrived before a waiter
+
+**Kind:** a real bug in pre-existing test-driver code. Fixed.
+**Where:** `src/clusterd-test-driver/src/responses.rs`, `Responses::dispatch`.
+
+`watch::Sender::send` fails when no receiver exists yet, and leaves the stored
+value unchanged. The pump discarded that failure with `let _ =`, for both
+frontier updates and subscribe uppers:
+
+```rust
+let _ = tx.send(cur);                    // frontiers
+let _ = state.upper_tx.send(upper);      // subscribe uppers
+```
+
+So a response the replica sent before anything subscribed was lost, and a later
+`expect_frontier` or `await_subscribe` blocked until its timeout on a frontier
+the replica had *already reported*. Fixed with `send_replace`, which always
+stores.
+
+The ordering it needs is routine: a dataflow can hydrate and report while the
+caller is still reading a different export, and a subscribe with a finite `up_to`
+can complete before anything awaits it. It stayed latent because the hand-written
+`.spec` scenarios always `await-frontier` immediately after `schedule`, putting
+the waiter in place first. It only surfaced with several exports read in
+sequence.
+
+**Why it took so long to find:** it presented as flakiness and moved under every
+unrelated change, which produced three wrong diagnoses (per-config id collisions,
+reconciliation-window ordering, and "it is just slow"). What localized it was
+adding a raw-response trace and catching the replica reporting
+`Frontiers(User(2001), output_frontier: Some([2]))` for the very frontier the
+waiter then timed out on. A timeout that cannot say what it observed is a
+diagnostic dead end, so `expect_frontier` now reports the last frontier it saw,
+or that none was ever reported.
+
+**Test note:** the pre-existing dispatch test creates the receiver before
+dispatching, which is the ordering that works, and so could never have caught
+this. The two added tests dispatch first and subscribe afterwards; both fail
+against `send` and pass against `send_replace`.
+
+---
+
 ## 4. Error-propagating plans are now result-checked
 
 **Kind:** a gap in the new suite, since closed.

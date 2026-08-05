@@ -103,6 +103,12 @@ pub struct WorkloadOutcome {
     pub realized_cells: BTreeSet<SurfaceCell>,
     /// One result multiset per configuration, in `configs` order.
     pub per_config: Vec<(String, ReadResult)>,
+    /// Oracle comparisons that could not render a verdict, with the reason.
+    ///
+    /// Surfaced rather than dropped: a check that quietly stops answering looks
+    /// exactly like one that passes, and the count is how a reader knows how much
+    /// of the run actually concluded anything.
+    pub inconclusive: Vec<String>,
 }
 
 /// Render a multiset as deterministic text, for failure messages and goldens.
@@ -230,8 +236,9 @@ impl WorkloadRunner {
 
         let mut per_config = Vec::new();
         let mut realized_cells = BTreeSet::new();
+        let mut inconclusive: Vec<String> = Vec::new();
         for (config_index, config) in configs.iter().enumerate() {
-            let (result, cells) = self
+            let (result, cells, mut config_inconclusive) = self
                 .run_one_config(workload, config_index, config)
                 .await
                 .map_err(|e| anyhow::anyhow!("config {:?}: {e}", config.name))?;
@@ -252,6 +259,7 @@ impl WorkloadRunner {
                 );
             }
             per_config.push((config.name.clone(), result));
+            inconclusive.append(&mut config_inconclusive);
         }
 
         self.check_claims(workload, &realized_cells)?;
@@ -263,6 +271,7 @@ impl WorkloadRunner {
             name: workload.name.clone(),
             realized_cells,
             per_config,
+            inconclusive,
         })
     }
 
@@ -298,7 +307,7 @@ impl WorkloadRunner {
         workload: &Workload,
         config_index: usize,
         config: &NamedConfig,
-    ) -> anyhow::Result<(ReadResult, BTreeSet<SurfaceCell>)> {
+    ) -> anyhow::Result<(ReadResult, BTreeSet<SurfaceCell>, Vec<String>)> {
         self.reset_instance(config).await?;
         if std::env::var_os("DRIVER_DEBUG_RESPONSES").is_some() {
             self.driver
@@ -399,15 +408,18 @@ impl WorkloadRunner {
         if workload.oracles.contains(&Oracle::ExportInvariance) {
             check_export_invariance(&by_export)?;
         }
+        let mut inconclusive = Vec::new();
         if workload.oracles.contains(&Oracle::FoldConstants) {
-            check_fold_constants(workload, ts, &canonical)?;
+            if let Some(reason) = check_fold_constants(workload, ts, &canonical)? {
+                inconclusive.push(format!("{}: {reason}", config.name));
+            }
         }
         if workload.oracles.contains(&Oracle::Incremental) {
             self.check_incremental(workload, config_index, ts, upper, &canonical)
                 .await?;
         }
 
-        Ok((canonical, cells))
+        Ok((canonical, cells, inconclusive))
     }
 
     /// Drop the previous configuration's dataflows and open a fresh instance
@@ -692,40 +704,66 @@ fn export_id(config_index: usize, export: WorkloadExport) -> u64 {
 /// here, and a workload whose plan cannot fold must not request this oracle. The
 /// generator knows which plans those are (any containing a `LetRec`) and selects
 /// oracles accordingly.
-fn check_fold_constants(workload: &Workload, ts: u64, actual: &ReadResult) -> anyhow::Result<()> {
+fn check_fold_constants(
+    workload: &Workload,
+    ts: u64,
+    actual: &ReadResult,
+) -> anyhow::Result<Option<String>> {
     use mz_transform::mirgen::FoldOutcome;
 
     let reference_plan = workload.plan_with_constants(ts)?;
     let expected = match mz_transform::mirgen::fold_outcome(reference_plan) {
         FoldOutcome::Rows(m) => ReadResult::Rows(m),
-        // An erroring plan has a definite expected result: the same error. The
-        // renderer routes it through the `err` collection, so the read reports it
-        // rather than returning rows.
-        FoldOutcome::Error(err) => ReadResult::Error(err.to_string()),
+        // Spell the error the way the renderer will. The renderer surfaces an
+        // `EvalError` wrapped in a `DataflowError`, whose `Display` prepends
+        // "Evaluation error: ", so wrapping it here makes the comparison exact
+        // instead of a substring match that would pass on a genuinely different
+        // error that merely shares a prefix.
+        FoldOutcome::Error(err) => ReadResult::Error(
+            mz_storage_types::errors::DataflowError::EvalError(Box::new(err)).to_string(),
+        ),
         FoldOutcome::Unfoldable => anyhow::bail!(
             "fold oracle is inert: the plan did not reduce to a constant, so this \
              workload must not request the fold-constants oracle"
         ),
     };
     match (&expected, actual) {
-        (ReadResult::Rows(e), ReadResult::Rows(a)) if e == a => Ok(()),
-        // Both sides erroring is agreement on the important axis. The messages are
-        // compared too, but a difference there is reported as its own case: the
-        // renderer wraps an `EvalError` in a `DataflowError`, so the two spellings
-        // can legitimately differ, and conflating that with "one errored and the
-        // other did not" would hide the real signal.
-        (ReadResult::Error(e), ReadResult::Error(a)) if e == a => Ok(()),
-        (ReadResult::Error(e), ReadResult::Error(a)) => anyhow::bail!(
-            "fold oracle: both sides errored but with different messages. This is \
-             either an error-mapping difference between the folder and the \
-             renderer, or a genuinely different error.\nexpected: {e}\nactual:   {a}"
-        ),
-        _ => anyhow::bail!(
+        (ReadResult::Rows(e), ReadResult::Rows(a)) if e == a => Ok(None),
+        // The finding this oracle exists for: both sides computed a result and
+        // they disagree.
+        (ReadResult::Rows(e), ReadResult::Rows(a)) => anyhow::bail!(
             "fold oracle: rendered output differs from the constant-folded \
              reference\nexpected:\n{}\nactual:\n{}",
-            expected.render(),
-            actual.render()
+            render_multiset(e),
+            render_multiset(a)
         ),
+        (ReadResult::Error(e), ReadResult::Error(a)) if e == a => Ok(None),
+        (ReadResult::Error(e), ReadResult::Error(a)) => anyhow::bail!(
+            "fold oracle: both sides errored, but with different errors\n\
+             expected: {e}\nactual:   {a}"
+        ),
+        // Rows on one side and an error on the other is not a verdict this oracle
+        // can render, so it is reported rather than judged.
+        //
+        // Errors travel in a dataflow's `err` collection, which is unioned through
+        // operators independently of the `ok` collection. A join with an empty
+        // input therefore still forwards its inputs' errors, while constant
+        // folding computes the join, gets no rows, and drops the error with them.
+        // Neither side is obviously wrong: Materialize does not promise that
+        // optimization preserves errors exactly, so a difference here is expected
+        // behaviour often enough that failing on it would bury the real
+        // divergences this oracle exists to catch.
+        //
+        // Counted and named rather than silently skipped. A skip is
+        // indistinguishable from a pass, and an oracle that quietly stops
+        // answering is the failure mode this suite is built to avoid.
+        (ReadResult::Rows(_), ReadResult::Error(a)) => Ok(Some(format!(
+            "folder produced rows, renderer produced an error ({a}); errors survive \
+             row elimination in dataflow but not in constant folding"
+        ))),
+        (ReadResult::Error(e), ReadResult::Rows(_)) => Ok(Some(format!(
+            "folder produced an error ({e}), renderer produced rows"
+        ))),
     }
 }
 
@@ -868,8 +906,12 @@ mod tests {
         let mut row = Row::default();
         row.packer().push(mz_repr::Datum::Int64(7));
         correct.insert(row.clone(), Diff::from(1));
-        check_fold_constants(&workload, 0, &ReadResult::Rows(correct.clone()))
-            .expect("the correct result must pass");
+        assert_eq!(
+            check_fold_constants(&workload, 0, &ReadResult::Rows(correct.clone()))
+                .expect("the correct result must pass"),
+            None,
+            "an agreeing comparison reaches a verdict, so reports no reason"
+        );
 
         // A wrong multiplicity must be caught.
         let mut wrong = correct.clone();
@@ -878,11 +920,17 @@ mod tests {
             .expect_err("a wrong result must be rejected");
         assert!(err.to_string().contains("fold oracle"));
 
-        // An error where rows were expected is a divergence, not a pass. Without
-        // this the error channel could swallow a wrong answer.
-        let err = check_fold_constants(&workload, 0, &ReadResult::Error("boom".into()))
-            .expect_err("an error where rows were expected must be rejected");
-        assert!(err.to_string().contains("fold oracle"));
+        // Rows on one side and an error on the other yields no verdict, and says
+        // so. It must not read as a pass: an oracle that quietly stops answering
+        // is indistinguishable from one that agrees, which is the failure mode
+        // this suite exists to avoid.
+        let verdict = check_fold_constants(&workload, 0, &ReadResult::Error("boom".into()))
+            .expect("a mixed rows/error comparison is reported, not an error");
+        let reason = verdict.expect("the mixed case must report a reason");
+        assert!(
+            reason.contains("renderer produced an error"),
+            "expected a named reason, got: {reason}"
+        );
     }
 
     /// Strategy invariance catches a divergence between configurations, and

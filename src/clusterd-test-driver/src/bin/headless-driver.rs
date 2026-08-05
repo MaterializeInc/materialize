@@ -123,6 +123,7 @@ async fn run_workloads(
     let mut runner = WorkloadRunner::new(driver, loc).await?;
     let mut covered = std::collections::BTreeSet::new();
     let mut failures = Vec::new();
+    let mut inconclusive: Vec<String> = Vec::new();
     for path in &paths {
         let json =
             std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -131,10 +132,18 @@ async fn run_workloads(
         match runner.run(&workload).await {
             Ok(outcome) => {
                 covered.extend(outcome.realized_cells);
+                for reason in &outcome.inconclusive {
+                    inconclusive.push(format!("{}/{reason}", outcome.name));
+                }
                 println!(
-                    "ok: {} ({} config(s))",
+                    "ok: {} ({} config(s){})",
                     outcome.name,
-                    outcome.per_config.len()
+                    outcome.per_config.len(),
+                    if outcome.inconclusive.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} inconclusive", outcome.inconclusive.len())
+                    }
                 );
             }
             Err(e) => {
@@ -149,6 +158,16 @@ async fn run_workloads(
 
     println!("\nsurface cells covered by this run ({}):", covered.len());
     println!("{}", render_cells(&covered));
+
+    if !inconclusive.is_empty() {
+        println!(
+            "\n{} oracle comparison(s) reached no verdict:",
+            inconclusive.len()
+        );
+        for reason in &inconclusive {
+            println!("  {reason}");
+        }
+    }
 
     if !failures.is_empty() {
         anyhow::bail!(
