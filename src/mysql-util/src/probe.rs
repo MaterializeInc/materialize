@@ -131,20 +131,23 @@ impl<'a> KeyProber<'a> {
         prefix: &str,
         upper_bound_exclusive: Option<&str>,
     ) -> Result<Option<String>, MySqlError> {
-        let col = &self.col;
-        let table = &self.table;
-        let mut sql =
-            format!("SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}'");
+        let (range_clause, range_params) = self.range_filter(None, upper_bound_exclusive);
+        let sql = format!(
+            "SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}' \
+             AND {range_clause} ORDER BY {col} DESC LIMIT 1",
+            col = self.col,
+            table = self.table,
+        );
         let mut params: Vec<Value> = vec![like_prefix_pattern(prefix).into()];
-        self.less_than_end(&mut sql, &mut params, upper_bound_exclusive);
-        sql.push_str(&format!(" ORDER BY {col} DESC LIMIT 1"));
+        params.extend(range_params);
         self.query_string(sql, params).await
     }
 
     /// WHERE clause and params selecting keys in the open interval
     /// `(lower_bound_exclusive, upper_bound_exclusive)`. Both bounds are
-    /// optional, an unbounded side falls away and a fully unbounded filter
-    /// becomes `TRUE`.
+    /// optional and an unbounded side falls away. A fully unbounded filter
+    /// becomes `TRUE`: callers splice the clause after `WHERE` or `AND`, so
+    /// it must remain a valid predicate even with no conditions left.
     fn range_filter(
         &self,
         lower_bound_exclusive: Option<&str>,
@@ -165,19 +168,6 @@ impl<'a> KeyProber<'a> {
             ("TRUE".to_string(), params)
         } else {
             (conditions.join(" AND "), params)
-        }
-    }
-
-    fn less_than_end(
-        &self,
-        sql: &mut String,
-        params: &mut Vec<Value>,
-        upper_bound_exclusive: Option<&str>,
-    ) {
-        if let Some(upper) = upper_bound_exclusive {
-            let col = &self.col;
-            sql.push_str(&format!(" AND {col} < ?"));
-            params.push(upper.into());
         }
     }
 
