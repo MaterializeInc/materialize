@@ -25,7 +25,6 @@ use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
 };
 use mz_auth::hash::scram256_hash;
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin, Fingerprint,
     MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
@@ -155,9 +154,7 @@ impl Catalog {
             comments: Arc::new(CommentsMap::default()),
             source_references: imbl::OrdMap::new(),
             storage_metadata: Arc::new(StorageMetadata::default()),
-            temporary_schemas: imbl::OrdMap::new(),
-            ephemeral_owner_conns_by_uuid: imbl::OrdMap::new(),
-            ephemeral_owner_uuids_by_conn: imbl::OrdMap::new(),
+            temporary_namespaces: Default::default(),
             mock_authentication_nonce: Default::default(),
             config: mz_sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
@@ -251,7 +248,6 @@ impl Catalog {
                     Err(e) => return Err(e.into()),
                 };
             }
-            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
         }
 
         // Make life easier by consolidating all updates, so that we end up with only positive

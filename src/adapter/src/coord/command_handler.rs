@@ -81,7 +81,7 @@ use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
-use crate::util::{ClientTransmitter, ResultExt};
+use crate::util::ClientTransmitter;
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
@@ -2019,18 +2019,13 @@ impl Coordinator {
         drop(retire_notify);
 
         self.drop_temp_items(&conn_id).await;
-        // Only call catalog_mut() if a temporary schema actually exists for this connection.
+        // Only call catalog_mut() if a temporary namespace actually exists for this connection.
         // This avoids an expensive Arc::make_mut clone for the common case where the connection
         // never created any temporary objects.
-        if self.catalog().state().has_temporary_schema(&conn_id) {
-            self.catalog_mut()
-                .drop_temporary_schema(&conn_id)
-                .unwrap_or_terminate("unable to drop temporary schema");
-        }
-        // The transaction dropping the session's temporary items has been
-        // applied, so the registration is safe to remove.
-        if self.catalog().state().is_ephemeral_owner(&conn_id) {
-            self.catalog_mut().unregister_ephemeral_owner(&conn_id);
+        if self.catalog().state().has_temporary_namespace(&conn_id) {
+            if let Err(err) = self.catalog_mut().drop_temporary_namespace(&conn_id) {
+                warn!(%conn_id, "failed to drop temporary namespace: {err:?}");
+            }
         }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());

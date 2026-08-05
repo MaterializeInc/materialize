@@ -1777,11 +1777,11 @@ impl Catalog {
                     // Defensive check: the connection -> session mapping is
                     // registered lazily in `catalog_transact_inner`. We
                     // ensure that the mapping exists as expected.
-                    if state.ephemeral_owner_uuids_by_conn.get(session.conn_id())
-                        != Some(&owner_session)
+                    if state.temporary_namespaces.uuid_for_conn(session.conn_id())
+                        != Some(owner_session)
                     {
                         return Err(AdapterError::Internal(format!(
-                            "connection {} is not registered as an ephemeral owner while creating temporary item {}",
+                            "connection {} has no temporary namespace while creating temporary item {}",
                             session.conn_id(),
                             name.item,
                         )));
