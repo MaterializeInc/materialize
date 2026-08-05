@@ -83,6 +83,37 @@ validates every progress boundary, retroactively closing the rounds live
 checkers had to skip during outages. Reads rotate over isolation levels, since a
 timestamp-free invariant must hold under all of them.
 
+## What the checkers assert
+
+A conserved total is safe to assert mid-disruption, which is what makes
+continuous checking possible, but on its own it is a one-dimensional projection:
+transfers are balanced pairs, so only a *torn* pair breaks the sum, and that is
+the one thing atomic batch commit already prevents. So the oracles go past it,
+while staying outcome-independent:
+
+- **row-level identity**, continuously. Every op id in a bounded window of the
+  newest ops must have exactly its two rows summing to zero, its derived columns
+  must match its op id, committed ops must be present, ops never issued must not
+  be, and an op observed once must never be absent again. A lost transfer masked
+  by a duplicated one, a rewritten row, or a resurrected retraction all keep the
+  count and the sum intact and are only visible here.
+- **the change stream itself**, via a snapshot-free `SUBSCRIBE` whose cost is
+  independent of table size. The ledger is append-only, so any retraction is a
+  bug outright, even the ones that cancel against their insert and leave the
+  folded state looking correct.
+- **read-your-writes**, on the writer's own session right after a commit. No
+  timestamp-free invariant covers it, and it is what a stale read breaks first.
+- **predicate results, recomputed**. An aggregate with a predicate lets persist
+  skip parts by their statistics, and getting that wrong is silent: the answer is
+  just too small. The same predicate is re-evaluated on the client over the rows
+  the same transaction returns, so the two must agree.
+
+The ledger carries the values those oracles need in order to be able to fail: a
+numeric mirror of each amount (its own encoding and scale handling), a tag
+derived from the op id (so each row is checkable alone), floats covering NaN,
+negative zero, the infinities and a denormal, and a nullable date. Predicates
+over the last two are what pull filter pushdown onto the checked path.
+
 ## Findings so far
 
 Each finding has a concentrated reproducer, selectable via `--scenario`:

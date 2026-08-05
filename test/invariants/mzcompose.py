@@ -44,6 +44,7 @@ from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.toxiproxy import Toxiproxy
+from materialize.version_list import get_latest_published_version
 
 # Host port for the Kafka listener the harness (producers, consumers) uses.
 # It must be a fixed port because Kafka advertises it back to clients.
@@ -164,6 +165,13 @@ LEGS = {
             Proxy("compute_storagectl", 2100, "clusterd-compute:2100"),
             Proxy("compute_computectl", 2101, "clusterd-compute:2101"),
         ),
+        # TODO: Reenable the cutting kinds when PER-49 is fixed, as for
+        # clusterd-compute2 below. NOTE: this does not remove the trigger.
+        # Losing the replica is what drops its per-replica read holds, and the
+        # disruptor's SIGKILLs of this process do that just as well as a leg
+        # cut, so the halt keeps occurring until PER-49 is fixed. Reproducer:
+        # bin/mzcompose --find invariants run default --scenario=repro-compute-asof
+        kinds=("latency", "limit_data", "bandwidth"),
     ),
     "clusterd-compute2": Leg(
         "clusterd-compute2",
@@ -199,7 +207,12 @@ LEGS = {
         "blob",
         (Proxy("blob", 9000, "minio:9000"),),
         max_outage=15.0,
-        kinds=("disable", "timeout", "limit_data"),
+        # NOTE: limit_data is dropped here, not for the buffering reason above
+        # but because max_outage only caps the full-outage kinds. A limit_data
+        # on this leg kills every connection past its byte budget, so it stalls
+        # blob writes for its whole uncapped duration, which is all PER-31
+        # needs: nightly 17743 OOM-killed clusterd at 6.2GiB during a 29s one.
+        kinds=("disable", "timeout"),
     ),
     "pg": Leg("pg", (Proxy("pg", 5432, "postgres:5432"),)),
     "mysql": Leg("mysql", (Proxy("mysql", 3306, "mysql:3306"),)),
@@ -261,9 +274,13 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     parser.add_argument(
         "--upgrade-from",
         type=str,
+        nargs="?",
+        const="latest",
         default=None,
+        metavar="IMAGE",
         help="start Materialize on this image and swap to the current build"
-        " mid-chaos, an upgrade under load and disruptions",
+        " mid-chaos, an upgrade under load and disruptions. Bare or 'latest'"
+        " resolves to the most recent published release",
     )
     parser.add_argument(
         "--no-disruptions",
@@ -272,6 +289,9 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     args = parser.parse_args()
 
+    if args.upgrade_from == "latest":
+        args.upgrade_from = f"materialize/materialized:{get_latest_published_version()}"
+        print(f"--- Upgrading from {args.upgrade_from}")
     print(f"--- Random seed is {args.seed}")
     if args.scenario in REPROS:
         log = EventLog("invariants-events.log")
@@ -393,7 +413,7 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                 restore_proxies=[
                     proxy for leg in LEGS.values() for proxy in leg.proxies
                 ],
-                restart_toxiproxy=lambda: _restart_toxiproxy(c),
+                restart_toxiproxy=lambda: _restart_toxiproxy(c, toxiproxy),
             ).run()
         finally:
             scenario.teardown()
@@ -485,6 +505,8 @@ REPROS = {
     "repro-durable-resume": "resumed SUBSCRIBE cancels its carried state",
     "repro-compute-asof": "PER-49: compute halts hydrating a dataflow past its"
     " as_of",
+    "repro-replacement-brick": "SQL-603: bootstrap halts forever on an"
+    " interrupted replacement apply",
 }
 
 
@@ -554,16 +576,20 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
                 t.join(timeout=10)
 
 
-def _restart_toxiproxy(c: Composition) -> None:
+def _restart_toxiproxy(c: Composition, api: ToxiproxyApi) -> None:
     """Replace a toxiproxy whose admin API no longer answers.
 
     Every leg runs through this container, so the restart cuts them all for a
     moment. That is the same event as a toxiproxy crash, which the disruptor
     recovers from by re-creating the proxies, and it is the only way out of a
     wedged admin API.
+
+    The admin port is published on an ephemeral host port, which a recreated
+    container does not keep, so the API is re-pointed at the new mapping.
     """
     c.kill("toxiproxy")
     c.up("toxiproxy", detach=True, max_tries=3)
+    api.rebind(f"http://127.0.0.1:{c.default_port('toxiproxy')}")
 
 
 def _toxiproxy_heal(toxiproxy: ToxiproxyApi, log: EventLog) -> None:
@@ -685,7 +711,8 @@ def repro_postheal_stall(c, toxiproxy, ctx, log) -> None:
             seq += 1
             try:
                 client.write(
-                    f"INSERT INTO ledger VALUES ({1000 + idx}, {seq}, 0, 0)",
+                    f"INSERT INTO ledger (worker, seq, account, amount)"
+                    f" VALUES ({1000 + idx}, {seq}, 0, 0)",
                     timeout=20,
                 )
             except Exception:
@@ -975,10 +1002,116 @@ def repro_compute_asof(c, toxiproxy, ctx, log) -> None:
     log.log("repro", "not reproduced in 15 iterations")
 
 
+def repro_replacement_brick(c, toxiproxy, ctx, log) -> None:
+    """Kill environmentd while a replacement is applied, then fail to boot.
+
+    The storage controller's bootstrap halts whenever a dependency read hold
+    has an empty since, calling it a concurrent deletion. The condition it
+    tests is narrower than the one its message claims: it does not check the
+    dependent's own write frontier, and the check right below it documents why
+    that matters ("We don't care about the dependency since when the write
+    frontier is empty. In that case, no-one can write down any more updates.").
+
+    A replacement MV holds a read hold on the collection it replaces, so an
+    apply that is interrupted can leave the replacement registered while the
+    replaced collection is already finalized. Both frontiers are then empty,
+    which is benign, and bootstrap halts on it anyway. The state is durable, so
+    every restart halts again and environmentd never comes back:
+    src/storage-controller/src/lib.rs:992, nightly 17740 spent 139 boots there.
+
+    SQL-603. NOTE: this presses the sequence but has not reproduced it, in 30
+    kill-during-apply cycles across two variants (the second delays the
+    metadata leg to widen the window between the storage finalize and the
+    catalog commit). The nightly hit it in 6 of 8 upgrade runs, so an
+    ingredient here is still missing, most likely the concurrent load and the
+    other dependents of `total` that a full scenario has.
+    """
+    from materialize.invariants.mz import MzClient
+    from materialize.invariants.scenarios.table_bank import TOTAL_DEF
+
+    MARKER = "dependency since frontier is empty"
+
+    def bricked() -> bool:
+        logs = c.invoke("logs", "materialized", capture=True).stdout or ""
+        return logs.count(MARKER) > 0
+
+    applier = MzClient(ctx, "brick-applier")
+    driver = MzClient(ctx, "brick-driver")
+    for iteration in range(15):
+        driver.write("DROP MATERIALIZED VIEW IF EXISTS total_repl")
+        driver.write(
+            "CREATE REPLACEMENT MATERIALIZED VIEW total_repl FOR total"
+            " IN CLUSTER compute WITH (RETAIN HISTORY = FOR '600s')"
+            f" AS {TOTAL_DEF}"
+        )
+        # Applying an unhydrated replacement is rejected, so wait for it as the
+        # documented workflow does.
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            rows = driver.query(
+                "SELECT bool_and(h.hydrated)"
+                " FROM mz_internal.mz_hydration_statuses h"
+                " JOIN mz_catalog.mz_materialized_views v ON h.object_id = v.id"
+                " WHERE v.name = 'total_repl'"
+            )
+            if rows and rows[0][0]:
+                break
+            time.sleep(1)
+
+        # The kill has to land inside the apply, which finalizes the replaced
+        # collection and retires the replacement in one go.
+        def apply() -> None:
+            try:
+                applier.write(
+                    "ALTER MATERIALIZED VIEW total APPLY REPLACEMENT total_repl"
+                )
+            except Exception:
+                pass
+
+        # The apply finalizes the replaced collection and retires the
+        # replacement, then commits the catalog transaction, and the state that
+        # bricks the next boot is the window in between. Both halves are
+        # consensus writes, so delaying the metadata leg stretches that window
+        # from microseconds to something a kill can land in.
+        for stream in ("upstream", "downstream"):
+            toxiproxy.add_toxic(
+                "metadata",
+                f"apply-delay-{stream}",
+                "latency",
+                {"latency": 1500, "jitter": 500},
+                stream=stream,
+            )
+        thread = threading.Thread(target=apply, daemon=True)
+        thread.start()
+        time.sleep(0.5 + 0.5 * (iteration % 12))
+        c.kill("materialized")
+        for stream in ("upstream", "downstream"):
+            toxiproxy.delete_toxic("metadata", f"apply-delay-{stream}")
+        try:
+            c.up("materialized", detach=True, max_tries=2)
+        except Exception as e:
+            # A bricked environmentd never becomes healthy, which is the
+            # symptom, so the log decides rather than this call.
+            log.log(
+                "repro", f"iteration {iteration}: environmentd did not come up ({e})"
+            )
+        thread.join(timeout=30)
+        if bricked():
+            raise AssertionError(
+                "REPRODUCED: environmentd halts at bootstrap and cannot come"
+                f" back, iteration {iteration}"
+            )
+        applier.reset()
+        driver.reset()
+        log.log("repro", f"iteration {iteration}: booted again")
+    log.log("repro", "not reproduced in 15 iterations")
+
+
 REPRO_FUNCS = {
     "repro-blob-memory": repro_blob_memory,
     "repro-postheal-stall": repro_postheal_stall,
     "repro-per10": repro_per10,
     "repro-durable-resume": repro_durable_resume,
     "repro-compute-asof": repro_compute_asof,
+    "repro-replacement-brick": repro_replacement_brick,
 }

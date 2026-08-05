@@ -115,6 +115,7 @@ class MzClient:
         self.user = user
         self.database = database
         self.name = name
+        self.ctx = ctx
         self.log = ctx.log
         self.default_timeout = ctx.complexity.query_timeout
         self._conn: psycopg.Connection | None = None

@@ -93,6 +93,16 @@ class ToxiproxyApi:
         self.base_url = base_url
         self.session = requests.Session()
 
+    def rebind(self, base_url: str) -> None:
+        """Point at a restarted toxiproxy and drop the old connections.
+
+        A recreated container is published on a fresh ephemeral host port, so
+        every client that cached the old mapping is stranded on it.
+        """
+        self.base_url = base_url
+        self.session.close()
+        self.session = requests.Session()
+
     @staticmethod
     def _check(r: requests.Response, ok: tuple[int, ...], what: str) -> None:
         if r.status_code >= 500:

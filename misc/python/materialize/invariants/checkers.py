@@ -40,11 +40,14 @@ class PeekChecker(Checker):
         self.ctx = ctx
         self.clusters = clusters
         self._round = 0
+        self.last_cluster: str | None = None
         self.client = MzClient(ctx, name)
 
     def peek(self, sql: str) -> list[tuple]:
         cluster = self.clusters[self._round % len(self.clusters)]
         self._round += 1
+        # Recorded so a violation can name the cluster that produced it.
+        self.last_cluster = cluster
         self.client.query(f"SET cluster = {cluster}")
         return self.client.query(sql)
 
@@ -77,12 +80,23 @@ class SubscribeChecker(Checker):
         inner_query: str,
         cluster: str = "quickstart",
         durable: bool = False,
+        snapshot: bool = True,
+        append_only: bool = False,
     ) -> None:
         super().__init__(rng)
         self.name = name
         self.ctx = ctx
         self.inner_query = inner_query
         self.cluster = cluster
+        # False subscribes to the changes from the subscription's as_of on,
+        # which is the only affordable way to watch a relation whose snapshot
+        # is large.
+        self.snapshot = snapshot
+        # For a relation nothing ever deletes from, a retraction in the change
+        # stream is a bug on its own, no matter what the folded state says: an
+        # insert and its bogus retraction cancel out and leave the state
+        # looking right.
+        self.append_only = append_only
         # When True, a restarted session resumes from the last validated
         # progress timestamp instead of taking a fresh snapshot, carrying
         # the reconstructed state across reconnects (the documented durable
@@ -160,10 +174,11 @@ class SubscribeChecker(Checker):
         self._reset_session()
         self.client.query(f"SET cluster = {self.cluster}")
         self.client.query("BEGIN")
+        snapshot_clause = "" if self.snapshot else ", SNAPSHOT = false"
         self.client.query(
             f"DECLARE {self._cursor} CURSOR FOR"
             f" SUBSCRIBE ({self.inner_query}) {self.order_clause}"
-            f" WITH (PROGRESS) {self.as_of_clause}"
+            f" WITH (PROGRESS{snapshot_clause}) {self.as_of_clause}"
         )
 
     def _process(self, rows: list[tuple]) -> None:
@@ -184,6 +199,12 @@ class SubscribeChecker(Checker):
                 self._apply_pending(ts)
             else:
                 data = tuple(row[3:])
+                diff = int(row[2])
+                if self.append_only and diff < 0:
+                    raise InvariantViolation(
+                        f"{self.name}: retraction {diff} of row {data} at {ts}"
+                        " in an append-only relation"
+                    )
                 if self.order_index is not None:
                     # WITHIN TIMESTAMP ORDER BY: rows of one timestamp must
                     # arrive sorted by the ordering expression.
@@ -266,6 +287,17 @@ class SubscribeChecker(Checker):
     @abstractmethod
     def validate_state(self, state: dict[tuple, int], ts: int) -> None:
         """Verify one transactionally consistent snapshot of the query."""
+
+    def recycle(self) -> None:
+        """Start over with a fresh subscription and no carried state.
+
+        A snapshot-free subscription accumulates every change it has seen, so a
+        checker that validates the whole accumulated state has to bound it.
+        """
+        self.client.reset()
+        self._active = False
+        self.last_validated_ts = None
+        self._reset_session()
 
     def close(self) -> None:
         self.client.reset()

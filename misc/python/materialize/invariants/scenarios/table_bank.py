@@ -26,9 +26,10 @@ blue/green schema pair cut over via ALTER SCHEMA SWAP, and replacement
 materialized views applied in place).
 """
 
+import math
 import random
 import time
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from materialize.invariants.checkers import PeekChecker, SubscribeChecker
@@ -61,6 +62,72 @@ REGISTRY_KEYS = 8
 TOTAL_DEF = (
     "SELECT (SELECT coalesce(sum(balance), 0) FROM accounts)"
     " + (SELECT coalesce(sum(amount), 0) FROM ledger) AS total"
+)
+
+# Values a summed invariant cannot see. `tag` and `amount_dec` are derived
+# from the op id, so every row is checkable on its own, which catches a
+# corruption that keeps the count and the sum intact. `flt` carries the float
+# values whose comparison and statistics handling has been wrong before
+# (NaN, negative zero, infinities), and `day` is nullable, so predicates over
+# both pull persist's filter pushdown into the checked path.
+FLOAT_TEXTS = ["0", "-0", "1e-320", "NaN", "Infinity", "-Infinity", "0.5"]
+# Must match the literal in PredicateDifferentialPeek.PREDICATES.
+DAY_CUT = date(2024, 1, 1)
+
+
+def _derived(worker: int, seq: int, amount: int) -> tuple[str, str, str, str | None]:
+    """The derived columns of one ledger row, as text: dec, tag, flt, day."""
+    dec = f"{amount / 1_000_000:.6f}"
+    tag = f"w{worker}-s{seq}"
+    flt = FLOAT_TEXTS[abs(seq) % len(FLOAT_TEXTS)]
+    # NULL every fifth row, so IS NULL predicates have something to find.
+    day = (
+        None
+        if abs(seq) % 5 == 0
+        else (date(2020, 1, 1) + timedelta(days=abs(seq) % 3000)).isoformat()
+    )
+    return dec, tag, flt, day
+
+
+# Only table-bank's ledger has the derived columns. The other scenarios reuse
+# these actions against a plain (worker, seq, account, amount, at) table, so
+# every write path takes the shape as a flag rather than assuming the wide one.
+LEDGER_COLS = "worker, seq, account, amount, at"
+LEDGER_COLS_DERIVED = f"{LEDGER_COLS}, amount_dec, tag, flt, day"
+
+
+def ledger_values(
+    worker: int, seq: int, account: int, amount: int, derived: bool
+) -> str:
+    """One ledger row literal, with the derived columns when the table has them."""
+    base = f"{worker}, {seq}, {account}, {amount}, now()"
+    if not derived:
+        return f"({base})"
+    dec, tag, flt, day = _derived(worker, seq, amount)
+    day_sql = "NULL" if day is None else f"DATE '{day}'"
+    return f"({base}, {dec}, '{tag}', '{flt}'::double, {day_sql})"
+
+
+def ledger_copy_row(
+    worker: int, seq: int, account: int, amount: int, at: str, derived: bool
+) -> str:
+    """The same row in COPY's text format, NULL spelled the way COPY wants."""
+    base = f"{worker}\t{seq}\t{account}\t{amount}\t{at}"
+    if not derived:
+        return f"{base}\n"
+    dec, tag, flt, day = _derived(worker, seq, amount)
+    # COPY's text format spells NULL as \N. Bound outside the f-string, whose
+    # expression part may not contain a backslash before Python 3.12.
+    day_text = "\\N" if day is None else day
+    return f"{base}\t{dec}\t{tag}\t{flt}\t{day_text}\n"
+
+
+# The row-level contract of the derived columns, as SQL over `ledger`. Checked
+# per row rather than in aggregate: a swapped or rewritten row keeps both the
+# count and the sum, and only this notices.
+DERIVED_ROW_CONTRACT = (
+    "tag <> 'w' || worker::text || '-s' || seq::text"
+    " OR amount_dec <> amount * 0.000001"
 )
 
 
@@ -99,12 +166,15 @@ class LedgerTransfer(Action):
         accounts: int,
         client: MzClient,
         oplog: OpLog,
+        derived: bool = False,
     ) -> None:
         super().__init__(rng)
         self.worker = worker
         self.accounts = accounts
         self.client = client
+        self.ctx = client.ctx
         self.oplog = oplog
+        self.derived = derived
         self.seq = 0
         # Committed transfers not yet reversed, consumed by ReversalTransfer.
         self.reversible: list[int] = []
@@ -114,8 +184,8 @@ class LedgerTransfer(Action):
         seq = self.seq
         src, dst = self.rng.sample(range(self.accounts), 2)
         amount = self.rng.randint(1, 100)
-        debit = f"({self.worker}, {seq}, {src}, {-amount}, now())"
-        credit = f"({self.worker}, {seq}, {dst}, {amount}, now())"
+        debit = ledger_values(self.worker, seq, src, -amount, self.derived)
+        credit = ledger_values(self.worker, seq, dst, amount, self.derived)
         # Register before sending: if this thread dies mid-call the op still
         # counts as possibly-applied.
         self.oplog.record(self.worker, seq, Outcome.UNKNOWN)
@@ -133,7 +203,30 @@ class LedgerTransfer(Action):
         self.oplog.record(self.worker, seq, outcome)
         if outcome == Outcome.COMMITTED:
             self.reversible.append(seq)
+            self._read_back(seq)
         return outcome
+
+    def _read_back(self, seq: int) -> None:
+        """A committed write must be visible to the session that wrote it.
+
+        Read-your-writes is a guarantee no timestamp-free invariant covers, and
+        it is the one a stale read breaks first. The read goes through this
+        action's own client, on purpose: another session may legitimately be
+        behind. A read that fails or times out under disruption raises
+        TransientError, which the worker loop treats as a skipped op.
+        """
+        if self.rng.random() >= 0.25 or not self.ctx.checking.is_set():
+            return
+        rows = self.client.query(
+            f"SELECT count(*) FROM ledger WHERE worker = {self.worker}"
+            f" AND seq = {seq}"
+        )
+        if int(rows[0][0]) != ROWS_PER_TRANSFER:
+            raise InvariantViolation(
+                f"read-your-writes: worker {self.worker} committed op {seq} and"
+                f" its own session then saw {rows[0][0]} of"
+                f" {ROWS_PER_TRANSFER} rows"
+            )
 
     def close(self) -> None:
         self.client.reset()
@@ -170,8 +263,14 @@ class ReversalTransfer(Action):
             self.rng.randrange(len(self.forward.reversible))
         )
         self.oplog.record(self.worker, -seq, Outcome.UNKNOWN)
+        derived_cols = (
+            ", -amount_dec, 'w' || worker::text || '-s' || (-seq)::text, flt, day"
+            if self.forward.derived
+            else ""
+        )
         outcome = self.client.write(
             "INSERT INTO ledger SELECT worker, -seq, account, -amount, now()"
+            f"{derived_cols}"
             f" FROM ledger WHERE worker = {self.worker} AND seq = {seq}"
         )
         self.oplog.record(self.worker, -seq, outcome)
@@ -215,14 +314,13 @@ class CopyTransfer(Action):
         # here, and the temporal-filter windows are wide enough to absorb
         # clock skew between host and server.
         at = datetime.now(UTC).isoformat()
-        data = (
-            f"{self.worker}\t{seq}\t{src}\t{-amount}\t{at}\n"
-            f"{self.worker}\t{seq}\t{dst}\t{amount}\t{at}\n"
-        )
+        derived = self.forward.derived
+        data = ledger_copy_row(
+            self.worker, seq, src, -amount, at, derived
+        ) + ledger_copy_row(self.worker, seq, dst, amount, at, derived)
+        cols = LEDGER_COLS_DERIVED if derived else LEDGER_COLS
         self.oplog.record(self.worker, seq, Outcome.UNKNOWN)
-        outcome = self.client.copy_in(
-            "COPY ledger (worker, seq, account, amount, at) FROM STDIN", data
-        )
+        outcome = self.client.copy_in(f"COPY ledger ({cols}) FROM STDIN", data)
         self.oplog.record(self.worker, seq, outcome)
         if outcome == Outcome.COMMITTED:
             self.forward.reversible.append(seq)
@@ -314,6 +412,8 @@ class ReplacementChurn(Action):
     REPLACEMENT switches the definition while preserving the name and all
     downstream objects. Because the definition is identical, every existing
     total checker must keep seeing the exact total through the switch.
+
+    The cutover itself is currently disabled, see the TODO on SQL-603 in run().
     """
 
     name = "replacement"
@@ -375,9 +475,20 @@ class ReplacementChurn(Action):
             # run is shutting down. Leave the replacement for the next
             # cycle's drop.
             return Outcome.UNKNOWN
-        return self.client.write(
-            "ALTER MATERIALIZED VIEW total APPLY REPLACEMENT total_repl"
-        )
+        # TODO: Reenable when SQL-603 is fixed. Applying the replacement
+        # finalizes the collection it replaces while the replacement still
+        # holds a read hold on it, and an interrupted apply leaves that state
+        # durable. The next bootstrap then halts on it ("dependency since
+        # frontier is empty while dependent upper is not empty"), and so does
+        # every restart after that, so environmentd never comes back: nightly
+        # 17740 spent 139 boots in that loop. Creating, hydrating and dropping
+        # the replacement stays in, only the cutover is out, so the read hold
+        # and its removal are still exercised. The next cycle's DROP cleans up.
+        #
+        # return self.client.write(
+        #     "ALTER MATERIALIZED VIEW total APPLY REPLACEMENT total_repl"
+        # )
+        return Outcome.COMMITTED
 
     def close(self) -> None:
         self.client.reset()
@@ -514,6 +625,29 @@ class BankTotalPeek(PeekChecker):
             "bounded staleness 5s",
         ]
 
+    def _context(self, isolation: str) -> str:
+        """What the next occurrence needs in order to classify itself.
+
+        A peek that returns the wrong rows says nothing on its own about where
+        it went wrong. Naming the cluster and the isolation the read used, and
+        reading the object again on every cluster with the timestamp each read
+        picks, separates a wrong shard from one wrong replica, and a window
+        that has passed from one that is still open.
+        """
+        parts = [f"cluster={self.last_cluster}", f"isolation={isolation}"]
+        for cluster in self.clusters:
+            try:
+                self.client.query(f"SET cluster = {cluster}")
+                # mz_now() over an input relation is the read's own timestamp,
+                # unlike the input-free form (CPU-197).
+                rows = self.client.query(
+                    "SELECT total, mz_now()::text FROM total", timeout=20
+                )
+                parts.append(f"re-read on {cluster}: {rows}")
+            except Exception as e:
+                parts.append(f"re-read on {cluster} failed: {e}")
+        return "; ".join(parts)
+
     def check_once(self) -> None:
         # Conservation is timestamp-free, so it must hold under every
         # isolation level: staleness changes the chosen timestamp, never the
@@ -561,7 +695,7 @@ class BankTotalPeek(PeekChecker):
         ):
             raise InvariantViolation(
                 f"total mismatch via {query!r}: expected {expected_rows}x"
-                f" {self.scenario.total}, got {rows}"
+                f" {self.scenario.total}, got {rows} [{self._context(isolation)}]"
             )
         # Sample the watermark that feeds the history probe. `SELECT mz_now()`
         # has no inputs, and for such a constant query the coordinator answers
@@ -595,11 +729,18 @@ class LedgerDirectPeek(PeekChecker):
         # before the read was issued.
         low = ROWS_PER_TRANSFER * oplog.committed_count()
         watermark = self.scenario.ledger_rows.get()
-        rows = self.peek("SELECT count(*), coalesce(sum(amount), 0) FROM ledger")
+        rows = self.peek(
+            "SELECT count(*), coalesce(sum(amount), 0),"
+            " coalesce(sum(amount_dec), 0) FROM ledger"
+        )
         high = ROWS_PER_TRANSFER * oplog.attempted_count()
-        count, amount_sum = int(rows[0][0]), int(rows[0][1])
+        count, amount_sum, dec_sum = int(rows[0][0]), int(rows[0][1]), rows[0][2]
         if amount_sum != 0:
             raise InvariantViolation(f"ledger sum {amount_sum} != 0 (count {count})")
+        # The same conservation in numeric arithmetic, which has its own
+        # encoding and scale handling.
+        if float(dec_sum) != 0.0:
+            raise InvariantViolation(f"ledger decimal sum {dec_sum} != 0")
         if count < watermark:
             raise InvariantViolation(
                 f"ledger count went backwards: {count} < watermark {watermark}"
@@ -613,6 +754,212 @@ class LedgerDirectPeek(PeekChecker):
                 f"ledger count {count} exceeds attempted transfers (<= {high} expected)"
             )
         self.scenario.ledger_rows.advance(count)
+        self.validations += 1
+
+
+class LedgerIdentityPeek(PeekChecker):
+    """Row-level reconciliation of a window of one worker's ledger rows.
+
+    The conserved sum and the counted bounds are blind to a corruption that
+    keeps both intact: a lost transfer masked by a duplicated one, a rewritten
+    account or tag, a pair that is present twice. This checks the identities
+    instead, over a bounded window so it stays cheap, and it remembers what it
+    saw: an op id that was there once must never be gone again, which no
+    aggregate can express.
+    """
+
+    # Ops per worker examined per round. The newest ones are where a write
+    # that is still settling would show up.
+    WINDOW = 200
+
+    def __init__(self, rng, ctx, scenario: "TableBank") -> None:
+        super().__init__(rng, ctx, "ledger-identity", ["quickstart", "compute"])
+        self.scenario = scenario
+        # Op ids this checker has already observed, per worker. Nothing ever
+        # deletes ledger rows, so these may never disappear.
+        self.seen: dict[int, set[int]] = {}
+
+    def check_once(self) -> None:
+        oplog = self.scenario.oplog
+        worker = self.rng.randrange(self.ctx.complexity.workers)
+        # Sampling order as in LedgerDirectPeek: what must be present is
+        # sampled before the read, what may at most be present after it. An op
+        # issued while the read is in flight is legitimately in its result, and
+        # comparing it against a pre-read sample would report it as a phantom.
+        committed = oplog.seqs(worker, Outcome.COMMITTED)
+        issued = oplog.issued(worker)
+        if not issued:
+            return
+        # Bound the window by op id magnitude, so reversals (negative ids) of
+        # transfers in the window come along.
+        floor = max(abs(seq) for seq in issued) - self.WINDOW
+        rows = self.peek(
+            f"SELECT seq, count(*), coalesce(sum(amount), 0),"
+            f" count(*) FILTER (WHERE {DERIVED_ROW_CONTRACT})"
+            f" FROM ledger WHERE worker = {worker} AND abs(seq) > {floor}"
+            f" GROUP BY seq"
+        )
+        # Everything the read may legitimately contain, including ops issued
+        # while it was in flight.
+        issued_after = oplog.issued(worker)
+        present = set()
+        for seq, count, amount_sum, bad_rows in rows:
+            seq, count = int(seq), int(count)
+            present.add(seq)
+            if count != ROWS_PER_TRANSFER or int(amount_sum) != 0:
+                raise InvariantViolation(
+                    f"worker {worker} op {seq}: {count} rows summing to"
+                    f" {amount_sum}, expected {ROWS_PER_TRANSFER} summing to 0"
+                )
+            if int(bad_rows) != 0:
+                raise InvariantViolation(
+                    f"worker {worker} op {seq}: {bad_rows} rows whose derived"
+                    " columns do not match their op id"
+                )
+        missing = {seq for seq in committed if abs(seq) > floor} - present
+        if missing:
+            raise InvariantViolation(
+                f"worker {worker}: committed ops absent: {sorted(missing)[:20]}"
+            )
+        phantom = present - issued_after
+        if phantom:
+            raise InvariantViolation(
+                f"worker {worker}: ops never issued: {sorted(phantom)[:20]}"
+            )
+        seen = self.seen.setdefault(worker, set())
+        vanished = {seq for seq in seen if abs(seq) > floor} - present
+        if vanished:
+            raise InvariantViolation(
+                f"worker {worker}: ops disappeared after being observed:"
+                f" {sorted(vanished)[:20]}"
+            )
+        seen |= present
+        self.validations += 1
+
+
+class LedgerRowsSubscribe(SubscribeChecker):
+    """Row-level validation of the ledger's change stream.
+
+    Subscribes without a snapshot, so the cost is independent of how large the
+    table has grown, and judges the stream itself rather than an aggregate of
+    it: the ledger is append-only, so a retraction is a bug outright, and both
+    rows of a transfer are written in one statement, so every op id that
+    appears at a completed timestamp must appear exactly twice and sum to zero.
+    """
+
+    def __init__(self, rng, ctx, scenario: "TableBank") -> None:
+        super().__init__(
+            rng,
+            ctx,
+            "ledger-rows-subscribe",
+            "SELECT worker, seq, account, amount FROM ledger",
+            snapshot=False,
+            append_only=True,
+        )
+        self.scenario = scenario
+
+    # Rows to carry before starting a fresh subscription, so the per-round
+    # validation stays cheap however long the run is.
+    STATE_LIMIT = 4000
+
+    def check_once(self) -> None:
+        super().check_once()
+        if len(self._state) > self.STATE_LIMIT:
+            self.recycle()
+
+    def validate_state(self, state: dict[tuple, int], ts: int) -> None:
+        per_op: dict[tuple[int, int], tuple[int, int]] = {}
+        for row, count in state.items():
+            worker, seq, _account, amount = row
+            if count != 1:
+                raise InvariantViolation(f"row {row} present {count} times at {ts}")
+            rows, total = per_op.get((int(worker), int(seq)), (0, 0))
+            per_op[(int(worker), int(seq))] = (rows + 1, total + int(amount))
+        for (worker, seq), (rows, total) in per_op.items():
+            if rows != ROWS_PER_TRANSFER or total != 0:
+                raise InvariantViolation(
+                    f"worker {worker} op {seq} at {ts}: {rows} rows summing to"
+                    f" {total} in the change stream"
+                )
+            if not self.scenario.oplog.was_issued(worker, seq):
+                raise InvariantViolation(
+                    f"worker {worker} op {seq} at {ts} was never issued"
+                )
+
+
+class PredicateDifferentialPeek(PeekChecker):
+    """Predicates over the float and date columns, judged two ways.
+
+    An aggregate with a predicate lets persist skip parts by their statistics,
+    and getting that wrong is silent: the answer is simply too small. So the
+    same predicate is also evaluated on the client, over the rows the same
+    transaction returns, and the two must agree. The values chosen are the ones
+    whose statistics handling has been wrong before: NaN, negative zero, the
+    infinities, a denormal, and a nullable date.
+
+    Only predicates whose truth does not depend on where NaN sorts are used,
+    so this checks statistics handling and not float ordering semantics.
+    """
+
+    # Ops per worker read back per round, as in LedgerIdentityPeek.
+    WINDOW = 200
+
+    PREDICATES: list[tuple[str, Any]] = [
+        (
+            "flt < 0",
+            lambda flt, day: flt is not None and not math.isnan(flt) and flt < 0,
+        ),
+        (
+            "flt = 0",
+            lambda flt, day: flt is not None and not math.isnan(flt) and flt == 0,
+        ),
+        (
+            "flt = 'NaN'::double precision",
+            lambda flt, day: flt is not None and math.isnan(flt),
+        ),
+        ("day IS NULL", lambda flt, day: day is None),
+        (
+            "day > DATE '2024-01-01'",
+            lambda flt, day: day is not None and day > DAY_CUT,
+        ),
+    ]
+
+    def __init__(self, rng, ctx, scenario: "TableBank") -> None:
+        super().__init__(rng, ctx, "predicate-differential", ["quickstart", "compute"])
+        self.scenario = scenario
+
+    def check_once(self) -> None:
+        oplog = self.scenario.oplog
+        worker = self.rng.randrange(self.ctx.complexity.workers)
+        issued = oplog.issued(worker)
+        if not issued:
+            return
+        floor = max(abs(seq) for seq in issued) - self.WINDOW
+        predicate, on_client = self.rng.choice(self.PREDICATES)
+        window = f"FROM ledger WHERE worker = {worker} AND abs(seq) > {floor}"
+        cluster = self.clusters[self._round % len(self.clusters)]
+        self._round += 1
+        self.client.query(f"SET cluster = {cluster}")
+        # One read-only transaction, so both statements read at the same
+        # timestamp and a disagreement cannot be staleness.
+        self.client.query("BEGIN")
+        try:
+            counted = int(
+                self.client.query(f"SELECT count(*) {window} AND ({predicate})")[0][0]
+            )
+            rows = self.client.query(f"SELECT flt, day {window}")
+        finally:
+            try:
+                self.client.query("COMMIT")
+            except Exception:
+                pass
+        recomputed = sum(1 for flt, day in rows if on_client(flt, day))
+        if counted != recomputed:
+            raise InvariantViolation(
+                f"worker {worker}: `{predicate}` counted {counted} of"
+                f" {len(rows)} rows, recomputing it over the same read gives"
+                f" {recomputed}"
+            )
         self.validations += 1
 
 
@@ -1016,8 +1363,13 @@ class TableBank(Scenario):
             f" {BALANCE_PER_ACCOUNT}",
             # RETAIN HISTORY on the base table keeps direct AS OF reads of
             # the ledger itself possible, besides the MVs.
+            # amount_dec, tag, flt and day are derived from the op id, see
+            # ledger_values: they make every row checkable on its own and put
+            # float and nullable-date predicates on the checked path.
             "CREATE TABLE ledger (worker int, seq bigint, account int,"
-            " amount bigint, at timestamptz) WITH (RETAIN HISTORY = FOR '600s')",
+            " amount bigint, at timestamptz, amount_dec numeric(38, 6),"
+            " tag text, flt double precision, day date)"
+            " WITH (RETAIN HISTORY = FOR '600s')",
             "CREATE TABLE registry (worker int, key int, ver bigint)",
             # RETAIN HISTORY keeps recent timestamps readable so the durable
             # subscribe checker can resume where it left off.
@@ -1059,7 +1411,9 @@ class TableBank(Scenario):
 
     def make_worker(self, index: int, rng: random.Random) -> WorkerBundle:
         client = MzClient(self.ctx, f"worker-{index}")
-        forward = LedgerTransfer(rng, index, self.accounts, client, self.oplog)
+        forward = LedgerTransfer(
+            rng, index, self.accounts, client, self.oplog, derived=True
+        )
         actions: list[Action] = [
             UpdateTransfer(rng, self.accounts, client),
             forward,
@@ -1081,10 +1435,13 @@ class TableBank(Scenario):
         return WorkerBundle(actions=actions, weights=weights)
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(10)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(13)]
         return [
             BankTotalPeek(rngs[0], self.ctx, self),
             LedgerDirectPeek(rngs[1], self.ctx, self),
+            LedgerIdentityPeek(rngs[10], self.ctx, self),
+            LedgerRowsSubscribe(rngs[11], self.ctx, self),
+            PredicateDifferentialPeek(rngs[12], self.ctx, self),
             BankTotalSubscribe(rngs[2], self.ctx, self),
             BankTotalSubscribe(
                 rngs[3], self.ctx, self, name="total-subscribe-durable", durable=True
@@ -1130,13 +1487,13 @@ class TableBank(Scenario):
                 )
             }
             committed = self.oplog.seqs(worker, Outcome.COMMITTED)
-            unknown = self.oplog.seqs(worker, Outcome.UNKNOWN)
+            issued = self.oplog.issued(worker)
             missing = committed - present
             if missing:
                 raise InvariantViolation(
                     f"worker {worker}: committed transfers lost: {sorted(missing)[:20]}"
                 )
-            phantom = present - committed - unknown
+            phantom = present - issued
             if phantom:
                 raise InvariantViolation(
                     f"worker {worker}: transfers present that never committed:"

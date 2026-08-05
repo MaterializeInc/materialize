@@ -192,6 +192,10 @@ class OpLog:
         self._lock = threading.Lock()
         self._outcomes: dict[tuple[int, int], Outcome] = {}
         self._counts: Counter[Outcome] = Counter()
+        # Per worker, so a checker's lookups cost its own worker's ops rather
+        # than every op the run ever issued. Checkers query this on the hot
+        # path, holding the same lock every writer needs.
+        self._by_worker: dict[int, dict[int, Outcome]] = {}
 
     def record(self, worker: int, seq: int, outcome: Outcome) -> None:
         with self._lock:
@@ -200,6 +204,7 @@ class OpLog:
                 self._counts[previous] -= 1
             self._outcomes[(worker, seq)] = outcome
             self._counts[outcome] += 1
+            self._by_worker.setdefault(worker, {})[seq] = outcome
 
     def committed_count(self) -> int:
         with self._lock:
@@ -212,10 +217,34 @@ class OpLog:
     def seqs(self, worker: int, outcome: Outcome) -> set[int]:
         with self._lock:
             return {
-                s
-                for (w, s), o in self._outcomes.items()
-                if w == worker and o == outcome
+                s for s, o in self._by_worker.get(worker, {}).items() if o == outcome
             }
+
+    def issued(self, worker: int) -> set[int]:
+        """Every op of this worker that may exist, in one snapshot.
+
+        Sampling COMMITTED and UNKNOWN separately is not sound: an op that
+        moves from UNKNOWN to COMMITTED between the two reads is in neither
+        result, and a check for rows that were never issued then reports it.
+        """
+        with self._lock:
+            return {
+                s
+                for s, o in self._by_worker.get(worker, {}).items()
+                if o in (Outcome.COMMITTED, Outcome.UNKNOWN)
+            }
+
+    def was_issued(self, worker: int, seq: int) -> bool:
+        """Whether this op may exist, without materializing a set.
+
+        The change-stream checkers ask per row, so building a set per question
+        would cost the whole worker's history each time.
+        """
+        with self._lock:
+            return self._by_worker.get(worker, {}).get(seq) in (
+                Outcome.COMMITTED,
+                Outcome.UNKNOWN,
+            )
 
     def counts(self) -> dict[Outcome, int]:
         with self._lock:
@@ -321,6 +350,11 @@ class ScenarioContext:
     log: EventLog
     seed: str
     stop: threading.Event = field(default_factory=threading.Event)
+    # Set once the build under test is the one serving. An --upgrade-from run
+    # starts on an older release, and asserting there only rediscovers bugs
+    # that release already has, so nothing checks invariants until the swap.
+    # Set from the start for every other run.
+    checking: threading.Event = field(default_factory=threading.Event)
     # All MzClients ever created, so the shutdown ladder can unblock
     # stragglers by cancelling/closing their connections cross-thread.
     clients: list = field(default_factory=list)

@@ -186,6 +186,8 @@ class Runner:
         self.checkers: list[Checker] = []
         self.disruptor: Disruptor | None = None
         self.agitator: Agitator | None = None
+        # Checker threads held back until the version swap, see run().
+        self._deferred: list[threading.Thread] = []
         # Checker validations and committed ops at the chaos midpoint, for
         # the progress assertions.
         self._half_marks: tuple[list[int], int] | None = None
@@ -223,6 +225,10 @@ class Runner:
                 name=f"worker-{i}", target=self._worker_loop, args=(bundle, rng, stats)
             )
             threads.append(thread)
+        # On an --upgrade-from run the checkers only start at the swap, so
+        # nothing is asserted against the older release, and the swap window
+        # itself is still covered.
+        defer = self.midrun_event is not None
         for checker, rng in zip(self.checkers, checker_rngs):
             thread = threading.Thread(
                 name=f"checker-{checker.name}",
@@ -230,6 +236,8 @@ class Runner:
                 args=(checker, rng),
             )
             threads.append(thread)
+            if defer:
+                self._deferred.append(thread)
         if self.legs:
             self.disruptor = Disruptor(
                 api=self.toxiproxy,
@@ -252,9 +260,19 @@ class Runner:
         # The finally clause guarantees heal/stop/join even when the monitor
         # itself fails, so no scenario ever leaves disruptions applied or
         # threads running.
+        if not self._deferred:
+            # Nothing to wait for: the build under test is already serving.
+            ctx.checking.set()
+        else:
+            ctx.log.log(
+                "phase",
+                "chaos: invariants are checked from the version swap on,"
+                " the run starts on the older release",
+            )
         try:
             for thread in threads:
-                thread.start()
+                if thread not in self._deferred:
+                    thread.start()
             if self.disruptor:
                 self.disruptor.start()
             self._monitor()
@@ -295,6 +313,12 @@ class Runner:
                     self._committed_total(),
                 )
                 if self.midrun_event is not None:
+                    # Started before the swap runs, so the transition itself is
+                    # checked: what the new build makes of the old build's
+                    # state is the point of this scenario.
+                    self.ctx.checking.set()
+                    for thread in self._deferred:
+                        thread.start()
                     self.ctx.log.log("phase", "midrun event: upgrade swap")
                     try:
                         self.midrun_event()
@@ -456,7 +480,11 @@ class Runner:
         # watchdog-bounded hung peek can legitimately eat most of a half.
         if self._half_marks is not None and self.runtime >= 600:
             half_validations, half_committed = self._half_marks
+            # Deferred checkers have no first half to compare against, their
+            # coverage is asserted by the vacuity check above.
             for checker, at_half in zip(self.checkers, half_validations):
+                if self._deferred:
+                    continue
                 if at_half == 0 or checker.validations <= at_half:
                     raise InvariantViolation(
                         f"stalled run: checker {checker.name} verified"

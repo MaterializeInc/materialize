@@ -2144,7 +2144,7 @@ steps:
                   --scenario=table-bank,
                   --complexity=high,
                   --runtime=1200,
-                  --upgrade-from=materialize/materialized:v26.31.1,
+                  --upgrade-from=latest,
                 ]
 
       - id: invariants-table-bank

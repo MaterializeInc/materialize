@@ -297,14 +297,14 @@ class WebhookSet(Scenario):
                 )
             }
             committed = self.oplog.seqs(worker, Outcome.COMMITTED)
-            unknown = self.oplog.seqs(worker, Outcome.UNKNOWN)
+            issued = self.oplog.issued(worker)
             missing = committed - present
             if missing:
                 raise InvariantViolation(
                     f"worker {worker}: acknowledged events lost:"
                     f" {sorted(missing)[:20]}"
                 )
-            phantom = present - committed - unknown
+            phantom = present - issued
             if phantom:
                 raise InvariantViolation(
                     f"worker {worker}: events present that were rejected or"
