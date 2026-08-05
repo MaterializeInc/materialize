@@ -50,7 +50,7 @@ use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::range::InvalidRangeError;
 use mz_repr::strconv::{ParseErrorKind, ParseHexError};
-use mz_repr::{CatalogItemId, GlobalId, ReprScalarType, Row, SqlScalarType};
+use mz_repr::{CatalogItemId, GlobalId, ReprScalarType, SqlScalarType};
 use serde_reflection::{ContainerFormat, Registry, Samples, Tracer, TracerConfig};
 
 const SNAPSHOT_DIR: &str = "tests/snapshots";
@@ -187,7 +187,11 @@ fn trace_lir_registry() -> Registry {
         ReducePlan,
         TopKPlan,
         ThresholdPlan,
-        UnaryFunc,
+        // The LIR instantiation. The registry is keyed by container name, so
+        // the schema records the cast funcs' payloads as LirScalarExpr. The
+        // MIR instantiation must never be traced here, its cast payloads
+        // would register incompatible formats under the same names.
+        UnaryFunc<LirScalarExpr>,
         BinaryFunc,
         VariadicFunc,
         TableFunc,
@@ -211,19 +215,8 @@ fn trace_lir_registry() -> Registry {
         WindowFrameBound,
         WindowFrameUnits,
         Timezone,
+        // Reachable via SqlScalarType's List/Map/Record custom_id fields.
         CatalogItemId,
-        // Reachable via MirScalarExpr::Literal through the cast func leak
-        // noted below. There is exactly one Result instantiation in the
-        // graph, so tracing it does not clash. (The LIR types themselves
-        // avoid std Result, see ConstantRows and LiteralValue.)
-        Result<Row, EvalError>,
-        // TODO: MirScalarExpr and UnmaterializableFunc are reachable through
-        // the cast funcs that store a nested cast expression (for example
-        // CastArrayToArray's cast_expr). Remove these once those funcs hold a
-        // stable expression type, per the Lir*Func plan in
-        // doc/developer/design/20260311_optimizer_customer_tradeoff.md.
-        mz_expr::MirScalarExpr,
-        mz_expr::UnmaterializableFunc,
     ];
 
     // Some enums in the graph are private (MatcherImpl in like_pattern, and
@@ -364,22 +357,14 @@ fn lir_schema_contains_expected_types() {
     );
 }
 
-/// The schema must only contain stable types, with one known exception.
+/// The schema must only contain stable types. No MIR type may be reachable.
 ///
 /// `LirScalarExpr` exists precisely to keep `MirScalarExpr` (and with it
-/// `UnmaterializableFunc`) out of the stored format, and `LirAggregateExpr`
-/// does the same for aggregates.
-///
-/// The known exception: cast funcs that store a nested cast expression (for
-/// example CastArrayToArray's cast_expr and CastRecord1ToRecord2's
-/// cast_exprs) still hold `MirScalarExpr`, which pulls in
-/// `UnmaterializableFunc` through its CallUnmaterializable variant. We pin
-/// the leak as a positive assertion so this test flips loudly when it is
-/// fixed.
-///
-/// TODO: once those funcs hold a stable expression type (per the Lir*Func
-/// plan in doc/developer/design/20260311_optimizer_customer_tradeoff.md),
-/// move MirScalarExpr and UnmaterializableFunc into the forbidden list.
+/// `UnmaterializableFunc`) out of the stored format, `LirAggregateExpr` does
+/// the same for aggregates, and the `UnaryFunc<E>` parameter does the same
+/// for the cast funcs that store a nested cast expression (for example
+/// CastArrayToArray's cast_expr, which is a LirScalarExpr in the traced
+/// instantiation).
 #[mz_ore::test]
 fn lir_schema_contains_only_stable_types() {
     let registry = trace_lir_registry();
@@ -401,19 +386,15 @@ fn lir_schema_contains_only_stable_types() {
         "unexpected LirScalarExpr variants"
     );
 
-    for forbidden in ["AggregateExpr", "MirRelationExpr"] {
+    for forbidden in [
+        "MirScalarExpr",
+        "UnmaterializableFunc",
+        "AggregateExpr",
+        "MirRelationExpr",
+    ] {
         assert!(
             !registry.contains_key(forbidden),
             "unstable type '{forbidden}' is reachable from LirRelationExpr"
-        );
-    }
-
-    // The known leak, pinned. See the doc comment above.
-    for leaked in ["MirScalarExpr", "UnmaterializableFunc"] {
-        assert!(
-            registry.contains_key(leaked),
-            "'{leaked}' no longer leaks into the LIR schema. Remove it from \
-             trace_enums! and move it to the forbidden list in this test."
         );
     }
 }

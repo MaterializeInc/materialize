@@ -2277,7 +2277,7 @@
       },
       {
         "cast_expr": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -2286,7 +2286,7 @@
     "STRUCT": [
       {
         "cast_element": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -2433,7 +2433,7 @@
       },
       {
         "cast_expr": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -2442,7 +2442,7 @@
     "STRUCT": [
       {
         "cast_element": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -2507,7 +2507,7 @@
       {
         "cast_exprs": {
           "SEQ": {
-            "TYPENAME": "MirScalarExpr"
+            "TYPENAME": "LirScalarExpr"
           }
         }
       }
@@ -2534,7 +2534,7 @@
       },
       {
         "cast_expr": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -2573,7 +2573,7 @@
       },
       {
         "cast_expr": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -2587,7 +2587,7 @@
       },
       {
         "cast_expr": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -2612,7 +2612,7 @@
       },
       {
         "cast_expr": {
-          "TYPENAME": "MirScalarExpr"
+          "TYPENAME": "LirScalarExpr"
         }
       }
     ]
@@ -3004,8 +3004,10 @@
       },
       {
         "source_key": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
+          "OPTION": {
+            "SEQ": {
+              "TYPENAME": "LirScalarExpr"
+            }
           }
         }
       },
@@ -4545,115 +4547,6 @@
       }
     ]
   },
-  "MirScalarExpr": {
-    "ENUM": {
-      "0": {
-        "Column": {
-          "TUPLE": [
-            "U64",
-            {
-              "OPTION": "STR"
-            }
-          ]
-        }
-      },
-      "1": {
-        "Literal": {
-          "TUPLE": [
-            {
-              "TYPENAME": "Result"
-            },
-            {
-              "TYPENAME": "ReprColumnType"
-            }
-          ]
-        }
-      },
-      "2": {
-        "CallUnmaterializable": {
-          "NEWTYPE": {
-            "TYPENAME": "UnmaterializableFunc"
-          }
-        }
-      },
-      "3": {
-        "CallUnary": {
-          "STRUCT": [
-            {
-              "func": {
-                "TYPENAME": "UnaryFunc"
-              }
-            },
-            {
-              "expr": {
-                "TYPENAME": "MirScalarExpr"
-              }
-            }
-          ]
-        }
-      },
-      "4": {
-        "CallBinary": {
-          "STRUCT": [
-            {
-              "func": {
-                "TYPENAME": "BinaryFunc"
-              }
-            },
-            {
-              "expr1": {
-                "TYPENAME": "MirScalarExpr"
-              }
-            },
-            {
-              "expr2": {
-                "TYPENAME": "MirScalarExpr"
-              }
-            }
-          ]
-        }
-      },
-      "5": {
-        "CallVariadic": {
-          "STRUCT": [
-            {
-              "func": {
-                "TYPENAME": "VariadicFunc"
-              }
-            },
-            {
-              "exprs": {
-                "SEQ": {
-                  "TYPENAME": "MirScalarExpr"
-                }
-              }
-            }
-          ]
-        }
-      },
-      "6": {
-        "If": {
-          "STRUCT": [
-            {
-              "cond": {
-                "TYPENAME": "MirScalarExpr"
-              }
-            },
-            {
-              "then": {
-                "TYPENAME": "MirScalarExpr"
-              }
-            },
-            {
-              "els": {
-                "TYPENAME": "MirScalarExpr"
-              }
-            }
-          ]
-        }
-      }
-    }
-  },
   "ModFloat32": "UNITSTRUCT",
   "ModFloat64": "UNITSTRUCT",
   "ModInt16": "UNITSTRUCT",
@@ -4835,6 +4728,7 @@
   "ParseIdent": "UNITSTRUCT",
   "ParseKafkaSourceDetails": "UNITSTRUCT",
   "ParsePostgresSourceDetails": "UNITSTRUCT",
+  "ParseSourceExportDetails": "UNITSTRUCT",
   "PgColumnSize": "UNITSTRUCT",
   "PgSizePretty": "UNITSTRUCT",
   "Position": "UNITSTRUCT",
@@ -5103,24 +4997,6 @@
       },
       "28": {
         "AclItem": "UNIT"
-      }
-    }
-  },
-  "Result": {
-    "ENUM": {
-      "0": {
-        "Ok": {
-          "NEWTYPE": {
-            "TYPENAME": "Row"
-          }
-        }
-      },
-      "1": {
-        "Err": {
-          "NEWTYPE": {
-            "TYPENAME": "EvalError"
-          }
-        }
       }
     }
   },
@@ -7558,572 +7434,515 @@
         }
       },
       "261": {
+        "ParseSourceExportDetails": {
+          "NEWTYPE": {
+            "TYPENAME": "ParseSourceExportDetails"
+          }
+        }
+      },
+      "262": {
         "RedactSql": {
           "NEWTYPE": {
             "TYPENAME": "RedactSql"
           }
         }
       },
-      "262": {
+      "263": {
         "RoundFloat32": {
           "NEWTYPE": {
             "TYPENAME": "RoundFloat32"
           }
         }
       },
-      "263": {
+      "264": {
         "RoundFloat64": {
           "NEWTYPE": {
             "TYPENAME": "RoundFloat64"
           }
         }
       },
-      "264": {
+      "265": {
         "RoundNumeric": {
           "NEWTYPE": {
             "TYPENAME": "RoundNumeric"
           }
         }
       },
-      "265": {
+      "266": {
         "TruncFloat32": {
           "NEWTYPE": {
             "TYPENAME": "TruncFloat32"
           }
         }
       },
-      "266": {
+      "267": {
         "TruncFloat64": {
           "NEWTYPE": {
             "TYPENAME": "TruncFloat64"
           }
         }
       },
-      "267": {
+      "268": {
         "TruncNumeric": {
           "NEWTYPE": {
             "TYPENAME": "TruncNumeric"
           }
         }
       },
-      "268": {
+      "269": {
         "TrimWhitespace": {
           "NEWTYPE": {
             "TYPENAME": "TrimWhitespace"
           }
         }
       },
-      "269": {
+      "270": {
         "TrimLeadingWhitespace": {
           "NEWTYPE": {
             "TYPENAME": "TrimLeadingWhitespace"
           }
         }
       },
-      "270": {
+      "271": {
         "TrimTrailingWhitespace": {
           "NEWTYPE": {
             "TYPENAME": "TrimTrailingWhitespace"
           }
         }
       },
-      "271": {
+      "272": {
         "Initcap": {
           "NEWTYPE": {
             "TYPENAME": "Initcap"
           }
         }
       },
-      "272": {
+      "273": {
         "RecordGet": {
           "NEWTYPE": {
             "TYPENAME": "RecordGet"
           }
         }
       },
-      "273": {
+      "274": {
         "ListLength": {
           "NEWTYPE": {
             "TYPENAME": "ListLength"
           }
         }
       },
-      "274": {
+      "275": {
         "MapLength": {
           "NEWTYPE": {
             "TYPENAME": "MapLength"
           }
         }
       },
-      "275": {
+      "276": {
         "MapBuildFromRecordList": {
           "NEWTYPE": {
             "TYPENAME": "MapBuildFromRecordList"
           }
         }
       },
-      "276": {
+      "277": {
         "Upper": {
           "NEWTYPE": {
             "TYPENAME": "Upper"
           }
         }
       },
-      "277": {
+      "278": {
         "Lower": {
           "NEWTYPE": {
             "TYPENAME": "Lower"
           }
         }
       },
-      "278": {
+      "279": {
         "Cos": {
           "NEWTYPE": {
             "TYPENAME": "Cos"
           }
         }
       },
-      "279": {
+      "280": {
         "Acos": {
           "NEWTYPE": {
             "TYPENAME": "Acos"
           }
         }
       },
-      "280": {
+      "281": {
         "Cosh": {
           "NEWTYPE": {
             "TYPENAME": "Cosh"
           }
         }
       },
-      "281": {
+      "282": {
         "Acosh": {
           "NEWTYPE": {
             "TYPENAME": "Acosh"
           }
         }
       },
-      "282": {
+      "283": {
         "Sin": {
           "NEWTYPE": {
             "TYPENAME": "Sin"
           }
         }
       },
-      "283": {
+      "284": {
         "Asin": {
           "NEWTYPE": {
             "TYPENAME": "Asin"
           }
         }
       },
-      "284": {
+      "285": {
         "Sinh": {
           "NEWTYPE": {
             "TYPENAME": "Sinh"
           }
         }
       },
-      "285": {
+      "286": {
         "Asinh": {
           "NEWTYPE": {
             "TYPENAME": "Asinh"
           }
         }
       },
-      "286": {
+      "287": {
         "Tan": {
           "NEWTYPE": {
             "TYPENAME": "Tan"
           }
         }
       },
-      "287": {
+      "288": {
         "Atan": {
           "NEWTYPE": {
             "TYPENAME": "Atan"
           }
         }
       },
-      "288": {
+      "289": {
         "Tanh": {
           "NEWTYPE": {
             "TYPENAME": "Tanh"
           }
         }
       },
-      "289": {
+      "290": {
         "Atanh": {
           "NEWTYPE": {
             "TYPENAME": "Atanh"
           }
         }
       },
-      "290": {
+      "291": {
         "Cot": {
           "NEWTYPE": {
             "TYPENAME": "Cot"
           }
         }
       },
-      "291": {
+      "292": {
         "Degrees": {
           "NEWTYPE": {
             "TYPENAME": "Degrees"
           }
         }
       },
-      "292": {
+      "293": {
         "Radians": {
           "NEWTYPE": {
             "TYPENAME": "Radians"
           }
         }
       },
-      "293": {
+      "294": {
         "Log10": {
           "NEWTYPE": {
             "TYPENAME": "Log10"
           }
         }
       },
-      "294": {
+      "295": {
         "Log10Numeric": {
           "NEWTYPE": {
             "TYPENAME": "Log10Numeric"
           }
         }
       },
-      "295": {
+      "296": {
         "Ln": {
           "NEWTYPE": {
             "TYPENAME": "Ln"
           }
         }
       },
-      "296": {
+      "297": {
         "LnNumeric": {
           "NEWTYPE": {
             "TYPENAME": "LnNumeric"
           }
         }
       },
-      "297": {
+      "298": {
         "Exp": {
           "NEWTYPE": {
             "TYPENAME": "Exp"
           }
         }
       },
-      "298": {
+      "299": {
         "ExpNumeric": {
           "NEWTYPE": {
             "TYPENAME": "ExpNumeric"
           }
         }
       },
-      "299": {
+      "300": {
         "Sleep": {
           "NEWTYPE": {
             "TYPENAME": "Sleep"
           }
         }
       },
-      "300": {
+      "301": {
         "Panic": {
           "NEWTYPE": {
             "TYPENAME": "Panic"
           }
         }
       },
-      "301": {
+      "302": {
         "AdjustNumericScale": {
           "NEWTYPE": {
             "TYPENAME": "AdjustNumericScale"
           }
         }
       },
-      "302": {
+      "303": {
         "PgColumnSize": {
           "NEWTYPE": {
             "TYPENAME": "PgColumnSize"
           }
         }
       },
-      "303": {
+      "304": {
         "MzRowSize": {
           "NEWTYPE": {
             "TYPENAME": "MzRowSize"
           }
         }
       },
-      "304": {
+      "305": {
         "MzTypeName": {
           "NEWTYPE": {
             "TYPENAME": "MzTypeName"
           }
         }
       },
-      "305": {
+      "306": {
         "StepMzTimestamp": {
           "NEWTYPE": {
             "TYPENAME": "StepMzTimestamp"
           }
         }
       },
-      "306": {
+      "307": {
         "RangeLower": {
           "NEWTYPE": {
             "TYPENAME": "RangeLower"
           }
         }
       },
-      "307": {
+      "308": {
         "RangeUpper": {
           "NEWTYPE": {
             "TYPENAME": "RangeUpper"
           }
         }
       },
-      "308": {
+      "309": {
         "RangeEmpty": {
           "NEWTYPE": {
             "TYPENAME": "RangeEmpty"
           }
         }
       },
-      "309": {
+      "310": {
         "RangeLowerInc": {
           "NEWTYPE": {
             "TYPENAME": "RangeLowerInc"
           }
         }
       },
-      "310": {
+      "311": {
         "RangeUpperInc": {
           "NEWTYPE": {
             "TYPENAME": "RangeUpperInc"
           }
         }
       },
-      "311": {
+      "312": {
         "RangeLowerInf": {
           "NEWTYPE": {
             "TYPENAME": "RangeLowerInf"
           }
         }
       },
-      "312": {
+      "313": {
         "RangeUpperInf": {
           "NEWTYPE": {
             "TYPENAME": "RangeUpperInf"
           }
         }
       },
-      "313": {
+      "314": {
         "MzAclItemGrantor": {
           "NEWTYPE": {
             "TYPENAME": "MzAclItemGrantor"
           }
         }
       },
-      "314": {
+      "315": {
         "MzAclItemGrantee": {
           "NEWTYPE": {
             "TYPENAME": "MzAclItemGrantee"
           }
         }
       },
-      "315": {
+      "316": {
         "MzAclItemPrivileges": {
           "NEWTYPE": {
             "TYPENAME": "MzAclItemPrivileges"
           }
         }
       },
-      "316": {
+      "317": {
         "MzFormatPrivileges": {
           "NEWTYPE": {
             "TYPENAME": "MzFormatPrivileges"
           }
         }
       },
-      "317": {
+      "318": {
         "MzValidatePrivileges": {
           "NEWTYPE": {
             "TYPENAME": "MzValidatePrivileges"
           }
         }
       },
-      "318": {
+      "319": {
         "MzValidateRolePrivilege": {
           "NEWTYPE": {
             "TYPENAME": "MzValidateRolePrivilege"
           }
         }
       },
-      "319": {
+      "320": {
         "AclItemGrantor": {
           "NEWTYPE": {
             "TYPENAME": "AclItemGrantor"
           }
         }
       },
-      "320": {
+      "321": {
         "AclItemGrantee": {
           "NEWTYPE": {
             "TYPENAME": "AclItemGrantee"
           }
         }
       },
-      "321": {
+      "322": {
         "AclItemPrivileges": {
           "NEWTYPE": {
             "TYPENAME": "AclItemPrivileges"
           }
         }
       },
-      "322": {
+      "323": {
         "QuoteIdent": {
           "NEWTYPE": {
             "TYPENAME": "QuoteIdent"
           }
         }
       },
-      "323": {
+      "324": {
         "TryParseMonotonicIso8601Timestamp": {
           "NEWTYPE": {
             "TYPENAME": "TryParseMonotonicIso8601Timestamp"
           }
         }
       },
-      "324": {
+      "325": {
         "RegexpSplitToArray": {
           "NEWTYPE": {
             "TYPENAME": "RegexpSplitToArrayStatic"
           }
         }
       },
-      "325": {
+      "326": {
         "PgSizePretty": {
           "NEWTYPE": {
             "TYPENAME": "PgSizePretty"
           }
         }
       },
-      "326": {
+      "327": {
         "Crc32Bytes": {
           "NEWTYPE": {
             "TYPENAME": "Crc32Bytes"
           }
         }
       },
-      "327": {
+      "328": {
         "Crc32String": {
           "NEWTYPE": {
             "TYPENAME": "Crc32String"
           }
         }
       },
-      "328": {
+      "329": {
         "KafkaMurmur2Bytes": {
           "NEWTYPE": {
             "TYPENAME": "KafkaMurmur2Bytes"
           }
         }
       },
-      "329": {
+      "330": {
         "KafkaMurmur2String": {
           "NEWTYPE": {
             "TYPENAME": "KafkaMurmur2String"
           }
         }
       },
-      "330": {
+      "331": {
         "SeahashBytes": {
           "NEWTYPE": {
             "TYPENAME": "SeahashBytes"
           }
         }
       },
-      "331": {
+      "332": {
         "SeahashString": {
           "NEWTYPE": {
             "TYPENAME": "SeahashString"
           }
         }
       },
-      "332": {
+      "333": {
         "Reverse": {
           "NEWTYPE": {
             "TYPENAME": "Reverse"
           }
         }
-      }
-    }
-  },
-  "UnmaterializableFunc": {
-    "ENUM": {
-      "0": {
-        "CurrentDatabase": "UNIT"
-      },
-      "1": {
-        "CurrentSchema": "UNIT"
-      },
-      "2": {
-        "CurrentSchemasWithSystem": "UNIT"
-      },
-      "3": {
-        "CurrentSchemasWithoutSystem": "UNIT"
-      },
-      "4": {
-        "CurrentTimestamp": "UNIT"
-      },
-      "5": {
-        "CurrentUser": "UNIT"
-      },
-      "6": {
-        "IsRbacEnabled": "UNIT"
-      },
-      "7": {
-        "MzIsSuperuser": "UNIT"
-      },
-      "8": {
-        "MzNow": "UNIT"
-      },
-      "9": {
-        "MzRoleOidMemberships": "UNIT"
-      },
-      "10": {
-        "MzSessionId": "UNIT"
-      },
-      "11": {
-        "MzSessionRoleMemberships": "UNIT"
-      },
-      "12": {
-        "MzUptime": "UNIT"
-      },
-      "13": {
-        "MzVersion": "UNIT"
-      },
-      "14": {
-        "MzVersionNum": "UNIT"
-      },
-      "15": {
-        "PgBackendPid": "UNIT"
-      },
-      "16": {
-        "PgPostmasterStartTime": "UNIT"
-      },
-      "17": {
-        "SessionUser": "UNIT"
-      },
-      "18": {
-        "Version": "UNIT"
-      },
-      "19": {
-        "ViewableVariables": "UNIT"
       }
     }
   },
