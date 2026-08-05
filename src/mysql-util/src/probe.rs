@@ -9,24 +9,26 @@
 
 use mysql_async::prelude::Queryable;
 use mysql_async::{Params, Value};
-use mz_ore::cast::CastFrom;
 
 use crate::{MySqlError, QualifiedTableRef, quote_identifier};
 
 /// The escape character for `LIKE` patterns built by [`like_prefix_pattern`].
 const LIKE_ESCAPE: char = '|';
 
-pub struct KeyProber<'a, Q> {
-    conn: &'a mut Q,
+pub struct KeyProber<'a> {
+    conn: &'a mut mysql_async::Conn,
     table: String,
     col: String,
 }
 
-impl<'a, Q: Queryable> KeyProber<'a, Q> {
+impl<'a> KeyProber<'a> {
     /// NOTE: `conn` is assumed to use a utf8mb4 connection character set (the
     /// driver's handshake default), so key values arrive converted to UTF-8.
-    /// [`KeyProber::next_prefix`] relies on that for character counting.
-    pub fn new(conn: &'a mut Q, table: QualifiedTableRef<'_>, key_col: &str) -> Self {
+    pub fn new(
+        conn: &'a mut mysql_async::Conn,
+        table: QualifiedTableRef<'_>,
+        key_col: &str,
+    ) -> Self {
         Self {
             conn,
             table: format!(
@@ -52,7 +54,7 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         start: &str,
         end: Option<&str>,
     ) -> Result<Option<u64>, MySqlError> {
-        let (clause, params) = self.range_filter(start, true, end);
+        let (clause, params) = self.range_filter(Some(start), end);
         let select = format!(
             "SELECT {col} FROM {table} WHERE {clause}",
             col = self.col,
@@ -61,105 +63,98 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         explain_row_estimate(&mut *self.conn, &select, Params::Positional(params)).await
     }
 
-    /// Grabs a prefix of length `len` for the first row in the given range. If the string is
-    /// shorter than `len`, it will return that shorter value.
+    /// Grabs a prefix of `prefix_len` characters for the first key in the
+    /// given range. If the key is shorter than `prefix_len`, it returns that
+    /// shorter value. The lower bound is exclusive, a key exactly equal to it
+    /// is skipped.
     ///
     /// The query will generally look something like:
     ///
     /// ```sql
     /// SELECT LEFT(pk_col, 3) FROM table
-    /// WHERE pk_col >= 'ab' AND pk_col < 'ac'
+    /// WHERE pk_col > 'ab' AND pk_col < 'ac'
     /// ORDER BY pk_col
     /// LIMIT 1
     /// ```
-    pub async fn first_prefix(
+    pub async fn prefix_of_first_key_in_range(
         &mut self,
-        start: &str,
-        end: Option<&str>,
-        len: usize,
+        lower_bound_exclusive: Option<&str>,
+        upper_bound: Option<&str>,
+        prefix_len: usize,
     ) -> Result<Option<String>, MySqlError> {
-        let (clause, mut params) = self.range_filter(start, true, end);
+        let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound);
         let sql = format!(
-            "SELECT LEFT({col}, ?) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
+            "SELECT LEFT({col}, {prefix_len}) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
             col = self.col,
             table = self.table,
         );
-        params.insert(0, u64::cast_from(len).into());
         self.query_string(sql, params).await
     }
 
-    /// Grabs the next prefix of length `len` after the prefix `cur`, from keys below `end`.
+    /// Returns the prefix of up to length `len` of the first key after `prefix`, but below `upper_bound`.
+    /// Returns None if no key matching these conditions exists.
+    pub async fn prefix_of_first_row_not_matching_prefix(
+        &mut self,
+        prefix: &str,
+        upper_bound: Option<&str>,
+        len: usize,
+    ) -> Result<Option<String>, MySqlError> {
+        let Some(max_key) = self.max_key_with_prefix(prefix, upper_bound).await? else {
+            return Ok(None);
+        };
+        self.prefix_of_first_key_in_range(Some(&max_key), upper_bound, len)
+            .await
+    }
+
+    /// Quick way to grab the maximum key matching the prefix within the given upper bound.
     ///
     /// The query will generally look something like:
     ///
     /// ```sql
-    /// SELECT LEFT(pk_col, /* len */ 3) FROM table
-    /// WHERE pk_col > (
     ///     SELECT pk_col FROM table
-    ///     WHERE pk_col LIKE /* cur% */ 'abc%'  AND pk_col < /* end */ 'ac'
+    ///     WHERE pk_col LIKE /* prefix% */ 'abc%'  AND pk_col < /* upper_bound */ 'ac'
     ///     ORDER BY pk_col DESC
     ///     LIMIT 1
-    /// ) AND pk_col < /* end */ 'ac'
-    /// ORDER BY pk_col
-    /// LIMIT 1
     /// ```
-    ///
-    /// In this case it would likely return something like `abd` or `abe`, but not `aca`. It's
-    /// useful for finding the next prefix of a given length. If the next key is shorter than the given
-    /// length it will return the shorter key. In MySQL shorter keys are ordered before keys with the same
-    /// prefix, and this holds for all collations.
-    pub async fn next_prefix(
+    async fn max_key_with_prefix(
         &mut self,
-        cur: &str,
-        end: Option<&str>,
-        len: usize,
+        prefix: &str,
+        upper_bound: Option<&str>,
     ) -> Result<Option<String>, MySqlError> {
-        // chars().count() counts Unicode code points. The column can use any
-        // character set, but the driver handshakes the connection character
-        // set as utf8mb4, so values reach us converted to UTF-8, and every
-        // MySQL character converts to exactly one code point. The count here
-        // therefore agrees with how LEFT counted characters when it produced
-        // the prefix.
-        if cur.chars().count() < len {
-            // When `cur` has fewer than `len` characters it likely names an exact key, i.e. imagine strings
-            // "a", "aa", "aaa". If we get "a" with depth 2 we want the next key to be "aa". Without this block,
-            // we'd skip past all of these strings because they match the prefix "a".
-            let (clause, mut params) = self.range_filter(cur, false, end);
-            let sql = format!(
-                "SELECT LEFT({col}, ?) FROM {table} WHERE {clause} ORDER BY {col} LIMIT 1",
-                col = self.col,
-                table = self.table,
-            );
-            params.insert(0, u64::cast_from(len).into());
-            return self.query_string(sql, params).await;
-        }
         let col = &self.col;
         let table = &self.table;
-        let mut sql = format!(
-            "SELECT LEFT({col}, ?) FROM {table} \
-             WHERE {col} > (SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}'"
-        );
-        let mut params: Vec<Value> =
-            vec![u64::cast_from(len).into(), like_prefix_pattern(cur).into()];
-        self.less_than_end(&mut sql, &mut params, end);
-        sql.push_str(&format!(" ORDER BY {col} DESC LIMIT 1)"));
-        self.less_than_end(&mut sql, &mut params, end);
-        sql.push_str(&format!(" ORDER BY {col} LIMIT 1"));
+        let mut sql =
+            format!("SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}'");
+        let mut params: Vec<Value> = vec![like_prefix_pattern(prefix).into()];
+        self.less_than_end(&mut sql, &mut params, upper_bound);
+        sql.push_str(&format!(" ORDER BY {col} DESC LIMIT 1"));
         self.query_string(sql, params).await
     }
 
+    /// WHERE clause and params selecting keys in `(lower_bound_exclusive, upper_bound)`.
+    /// Both bounds are optional, an unbounded side falls away and a fully
+    /// unbounded filter becomes `TRUE`.
     fn range_filter(
         &self,
-        start: &str,
-        inclusive: bool,
-        end: Option<&str>,
+        lower_bound_exclusive: Option<&str>,
+        upper_bound: Option<&str>,
     ) -> (String, Vec<Value>) {
         let col = &self.col;
-        let op = if inclusive { ">=" } else { ">" };
-        let mut clause = format!("{col} {op} ?");
-        let mut params: Vec<Value> = vec![start.into()];
-        self.less_than_end(&mut clause, &mut params, end);
-        (clause, params)
+        let mut conditions = Vec::new();
+        let mut params: Vec<Value> = Vec::new();
+        if let Some(lower) = lower_bound_exclusive {
+            conditions.push(format!("{col} > ?"));
+            params.push(lower.into());
+        }
+        if let Some(upper) = upper_bound {
+            conditions.push(format!("{col} < ?"));
+            params.push(upper.into());
+        }
+        if conditions.is_empty() {
+            ("TRUE".to_string(), params)
+        } else {
+            (conditions.join(" AND "), params)
+        }
     }
 
     fn less_than_end(&self, sql: &mut String, params: &mut Vec<Value>, end: Option<&str>) {
@@ -199,13 +194,12 @@ fn like_prefix_pattern(prefix: &str) -> String {
     pattern
 }
 
-pub async fn explain_row_estimate<Q, P>(
-    conn: &mut Q,
+async fn explain_row_estimate<P>(
+    conn: &mut mysql_async::Conn,
     select: &str,
     params: P,
 ) -> Result<Option<u64>, MySqlError>
 where
-    Q: Queryable,
     P: Into<Params> + Send,
 {
     let plan: Option<mysql_async::Row> = conn
@@ -255,15 +249,15 @@ mod tests {
         assert_eq!(next(p, "aa", Some("b"), 2).await, some("ab"));
         assert_eq!(next(p, "ab", Some("b"), 2).await, None);
 
-        // The key "b" is shorter than the prefix length, so the walk steps
-        // past it as an exact key: bb becomes its own prefix, which then
-        // subsumes bbb.
-        assert_eq!(first(p, "b", Some("c"), 2).await, some("b"));
-        assert_eq!(next(p, "b", Some("c"), 2).await, some("bb"));
+        // Bounds are exclusive: the exact key "b" is skipped as a split
+        // point, and its extensions surface as their own prefixes.
+        assert_eq!(first(p, "b", Some("c"), 2).await, some("bb"));
         assert_eq!(next(p, "bb", Some("c"), 2).await, None);
+        // The anchor for "b" covers every key matching 'b%', so the walk
+        // reports no further prefix inside this range.
+        assert_eq!(next(p, "b", Some("c"), 2).await, None);
 
-        assert_eq!(first(p, "c", None, 2).await, some("c"));
-        assert_eq!(next(p, "c", None, 2).await, None);
+        assert_eq!(first(p, "c", None, 2).await, None);
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -364,30 +358,32 @@ mod tests {
         Ok(())
     }
 
-    /// [`KeyProber::first_prefix`], unwrapped so assertions stay one-liners.
+    /// [`KeyProber::prefix_of_first_key_in_range`], unwrapped so assertions
+    /// stay one-liners.
     async fn first(
-        prober: &mut KeyProber<'_, mysql_async::Conn>,
-        start: &str,
-        end: Option<&str>,
+        prober: &mut KeyProber<'_>,
+        lower_bound_exclusive: &str,
+        upper_bound: Option<&str>,
         len: usize,
     ) -> Option<String> {
         prober
-            .first_prefix(start, end, len)
+            .prefix_of_first_key_in_range(Some(lower_bound_exclusive), upper_bound, len)
             .await
-            .expect("first_prefix failed")
+            .expect("prefix_of_first_key_in_range failed")
     }
 
-    /// [`KeyProber::next_prefix`], unwrapped so assertions stay one-liners.
+    /// [`KeyProber::prefix_of_first_row_not_matching_prefix`], unwrapped so
+    /// assertions stay one-liners.
     async fn next(
-        prober: &mut KeyProber<'_, mysql_async::Conn>,
+        prober: &mut KeyProber<'_>,
         cur: &str,
         end: Option<&str>,
         len: usize,
     ) -> Option<String> {
         prober
-            .next_prefix(cur, end, len)
+            .prefix_of_first_row_not_matching_prefix(cur, end, len)
             .await
-            .expect("next_prefix failed")
+            .expect("prefix_of_first_row_not_matching_prefix failed")
     }
 
     /// `Some` for comparing against [`first`]/[`next`] results without
