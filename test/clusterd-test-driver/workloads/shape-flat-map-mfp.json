@@ -1,203 +1,155 @@
 {
-  "name": "gen-00005ef5",
-  "seed": 24309,
+  "name": "shape-flat-map-mfp",
+  "seed": null,
   "inputs": [
     {
       "schema": [
-        "int32"
+        "int64"
       ],
       "batches": [
         {
           "updates": [
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             }
@@ -207,193 +159,293 @@
           "updates": [
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": -1
+            }
+          ]
+        },
+        {
+          "updates": [
+            {
+              "values": [
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             }
@@ -403,391 +455,147 @@
           "updates": [
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
             },
             {
               "values": [
-                {
-                  "int32": -1466888827
-                }
+                "null"
               ],
               "diff": 1
-            }
-          ]
-        },
-        {
-          "updates": [
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "int32": -1466888827
-                }
-              ],
-              "diff": -1
             }
           ]
         }
@@ -795,120 +603,119 @@
     }
   ],
   "plan": {
-    "Reduce": {
+    "Filter": {
       "input": {
-        "Get": {
-          "id": {
-            "Global": {
-              "User": 100
-            }
-          },
-          "typ": {
-            "column_types": [
-              {
-                "scalar_type": "Int32",
-                "nullable": true
-              }
-            ],
-            "keys": []
-          },
-          "access_strategy": "UnknownOrLocal"
-        }
-      },
-      "group_key": [],
-      "aggregates": [
-        {
-          "func": "MaxInt64",
-          "expr": {
-            "If": {
-              "cond": {
-                "Literal": [
-                  {
-                    "Ok": {
-                      "data": [
-                        1
-                      ]
-                    }
-                  },
-                  {
-                    "scalar_type": "Bool",
-                    "nullable": false
-                  }
-                ]
-              },
-              "then": {
-                "CallBinary": {
-                  "func": {
-                    "SubInt64": null
-                  },
-                  "expr1": {
-                    "Literal": [
-                      {
-                        "Err": "DivisionByZero"
-                      },
-                      {
-                        "scalar_type": "Int64",
-                        "nullable": false
-                      }
-                    ]
-                  },
-                  "expr2": {
-                    "Literal": [
-                      {
-                        "Ok": {
-                          "data": [
-                            0
-                          ]
-                        }
-                      },
-                      {
-                        "scalar_type": "Int64",
-                        "nullable": true
-                      }
-                    ]
-                  }
+        "FlatMap": {
+          "input": {
+            "Get": {
+              "id": {
+                "Global": {
+                  "User": 100
                 }
               },
-              "els": {
-                "Literal": [
-                  {
-                    "Err": "DivisionByZero"
-                  },
+              "typ": {
+                "column_types": [
                   {
                     "scalar_type": "Int64",
-                    "nullable": false
+                    "nullable": true
                   }
-                ]
-              }
-            }
-          },
-          "distinct": false
-        },
-        {
-          "func": "Any",
-          "expr": {
-            "CallUnary": {
-              "func": {
-                "CastInt32ToBool": null
+                ],
+                "keys": []
               },
-              "expr": {
-                "Literal": [
-                  {
-                    "Err": "DivisionByZero"
-                  },
-                  {
-                    "scalar_type": "Int32",
-                    "nullable": false
-                  }
-                ]
-              }
+              "access_strategy": "UnknownOrLocal"
             }
           },
-          "distinct": false
+          "func": "GenerateSeriesInt64",
+          "exprs": [
+            {
+              "Literal": [
+                {
+                  "Ok": {
+                    "data": [
+                      50,
+                      1
+                    ]
+                  }
+                },
+                {
+                  "scalar_type": "Int64",
+                  "nullable": false
+                }
+              ]
+            },
+            {
+              "Literal": [
+                {
+                  "Ok": {
+                    "data": [
+                      50,
+                      4
+                    ]
+                  }
+                },
+                {
+                  "scalar_type": "Int64",
+                  "nullable": false
+                }
+              ]
+            },
+            {
+              "Literal": [
+                {
+                  "Ok": {
+                    "data": [
+                      50,
+                      1
+                    ]
+                  }
+                },
+                {
+                  "scalar_type": "Int64",
+                  "nullable": false
+                }
+              ]
+            }
+          ]
         }
-      ],
-      "monotonic": false,
-      "expected_group_size": null
+      },
+      "predicates": [
+        {
+          "CallUnary": {
+            "func": {
+              "Not": null
+            },
+            "expr": {
+              "CallBinary": {
+                "func": {
+                  "Eq": null
+                },
+                "expr1": {
+                  "Column": [
+                    1,
+                    null
+                  ]
+                },
+                "expr2": {
+                  "Literal": [
+                    {
+                      "Ok": {
+                        "data": [
+                          50,
+                          2
+                        ]
+                      }
+                    },
+                    {
+                      "scalar_type": "Int64",
+                      "nullable": false
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "exports": [
@@ -1285,26 +1092,9 @@
       }
     },
     {
-      "get": {
-        "kind": "arrangement-scan"
-      }
-    },
-    {
-      "get": {
-        "kind": "collection"
-      }
-    },
-    {
-      "join": {
-        "kind": "linear",
-        "inputs": 2
-      }
-    },
-    {
-      "reduce": {
-        "kind": "distinct",
-        "strategy": "direct",
-        "mfp_after": false
+      "flat-map": {
+        "input": "stream",
+        "mfp_after": true
       }
     },
     {
@@ -1313,8 +1103,7 @@
         "strategy": "direct",
         "input": "stream"
       }
-    },
-    "let"
+    }
   ],
   "oracles": [
     "export-invariance",
@@ -1322,5 +1111,5 @@
     "strategy-invariance",
     "fold-constants"
   ],
-  "optimize": true
+  "optimize": false
 }

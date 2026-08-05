@@ -20,6 +20,7 @@ pub mod persist_host;
 pub mod responses;
 pub mod runner;
 pub mod script;
+pub mod shapes;
 pub mod surface;
 pub mod target;
 pub mod text;

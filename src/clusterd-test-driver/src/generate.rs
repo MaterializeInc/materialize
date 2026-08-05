@@ -240,7 +240,7 @@ fn draw_candidate(
 
     let inputs: Vec<InputSpec> = inputs
         .iter()
-        .map(|input| into_input_spec(input, seed))
+        .map(|input| into_input_spec(input, seed, false))
         .collect::<anyhow::Result<_>>()?;
 
     // Export invariance and the incremental check apply to every plan; the fold
@@ -380,14 +380,45 @@ fn desc_from_repr(typ: &mz_repr::ReprRelationType) -> mz_repr::RelationDesc {
     builder.finish()
 }
 
-/// Turn generated rows into timestamped batches, with retractions.
+/// How many timestamped batches an input's rows are spread across.
 ///
-/// The rows are split across two timestamps and a fraction of the first batch is
-/// retracted in the second. Retractions are the point: a single all-positive batch
-/// never reaches the correction, consolidation, or negative-diff paths, which is
-/// where the incremental bugs live. The split is derived from `seed` so it varies
-/// across the corpus while staying reproducible.
-fn into_input_spec(input: &GeneratedInput, seed: u64) -> anyhow::Result<InputSpec> {
+/// Two batches is the minimum that exercises incremental maintenance at all, and
+/// it is not enough: with a single update step, an arrangement never compacts
+/// mid-stream and the correction buffers never see more than one round. Four
+/// gives the maintained collection somewhere to go wrong between the first update
+/// and the assertion.
+pub const BATCHES_PER_INPUT: usize = 4;
+
+/// How many times each generated row is repeated across the batches.
+///
+/// The generator draws 0-4 distinct rows, which is the right size for finding
+/// logic bugs and far too small for anything volume-sensitive: the spilling
+/// batcher never spills, dictionary compression has nothing to compress, and the
+/// peek stash never fills. Repeating rows raises the update count without
+/// widening the value space, so results stay small enough to compare exactly
+/// while the operators see real batches.
+///
+/// Deliberately modest. This is a correctness suite that runs a large
+/// configuration matrix, so per-workload cost multiplies by 8; genuinely large
+/// data belongs in a load-oriented test rather than here.
+pub const ROW_REPEATS: usize = 24;
+
+/// Turn generated rows into timestamped batches.
+///
+/// Rows are spread across [`BATCHES_PER_INPUT`] timestamps, each repeated
+/// [`ROW_REPEATS`] times, and (unless `append_only`) a share of them is retracted
+/// in later batches. Retractions are the point of the later batches: an
+/// all-positive sequence never reaches the correction, consolidation, or
+/// negative-diff paths, which is where incremental bugs live.
+///
+/// `append_only` exists for the monotonic shapes. A monotonic operator over a
+/// retracting collection is incorrect, so declaring one requires insert-only
+/// input; see [`crate::shapes`].
+fn into_input_spec(
+    input: &GeneratedInput,
+    seed: u64,
+    append_only: bool,
+) -> anyhow::Result<InputSpec> {
     let schema: Vec<ColumnTy> = input.schema.iter().copied().map(ColumnTy::from).collect();
 
     let to_update = |row: &Vec<Datum<'static>>, diff: i64| -> anyhow::Result<Update> {
@@ -400,93 +431,111 @@ fn into_input_spec(input: &GeneratedInput, seed: u64) -> anyhow::Result<InputSpe
         })
     };
 
-    // Insert everything at time 0.
-    let first: Vec<Update> = input
-        .rows
-        .iter()
-        .map(|r| to_update(r, 1))
-        .collect::<anyhow::Result<_>>()?;
-
-    // At time 1, retract every k-th row and re-insert the rest with an extra
-    // copy, so the second batch carries both signs.
-    let mut second = Vec::new();
-    for (i, row) in input.rows.iter().enumerate() {
-        let retract = (seed as usize + i) % 3 == 0;
-        second.push(to_update(row, if retract { -1 } else { 1 })?);
+    let mut batches = Vec::with_capacity(BATCHES_PER_INPUT);
+    for batch in 0..BATCHES_PER_INPUT {
+        let mut updates = Vec::new();
+        for (i, row) in input.rows.iter().enumerate() {
+            // Retract a rotating third of the rows in every batch after the
+            // first. The rotation is derived from the seed so it varies across
+            // the corpus while staying reproducible, and skipping the first batch
+            // means there is always something present to retract.
+            let retract = !append_only && batch > 0 && (seed as usize + i + batch) % 3 == 0;
+            let diff = if retract { -1 } else { 1 };
+            for _ in 0..ROW_REPEATS {
+                updates.push(to_update(row, diff)?);
+            }
+        }
+        batches.push(Batch { updates });
     }
 
-    Ok(InputSpec {
-        schema,
-        batches: vec![Batch { updates: first }, Batch { updates: second }],
-    })
+    Ok(InputSpec { schema, batches })
 }
 
-/// A surface cell the shared MIR generator provably cannot reach, and why.
+/// Surface cells the corpus does not reach, as a matchable cell-name prefix and
+/// the reason.
 ///
-/// This list is the honest half of the coverage report. A generated suite that
-/// only reports what it covered is indistinguishable from one that covered
-/// everything, so the gaps are enumerated here with their cause. Each entry is a
-/// claim about *why* random MIR cannot produce the cell, which makes it reviewable
-/// and gives whoever closes the gap a starting point.
+/// This is the honest half of the coverage report. A suite that reports only what
+/// it covered reads exactly like one that covered everything, so the gaps are
+/// enumerated with their causes.
 ///
-/// The overwhelming reason is that [`mz_transform::mirgen::gen_rel`] is shared
-/// with the `mz-transform` fuzz targets, and its draw sequence is load-bearing:
-/// the release-qualification corpus is carried between runs and is keyed to how
-/// many bytes each draw consumes. Adding an operator arm to `gen_rel` would remap
-/// every stored corpus entry to a different plan. So these gaps are closed by
-/// adding targeted plan shapes *here*, alongside the random draws, not by widening
-/// the shared generator.
+/// The prefixes are matched against realized cell names by
+/// `known_gaps_are_still_gaps`, which fails if any entry is actually covered. That
+/// matters more than it looks: as `shapes` closes gaps, a hand-maintained list
+/// silently becomes a list of lies, and a stale gap list is worse than none
+/// because it argues against work already done.
 pub const KNOWN_GAPS: &[(&str, &str)] = &[
     (
-        "Constant/Error",
-        "gen_scalar emits error literals inside expressions, but gen_rel never \
-         roots a collection at an error Constant",
-    ),
-    (
         "Get/ArrangementLookup",
-        "needs literal constraints over an imported index key; gen_rel imports \
-         nothing and its Gets carry no key",
+        "needs literal constraints over an imported index key. The workload format \
+         has no index imports: every input is a persist source, so no Get carries \
+         a key to seek into",
     ),
     (
-        "Mfp/Temporal/*",
-        "needs an mz_now() predicate; gen_scalar has no unmaterializable functions",
+        "Mfp/Plain/Lookup",
+        "same as Get/ArrangementLookup, no keyed input to seek into",
     ),
     (
-        "Mfp/*/Lookup",
-        "same as Get/ArrangementLookup: no keyed input to seek into",
+        "Mfp/Temporal",
+        "needs an mz_now() predicate. gen_scalar has no unmaterializable functions, \
+         and adding one makes the result depend on wall-clock time, which breaks \
+         the export-invariance and strategy-invariance oracles unless the workload \
+         pins mz_now through the dataflow's `until`",
     ),
     (
-        "FlatMap/*",
-        "gen_rel has no FlatMap arm, so no table function is ever planned",
+        "Reduce/BasicSingle",
+        "needs a non-accumulable, non-hierarchical aggregate. Every Basic aggregate \
+         (jsonb_agg, string_agg, the window functions) takes jsonb, text, or a \
+         record argument, and the workload format's column types are int4/int8/bool",
     ),
     (
-        "Reduce/Monotonic*, TopK/Monotonic*",
-        "needs a monotonic input; gen_rel marks every leaf non-monotonic and \
-         nothing in the plan establishes monotonicity",
+        "Reduce/BasicMultiple",
+        "as Reduce/BasicSingle: no Basic aggregate is expressible over the \
+         supported column types",
     ),
     (
-        "Reduce/BasicSingle, Reduce/BasicMultiple",
-        "needs a non-accumulable, non-hierarchical aggregate (jsonb_agg, \
-         string_agg); gen_aggregate's set is all accumulable or hierarchical",
+        "Reduce/MonotonicConsolidating",
+        "the consolidating variant of a monotonic hierarchical reduce. Lowering \
+         sets must_consolidate from its own analysis, and the monotonic shape does \
+         not land on the branch that asks for it",
     ),
     (
-        "*/Bucketed (ArrangementStrategy::TemporalBucketing)",
-        "lowering only chooses it for plans with mz_now() temporal filters, which \
-         gen_scalar cannot express",
+        "TopK/MonotonicTopK/",
+        "the unlimited monotonic Top-K. A TopK with no limit and a monotonic input \
+         is not a shape SQL produces, since LIMIT is what creates a TopK",
+    ),
+    (
+        "FlatMap/Arranged",
+        "needs a table function reading an arrangement rather than a stream, which \
+         requires an index import (see Get/ArrangementLookup)",
+    ),
+    (
+        "FlatMap/Lookup",
+        "as FlatMap/Arranged, plus a literal constraint to seek with",
     ),
     (
         "ArrangeBy/Several",
-        "needs one collection arranged by several keys at once, which the \
-         optimizer forms for a join over multiple keys; not reached by the drawn \
-         join shapes",
+        "needs one collection carrying several arrangements at once. The multi-key \
+         join shape asks for it, but the optimizer decides the arrangements and \
+         currently plans that join without it",
     ),
     (
-        "LetRec/*",
-        "gen_rel has no LetRec arm, so no recursive binding is ever planned. Note \
-         this is also where the fold oracle goes blind, so these cells need the \
-         incremental oracle instead",
+        "Bucketed",
+        "every ArrangementStrategy::TemporalBucketing cell, across Reduce, TopK, \
+         Union, and ArrangeBy. Lowering picks it only for a plan carrying \
+         future-stamped updates, which means mz_now(); see Mfp/Temporal",
     ),
 ];
+
+/// Whether `cell` is covered by one of the [`KNOWN_GAPS`] prefixes.
+fn matches_gap(cell: &str, prefix: &str) -> bool {
+    // `Bucketed` appears mid-name (`Reduce/Bucketed/...` is a different thing:
+    // the bucketed *hierarchical* reduce, not temporal bucketing), so match the
+    // strategy position rather than a bare substring.
+    if prefix == "Bucketed" {
+        return cell.contains("/Bucketed/") && !cell.starts_with("Reduce/Bucketed");
+    }
+    cell.starts_with(prefix)
+}
 
 /// The outcome of a corpus generation run.
 #[derive(Debug)]
@@ -497,6 +546,83 @@ pub struct Corpus {
     pub covered: BTreeSet<SurfaceCell>,
     /// How many candidates were drawn to get here, including the discarded ones.
     pub drawn: usize,
+}
+
+/// Build the workload for a targeted shape.
+///
+/// Mirrors `draw_candidate`'s assembly, but over a written-out plan and its
+/// declared input schemas rather than a drawn one. The oracle selection is the
+/// same logic: fold when the plan reaches a verdict, which a `LetRec` shape will
+/// not, leaving it the export-invariance and incremental checks.
+fn shape_workload(
+    shape: &crate::shapes::Shape,
+    configs: &[NamedConfig],
+) -> anyhow::Result<Option<(Workload, BTreeSet<SurfaceCell>)>> {
+    use crate::shapes::ShapeInputs;
+
+    let append_only = shape.input_mode == ShapeInputs::AppendOnly;
+    // Deterministic per shape, so the corpus is reproducible: seed the row values
+    // off the shape's name rather than a counter, which would shift every shape's
+    // data when one is added.
+    let seed = shape.name.bytes().fold(0u64, |acc, b| {
+        acc.wrapping_mul(31).wrapping_add(u64::from(b))
+    });
+
+    let inputs: Vec<InputSpec> = shape
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, schema)| {
+            let mut entropy = SeededEntropy::new(seed.wrapping_add(i as u64));
+            let rows = mirgen::gen_rows(&mut entropy, schema).expect("seeded entropy never fails");
+            let generated = GeneratedInput {
+                schema: schema.clone(),
+                rows,
+            };
+            into_input_spec(&generated, seed, append_only)
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    let mut oracles = vec![Oracle::ExportInvariance, Oracle::Incremental];
+    if configs.len() > 1 {
+        oracles.push(Oracle::StrategyInvariance);
+    }
+
+    let mut workload = Workload {
+        name: shape.name.to_string(),
+        seed: None,
+        inputs,
+        plan: shape.plan.clone(),
+        exports: vec![
+            WorkloadExport::Index,
+            WorkloadExport::MaterializedView,
+            WorkloadExport::Subscribe,
+        ],
+        configs: configs.to_vec(),
+        claims: BTreeSet::new(),
+        oracles,
+        optimize: shape.optimize,
+    };
+
+    let Some(cells) = realized_cells(&workload)? else {
+        // A shape that does not lower is a defect in the shape, not a draw to
+        // skip, so say so rather than dropping it silently.
+        anyhow::bail!(
+            "shape {:?} does not lower; it targets {} but cannot be rendered",
+            shape.name,
+            shape.targets
+        );
+    };
+    workload.claims = cells.clone();
+
+    let reference = workload.plan_with_constants(workload.assert_ts())?;
+    match mz_transform::mirgen::fold_outcome(reference) {
+        mirgen::FoldOutcome::Rows(_) | mirgen::FoldOutcome::Error(_) => {
+            workload.oracles.push(Oracle::FoldConstants)
+        }
+        mirgen::FoldOutcome::Unfoldable => {}
+    }
+    Ok(Some((workload, cells)))
 }
 
 /// Generate a corpus by greedy set cover over the surface.
@@ -520,6 +646,17 @@ pub fn generate(
     let mut covered: BTreeSet<SurfaceCell> = BTreeSet::new();
     let mut since_progress = 0usize;
     let mut drawn = 0usize;
+
+    // The targeted shapes come first and are always kept. They exist precisely
+    // because random draws do not reach their cells, so subjecting them to the
+    // set-cover filter would be circular: whether they are kept must not depend
+    // on what the draws happen to find.
+    for shape in crate::shapes::all() {
+        let (workload, cells) = shape_workload(&shape, configs)?
+            .ok_or_else(|| anyhow::anyhow!("shape {:?} produced no workload", shape.name))?;
+        covered.extend(cells);
+        workloads.push(workload);
+    }
 
     for i in 0..max_draws {
         let seed = start_seed.wrapping_add(u64::try_from(i).expect("draw index fits u64"));
@@ -569,9 +706,17 @@ pub fn coverage_report(corpus: &Corpus) -> String {
     for cell in &corpus.covered {
         out.push_str(&format!("  {cell}\n"));
     }
-    out.push_str("\nknown gaps (cells random MIR cannot reach, with cause):\n");
+    out.push_str("\nknown gaps (cells the corpus does not reach, with cause):\n");
     for (cell, why) in KNOWN_GAPS {
-        out.push_str(&format!("  {cell}\n      {why}\n"));
+        // A gap the corpus actually covers would make this report misleading.
+        // `known_gaps_are_still_gaps` fails the build on it; say so here too, so a
+        // report generated from a stale list cannot be read as authoritative.
+        let stale = corpus
+            .covered
+            .iter()
+            .any(|c| matches_gap(&c.to_string(), cell));
+        let mark = if stale { "  [STALE: now covered]" } else { "" };
+        out.push_str(&format!("  {cell}{mark}\n      {why}\n"));
     }
     out
 }
@@ -801,6 +946,33 @@ mod corpus_tests {
             checked > 0,
             "no committed workloads were checked; a vacuous pass here would hide an \
              empty or misplaced corpus"
+        );
+    }
+
+    /// No `KNOWN_GAPS` entry may name a cell the corpus actually covers.
+    ///
+    /// The gap list is the suite's own account of what it does not test, and it
+    /// is hand-maintained. As `shapes` closes gaps, an unrevised entry turns the
+    /// coverage report into a list of lies, arguing against work already done.
+    /// Failing here is what keeps the report worth reading.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
+    fn known_gaps_are_still_gaps() {
+        let configs = pairwise_configs(STRATEGY_FLAGS);
+        let corpus = generate(0x5EED, 6000, 1500, &configs).expect("generate");
+        let covered: Vec<String> = corpus.covered.iter().map(|c| c.to_string()).collect();
+
+        let mut stale = Vec::new();
+        for (prefix, _) in KNOWN_GAPS {
+            let hits: Vec<&String> = covered.iter().filter(|c| matches_gap(c, prefix)).collect();
+            if !hits.is_empty() {
+                stale.push(format!("{prefix} is covered by {hits:?}"));
+            }
+        }
+        assert!(
+            stale.is_empty(),
+            "KNOWN_GAPS lists cells the corpus now covers; remove them:\n{}",
+            stale.join("\n")
         );
     }
 }

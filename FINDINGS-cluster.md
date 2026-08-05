@@ -209,5 +209,7 @@ the renderer wraps an `EvalError` in a `DataflowError` and the two spellings can
 legitimately differ. All 16 corpus workloads now carry the fold oracle, up from
 15.
 
-The remaining gaps are the nine surface cells random MIR cannot reach, listed with
-causes in `KNOWN_GAPS` in `src/clusterd-test-driver/src/generate.rs`.
+The remaining gaps are listed with causes in `KNOWN_GAPS` in
+`src/clusterd-test-driver/src/generate.rs`, and a test fails the build if any of
+them names a cell the corpus actually covers, so the list cannot rot into a set of
+lies as `shapes` closes gaps.

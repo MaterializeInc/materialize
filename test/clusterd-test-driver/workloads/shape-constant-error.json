@@ -1,354 +1,21 @@
 {
-  "name": "gen-00005f0b",
-  "seed": 24331,
-  "inputs": [
-    {
-      "schema": [
-        "bool",
-        "int64",
-        "bool"
-      ],
-      "batches": [
-        {
-          "updates": [
-            {
-              "values": [
-                "null",
-                {
-                  "int64": "6226111016050496784"
-                },
-                {
-                  "bool": true
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                "null",
-                {
-                  "int64": "-1260147052778882982"
-                },
-                {
-                  "bool": true
-                }
-              ],
-              "diff": 1
-            }
-          ]
-        },
-        {
-          "updates": [
-            {
-              "values": [
-                "null",
-                {
-                  "int64": "6226111016050496784"
-                },
-                {
-                  "bool": true
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                "null",
-                {
-                  "int64": "-1260147052778882982"
-                },
-                {
-                  "bool": true
-                }
-              ],
-              "diff": 1
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "schema": [
-        "bool"
-      ],
-      "batches": [
-        {
-          "updates": [
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            }
-          ]
-        },
-        {
-          "updates": [
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "schema": [
-        "bool"
-      ],
-      "batches": [
-        {
-          "updates": [
-            {
-              "values": [
-                {
-                  "bool": true
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                "null"
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            }
-          ]
-        },
-        {
-          "updates": [
-            {
-              "values": [
-                {
-                  "bool": true
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                "null"
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            }
-          ]
-        }
-      ]
-    }
-  ],
+  "name": "shape-constant-error",
+  "seed": null,
+  "inputs": [],
   "plan": {
-    "Map": {
-      "input": {
-        "Join": {
-          "inputs": [
-            {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 100
-                  }
-                },
-                "typ": {
-                  "column_types": [
-                    {
-                      "scalar_type": "Bool",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Int64",
-                      "nullable": true
-                    },
-                    {
-                      "scalar_type": "Bool",
-                      "nullable": true
-                    }
-                  ],
-                  "keys": []
-                },
-                "access_strategy": "UnknownOrLocal"
-              }
-            },
-            {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 101
-                  }
-                },
-                "typ": {
-                  "column_types": [
-                    {
-                      "scalar_type": "Bool",
-                      "nullable": true
-                    }
-                  ],
-                  "keys": []
-                },
-                "access_strategy": "UnknownOrLocal"
-              }
-            },
-            {
-              "Threshold": {
-                "input": {
-                  "Negate": {
-                    "input": {
-                      "Get": {
-                        "id": {
-                          "Global": {
-                            "User": 102
-                          }
-                        },
-                        "typ": {
-                          "column_types": [
-                            {
-                              "scalar_type": "Bool",
-                              "nullable": true
-                            }
-                          ],
-                          "keys": []
-                        },
-                        "access_strategy": "UnknownOrLocal"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          ],
-          "equivalences": [
-            [
-              {
-                "Column": [
-                  2,
-                  null
-                ]
-              },
-              {
-                "Column": [
-                  4,
-                  null
-                ]
-              }
-            ]
-          ],
-          "implementation": "Unimplemented"
-        }
+    "Constant": {
+      "rows": {
+        "Err": "DivisionByZero"
       },
-      "scalars": [
-        {
-          "CallBinary": {
-            "func": {
-              "ModInt32": null
-            },
-            "expr1": {
-              "Literal": [
-                {
-                  "Err": "DivisionByZero"
-                },
-                {
-                  "scalar_type": "Int32",
-                  "nullable": false
-                }
-              ]
-            },
-            "expr2": {
-              "CallBinary": {
-                "func": {
-                  "ModInt32": null
-                },
-                "expr1": {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          0
-                        ]
-                      }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": true
-                    }
-                  ]
-                },
-                "expr2": {
-                  "Literal": [
-                    {
-                      "Ok": {
-                        "data": [
-                          65,
-                          140,
-                          110,
-                          201,
-                          223
-                        ]
-                      }
-                    },
-                    {
-                      "scalar_type": "Int32",
-                      "nullable": false
-                    }
-                  ]
-                }
-              }
-            }
+      "typ": {
+        "column_types": [
+          {
+            "scalar_type": "Int64",
+            "nullable": true
           }
-        }
-      ]
+        ],
+        "keys": []
+      }
     }
   },
   "exports": [
@@ -720,28 +387,18 @@
   ],
   "claims": [
     {
+      "constant": {
+        "error": true
+      }
+    },
+    {
       "get": {
         "kind": "pass-raw"
       }
     },
     {
-      "join": {
-        "kind": "linear",
-        "inputs": 3
-      }
-    },
-    "negate",
-    "threshold",
-    {
       "arrange-by": {
         "forms": "empty-key",
-        "strategy": "direct",
-        "input": "stream"
-      }
-    },
-    {
-      "arrange-by": {
-        "forms": "one",
         "strategy": "direct",
         "input": "stream"
       }
@@ -753,5 +410,5 @@
     "strategy-invariance",
     "fold-constants"
   ],
-  "optimize": true
+  "optimize": false
 }

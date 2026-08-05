@@ -1,172 +1,114 @@
 {
-  "name": "gen-00005f0c",
-  "seed": 24332,
+  "name": "shape-letrec-return-at",
+  "seed": null,
   "inputs": [
     {
       "schema": [
-        "bool"
+        "int64"
       ],
       "batches": [
         {
-          "updates": [
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                "null"
-              ],
-              "diff": 1
-            }
-          ]
+          "updates": []
         },
         {
-          "updates": [
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                "null"
-              ],
-              "diff": 1
-            }
-          ]
+          "updates": []
+        },
+        {
+          "updates": []
+        },
+        {
+          "updates": []
         }
       ]
     }
   ],
   "plan": {
-    "Reduce": {
-      "input": {
-        "Union": {
-          "base": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 100
-                }
-              },
-              "typ": {
-                "column_types": [
-                  {
-                    "scalar_type": "Bool",
-                    "nullable": true
-                  }
-                ],
-                "keys": []
-              },
-              "access_strategy": "UnknownOrLocal"
-            }
-          },
-          "inputs": [
-            {
-              "Get": {
-                "id": {
-                  "Global": {
-                    "User": 100
-                  }
-                },
-                "typ": {
-                  "column_types": [
-                    {
-                      "scalar_type": "Bool",
-                      "nullable": true
-                    }
-                  ],
-                  "keys": []
-                },
-                "access_strategy": "UnknownOrLocal"
-              }
-            },
-            {
-              "Negate": {
-                "input": {
-                  "Union": {
-                    "base": {
-                      "Get": {
-                        "id": {
-                          "Global": {
-                            "User": 100
-                          }
-                        },
-                        "typ": {
-                          "column_types": [
-                            {
-                              "scalar_type": "Bool",
-                              "nullable": true
-                            }
-                          ],
-                          "keys": []
-                        },
-                        "access_strategy": "UnknownOrLocal"
+    "LetRec": {
+      "ids": [
+        0
+      ],
+      "values": [
+        {
+          "Reduce": {
+            "input": {
+              "Union": {
+                "base": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 100
                       }
                     },
-                    "inputs": [
-                      {
-                        "Get": {
-                          "id": {
-                            "Global": {
-                              "User": 100
-                            }
-                          },
-                          "typ": {
-                            "column_types": [
-                              {
-                                "scalar_type": "Bool",
-                                "nullable": true
-                              }
-                            ],
-                            "keys": []
-                          },
-                          "access_strategy": "UnknownOrLocal"
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int64",
+                          "nullable": true
                         }
-                      }
-                    ]
+                      ],
+                      "keys": []
+                    },
+                    "access_strategy": "UnknownOrLocal"
                   }
-                }
+                },
+                "inputs": [
+                  {
+                    "Get": {
+                      "id": {
+                        "Local": 0
+                      },
+                      "typ": {
+                        "column_types": [
+                          {
+                            "scalar_type": "Int64",
+                            "nullable": true
+                          }
+                        ],
+                        "keys": []
+                      },
+                      "access_strategy": "UnknownOrLocal"
+                    }
+                  }
+                ]
               }
-            }
-          ]
-        }
-      },
-      "group_key": [
-        {
-          "Column": [
-            0,
-            null
-          ]
+            },
+            "group_key": [
+              {
+                "Column": [
+                  0,
+                  null
+                ]
+              }
+            ],
+            "aggregates": [],
+            "monotonic": false,
+            "expected_group_size": null
+          }
         }
       ],
-      "aggregates": [],
-      "monotonic": false,
-      "expected_group_size": null
+      "limits": [
+        {
+          "max_iters": 100,
+          "return_at_limit": true
+        }
+      ],
+      "body": {
+        "Get": {
+          "id": {
+            "Local": 0
+          },
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "Int64",
+                "nullable": true
+              }
+            ],
+            "keys": []
+          },
+          "access_strategy": "UnknownOrLocal"
+        }
+      }
     }
   },
   "exports": [
@@ -543,18 +485,12 @@
       }
     },
     {
-      "get": {
-        "kind": "pass-arranged"
-      }
-    },
-    {
       "reduce": {
         "kind": "distinct",
         "strategy": "direct",
         "mfp_after": false
       }
     },
-    "negate",
     {
       "union": {
         "consolidate": false,
@@ -562,24 +498,29 @@
       }
     },
     {
-      "union": {
-        "consolidate": true,
-        "bucketed": false
+      "arrange-by": {
+        "forms": "raw-only",
+        "strategy": "direct",
+        "input": "arranged"
       }
     },
     {
       "arrange-by": {
         "forms": "empty-key",
         "strategy": "direct",
-        "input": "arranged"
+        "input": "stream"
+      }
+    },
+    {
+      "let-rec": {
+        "limit": "limited-return-at"
       }
     }
   ],
   "oracles": [
     "export-invariance",
     "incremental",
-    "strategy-invariance",
-    "fold-constants"
+    "strategy-invariance"
   ],
   "optimize": false
 }

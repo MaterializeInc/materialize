@@ -1,10 +1,10 @@
 {
-  "name": "gen-00005f04",
-  "seed": 24324,
+  "name": "shape-letrec-limited",
+  "seed": null,
   "inputs": [
     {
       "schema": [
-        "bool"
+        "int64"
       ],
       "batches": [
         {
@@ -12,7 +12,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -20,7 +20,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -28,7 +28,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -36,7 +36,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -44,7 +44,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -52,7 +52,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -60,7 +60,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -68,7 +68,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -76,7 +76,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -84,7 +84,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -92,7 +92,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -100,7 +100,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -108,7 +108,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -116,7 +116,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -124,7 +124,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -132,7 +132,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -140,7 +140,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -148,7 +148,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -156,7 +156,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -164,7 +164,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -172,7 +172,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -180,7 +180,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -188,7 +188,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -196,391 +196,7 @@
             {
               "values": [
                 {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -726,6 +342,390 @@
             {
               "values": [
                 "null"
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
               ],
               "diff": 1
             }
@@ -736,7 +736,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -744,7 +744,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -752,7 +752,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -760,7 +760,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -768,7 +768,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -776,7 +776,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -784,7 +784,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -792,7 +792,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -800,7 +800,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -808,7 +808,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -816,7 +816,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -824,7 +824,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -832,7 +832,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -840,7 +840,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -848,7 +848,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -856,7 +856,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -864,7 +864,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -872,7 +872,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -880,7 +880,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -888,7 +888,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -896,7 +896,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -904,7 +904,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -912,7 +912,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -920,394 +920,10 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
             },
             {
               "values": [
@@ -1450,6 +1066,390 @@
             {
               "values": [
                 "null"
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
               ],
               "diff": 1
             }
@@ -1460,7 +1460,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1468,7 +1468,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1476,7 +1476,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1484,7 +1484,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1492,7 +1492,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1500,7 +1500,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1508,7 +1508,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1516,7 +1516,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1524,7 +1524,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1532,7 +1532,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1540,7 +1540,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1548,7 +1548,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1556,7 +1556,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1564,7 +1564,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1572,7 +1572,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1580,7 +1580,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1588,7 +1588,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1596,7 +1596,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1604,7 +1604,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1612,7 +1612,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1620,7 +1620,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1628,7 +1628,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1636,7 +1636,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -1644,391 +1644,7 @@
             {
               "values": [
                 {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": 1
@@ -2037,143 +1653,527 @@
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": 1
+              "diff": -1
             },
             {
               "values": [
                 "null"
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
               ],
               "diff": 1
             }
@@ -2184,7 +2184,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2192,7 +2192,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2200,7 +2200,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2208,7 +2208,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2216,7 +2216,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2224,7 +2224,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2232,7 +2232,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2240,7 +2240,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2248,7 +2248,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2256,7 +2256,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2264,7 +2264,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2272,7 +2272,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2280,7 +2280,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2288,7 +2288,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2296,7 +2296,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2304,7 +2304,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2312,7 +2312,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2320,7 +2320,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2328,7 +2328,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2336,7 +2336,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2344,7 +2344,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2352,7 +2352,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2360,7 +2360,7 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
               ],
               "diff": -1
@@ -2368,398 +2368,8 @@
             {
               "values": [
                 {
-                  "bool": false
+                  "int64": "4322608411717577165"
                 }
-              ],
-              "diff": -1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                {
-                  "bool": false
-                }
-              ],
-              "diff": 1
-            },
-            {
-              "values": [
-                "null"
               ],
               "diff": -1
             },
@@ -2767,137 +2377,527 @@
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
               ],
-              "diff": -1
+              "diff": 1
             },
             {
               "values": [
                 "null"
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                "null"
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "-1422985321224288530"
+                }
+              ],
+              "diff": 1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
+              ],
+              "diff": -1
+            },
+            {
+              "values": [
+                {
+                  "int64": "1400410980817447748"
+                }
               ],
               "diff": -1
             }
@@ -2907,47 +2907,92 @@
     }
   ],
   "plan": {
-    "TopK": {
-      "input": {
-        "Project": {
-          "input": {
-            "Get": {
-              "id": {
-                "Global": {
-                  "User": 100
-                }
-              },
-              "typ": {
-                "column_types": [
-                  {
-                    "scalar_type": "Bool",
-                    "nullable": true
-                  }
-                ],
-                "keys": []
-              },
-              "access_strategy": "UnknownOrLocal"
-            }
-          },
-          "outputs": [
-            0
-          ]
-        }
-      },
-      "group_key": [
+    "LetRec": {
+      "ids": [
         0
       ],
-      "order_key": [
+      "values": [
         {
-          "column": 0,
-          "desc": false,
-          "nulls_last": true
+          "Reduce": {
+            "input": {
+              "Union": {
+                "base": {
+                  "Get": {
+                    "id": {
+                      "Global": {
+                        "User": 100
+                      }
+                    },
+                    "typ": {
+                      "column_types": [
+                        {
+                          "scalar_type": "Int64",
+                          "nullable": true
+                        }
+                      ],
+                      "keys": []
+                    },
+                    "access_strategy": "UnknownOrLocal"
+                  }
+                },
+                "inputs": [
+                  {
+                    "Get": {
+                      "id": {
+                        "Local": 0
+                      },
+                      "typ": {
+                        "column_types": [
+                          {
+                            "scalar_type": "Int64",
+                            "nullable": true
+                          }
+                        ],
+                        "keys": []
+                      },
+                      "access_strategy": "UnknownOrLocal"
+                    }
+                  }
+                ]
+              }
+            },
+            "group_key": [
+              {
+                "Column": [
+                  0,
+                  null
+                ]
+              }
+            ],
+            "aggregates": [],
+            "monotonic": false,
+            "expected_group_size": null
+          }
         }
       ],
-      "limit": null,
-      "offset": 2,
-      "monotonic": false,
-      "expected_group_size": null
+      "limits": [
+        {
+          "max_iters": 100,
+          "return_at_limit": false
+        }
+      ],
+      "body": {
+        "Get": {
+          "id": {
+            "Local": 0
+          },
+          "typ": {
+            "column_types": [
+              {
+                "scalar_type": "Int64",
+                "nullable": true
+              }
+            ],
+            "keys": []
+          },
+          "access_strategy": "UnknownOrLocal"
+        }
+      }
     }
   },
   "exports": [
@@ -3324,9 +3369,23 @@
       }
     },
     {
-      "top-k": {
-        "kind": "basic",
-        "strategy": "direct"
+      "reduce": {
+        "kind": "distinct",
+        "strategy": "direct",
+        "mfp_after": false
+      }
+    },
+    {
+      "union": {
+        "consolidate": false,
+        "bucketed": false
+      }
+    },
+    {
+      "arrange-by": {
+        "forms": "raw-only",
+        "strategy": "direct",
+        "input": "arranged"
       }
     },
     {
@@ -3335,13 +3394,17 @@
         "strategy": "direct",
         "input": "stream"
       }
+    },
+    {
+      "let-rec": {
+        "limit": "limited"
+      }
     }
   ],
   "oracles": [
     "export-invariance",
     "incremental",
-    "strategy-invariance",
-    "fold-constants"
+    "strategy-invariance"
   ],
   "optimize": false
 }
