@@ -171,6 +171,13 @@ LEGS = {
             Proxy("compute2_storagectl", 2200, "clusterd-compute2:2100"),
             Proxy("compute2_computectl", 2201, "clusterd-compute2:2101"),
         ),
+        # TODO: Reenable the cutting kinds when PER-49 is fixed. Losing this
+        # replica drops its per-replica read holds while it keeps a pending
+        # dataflow, whose inputs then compact past the dataflow's as_of, and
+        # rendering it halts the process. Degrading the leg still covers the
+        # controller's slow-replica paths. Reproducer:
+        # bin/mzcompose --find invariants run default --scenario=repro-compute-asof
+        kinds=("latency", "limit_data", "bandwidth"),
     ),
     "clusterd-storage": Leg(
         "clusterd-storage",
@@ -182,10 +189,16 @@ LEGS = {
     # Persist blob I/O of envd and every clusterd. Capped like the metadata
     # leg, and restricted to non-buffering toxics: latency and bandwidth
     # would hold the entire blob throughput in toxiproxy's memory.
+    # TODO: Shorten to 45s again when PER-31 is fixed. Every process buffers
+    # unboundedly for as long as blob writes cannot land, and at high
+    # complexity one 45s cut already grows clusterd by GiBs, so repeated cuts
+    # OOM-kill it before the run finishes. 15s still exercises the heal edges,
+    # which is where the recovery bugs are. Reproducer:
+    # bin/mzcompose --find invariants run default --scenario=repro-blob-memory
     "blob": Leg(
         "blob",
         (Proxy("blob", 9000, "minio:9000"),),
-        max_outage=45.0,
+        max_outage=15.0,
         kinds=("disable", "timeout", "limit_data"),
     ),
     "pg": Leg("pg", (Proxy("pg", 5432, "postgres:5432"),)),
@@ -380,6 +393,7 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                 restore_proxies=[
                     proxy for leg in LEGS.values() for proxy in leg.proxies
                 ],
+                restart_toxiproxy=lambda: _restart_toxiproxy(c),
             ).run()
         finally:
             scenario.teardown()
@@ -469,7 +483,8 @@ REPROS = {
     " healed",
     "repro-per10": "PER-10: persist GC panic, earliest state without rollup",
     "repro-durable-resume": "resumed SUBSCRIBE cancels its carried state",
-    "repro-compute-asof": "CLU-34: compute halts hydrating a dataflow past its as_of",
+    "repro-compute-asof": "PER-49: compute halts hydrating a dataflow past its"
+    " as_of",
 }
 
 
@@ -537,6 +552,18 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
             stop.set()
             for t in threads:
                 t.join(timeout=10)
+
+
+def _restart_toxiproxy(c: Composition) -> None:
+    """Replace a toxiproxy whose admin API no longer answers.
+
+    Every leg runs through this container, so the restart cuts them all for a
+    moment. That is the same event as a toxiproxy crash, which the disruptor
+    recovers from by re-creating the proxies, and it is the only way out of a
+    wedged admin API.
+    """
+    c.kill("toxiproxy")
+    c.up("toxiproxy", detach=True, max_tries=3)
 
 
 def _toxiproxy_heal(toxiproxy: ToxiproxyApi, log: EventLog) -> None:
@@ -775,9 +802,29 @@ def repro_per10(c, toxiproxy, ctx, log) -> None:
 
 
 def repro_durable_resume(c, toxiproxy, ctx, log) -> None:
-    """Blob cut + envd kill, then a durable resume must keep its state."""
+    """Blob cut that freezes writes, envd death, then a durable resume.
+
+    The observed occurrence had two ingredients: a blob cut that froze every
+    write for 89s, so the subscriber's resume timestamp fell far behind the
+    shard, and envd dying seconds after the heal from the PER-10 GC panic. A
+    scripted clean kill and restart on its own was ruled out as a trigger, so
+    each cycle first gives that panic a window to fire (envd's restart policy
+    brings it back) and kills only when it does not, recording which trigger
+    the cycle actually got. Cut lengths alternate between the incident's long
+    write freeze and repro-per10's short cut, whose heal is where the panic
+    fires.
+    """
     from materialize.invariants.checkers import SubscribeChecker
     from materialize.invariants.framework import InvariantViolation
+
+    # Long cuts match the incident's write freeze, short ones repro-per10.
+    CUT_LENGTHS = [90.0, 5.0, 90.0, 5.0, 90.0]
+    # Grace period for the GC panic to kill envd on its own after a heal.
+    PANIC_WINDOW_S = 15.0
+
+    def rollup_panics() -> int:
+        logs = c.invoke("logs", "materialized", capture=True).stdout or ""
+        return logs.count("did not have corresponding rollup")
 
     total = ctx.complexity.accounts * 1000
 
@@ -792,7 +839,7 @@ def repro_durable_resume(c, toxiproxy, ctx, log) -> None:
             if got != {(total,): 1}:
                 raise InvariantViolation(f"state {got} at {ts}")
 
-    for iteration in range(5):
+    for iteration, cut_s in enumerate(CUT_LENGTHS):
         rng = random.Random(f"resume-{iteration}")
         checker = ResumeChecker(rng)
         deadline = time.monotonic() + 15
@@ -804,32 +851,54 @@ def repro_durable_resume(c, toxiproxy, ctx, log) -> None:
                 raise
             except Exception:
                 pass
-        assert checker.last_validated_ts is not None
+        assert (
+            checker.last_validated_ts is not None
+        ), "warmup validated no timestamp, so there is no state to carry"
+        resume_from = checker.last_validated_ts
+        panics_before = rollup_panics()
         toxiproxy.set_enabled("blob", False)
-        time.sleep(15)
+        time.sleep(cut_s)
         _toxiproxy_heal(toxiproxy, log)
-        time.sleep(2)
-        c.kill("materialized")
+        trigger = "clean kill (ruled out on its own)"
+        panic_deadline = time.monotonic() + PANIC_WINDOW_S
+        while time.monotonic() < panic_deadline:
+            if rollup_panics() > panics_before:
+                trigger = "PER-10 panic"
+                break
+            time.sleep(1)
+        if trigger != "PER-10 panic":
+            c.kill("materialized")
         c.up("materialized", detach=True, max_tries=3)
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
             try:
                 checker.check_once()  # raises InvariantViolation if reproduced
-            except AssertionError:
+            except AssertionError as e:
+                # Carry the violation through: it holds the shard-vs-stream
+                # probe and the session context that classify the occurrence.
                 raise AssertionError(
-                    f"REPRODUCED durable-resume anomaly, iteration {iteration}"
-                )
+                    f"REPRODUCED durable-resume anomaly, iteration"
+                    f" {iteration} ({trigger}): {e}"
+                ) from e
             except Exception:
                 pass
+        # resumes==0 means the resume never ran, which is not evidence of
+        # consistency, so the count is part of the result.
+        log.log(
+            "repro",
+            f"iteration {iteration}: {cut_s:.0f}s cut, {trigger}, resumed"
+            f" {checker.resumes}x from {resume_from}, stayed consistent",
+        )
         checker.close()
-        log.log("repro", f"iteration {iteration}: resume stayed consistent")
-    log.log("repro", "not reproduced in 5 iterations")
+    log.log("repro", f"not reproduced in {len(CUT_LENGTHS)} iterations")
 
 
 def repro_compute_asof(c, toxiproxy, ctx, log) -> None:
     """Compute halts hydrating a dataflow whose input compacted past its as_of.
 
-    incidents-and-escalations #39 / CLU-34. When the controller loses a
+    The halt is tracked as PER-49, the retry mechanism that would absorb it as
+    CPU-34, and it was seen in incidents-and-escalations #39. When the
+    controller loses a
     replica it drops that replica's per-replica read holds, and for a dataflow
     it no longer wants (a canceled peek) it does not reinstall them, while the
     replica still has the dataflow pending. The inputs then compact, and when

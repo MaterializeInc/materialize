@@ -182,6 +182,7 @@ class Disruptor(threading.Thread):
         on_error: Callable[[Exception], None],
         processes: list[ProcessTarget] | None = None,
         restore_proxies: list[Proxy] | None = None,
+        restart_toxiproxy: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(name="disruptor")
         self.api = api
@@ -193,6 +194,9 @@ class Disruptor(threading.Thread):
         self.concurrent = concurrent
         self.on_error = on_error
         self.processes = processes or []
+        # Last resort for an admin API that no longer answers, see
+        # _heal_network_with_retries.
+        self.restart_toxiproxy = restart_toxiproxy
         # Re-created after a toxiproxy crash-restart. The harness may have
         # created proxies beyond this scenario's legs (e.g. for a cluster the
         # scenario does not disrupt), and losing those would strand their
@@ -439,7 +443,13 @@ class Disruptor(threading.Thread):
                 self._record(f"heal of {target.name} failed ({e}), continuing")
 
     def _heal_network_with_retries(self) -> None:
+        # A wedged admin API (see ApiStalled) does not recover on its own,
+        # because the toxic goroutine holding it up is blocked on a socket
+        # whose peer is gone, so retrying alone cannot heal the network.
+        # Restarting toxiproxy clears it, and comes back to the empty state
+        # the proxy re-creation below already handles.
         deadline = time.monotonic() + 60
+        restarted = False
         while True:
             try:
                 self.api.reset()
@@ -455,10 +465,18 @@ class Disruptor(threading.Thread):
                 return
             except Exception as e:
                 if time.monotonic() > deadline:
-                    self.on_error(
-                        TransientError(f"failed to heal toxiproxy state: {e}")
-                    )
-                    return
+                    if self.restart_toxiproxy is None or restarted:
+                        self.on_error(
+                            TransientError(f"failed to heal toxiproxy state: {e}")
+                        )
+                        return
+                    restarted = True
+                    self._record(f"admin API stuck ({e}), restarting toxiproxy")
+                    try:
+                        self.restart_toxiproxy()
+                    except Exception as restart_error:
+                        self._record(f"toxiproxy restart failed ({restart_error})")
+                    deadline = time.monotonic() + 60
                 time.sleep(1)
 
     def stop_and_heal(self) -> None:

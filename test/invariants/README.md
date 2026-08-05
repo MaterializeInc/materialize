@@ -93,9 +93,10 @@ Each finding has a concentrated reproducer, selectable via `--scenario`:
   memory while the blob store is cut (`repro-blob-memory`)
 - [PER-32](https://linear.app/materializeinc/issue/PER-32): writes stalled long
   after a metadata cut healed (`repro-postheal-stall`)
-- [CLU-34](https://linear.app/materializeinc/issue/CLU-34): compute halts
+- [PER-49](https://linear.app/materializeinc/issue/PER-49): compute halts
   hydrating a dataflow past its `as_of` (`repro-compute-asof`)
-- a resumed `SUBSCRIBE` loses its carried state (`repro-durable-resume`)
+- not yet filed: a resumed `SUBSCRIBE` loses its carried state
+  (`repro-durable-resume`)
 
 ## Running it
 

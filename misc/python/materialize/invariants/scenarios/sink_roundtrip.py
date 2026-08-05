@@ -355,9 +355,15 @@ class SinkRoundtrip(Scenario):
             LedgerTransfer(rng, index, self.accounts, client, self.oplog)
         ]
         weights = [10]
-        if index == 0:
-            actions.append(AlterSinkFlip(rng, client))
-            weights.append(1)
+        # TODO: Reenable when SS-415 is fixed. A storage replica that was
+        # unreachable while the sink was altered panics reconciling it, which
+        # under chaos is most runs, so the flip masks every other finding in
+        # this scenario. Reproducer, deterministic:
+        # bin/mzcompose --find cluster run test-ss415-alter-sink
+        #
+        # if index == 0:
+        #     actions.append(AlterSinkFlip(rng, client))
+        #     weights.append(1)
         return WorkerBundle(actions=actions, weights=weights)
 
     def checkers(self) -> list[Checker]:
