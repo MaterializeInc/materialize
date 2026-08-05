@@ -380,9 +380,10 @@ def workflow_console_scalability(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
     """
-    Run the console Playwright scalability suite against a captured workload.
+    Run the console Playwright scalability suite against each captured
+    workload.
 
-    Boots the workload (objects, initial data, hydration), then runs the
+    Per workload: boot (objects, initial data, hydration), then run the
     suite against the console bundled in the materialized image while
     continuous ingestions and queries provide background load. The suite
     only reports timings. Suite failures do not fail the workflow, the runs
@@ -420,15 +421,16 @@ def workflow_console_scalability(
         help="random seed",
     )
     parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
-    # One fixed workload rather than all: console query cost scales with
-    # catalog shape (object counts), not data content, and night-over-night
-    # timing trends are only comparable against a stable shape.
-    # prod-analytics is the largest capture.
+    parser.add_argument(
+        "--skip-large",
+        action="store_true",
+        help="skip workloads tagged `settings.large: true`",
+    )
     parser.add_argument(
         "files",
         nargs="*",
-        default=["workload_prod_analytics.yml"],
-        help="the workload to run against (must match exactly one file)",
+        default=["*.yml"],
+        help="run against the specified files",
     )
     args = parser.parse_args()
 
@@ -436,108 +438,138 @@ def workflow_console_scalability(
     random.seed(args.seed)
     update_captured_workloads_repo()
 
-    files = get_paths(args.files)
-    if len(files) != 1:
-        raise ValueError(
-            f"console-scalability expects exactly one workload, got {[str(f) for f in files]}"
-        )
-    file = files[0]
-    workload = load_workload(file)
-    print_workload_stats(file, workload)
-
-    # Reset any state left over from a previous run, like workflow_default.
-    service_names = [s.name for s in SERVICES]
-    try:
-        c.kill(*service_names)
-    except Exception:
-        pass
-    c.rm(*service_names, destroy_volumes=True)
-    c.rm_volumes("mzdata", force=True)
-
-    # Prepare the Playwright runner up front so dependency installation does
-    # not eat into the measurement window.
-    c.up(Service("console-scalability-runner", idle=True))
-    c.exec(
-        "console-scalability-runner",
-        "sh",
-        "-c",
-        "corepack enable",
-        env_extra={"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"},
+    all_paths = get_paths(args.files)
+    workloads: dict[pathlib.Path, dict] = {}
+    for path in all_paths:
+        workload = load_workload(path)
+        if args.skip_large and workload.get("settings", {}).get("large", False):
+            print(f"-- Skipping {path} (settings.large: true and --skip-large)")
+            continue
+        workloads[path] = workload
+    files: list[pathlib.Path] = buildkite.shard_list(
+        list(workloads.keys()),
+        lambda file: str(file),
     )
-    _console_runner_sh(
-        c, "yarn install --immutable --network-timeout 30000", user=_HOST_UID_GID
-    )
-    # Fetches matching browsers in case @playwright/test drifted from the
-    # image tag. Runs as root because it writes to /ms-playwright.
-    _console_runner_sh(c, "node_modules/.bin/playwright install chromium")
 
-    # k6 must only ever replay queries captured from this run's console
-    # build, so remove a stale dump from a previous local run.
-    queries_json = MZ_ROOT / "console" / "e2e-tests" / "k6" / "queries.json"
-    queries_json.unlink(missing_ok=True)
+    k6_dir = MZ_ROOT / "console" / "e2e-tests" / "k6"
 
-    def run_suite() -> None:
-        print("+++ Running console scalability suite")
-        try:
-            _console_runner_sh(
-                c,
-                "yarn test:e2e:scalability --workers=1 --trace=off",
-                user=_HOST_UID_GID,
-                env={"BASE_URL": "http://materialized:6874"},
-            )
-        except Exception as e:
-            print(
-                "Console scalability suite failed. Not failing the workflow, "
-                f"the suite only collects timing data: {e}"
-            )
-        # k6 replays the query set that dump-queries captured above (it runs
-        # first in the suite), isolating server-side concurrency from browser
-        # behavior.
-        if not queries_json.exists():
-            print("dump-queries produced no queries.json, skipping the k6 load test")
-            return
-        print("+++ Running console k6 load test")
-        try:
-            c.run(
-                "console-k6",
-                "run",
-                "--summary-export=summary.json",
-                "cluster-detail.ts",
-                rm=True,
-                env_extra={"MZ_HTTP_URL": "http://materialized:6876"},
-            )
-        except Exception as e:
-            print(
-                "Console k6 load test failed. Not failing the workflow, "
-                f"it only collects timing data: {e}"
-            )
+    def run(file: pathlib.Path) -> None:
+        workload = workloads[file]
+        settings = workload.get("settings", {})
+        # When scale_data is false, use 100% initial data, like
+        # workflow_default.
+        factor_initial_data = args.factor_initial_data
+        if not settings.get("scale_data", True):
+            factor_initial_data = 1.0
+        else:
+            factor_initial_data *= settings.get("factor_initial_data_multiplier", 1.0)
+        print_workload_stats(file, workload)
 
-    try:
-        test(
-            c,
-            workload,
-            file,
-            args.factor_initial_data,
-            args.factor_ingestions,
-            args.factor_queries,
-            0,  # runtime is unused, the suite governs the continuous phase
-            args.verbose,
-            True,  # create_objects
-            True,  # initial_data
-            True,  # early_initial_data
-            True,  # run_ingestions
-            True,  # run_queries
-            args.max_concurrent_queries,
-            during_continuous=run_suite,
-        )
-    finally:
-        # The runner idles on sleep infinity, don't let it outlive the
-        # workflow into CI teardown.
+        # Reset any state left over from the previous workload.
+        service_names = [s.name for s in SERVICES]
         try:
-            c.kill("console-scalability-runner")
-            c.rm("console-scalability-runner")
+            c.kill(*service_names)
         except Exception:
             pass
+        c.rm(*service_names, destroy_volumes=True)
+        c.rm_volumes("mzdata", force=True)
+
+        # Prepare the Playwright runner up front so dependency installation
+        # does not eat into the measurement window. Cheap after the first
+        # workload, node_modules lives in the bind-mounted checkout.
+        c.up(Service("console-scalability-runner", idle=True))
+        c.exec(
+            "console-scalability-runner",
+            "sh",
+            "-c",
+            "corepack enable",
+            env_extra={"COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"},
+        )
+        _console_runner_sh(
+            c, "yarn install --immutable --network-timeout 30000", user=_HOST_UID_GID
+        )
+        # Fetches matching browsers in case @playwright/test drifted from the
+        # image tag. Runs as root because it writes to /ms-playwright.
+        _console_runner_sh(c, "node_modules/.bin/playwright install chromium")
+
+        # k6 must only ever replay queries captured from this workload's run,
+        # so remove a stale dump.
+        queries_json = k6_dir / "queries.json"
+        queries_json.unlink(missing_ok=True)
+
+        def run_suite() -> None:
+            print(f"+++ Running console scalability suite ({file.stem})")
+            try:
+                _console_runner_sh(
+                    c,
+                    "yarn test:e2e:scalability --workers=1 --trace=off "
+                    f"--output=test-results/{file.stem}",
+                    user=_HOST_UID_GID,
+                    env={"BASE_URL": "http://materialized:6874"},
+                )
+            except Exception as e:
+                print(
+                    "Console scalability suite failed. Not failing the workflow, "
+                    f"the suite only collects timing data: {e}"
+                )
+            # k6 replays the query set that dump-queries captured above (it
+            # runs first in the suite), isolating server-side concurrency
+            # from browser behavior.
+            if queries_json.exists():
+                print(f"+++ Running console k6 load test ({file.stem})")
+                try:
+                    c.run(
+                        "console-k6",
+                        "run",
+                        "--summary-export=summary.json",
+                        "cluster-detail.ts",
+                        rm=True,
+                        env_extra={"MZ_HTTP_URL": "http://materialized:6876"},
+                    )
+                except Exception as e:
+                    print(
+                        "Console k6 load test failed. Not failing the workflow, "
+                        f"it only collects timing data: {e}"
+                    )
+            else:
+                print(
+                    "dump-queries produced no queries.json, skipping the k6 load test"
+                )
+            # Keep per-workload copies, the next workload overwrites the
+            # originals.
+            for name in ("queries", "summary"):
+                src = k6_dir / f"{name}.json"
+                if src.exists():
+                    src.rename(k6_dir / f"{name}-{file.stem}.json")
+
+        try:
+            test(
+                c,
+                workload,
+                file,
+                factor_initial_data,
+                args.factor_ingestions,
+                args.factor_queries,
+                0,  # runtime is unused, the suite governs the continuous phase
+                args.verbose,
+                True,  # create_objects
+                True,  # initial_data
+                True,  # early_initial_data
+                True,  # run_ingestions
+                True,  # run_queries
+                args.max_concurrent_queries,
+                during_continuous=run_suite,
+            )
+        finally:
+            # The runner idles on sleep infinity, don't let it outlive the
+            # workflow into CI teardown.
+            try:
+                c.kill("console-scalability-runner")
+                c.rm("console-scalability-runner")
+            except Exception:
+                pass
+
+    c.test_parts(files, run)
 
 
 def _console_runner_sh(

@@ -12,8 +12,8 @@ yarn-error.log
 
 # Playwrite E2E tests
 /e2e-tests/state*.json
-/e2e-tests/k6/queries.json
-/e2e-tests/k6/summary.json
+/e2e-tests/k6/queries*.json
+/e2e-tests/k6/summary*.json
 /test-results
 
 # Vite

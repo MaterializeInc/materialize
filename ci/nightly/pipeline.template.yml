@@ -316,14 +316,16 @@ steps:
         label: "Console scalability (workload replay)"
         depends_on: build-x86_64
         timeout_in_minutes: 120
+        parallelism: 3
         artifact_paths:
           - console/test-results/**/*
-          - console/e2e-tests/k6/queries.json
-          - console/e2e-tests/k6/summary.json
+          - console/e2e-tests/k6/queries-*.json
+          - console/e2e-tests/k6/summary-*.json
         plugins:
           - ./ci/plugins/mzcompose:
               composition: workload-replay
               run: console-scalability
+              args: [--skip-large]
         agents:
           # Larger instance is more stable in performance
           queue: hetzner-x86-64-dedi-16cpu-64gb
