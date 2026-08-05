@@ -288,7 +288,7 @@ const stepsData: Array<{
               >
                 CREATE SOURCE
               </TextLink>
-            </Code>{" "}
+            </Code> 
             with the <Code variant="inline-syntax">FROM LOAD GENERATOR</Code>{" "}
             clause that works specifically with Materialize&apos;s sample data
             generators. The tutorial specifies that the generator should emit
@@ -298,90 +298,195 @@ const stepsData: Array<{
                 runCommand={runCommand}
                 value="CREATE SOURCE auction_house
   FROM LOAD GENERATOR AUCTION
-  (TICK INTERVAL '1s', AS OF 100000)
-  FOR ALL TABLES;"
+  (TICK INTERVAL '1s', AS OF 100000);"
                 title="Create the sources."
               />
             </RunnableContainer>
-            <Code variant="inline-syntax">
-              <TextLink
-                target="_blank"
-                href={docUrls["/docs/sql/create-source/"]}
-              >
-                CREATE SOURCE
-              </TextLink>
-            </Code>{" "}
-            can create multiple tables (referred to as
-            <Code variant="inline-syntax">subsources</Code> in Materialize) when
-            ingesting data from multiple upstream tables. For each upstream
-            table that is selected for ingestion, Materialize creates a
-            subsource.
+            The source connects to the data generator but does not ingest its relations
+            yet. To start ingesting data, you create a table from the source for each
+            relation you want to ingest.
           </ListItem>
           <ListItem>
+
+
             Use{" "}
             <Code variant="inline-syntax">
               <TextLink
                 target="_blank"
-                href={docUrls["/docs/sql/show-sources/"]}
+                href={docUrls["/docs/sql/create-table/"]}
               >
-                SHOW SOURCES
+                CREATE TABLE ... FROM SOURCE
               </TextLink>
             </Code>{" "}
-            command to see the results of the previous step.
+            in a
+            {" "}<TextLink target="_blank" href={docUrls["/docs/sql/create-table/"]}>DDL
+            transaction block</TextLink>{" "}
+            to create <strong>read-only</strong> tables for the{" "}
+            <Code variant="inline-syntax">auctions</Code> and{" "}
+            <Code variant="inline-syntax">bids</Code> relations,{" "}
+            the two relations this quickstart uses:
             <RunnableContainer mt={3} mb={3}>
               <Runnable
                 runCommand={runCommand}
-                value="SHOW SOURCES;"
-                title="See the results of the previous step."
+                value="BEGIN;
+CREATE TABLE auctions FROM SOURCE auction_house (REFERENCE auctions);
+CREATE TABLE bids FROM SOURCE auction_house (REFERENCE bids);
+COMMIT;"
+                title="Create the tables."
               />
             </RunnableContainer>
-            A subsource is how Materialize refers to a table that has the
-            following properties:
+            Tables created from a source are read-only; that is:
             <UnorderedList>
               <ListItem>
-                A subsource can only be written by the source; in this case, the
-                load-generator.
+                Only the source can write to the table; in this case, the load generator.
               </ListItem>
-              <ListItem>Users can read from subsources.</ListItem>
+              <ListItem>Users can read from the table.</ListItem>
             </UnorderedList>
           </ListItem>
 
           <ListItem>
             Use the{" "}
             <Code variant="inline-syntax">
-              <TextLink target="_blank" href={docUrls["/docs/sql/select/"]}>
-                SELECT
+              <TextLink target="_blank" href={docUrls["/docs/sql/show-sources/"]}>
+                SHOW SOURCES
               </TextLink>
             </Code>{" "}
-            statement to query <Code variant="inline-syntax">auctions</Code> and{" "}
-            <Code variant="inline-syntax">bids</Code>.
+            command to see the new source:
             <RunnableContainer mt={3} mb={3}>
               <Runnable
                 runCommand={runCommand}
-                value="SELECT * FROM auctions LIMIT 1;"
-                title="View a sample row in auctions."
-              />
-              <Runnable
-                runCommand={runCommand}
-                value="SELECT * FROM bids LIMIT 1;"
-                title="View a sample row in bids."
-              />
-              <Runnable
-                runCommand={runCommand}
-                value="SELECT a.*, b.*
-FROM auctions AS a
-JOIN bids AS b
-  ON a.id = b.auction_id
-LIMIT 3;"
-                title="View the relationship between auctions and bids."
+                value="SHOW SOURCES;"
+                title="Show the sources."
               />
             </RunnableContainer>
             <TextContainer>
               <Text textStyle="text-base">
-                Subsequent steps in this quickstart uses a query to find winning
-                bids for auctions to show how Materialize uses views and indexes
-                to provide immediately available up-to-date results for various
-                queries.
+                The output should resemble the following:
+              </Text>
+            </TextContainer>
+            <RunnableContainer mt={3} mb={3}>
+              <Runnable
+                runCommand={runCommand}
+                value="| name          | type           | cluster    | comment |
+| ------------- | -------------- | ---------- | ------- |
+| auction_house | load-generator | quickstart |         |"
+                title="Sample output"
+              />
+            </RunnableContainer>
+            <TextContainer>
+              <Text textStyle="text-base">
+                Use the{" "}
+                <Code variant="inline-syntax">
+                  <TextLink target="_blank" href={docUrls["/docs/sql/show-tables/"]}>
+                    SHOW TABLES
+                  </TextLink>
+                </Code>{" "}
+                command to see the tables created from the source:
+              </Text>
+            </TextContainer>
+            <RunnableContainer mt={3} mb={3}>
+              <Runnable
+                runCommand={runCommand}
+                value="SHOW TABLES;"
+                title="Show the tables."
+                />
+              <Runnable
+                runCommand={runCommand}
+                value="| name     | comment |
+| -------- | ------- |
+| auctions |         |
+| bids     |         |"
+                title="Sample output"
+                />
+            </RunnableContainer>
+          </ListItem>
+          <ListItem>
+            <TextContainer>
+              <Text textStyle="text-base">
+                Use the{" "}
+                <Code variant="inline-syntax">
+                  <TextLink target="_blank" href={docUrls["/docs/sql/select/"]}>
+                    SELECT
+                  </TextLink>
+                </Code>{" "}
+                statement to query{" "}
+                <Code variant="inline-syntax">auctions</Code> and{" "}
+                <Code variant="inline-syntax">bids</Code>.
+              </Text>            
+            </TextContainer>
+            <UnorderedList>
+              <ListItem>
+                View a sample row in <Code variant="inline-syntax">auctions</Code>:
+                <RunnableContainer mt={3} mb={3}>
+                  <Runnable
+                    runCommand={runCommand}
+                    value="SELECT * FROM auctions LIMIT 1;"
+                    title="View an auction."
+                  />                      
+                </RunnableContainer>
+                The output should return a single row (your results may differ):
+                <RunnableContainer mt={3} mb={3}>
+                  <Runnable
+                    runCommand={runCommand}
+                    value=" id    | seller | item               | end_time
+                    -------+--------+--------------------+---------------------------
+                    29550 | 2468   | Best Pizza in Town | 2024-07-25 18:24:25.805+00"
+                    title="View an auction."
+                    />                      
+                </RunnableContainer>
+              </ListItem>
+              <ListItem>
+                View a sample row in <Code variant="inline-syntax">bids</Code>:
+                <RunnableContainer mt={3} mb={3}>
+                  <Runnable
+                    runCommand={runCommand}
+                    value="SELECT * FROM bids LIMIT 1;"
+                    title="View a bid."
+                  />
+                </RunnableContainer>
+                The output should return a single row (your results may differ):
+                <RunnableContainer mt={3} mb={3}>
+                  <Runnable
+                    runCommand={runCommand}
+                    value=" id     | buyer | auction_id | amount | bid_time
+--------+-------+------------+--------+---------------------------
+ 295641 | 737   | 29564      | 72     | 2024-07-25 18:25:42.911+00"
+                    title="View a bid."
+                  />                      
+                </RunnableContainer>
+              </ListItem>
+              <ListItem>
+                To view the relationship between{" "}
+                <Code variant="inline-syntax">auctions</Code> and{" "}
+                <Code variant="inline-syntax">bids</Code>, you can join by the auction id:
+                <RunnableContainer mt={3} mb={3}>
+                  <Runnable
+                    runCommand={runCommand}
+                    value="SELECT a.*, b.*
+FROM auctions AS a
+JOIN bids AS b
+  ON a.id = b.auction_id
+LIMIT 3;"
+                    title="Join bids and auctions."
+                    />
+                </RunnableContainer>      
+                The output should return (at most) 3 rows (your results may differ):
+                <RunnableContainer mt={3} mb={3}>
+                  <Runnable
+                    runCommand={runCommand}
+                    value="| id    | seller | item               | end_time                   | id     | buyer | auction_id | amount | bid_time                   |
+                    | ----- | ------ | ------------------ | -------------------------- | ------ | ----- | ---------- | ------ | -------------------------- |
+                    | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155751 | 215   | 15575      | 27     | 2024-07-25 20:30:16.085+00 |
+                    | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155750 | 871   | 15575      | 63     | 2024-07-25 20:30:15.085+00 |
+                    | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155752 | 2608  | 15575      | 16     | 2024-07-25 20:30:17.085+00 |"
+                    title="Join bids and auctions."
+                  />
+                </RunnableContainer>                      
+              </ListItem>
+            </UnorderedList>
+            <TextContainer>
+              <Text textStyle="text-base">
+                Subsequent steps in this quickstart uses a query to find winning bids for auctions to show how Materialize uses views and indexes to provide immediately available up-to-date results for various queries.
               </Text>
             </TextContainer>
           </ListItem>
@@ -501,7 +606,7 @@ LIMIT 10;`}
             <TextContainer>
               <Text>
                 Since new data is continually being ingested, you must{" "}
-                <span style={{ fontWeight: "600" }}>rerun the query</span> to
+                <strong>rerun the query</strong> to
                 get the up-to-date results. Each time you query the view, you
                 are re-running the underlying statement, which becomes less
                 performant as the amount of data grows.
@@ -517,15 +622,15 @@ LIMIT 10;`}
                 </TextLink>{" "}
                 on views. Indexes provide always fresh view results in memory
                 within a cluster by performing{" "}
-                <span style={{ fontWeight: "600" }}>
+                <strong>
                   incremental updates as new data arrives
-                </span>
+                </strong>
                 . Queries can then read from the in-memory, already up-to-date
                 results instead of re-running the underlying statement, making
                 queries{" "}
-                <span style={{ fontWeight: "600" }}>
+                <strong>
                   computationally free and more performant
-                </span>
+                </strong>
                 .
               </Text>
               <Text>
@@ -556,10 +661,10 @@ LIMIT 10;`}
           </Text>
           <Text textStyle="text-base">
             To provide the up-to-date results, indexes
-            <span style={{ fontWeight: "600" }}>
+            <strong>
               {" "}
               perform incremental updates{" "}
-            </span>{" "}
+            </strong>{" "}
             as inputs change instead of recalculating the results from scratch.
             Additionally, indexes can also help{" "}
             <TextLink
@@ -598,10 +703,10 @@ LIMIT 10;`}
                 <Code variant="inline-syntax">winning_bids</Code> query is
                 executed, and the view results are stored in memory within the
                 cluster.{" "}
-                <span style={{ fontWeight: "600" }}>
+                <strong>
                   As new data arrives, the index incrementally updates the view
                   results in memory.{" "}
-                </span>{" "}
+                </strong>{" "}
                 Because incremental work is performed on writes, reads from
                 indexes return up-to-date results and are computationally free.
               </Text>
@@ -704,17 +809,10 @@ WHERE w2.amount > w1.amount
 ;`}
                 title="Create a view flip_activities"
               />
-
-              <Text textStyle="text-base">
-                The <Code variant="inline-syntax"> flip_activities</Code> view
-                can use the index created on
-                <Code variant="inline-syntax"> winning_bids</Code> view to
-                provide up-to-date data.
-              </Text>
               <Text textStyle="text-base">
                 To view a sample row in{" "}
-                <Code variant="inline-syntax">flip_activities</Code>, run the
-                following{" "}
+                <Code variant="inline-syntax">flip_activities</Code>{" "}
+                , run the following{" "}
                 <Code variant="inline-syntax">
                   <TextLink target="_blank" href={docUrls["/docs/sql/select/"]}>
                     SELECT{" "}
@@ -728,6 +826,36 @@ WHERE w2.amount > w1.amount
                 title="View a sample row in flip_activities"
               />
             </RunnableContainer>
+            <TextContainer>
+              <Text textStyle="text-base">
+                The query may take a while to return, even though it uses the{" "}
+                <Code variant="inline-syntax">wins_by_item</Code>{" "}
+                index. The{" "}
+                <Code variant="inline-syntax">flip_activities</Code>{" "}
+                view self-joins{" "}
+                <Code variant="inline-syntax">winning_bids</Code>
+                on{" "}
+                <Code variant="inline-syntax">item</Code>{" "}
+                and the corresponding{" "}
+                <Code variant="inline-syntax">buyer</Code>{" "}
+                and{" "}
+                <Code variant="inline-syntax">seller</Code>{" "}
+                columns (
+                <Code variant="inline-syntax">w1.buyer = w2.seller AND w1.item = w2.item</Code>
+                ), but the{" "}
+                <Code variant="inline-syntax">wins_by_item</Code>{" "}
+                index is keyed on the{" "}
+                <Code variant="inline-syntax">item</Code>{" "}
+                column only. As a result, the join must first form every pair of rows with the same{" "}
+                <Code variant="inline-syntax">item</Code>{" "}
+                (the part supported by the index) before{" "}
+                evaluating the buyer/seller predicates on each pair to find the actual{" "}
+                matches. Because the sample data contains only a small number of distinct{" "}
+                item values, as{" "}
+                <Code variant="inline-syntax">winning_bids</Code>{" "}
+                grows, the number of pairs per item grows quadratically.
+              </Text>
+            </TextContainer>
           </ListItem>
           <ListItem>
             Use{" "}
@@ -809,7 +937,12 @@ FROM (
             to <Code variant="inline-syntax">flippers</Code> to see new flippers
             appear as new data arrives (either from the{" "}
             <Code variant="inline-syntax">known_flippers</Code> table or the{" "}
-            <Code variant="inline-syntax">flip_activities</Code> view).
+            <Code variant="inline-syntax">flip_activities</Code> view).{" "}
+            <TextLink target="_blank" href={docUrls["/docs/sql/subscribe/"]}>
+              SUBSCRIBE
+            </TextLink>{" "}
+            returns data from a source, table, view, or materialized view{" "}
+            as they occur, in this case, the view <Code variant="inline-syntax">flippers</Code>.
           </Text>
         </TextContainer>
 
@@ -884,7 +1017,7 @@ FROM (
               </TextLink>
             </Code>
             , click the{" "}
-            <span style={{ fontWeight: "bold" }}>Stop streaming</span> button.
+            <strong>Stop streaming</strong> button.
           </ListItem>
         </OrderedList>
       </>
@@ -991,7 +1124,7 @@ FROM (
                 title="Subscribe to see results change over time!"
               />
             </RunnableContainer>
-            Toggle <span style={{ fontWeight: "bold" }}>Show diffs</span> to see
+            Toggle <strong>Show diffs</strong> to see
             changes to <Code variant="inline-syntax">funds_movement</Code>. As
             new data comes in and auctions complete, the{" "}
             <Code variant="inline-syntax">total_credits</Code> and
@@ -1007,7 +1140,7 @@ FROM (
               </TextLink>
             </Code>
             , click the{" "}
-            <span style={{ fontWeight: "bold" }}>Stop streaming</span> button.
+            <strong>Stop streaming</strong> button.
           </ListItem>
         </OrderedList>
       </>
@@ -1036,7 +1169,7 @@ FROM (
               </Code>{" "}
               with the <Code variant="inline-syntax">CASCADE</Code> option to
               drop <Code variant="inline-syntax">auction_house</Code> and its
-              dependent objects (e.g., views and indexes).
+              dependent objects, including the tables created from the source and the views and indexes created on them.
             </ListItem>
 
             <ListItem>
@@ -1203,12 +1336,12 @@ FROM (
           <Text textStyle="heading-md">{title}</Text>
           <Text textStyle="text-base">
             To start developing with your own data, click{" "}
-            <span style={{ fontWeight: "600" }}>Connect data</span>.
+            <strong>Connect data</strong>.
           </Text>
           <Text textStyle="text-base">
             For help getting started with your data or other questions about
             Materialize, click{" "}
-            <span style={{ fontWeight: "600" }}>Talk to us</span>.
+            <strong>Talk to us</strong>.
           </Text>
 
           <Text textStyle="heading-sm">Additional resources</Text>
@@ -1512,6 +1645,11 @@ const Tutorial = ({ runCommand, ...rest }: TutorialProps) => {
       borderBottomRightRadius="lg"
       display="flex"
       flexDirection="column"
+      sx={{
+        strong: {
+          fontWeight: "600",
+        },
+      }}
       {...rest}
     >
       <VStack
