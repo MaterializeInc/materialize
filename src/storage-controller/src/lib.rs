@@ -35,6 +35,7 @@ use mz_cluster_client::{ReplicaId, WallclockLagFn};
 use mz_controller_types::dyncfgs::{
     ENABLE_0DT_DEPLOYMENT_SOURCES, WALLCLOCK_LAG_RECORDING_INTERVAL,
 };
+use mz_dyncfg::ConfigUpdates;
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
@@ -331,6 +332,16 @@ impl StorageController for Controller {
                 .parameters
                 .user_storage_managed_collections_batch_duration,
         );
+    }
+
+    fn update_replica_dyncfg_overrides(
+        &mut self,
+        mut overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    ) {
+        for (id, instance) in self.instances.iter_mut() {
+            let instance_overrides = overrides.remove(id).unwrap_or_default();
+            instance.update_replica_dyncfg_overrides(instance_overrides);
+        }
     }
 
     /// Get the current configuration
