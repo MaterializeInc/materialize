@@ -372,7 +372,10 @@ WHERE c.name = 'cc_force_existing' AND r.size = 'scale=1,workers=4'
 
 # Replace only the deadline and timeout action. The existing target shape and
 # replica are reused, and the elapsed deadline forces cut-over on the next tick.
-> ALTER CLUSTER cc_force_existing SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+# A '1ms' timeout rather than '0s': a zero timeout with COMMIT is the request for
+# a synchronous cut-over, which takes the direct path and recreates the replica
+# set instead of reusing the target replica (covered in its own section below).
+> ALTER CLUSTER cc_force_existing SET (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT'))
 
 > SELECT r.id::text = '${cc_force_existing_target_id}', r.size
   FROM mz_cluster_replicas r
@@ -727,11 +730,12 @@ timed-out
 > SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_rollback'
 cc_rollback r1 scale=1,workers=1
 
-# A forced cut-over: TIMEOUT '0s' with ON TIMEOUT COMMIT advances the realized
-# config to the (necessarily un-hydrated) target on the first tick. The retained
-# record carries status `finalized` with the deadline, so a reader can tell it was a
-# past-deadline (forced) cut-over.
-> ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+# A forced cut-over: an elapsed deadline with ON TIMEOUT COMMIT advances the
+# realized config to the (necessarily un-hydrated) target on the first tick. The
+# retained record carries status `finalized` with the deadline, so a reader can
+# tell it was a past-deadline (forced) cut-over. '1ms' rather than '0s', which
+# would request the synchronous direct cut-over instead.
+> ALTER CLUSTER cc_rollback SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '1ms', ON TIMEOUT 'COMMIT'))
 > SELECT size FROM mz_clusters WHERE name = 'cc_rollback'
 scale=1,workers=2
 > SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_rollback'
@@ -1345,6 +1349,108 @@ manual
 > SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_wait_manual'
 scale=1,workers=2 0
 > DROP CLUSTER cc_wait_manual
+
+# ----- Direct cut-over: the zero-timeout commit escape hatch -----
+#
+# A zero timeout with COMMIT already means "cut over now, hydrated or not", so
+# the ALTER transacts the reshape itself instead of writing a record the
+# controller would commit one tick later. It converges the replica set with the
+# controller's own reconcile kernel, so it lands the same set the controller
+# would have, and it retires any carried reconfiguration record. That makes it
+# the escape hatch for a wedged reconfiguration, which is the scenario below.
+#
+# A sleeping materialized view pins hydration on every replica of the cluster,
+# baseline and overlap alike, so the target set never hydrates and the
+# controller cannot cut over. The default deadline is 24h away, so nothing else
+# retires the record either: the reconfiguration is stuck until an operator
+# intervenes.
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
+
+> CREATE CLUSTER cc_cutover (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+> CREATE TABLE cc_cutover_t (id int)
+> INSERT INTO cc_cutover_t VALUES (1)
+
+> CREATE MATERIALIZED VIEW cc_cutover_slow IN CLUSTER cc_cutover AS
+  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_cutover_t
+
+> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=2')
+
+# Wedged: baseline and overlap run side by side, the realized size is unchanged,
+# and the record stays in progress.
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=1 1
+scale=1,workers=2 1
+> SELECT size FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=1
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
+in-progress
+
+# Re-stating the in-flight target is the "commit this now" case. The overlap
+# replica already has the target shape, so the reconcile keeps it and only
+# retires the baseline: forcing the commit must not cost a cold restart of a
+# replica that was already up. The record reached its own target, so it settles
+# `finalized`, marked forced because nothing waited for hydration.
+$ set-from-sql var=cc_cutover_target_id
+SELECT r.id::text
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'cc_cutover' AND r.size = 'scale=1,workers=2'
+
+> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=2') WITH (WAIT FOR '0s')
+
+> SELECT r.id::text = '${cc_cutover_target_id}', r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_cutover'
+true scale=1,workers=2
+> SELECT size FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=2
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
+finalized
+
+> SELECT row_number() OVER (ORDER BY id), details->>'transition', details->>'forced'
+  FROM mz_catalog.mz_audit_events
+  WHERE event_type = 'alter' AND object_type = 'cluster'
+    AND details->>'cluster_name' = 'cc_cutover' AND details->>'transition' IS NOT NULL
+1 started <null>
+2 finalized true
+
+# Now wedge it again and cut over to a *different* size. Nothing matches the new
+# target, so the whole owned set goes, including the stranded overlap replica,
+# and the abandoned record settles `cancelled` rather than `finalized`.
+> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=4')
+
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=2 1
+scale=1,workers=4 1
+
+> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=8') WITH (WAIT FOR '0s')
+
+> SELECT size FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=8
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=8 1
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
+cancelled
+
+# The other zero-timeout spelling requests the same thing, here with a factor
+# change riding along and no record in flight. Both land in the one transaction
+# the ALTER commits.
+> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 2) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
+
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=2 2
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=2 2
+
+> DROP CLUSTER cc_cutover CASCADE
+> DROP TABLE cc_cutover_t
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 
 # Restore pristine server state (including the tick-interval override).
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
