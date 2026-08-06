@@ -14,7 +14,7 @@ use std::str::FromStr;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use mz_authenticator::GenericOidcAuthenticator;
+use mz_authenticator::{GenericOidcAuthenticator, TalosAuthenticator};
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::now::{SYSTEM_TIME, epoch_to_uuid_v7};
 use mz_pgwire_common::{
@@ -49,6 +49,8 @@ pub struct Config {
     pub frontegg: Option<FronteggAuthenticator>,
     /// OIDC authenticator.
     pub oidc: GenericOidcAuthenticator,
+    /// Ory Talos authenticator, if this listener authenticates Talos keys.
+    pub talos: Option<TalosAuthenticator>,
     /// The authentication method defined by the server's listener
     /// configuration.
     pub authenticator_kind: AuthenticatorKind,
@@ -69,6 +71,7 @@ pub struct Server {
     authenticator_kind: AuthenticatorKind,
     frontegg: Option<FronteggAuthenticator>,
     oidc: GenericOidcAuthenticator,
+    talos: Option<TalosAuthenticator>,
     metrics: Metrics,
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
@@ -104,6 +107,7 @@ impl Server {
             authenticator_kind: config.authenticator_kind,
             frontegg: config.frontegg,
             oidc: config.oidc,
+            talos: config.talos,
             metrics: Metrics::new(config.metrics, config.label),
             active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
@@ -121,6 +125,7 @@ impl Server {
         let authenticator_kind = self.authenticator_kind;
         let frontegg = self.frontegg.clone();
         let oidc = self.oidc.clone();
+        let talos = self.talos.clone();
         let tls = self.tls.clone();
         let metrics = self.metrics.clone();
         let active_connection_counter = self.active_connection_counter.clone();
@@ -214,6 +219,7 @@ impl Server {
                                     params,
                                     frontegg,
                                     oidc,
+                                    talos,
                                     authenticator_kind,
                                     active_connection_counter,
                                     helm_chart_version,
