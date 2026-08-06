@@ -11,7 +11,7 @@ menu:
 
 The Materialize Console provides an **Admin** section where you can manage
 client credentials and, for administrators, review your usage and billing
-information.
+information and manage roles and users.
 
 The **Admin** section contains the following screens:
 
@@ -19,6 +19,7 @@ The **Admin** section contains the following screens:
 |---------|-------------|
 | **App Passwords** | View or delete client credentials that allow your applications and services to connect to Materialize. |
 | **Billing** | Access detailed usage and billing information as well as your invoices. <br>**Available for administrators only.** |
+| **[Roles and Users](/console/rolesandusers/)** | Manage roles, privileges, and users that are granted these roles. <br>**Available for administrators only.** |
 
 ### App Passwords
 
