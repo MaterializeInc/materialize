@@ -156,7 +156,7 @@ class MaterializeApplication(CloudtestApplicationBase):
             try:
                 self.environmentd.sql("SELECT 1")
                 break
-            except InterfaceError as e:
+            except (InterfaceError, OSError) as e:
                 # Since we crash environmentd, we expect some errors that we swallow.
                 LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
                 time.sleep(2)
