@@ -50,8 +50,10 @@ impl RelationPartStats<'_> {
         let mut ranges = ColumnSpecs::new(&relation, &arena);
         ranges.push_unmaterializable(UnmaterializableFunc::MzNow, time_range);
 
-        if self.err_count().into_iter().any(|count| count > 0) {
-            // If the error collection is nonempty, we always keep the part.
+        // If the error collection is nonempty, we always keep the part.
+        // Missing err stats mean errors cannot be ruled out, so they count as
+        // "may error" too, matching the storage read path's `filter_result`.
+        if self.err_count().is_none_or(|count| count > 0) {
             return true;
         }
 
@@ -315,6 +317,63 @@ mod tests {
                 prop_assert_eq!(validate_stats(&ty, &datums[..]), Ok(()));
             }
         )
+    }
+
+    /// The err column's stats are force-kept from trimming by default, but
+    /// that list is configurable, so they can be absent. When they are,
+    /// `may_match_mfp` must treat the part as possibly containing errors,
+    /// exactly like `filter_result` does: error rows must surface regardless
+    /// of any filter, so a part that may hold one can never be skipped.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn may_match_mfp_missing_err_stats_keeps_part() {
+        use mz_expr::{BinaryFunc, EvalError, MirScalarExpr, func};
+        use mz_repr::ReprScalarType;
+
+        use crate::errors::DataflowError;
+
+        let schema = RelationDesc::builder()
+            .with_column("col", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(
+            &SourceData(Ok(Row::pack_slice(&[Datum::Int32(1)]))),
+            &(),
+            1u64,
+            1i64,
+        );
+        builder.push(
+            &SourceData(Err(DataflowError::from(EvalError::DivisionByZero))),
+            &(),
+            1u64,
+            1i64,
+        );
+        let part = builder.finish();
+        let key_col = part.key.as_struct();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
+            .expect("success");
+        let mut key_stats = decoder.stats();
+        // Simulate the err column's stats having been trimmed away.
+        key_stats.cols.remove("err").expect("err stats present");
+
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &metrics,
+            stats: &PartStats { key: key_stats },
+            desc: &schema,
+        };
+        // No Ok row matches this filter: only the error row makes the part
+        // relevant, and with the err stats missing it cannot be ruled out.
+        let mfp = MapFilterProject::new(1).filter(std::iter::once(MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq(func::Eq),
+            expr1: Box::new(MirScalarExpr::column(0)),
+            expr2: Box::new(MirScalarExpr::literal_ok(
+                Datum::Int32(999),
+                ReprScalarType::Int32,
+            )),
+        }));
+        assert!(stats.may_match_mfp(ResultSpec::anything(), &mfp));
     }
 
     #[mz_ore::test]
