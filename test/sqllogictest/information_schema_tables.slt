@@ -461,6 +461,10 @@ mz_mcp_data_products
 VIEW
 materialize
 mz_internal
+mz_metric_sinks
+MATERIALIZED VIEW
+materialize
+mz_internal
 mz_mysql_source_tables
 MATERIALIZED VIEW
 materialize

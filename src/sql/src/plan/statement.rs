@@ -196,6 +196,9 @@ pub fn describe(
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::describe_show_create_sink(&scx, stmt)?
         }
+        Statement::Show(ShowStatement::ShowCreateMetricSink(stmt)) => {
+            show::describe_show_create_metric_sink(&scx, stmt)?
+        }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
             show::describe_show_create_source(&scx, stmt)?
         }
@@ -411,6 +414,9 @@ pub fn plan(
         }
         Statement::Show(ShowStatement::ShowCreateSink(stmt)) => {
             show::plan_show_create_sink(scx, stmt).map(Plan::ShowCreate)
+        }
+        Statement::Show(ShowStatement::ShowCreateMetricSink(stmt)) => {
+            show::plan_show_create_metric_sink(scx, stmt).map(Plan::ShowCreate)
         }
         Statement::Show(ShowStatement::ShowCreateSource(stmt)) => {
             show::plan_show_create_source(scx, stmt).map(Plan::ShowCreate)
@@ -1125,6 +1131,7 @@ impl<T: mz_sql_parser::ast::AstInfo> From<&Statement<T>> for StatementClassifica
             Statement::Show(ShowStatement::ShowCreateCluster(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateIndex(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSink(_)) => Show,
+            Statement::Show(ShowStatement::ShowCreateMetricSink(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateSource(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateTable(_)) => Show,
             Statement::Show(ShowStatement::ShowCreateView(_)) => Show,
