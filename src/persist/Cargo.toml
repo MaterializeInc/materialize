@@ -28,6 +28,8 @@ async-trait.workspace = true
 async-stream.workspace = true
 aws-config.workspace = true
 aws-credential-types.workspace = true
+aws-lc-rs.workspace = true
+aws-sdk-kms.workspace = true
 aws-sdk-s3.workspace = true
 aws-types.workspace = true
 azure_identity.workspace = true
@@ -70,6 +72,7 @@ turmoil = { workspace = true, optional = true }
 url.workspace = true
 urlencoding.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+zeroize.workspace = true
 
 # While this crate doesn't directly depend on `sha2` we want to ensure that the
 # `asm` feature is enabled since computing SHA256 hashes is taking a
