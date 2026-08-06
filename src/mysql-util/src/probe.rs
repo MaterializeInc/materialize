@@ -9,6 +9,7 @@
 
 use mysql_async::prelude::Queryable;
 use mysql_async::{Params, Value};
+use mz_ore::str::redact;
 
 use crate::{MySqlError, QualifiedTableRef, quote_identifier};
 
@@ -63,7 +64,7 @@ impl<'a> KeyProber<'a> {
         &mut self,
         lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
-    ) -> Result<Option<u64>, MySqlError> {
+    ) -> Result<u64, MySqlError> {
         let (clause, params) =
             self.range_filter(Some(lower_bound_exclusive), upper_bound_exclusive);
         let select = format!(
@@ -71,7 +72,15 @@ impl<'a> KeyProber<'a> {
             col = self.col,
             table = self.table,
         );
-        explain_row_estimate(&mut *self.conn, &select, Params::Positional(params)).await
+        explain_row_estimate(&mut *self.conn, &select, Params::Positional(params))
+            .await?
+            .ok_or_else(|| MySqlError::MissingRowEstimate {
+                qualified_table_name: self.table_name.clone(),
+                // The bounds are column values, redact them so the error
+                // stays loggable outside of CI.
+                lower_bound: format!("{:?}", redact(&lower_bound_exclusive)),
+                upper_bound: format!("{:?}", redact(&upper_bound_exclusive)),
+            })
     }
 
     /// Grabs a prefix of up to `max_prefix_length` characters for the first
@@ -333,14 +342,11 @@ mod tests {
 
         // Estimates are index dives, near reality but never exact by
         // contract, so the bounds are deliberately loose.
-        let all = p.estimate_range_rows("", None).await?.expect("estimate");
+        let all = p.estimate_range_rows("", None).await?;
         assert!((500..=2000).contains(&all), "all={all}");
-        let half = p
-            .estimate_range_rows("a00500", None)
-            .await?
-            .expect("estimate");
+        let half = p.estimate_range_rows("a00500", None).await?;
         assert!((250..=1000).contains(&half), "half={half}");
-        let none = p.estimate_range_rows("zzz", None).await?.expect("estimate");
+        let none = p.estimate_range_rows("zzz", None).await?;
         assert!(none <= 5, "none={none}");
 
         drop_db(&mut conn, DB).await?;
@@ -795,15 +801,9 @@ mod tests {
 
         // Range estimates come from index dives on the real B-tree, not the
         // stale table statistics, so they still reflect the actual data.
-        let all = prober
-            .estimate_range_rows("", None)
-            .await?
-            .expect("estimate");
+        let all = prober.estimate_range_rows("", None).await?;
         assert!((500..=2000).contains(&all), "all={all}");
-        let range = prober
-            .estimate_range_rows("a00100", Some("a00200"))
-            .await?
-            .expect("estimate");
+        let range = prober.estimate_range_rows("a00100", Some("a00200")).await?;
         assert!((50..=200).contains(&range), "range={range}");
 
         drop_db(&mut conn, DB).await?;
@@ -943,7 +943,10 @@ mod tests {
             some("\0")
         );
         // The inverted range has no optimizer estimate.
-        assert_eq!(p.estimate_range_rows("m", Some("\0")).await?, None);
+        assert!(matches!(
+            p.estimate_range_rows("m", Some("\0")).await,
+            Err(MySqlError::MissingRowEstimate { .. })
+        ));
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -978,7 +981,10 @@ mod tests {
             some("as")
         );
         // The inverted range has no optimizer estimate.
-        assert_eq!(p.estimate_range_rows("aß", Some("as")).await?, None);
+        assert!(matches!(
+            p.estimate_range_rows("aß", Some("as")).await,
+            Err(MySqlError::MissingRowEstimate { .. })
+        ));
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
