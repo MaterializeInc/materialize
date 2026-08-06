@@ -50,6 +50,8 @@ export type NavItemType = {
   navItems?: NavItemType[];
   onClick?: () => void;
   forceShow?: boolean;
+  /** Renders the item at the bottom of the nav menu, below a spacer. */
+  pinToBottom?: boolean;
 };
 
 const getNavItems = ({
@@ -144,6 +146,7 @@ const getNavItems = ({
       icon: <AdminIcon />,
       label: "Admin",
       forceShow: true,
+      pinToBottom: true,
       navItems: [
         ...(canViewAppPasswords
           ? [
@@ -253,9 +256,17 @@ const useSelfManagedNavMenuItems = () => {
 };
 
 const NavMenu = (props: { isCollapsed?: boolean; items: NavItemType[] }) => {
+  const topItems = props.items.filter((item) => !item.pinToBottom);
+  const bottomItems = props.items.filter((item) => item.pinToBottom);
   return (
     <NavMenuContainer>
-      {props.items.map((item) => (
+      {topItems.map((item) => (
+        <HideIfEnvironmentDisabled key={item.label} forceShow={item.forceShow}>
+          <NavItem key={item.label} {...item} isCollapsed={props.isCollapsed} />
+        </HideIfEnvironmentDisabled>
+      ))}
+      <Spacer />
+      {bottomItems.map((item) => (
         <HideIfEnvironmentDisabled key={item.label} forceShow={item.forceShow}>
           <NavItem key={item.label} {...item} isCollapsed={props.isCollapsed} />
         </HideIfEnvironmentDisabled>
@@ -285,16 +296,30 @@ const NavMenuMobile = (props: {
       overflowY="auto"
     >
       <VStack px="4" py="6">
-        {props.items.map((item) => (
-          <HideIfEnvironmentDisabled
-            key={item.label}
-            forceShow={item.forceShow}
-          >
-            <NavItem key={item.label} closeMenu={props.closeMenu} {...item} />
-          </HideIfEnvironmentDisabled>
-        ))}
+        {props.items
+          .filter((item) => !item.pinToBottom)
+          .map((item) => (
+            <HideIfEnvironmentDisabled
+              key={item.label}
+              forceShow={item.forceShow}
+            >
+              <NavItem key={item.label} closeMenu={props.closeMenu} {...item} />
+            </HideIfEnvironmentDisabled>
+          ))}
       </VStack>
       <Spacer />
+      <VStack px="4" pb="2">
+        {props.items
+          .filter((item) => item.pinToBottom)
+          .map((item) => (
+            <HideIfEnvironmentDisabled
+              key={item.label}
+              forceShow={item.forceShow}
+            >
+              <NavItem key={item.label} closeMenu={props.closeMenu} {...item} />
+            </HideIfEnvironmentDisabled>
+          ))}
+      </VStack>
       <VStack align="stretch">
         <FreeTrialNotice />
         <VStack>

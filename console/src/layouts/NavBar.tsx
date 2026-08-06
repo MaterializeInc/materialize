@@ -244,7 +244,11 @@ export const NavBar = ({ isCollapsed, accountOnly }: NavBarProps) => {
             />
           </Box>
         )}
-        {!accountOnly && <CreateObjectButton isCollapsed={isCollapsed} />}
+        {!accountOnly && (
+          <HideIfEnvironmentDisabled>
+            <CreateObjectButton isCollapsed={isCollapsed} />
+          </HideIfEnvironmentDisabled>
+        )}
         <AppConfigSwitch
           cloudConfigElement={({ runtimeConfig }) => (
             <CloudNavMenu
@@ -262,7 +266,6 @@ export const NavBar = ({ isCollapsed, accountOnly }: NavBarProps) => {
             />
           }
         />
-        {!isMobile && <Spacer />}
         {!isMobile && !isCollapsed && (
           <FreeTrialNotice mb="4" mx={{ lg: "4" }} />
         )}
