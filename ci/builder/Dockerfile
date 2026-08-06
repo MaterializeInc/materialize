@@ -325,16 +325,15 @@ RUN if [ $ARCH_GCC = x86_64 ]; then \
 
 # Install KinD, kubectl, helm & helm-docs
 
-# TODO(def-) Upgrading kind/kubectl seems to cause Cloudtest failures
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo 'c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284 /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '03d45095dbd9cc1689f179a3e5e5da24b77c2d1b257d7645abf1b4174bebcf2a /usr/local/bin/kind' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
 
-RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
-    && if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
 
 RUN curl -fsSL https://get.helm.sh/helm-v4.0.0-linux-$ARCH_GO.tar.gz > helm.tar.gz \
     && if [ $ARCH_GO = amd64 ]; then echo 'c77e9e7c1cc96e066bd240d190d1beed9a6b08060b2043ef0862c4f865eca08f helm.tar.gz' | sha256sum --check; fi \
@@ -517,16 +516,15 @@ RUN ln -s ../lib/node_modules/corepack/dist/corepack.js /usr/local/bin/corepack 
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && corepack enable
 
-# TODO(def-) Upgrading kind/kubectl seems to cause Cloudtest failures
-RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
+RUN curl -fsSL https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO > /usr/local/bin/kind \
     && chmod +x /usr/local/bin/kind \
-    && if [ $ARCH_GO = amd64 ]; then echo 'c72eda46430f065fb45c5f70e7c957cc9209402ef309294821978677c8fb3284 /usr/local/bin/kind' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo '03d45095dbd9cc1689f179a3e5e5da24b77c2d1b257d7645abf1b4174bebcf2a /usr/local/bin/kind' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54 /usr/local/bin/kind' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo 'b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d /usr/local/bin/kind' | sha256sum --check; fi
 
-RUN curl -fsSL https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
+RUN curl -fsSL https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl > /usr/local/bin/kubectl \
     && chmod +x /usr/local/bin/kubectl \
-    && if [ $ARCH_GO = amd64 ]; then echo '8a45348bdaf81d46caf1706c8bf95b3f431150554f47d444ffde89e8cdd712c1 /usr/local/bin/kubectl' | sha256sum --check; fi \
-    && if [ $ARCH_GO = arm64 ]; then echo 'bdad4d3063ddb7bfa5ecf17fb8b029d5d81d7d4ea1650e4369aafa13ed97149a /usr/local/bin/kubectl' | sha256sum --check; fi
+    && if [ $ARCH_GO = amd64 ]; then echo '95bd70842bd11a524d24acd5b68726899e3488e153e45e2b4ae846545beda050 /usr/local/bin/kubectl' | sha256sum --check; fi \
+    && if [ $ARCH_GO = arm64 ]; then echo '52d3aeefea32fdfa3671ccd636be5da463ddfd0a2fc09d7bcbaedcff4c76cad5 /usr/local/bin/kubectl' | sha256sum --check; fi
 
 # Use Helm 3 (not 4) because the cloud repo's bin/kind-create uses relative
 # file paths for vendored charts, which Helm 4 rejects as invalid URLs.
