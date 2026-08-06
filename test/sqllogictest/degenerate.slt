@@ -19,3 +19,36 @@ INSERT INTO t1 VALUES (NULL)
 query I
 SELECT * FROM t1 WHERE NOT (f1 = f1)
 ----
+
+# Constant collections render into a columnar edge (node P2). Duplicate constant
+# rows land at the same (advanced) time, so the producer folds them within the
+# batch; the query result must still show the correct multiplicity.
+query I rowsort
+SELECT a FROM (VALUES (1), (1), (2)) t(a)
+----
+1
+1
+2
+
+# A constant feeding an indexed view exercises the columnar producer against an
+# ArrangeBy consumer, and the aggregate below against a Reduce consumer.
+statement ok
+CREATE VIEW cv AS SELECT a FROM (VALUES (1), (1), (2), (3)) t(a)
+
+statement ok
+CREATE DEFAULT INDEX ON cv
+
+query II rowsort
+SELECT a, count(*) FROM cv GROUP BY a
+----
+1
+2
+2
+1
+3
+1
+
+query I
+SELECT sum(a) FROM cv
+----
+7
