@@ -39,6 +39,7 @@ enum-iterator.workspace = true
 fallible-iterator.workspace = true
 hex.workspace = true
 hmac.workspace = true
+indexmap.workspace = true
 itertools.workspace = true
 md-5.workspace = true
 murmur2.workspace = true
