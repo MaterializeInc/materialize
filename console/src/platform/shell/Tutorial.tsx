@@ -364,20 +364,6 @@ COMMIT;"
             </RunnableContainer>
             <TextContainer>
               <Text textStyle="text-base">
-                The output should resemble the following:
-              </Text>
-            </TextContainer>
-            <RunnableContainer mt={3} mb={3}>
-              <Runnable
-                runCommand={runCommand}
-                value="| name          | type           | cluster    | comment |
-| ------------- | -------------- | ---------- | ------- |
-| auction_house | load-generator | quickstart |         |"
-                title="Sample output"
-              />
-            </RunnableContainer>
-            <TextContainer>
-              <Text textStyle="text-base">
                 Use the{" "}
                 <Code variant="inline-syntax">
                   <TextLink
@@ -387,7 +373,7 @@ COMMIT;"
                     SHOW TABLES
                   </TextLink>
                 </Code>{" "}
-                command to see the tables created from the source:
+                command to see the tables created from the source.
               </Text>
             </TextContainer>
             <RunnableContainer mt={3} mb={3}>
@@ -395,14 +381,6 @@ COMMIT;"
                 runCommand={runCommand}
                 value="SHOW TABLES;"
                 title="Show the tables."
-              />
-              <Runnable
-                runCommand={runCommand}
-                value="| name     | comment |
-| -------- | ------- |
-| auctions |         |
-| bids     |         |"
-                title="Sample output"
               />
             </RunnableContainer>
           </ListItem>
@@ -430,16 +408,6 @@ COMMIT;"
                     title="View an auction."
                   />
                 </RunnableContainer>
-                The output should return a single row (your results may differ):
-                <RunnableContainer mt={3} mb={3}>
-                  <Runnable
-                    runCommand={runCommand}
-                    value=" id    | seller | item               | end_time
-                    -------+--------+--------------------+---------------------------
-                    29550 | 2468   | Best Pizza in Town | 2024-07-25 18:24:25.805+00"
-                    title="View an auction."
-                  />
-                </RunnableContainer>
               </ListItem>
               <ListItem>
                 View a sample row in <Code variant="inline-syntax">bids</Code>:
@@ -447,16 +415,6 @@ COMMIT;"
                   <Runnable
                     runCommand={runCommand}
                     value="SELECT * FROM bids LIMIT 1;"
-                    title="View a bid."
-                  />
-                </RunnableContainer>
-                The output should return a single row (your results may differ):
-                <RunnableContainer mt={3} mb={3}>
-                  <Runnable
-                    runCommand={runCommand}
-                    value=" id     | buyer | auction_id | amount | bid_time
---------+-------+------------+--------+---------------------------
- 295641 | 737   | 29564      | 72     | 2024-07-25 18:25:42.911+00"
                     title="View a bid."
                   />
                 </RunnableContainer>
@@ -474,19 +432,6 @@ FROM auctions AS a
 JOIN bids AS b
   ON a.id = b.auction_id
 LIMIT 3;"
-                    title="Join bids and auctions."
-                  />
-                </RunnableContainer>
-                The output should return (at most) 3 rows (your results may
-                differ):
-                <RunnableContainer mt={3} mb={3}>
-                  <Runnable
-                    runCommand={runCommand}
-                    value="| id    | seller | item               | end_time                   | id     | buyer | auction_id | amount | bid_time                   |
-                    | ----- | ------ | ------------------ | -------------------------- | ------ | ----- | ---------- | ------ | -------------------------- |
-                    | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155751 | 215   | 15575      | 27     | 2024-07-25 20:30:16.085+00 |
-                    | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155750 | 871   | 15575      | 63     | 2024-07-25 20:30:15.085+00 |
-                    | 15575 | 158    | Signed Memorabilia | 2024-07-25 20:30:25.085+00 | 155752 | 2608  | 15575      | 16     | 2024-07-25 20:30:17.085+00 |"
                     title="Join bids and auctions."
                   />
                 </RunnableContainer>
