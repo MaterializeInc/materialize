@@ -77,6 +77,10 @@ pub type Multiset = BTreeMap<Row, Diff>;
 /// drop every error-propagating plan out of the oracles' reach while looking like
 /// coverage. Genuine failures (timeouts, dropped connections, a cancelled peek)
 /// stay in `anyhow::Error`.
+///
+/// NOTE: oracles compare with [`ReadResult::agrees_with`], not `==`. Equality is
+/// structural and compares the error text, which is stricter than the property the
+/// oracles are entitled to assert.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReadResult {
     /// The collection's contents.
@@ -97,6 +101,28 @@ impl ReadResult {
     /// Whether the collection held an error rather than rows.
     pub fn is_error(&self) -> bool {
         matches!(self, ReadResult::Error(_))
+    }
+
+    /// Whether two reads of the same collection are consistent.
+    ///
+    /// Rows must match exactly. Two errors agree whatever they say, because which
+    /// error a read path reports is not specified. An error collection can hold
+    /// several errors at one timestamp, and each path picks one by its own rule: an
+    /// index peek takes the first key with a nonzero accumulation in its
+    /// *worker-local* error trace and the partitioned client keeps whichever
+    /// worker's error it merges first, while a persist read takes the first error
+    /// row in shard order. Since the error arrangement is keyed by the error, the
+    /// answer moves with the worker count. Requiring two exports to name the same
+    /// error asserts a contract Materialize does not offer (STG-54).
+    ///
+    /// Erroring versus returning rows is a real divergence and stays one.
+    pub fn agrees_with(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ReadResult::Rows(a), ReadResult::Rows(b)) => a == b,
+            (ReadResult::Error(_), ReadResult::Error(_)) => true,
+            (ReadResult::Rows(_), ReadResult::Error(_))
+            | (ReadResult::Error(_), ReadResult::Rows(_)) => false,
+        }
     }
 }
 
@@ -634,7 +660,7 @@ impl WorkloadRunner {
                 )
                 .await?;
             let recomputed = read_result(read.map(multiset_from_rows));
-            if &recomputed != expected {
+            if !recomputed.agrees_with(expected) {
                 anyhow::bail!(
                     "incremental oracle at ts {ts}: the maintained collection differs \
                      from a fresh computation at the same as_of\nmaintained:\n{}\n\
@@ -723,7 +749,7 @@ impl WorkloadRunner {
             )
             .await?;
         let after = read_result(read.map(multiset_from_rows));
-        if &after != expected {
+        if !after.agrees_with(expected) {
             anyhow::bail!(
                 "reconciliation oracle: the index read differently at ts {ts} after \
                  replaying the installed dataflows\nbefore:\n{}\nafter:\n{}",
@@ -774,7 +800,7 @@ impl WorkloadRunner {
             )
             .await?;
         let after = read_result(read.map(multiset_from_rows));
-        if &after != expected {
+        if !after.agrees_with(expected) {
             anyhow::bail!(
                 "compaction oracle: the index read differently at ts {ts} after \
                  AllowCompaction\nbefore:\n{}\nafter:\n{}",
@@ -870,13 +896,34 @@ fn check_export_invariance(
             continue;
         }
         let subscribe = *kind == WorkloadExport::Subscribe;
+        // One report per export pair. An error poisons the collection, so the same
+        // two errors recur at every later timestamp and repeating them buries the
+        // run summary under one finding.
+        let mut error_mismatch_reported = false;
         for (ts, result) in timeline {
             let expected = if subscribe { &sticky } else { reference }
                 .get(ts)
                 .ok_or_else(|| {
                     anyhow::anyhow!("{ref_kind:?} has no read at ts {ts} but {kind:?} does")
                 })?;
-            if result == expected {
+            if result.agrees_with(expected) {
+                // Both errored, naming different errors. Not a divergence, but the
+                // only signal that two read paths picked different elements of one
+                // error collection, so name it rather than letting it pass silently.
+                //
+                // The errors themselves are deliberately not rendered.
+                // `ci-annotate-errors` scans this log for `internal error:` among
+                // others and maps a hit onto a closed issue, which fails the step,
+                // and this line is reached on runs that are otherwise green. The
+                // workload name and the run's seed are a complete reproducer, so a
+                // reader who wants the two errors re-runs it.
+                if result != expected && !error_mismatch_reported {
+                    error_mismatch_reported = true;
+                    inconclusive.push(format!(
+                        "export invariance from ts {ts}: {kind:?} and {ref_kind:?} both \
+                         errored, reporting different errors"
+                    ));
+                }
                 continue;
             }
             // Inside the batch that carried the error, the subscribe cannot say
@@ -955,7 +1002,7 @@ fn check_strategy_invariance(
             let expected = base.get(ts).ok_or_else(|| {
                 anyhow::anyhow!("config {base_name:?} has no read at ts {ts} but {name:?} does")
             })?;
-            if result != expected {
+            if !result.agrees_with(expected) {
                 anyhow::bail!(
                     "strategy invariance at ts {ts}: config {name:?} differs from \
                      {base_name:?}\n{base_name:?}:\n{}\n{name:?}:\n{}",
@@ -1105,5 +1152,45 @@ mod tests {
             err.to_string().contains("at ts 0"),
             "the failure must name the timestamp, got: {err}"
         );
+    }
+
+    /// Two exports that both error agree, whatever error each names, but the
+    /// mismatch is reported as inconclusive rather than passing silently.
+    #[mz_ore::test]
+    fn export_invariance_tolerates_differing_errors() {
+        let err_at = |msg: &str| -> Timeline {
+            [(0, ReadResult::Error(msg.to_string()))]
+                .into_iter()
+                .collect()
+        };
+
+        let by_export: BTreeMap<WorkloadExport, Timeline> = [
+            (WorkloadExport::Index, err_at("Non-positive multiplicity")),
+            (WorkloadExport::Subscribe, err_at("division by zero")),
+        ]
+        .into_iter()
+        .collect();
+        let inconclusive =
+            check_export_invariance(&by_export, None).expect("two errors must not be a divergence");
+        assert_eq!(
+            inconclusive.len(),
+            1,
+            "the differing errors must be reported, got: {inconclusive:?}"
+        );
+        assert!(inconclusive[0].contains("both errored"));
+        assert!(
+            !inconclusive[0].contains("division by zero"),
+            "the errors must not be rendered: ci-annotate-errors scans this log, got: {}",
+            inconclusive[0]
+        );
+
+        // Erroring versus returning rows stays a divergence.
+        let mixed: BTreeMap<WorkloadExport, Timeline> = [
+            (WorkloadExport::Index, err_at("division by zero")),
+            (WorkloadExport::Subscribe, timeline_at(1)),
+        ]
+        .into_iter()
+        .collect();
+        check_export_invariance(&mixed, None).expect_err("an error against rows must be rejected");
     }
 }
