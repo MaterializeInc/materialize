@@ -17,8 +17,14 @@ const LIKE_ESCAPE: char = '|';
 
 pub struct KeyProber<'a> {
     conn: &'a mut mysql_async::Conn,
+    /// Quoted `` `schema`.`table` `` for SQL interpolation.
     table: String,
+    /// Quoted key column for SQL interpolation.
     col: String,
+    /// Unquoted `schema.table` for error reporting.
+    table_name: String,
+    /// Unquoted key column for error reporting.
+    col_name: String,
 }
 
 impl<'a> KeyProber<'a> {
@@ -37,6 +43,8 @@ impl<'a> KeyProber<'a> {
                 quote_identifier(table.table_name)
             ),
             col: quote_identifier(key_col),
+            table_name: format!("{}.{}", table.schema_name, table.table_name),
+            col_name: key_col.to_string(),
         }
     }
 
@@ -177,9 +185,10 @@ impl<'a> KeyProber<'a> {
         match row.and_then(|mut row| row.take_opt::<String, _>(0)) {
             None => Ok(None),
             Some(Ok(value)) => Ok(Some(value)),
-            Some(Err(_)) => Err(MySqlError::NonUtf8KeyValue {
-                qualified_table_name: self.table.clone(),
-                column_name: self.col.clone(),
+            Some(Err(err)) => Err(MySqlError::NonUtf8KeyValue {
+                qualified_table_name: self.table_name.clone(),
+                column_name: self.col_name.clone(),
+                error: err.to_string(),
             }),
         }
     }
