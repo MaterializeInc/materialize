@@ -13,7 +13,69 @@ use std::time::Instant;
 
 use mz_ore::metric;
 use mz_ore::metrics::{Counter, IntCounter, MetricsRegistry};
-use prometheus::IntCounterVec;
+use mz_ore::stats::histogram_seconds_buckets;
+use prometheus::{Gauge, Histogram, IntCounterVec, IntGauge};
+
+/// Metrics for [crate::hedge::HedgedBlob].
+#[derive(Debug, Clone)]
+pub struct BlobHedgeMetrics {
+    pub(crate) fired: IntCounter,
+    pub(crate) won: IntCounter,
+    pub(crate) won_seconds: Histogram,
+    pub(crate) skipped_budget: IntCounter,
+    pub(crate) skipped_concurrency: IntCounter,
+    pub(crate) skipped_unavailable: IntCounter,
+    pub(crate) errors: IntCounter,
+    pub(crate) warm_errors: IntCounter,
+    pub(crate) armed: IntGauge,
+    pub(crate) rtt_latency: Gauge,
+}
+
+impl BlobHedgeMetrics {
+    /// Returns a new [BlobHedgeMetrics] instance connected to the given
+    /// registry.
+    pub fn new(registry: &MetricsRegistry) -> Self {
+        let skipped: IntCounterVec = registry.register(metric!(
+            name: "mz_persist_blob_hedges_skipped",
+            help: "hedge requests not fired for a get that exceeded the hedge delay, by reason",
+            var_labels: ["reason"],
+        ));
+        BlobHedgeMetrics {
+            fired: registry.register(metric!(
+                name: "mz_persist_blob_hedges_fired",
+                help: "blob gets that fired a hedge request",
+            )),
+            won: registry.register(metric!(
+                name: "mz_persist_blob_hedges_won",
+                help: "blob gets where the hedge request won the race",
+            )),
+            won_seconds: registry.register(metric!(
+                name: "mz_persist_blob_hedge_won_seconds",
+                help: "end-to-end latency of blob gets won by the hedge request",
+                buckets: histogram_seconds_buckets(0.000_500, 32.0),
+            )),
+            skipped_budget: skipped.with_label_values(&["budget"]),
+            skipped_concurrency: skipped.with_label_values(&["concurrency"]),
+            skipped_unavailable: skipped.with_label_values(&["unavailable"]),
+            errors: registry.register(metric!(
+                name: "mz_persist_blob_hedge_errors",
+                help: "hedge requests (the hedge leg only, not the primary) that completed with an error",
+            )),
+            warm_errors: registry.register(metric!(
+                name: "mz_persist_blob_hedge_warm_errors",
+                help: "warm-path liveness gets on the hedge sibling that failed or timed out",
+            )),
+            armed: registry.register(metric!(
+                name: "mz_persist_blob_hedge_armed",
+                help: "1 if this process opened a hedge sibling and can hedge when enabled",
+            )),
+            rtt_latency: registry.register(metric!(
+                name: "mz_persist_blob_hedge_rtt_latency",
+                help: "roundtrip-time of the most recent successful warm-path liveness gets on the hedge sibling",
+            )),
+        }
+    }
+}
 
 /// Metrics specific to S3Blob's internal workings.
 #[derive(Debug, Clone)]

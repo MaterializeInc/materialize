@@ -1659,6 +1659,50 @@ metrics:
   - honeycomb
   source: src/persist-client/src/internal/metrics.rs
   visibility: internal
+- name: mz_persist_blob_hedge_armed
+  help: 1 if this process opened a hedge sibling and can hedge when enabled
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_errors
+  help: hedge requests (the hedge leg only, not the primary) that completed with an error
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_rtt_latency
+  help: roundtrip-time of the most recent successful warm-path liveness gets on the hedge sibling
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_warm_errors
+  help: warm-path liveness gets on the hedge sibling that failed or timed out
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_won_seconds_bucket
+  help: end-to-end latency of blob gets won by the hedge request
+  labels:
+  - le
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_won_seconds_count
+  help: end-to-end latency of blob gets won by the hedge request
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedge_won_seconds_sum
+  help: end-to-end latency of blob gets won by the hedge request
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedges_fired
+  help: blob gets that fired a hedge request
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedges_skipped
+  help: hedge requests not fired for a get that exceeded the hedge delay, by reason
+  labels:
+  - reason
+  source: src/persist/src/metrics.rs
+  visibility: internal
+- name: mz_persist_blob_hedges_won
+  help: blob gets where the hedge request won the race
+  source: src/persist/src/metrics.rs
+  visibility: internal
 - name: mz_persist_cmd_cas_mismatch_count
   help: count of command retries from CaS mismatch
   labels:
