@@ -20,7 +20,10 @@ import React from "react";
 import { Link as RouterLink } from "react-router-dom";
 
 import { isSystemCluster } from "~/api/materialize";
-import { ClusterWithOwnership } from "~/api/materialize/cluster/clusterList";
+import {
+  ClusterWithOwnership,
+  Replica,
+} from "~/api/materialize/cluster/clusterList";
 import useLatestOfflineReplica, {
   LatestOfflineReplicaMap,
 } from "~/api/materialize/cluster/useLatestOfflineReplica";
@@ -71,6 +74,15 @@ const createClusterSuggestion = {
 };
 
 /**
+ * One row in the clusters table: a cluster, or one of its replicas nested
+ * underneath it. A union because TanStack's `getSubRows` requires child rows
+ * to share the parent's row type.
+ */
+type ClusterRow =
+  | ({ rowType: "cluster" } & ClusterWithOwnership)
+  | ({ rowType: "replica" } & Replica);
+
+/**
  * Shared data threaded into cell components via TanStack's table `meta`.
  * Read from `info.table.options.meta` and cast to this shape inside cells.
  */
@@ -99,6 +111,22 @@ const ClusterNameCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
   </HStack>
 );
 
+const ReplicaNameCell = ({ replica }: { replica: Replica }) => (
+  <Text textStyle="text-ui-med" noOfLines={1}>
+    {replica.name}
+  </Text>
+);
+
+/** Formats a status-change timestamp for display, or "-" when there is none. */
+const formatStatusChange = (timestamp: string | null | undefined) =>
+  timestamp ? formatDate(timestamp, FRIENDLY_DATETIME_FORMAT_NO_SECONDS) : "-";
+
+const ReplicaLastStatusChangeCell = ({
+  updatedAt,
+}: {
+  updatedAt: string | null;
+}) => <Text noOfLines={1}>{formatStatusChange(updatedAt)}</Text>;
+
 const LastStatusChangeCell = ({
   cluster,
   offlineReplicaMap,
@@ -108,12 +136,7 @@ const LastStatusChangeCell = ({
 }) => {
   const offlineStatus = offlineReplicaMap?.get(cluster.id);
 
-  const lastStatusChangeString = cluster.latestStatusUpdate
-    ? formatDate(
-        cluster.latestStatusUpdate,
-        FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-      )
-    : "-";
+  const lastStatusChangeString = formatStatusChange(cluster.latestStatusUpdate);
 
   return (
     <HStack>
@@ -160,25 +183,39 @@ const ClusterActionsCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
   />
 );
 
-const columnHelper = createColumnHelper<ClusterWithOwnership>();
+const columnHelper = createColumnHelper<ClusterRow>();
 
 const columns = [
   columnHelper.accessor("name", {
     header: "Name",
     sortingFn: "alphanumeric",
-    cell: (info) => <ClusterNameCell cluster={info.row.original} />,
+    cell: (info) => {
+      const row = info.row.original;
+      return row.rowType === "cluster" ? (
+        <ClusterNameCell cluster={row} />
+      ) : (
+        <ReplicaNameCell replica={row} />
+      );
+    },
     meta: {
       minWidth: { md: "280px", sm: "auto" },
       cellProps: truncateMaxWidth,
     },
   }),
-  columnHelper.accessor((row) => row.replicas.length, {
-    id: "replicaCount",
-    header: "Replicas",
-    sortingFn: "basic",
-  }),
+  columnHelper.accessor(
+    (row) => (row.rowType === "cluster" ? row.replicas.length : null),
+    {
+      id: "replicaCount",
+      header: "Replicas",
+      sortingFn: "basic",
+      cell: (info) => info.getValue() ?? "-",
+    },
+  ),
   columnHelper.accessor(
     (row) => {
+      if (row.rowType === "replica") {
+        return row.size;
+      }
       const sizes = new Set(row.replicas.map((r) => r.size));
       return sizes.size > 0 ? Array.from(sizes).join(", ") : null;
     },
@@ -189,24 +226,51 @@ const columns = [
       cell: (info) => info.getValue() ?? "-",
     },
   ),
-  columnHelper.accessor("latestStatusUpdate", {
-    id: "lastStatusChange",
-    header: "Last status change",
-    sortingFn: sortingFunctions.nullsLast,
-    cell: (info) => {
-      const meta = info.table.options.meta as ClusterTableMeta;
-      return (
-        <LastStatusChangeCell
-          cluster={info.row.original}
-          offlineReplicaMap={meta.offlineReplicaMap}
-        />
+  columnHelper.accessor(
+    (row) => {
+      if (row.rowType === "cluster") {
+        return row.latestStatusUpdate;
+      }
+      // A replica carries one status row per process and the query leaves them
+      // unordered, so pick the newest by timestamp.
+      return row.statuses.reduce<string | null>(
+        (latest, { updated_at }) =>
+          latest === null || Date.parse(updated_at) > Date.parse(latest)
+            ? updated_at
+            : latest,
+        null,
       );
     },
-  }),
+    {
+      id: "lastStatusChange",
+      header: "Last status change",
+      sortingFn: sortingFunctions.nullsLast,
+      cell: (info) => {
+        const row = info.row.original;
+        if (row.rowType === "replica") {
+          return <ReplicaLastStatusChangeCell updatedAt={info.getValue()} />;
+        }
+        const meta = info.table.options.meta as ClusterTableMeta;
+        return (
+          <LastStatusChangeCell
+            cluster={row}
+            offlineReplicaMap={meta.offlineReplicaMap}
+          />
+        );
+      },
+    },
+  ),
   columnHelper.display({
     id: "actions",
     header: "",
-    cell: (info) => <ClusterActionsCell cluster={info.row.original} />,
+    cell: (info) => {
+      const row = info.row.original;
+      return row.rowType === "cluster" ? (
+        <ClusterActionsCell cluster={row} />
+      ) : (
+        "-"
+      );
+    },
     enableSorting: false,
     size: OVERFLOW_BUTTON_WIDTH,
   }),
@@ -223,7 +287,11 @@ const ClustersListContent = ({
   const orderedClusters = React.useMemo(() => {
     const visibleClusters = clusters
       .filter((c) => showSystemObjects || !isSystemCluster(c.id))
-      .map((c) => ({ ...c, isOwner: isOwner(c.ownerId) }));
+      .map((c) => ({
+        rowType: "cluster" as const,
+        ...c,
+        isOwner: isOwner(c.ownerId),
+      }));
     // The subscribe upserts by id, so the atom's order is arbitrary. Sort each
     // group by name and keep system clusters at the end.
     const byName = (a: ClusterWithOwnership, b: ClusterWithOwnership) =>
@@ -279,7 +347,7 @@ const ClustersListContent = ({
 };
 
 interface ClusterTableProps {
-  clusters: ClusterWithOwnership[];
+  clusters: ClusterRow[];
 }
 
 const ClusterTable = ({ clusters }: ClusterTableProps) => {
@@ -287,12 +355,18 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
     useLatestOfflineReplica();
 
   const meta: ClusterTableMeta = { offlineReplicaMap };
-
   const table = useUniversalTable({
     data: clusters,
     columns,
     initialSorting: [{ id: "name", desc: false }],
     pageSize: 20,
+    // Only multi-replica clusters expand. A lone replica's size and status are
+    // already what the cluster row shows, so nesting it adds a caret and a
+    // click for no new information.
+    getSubRows: (row) =>
+      row.rowType === "cluster" && row.replicas.length > 1
+        ? row.replicas.map((r) => ({ rowType: "replica" as const, ...r }))
+        : undefined,
     state: {
       columnVisibility: {
         lastStatusChange: !offlineReplicaError,
