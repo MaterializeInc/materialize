@@ -23,6 +23,13 @@
 //! generate the access key/index from that same set, so the accessors hit real
 //! fields/elements (the success + traversal paths) as well as missing ones, and
 //! the index includes out-of-range and extreme values for the array-bounds path.
+//!
+//! Two caps on the generated document are deliberate rather than oversights.
+//! String values draw from a fragment set that covers escapes and non-ASCII but
+//! omits the NUL escape (SQL-475), and nesting stops at depth 5 (SQL-515). Both
+//! of the excluded shapes hit bugs that are tracked already and that this target
+//! has no oracle for anyway, and a target that reproduces a known crash on every
+//! run buries whatever else it would have found.
 
 #![no_main]
 
@@ -30,12 +37,32 @@ use std::str::FromStr;
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_expr::{func, Eval, MirScalarExpr};
+use mz_expr::{Eval, MirScalarExpr, func};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::{Datum, ReprScalarType, RowArena};
 
 /// Object keys, kept to a small set so generated access keys hit real fields.
 const KEYS: &[&str] = &["a", "b", "c", "x"];
+
+/// Fragments of a JSON string value, spliced raw between the quotes, so escape
+/// sequences appear here already escaped. Past plain ASCII these cover what
+/// `->>` has to re-escape when `jsonb_stringify` renders the accessed element
+/// back to text: quote, backslash, a control character, and non-ASCII in both
+/// `\u` and raw UTF-8 form, including a surrogate pair.
+const STRING_PARTS: &[&str] = &[
+    "a",
+    "z",
+    "0",
+    " ",
+    "\\\"",
+    "\\\\",
+    "\\n",
+    "\\u0001",
+    "\\u00e9",
+    "é",
+    "\\ud83d\\ude00",
+    "😀",
+];
 
 fn gen_json(u: &mut Unstructured, depth: u32, out: &mut String) -> arbitrary::Result<()> {
     let leaf = depth == 0 || u.is_empty();
@@ -54,7 +81,7 @@ fn gen_json(u: &mut Unstructured, depth: u32, out: &mut String) -> arbitrary::Re
         3 => {
             out.push('"');
             for _ in 0..u.int_in_range(0usize..=4)? {
-                out.push(*u.choose(&['a', 'z', '0', ' '])?);
+                out.push_str(u.choose(STRING_PARTS)?);
             }
             out.push('"');
         }
@@ -87,15 +114,31 @@ fn gen_json(u: &mut Unstructured, depth: u32, out: &mut String) -> arbitrary::Re
     Ok(())
 }
 
-fn run(mut u: Unstructured) -> arbitrary::Result<()> {
-    let mut json = String::new();
-    gen_json(&mut u, 5, &mut json)?;
-    let Ok(jsonb) = Jsonb::from_str(&json) else {
-        return Ok(());
-    };
-    let value = jsonb.as_ref().into_datum();
-    let arena = RowArena::new();
+/// Evaluates `expr`, requiring that it neither panic nor error.
+///
+/// The four accessors under test are infallible, they return `Option`, not
+/// `Result`, and both operands are `Literal(Ok(..))`, which cannot error. So the
+/// only `Err` reachable here is the `EvalError::Internal` that the eager binary
+/// dispatch raises when a literal's `Datum`/`ReprScalarType` does not match the
+/// function's declared input type. Nothing checks that match at compile time, so
+/// an `Err` means this harness built an invalid expression and every eval below
+/// short-circuits before reaching the code under test, leaving a target that
+/// exercises nothing yet still reports clean.
+fn eval_ok(expr: MirScalarExpr, arena: &RowArena) {
+    let res = expr.eval(&[], arena);
+    assert!(res.is_ok(), "harness built an invalid expression: {res:?}");
+}
 
+fn run(mut u: Unstructured) -> arbitrary::Result<()> {
+    // The access key and index are drawn before the document, and the order
+    // matters. `gen_json` scales its appetite with the input it is handed and
+    // drains the buffer on anything up to libFuzzer's default `-max_len=4096`,
+    // and `Unstructured` does not error once exhausted, it returns the low end of
+    // every range. Drawing these afterwards therefore pins them to `""` and `0`
+    // for the vast majority of executions, which unfuzzes half the input space.
+    // `gen_json` degrades gracefully on the remainder, it emits `null` when
+    // starved.
+    //
     // Key: usually a real field name (hit), sometimes a miss / arbitrary string.
     let key_buf;
     let key: &str = if u.int_in_range(0u8..=2)? == 0 {
@@ -116,27 +159,39 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
         i64::from(u.int_in_range(-3i32..=8)?)
     };
 
+    let mut json = String::new();
+    gen_json(&mut u, 5, &mut json)?;
+    let Ok(jsonb) = Jsonb::from_str(&json) else {
+        return Ok(());
+    };
+    let value = jsonb.as_ref().into_datum();
+    let arena = RowArena::new();
+
     let key_expr = || MirScalarExpr::literal_ok(Datum::String(key), ReprScalarType::String);
     let index_expr = || MirScalarExpr::literal_ok(Datum::Int64(index), ReprScalarType::Int64);
     let jsonb_expr = || MirScalarExpr::literal_ok(value, ReprScalarType::Jsonb);
 
     // jsonb -> '<key>'  (object field access, returns jsonb)
-    let _ = jsonb_expr()
-        .call_binary(key_expr(), func::JsonbGetString)
-        .eval(&[], &arena);
+    eval_ok(
+        jsonb_expr().call_binary(key_expr(), func::JsonbGetString),
+        &arena,
+    );
     // jsonb ->> '<key>'  (object field access, returns text via jsonb_stringify)
-    let _ = jsonb_expr()
-        .call_binary(key_expr(), func::JsonbGetStringStringify)
-        .eval(&[], &arena);
+    eval_ok(
+        jsonb_expr().call_binary(key_expr(), func::JsonbGetStringStringify),
+        &arena,
+    );
 
     // jsonb -> <index>  (array element access, returns jsonb)
-    let _ = jsonb_expr()
-        .call_binary(index_expr(), func::JsonbGetInt64)
-        .eval(&[], &arena);
+    eval_ok(
+        jsonb_expr().call_binary(index_expr(), func::JsonbGetInt64),
+        &arena,
+    );
     // jsonb ->> <index>  (array element access, returns text via jsonb_stringify)
-    let _ = jsonb_expr()
-        .call_binary(index_expr(), func::JsonbGetInt64Stringify)
-        .eval(&[], &arena);
+    eval_ok(
+        jsonb_expr().call_binary(index_expr(), func::JsonbGetInt64Stringify),
+        &arena,
+    );
     Ok(())
 }
 

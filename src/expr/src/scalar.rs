@@ -1385,6 +1385,44 @@ impl VisitChildren<Self> for MirScalarExpr {
 }
 
 impl MirScalarExpr {
+    /// Reports whether this expression contains a non-strict variadic call with an
+    /// operand that could error, the shape of the open bug CLU-137.
+    ///
+    /// `And`, `Or` and `ErrorIfNull` do not evaluate every operand: `Or::eval`
+    /// returns `true` the moment it sees a true operand and drops any error it
+    /// collected, `And::eval` does the same for `false`, and `ErrorIfNull`
+    /// evaluates its message operand only when the first operand is NULL. Yet
+    /// `reduce_call_variadic`'s generic error propagation replaces the whole call
+    /// with any operand's literal error, wherever it sits. So `reduce` can turn a
+    /// row the expression should evaluate into an error, and, because that literal
+    /// is typed non-nullable, it can go on to license a nullability-dependent
+    /// rewrite and yield a different *value* rather than an error.
+    ///
+    /// Fuzz oracles that compare evaluation across `reduce` use this to skip the
+    /// shape rather than rediscover CLU-137 on every run. It lives here, next to
+    /// the fold it describes, so the several oracles that need it cannot drift
+    /// apart on which functions count as non-strict.
+    ///
+    /// Deliberately conservative: it asks whether an operand *could* error rather
+    /// than whether it already holds a literal error, because `reduce` folds a
+    /// column-free fallible operand (`1 / 0`) to a literal error first and absorbs
+    /// it after.
+    pub fn could_hit_nonstrict_error_fold(&self) -> bool {
+        let mut hit = false;
+        self.visit_pre(|e| {
+            if let MirScalarExpr::CallVariadic { func, exprs } = e {
+                let non_strict = matches!(
+                    func,
+                    VariadicFunc::And(_) | VariadicFunc::Or(_) | VariadicFunc::ErrorIfNull(_)
+                );
+                if non_strict && exprs.iter().any(|operand| operand.could_error()) {
+                    hit = true;
+                }
+            }
+        });
+        hit
+    }
+
     /// Iterates through references to child expressions.
     pub fn children(&self) -> impl DoubleEndedIterator<Item = &Self> {
         let mut first = None;
@@ -1968,7 +2006,13 @@ impl fmt::Display for EvalError {
                     (Exclusive(lo), Inclusive(hi)) => {
                         write!(f, "between {lo} exclusive and {hi} inclusive")
                     }
-                    (None, None) => panic!("invalid domain error"),
+                    // No caller constructs an unbounded domain, but a corrupted or
+                    // forged `ProtoEvalError` decodes into one. Render it instead of
+                    // panicking: `DataflowErrorSer::Display` decodes errors straight
+                    // out of a persist shard and Displays them on the index peek
+                    // path, so a panicking arm here wedges the dataflow on every
+                    // retry rather than producing a bad error message once.
+                    (None, None) => write!(f, "in an unspecified range"),
                 }
             }
             EvalError::ComplexOutOfRange(s) => {
@@ -2460,6 +2504,19 @@ impl RustType<ProtoDims> for (usize, usize) {
 mod tests {
     use super::*;
     use crate::scalar::func::variadic::Coalesce;
+
+    /// An `OutOfDomain` with both limits unset is not constructible by any
+    /// caller, but it decodes out of corrupted or forged `ProtoEvalError` bytes,
+    /// and `DataflowErrorSer::Display` renders decoded errors on the peek path.
+    /// Rendering it must not panic.
+    #[mz_ore::test]
+    fn test_unbounded_out_of_domain_renders() {
+        let err = EvalError::OutOfDomain(DomainLimit::None, DomainLimit::None, "f".into());
+        assert_eq!(
+            err.to_string(),
+            "function f is defined for numbers in an unspecified range"
+        );
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`

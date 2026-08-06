@@ -37,17 +37,36 @@
 //! batch of random rows. The check is mostly one-directional: reduce is allowed
 //! to *eliminate* a runtime error (e.g. `If(c, x, x)` becomes `x`, dropping `c`,
 //! and `x AND false` becomes `false`), so we only require that a successful
-//! `Ok(v)` result is preserved exactly. The exception is non-strict AND/OR
-//! error absorption, where the oracle allows a reduced error if the original
-//! row succeeded by absorbing an operand error. Every value type compared is
-//! exact (no float/numeric normalization), so equality is the right oracle.
+//! `Ok(v)` result is preserved exactly. Every value type compared is exact (no
+//! float/numeric normalization), so equality is the right oracle.
+//!
+//! The exception is a row that absorbs a non-strict AND/OR operand error, the
+//! shape of the open bug CLU-137: `Or::eval` returns `true` the moment it sees a
+//! true operand and drops any error it collected, while reduce's error
+//! propagation replaces the whole call with the operand's literal error. Such a
+//! row is skipped outright.
+//!
+//! NOTE: this carve-out used to be gated on the reduced side also being an error,
+//! on the reasoning that "an absorbed error cannot resurface as a value". That is
+//! false, and the fuzzer falsified it: once the absorbed error becomes a
+//! `Literal(Err)`, every rewrite downstream is reading a value the original never
+//! produced, and some of them yield an `Ok` rather than propagating. The observed
+//! case reduced `CastBoolToString(IsNull(If(..)))` from `Ok("true")` to a literal
+//! `Ok("false")`, with `Or([Literal(Err), Column(3)])` folding to `Literal(Err)`
+//! where it evaluates to `Ok(True)`. The wrong value is downstream of CLU-137,
+//! not a second defect, so the whole row goes.
+//!
+//! Leaf and atom distributions are tuned against the folds rather than left
+//! uniform, because a literal-heavy expression is annihilated by constant
+//! folding, null propagation, or error propagation long before it reaches the
+//! rewrites above. See `gen_leaf` and `gen_bool_atoms`.
 
 #![no_main]
 
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use mz_expr::func::variadic::{And, Or};
-use mz_expr::{func, Eval, EvalError, MirScalarExpr, VariadicFunc};
+use mz_expr::{Eval, EvalError, MirScalarExpr, VariadicFunc, func};
 use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena};
 
 // Column layout: a contiguous block per type. Columns are nullable.
@@ -137,10 +156,20 @@ fn nonstr_datum(u: &mut Unstructured, ty: Ty) -> arbitrary::Result<Datum<'static
     })
 }
 
+/// A leaf: a column reference half the time, one of the three literal kinds
+/// otherwise.
+///
+/// The column share is load-bearing. `reduce` constant-folds any node whose
+/// operands are all literals, null-propagates any strict node with a literal
+/// null, and error-propagates any node with a literal error, so a literal-heavy
+/// leaf distribution collapses the whole expression to a single literal before
+/// the interesting rewrites are reached. Columns are opaque to all three folds,
+/// so they are what keeps an expression alive down to the variadic AND/OR
+/// machinery.
 fn gen_leaf(u: &mut Unstructured, ty: Ty) -> arbitrary::Result<MirScalarExpr> {
     let st = scalar_ty(ty);
-    Ok(match u.int_in_range(0u8..=3)? {
-        0 => {
+    Ok(match u.int_in_range(0u8..=5)? {
+        0..=2 => {
             let col = match ty {
                 Ty::Int => COL_INT0 + u.int_in_range(0..=N_INT - 1)?,
                 Ty::Long => COL_LONG0 + u.int_in_range(0..=N_LONG - 1)?,
@@ -149,14 +178,14 @@ fn gen_leaf(u: &mut Unstructured, ty: Ty) -> arbitrary::Result<MirScalarExpr> {
             };
             MirScalarExpr::column(col)
         }
-        1 => match ty {
+        3 => match ty {
             Ty::Str => {
                 let s = gen_string(u)?;
                 MirScalarExpr::literal_ok(Datum::String(&s), st)
             }
             _ => MirScalarExpr::literal_ok(nonstr_datum(u, ty)?, st),
         },
-        2 => MirScalarExpr::literal_null(st),
+        4 => MirScalarExpr::literal_null(st),
         // An error literal exercises reduce's error propagation/ordering.
         _ => MirScalarExpr::literal(Err(EvalError::DivisionByZero), st),
     })
@@ -173,11 +202,27 @@ fn gen_bool_atoms(u: &mut Unstructured, depth: u32) -> arbitrary::Result<Vec<Mir
     let n = u.int_in_range(2usize..=4)?;
     let mut atoms = Vec::with_capacity(n + 2);
     for _ in 0..n {
-        atoms.push(gen_expr(u, Ty::Bool, depth)?);
+        let atom = gen_expr(u, Ty::Bool, depth)?;
+        // A bare literal atom defeats the pool. A literal error annihilates the
+        // enclosing And/Or at reduce's error propagation, and a literal `false`
+        // short-circuits an enclosing `And` in canonicalization, both of which
+        // run before undistribution is reached. Substituting a column keeps the
+        // operand repeatable and opaque to folding.
+        atoms.push(if atom.is_literal() {
+            MirScalarExpr::column(COL_BOOL0 + u.int_in_range(0..=N_BOOL - 1)?)
+        } else {
+            atom
+        });
     }
-    // Seed unit/zero literals so canonicalization's true/false handling fires.
-    atoms.push(MirScalarExpr::literal_ok(Datum::True, scalar_ty(Ty::Bool)));
-    atoms.push(MirScalarExpr::literal_ok(Datum::False, scalar_ty(Ty::Bool)));
+    // Seed unit/zero literals so canonicalization's true/false handling fires,
+    // but only sometimes. An always-present `false` collapses to a constant
+    // every wide `And` that draws it, which is most of them.
+    if u.ratio(1u8, 4u8)? {
+        atoms.push(MirScalarExpr::literal_ok(Datum::True, scalar_ty(Ty::Bool)));
+    }
+    if u.ratio(1u8, 4u8)? {
+        atoms.push(MirScalarExpr::literal_ok(Datum::False, scalar_ty(Ty::Bool)));
+    }
     Ok(atoms)
 }
 
@@ -258,19 +303,25 @@ fn gen_expr(u: &mut Unstructured, ty: Ty, depth: u32) -> arbitrary::Result<MirSc
             },
         },
         Ty::Long => {
-            match u.int_in_range(0u8..=4)? {
+            match u.int_in_range(0u8..=7)? {
                 0 => {
                     let cond = gen_expr(u, Ty::Bool, d)?;
                     let then = gen_expr(u, Ty::Long, d)?;
                     let els = gen_expr(u, Ty::Long, d)?;
                     Ok(cond.if_then_else(then, els))
                 }
+                // int8 arithmetic, mirroring the int4 vocabulary: `%` divides by
+                // zero and negate/abs overflow at `i64::MIN`.
                 1 => Ok(gen_expr(u, Ty::Long, d)?
                     .call_binary(gen_expr(u, Ty::Long, d)?, func::AddInt64)),
                 2 => Ok(gen_expr(u, Ty::Long, d)?
                     .call_binary(gen_expr(u, Ty::Long, d)?, func::SubInt64)),
                 3 => Ok(gen_expr(u, Ty::Long, d)?
                     .call_binary(gen_expr(u, Ty::Long, d)?, func::MulInt64)),
+                4 => Ok(gen_expr(u, Ty::Long, d)?
+                    .call_binary(gen_expr(u, Ty::Long, d)?, func::ModInt64)),
+                5 => Ok(gen_expr(u, Ty::Long, d)?.call_unary(func::NegInt64)),
+                6 => Ok(gen_expr(u, Ty::Long, d)?.call_unary(func::AbsInt64)),
                 // Casts that produce an int8.
                 _ => match u.int_in_range(0u8..=1)? {
                     0 => Ok(gen_expr(u, Ty::Int, d)?.call_unary(func::CastInt32ToInt64)),
@@ -347,6 +398,25 @@ fn gen_row(u: &mut Unstructured) -> arbitrary::Result<Row> {
     Ok(row)
 }
 
+/// Does evaluating `expr` on this row absorb an `And`/`Or` operand error?
+///
+/// This is the per-row refinement of `MirScalarExpr::could_hit_nonstrict_error_fold`,
+/// which answers the same question for a whole expression. The coarse predicate is
+/// what the plan-level oracles use; here a row-precise answer is worth the extra
+/// code, because the CLU-137 shape is common in this generator and skipping every
+/// expression carrying it would cost most of the comparisons.
+///
+/// It models `And` and `Or`, the only non-strict variadics this target generates.
+/// `ErrorIfNull`, the third one the shared predicate knows about, is absent from
+/// the vocabulary above; adding it there needs a matching arm here.
+///
+/// NOTE: this deliberately evaluates *every* operand of an `And`/`Or`, even
+/// though `And::eval` short-circuits on the first `false` and so may never reach
+/// a later erroring operand. Reduce's error propagation is equally
+/// position-insensitive (it fires on any literal-error operand, wherever it
+/// sits), so a short-circuit-aware version here would report "no absorption" for
+/// rows whose reduced form is nonetheless an error, and the oracle would flag
+/// them.
 fn absorbs_and_or_operand_error<'a>(
     expr: &'a MirScalarExpr,
     datums: &[Datum<'a>],
@@ -413,12 +483,15 @@ fn run(u: &mut Unstructured) -> arbitrary::Result<()> {
         let folded = reduced.eval(&datums, &arena);
         // The invariant is one-directional. `reduce` is permitted to eliminate
         // a runtime error, for example when `reduce_if` collapses `If(c, x, x)`
-        // to `x` and drops `c`. So an `Err` original may become anything. The
-        // known exception in the other direction: non-strict AND/OR error
-        // absorption, where a successful `false AND <error>` or
-        // `true OR <error>` may reduce through the absorbed error. Outer
-        // expressions can then fold that error into another value, for example
-        // `IS NULL` reducing to `false`, so skip the whole known shape.
+        // to `x` and drops `c`. So an `Err` original may become anything.
+        //
+        // A row that absorbed a non-strict AND/OR operand error is skipped
+        // entirely, not merely allowed to reduce to an error. Reduce's error
+        // propagation is not absorption-aware (CLU-137), so from the moment it
+        // installs that `Literal(Err)` the reduced expression is evaluating
+        // something the original never computed, and the divergence surfaces as a
+        // wrong *value* as readily as an error. See the module doc for the case
+        // that showed it.
         if original.is_ok() {
             if absorbs_and_or_operand_error(&expr, &datums, &arena) {
                 continue;
