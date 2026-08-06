@@ -210,26 +210,50 @@ pub fn col_values<'a>(
             let upper = soft_expect_or_log(Date::from_pg_epoch(stats.upper))?;
             Some((Datum::Date(lower), Datum::Date(upper)))
         }
-        (SqlScalarType::Time, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        // NOTE: the `kind` field is checked in each fixed-size arm below
+        // because `from_bytes` validates length only, and PackedNaiveDateTime,
+        // PackedInterval, and Uuid are all 16 bytes: wrong-kind bytes would
+        // otherwise silently decode into garbage bounds. A mismatched kind
+        // falls through to the catch-all arm, which degrades to "no stats".
+        (
+            SqlScalarType::Time,
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedTime,
+                    ..
+                },
+            )),
+        ) => {
             let lower = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.lower))?.into_value();
             let upper = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.upper))?.into_value();
             Some((Datum::Time(lower), Datum::Time(upper)))
         }
-        (SqlScalarType::Timestamp { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (
+            SqlScalarType::Timestamp { .. },
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedDateTime,
+                    ..
+                },
+            )),
+        ) => {
             let lower =
                 soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?.into_value();
-            let lower =
-                CheckedTimestamp::from_timestamplike(lower).expect("failed to roundtrip timestamp");
+            let lower = soft_expect_or_log(CheckedTimestamp::from_timestamplike(lower))?;
             let upper =
                 soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.upper))?.into_value();
-            let upper =
-                CheckedTimestamp::from_timestamplike(upper).expect("failed to roundtrip timestamp");
+            let upper = soft_expect_or_log(CheckedTimestamp::from_timestamplike(upper))?;
 
             Some((Datum::Timestamp(lower), Datum::Timestamp(upper)))
         }
         (
             SqlScalarType::TimestampTz { .. },
-            ColumnStatKinds::Bytes(BytesStats::FixedSize(stats)),
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedDateTime,
+                    ..
+                },
+            )),
         ) => {
             let lower = soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?
                 .into_value()
@@ -245,12 +269,28 @@ pub fn col_values<'a>(
         (SqlScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => {
             map_stats(stats, |x| Datum::MzTimestamp(crate::Timestamp::from(x)))
         }
-        (SqlScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (
+            SqlScalarType::Interval,
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedInterval,
+                    ..
+                },
+            )),
+        ) => {
             let lower = soft_expect_or_log(PackedInterval::from_bytes(&stats.lower))?.into_value();
             let upper = soft_expect_or_log(PackedInterval::from_bytes(&stats.upper))?.into_value();
             Some((Datum::Interval(lower), Datum::Interval(upper)))
         }
-        (SqlScalarType::Uuid, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (
+            SqlScalarType::Uuid,
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::Uuid,
+                    ..
+                },
+            )),
+        ) => {
             let lower = soft_expect_or_log(Uuid::from_slice(&stats.lower))?;
             let upper = soft_expect_or_log(Uuid::from_slice(&stats.upper))?;
             Some((Datum::Uuid(lower), Datum::Uuid(upper)))
