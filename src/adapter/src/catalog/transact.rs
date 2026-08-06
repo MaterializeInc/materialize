@@ -86,7 +86,6 @@ use crate::catalog::{
 use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
 
 /// A manually injected audit event.
@@ -360,9 +359,6 @@ pub enum ReplicaCreateDropReason {
     /// - ALTERing various options on a managed cluster,
     /// - CREATE/DROP CLUSTER REPLICA on an unmanaged cluster.
     Manual,
-    /// The automated cluster scheduling initiated the replica create or drop, e.g., a
-    /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
-    ClusterScheduling(Vec<SchedulingDecision>),
     /// The cluster controller's graceful-reconfiguration strategy created the replica while
     /// converging a cluster onto an in-flight `reconfiguration` target (a background
     /// `ALTER CLUSTER`).
@@ -373,11 +369,7 @@ pub enum ReplicaCreateDropReason {
     /// The cluster controller's on-refresh strategy created the replica for a refresh window on
     /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
     /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
-    /// estimate) as the `scheduling_policies` detail, the same detail the legacy scheduler's
-    /// [`ReplicaCreateDropReason::ClusterScheduling`] records. Deliberately not that variant
-    /// itself: its legacy shape carries a per-policy `Vec` and an on/off flag for auditing
-    /// off-decisions, neither of which the controller has (controller drops are uniformly
-    /// `Retired`), and it is removed together with the legacy scheduler.
+    /// estimate) as the `scheduling_policies` detail.
     OnRefresh(RefreshWindowDecision),
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
@@ -394,12 +386,6 @@ impl ReplicaCreateDropReason {
     ) {
         match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
-            ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
-                CreateOrDropClusterReplicaReasonV1::Schedule,
-                Some(SchedulingDecision::reasons_to_audit_log_reasons(
-                    &scheduling_decisions,
-                )),
-            ),
             ReplicaCreateDropReason::GracefulReconfiguration => {
                 (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
             }
@@ -416,8 +402,8 @@ impl ReplicaCreateDropReason {
 }
 
 /// Convert the controller's on-refresh window decision into the audit log's
-/// `scheduling_policies` detail, the same shape the legacy scheduler records:
-/// ids as strings and the hydration-time estimate as an interval string.
+/// `scheduling_policies` detail: ids as strings and the hydration-time estimate
+/// as an interval string.
 fn refresh_window_decision_to_audit_log(
     decision: RefreshWindowDecision,
 ) -> SchedulingDecisionsWithReasonsV2 {
@@ -514,8 +500,8 @@ impl Catalog {
     /// status change, a fresh record, or the drop of an in-progress record.
     ///
     /// Every such movement is an audit-log transition, so a write performing
-    /// one must declare the matching intent. Status-preserving copies (legacy
-    /// paths carrying a record forward, re-targets that stay in progress with a
+    /// one must declare the matching intent. Status-preserving copies (a write
+    /// carrying a record forward, re-targets that stay in progress with a
     /// declared `Started`) and drops of already-settled records move nothing.
     fn reconfiguration_lifecycle_moved(
         old_config: &ClusterConfig,
@@ -3827,8 +3813,8 @@ mod tests {
             &unmanaged,
         ));
 
-        // Not movements: no record at all, a status-preserving copy (legacy
-        // paths carry the record forward), and dropping a settled record.
+        // Not movements: no record at all, a status-preserving copy (a write
+        // that carries the record forward), and dropping a settled record.
         assert!(!Catalog::reconfiguration_lifecycle_moved(
             &managed(None),
             &managed(None),
@@ -3985,9 +3971,8 @@ mod tests {
 
         use crate::catalog::ReplicaCreateDropReason;
 
-        // `OnRefresh` shares the `schedule` audit word with the legacy
-        // `ClusterScheduling` variant and converts the controller's window
-        // decision into the same `scheduling_policies` detail blob: ids as
+        // `OnRefresh` audits the `schedule` word and converts the controller's
+        // window decision into the `scheduling_policies` detail blob: ids as
         // strings, the hydration-time estimate as an interval string, and the
         // decision hardcoded `on` (the controller produces a create, and so
         // this detail, only for an open window).

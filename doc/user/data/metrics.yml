@@ -453,28 +453,6 @@ metrics:
   help: Total number of started transactions.
   source: src/catalog/src/durable/metrics.rs
   visibility: internal
-- name: mz_check_scheduling_policies_seconds_bucket
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - le
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_count
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_sum
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
-  visibility: internal
 - name: mz_cluster_handle_command_duration_seconds_bucket
   help: Time spent in handling commands.
   labels:
@@ -969,25 +947,6 @@ metrics:
   visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_sum
   help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_bucket
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
-  - le
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_count
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_sum
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_bucket

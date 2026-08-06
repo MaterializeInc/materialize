@@ -195,7 +195,6 @@ use crate::coord::appends::{
     PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
@@ -220,7 +219,6 @@ use crate::{AdapterNotice, ReadHolds, flags};
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
 pub(crate) mod cluster_controller;
-pub(crate) mod cluster_scheduling;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -446,13 +444,6 @@ pub enum Message {
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
-    CheckSchedulingPolicies,
-
-    /// Scheduling policy decisions about turning clusters On/Off.
-    /// `Vec<(policy name, Vec of decisions by the policy)>`
-    /// A cluster will be On if and only if there is at least one On decision for it.
-    /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
-    SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
 
     /// One pull/apply call from the cluster controller task, answered on the main
     /// coordinator message loop from the catalog and live controller signals.
@@ -560,8 +551,6 @@ impl Message {
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
-            Message::CheckSchedulingPolicies => "check_scheduling_policies",
-            Message::SchedulingDecisions { .. } => "scheduling_decision",
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
@@ -2133,14 +2122,6 @@ pub struct Coordinator {
     /// Optional config for the timestamp oracle. This is _required_ when
     /// a timestamp oracle backend is configured.
     timestamp_oracle_config: Option<TimestampOracleConfig>,
-
-    /// Periodically asks cluster scheduling policies to make their decisions.
-    check_cluster_scheduling_policies_interval: Interval,
-
-    /// This keeps the last On/Off decision for each cluster and each scheduling policy.
-    /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
-    /// periodically cleaned up from this Map.)
-    cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
 
     /// When doing 0dt upgrades/in read-only mode, periodically ask all known
     /// clusters/collections whether they are caught up.
@@ -4044,13 +4025,6 @@ impl Coordinator {
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
-                    _ = self.check_cluster_scheduling_policies_interval.tick() => {
-                        messages.push(Message::CheckSchedulingPolicies);
-                    },
-
-                    // `tick()` on `Interval` is cancel-safe:
-                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                    // Receive a single command.
                     _ = self.caught_up_check_interval.tick() => {
                         // We do this directly on the main loop instead of
                         // firing off a message. We are still in read-only mode,
@@ -4928,12 +4902,6 @@ pub fn serve(
         let coord_now = now.clone();
         let advance_timelines_interval =
             tokio::time::interval(catalog.system_config().default_timestamp_interval());
-        let mut check_scheduling_policies_interval = tokio::time::interval(
-            catalog
-                .system_config()
-                .cluster_check_scheduling_policies_interval(),
-        );
-        check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         let clusters_caught_up_check_interval = if read_only_controllers {
             let dyncfgs = catalog.system_config().dyncfgs();
@@ -5122,8 +5090,6 @@ pub fn serve(
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
-                    check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
-                    cluster_scheduling_decisions: BTreeMap::new(),
                     caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
