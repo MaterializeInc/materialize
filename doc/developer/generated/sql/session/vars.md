@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/session/vars.rs
-revision: 792095ecf6
+revision: b9097f8a3d
 ---
 
 # mz-sql::session::vars
@@ -9,6 +9,7 @@ Implements `SessionVars` (per-session configuration parameters accessed via `SET
 Defines `Var`, `ServerVar`, and `SystemVar` traits; `FeatureFlag` for feature-gating planner behavior; and the `OwnedVarInput`/`VarInput` types for passing values.
 The `Var` trait includes a `scope()` method returning a `ParameterScope` (from `mz_dyncfg`) that indicates the scope at which a variable's value may be overridden by the LaunchDarkly sync loop; the default is `ParameterScope::Environment`. `SystemVar` delegates `scope()` to its `VarDefinition`. Dyncfg-backed system variables propagate their declared `ParameterScope` from the dyncfg entry into the corresponding `VarDefinition` via `VarDefinition::scoped`.
 Delegates to `definitions` for all variable declarations, `value` for parsing/formatting, `constraints` for validation, and `errors` for error types.
+`SystemVars::dyncfg_updates` computes an update for every dyncfg from its configured value without touching this process's `ConfigSet`; callers that only forward the updates elsewhere use this. `SystemVars::sync_dyncfgs` applies those updates to this process's own `ConfigSet` and returns them; catalog open and every durable system-config change use this to keep the process's dyncfgs in step with the catalog.
 `set_default` (used by `ALTER ROLE ... SET`) skips `check_read_only` for variables listed in `allow_role_default`; currently only `restrict_to_user_objects` is listed there, pairing with a superuser RBAC check in `rbac.rs`. `set_default` calls `self.parse` (which applies domain constraints) rather than `self.definition.parse` (which does not), so constraint violations are caught when setting defaults.
 `restrict_to_user_objects()` returns the value of the `restrict_to_user_objects` session variable.
 `text_encode_settings()` packages the session's `extra_float_digits` (and any future text-encoding session parameters) into a `mz_pgrepr::TextEncodeSettings` value that can be forwarded to encoding calls.

@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar.rs
-revision: 4bd76235f0
+revision: 26305d8cb0
 ---
 
 # timely-util::columnar

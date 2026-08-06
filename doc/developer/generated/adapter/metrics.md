@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/metrics.rs
-revision: b644395dd7
+revision: ff68428395
 ---
 
 # adapter::metrics
@@ -13,3 +13,4 @@ The `mz_time_to_first_row_seconds` histogram carries an `application_name` label
 `Metrics` includes `catalog_transact_seconds` (a `HistogramVec` labeled by `method`) for timing catalog transact methods, `catalog_transact_phase_seconds` (a `HistogramVec` labeled by `phase`) for fine-grained per-phase timing within a catalog transaction (phases overlap and do not sum to `catalog_transact_seconds`), `apply_catalog_implications_seconds` for timing catalog implication application, and `group_commit_catalog_upper_seconds` for timing catalog shard upper advances during group commits and table register/forget operations.
 Several public metrics carry `MetricTag` annotations for categorization: `mz_query_total`, `mz_active_sessions`, `mz_active_subscribes`, and `mz_adapter_commands` carry `MetricTag::Environment`.
 Helper functions `session_type_label_value`, `statement_type_label_value`, and `subscribe_output_label_value` produce the label strings used for partitioning these metrics.
+`Metrics` includes a `subscribe_outputs` `IntCounterVec` (labeled via `subscribe_output_label_value`) counting subscribe output rows; `SessionMetrics` vends per-call counters from it via `Metrics::subscribe_outputs`.

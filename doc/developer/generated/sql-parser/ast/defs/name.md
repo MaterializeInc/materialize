@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/ast/defs/name.rs
-revision: 2483293365
+revision: 15debdab54
 ---
 
 # mz-sql-parser::ast::defs::name
