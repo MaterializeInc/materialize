@@ -111,6 +111,16 @@ pub enum MySqlError {
         column_name: String,
         error: String,
     },
+    #[error(
+        "missing row estimate in '{qualified_table_name}' for key range ({lower_bound}, {upper_bound})"
+    )]
+    MissingRowEstimate {
+        qualified_table_name: String,
+        /// Redacted at construction, safe to log.
+        lower_bound: String,
+        /// Redacted at construction, safe to log.
+        upper_bound: String,
+    },
     #[error("unsupported data types: {columns:?}")]
     UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },
     #[error("duplicated column names in table '{qualified_table_name}': {columns:?}")]
