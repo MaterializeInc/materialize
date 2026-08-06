@@ -1628,6 +1628,10 @@ impl CatalogState {
             .flatten()
     }
 
+    pub(super) fn try_get_database(&self, database_id: &DatabaseId) -> Option<&Database> {
+        self.database_by_id.get(database_id)
+    }
+
     pub(super) fn get_database(&self, database_id: &DatabaseId) -> &Database {
         &self.database_by_id[database_id]
     }
