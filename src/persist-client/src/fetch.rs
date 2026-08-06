@@ -691,6 +691,11 @@ where
             &[as_of] => as_of,
             _ => return,
         };
+        // NOTE: `diffs_sum` sums every row physically in the blob, while
+        // reads truncate rows outside the registered desc. Substituting it is
+        // sound only while no writer registers a batch with tighter bounds
+        // than the blob holds (none does today, and rewritten batches prove
+        // it), which nothing here can re-check without fetching the blob.
         let eligible = self.desc.upper().less_equal(as_of) && self.desc.since().less_equal(as_of);
         if !eligible {
             return;
