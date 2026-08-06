@@ -18,19 +18,18 @@ use mz_catalog::builtin::{
     BuiltinTable, MZ_AGGREGATES, MZ_ARRAY_TYPES, MZ_AWS_CONNECTIONS,
     MZ_AWS_PRIVATELINK_CONNECTIONS, MZ_BASE_TYPES, MZ_CLUSTER_REPLICA_SIZE_INTERNAL,
     MZ_CLUSTER_REPLICA_SIZES, MZ_COLUMNS, MZ_EGRESS_IPS, MZ_FUNCTIONS,
-    MZ_HISTORY_RETENTION_STRATEGIES, MZ_ICEBERG_SINKS, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS,
-    MZ_KAFKA_SINKS, MZ_LICENSE_KEYS, MZ_LIST_TYPES, MZ_MAP_TYPES,
-    MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_DEPENDENCIES, MZ_OBJECT_GLOBAL_IDS,
-    MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH, MZ_SESSIONS, MZ_SINKS,
-    MZ_SOURCE_REFERENCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD, MZ_SUBSCRIPTIONS,
-    MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
+    MZ_HISTORY_RETENTION_STRATEGIES, MZ_INDEX_COLUMNS, MZ_KAFKA_CONNECTIONS, MZ_LICENSE_KEYS,
+    MZ_LIST_TYPES, MZ_MAP_TYPES, MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES, MZ_OBJECT_DEPENDENCIES,
+    MZ_OBJECT_GLOBAL_IDS, MZ_OPERATORS, MZ_PSEUDO_TYPES, MZ_REPLACEMENTS, MZ_ROLE_AUTH,
+    MZ_SESSIONS, MZ_SOURCE_REFERENCES, MZ_SSH_TUNNEL_CONNECTIONS, MZ_STORAGE_USAGE_BY_SHARD,
+    MZ_SUBSCRIPTIONS, MZ_TABLES, MZ_TYPE_PG_METADATA, MZ_TYPES, MZ_VIEWS, MZ_WEBHOOKS_SOURCES,
 };
 use mz_catalog::config::AwsPrincipalContext;
 use mz_catalog::durable::SourceReferences;
 use mz_catalog::memory::error::Error;
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView, Sink,
-    Table, TableDataSource, Type, View,
+    CatalogEntry, CatalogItem, Connection, DataSourceDesc, Func, Index, MaterializedView, Table,
+    TableDataSource, Type, View,
 };
 use mz_expr::MirScalarExpr;
 use mz_license_keys::ValidatedLicenseKey;
@@ -58,7 +57,6 @@ use mz_storage_types::connections::KafkaConnection;
 use mz_storage_types::connections::aws::{AwsAuth, AwsConnection};
 use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
-use mz_storage_types::sinks::{IcebergSinkConnection, KafkaSinkConnection, StorageSinkConnection};
 use smallvec::smallvec;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
@@ -200,9 +198,9 @@ impl CatalogState {
             CatalogItem::MaterializedView(mview) => {
                 self.pack_materialized_view_update(id, mview, diff)
             }
-            CatalogItem::Sink(sink) => {
-                self.pack_sink_update(id, oid, schema_id, name, owner_id, sink, diff)
-            }
+            // mz_sinks, mz_kafka_sinks and mz_iceberg_sinks read create_sql
+            // out of mz_catalog_raw, so there is nothing to pack here.
+            CatalogItem::Sink(_) => vec![],
             CatalogItem::Type(ty) => {
                 self.pack_type_update(id, oid, schema_id, name, owner_id, privileges, ty, diff)
             }
@@ -701,87 +699,6 @@ impl CatalogState {
                 diff,
             ));
         }
-
-        updates
-    }
-
-    fn pack_sink_update(
-        &self,
-        id: CatalogItemId,
-        oid: u32,
-        schema_id: &SchemaSpecifier,
-        name: &str,
-        owner_id: &RoleId,
-        sink: &Sink,
-        diff: Diff,
-    ) -> Vec<BuiltinTableUpdate<&'static BuiltinTable>> {
-        let mut updates = vec![];
-        match &sink.connection {
-            StorageSinkConnection::Kafka(KafkaSinkConnection {
-                topic: topic_name, ..
-            }) => {
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_KAFKA_SINKS,
-                    Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String(topic_name.as_str()),
-                    ]),
-                    diff,
-                ));
-            }
-            StorageSinkConnection::Iceberg(IcebergSinkConnection {
-                namespace, table, ..
-            }) => {
-                updates.push(BuiltinTableUpdate::row(
-                    &*MZ_ICEBERG_SINKS,
-                    Row::pack_slice(&[
-                        Datum::String(&id.to_string()),
-                        Datum::String(namespace.as_str()),
-                        Datum::String(table.as_str()),
-                    ]),
-                    diff,
-                ));
-            }
-        };
-
-        let create_stmt = mz_sql::parse::parse(&sink.create_sql)
-            .unwrap_or_else(|_| panic!("create_sql cannot be invalid: {}", sink.create_sql))
-            .into_element()
-            .ast;
-
-        let envelope = sink.envelope();
-
-        // The combined format string is used for the deprecated `format` column.
-        let combined_format = sink.combined_format();
-        let (key_format, value_format) = match sink.formats() {
-            Some((key_format, value_format)) => (key_format, Some(value_format)),
-            None => (None, None),
-        };
-
-        updates.push(BuiltinTableUpdate::row(
-            &*MZ_SINKS,
-            Row::pack_slice(&[
-                Datum::String(&id.to_string()),
-                Datum::UInt32(oid),
-                Datum::String(&schema_id.to_string()),
-                Datum::String(name),
-                Datum::String(sink.connection.name()),
-                Datum::from(sink.connection_id().map(|id| id.to_string()).as_deref()),
-                // size column now deprecated w/o linked clusters
-                Datum::Null,
-                Datum::from(envelope),
-                // FIXME: These key/value formats are kinda leaky! Should probably live in
-                // the kafka sink table.
-                Datum::from(combined_format.as_ref().map(|f| f.as_ref())),
-                Datum::from(key_format),
-                Datum::from(value_format),
-                Datum::String(&sink.cluster_id.to_string()),
-                Datum::String(&owner_id.to_string()),
-                Datum::String(&sink.create_sql),
-                Datum::String(&create_stmt.to_ast_string_redacted()),
-            ]),
-            diff,
-        ));
 
         updates
     }
