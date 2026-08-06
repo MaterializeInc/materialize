@@ -469,6 +469,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_repr_typecheck
     enable_unified_cluster_arrangment
     enable_yugabyte_connection
+    enable_zero_downtime_cluster_reconfiguration
     kafka_default_metadata_fetch_interval
     mysql_offset_known_interval
     persist_enable_arrow_lgalloc_noncc_sizes
@@ -505,7 +506,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_lgalloc",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
-    "enable_zero_downtime_cluster_reconfiguration",
     "kafka_client_id_enrichment_rules",
     "kafka_progress_record_fetch_timeout",
     "kafka_socket_timeout",

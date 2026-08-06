@@ -24,11 +24,9 @@ $ set-sql-timeout duration=120s
 
 # Drive the tick interval down so the controller ticks ~hundreds of times across
 # the waits below. It is re-read each tick, so the flip takes effect without a
-# restart. The graceful cases use the WITH (WAIT ...) surface, whose planner
-# acceptance is gated on enable_zero_downtime.
+# restart.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
-ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
 
 # ----- Baseline reconcile is a no-op -----
 #
@@ -1697,7 +1695,6 @@ ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
 # Restore pristine server state (including the tick-interval override).
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
 ALTER SYSTEM RESET cluster_controller_tick_interval
-ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration
 ALTER SYSTEM RESET enable_background_alter_cluster
 ALTER SYSTEM RESET enable_auto_scaling_strategy
 ALTER SYSTEM RESET enable_hydration_burst
