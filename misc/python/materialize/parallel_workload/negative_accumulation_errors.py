@@ -12,12 +12,12 @@ accumulation (or similar "non-positive multiplicity" condition).
 
 Parallel Workload intentionally generates queries (via `repeat_row`) that can
 trigger these errors; this module is the single place to update when the
-messages change. Source of truth: database-issues#9308 (section "For reference,
+messages change. Source of truth: STG-36 (section "For reference,
 here is a list of places in the code / error msgs where we detect negative
 accumulations or similar issues").
 """
 
-# Keep this list in sync with database-issues#9308. Each entry is a substring
+# Keep this list in sync with STG-36. Each entry is a substring
 # that may appear in an error surfaced to the client. When the underlying
 # error messages are reworded, update this list in a single commit so the
 # rest of Parallel Workload picks up the new strings automatically.

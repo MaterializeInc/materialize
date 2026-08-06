@@ -438,8 +438,12 @@ impl Pretty {
     ) -> RcDoc<'a> {
         let mut docs = Vec::new();
 
-        // CREATE CLUSTER name
-        docs.push(nest_title("CREATE CLUSTER", self.doc_display_pass(&v.name)));
+        // CREATE CLUSTER [IF NOT EXISTS] name
+        let mut title = "CREATE CLUSTER".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
+        docs.push(nest_title(&title, self.doc_display_pass(&v.name)));
 
         // OPTIONS (...)
         if !v.options.is_empty() {
@@ -468,13 +472,17 @@ impl Pretty {
     ) -> RcDoc<'a> {
         let mut docs = Vec::new();
 
-        // CREATE CLUSTER REPLICA cluster.replica
+        // CREATE CLUSTER REPLICA [IF NOT EXISTS] cluster.replica
+        let mut title = "CREATE CLUSTER REPLICA".to_string();
+        if v.if_not_exists {
+            title.push_str(" IF NOT EXISTS");
+        }
         let replica_name = RcDoc::concat([
             self.doc_display_pass(&v.of_cluster),
             RcDoc::text("."),
             self.doc_display_pass(&v.definition.name),
         ]);
-        docs.push(nest_title("CREATE CLUSTER REPLICA", replica_name));
+        docs.push(nest_title(&title, replica_name));
 
         // OPTIONS (...)
         docs.push(bracket(
