@@ -10,8 +10,9 @@ menu:
     identifier: "grafana-sm"
 ---
 
-The [Materialize Terraform modules](/self-managed-deployments/) can deploy a
-monitoring stack alongside your Materialize deployment. Enabling it installs:
+The [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules) can deploy a
+monitoring stack alongside your Materialize deployment.
+When you set `enable_observability = true`, the modules install:
 
 | Component | Purpose |
 |-----------|---------|
@@ -66,6 +67,11 @@ Alertmanager, kube-state-metrics, and two Alloy roles. Your generic node pool
 may need to grow before the first apply can schedule all of them.
 {{< /note >}}
 
+{{< warning >}}
+If you previously had `enable_observability = true` before
+v9.0.0, your metrics would be lost when you upgrade to v9.0.0 or later, because the stack now uses object storage for metrics and logs rather than ephemeral storage.
+{{< /warning >}}
+
 If you instantiate the modules in your own Terraform rather than using an
 example, add the `monitoring` module for your cloud (see the [Terraform
 installation guide
@@ -90,8 +96,9 @@ module "operator" {
 
 ## Step 2. Access Grafana
 
-Grafana is deployed as a `ClusterIP` service in the `monitoring` namespace, so
-reaching it means port forwarding.
+Grafana is deployed as a `ClusterIP` service in the `monitoring` namespace,
+so it is only reachable from inside the cluster.
+To access it from your local machine, use port forwarding.
 
 1. Retrieve the `admin` password from the Terraform output:
 
@@ -120,10 +127,10 @@ reaching it means port forwarding.
 
 ## Step 3. Open the Materialize dashboards
 
-The dashboards and their data sources are installed by grafana-operator from the
+The dashboards and their data sources are installed by Grafana Operator from the
 released chart, so they track the chart version rather than a copy you maintain.
 
-To confirm they landed:
+To confirm that they were installed:
 
 ```bash
 kubectl -n monitoring get grafanamanifest,grafanadatasource
@@ -143,20 +150,21 @@ For the list of dashboards and what each one covers, see [Grafana dashboards
 ## Connect existing tooling
 
 If you already run Grafana, or want to point other tools at the collected data,
-the examples output the query endpoints:
+the examples output the metric and logging query endpoints:
 
-| Output | Endpoint |
-|--------|----------|
-| `metrics_url` | Thanos Query. Prometheus-API-compatible, so anything that speaks to a Prometheus server works against it. |
+| Terraform Output | Description |
+|------------------|-------------|
+| `metrics_url` | Thanos Query endpoint. Prometheus-API-compatible, so anything that supports the PromQL query API will work with it. |
 | `logs_url` | Loki read endpoint. |
 
 ```bash
 terraform output -raw metrics_url
+terraform output -raw logs_url
 ```
 
 ## Advanced configuration
 
-The monitoring modules expose further options, including sizing profiles,
+The monitoring modules expose additional options, including sizing profiles,
 retention, node placement, and raw Helm value overrides. For these, and for
 installing the stack without the Materialize Terraform modules, see:
 
@@ -175,5 +183,6 @@ installing the stack without the Materialize Terraform modules, see:
 
 ## Alerting
 
-The stack includes Alertmanager. For the metrics and thresholds to start from,
+The stack includes Alertmanager for recording and routing alerts.
+For guidance on the initial set of metrics and suggested thresholds,
 see [Alerting](/manage/monitor/self-managed/alerting/).
