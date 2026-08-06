@@ -4053,6 +4053,12 @@ impl SqlScalarType {
                 Datum::Float32(OrderedFloat(f32::MAX)),
                 Datum::Float32(OrderedFloat(f32::EPSILON)),
                 Datum::Float32(OrderedFloat(f32::NAN)),
+                // NOTE: -NaN and -0.0 have distinct bit patterns from NaN and
+                // 0.0 but compare equal under `OrderedFloat`. Orderings that
+                // look at the representation (e.g. arrow's total order, where
+                // -NaN < -Infinity) can disagree with `OrderedFloat` on them.
+                Datum::Float32(OrderedFloat(-f32::NAN)),
+                Datum::Float32(OrderedFloat(-0.0)),
                 Datum::Float32(OrderedFloat(f32::INFINITY)),
                 Datum::Float32(OrderedFloat(f32::NEG_INFINITY)),
             ])
@@ -4067,6 +4073,9 @@ impl SqlScalarType {
                 Datum::Float64(OrderedFloat(f64::MAX)),
                 Datum::Float64(OrderedFloat(f64::EPSILON)),
                 Datum::Float64(OrderedFloat(f64::NAN)),
+                // See the FLOAT32 note on -NaN and -0.0.
+                Datum::Float64(OrderedFloat(-f64::NAN)),
+                Datum::Float64(OrderedFloat(-0.0)),
                 Datum::Float64(OrderedFloat(f64::INFINITY)),
                 Datum::Float64(OrderedFloat(f64::NEG_INFINITY)),
             ])
@@ -4103,6 +4112,9 @@ impl SqlScalarType {
             Row::pack_slice(&[
                 Datum::Time(NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap()),
                 Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap()),
+                // Leap second: chrono represents it as a fractional part of
+                // one second or more.
+                Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 1_999_999).unwrap()),
             ])
         });
         static TIMESTAMP: LazyLock<Row> = LazyLock::new(|| {
@@ -4225,6 +4237,13 @@ impl SqlScalarType {
                 Datum::String("."),
                 Datum::String("2015-09-18T23:56:04.123Z"),
                 Datum::String(&"x".repeat(100)),
+                // Persist stats truncate string bounds to 100 bytes: cover a
+                // string past that limit, one whose truncated upper bound
+                // cannot be incremented (every char is char::MAX), and one
+                // with a multibyte char straddling the truncation boundary.
+                Datum::String(&"x".repeat(101)),
+                Datum::String(&"\u{10FFFF}".repeat(101)),
+                Datum::String(&format!("{}\u{1F600}", "x".repeat(99))),
                 // Valid timezone.
                 Datum::String("JAPAN"),
                 Datum::String("1,2,3"),
@@ -4267,8 +4286,31 @@ impl SqlScalarType {
                 // JSON doesn't support NaN or Infinite numbers.
                 !(n.0.is_nan() || n.0.is_infinite())
             }));
-            // TODO: Add List, Map.
-            Row::pack_slice(&datums)
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            for datum in datums {
+                packer.push(datum);
+            }
+            // Maps, including ones with disjoint key sets. Persist keeps
+            // per-key statistics for JSON maps, so a collection mixing maps
+            // where a key is present in one and absent in another exercises
+            // the absent-key handling in stats and their consumers.
+            packer.push_dict([("x", Datum::String("a"))]);
+            packer.push_dict([("y", Datum::String("b"))]);
+            packer.push_dict([("x", Datum::True), ("y", Datum::JsonNull)]);
+            packer.push_dict(std::iter::empty::<(&str, Datum)>());
+            // JSON map keys are not truncated in persist stats, unlike SQL
+            // string columns, so cover one past the string truncation limit.
+            let long_key = "k".repeat(101);
+            packer.push_dict([(long_key.as_str(), Datum::True)]);
+            packer.push_dict_with(|packer| {
+                packer.push(Datum::String("nested"));
+                packer.push_dict([("x", Datum::String("a"))]);
+            });
+            // Lists, including a heterogeneous one.
+            packer.push_list([Datum::True, Datum::JsonNull, Datum::String("a")]);
+            packer.push_list(std::iter::empty::<Datum>());
+            row
         });
         static UUID: LazyLock<Row> = LazyLock::new(|| {
             Row::pack_slice(&[
