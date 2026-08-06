@@ -12,6 +12,12 @@ import {
   Button,
   GridItem,
   HStack,
+  IconButton,
+  Menu,
+  MenuButton,
+  MenuItem,
+  MenuList,
+  Portal,
   Text,
   useTheme,
   VStack,
@@ -30,11 +36,22 @@ import SchemaSelect, { SchemaOption } from "~/components/SchemaSelect";
 import { useAllClusters } from "~/store/allClusters";
 import { useAllSchemas } from "~/store/allSchemas";
 import BookOpenIcon from "~/svg/BookOpenIcon";
+import ChevronDownIcon from "~/svg/ChevronDownIcon";
 import { MaterializeTheme } from "~/theme";
 
 import ClusterDropdown from "./ClusterDropdown";
 import { NAVBAR_HEIGHT_PX } from "./constants";
-import { setStoredSidebarVisibility, shellStateAtom } from "./store/shell";
+import {
+  setStoredActiveTutorial,
+  setStoredSidebarVisibility,
+  shellStateAtom,
+} from "./store/shell";
+import {
+  TUTORIAL_IDS,
+  TUTORIAL_LABELS,
+  TUTORIAL_SHORT_LABELS,
+  TutorialId,
+} from "./store/tutorialIds";
 import { getSelectedSchemaOption } from "./utils";
 
 function createSchemaOptionSelectionCommand(
@@ -157,6 +174,22 @@ const ShellHeader = ({
     setStoredSidebarVisibility(tutorialVisible);
   };
 
+  const selectTutorial = (id: TutorialId) => {
+    setShellState((prevState) => ({
+      ...prevState,
+      tutorialVisible: true,
+      activeTutorial: id,
+      // Reset to the first step when switching tutorials so the user lands on
+      // the intro page rather than partway through a different sequence.
+      currentTutorialStep:
+        prevState.activeTutorial === id ? prevState.currentTutorialStep : 0,
+    }));
+    setStoredSidebarVisibility(true);
+    setStoredActiveTutorial(id);
+  };
+
+  const activeTutorialLabel = TUTORIAL_SHORT_LABELS[shellState.activeTutorial];
+
   return (
     <GridItem area="header" display="flex">
       <VStack spacing="0" width="100%">
@@ -191,32 +224,66 @@ const ShellHeader = ({
               menuWidth="400px"
             />
           </HStack>
-          <Button
-            flexShrink="0"
-            variant="secondary"
-            aria-label="Tutorial button"
-            title={
-              shellState.tutorialVisible
-                ? "Close Quickstart"
-                : "Open Quickstart"
-            }
-            leftIcon={
-              shellState.tutorialVisible ? (
-                <CloseIcon height="3" width="3" />
-              ) : (
-                <BookOpenIcon />
-              )
-            }
-            borderRadius="3xl"
-            size="sm"
-            _focus={{
-              border: `1px solid ${colors.accent.brightPurple}`,
-              boxShadow: shadows.input.focus,
-            }}
-            onClick={() => setTutorialVisibility(!shellState.tutorialVisible)}
-          >
-            {shellState.tutorialVisible ? "Close Quickstart" : "Quickstart"}
-          </Button>
+          <HStack spacing="1">
+            <Button
+              flexShrink="0"
+              variant="secondary"
+              aria-label="Tutorial button"
+              title={
+                shellState.tutorialVisible
+                  ? `Close ${activeTutorialLabel}`
+                  : `Open ${activeTutorialLabel}`
+              }
+              leftIcon={
+                shellState.tutorialVisible ? (
+                  <CloseIcon height="3" width="3" />
+                ) : (
+                  <BookOpenIcon />
+                )
+              }
+              borderRadius="3xl"
+              size="sm"
+              _focus={{
+                border: `1px solid ${colors.accent.brightPurple}`,
+                boxShadow: shadows.input.focus,
+              }}
+              onClick={() => setTutorialVisibility(!shellState.tutorialVisible)}
+            >
+              {shellState.tutorialVisible
+                ? `Close ${activeTutorialLabel}`
+                : activeTutorialLabel}
+            </Button>
+            <Menu placement="bottom-end" gutter={2}>
+              <MenuButton
+                as={IconButton}
+                aria-label="Pick a tutorial"
+                title="Pick a tutorial"
+                variant="secondary"
+                size="sm"
+                borderRadius="3xl"
+                icon={<ChevronDownIcon />}
+                _focus={{
+                  border: `1px solid ${colors.accent.brightPurple}`,
+                  boxShadow: shadows.input.focus,
+                }}
+              />
+              <Portal>
+                <MenuList>
+                  {TUTORIAL_IDS.map((id) => (
+                    <MenuItem
+                      key={id}
+                      onClick={() => selectTutorial(id)}
+                      fontWeight={
+                        id === shellState.activeTutorial ? "600" : "400"
+                      }
+                    >
+                      {TUTORIAL_LABELS[id]}
+                    </MenuItem>
+                  ))}
+                </MenuList>
+              </Portal>
+            </Menu>
+          </HStack>
         </HStack>
         {!isClustersError &&
           // Need to make sure the cluster has loaded before checking if it exists
