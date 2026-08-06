@@ -702,6 +702,30 @@ impl PendingWork {
                     }
                 }
                 (SourceData(Err(err)), ()) => {
+                    // A discarded part that turns out to hold an error row is
+                    // as much a pushdown violation as one whose MFP yields
+                    // output: errors must surface regardless of any filter.
+                    // Without this arm the audit was blind to exactly the
+                    // undercounted-err-stats violation class.
+                    if let Some(stats) = &is_filter_pushdown_audit {
+                        sentry::with_scope(
+                            |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+                            || {
+                                error!(
+                                    ?stats,
+                                    name,
+                                    ?err,
+                                    "persist filter pushdown correctness violation!"
+                                );
+                                if self.panic_on_audit_failure {
+                                    panic!(
+                                        "persist filter pushdown correctness violation! {}",
+                                        name
+                                    );
+                                }
+                            },
+                        );
+                    }
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
                     session.give((Err(E::from(err)), emit_time, diff.into()));
