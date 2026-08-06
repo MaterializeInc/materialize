@@ -31,9 +31,9 @@ use query::QueryContext;
 use crate::ast::display::escaped_string_literal;
 use crate::ast::visit_mut::VisitMut;
 use crate::ast::{
-    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateSinkStatement,
-    ShowCreateSourceStatement, ShowCreateTableStatement, ShowCreateViewStatement,
-    ShowObjectsStatement, ShowStatementFilter, Statement, Value,
+    SelectStatement, ShowColumnsStatement, ShowCreateIndexStatement, ShowCreateMetricSinkStatement,
+    ShowCreateSinkStatement, ShowCreateSourceStatement, ShowCreateTableStatement,
+    ShowCreateViewStatement, ShowObjectsStatement, ShowStatementFilter, Statement, Value,
 };
 use crate::catalog::{CatalogItemType, SessionCatalog};
 use crate::names::{
@@ -47,6 +47,7 @@ use crate::plan::statement::{StatementContext, StatementDesc, dml};
 use crate::plan::{
     HirRelationExpr, Params, Plan, PlanError, ShowColumnsPlan, ShowCreatePlan, query, transform_ast,
 };
+use crate::session::vars::ENABLE_METRIC_SINK;
 
 pub fn describe_show_create_view(
     _: &StatementContext,
@@ -192,6 +193,34 @@ pub fn plan_show_create_sink(
     }: ShowCreateSinkStatement<Aug>,
 ) -> Result<ShowCreatePlan, PlanError> {
     plan_show_create_item(scx, &sink_name, CatalogItemType::Sink, redacted)
+}
+
+pub fn describe_show_create_metric_sink(
+    _: &StatementContext,
+    _: ShowCreateMetricSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(Some(
+        RelationDesc::builder()
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            .finish(),
+    )))
+}
+
+pub fn plan_show_create_metric_sink(
+    scx: &StatementContext,
+    ShowCreateMetricSinkStatement {
+        metric_sink_name,
+        redacted,
+    }: ShowCreateMetricSinkStatement<Aug>,
+) -> Result<ShowCreatePlan, PlanError> {
+    scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
+    plan_show_create_item(
+        scx,
+        &metric_sink_name,
+        CatalogItemType::MetricSink,
+        redacted,
+    )
 }
 
 pub fn describe_show_create_index(
@@ -386,6 +415,9 @@ pub fn show_objects<'a>(
         ShowObjectType::Subsource { on_source } => show_subsources(scx, from, on_source, filter),
         ShowObjectType::View => show_views(scx, from, filter),
         ShowObjectType::Sink { in_cluster } => show_sinks(scx, from, in_cluster, filter),
+        ShowObjectType::MetricSink { in_cluster } => {
+            show_metric_sinks(scx, from, in_cluster, filter)
+        }
         ShowObjectType::Type => show_types(scx, from, filter),
         ShowObjectType::Object => show_all_objects(scx, from, filter),
         ShowObjectType::Role => {
@@ -620,6 +652,40 @@ fn show_sinks<'a>(
         filter,
         None,
         Some(&["name", "type", "cluster", "comment"]),
+    )
+}
+
+/// `SHOW METRIC SINKS` reports the `FROM` relation rather than a connection or format, since a
+/// metric sink publishes into the replica's registry and has neither.
+fn show_metric_sinks<'a>(
+    scx: &'a StatementContext<'a>,
+    from: Option<ResolvedSchemaName>,
+    in_cluster: Option<ResolvedClusterName>,
+    filter: Option<ShowStatementFilter<Aug>>,
+) -> Result<ShowSelect<'a>, PlanError> {
+    scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
+    let schema_spec = scx.resolve_optional_schema(&from)?;
+
+    let mut where_clause = format!("sinks.schema_id = '{schema_spec}'");
+    if let Some(cluster) = in_cluster {
+        write!(where_clause, " AND sinks.cluster_id = '{}'", cluster.id)
+            .expect("write on string cannot fail");
+    }
+
+    let query = format!(
+        "SELECT sinks.name, objs.name AS \"from\", clusters.name AS cluster
+        FROM mz_internal.mz_metric_sinks AS sinks
+        JOIN mz_catalog.mz_objects AS objs ON objs.id = sinks.from_id
+        JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id
+        WHERE {where_clause}"
+    );
+    ShowSelect::new(
+        scx,
+        query,
+        filter,
+        None,
+        // `from` is a reserved keyword, so the projection has to quote it.
+        Some(&["name", "\"from\"", "cluster"]),
     )
 }
 

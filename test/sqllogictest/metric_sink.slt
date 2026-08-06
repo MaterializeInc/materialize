@@ -179,12 +179,92 @@ WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 'ms';
 metric-sink
 COMPLETE 1
 
-# It isn't in mz_objects yet, since nothing packs a builtin-table row for it.
+# It is discoverable: one `mz_metric_sinks` row resolving to its `FROM` relation,
+# cluster, schema, and owner.
 
-query I
-SELECT count(*) FROM mz_catalog.mz_objects WHERE name = 'ms'
+query TTTTT
+SELECT sinks.name, objs.name, clusters.name, schemas.name, roles.name
+FROM mz_internal.mz_metric_sinks AS sinks
+JOIN mz_catalog.mz_objects AS objs ON objs.id = sinks.from_id
+JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id
+JOIN mz_catalog.mz_schemas AS schemas ON schemas.id = sinks.schema_id
+JOIN mz_catalog.mz_roles AS roles ON roles.id = sinks.owner_id
+----
+ms  shaped  quickstart  public  materialize
+
+# It joins `mz_objects` under its own type, with the same identity.
+
+query TT
+SELECT sinks.oid = objs.oid, sinks.id = objs.id
+FROM mz_internal.mz_metric_sinks AS sinks
+JOIN mz_catalog.mz_objects AS objs ON objs.name = 'ms' AND objs.type = 'metric-sink'
+----
+true  true
+
+# `mz_show_all_objects` LEFT JOINs comments on the type, so a metric sink has to
+# survive a join it can never match.
+
+query TT
+SELECT name, type FROM mz_internal.mz_show_all_objects WHERE name = 'ms'
+----
+ms  metric-sink
+
+query TTT
+SHOW METRIC SINKS
+----
+ms  shaped  quickstart
+
+query TTT
+SHOW METRIC SINKS IN CLUSTER quickstart LIKE 'm%'
+----
+ms  shaped  quickstart
+
+query TTT
+SHOW METRIC SINKS IN CLUSTER mz_catalog_server
+----
+
+# A metric sink is not a sink, and neither `SHOW` mixes the two up.
+
+query T
+SELECT count(*) FROM (SHOW SINKS)
 ----
 0
+
+# `SHOW CREATE` round-trips through `create_sql`.
+
+query T
+SELECT create_sql FROM (SHOW CREATE METRIC SINK ms)
+----
+CREATE METRIC SINK materialize.public.ms IN CLUSTER quickstart FROM materialize.public.shaped;
+
+statement error materialize.public.ms is not a sink
+SHOW CREATE SINK ms
+
+statement error materialize.public.raw is not a metric sink
+SHOW CREATE METRIC SINK raw
+
+# Creating one is audited. `mz_audit_events.object_type` asserts NOT NULL, so an
+# object type the CASE cannot name errors the whole collection, not just its own
+# row.
+
+simple conn=mz_system,user=mz_system
+SELECT event_type, object_type FROM mz_catalog.mz_audit_events WHERE details->>'item' = 'ms' ORDER BY id
+----
+create,metric-sink
+drop,metric-sink
+create,metric-sink
+COMPLETE 3
+
+# And `metric-sink` is in the object-id namespace, so those events reach
+# `mz_object_history` rather than being filtered out of it.
+
+query TT
+SELECT o.object_type, o.dropped_at IS NULL
+FROM mz_internal.mz_object_history AS o
+JOIN mz_catalog.mz_objects AS objs ON objs.id = o.id
+WHERE objs.name = 'ms'
+----
+metric-sink  true
 
 # Things that deliberately don't work. `COMMENT ON` has no metric-sink variant
 # in the grammar at all.
@@ -215,6 +295,138 @@ SELECT count(*) FROM mz_internal.mz_show_all_objects WHERE name = 'ms'
 ----
 0
 
+# Dropping the sink retracts its catalog row too.
+
+query I
+SELECT count(*) FROM mz_internal.mz_metric_sinks
+----
+0
+
+# Access control. A role needs `CREATE` on the schema, `CREATE` on the cluster,
+# and read on the `FROM` relation. It does not need to own that relation.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE op
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE bystander
+----
+COMPLETE 0
+
+statement ok
+CREATE VIEW shaped AS SELECT * FROM raw
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON SCHEMA materialize.public FROM PUBLIC
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON CLUSTER quickstart FROM PUBLIC
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO op, bystander
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO op, bystander
+----
+COMPLETE 0
+
+# Nothing granted yet, so the schema is the first thing in the way.
+
+simple conn=op,user=op
+CREATE METRIC SINK denied FROM shaped
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+DETAIL: The 'op' role needs CREATE privileges on SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO op
+----
+COMPLETE 0
+
+# Then the relation being read. You cannot sink what you cannot select.
+
+simple conn=op,user=op
+CREATE METRIC SINK denied FROM shaped
+----
+db error: ERROR: permission denied for VIEW "materialize.public.shaped"
+DETAIL: The 'op' role needs SELECT privileges on VIEW "materialize.public.shaped"
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON materialize.public.shaped TO op
+----
+COMPLETE 0
+
+# Then the cluster.
+
+simple conn=op,user=op
+CREATE METRIC SINK denied FROM shaped
+----
+db error: ERROR: permission denied for CLUSTER "quickstart"
+DETAIL: The 'op' role needs CREATE privileges on CLUSTER "quickstart"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON CLUSTER quickstart TO op
+----
+COMPLETE 0
+
+# With all three, create succeeds, and `op` owns the result without owning
+# `shaped`.
+
+simple conn=op,user=op
+CREATE METRIC SINK owned FROM shaped
+----
+COMPLETE 0
+
+query TT
+SELECT sinks.name, roles.name
+FROM mz_internal.mz_metric_sinks AS sinks
+JOIN mz_catalog.mz_roles AS roles ON roles.id = sinks.owner_id
+----
+owned  op
+
+# A non-owner cannot drop it, the owner can, and so can a superuser.
+
+simple conn=bystander,user=bystander
+DROP METRIC SINK owned
+----
+db error: ERROR: must be owner of METRIC SINK materialize.public.owned
+
+simple conn=op,user=op
+DROP METRIC SINK owned
+----
+COMPLETE 0
+
+simple conn=op,user=op
+CREATE METRIC SINK owned FROM shaped
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP METRIC SINK owned
+----
+COMPLETE 0
+
+statement ok
+DROP VIEW shaped CASCADE
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks = false
+----
+COMPLETE 0
+
 # With the flag off the statement is refused, and the error says which flag.
 
 simple conn=mz_system,user=mz_system
@@ -224,3 +436,12 @@ COMPLETE 0
 
 statement error CREATE METRIC SINK is not available
 CREATE METRIC SINK gated FROM raw
+
+# The flag names the feature after its DDL, so the SHOW paths report the same
+# message the CREATE path does.
+
+statement error CREATE METRIC SINK is not available
+SHOW METRIC SINKS
+
+statement error CREATE METRIC SINK is not available
+SHOW CREATE METRIC SINK raw

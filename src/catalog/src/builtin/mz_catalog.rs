@@ -2731,6 +2731,7 @@ SELECT
         WHEN '16' THEN 'system'
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
+        WHEN '19' THEN 'metric-sink'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -3246,6 +3247,8 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         "SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
+UNION ALL
+    SELECT id, oid, schema_id, name, 'metric-sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_internal.mz_metric_sinks
 UNION ALL
     SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes

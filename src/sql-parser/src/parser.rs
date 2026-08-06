@@ -8301,6 +8301,10 @@ impl<'a> Parser<'a> {
                     let in_cluster = self.parse_optional_in_cluster()?;
                     ShowObjectType::Sink { in_cluster }
                 }
+                ObjectType::MetricSink => {
+                    let in_cluster = self.parse_optional_in_cluster()?;
+                    ShowObjectType::MetricSink { in_cluster }
+                }
                 ObjectType::Type => ShowObjectType::Type,
                 ObjectType::Role => ShowObjectType::Role,
                 ObjectType::ClusterReplica => ShowObjectType::ClusterReplica,
@@ -8333,7 +8337,7 @@ impl<'a> Parser<'a> {
                         on_object,
                     }
                 }
-                ObjectType::Func | ObjectType::MetricSink => {
+                ObjectType::Func => {
                     return parser_err!(
                         self,
                         self.peek_prev_pos(),
@@ -8393,6 +8397,13 @@ impl<'a> Parser<'a> {
                 sink_name: self.parse_raw_name()?,
                 redacted,
             }))
+        } else if self.parse_keywords(&[CREATE, METRIC, SINK]) {
+            Ok(ShowStatement::ShowCreateMetricSink(
+                ShowCreateMetricSinkStatement {
+                    metric_sink_name: self.parse_raw_name()?,
+                    redacted,
+                },
+            ))
         } else if self.parse_keywords(&[CREATE, INDEX]) {
             Ok(ShowStatement::ShowCreateIndex(ShowCreateIndexStatement {
                 index_name: self.parse_raw_name()?,
@@ -10132,6 +10143,7 @@ impl<'a> Parser<'a> {
                 MATERIALIZED,
                 SOURCES,
                 SINKS,
+                METRIC,
                 INDEXES,
                 TYPES,
                 ROLES,
@@ -10157,6 +10169,14 @@ impl<'a> Parser<'a> {
                 }
                 SOURCES => ObjectType::Source,
                 SINKS => ObjectType::Sink,
+                METRIC => {
+                    if self.parse_keyword(SINKS) {
+                        ObjectType::MetricSink
+                    } else {
+                        self.prev_token();
+                        return None;
+                    }
+                }
                 INDEXES => ObjectType::Index,
                 TYPES => ObjectType::Type,
                 ROLES | USERS => ObjectType::Role,

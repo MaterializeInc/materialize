@@ -52,24 +52,11 @@ class MetricSink(Check):
         ]
 
     def validate(self) -> Testdrive:
-        # Recreating a sink that is already there is how we probe for it without
-        # mutating anything: metric sinks are not in `mz_objects` yet, and
-        # `mz_catalog_raw` needs a system connection.
-        #
-        # TODO(SQL-572): once metric sinks join `mz_objects` (and the
-        # `mz_metric_sinks` builtin view), probe survival by SELECTing the sink
-        # row instead of re-issuing CREATE and matching "already exists". The
-        # current probe is a proxy: it confirms the catalog item was re-parsed on
-        # boot without needing a system connection.
         return Testdrive(dedent("""
-                ! CREATE METRIC SINK metric_sink_one IN CLUSTER quickstart FROM metric_sink_view
-                contains:metric sink "materialize.public.metric_sink_one" already exists
-
-                ! CREATE METRIC SINK metric_sink_two IN CLUSTER quickstart FROM metric_sink_view
-                contains:metric sink "materialize.public.metric_sink_two" already exists
-
-                ! CREATE METRIC SINK metric_sink_three IN CLUSTER quickstart FROM metric_sink_view
-                contains:metric sink "materialize.public.metric_sink_three" already exists
+                > SHOW METRIC SINKS
+                metric_sink_one   metric_sink_view quickstart
+                metric_sink_three metric_sink_view quickstart
+                metric_sink_two   metric_sink_view quickstart
 
                 # The FROM edge came back too, so the view is still pinned.
                 ! DROP VIEW metric_sink_view
