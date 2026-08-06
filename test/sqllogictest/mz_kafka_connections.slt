@@ -1,0 +1,116 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_kafka_connections. The view is a
+# BuiltinMaterializedView backed by SQL over mz_internal.mz_catalog_raw: see
+# MZ_KAFKA_CONNECTIONS in src/catalog/src/builtin/mz_catalog.rs and the
+# parse_connection_details helper in
+# src/expr/src/scalar/func/impls/jsonb.rs. Rows with a live broker are
+# exercised by test/testdrive/connection-create-drop.td; this file pins the
+# column shape, the progress-topic default, and the parent-type filtering,
+# none of which need a live Kafka.
+
+mode cockroach
+
+reset-server
+
+# --- Schema -------------------------------------------------------------------
+
+# Lock down: 3 columns, canonical order, types, and nullability.
+query TTT
+SELECT c.name, c.type, c.nullable::text
+FROM mz_catalog.mz_columns c
+JOIN mz_catalog.mz_objects o ON c.id = o.id
+JOIN mz_catalog.mz_schemas s ON o.schema_id = s.id
+WHERE o.name = 'mz_kafka_connections' AND s.name = 'mz_catalog'
+ORDER BY c.position
+----
+id  text  false
+brokers  text[]  false
+sink_progress_topic  text  false
+
+# --- Empty on a fresh env -----------------------------------------------------
+
+query I
+SELECT count(*) FROM mz_kafka_connections
+----
+0
+
+# --- A kafka connection populates the view ------------------------------------
+
+statement ok
+CREATE CONNECTION kc TO KAFKA (BROKER 'localhost:9092', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)
+
+query T
+SELECT brokers FROM mz_kafka_connections kc
+JOIN mz_connections c USING (id)
+WHERE c.name = 'kc'
+----
+{localhost:9092}
+
+# The default progress topic reconstructs KafkaConnection::progress_topic.
+query T
+SELECT sink_progress_topic =
+    '_materialize-progress-' || mz_environment_id() || '-' || id
+FROM mz_kafka_connections kc
+JOIN mz_connections c USING (id)
+WHERE c.name = 'kc'
+----
+true
+
+# An explicit PROGRESS TOPIC is passed through verbatim.
+statement ok
+CREATE CONNECTION kc_progress TO KAFKA (
+    BROKER 'localhost:9092',
+    PROGRESS TOPIC 'my_progress',
+    SECURITY PROTOCOL PLAINTEXT
+) WITH (VALIDATE = false)
+
+query T
+SELECT sink_progress_topic FROM mz_kafka_connections kc
+JOIN mz_connections c USING (id)
+WHERE c.name = 'kc_progress'
+----
+my_progress
+
+# --- Non-kafka connections are excluded ---------------------------------------
+
+statement ok
+CREATE CONNECTION sc TO SSH TUNNEL (HOST 'ssh.example.com', USER 'mz')
+
+query I
+SELECT count(*) FROM mz_kafka_connections kc
+JOIN mz_connections c USING (id)
+WHERE c.type != 'kafka'
+----
+0
+
+# --- FK-like invariant: every row joins its parent connection -----------------
+
+query I
+SELECT count(*) FROM mz_kafka_connections kc
+LEFT JOIN mz_connections c ON kc.id = c.id
+WHERE c.id IS NULL
+----
+0
+
+# No duplicate ids.
+query I
+SELECT count(*) - count(DISTINCT id) FROM mz_kafka_connections
+----
+0
+
+statement ok
+DROP CONNECTION kc
+
+statement ok
+DROP CONNECTION kc_progress
+
+statement ok
+DROP CONNECTION sc
