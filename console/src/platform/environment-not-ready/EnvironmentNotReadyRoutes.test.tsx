@@ -14,6 +14,7 @@ import server from "~/api/mocks/server";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
 import {
   disabledEnvironment,
+  healthyEnvironment,
   InitializeStateFn,
   renderComponent,
   RenderWithPathname,
@@ -90,5 +91,37 @@ describe("EnvironmentNotReadyRoutes", () => {
         "/enable-region",
       );
     });
+  });
+
+  it("shows account-level navigation without an enabled environment", async () => {
+    await renderRoutes(["/enable-region"]);
+    // Admin items are account-scoped and must stay reachable while no
+    // environment is enabled.
+    expect(await screen.findByText("Admin")).toBeInTheDocument();
+    expect(screen.getByText("App Passwords")).toBeInTheDocument();
+    expect(screen.getByText("Usage & Billing")).toBeInTheDocument();
+    // Region-scoped items are hidden until an environment is ready.
+    expect(screen.queryByText("Clusters")).not.toBeInTheDocument();
+    expect(screen.queryByText("SQL Shell")).not.toBeInTheDocument();
+  });
+
+  it("does not show the welcome dialog when a region becomes ready", async () => {
+    // The dialog would cover the flow's own region-ready affordances (the
+    // toast and the tutorial's "Open console" button).
+    await renderRoutes(["/creating-environment"], ({ set }) =>
+      setFakeEnvironment(set, "aws/us-east-1", healthyEnvironment),
+    );
+    expect(
+      await screen.findByText("We’re creating your environment"),
+    ).toBeVisible();
+    // The dialog mounts asynchronously, so poll for it rather than checking
+    // synchronously, which would pass before it had a chance to appear. The
+    // explicit timeout overrides the suite-wide asyncUtilTimeout, which would
+    // otherwise spend its full budget proving this negative.
+    await expect(
+      screen.findByTestId("welcome-dialog-close-button", undefined, {
+        timeout: 2_000,
+      }),
+    ).rejects.toThrow();
   });
 });
