@@ -546,7 +546,12 @@ class SqlServerExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE TABLE {identifier(self.table)}
+                # Qualified like the source above. Unqualified, the table lands
+                # in the connection's default schema (`public`) rather than
+                # `self.schema`, and a caller addressing it as
+                # `<database>.<schema>.<table>`, as parallel-workload does, never
+                # resolves it.
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     (REFERENCE {identifier(self.table)})""",
             )
@@ -696,7 +701,8 @@ class MySqlExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE TABLE {identifier(self.table)}
+                # Qualified like the source above, see SqlServerExecutor.create.
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     (REFERENCE mysql.{identifier(self.table)})""",
             )
@@ -826,7 +832,8 @@ class PgExecutor(Executor):
             )
             self.execute(
                 cur,
-                f"""CREATE TABLE {identifier(self.table)}
+                # Qualified like the source above, see SqlServerExecutor.create.
+                f"""CREATE TABLE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.table)}
                     FROM SOURCE {identifier(self.database)}.{identifier(self.schema)}.{identifier(self.source)}
                     (REFERENCE {identifier(self.table)})""",
             )
