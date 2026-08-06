@@ -229,6 +229,24 @@ where
     );
     tokens.push(descs_token);
 
+    // PROBE (diagnostic): consume the descs output directly on the chosen worker
+    // via Pipeline, before the scope `enter` and the fetch-input exchange. This
+    // is a pure async->async, same-worker, no-exchange delivery. Its "INSTR
+    // accept" logs (op=..._probe) localize the trickle: if this delivery is also
+    // ~1-2 per activation, the async bridge itself is the throttle; if it is
+    // bulk, the enter/exchange path downstream is.
+    {
+        let mut probe =
+            AsyncOperatorBuilder::new(format!("shard_source_fetch_probe({})", name), outer.clone());
+        let mut probe_input = probe.new_disconnected_input(descs.clone(), Pipeline);
+        let probe_button = probe.build(move |_caps| async move {
+            while let Some(event) = probe_input.next().await {
+                let _ = event;
+            }
+        });
+        tokens.push(probe_button.press_on_drop());
+    }
+
     let descs = descs.enter(scope);
     let descs = match desc_transformer {
         Some(desc_transformer) => {
@@ -238,6 +256,26 @@ where
         }
         None => descs,
     };
+
+    // PROBE (diagnostic): consume the entered descs stream inside the NESTED
+    // scope via Pipeline (no exchange, stays on the chosen worker). Compared to
+    // the outer-scope probe above (which pulls bulk) and the real fetch input
+    // (exchange, which dribbles), this isolates whether the throttle is the
+    // scope enter / nested-subgraph scheduling (this dribbles too) or the
+    // exchange redistribution (this stays bulk). Logs op=..._nprobe.
+    {
+        let mut nprobe = AsyncOperatorBuilder::new(
+            format!("shard_source_fetch_nprobe({})", name),
+            scope.clone(),
+        );
+        let mut nprobe_input = nprobe.new_disconnected_input(descs.clone(), Pipeline);
+        let nprobe_button = nprobe.build(move |_caps| async move {
+            while let Some(event) = nprobe_input.next().await {
+                let _ = event;
+            }
+        });
+        tokens.push(nprobe_button.press_on_drop());
+    }
 
     let (parts, completed_fetches_stream, fetch_token) = shard_source_fetch::<K, V, TOuter, D, T>(
         descs,
@@ -518,6 +556,8 @@ where
             let (parts, progress) = shard_stream.next().await.expect("infinite stream");
 
             let mut batch_bytes: u64 = 0;
+            // INSTR: count parts emitted per shard_stream batch (one persist batch).
+            let mut dbg_given: u64 = 0;
 
             // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
             // operator will refine this further, if its enabled.
@@ -598,6 +638,17 @@ where
                 let (part, lease) = part_desc.into_exchangeable_part();
                 leases.borrow_mut().push_at(current_ts.clone(), lease);
                 descs_output.give(&session_cap, (worker_idx, part));
+                dbg_given += 1;
+            }
+
+            // INSTR: how many parts this operator emitted in one shard_stream
+            // batch. Answers whether the source floods (single big batch) or
+            // trickles.
+            if dbg_given > 0 {
+                tracing::info!(
+                    target: "mz_persist_client::operators::shard_source",
+                    "INSTR descs emit: gave parts={dbg_given} in one shard_stream batch"
+                );
             }
 
             current_frontier.join_assign(&progress);
@@ -741,6 +792,11 @@ where
         let mut in_flight = FuturesUnordered::new();
         let mut input_done = false;
 
+        // INSTR: cumulative parts accepted from the input, plus a 1s heartbeat
+        // to sample loop depth even while parked in `descs_input.next()`.
+        let mut dbg_pushed: u64 = 0;
+        let mut dbg_tick = tokio::time::interval(std::time::Duration::from_secs(1));
+
         loop {
             // Start fetches up to the concurrency cap.
             while in_flight.len() < max_concurrency {
@@ -773,13 +829,57 @@ where
                         Some(Event::Data(caps, data)) => {
                             // `LeasedBatchPart`es cannot be dropped at this point
                             // w/o panicking, so swap them to an owned version.
+                            let mut first_parts: u64 = 0;
                             for (_idx, part) in data {
                                 pending.push_back((caps.clone(), part));
+                                first_parts += 1;
                             }
+                            // INSTR + candidate fix: after the first event, drain
+                            // every other event already sitting in the input queue
+                            // NOW, admitting the whole backlog in one activation
+                            // instead of one event per schedule. `drained_*`
+                            // measures how deep the backlog was: near-zero means
+                            // the exchange only surfaces ~1 event per activation
+                            // (a delivery trickle); large means the backlog was
+                            // there and this drain lets `in_flight` fill.
+                            let mut drained_events: u64 = 0;
+                            let mut drained_parts: u64 = 0;
+                            loop {
+                                match descs_input.next_sync() {
+                                    Some(Event::Data(caps2, data2)) => {
+                                        drained_events += 1;
+                                        for (_idx, part) in data2 {
+                                            pending.push_back((caps2.clone(), part));
+                                            drained_parts += 1;
+                                        }
+                                    }
+                                    Some(Event::Progress(_)) => {}
+                                    None => break,
+                                }
+                            }
+                            dbg_pushed += first_parts + drained_parts;
+                            tracing::info!(
+                                target: "mz_persist_client::operators::shard_source",
+                                "INSTR fetch recv: first_parts={first_parts} drained_events={drained_events} drained_parts={drained_parts} pending_now={} in_flight={} pushed_total={dbg_pushed}",
+                                pending.len(),
+                                in_flight.len(),
+                            );
                         }
                         Some(Event::Progress(_)) => {}
                         None => input_done = true,
                     }
+                }
+                // INSTR: 1s heartbeat. Fires when the loop is parked (idle) since
+                // biased order checks in_flight/descs first; a repeatedly-low
+                // in_flight with a nonempty pending would indict the fetch loop,
+                // low in_flight with empty pending indicts upstream delivery.
+                _ = dbg_tick.tick() => {
+                    tracing::info!(
+                        target: "mz_persist_client::operators::shard_source",
+                        "INSTR fetch loop: in_flight={} pending={} pushed_total={dbg_pushed} max_concurrency={max_concurrency}",
+                        in_flight.len(),
+                        pending.len(),
+                    );
                 }
                 // Input is exhausted and no fetches remain: we're done.
                 else => break,
@@ -1733,5 +1833,213 @@ mod tests {
             .expect("invalid usage");
 
         read_handle.downgrade_since(&since).await;
+    }
+
+    /// Measures the peak concurrent `blob.get` the fetch operator achieves while
+    /// hydrating a many-part snapshot, with artificial per-get latency injected.
+    ///
+    /// The staging hydration slowness is S3-only (file/minio do not reproduce
+    /// it): the fetch operator settles at ~1 concurrent get. This test injects a
+    /// fixed per-get delay into an in-mem blob (wrapped in `Tasked` just like
+    /// prod, so each get spawns) and reports the peak concurrency reached. If it
+    /// reaches the fetch-concurrency cap, latency alone does not reproduce the
+    /// throttle on a single worker; if it settles near 1, latency-coupling of
+    /// the descs->fetch delivery is reproduced locally.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 8))]
+    #[ignore = "diagnostic: the execute_directly + step_or_park harness cannot sustain \
+                async-operator throughput under real per-get latency, so it does not \
+                faithfully measure steady-state fetch concurrency"]
+    async fn test_shard_source_fetch_concurrency_under_latency() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        use async_trait::async_trait;
+        use bytes::Bytes;
+        use mz_ore::bytes::SegmentedBytes;
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist::location::{BlobMetadata, ExternalError, Tasked};
+        use mz_persist::mem::{MemBlob, MemBlobConfig, MemConsensus};
+
+        use crate::async_runtime::IsolatedRuntime;
+        use crate::cache::StateCache;
+        use crate::cfg::SOURCE_FETCH_CONCURRENCY;
+        use crate::internal::metrics::Metrics;
+        use crate::rpc::NoopPubSubSender;
+        use crate::{PersistClient, PersistConfig};
+
+        /// Blob wrapper that sleeps on every `get`, tracking the peak number of
+        /// gets in flight simultaneously.
+        #[derive(Debug)]
+        struct LatencyBlob {
+            inner: Arc<dyn Blob>,
+            delay: Duration,
+            concurrent: Arc<AtomicUsize>,
+            max_concurrent: Arc<AtomicUsize>,
+            gets: Arc<AtomicUsize>,
+        }
+
+        #[async_trait]
+        impl Blob for LatencyBlob {
+            async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
+                let n = self.concurrent.fetch_add(1, Ordering::SeqCst) + 1;
+                self.max_concurrent.fetch_max(n, Ordering::SeqCst);
+                self.gets.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(self.delay).await;
+                let r = self.inner.get(key).await;
+                self.concurrent.fetch_sub(1, Ordering::SeqCst);
+                r
+            }
+            async fn list_keys_and_metadata(
+                &self,
+                key_prefix: &str,
+                f: &mut (dyn FnMut(BlobMetadata) + Send + Sync),
+            ) -> Result<(), ExternalError> {
+                self.inner.list_keys_and_metadata(key_prefix, f).await
+            }
+            async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
+                self.inner.set(key, value).await
+            }
+            async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
+                self.inner.delete(key).await
+            }
+            async fn restore(&self, key: &str) -> Result<(), ExternalError> {
+                self.inner.restore(key).await
+            }
+        }
+
+        const N_BATCHES: u64 = 200;
+        const FETCH_CONCURRENCY: usize = 64;
+
+        let concurrent = Arc::new(AtomicUsize::new(0));
+        let max_concurrent = Arc::new(AtomicUsize::new(0));
+        let gets = Arc::new(AtomicUsize::new(0));
+
+        let mut cfg = PersistConfig::new_for_tests();
+        // Keep every batch a distinct part, mirroring a held-back `since`.
+        cfg.compaction_enabled = false;
+        cfg.set_config(&SOURCE_FETCH_CONCURRENCY, FETCH_CONCURRENCY);
+        // Force every write to a blob part (not inline in consensus), so the
+        // fetch operator actually issues `blob.get`s we can meter.
+        cfg.set_config(&INLINE_WRITES_SINGLE_MAX_BYTES, 0);
+        cfg.set_config(&INLINE_WRITES_TOTAL_MAX_BYTES, 0);
+        let metrics = Arc::new(Metrics::new(&cfg, &MetricsRegistry::new()));
+
+        let mem_blob: Arc<dyn Blob> = Arc::new(MemBlob::open(MemBlobConfig::default()));
+        let latency_blob = Arc::new(LatencyBlob {
+            inner: mem_blob,
+            delay: Duration::from_millis(25),
+            concurrent: Arc::clone(&concurrent),
+            max_concurrent: Arc::clone(&max_concurrent),
+            gets: Arc::clone(&gets),
+        });
+        // Wrap in `Tasked` exactly as `PersistClientCache::open` does, so each
+        // get runs on its own spawned task and can run in parallel.
+        let blob = Arc::new(Tasked(latency_blob));
+        let consensus = Arc::new(MemConsensus::default());
+
+        let persist_client = PersistClient::new(
+            cfg,
+            blob,
+            consensus,
+            metrics,
+            Arc::new(IsolatedRuntime::new_for_tests()),
+            Arc::new(StateCache::new_no_metrics()),
+            Arc::new(NoopPubSubSender),
+        )
+        .expect("client construction failed");
+
+        let shard_id = ShardId::new();
+        let mut write = persist_client
+            .open_writer::<String, String, u64, u64>(
+                shard_id,
+                Arc::new(StringSchema),
+                Arc::new(StringSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("invalid usage");
+        // `N_BATCHES` distinct single-timestamp batches => a snapshot with that
+        // many parts.
+        for t in 0..N_BATCHES {
+            let row = ((format!("k{t}"), format!("v{t}")), t, 1u64);
+            write.expect_compare_and_append(&[row], t, t + 1).await;
+        }
+
+        // Ignore any gets issued during setup; measure only the hydration read.
+        max_concurrent.store(0, Ordering::SeqCst);
+        gets.store(0, Ordering::SeqCst);
+
+        // Sample in-flight gets over time to see STEADY-STATE concurrency, not
+        // just the peak (an initial flood can spike the peak while steady state
+        // trickles).
+        let samples = Arc::new(std::sync::Mutex::new(Vec::<usize>::new()));
+        let _sampler = {
+            let concurrent = Arc::clone(&concurrent);
+            let samples = Arc::clone(&samples);
+            mz_ore::task::spawn(|| "latency-fetch-sampler", async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    samples
+                        .lock()
+                        .unwrap()
+                        .push(concurrent.load(Ordering::SeqCst));
+                }
+            })
+            .abort_on_drop()
+        };
+
+        let client_for_source = persist_client.clone();
+        timely::execute::execute_directly(move |worker| {
+            let (probe, _token) = worker.dataflow::<u64, _, _>(|outer| {
+                let (stream, token) = outer.scoped::<u64, _, _>("hybrid", |scope| {
+                    let (stream, tokens) = shard_source::<String, String, u64, u64, _, _, _>(
+                        outer,
+                        scope,
+                        "test_source",
+                        move || std::future::ready(client_for_source.clone()),
+                        shard_id,
+                        // Snapshot at the last written time: the whole history
+                        // is one snapshot flood of ~N_BATCHES parts.
+                        Some(Antichain::from_elem(N_BATCHES - 1)),
+                        SnapshotMode::Include,
+                        Antichain::from_elem(N_BATCHES),
+                        Some(move |_, descs, _| (descs, vec![])),
+                        Arc::new(StringSchema),
+                        Arc::new(StringSchema),
+                        FilterResult::keep_all,
+                        false.then_some(|| unreachable!()),
+                        async {},
+                        ErrorHandler::Halt("test"),
+                    );
+                    (stream.leave(outer), tokens)
+                });
+                let probe = ProbeHandle::new();
+                let _stream = stream.probe_with(&probe);
+                (probe, token)
+            });
+
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut timed_out = false;
+            while !probe.with_frontier(|f| f.is_empty()) {
+                if Instant::now() >= deadline {
+                    timed_out = true;
+                    break;
+                }
+                worker.step_or_park(Some(Duration::from_millis(1)));
+            }
+            eprintln!("LATENCY-FETCH hydration timed_out={timed_out}");
+        });
+
+        let mc = max_concurrent.load(Ordering::SeqCst);
+        let g = gets.load(Ordering::SeqCst);
+        let s = samples.lock().unwrap();
+        eprintln!(
+            "LATENCY-FETCH RESULT: max_concurrent_gets={mc} total_gets={g} \
+             (N_BATCHES={N_BATCHES}, delay=25ms, fetch_concurrency={FETCH_CONCURRENCY})"
+        );
+        eprintln!(
+            "LATENCY-FETCH in-flight-gets samples (every 200ms): {:?}",
+            &*s
+        );
     }
 }
