@@ -229,7 +229,8 @@ mod tests {
     use mz_persist_types::codec_impls::UnitSchema;
     use mz_persist_types::columnar::{ColumnDecoder, Schema};
     use mz_persist_types::part::PartBuilder;
-    use mz_persist_types::stats::PartStats;
+    use mz_persist_types::stats::{PartStats, ProtoStructStats, TrimStats, trim_to_budget};
+    use mz_proto::RustType;
     use mz_repr::{Datum, RelationDesc, Row, RowArena, SqlColumnType, SqlScalarType};
     use mz_repr::{SqlRelationType, arb_datum_for_column};
     use proptest::prelude::*;
@@ -256,19 +257,53 @@ mod tests {
             .expect("success");
         let key_stats = decoder.stats();
 
-        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
-        let stats = RelationPartStats {
-            name: "test",
-            metrics: &metrics,
-            stats: &PartStats { key: key_stats },
-            desc: &schema,
-        };
-        let arena = RowArena::default();
+        // Trimming may widen bounds or drop them entirely, but must never
+        // narrow them, so the containment check below has to hold after every
+        // trimming pass: the lossy-but-column-preserving `trim`, and
+        // `trim_to_budget` at budgets all the way down to one that drops
+        // every column. The force-keep column matches the production default
+        // of never trimming the err column's stats.
+        let proto: ProtoStructStats = RustType::into_proto(&key_stats);
+        let mut variants = vec![("collected".to_string(), key_stats)];
+        {
+            let mut trimmed = proto.clone();
+            trimmed.trim();
+            variants.push((
+                "trimmed".to_string(),
+                RustType::from_proto(trimmed).expect("valid proto"),
+            ));
+        }
+        let full = prost::Message::encoded_len(&proto);
+        for budget in [full / 2, full / 4, 16, 0] {
+            let mut trimmed = proto.clone();
+            trim_to_budget(&mut trimmed, budget, |col| col == "err");
+            variants.push((
+                format!("trim_to_budget({budget})"),
+                RustType::from_proto(trimmed).expect("valid proto"),
+            ));
+        }
 
-        // Validate that the stats would include all of the provided datums.
-        for datum in datums {
-            let spec = stats.col_stats(&ColumnIndex::from_raw(0), &arena);
-            assert!(spec.may_contain(*datum));
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        for (label, key_stats) in variants {
+            let stats = RelationPartStats {
+                name: "test",
+                metrics: &metrics,
+                stats: &PartStats { key: key_stats },
+                desc: &schema,
+            };
+            let arena = RowArena::default();
+
+            // Validate that the stats would include all of the provided datums.
+            for datum in datums {
+                let spec = stats.col_stats(&ColumnIndex::from_raw(0), &arena);
+                if !spec.may_contain(*datum) {
+                    return Err(format!(
+                        "{label} stats-derived spec claims {datum:?} is absent from a part that \
+                         contains it (type: {:?}, part: {datums:?}, spec: {spec:?})",
+                        column_type.scalar_type,
+                    ));
+                }
+            }
         }
 
         Ok(())
@@ -296,6 +331,42 @@ mod tests {
             // The proptest! macro interferes with rustfmt.
             scalar_type_stats_roundtrip(scalar_type)
         });
+    }
+
+    /// Deterministic sweep over multi-datum parts: every pair of interesting
+    /// datums and the full set, packed into a single part per type.
+    ///
+    /// Part bounds are computed over the whole part, so a value whose ordering
+    /// the stats collection disagrees on (e.g. -NaN, which arrow's total order
+    /// puts below -Infinity but `OrderedFloat` ranks above every finite value)
+    /// can invalidate the bounds for *other* values in the part. Single-datum
+    /// parts, as covered by `all_scalar_types_stats_roundtrip`, can never
+    /// catch that class of bug.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn interesting_datum_combinations_stats_roundtrip() {
+        for scalar_type in SqlScalarType::enumerate() {
+            let datums: Vec<_> = scalar_type.interesting_datums().collect();
+            if datums.is_empty() {
+                continue;
+            }
+            for nullable in [false, true] {
+                let column_type = scalar_type.clone().nullable(nullable);
+                for (i, a) in datums.iter().enumerate() {
+                    for b in &datums[i + 1..] {
+                        assert_eq!(validate_stats(&column_type, &[*a, *b]), Ok(()));
+                    }
+                    if nullable {
+                        assert_eq!(validate_stats(&column_type, &[*a, Datum::Null]), Ok(()));
+                    }
+                }
+                let mut all = datums.clone();
+                if nullable {
+                    all.push(Datum::Null);
+                }
+                assert_eq!(validate_stats(&column_type, &all[..]), Ok(()));
+            }
+        }
     }
 
     #[mz_ore::test]
