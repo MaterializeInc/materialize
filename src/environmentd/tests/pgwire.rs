@@ -16,7 +16,7 @@ use std::net::TcpStream;
 use std::path::Path;
 use std::time::Duration;
 
-use bytes::BytesMut;
+use bytes::{BufMut, BytesMut};
 use fallible_iterator::FallibleIterator;
 use mz_adapter::session::DEFAULT_DATABASE_NAME;
 use mz_environmentd::test_util::{self, PostgresErrorExt};
@@ -1124,4 +1124,153 @@ fn test_many_columns() {
             );
         }
     }
+}
+
+/// Writes a frontend message with type byte `typ`, filling in its length prefix.
+///
+/// `postgres_protocol`'s builders cap repeated groups at `i16::MAX` entries, so
+/// a message with more parameters than that must be assembled by hand.
+fn put_frontend_message<F: FnOnce(&mut BytesMut)>(buf: &mut BytesMut, typ: u8, body: F) {
+    buf.put_u8(typ);
+    let base = buf.len();
+    buf.put_u32(0);
+    body(buf);
+    let len = u32::try_from(buf.len() - base).unwrap();
+    buf[base..base + 4].copy_from_slice(&len.to_be_bytes());
+}
+
+/// Reads backend messages up to and including the `ReadyForQuery` that answers
+/// `Sync`.
+fn read_until_ready(stream: &mut TcpStream) -> Vec<postgres_protocol::message::backend::Message> {
+    use postgres_protocol::message::backend::Message;
+
+    let mut buf = BytesMut::new();
+    let mut chunk = [0; 1 << 13];
+    let mut msgs = Vec::new();
+    loop {
+        if let Some(msg) = Message::parse(&mut buf).unwrap() {
+            let ready = matches!(msg, Message::ReadyForQuery(_));
+            msgs.push(msg);
+            if ready {
+                return msgs;
+            }
+        } else {
+            let n = stream.read(&mut chunk).unwrap();
+            assert!(n > 0, "connection closed after {} messages", msgs.len());
+            buf.extend_from_slice(&chunk[..n]);
+        }
+    }
+}
+
+// The counts that precede the repeated groups of Parse and Bind (parameter
+// types, format codes, parameter values) are decoded as unsigned, like
+// PostgreSQL does, so a client may send more than `i16::MAX` parameters.
+// Reading such a count as signed made it negative, which dropped the group and
+// left the decoder misaligned for the rest of the message. See SQL-491.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_many_bind_params() {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+
+    // One past `i16::MAX`. The wire format allows 65535, but a bind that large
+    // runs into the unrelated `MAX_REQUEST_SIZE` limit.
+    const PARAMS: usize = 32768;
+    const INT4_OID: u32 = 23;
+    // Bound to the last parameter, so the inserted row matches only if the
+    // decoder stayed aligned to the end of the parameter array.
+    const LAST_VALUE: i32 = 4242;
+
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE many_params (a int)")
+        .unwrap();
+
+    let mut stream = TcpStream::connect(server.sql_local_addr()).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(120)))
+        .unwrap();
+    let mut buf = BytesMut::new();
+    frontend::startup_message(
+        vec![
+            ("user", "materialize"),
+            ("database", DEFAULT_DATABASE_NAME),
+            ("options", "--welcome_message=off"),
+        ],
+        &mut buf,
+    )
+    .unwrap();
+    stream.write_all(&buf).unwrap();
+    read_until_ready(&mut stream);
+
+    // The shape from the report: pgjdbc's reWriteBatchedInserts rewrites a batch
+    // into one insert whose placeholder count exceeds `i16::MAX`.
+    let placeholders = (1..=PARAMS)
+        .map(|i| format!("${i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!("INSERT INTO many_params VALUES (coalesce({placeholders}))");
+
+    // The statement and portal are unnamed throughout, hence the bare `0`s.
+    buf.clear();
+    put_frontend_message(&mut buf, b'P', |buf| {
+        buf.put_u8(0);
+        buf.put_slice(sql.as_bytes());
+        buf.put_u8(0);
+        buf.put_u16(u16::try_from(PARAMS).unwrap());
+        for _ in 0..PARAMS {
+            buf.put_u32(INT4_OID);
+        }
+    });
+    put_frontend_message(&mut buf, b'D', |buf| {
+        buf.put_u8(b'S'); // the statement, to get a ParameterDescription back
+        buf.put_u8(0);
+    });
+    put_frontend_message(&mut buf, b'B', |buf| {
+        buf.put_u8(0);
+        buf.put_u8(0);
+        buf.put_u16(u16::try_from(PARAMS).unwrap());
+        for _ in 0..PARAMS {
+            buf.put_u16(1); // binary
+        }
+        buf.put_u16(u16::try_from(PARAMS).unwrap());
+        for _ in 1..PARAMS {
+            buf.put_i32(-1); // NULL
+        }
+        buf.put_i32(4);
+        buf.put_i32(LAST_VALUE);
+        buf.put_u16(0); // results in text
+    });
+    put_frontend_message(&mut buf, b'E', |buf| {
+        buf.put_u8(0);
+        buf.put_i32(0); // no row limit
+    });
+    frontend::sync(&mut buf);
+    stream.write_all(&buf).unwrap();
+
+    let mut described_params = None;
+    let mut tags = Vec::new();
+    for msg in read_until_ready(&mut stream) {
+        match msg {
+            Message::ErrorResponse(body) => {
+                let fields: Vec<_> = body
+                    .fields()
+                    .map(|f| Ok(String::from_utf8_lossy(f.value_bytes()).into_owned()))
+                    .collect()
+                    .unwrap();
+                panic!("unexpected error response: {fields:?}");
+            }
+            Message::ParameterDescription(body) => {
+                described_params = Some(body.parameters().count().unwrap());
+            }
+            Message::CommandComplete(body) => tags.push(body.tag().unwrap().to_string()),
+            _ => (),
+        }
+    }
+    assert_eq!(described_params, Some(PARAMS));
+    assert_eq!(tags, ["INSERT 0 1"]);
+
+    let row = client.query_one("SELECT a FROM many_params", &[]).unwrap();
+    assert_eq!(row.get::<_, i32>(0), LAST_VALUE);
 }

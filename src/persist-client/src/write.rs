@@ -301,15 +301,9 @@ where
             let desc = Description::new(lower.clone(), target.clone(), since);
             let batch = HollowBatch::empty(desc);
 
-            let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
-                .compare_and_append(
-                    &batch,
-                    &self.writer_id,
-                    &self.debug_state,
-                    heartbeat_timestamp,
-                )
+                .compare_and_append(&batch, &self.writer_id, &self.debug_state)
                 .await;
 
             use CompareAndAppendRes::*;
@@ -749,15 +743,9 @@ where
                 }
             }
 
-            let heartbeat_timestamp = (self.cfg.now)();
             let res = self
                 .machine
-                .compare_and_append(
-                    &combined_batch,
-                    &self.writer_id,
-                    &self.debug_state,
-                    heartbeat_timestamp,
-                )
+                .compare_and_append(&combined_batch, &self.writer_id, &self.debug_state)
                 .await;
 
             match res {

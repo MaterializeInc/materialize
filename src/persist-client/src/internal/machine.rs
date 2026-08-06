@@ -222,12 +222,12 @@ where
         }
     }
 
+    /// Registers a leased reader, returning its initial state.
     pub async fn register_leased_reader(
         &self,
         reader_id: &LeasedReaderId,
         purpose: &str,
         lease_duration: Duration,
-        heartbeat_timestamp_ms: u64,
         use_critical_since: bool,
     ) -> (LeasedReaderState<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
@@ -239,7 +239,9 @@ where
                     purpose,
                     seqno,
                     lease_duration,
-                    heartbeat_timestamp_ms,
+                    // NOTE: Sample the clock here rather than hoisting it out of the closure so
+                    // that a fresh value is used on every retry of this command.
+                    (cfg.now)(),
                     use_critical_since,
                 )
             })
@@ -318,12 +320,12 @@ where
         (reqs, maintenance)
     }
 
+    /// Appends `batch` if the shard upper matches its lower.
     pub async fn compare_and_append(
         &self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
         debug_info: &HandleDebugState,
-        heartbeat_timestamp_ms: u64,
     ) -> CompareAndAppendRes<T> {
         let idempotency_token = IdempotencyToken::new();
         loop {
@@ -331,7 +333,6 @@ where
                 .compare_and_append_idempotent(
                     batch,
                     writer_id,
-                    heartbeat_timestamp_ms,
                     &idempotency_token,
                     debug_info,
                     None,
@@ -375,7 +376,6 @@ where
         &self,
         batch: &HollowBatch<T>,
         writer_id: &WriterId,
-        heartbeat_timestamp_ms: u64,
         idempotency_token: &IdempotencyToken,
         debug_info: &HandleDebugState,
         // Only exposed for testing. In prod, this always starts as None, but
@@ -488,7 +488,9 @@ where
                     state.compare_and_append(
                         batch,
                         writer_id,
-                        heartbeat_timestamp_ms,
+                        // NOTE: Sample the clock here rather than hoisting it out of the closure
+                        // so that a fresh value is used on every retry of this command.
+                        (cfg.now)(),
                         lease_duration_ms,
                         idempotency_token,
                         debug_info,
@@ -627,22 +629,18 @@ where
         }
     }
 
+    /// Downgrades the reader's since capability, also heartbeating its lease.
     pub async fn downgrade_since(
         &self,
         reader_id: &LeasedReaderId,
         outstanding_seqno: SeqNo,
         new_since: &Antichain<T>,
-        heartbeat_timestamp_ms: u64,
     ) -> (SeqNo, Since<T>, RoutineMaintenance) {
         let metrics = Arc::clone(&self.applier.metrics);
-        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, _cfg, state| {
-            state.downgrade_since(
-                reader_id,
-                seqno,
-                outstanding_seqno,
-                new_since,
-                heartbeat_timestamp_ms,
-            )
+        self.apply_unbatched_idempotent_cmd(&metrics.cmds.downgrade_since, |seqno, cfg, state| {
+            // NOTE: Sample the clock here rather than hoisting it out of the closure so that a
+            // fresh value is used on every retry of this command.
+            state.downgrade_since(reader_id, seqno, outstanding_seqno, new_since, (cfg.now)())
         })
         .await
     }
@@ -1500,12 +1498,7 @@ pub mod datadriven {
         let reader_id = args.expect("reader_id");
         let (_, since, routine) = datadriven
             .machine
-            .downgrade_since(
-                &reader_id,
-                seqno,
-                &since,
-                (datadriven.machine.applier.cfg.now)(),
-            )
+            .downgrade_since(&reader_id, seqno, &since)
             .await;
         datadriven.routine.push(routine);
         Ok(format!(
@@ -2195,7 +2188,6 @@ pub mod datadriven {
                 &reader_id,
                 "tests",
                 READER_LEASE_DURATION.get(&datadriven.client.cfg),
-                (datadriven.client.cfg.now)(),
                 false,
             )
             .await;
@@ -2313,7 +2305,6 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let token = args.optional("token").unwrap_or_else(IdempotencyToken::new);
-        let now = (datadriven.client.cfg.now)();
 
         let (id, maintenance) = datadriven
             .machine
@@ -2330,7 +2321,6 @@ pub mod datadriven {
                 .compare_and_append_idempotent(
                     &batch.batch,
                     &writer_id,
-                    now,
                     &token,
                     &HandleDebugState::default(),
                     indeterminate,
@@ -2494,7 +2484,6 @@ pub mod tests {
                     &batch.into_hollow_batch(),
                     &write.writer_id,
                     &HandleDebugState::default(),
-                    (write.cfg.now)(),
                 )
                 .await
                 .unwrap();

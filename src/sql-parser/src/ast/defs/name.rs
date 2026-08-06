@@ -333,9 +333,12 @@ impl Ident {
                         // (`list[1]` is a valid one-element list), so a bare `list`
                         // identifier that gets subscripted — `"list"[1]` — would
                         // reparse as a list literal instead of a subscript. (`ARRAY`
-                        // is reserved-in-scalar-expression and so already quoted;
-                        // `MAP[...]` requires `=>`, so `map[1]` is unambiguously a
-                        // subscript.)
+                        // is reserved-in-scalar-expression and so already quoted.
+                        // `MAP` needs no clause here even though `map[…]` is a
+                        // literal too: `MAP` is a context-sensitive keyword, so
+                        // `write_subscript_receiver` parenthesizes the receiver into
+                        // `(map)[1]`, and every grammar that starts a map literal
+                        // requires a `[` right after the keyword.)
                         || kw == LIST
                         // `DEALLOCATE [PREPARE] <name>` accepts an optional
                         // `PREPARE` keyword before the name, so a bare `prepare`

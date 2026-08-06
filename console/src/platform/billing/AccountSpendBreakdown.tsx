@@ -8,6 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { Box, chakra, HStack, Text, Tooltip, useTheme } from "@chakra-ui/react";
+import { createColumnHelper } from "@tanstack/react-table";
 import { AxisBottom, AxisLeft, AxisScale } from "@visx/axis";
 import { curveMonotoneX } from "@visx/curve";
 import { localPoint } from "@visx/event";
@@ -20,7 +21,7 @@ import { BarStack, LinePath } from "@visx/shape";
 import { useTooltip, useTooltipInPortal } from "@visx/tooltip";
 import { parseISO } from "date-fns";
 import { motion } from "framer-motion";
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 
 import {
   CostBreakdownAccount,
@@ -30,6 +31,8 @@ import {
 import ErrorBox from "~/components/ErrorBox";
 import { GraphEventOverlay, GraphTooltip } from "~/components/graphComponents";
 import { LoadingContainer } from "~/components/LoadingContainer";
+import { UniversalTable } from "~/components/Table/UniversalTable";
+import { useUniversalTable } from "~/components/Table/useUniversalTable";
 import {
   EmptyListHeader,
   EmptyListHeaderContents,
@@ -51,12 +54,6 @@ import {
   shortAccountId,
   StackedDailyRow,
 } from "./dailyBreakdown";
-import {
-  LedgerCaret,
-  LedgerCell,
-  LedgerGroup,
-  LedgerTable,
-} from "./LedgerTable";
 import RegionSelect from "./RegionSelect";
 import TimeRangeSelect from "./TimeRangeSelect";
 
@@ -402,88 +399,106 @@ const TrendSparkline = ({
 };
 
 /**
- * One account rendered as an expandable ledger group: the account is the
- * always-visible parent row (caret + color swatch + label, its share of the
- * period total, a daily-total trend, and its total cost) and its clusters are
- * indented, region-qualified child rows revealed by the disclosure. Groups
- * default closed, so the ledger opens to a compact summary and clusters are
- * revealed on demand.
+ * One ledger row: an account (the expandable parent, carrying its share,
+ * trend, and total) or one of its region-qualified clusters. A union because
+ * TanStack's `getSubRows` requires children to share the parent's row type.
  */
-const AccountLedgerGroup = ({
-  account,
-  total,
-  share,
-  trend,
-  color,
-  onOpenChange,
-}: {
-  account: CostBreakdownAccount;
-  total: number;
-  share: number;
-  trend: number[];
-  color: string;
-  onOpenChange: (isOpen: boolean) => void;
-}) => {
-  return (
-    <LedgerGroup
-      rowCount={account.clusters.length}
-      defaultIsOpen={false}
-      onOpenChange={onOpenChange}
-      data-testid="account-row"
-      renderHeader={(isOpen) => (
+type LedgerRow =
+  | {
+      kind: "account";
+      account: CostBreakdownAccount;
+      total: number;
+      share: number;
+      trend: number[];
+      color: string;
+      clusters: LedgerRow[];
+    }
+  | { kind: "cluster"; cluster: CostBreakdownCluster };
+
+interface LedgerTableMeta {
+  grandTotal: number;
+}
+
+const ledgerColumnHelper = createColumnHelper<LedgerRow>();
+
+const ledgerColumns = [
+  ledgerColumnHelper.display({
+    id: "name",
+    header: "Account / cluster",
+    cell: ({ row }) => {
+      const r = row.original;
+      if (r.kind === "cluster") return clusterLabel(r.cluster);
+      return (
         <>
-          <LedgerCell variant="groupHeader">
-            <LedgerCaret isOpen={isOpen} />
-            <Box
-              width="2"
-              height="2"
-              borderRadius="sm"
-              backgroundColor={color}
-              marginRight="2"
-              flexShrink={0}
-            />
-            <Tooltip label={account.external_customer_id}>
-              <Text whiteSpace="nowrap">
-                {account.name || shortAccountId(account.external_customer_id)}
-              </Text>
-            </Tooltip>
-          </LedgerCell>
-          <LedgerCell variant="groupHeader" />
-          <LedgerCell variant="groupHeader" numeric>
-            {formatPercentage(share, 1)}
-          </LedgerCell>
-          <LedgerCell variant="groupHeader">
-            <TrendSparkline points={trend} color={color} />
-          </LedgerCell>
-          <LedgerCell variant="groupHeader" numeric>
-            {formatCurrency(total)}
-          </LedgerCell>
+          <Box
+            width="2"
+            height="2"
+            borderRadius="sm"
+            backgroundColor={r.color}
+            marginRight="2"
+            flexShrink={0}
+          />
+          <Tooltip label={r.account.external_customer_id}>
+            <Text whiteSpace="nowrap">
+              {r.account.name || shortAccountId(r.account.external_customer_id)}
+            </Text>
+          </Tooltip>
         </>
-      )}
-    >
-      {account.clusters.map((cluster, ix) => {
-        const isLastElement = ix === account.clusters.length - 1;
-        return (
-          <React.Fragment
-            key={`${cluster.environment_id}/${cluster.cluster_grouping_key}/${cluster.category}/${ix}`}
-          >
-            <LedgerCell indented isLastRow={isLastElement}>
-              {clusterLabel(cluster)}
-            </LedgerCell>
-            <LedgerCell isLastRow={isLastElement} numeric>
-              {formatUsage(cluster)}
-            </LedgerCell>
-            <LedgerCell isLastRow={isLastElement} />
-            <LedgerCell isLastRow={isLastElement} />
-            <LedgerCell isLastRow={isLastElement} numeric>
-              {formatCurrency(clusterTotal(cluster.amounts))}
-            </LedgerCell>
-          </React.Fragment>
-        );
-      })}
-    </LedgerGroup>
-  );
-};
+      );
+    },
+    footer: () => "Total",
+    // Mirror the old grid's `minmax(200px, 1fr)`: without an explicit width,
+    // table auto-layout lets the greedy trend column squeeze the labels into
+    // wrapping.
+    meta: {
+      minWidth: "200px",
+      cellProps: { width: "35%", whiteSpace: "nowrap" },
+    },
+  }),
+  ledgerColumnHelper.display({
+    id: "usage",
+    // Only cluster rows have a usage value, so the header hides while every
+    // account is collapsed (SAS-169).
+    header: ({ table }) => (table.getIsSomeRowsExpanded() ? "Usage" : null),
+    cell: ({ row }) =>
+      row.original.kind === "cluster"
+        ? formatUsage(row.original.cluster)
+        : null,
+    meta: { isNumeric: true, cellProps: { whiteSpace: "nowrap" } },
+  }),
+  ledgerColumnHelper.display({
+    id: "share",
+    header: "Share of total",
+    cell: ({ row }) =>
+      row.original.kind === "account"
+        ? formatPercentage(row.original.share, 1)
+        : null,
+    meta: { isNumeric: true, cellProps: { whiteSpace: "nowrap" } },
+  }),
+  ledgerColumnHelper.display({
+    id: "trend",
+    header: "Trend",
+    cell: ({ row }) =>
+      row.original.kind === "account" ? (
+        <TrendSparkline
+          points={row.original.trend}
+          color={row.original.color}
+        />
+      ) : null,
+    meta: { minWidth: "120px" },
+  }),
+  ledgerColumnHelper.display({
+    id: "cost",
+    header: "Cost",
+    cell: ({ row }) =>
+      row.original.kind === "account"
+        ? formatCurrency(row.original.total)
+        : formatCurrency(clusterTotal(row.original.cluster.amounts)),
+    footer: ({ table }) =>
+      formatCurrency((table.options.meta as LedgerTableMeta).grandTotal),
+    meta: { isNumeric: true, cellProps: { whiteSpace: "nowrap" } },
+  }),
+];
 
 /**
  * Direction-A unified ledger (SAS-128): one table listing every account
@@ -501,64 +516,71 @@ const UnifiedLedger = ({
   colorFor: Map<string, string>;
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
-  const totals = accounts.map((account) => accountTotal(account));
-  const grandTotal = totals.reduce((sum, total) => sum + total, 0);
-  // Tracks which accounts are currently expanded, so the shared Usage header
-  // (SAS-169) can hide itself while nothing underneath it has a value to show.
-  const [openAccountIds, setOpenAccountIds] = useState<Set<string>>(
-    () => new Set(),
-  );
-  const anyOpen = openAccountIds.size > 0;
+  const fallbackColor = colors.accent.purple;
+  const { ledgerRows, grandTotal } = useMemo(() => {
+    const totals = accounts.map((account) => accountTotal(account));
+    const sum = totals.reduce((acc, total) => acc + total, 0);
+    return {
+      grandTotal: sum,
+      ledgerRows: accounts.map(
+        (account, ix): LedgerRow => ({
+          kind: "account",
+          account,
+          total: totals[ix],
+          share: sum > 0 ? totals[ix] / sum : 0,
+          trend: series.get(account.external_customer_id) ?? [],
+          color: colorFor.get(account.external_customer_id) ?? fallbackColor,
+          clusters: account.clusters.map(
+            (cluster): LedgerRow => ({ kind: "cluster", cluster }),
+          ),
+        }),
+      ),
+    };
+  }, [accounts, series, colorFor, fallbackColor]);
+
+  const table = useUniversalTable({
+    data: ledgerRows,
+    columns: ledgerColumns,
+    getSubRows: (row) => (row.kind === "account" ? row.clusters : undefined),
+    // Every account renders, there is no pagination UI.
+    manualPagination: true,
+    enableSorting: false,
+    meta: { grandTotal } satisfies LedgerTableMeta,
+  });
 
   return (
-    <LedgerTable
-      mt="6"
-      templateColumns="minmax(200px, 1fr) minmax(90px, auto) minmax(90px, auto) minmax(120px, 1fr) minmax(90px, auto)"
-      columns={[
-        { label: "Account / cluster" },
-        { label: anyOpen ? "Usage" : null, numeric: true },
-        { label: "Share of total", numeric: true },
-        { label: "Trend" },
-        { label: "Cost", numeric: true },
-      ]}
-    >
-      {accounts.map((account, ix) => {
-        const total = totals[ix];
-        const share = grandTotal > 0 ? total / grandTotal : 0;
-        return (
-          <AccountLedgerGroup
-            key={account.external_customer_id}
-            account={account}
-            total={total}
-            share={share}
-            trend={series.get(account.external_customer_id) ?? []}
-            color={
-              colorFor.get(account.external_customer_id) ?? colors.accent.purple
-            }
-            onOpenChange={(isOpen) =>
-              setOpenAccountIds((prev) => {
-                const next = new Set(prev);
-                if (isOpen) {
-                  next.add(account.external_customer_id);
-                } else {
-                  next.delete(account.external_customer_id);
-                }
-                return next;
-              })
-            }
-          />
-        );
-      })}
-      <Box display="contents" role="row" data-testid="account-total-row">
-        <LedgerCell variant="total">Total</LedgerCell>
-        <LedgerCell variant="total" />
-        <LedgerCell variant="total" />
-        <LedgerCell variant="total" />
-        <LedgerCell variant="total" numeric>
-          {formatCurrency(grandTotal)}
-        </LedgerCell>
-      </Box>
-    </LedgerTable>
+    <Box mt="6">
+      <UniversalTable
+        table={table}
+        variant="borderless"
+        rowTestId={(row) =>
+          row.original.kind === "account" ? "account-row" : undefined
+        }
+        footerTestId="account-total-row"
+        // Ledger look: compact borderless rows, each account group opened by
+        // a taller top-bordered row, a bordered total row closing the table.
+        rowSx={{
+          td: { borderBottomWidth: 0, height: "8" },
+          "&[aria-expanded] td": {
+            height: "16",
+            borderTopWidth: "1px",
+            borderTopStyle: "solid",
+            borderTopColor: colors.border.secondary,
+          },
+        }}
+        footerSx={{
+          td: {
+            textStyle: "text-ui-med",
+            height: "12",
+            borderTopWidth: "1px",
+            borderTopStyle: "solid",
+            borderTopColor: colors.border.secondary,
+            borderBottomWidth: "1px",
+            borderBottomColor: colors.border.secondary,
+          },
+        }}
+      />
+    </Box>
   );
 };
 

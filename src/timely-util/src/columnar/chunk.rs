@@ -1459,6 +1459,7 @@ mod tests {
     /// A body large enough to spill round-trips through the pool with resident
     /// metadata intact, and the batcher produces spilled sealed output.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn spill_round_trip() {
         set_spill_override(Some(test_pool()));
 
@@ -1490,6 +1491,7 @@ mod tests {
     /// Merging spilled chains loads bodies call-scoped and consolidates
     /// correctly, and an untouched survivor keeps its spilled body.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn merge_spilled_chains() {
         set_spill_override(Some(test_pool()));
 
@@ -1604,6 +1606,7 @@ mod tests {
     /// commit large enough to spill carries the depth into its spilled
     /// metadata (and thus into the pool hints).
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn settle_commits_at_accumulated_depth() {
         set_spill_override(Some(test_pool()));
         let big: Vec<Tuple> = (0..100_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
@@ -1627,6 +1630,7 @@ mod tests {
     /// periodic ship window, so mid-window chunk sizes cannot make it grow
     /// past the target unbounded.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn settle_carry_commits_at_target() {
         // ~1.5 MiB per chunk: inside the dead zone of the periodic window
         // check (see `at_commit_size`).
