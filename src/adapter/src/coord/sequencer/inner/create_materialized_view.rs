@@ -477,6 +477,12 @@ impl Coordinator {
             || "optimize create materialized view",
             move || {
                 span.in_scope(|| {
+                    // Lets tests pause here (off the coordinator main loop) to widen the
+                    // window between planning, which computed `drop_ids` for
+                    // `CREATE OR REPLACE`, and the finish stage that commits them. Used by
+                    // test/race-condition.
+                    fail::fail_point!("create_materialized_view_optimize");
+
                     let mut pipeline = || -> Result<(
                         optimize::materialized_view::LocalMirPlan,
                         optimize::materialized_view::GlobalMirPlan,
@@ -585,6 +591,7 @@ impl Coordinator {
                             refresh_schedule,
                             ..
                         },
+                    replace,
                     drop_ids,
                     if_not_exists,
                     ..
@@ -596,6 +603,17 @@ impl Coordinator {
             optimizer_features,
             ..
         } = stage;
+
+        // For `CREATE OR REPLACE`, re-validate the plan-time drop set. A statement not
+        // subject to the DDL lock (e.g. `CREATE SINK`) can have added a dependent on the
+        // item being replaced while the off-thread stages ran.
+        self.validate_or_replace_drop_ids(
+            ctx.session(),
+            "materialized view",
+            &name,
+            replace,
+            &drop_ids,
+        )?;
 
         // Validate the replacement target, if one is given.
         if let Some(target_id) = replacement_target {
