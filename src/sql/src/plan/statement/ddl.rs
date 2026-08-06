@@ -4887,6 +4887,11 @@ generate_extracted_config!(
         EnableProjectionPushdownAfterRelationCse,
         Option<bool>,
         Default(None)
+    ),
+    (
+        EnableUnionCancellationAfterRelationCse,
+        Option<bool>,
+        Default(None)
     )
 );
 
@@ -5029,6 +5034,7 @@ pub fn plan_create_cluster_inner(
             enable_letrec_fixpoint_analysis,
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
             seen: _,
         } = ClusterFeatureExtracted::try_from(features)?;
         let optimizer_feature_overrides = OptimizerFeatureOverrides {
@@ -5039,6 +5045,7 @@ pub fn plan_create_cluster_inner(
             enable_letrec_fixpoint_analysis,
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
             ..Default::default()
         };
 
@@ -5159,6 +5166,7 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse,
+                enable_union_cancellation_after_relation_cse,
                 enable_less_reduce_in_eqprop: _,
                 enable_dequadratic_eqprop_map: _,
                 enable_eq_classes_withholding_errors: _,
@@ -5182,6 +5190,7 @@ pub fn unplan_create_cluster(
                 enable_letrec_fixpoint_analysis,
                 enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse,
+                enable_union_cancellation_after_relation_cse,
             };
             let features = features_extracted.into_values(scx.catalog);
             let availability_zones = if availability_zones.is_empty() {

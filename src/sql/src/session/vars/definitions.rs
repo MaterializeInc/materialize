@@ -2271,6 +2271,13 @@ feature_flags!(
         scope: ParameterScope::Cluster,
     },
     {
+        name: enable_union_cancellation_after_relation_cse,
+        desc: "Run UnionBranchCancellation one more time after the last RelationCSE.",
+        default: true,
+        enable_for_item_parsing: false,
+        scope: ParameterScope::Cluster,
+    },
+    {
         name: enable_less_reduce_in_eqprop,
         desc: "Run MSE::reduce in EquivalencePropagation only if reduce_expr changed something.",
         default: true,
@@ -2380,6 +2387,8 @@ impl From<&super::SystemVars> for OptimizerFeatures {
             enable_join_prioritize_arranged: vars.enable_join_prioritize_arranged(),
             enable_projection_pushdown_after_relation_cse: vars
                 .enable_projection_pushdown_after_relation_cse(),
+            enable_union_cancellation_after_relation_cse: vars
+                .enable_union_cancellation_after_relation_cse(),
             enable_less_reduce_in_eqprop: vars.enable_less_reduce_in_eqprop(),
             enable_dequadratic_eqprop_map: vars.enable_dequadratic_eqprop_map(),
             enable_eq_classes_withholding_errors: vars.enable_eq_classes_withholding_errors(),
@@ -2425,6 +2434,7 @@ mod tests {
             reoptimize_imported_views,
             enable_join_prioritize_arranged,
             enable_projection_pushdown_after_relation_cse,
+            enable_union_cancellation_after_relation_cse,
             enable_less_reduce_in_eqprop,
             enable_dequadratic_eqprop_map,
             enable_fast_path_plan_insights,
@@ -2457,6 +2467,7 @@ mod tests {
         let _ = reoptimize_imported_views; // no corresponding var
         set_var!(enable_join_prioritize_arranged);
         set_var!(enable_projection_pushdown_after_relation_cse);
+        set_var!(enable_union_cancellation_after_relation_cse);
         set_var!(enable_less_reduce_in_eqprop);
         set_var!(enable_dequadratic_eqprop_map);
         set_var!(enable_fast_path_plan_insights);
