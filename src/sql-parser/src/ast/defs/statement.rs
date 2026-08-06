@@ -3589,6 +3589,9 @@ pub enum ShowObjectType<T: AstInfo> {
     Sink {
         in_cluster: Option<T::ClusterName>,
     },
+    MetricSink {
+        in_cluster: Option<T::ClusterName>,
+    },
     Type,
     Role,
     Cluster,
@@ -3641,6 +3644,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::View => "VIEWS",
             ShowObjectType::Source { .. } => "SOURCES",
             ShowObjectType::Sink { .. } => "SINKS",
+            ShowObjectType::MetricSink { .. } => "METRIC SINKS",
             ShowObjectType::Type => "TYPES",
             ShowObjectType::Role => "ROLES",
             ShowObjectType::Cluster => "CLUSTERS",
@@ -3681,6 +3685,7 @@ impl<T: AstInfo> AstDisplay for ShowObjectsStatement<T> {
             ShowObjectType::MaterializedView { in_cluster }
             | ShowObjectType::Index { in_cluster, .. }
             | ShowObjectType::Sink { in_cluster }
+            | ShowObjectType::MetricSink { in_cluster }
             | ShowObjectType::Source { in_cluster } => {
                 if let Some(cluster) = in_cluster {
                     f.write_str(" IN CLUSTER ");
@@ -3862,6 +3867,25 @@ impl<T: AstInfo> AstDisplay for ShowCreateSinkStatement<T> {
     }
 }
 impl_display_t!(ShowCreateSinkStatement);
+
+/// `SHOW [REDACTED] CREATE METRIC SINK <sink>`
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ShowCreateMetricSinkStatement<T: AstInfo> {
+    pub metric_sink_name: T::ItemName,
+    pub redacted: bool,
+}
+
+impl<T: AstInfo> AstDisplay for ShowCreateMetricSinkStatement<T> {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        f.write_str("SHOW ");
+        if self.redacted {
+            f.write_str("REDACTED ");
+        }
+        f.write_str("CREATE METRIC SINK ");
+        f.write_node(&self.metric_sink_name);
+    }
+}
+impl_display_t!(ShowCreateMetricSinkStatement);
 
 /// `SHOW [REDACTED] CREATE INDEX <index>`
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -5517,6 +5541,7 @@ pub enum ShowStatement<T: AstInfo> {
     ShowCreateSource(ShowCreateSourceStatement<T>),
     ShowCreateTable(ShowCreateTableStatement<T>),
     ShowCreateSink(ShowCreateSinkStatement<T>),
+    ShowCreateMetricSink(ShowCreateMetricSinkStatement<T>),
     ShowCreateIndex(ShowCreateIndexStatement<T>),
     ShowCreateConnection(ShowCreateConnectionStatement<T>),
     ShowCreateCluster(ShowCreateClusterStatement<T>),
@@ -5535,6 +5560,7 @@ impl<T: AstInfo> AstDisplay for ShowStatement<T> {
             ShowStatement::ShowCreateSource(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateTable(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateSink(stmt) => f.write_node(stmt),
+            ShowStatement::ShowCreateMetricSink(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateIndex(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateConnection(stmt) => f.write_node(stmt),
             ShowStatement::ShowCreateCluster(stmt) => f.write_node(stmt),
