@@ -1349,7 +1349,14 @@ mod dictionary {
                 stats: None,
             }
         }
-        #[inline]
+        // `inline(always)`, not merely `inline`: the read item `DatumSeq { ColumnsIter }` is 32
+        // bytes (codec pointer + column + slice), which exceeds the System V two-register return
+        // threshold. Emitted out-of-line, this method returns via a hidden `sret` pointer and
+        // spills registers around the offset-decode jump table, costing ~250ms (one quarter of a
+        // ~10% `ParallelDataflows` wallclock regression) even when compression is disabled. Forcing
+        // the inline lets the caller build the read item in registers (SROA) and drop the unused
+        // codec/column fields on the no-codec path (DCE), matching the pre-dictionary cost. CLU-116.
+        #[inline(always)]
         fn index(&self, index: usize) -> Self::ReadItem<'_> {
             let data = self.inner.index(index);
             let iter = if let Some(codec) = &self.codec {
