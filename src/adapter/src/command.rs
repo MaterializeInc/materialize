@@ -701,6 +701,7 @@ pub enum ExecuteResponse {
     /// Updates to the requested source or view will be streamed to the
     /// contained receiver.
     Subscribing {
+        #[derivative(Debug = "ignore")]
         rx: RowBatchStream,
         ctx_extra: ExecuteContextGuard,
         instance_id: ComputeInstanceId,

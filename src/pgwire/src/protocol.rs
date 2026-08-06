@@ -66,7 +66,6 @@ use tokio::io::{self, AsyncRead, AsyncWrite};
 use tokio::select;
 use tokio::time::{self};
 use tokio_metrics::TaskMetrics;
-use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, debug, debug_span, info, warn};
 use uuid::Uuid;
 
@@ -2245,7 +2244,7 @@ where
                         row_desc,
                         portal_name,
                         InProgressRows::new(RecordFirstRowStream::new(
-                            Box::new(UnboundedReceiverStream::new(rx)),
+                            rx,
                             execute_started,
                             &self.adapter_client,
                             Some(instance_id),
@@ -2302,7 +2301,7 @@ where
                                 format,
                                 row_desc,
                                 RecordFirstRowStream::new(
-                                    Box::new(UnboundedReceiverStream::new(rx)),
+                                    rx,
                                     execute_started,
                                     &self.adapter_client,
                                     Some(instance_id),

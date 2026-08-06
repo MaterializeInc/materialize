@@ -3074,6 +3074,7 @@ class FlipFlagsAction(Action):
             "compute_server_maintenance_interval",
             "compute_dataflow_max_inflight_bytes",
             "compute_dataflow_max_inflight_bytes_cc",
+            "subscribe_max_buffered_bytes",
             "compute_flat_map_fuel",
             "consolidating_vec_growth_dampener",
             "compute_hydration_concurrency",
