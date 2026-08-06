@@ -2221,6 +2221,14 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_metric_sink,
+        desc: "CREATE METRIC SINK",
+        default: false,
+        // Boot re-parses every item's `create_sql`, so turning this off would leave any
+        // already-created metric sink unparseable and take the whole catalog down with it.
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,

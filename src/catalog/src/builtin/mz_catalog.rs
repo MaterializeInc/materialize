@@ -3482,12 +3482,15 @@ mod tests {
     /// it's handled. A wrong string in the CASE fails the substring assertion.
     #[mz_ore::test]
     fn object_type_case_matches_proto_display() {
-        // Returns `None` for proto variants that never appear in stored
-        // `DefaultPrivilege` keys (currently just `Unknown`, the zero-value
-        // sentinel). Match is exhaustive: a new variant forces an update.
+        // `None` means the variant never shows up in a stored `DefaultPrivilege`
+        // key, so the CASE deliberately has no arm for it: `Unknown` is the
+        // zero-value sentinel, and `ON METRIC SINKS` is rejected by
+        // `plan_alter_default_privileges` before a key ever gets built. Match is
+        // exhaustive: a new variant forces an update.
         fn expected_for(proto: ProtoObjectType) -> Option<SqlObjectType> {
             match proto {
                 ProtoObjectType::Unknown => None,
+                ProtoObjectType::MetricSink => None,
                 ProtoObjectType::Table => Some(SqlObjectType::Table),
                 ProtoObjectType::View => Some(SqlObjectType::View),
                 ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
@@ -3529,6 +3532,7 @@ mod tests {
             ProtoObjectType::Schema,
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
+            ProtoObjectType::MetricSink,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;

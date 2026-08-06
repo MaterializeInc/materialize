@@ -920,7 +920,8 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {}
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::MetricSink(_) => {}
                 }
             }
         }
@@ -1732,7 +1733,10 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => (),
+                    | CatalogItem::Connection(_)
+                    // Metric sinks write to the replica's metrics registry, never to persist,
+                    // so there is no storage collection to create.
+                    | CatalogItem::MetricSink(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1916,7 +1920,8 @@ impl Catalog {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
-                        | CatalogItem::Connection(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                        | CatalogItem::Connection(_)
+                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
                             name,
                         }),
