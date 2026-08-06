@@ -152,12 +152,20 @@ class MaterializeApplication(CloudtestApplicationBase):
         wait(condition="condition=Ready", resource="pod/environmentd-0")
 
         start = datetime.now()
-        while datetime.now() - start < timedelta(seconds=300):
+        while True:
             try:
                 self.environmentd.sql("SELECT 1")
                 break
-            except InterfaceError as e:
-                # Since we crash environmentd, we expect some errors that we swallow.
+            except (InterfaceError, OSError) as e:
+                if datetime.now() - start > timedelta(seconds=300):
+                    raise
+                # Since we crash environmentd, we expect some errors that we
+                # swallow. pg8000 wraps most connection failures in
+                # InterfaceError, but raw socket errors from its SSL
+                # negotiation (e.g. ConnectionResetError when the connection
+                # is accepted by the port-forwarding proxy and then reset
+                # because environmentd is not listening yet) leak through
+                # unwrapped.
                 LOGGER.info(f"SQL interface not ready, {e} while SELECT 1. Waiting...")
                 time.sleep(2)
 
