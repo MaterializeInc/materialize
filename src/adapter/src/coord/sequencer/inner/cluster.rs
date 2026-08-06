@@ -48,7 +48,6 @@ use tracing::{Instrument, Span, debug};
 
 use mz_adapter_types::dyncfgs::{
     DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT, ENABLE_BACKGROUND_ALTER_CLUSTER,
-    ENABLE_CLUSTER_CONTROLLER,
 };
 
 use super::return_if_err;
@@ -316,10 +315,8 @@ impl Coordinator {
         // path below). A system/builtin cluster is never converged by the
         // controller, so it must not be reshaped into a durable reconfiguration
         // record nobody would cut over. It takes the direct realized-config path
-        // below, exactly as it does with the controller off.
-        let cluster_controller_owns = ENABLE_CLUSTER_CONTROLLER
-            .get(self.catalog().system_config().dyncfgs())
-            && cluster_id.is_user();
+        // below.
+        let cluster_controller_owns = cluster_id.is_user();
         let reconfiguration_in_flight = matches!(
             &config.variant,
             Managed(managed) if managed
@@ -2007,21 +2004,18 @@ impl Coordinator {
             }
         }
 
-        // When the controller owns the managed replica set (master gate on, user
-        // cluster), a non-record change reaching this path is replication-factor
-        // only. Config-shape changes (size/logging/AZ) are reshaped into a durable
+        // When the controller owns the managed replica set (a user cluster), a
+        // non-record change reaching this path is replication-factor only.
+        // Config-shape changes (size/logging/AZ) are reshaped into a durable
         // reconfiguration record before they get here. The controller reconciles
         // the replica set to the realized config's new count on its next tick, so
         // we update only the realized config and emit no create/drop here. Doing
         // both fights the controller. It derives replica names from the observed
         // set, so an adapter create by canonical `rN` can collide with a
         // controller-chosen name, and an adapter drop by canonical `rN` can miss a
-        // churned one. With the gate off (or a system cluster, which the
-        // controller never owns) the legacy path below still does the create/drop
-        // directly.
-        let controller_owns = ENABLE_CLUSTER_CONTROLLER
-            .get(self.catalog().system_config().dyncfgs())
-            && cluster_id.is_user();
+        // churned one. For a system cluster, which the controller never owns, the
+        // direct path below still does the create/drop itself.
+        let controller_owns = cluster_id.is_user();
 
         // Count exactly as many replica ids as the branches below consume. The
         // config-changed branches recreate all replicas. A pure scale-up creates
@@ -2244,15 +2238,9 @@ impl Coordinator {
         // config. Otherwise the config write happens here. With the controller
         // owning the cluster, a record still in progress belongs to a live,
         // converging reconfiguration this write didn't touch: carry it through
-        // untouched. Without (gate off, or a system cluster), such a record is
-        // orphaned, so retain it as cancelled with the matching audit intent
-        // rather than risk a bogus revival if the gate comes back on.
-        //
-        // NOTE: `handle_scheduling_decisions` also calls this function and
-        // bypasses the sequencer's guards. It runs only while the controller
-        // gate is off, where the cancel-carried write below retires any
-        // in-progress record instead of leaving it behind for a controller
-        // that is not running.
+        // untouched. On a system cluster, which the controller never owns, such
+        // a record is orphaned, so retain it as cancelled with the matching
+        // audit intent rather than leave it behind for nothing to settle.
         match finalization_needed {
             NeedsFinalization::No => {
                 let mut new_config = new_config;
@@ -2608,20 +2596,15 @@ struct ReconfigurationDimensionsUnchanged {
     arrangement_compression: bool,
 }
 
-/// Retains a stale in-progress reconfiguration record carried by a legacy-path
+/// Retains a stale in-progress reconfiguration record carried by a direct
 /// config write as cancelled, returning the audit intent to declare with the
 /// write.
 ///
-/// The legacy write paths (controller gate off), the ALTER sequencer and the
-/// legacy scheduler, change the realized config directly and know nothing
-/// about reconfiguration records. Nothing on those
-/// paths ever settles a record, and carrying an in-progress one forward invites
-/// a bogus revival, up to a forced cut-over to an obsolete target, if the gate
-/// is turned back on later. A record can only be in progress here if it was
-/// written while the gate was on.
-pub(crate) fn cancel_carried_reconfiguration(
-    config: &mut ClusterConfig,
-) -> Option<ReconfigurationAudit> {
+/// The direct write paths change the realized config themselves and settle no
+/// record. Carrying an in-progress one forward would leave it for a controller
+/// that does not own this cluster, so nothing would ever drive it to a terminal
+/// status.
+fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<ReconfigurationAudit> {
     let ClusterVariant::Managed(managed) = &mut config.variant else {
         return None;
     };
