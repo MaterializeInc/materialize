@@ -113,6 +113,11 @@ mz_system r1 bootstrap <TRUE_OR_FALSE> ""
 ! ALTER CLUSTER mz_support SET (replication factor 1, size 'scale=1,workers=2');
 contains: must be owner of CLUSTER mz_support
 
+# The cluster controller owns a system cluster's replica set, so every ALTER
+# below lands its config synchronously and the replica set (and, for a
+# config-shape change, the realized config itself) converges on a later tick.
+# Every readback is a retrying `>` for that reason.
+
 $ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
 ALTER CLUSTER mz_support SET (replication factor 0, SIZE 'scale=1,workers=1');
 
@@ -148,3 +153,62 @@ ALTER CLUSTER mz_support SET (introspection interval = '0s');
 
 > select name, introspection_debugging, introspection_interval from mz_catalog.mz_clusters where name = 'mz_support';
 mz_support true <null>
+
+# Convergence: the controller materializes and retires a system cluster's
+# replicas from its replication factor, and a config-shape change cuts the
+# realized config over once the target is up. The replicas it creates carry
+# system ids, like the ones the catalog-open migration creates.
+#
+# Every readback below is a retrying `>`, with room for a replica boot plus a
+# controller tick on a loaded CI host. `>` returns as soon as it matches, so the
+# budget is never actually slept.
+$ set-sql-timeout duration=120s
+
+$ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
+ALTER CLUSTER mz_support SET (REPLICATION FACTOR 1);
+
+> SELECT count(*), bool_and(r.id LIKE 's%')
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'mz_support'
+1 true
+
+$ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
+ALTER CLUSTER mz_support SET (SIZE 'scale=1,workers=2');
+
+> SELECT size FROM mz_clusters WHERE name = 'mz_support'
+scale=1,workers=2
+
+> SELECT r.size, count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'mz_support'
+  GROUP BY r.size
+scale=1,workers=2 1
+
+# The shape change really went through the graceful path: it left a settled
+# reconfiguration record behind, which is the capability system clusters did not
+# have before the controller owned them.
+
+> SELECT recon.status
+  FROM mz_internal.mz_cluster_reconfigurations recon
+  JOIN mz_clusters c ON c.id = recon.cluster_id
+  WHERE c.name = 'mz_support'
+finalized
+
+# Back to the default: no replica, and the cluster reports no activity, so the
+# reconfiguration above really did settle rather than park in progress.
+
+$ postgres-execute connection=postgres://mz_support@${testdrive.materialize-internal-sql-addr}/materializeI
+ALTER CLUSTER mz_support SET (REPLICATION FACTOR 0, SIZE 'scale=1,workers=1');
+
+> SELECT count(*)
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'mz_support'
+0
+
+> SELECT activity FROM (SHOW CLUSTERS) WHERE name = 'mz_support'
+<null>
+
+$ set-sql-timeout duration=default
