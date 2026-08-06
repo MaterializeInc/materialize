@@ -7,12 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Discovers boundaries that split a table's string primary key space into
-//! ranges of roughly equal row counts, for parallel snapshot reads.
-//!
-//! All key matching and ordering happens server-side under the key column's
-//! own collation. Rust never orders the returned prefixes.
-
 use mz_ore::cast::CastLossy;
 
 use crate::{KeyProber, MySqlError, QualifiedTableRef};
@@ -23,14 +17,8 @@ use crate::{KeyProber, MySqlError, QualifiedTableRef};
 const TARGET_RANGES_PER_WORKER: f64 = 8.0;
 
 /// Computes up to `num_workers - 1` partition boundaries that divide the primary key space
-/// into `num_workers` roughly even partitions. The boundaries are ordered according to MySQL's
-/// internal collation rules. This should only be used against a single CHAR(N) or VARCHAR
-/// primary key column.
-///
-/// NOTE: Run this inside a REPEATABLE READ transaction. The underlying probes
-/// read separate snapshots otherwise, and concurrent inserts can make the
-/// prefix walk see the same prefix repeatedly instead of advancing.
-pub async fn partition_table_by_pk_prefix(
+/// into `num_workers` roughly even partitions. This should be run in a transaction.
+pub async fn partition_table(
     conn: &mut mysql_async::Conn,
     table: QualifiedTableRef<'_>,
     pk_col: &str,
@@ -58,8 +46,8 @@ pub async fn partition_table_by_pk_prefix(
 
 #[derive(Debug)]
 struct Range {
-    /// Exclusive start, `None` at the beginning of the key space.
-    start: Option<String>,
+    /// `None` for the beginning of the key space.
+    prefix: Option<String>,
     /// Exclusive end, `None` for the final open range.
     end: Option<String>,
     /// Row estimate for the range, at least 1.
@@ -68,8 +56,8 @@ struct Range {
     depth: usize,
 }
 
-async fn partition<D: PrimaryKeyProber>(
-    db: &mut D,
+async fn partition(
+    db: &mut KeyProber<'_>,
     workers: usize,
     estimated_row_count: u64,
     min_rows_per_worker: u64,
@@ -109,13 +97,13 @@ fn get_target_max_rows_per_range(
     target_rows_per_range
 }
 
-async fn split_into_ranges<D: PrimaryKeyProber>(
-    db: &mut D,
+async fn split_into_ranges(
+    db: &mut KeyProber<'_>,
     estimated_row_count: f64,
     target_rows_per_bucket: f64,
 ) -> Result<Vec<Range>, MySqlError> {
     let mut ranges = vec![Range {
-        start: None,
+        prefix: None,
         end: None,
         estimated_rows: estimated_row_count,
         depth: 0,
@@ -172,8 +160,8 @@ fn assign_boundaries(ranges: &[Range], workers: usize) -> Vec<String> {
 /// Splits `parent` at every distinct key prefix one character longer than the
 /// prefix `parent`, i.e. "a" depth: 1 for a table with keys "a", "aa", "aaa", "ab" would be split to
 /// "a" depth: 2 estimate 1, "aa" depth: 2 estimate 2, "ab" depth 2, estimate 1.
-async fn split_range<D: PrimaryKeyProber>(
-    db: &mut D,
+async fn split_range(
+    db: &mut KeyProber<'_>,
     parent: &Range,
     target_rows: f64,
 ) -> Result<Vec<Range>, MySqlError> {
@@ -181,24 +169,27 @@ async fn split_range<D: PrimaryKeyProber>(
     let mut children = Vec::new();
 
     let Some(mut cur) = db
-        .first_prefix(parent.start.as_deref(), parent.end.as_deref(), depth)
+        .prefix_of_first_key_in_range(parent.prefix.as_deref(), parent.end.as_deref(), depth)
         .await?
     else {
         return Ok(children);
     };
     // The first child inherits the parent's start.
-    let mut start = parent.start.clone();
+    let mut start = parent.prefix.clone();
 
     loop {
         // Small optimization to return early if the remaining rows past the current start prefix
         // fits within the threshold we're looking for.
+        // A missing optimizer estimate reads as an empty range, which the
+        // splitting loop drops or leaves unsplit.
         let remaining = db
             .estimate_range_rows(start.as_deref(), parent.end.as_deref())
-            .await?;
+            .await?
+            .unwrap_or(0);
         let remaining = f64::cast_lossy(remaining).max(1.0);
         if remaining <= target_rows {
             children.push(Range {
-                start,
+                prefix: start,
                 end: parent.end.clone(),
                 estimated_rows: remaining,
                 depth,
@@ -210,10 +201,13 @@ async fn split_range<D: PrimaryKeyProber>(
         // extensions still need visiting. The first key past `cur` exposes
         // them, so the walk can keep splitting instead of retrying the whole
         // range at greater depths forever.
-        let next = match db.next_prefix(&cur, parent.end.as_deref(), depth).await? {
+        let next = match db
+            .prefix_of_first_row_not_matching_prefix(&cur, parent.end.as_deref(), depth)
+            .await?
+        {
             Some(next) => Some(next),
             None => {
-                db.first_prefix(Some(&cur), parent.end.as_deref(), depth)
+                db.prefix_of_first_key_in_range(Some(&cur), parent.end.as_deref(), depth)
                     .await?
             }
         };
@@ -223,9 +217,10 @@ async fn split_range<D: PrimaryKeyProber>(
             Some(next) => {
                 let estimated_rows = db
                     .estimate_range_rows(start.as_deref(), Some(&next))
-                    .await?;
+                    .await?
+                    .unwrap_or(0);
                 children.push(Range {
-                    start: start.clone(),
+                    prefix: start.clone(),
                     end: Some(next.clone()),
                     estimated_rows: f64::cast_lossy(estimated_rows).max(1.0),
                     depth,
@@ -235,7 +230,7 @@ async fn split_range<D: PrimaryKeyProber>(
             }
             None => {
                 children.push(Range {
-                    start,
+                    prefix: start,
                     end: parent.end.clone(),
                     estimated_rows: remaining,
                     depth,
@@ -243,63 +238,5 @@ async fn split_range<D: PrimaryKeyProber>(
                 return Ok(children);
             }
         }
-    }
-}
-
-/// Wrapper around KeyProber for testing purposes.
-trait PrimaryKeyProber {
-    async fn estimate_range_rows(
-        &mut self,
-        start: Option<&str>,
-        end: Option<&str>,
-    ) -> Result<u64, MySqlError>;
-
-    /// A `start` of `None` means the beginning of the key space.
-    async fn first_prefix(
-        &mut self,
-        start: Option<&str>,
-        end: Option<&str>,
-        len: usize,
-    ) -> Result<Option<String>, MySqlError>;
-
-    /// Every key extending `cur` is covered by the match, including `cur`
-    /// itself as an exact key.
-    async fn next_prefix(
-        &mut self,
-        cur: &str,
-        end: Option<&str>,
-        len: usize,
-    ) -> Result<Option<String>, MySqlError>;
-}
-
-impl<'a> PrimaryKeyProber for KeyProber<'a> {
-    async fn estimate_range_rows(
-        &mut self,
-        start: Option<&str>,
-        end: Option<&str>,
-    ) -> Result<u64, MySqlError> {
-        // A missing optimizer estimate reads as an empty range, which the
-        // splitting loop drops or leaves unsplit.
-        Ok(KeyProber::estimate_range_rows(self, start, end)
-            .await?
-            .unwrap_or(0))
-    }
-
-    async fn first_prefix(
-        &mut self,
-        start: Option<&str>,
-        end: Option<&str>,
-        len: usize,
-    ) -> Result<Option<String>, MySqlError> {
-        KeyProber::prefix_of_first_key_in_range(self, start, end, len).await
-    }
-
-    async fn next_prefix(
-        &mut self,
-        cur: &str,
-        end: Option<&str>,
-        len: usize,
-    ) -> Result<Option<String>, MySqlError> {
-        KeyProber::prefix_of_first_row_not_matching_prefix(self, cur, end, len).await
     }
 }
