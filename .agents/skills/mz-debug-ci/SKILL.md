@@ -159,3 +159,52 @@ Group failures by **root cause**, not by job name. Typically many failing jobs s
 2. **Root cause B** — description, which jobs it affects, what to fix
 
 Distinguish between issues that are clearly caused by the PR's changes vs. pre-existing flaky tests. The annotations often link to known flaky test issues (GitHub `database-issues` links) — use these to identify pre-existing flakes vs. regressions introduced by the PR.
+
+## Reference: triggering and scoping CI runs
+
+The steps above diagnose a build that already ran. These recipes trigger a new
+run or narrow one to the steps you care about.
+
+### Manually trigger a nightly
+
+The `nightly` pipeline restricts API builds to release branches
+(`branch_configuration: v*`). Triggering it on `main` (or any non-`v*` branch)
+via the API returns `422 Branches have been disabled for this pipeline` unless
+you pass `--ignore-branch-filters` (`-i`). Scheduled runs bypass the filter; API
+triggers do not.
+
+```bash
+bk build create -p nightly -b main -c <sha> -i -m "why this run exists"
+```
+
+### Scope a build to specific steps
+
+`ci/mkpipeline.py` reads two env vars at pipeline-upload time and marks every
+step whose `id` is not selected as `skip` (build steps are always kept):
+
+- `CI_TEST_SELECTION=<step-id,...>` by readable step id; use this one
+- `CI_TEST_IDS=<index,...>` by positional integer index; fragile, avoid
+
+Selection is step-granular. There is no file-granular selection: a testdrive
+step always runs its whole `*.td` glob. To run a single `.td` file, run it
+locally instead: `bin/mzcompose --find testdrive run default <file>.td`.
+
+```bash
+bk build create -p nightly -b main -c <sha> -i -e CI_TEST_SELECTION=redpanda-testdrive
+```
+
+### Testdrive coverage across pipelines
+
+The same `.td` file gets different coverage per pipeline:
+
+| Pipeline | Testdrive coverage |
+|---|---|
+| `test` (PR gate) | one default-config step, sharded x20; each `.td` runs once |
+| `nightly` | 9 mzcompose config variants: `redpanda-testdrive`, `testdrive-partitions-5`, `testdrive-replicas-4`, `testdrive-size-1`, `testdrive-size-8`, `azurite-testdrive`, `azurite-testdrive-size-8`, `testdrive-fdb`, `testdrive-alloydb`; `persistence-testdrive` is skipped |
+| `release-qualification` | one pass in the cloudtest/K8s harness (`testdrive-in-cloudtest`, `-m=long`); whole build runs ~24h |
+
+Nightly is the broad testdrive-config exerciser. Release-qualification adds
+harness realism (Materialize as real K8s pods), not more config permutations,
+and most of its ~24h is large-scale parallel-workload scenarios, not testdrive.
+Templates: `ci/nightly/pipeline.template.yml`,
+`ci/release-qualification/pipeline.template.yml`.
