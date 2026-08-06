@@ -2078,10 +2078,10 @@ def workflow_test_drop_during_reconciliation(c: Composition) -> None:
         Clusterd(
             name="clusterd1",
             environment_extra=[
-                # Disable GRPC host checking. We are connecting through a
-                # proxy, so the host in the request URI doesn't match
-                # clusterd's fqdn.
-                "CLUSTERD_GRPC_HOST=",
+                # Disable the CTP identity check. We are connecting through a
+                # proxy, so we don't require the replica to advertise a
+                # matching identity.
+                "CLUSTERD_CTP_IDENTITY=",
             ],
         ),
         Testdrive(
@@ -2320,10 +2320,10 @@ def workflow_test_clusterd_death_detection(c: Composition) -> None:
         Clusterd(
             name="clusterd1",
             environment_extra=[
-                # Disable GRPC host checking. We are connecting through a
-                # proxy, so the host in the request URI doesn't match
-                # clusterd's fqdn.
-                "CLUSTERD_GRPC_HOST=",
+                # Disable the CTP identity check. We are connecting through a
+                # proxy, so we don't require the replica to advertise a
+                # matching identity.
+                "CLUSTERD_CTP_IDENTITY=",
             ],
         ),
     ):

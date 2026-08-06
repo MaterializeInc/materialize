@@ -14,6 +14,7 @@ use std::sync::atomic::{self, AtomicBool};
 use std::time::{Duration, Instant};
 
 use anyhow::bail;
+use itertools::Itertools;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
@@ -181,8 +182,16 @@ impl ReplicaTask {
                 .unwrap_or(Duration::MAX);
 
             let connect_start = Instant::now();
+            let addrs = self
+                .config
+                .location
+                .ctl_addrs
+                .iter()
+                .cloned()
+                .zip_eq(self.config.location.ctl_identities.iter().cloned())
+                .collect();
             let connect_result = ComputeCtpClient::connect_partitioned(
-                self.config.location.ctl_addrs.clone(),
+                addrs,
                 version,
                 connect_timeout,
                 keepalive_timeout,

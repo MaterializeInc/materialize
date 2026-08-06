@@ -41,6 +41,8 @@ pub async fn connect_and_hello(compute_addr: &str) -> anyhow::Result<ComputeCtpC
     let version = mz_persist_client::BUILD_INFO.semver_version();
     let mut client = Client::<ComputeCommand, ComputeResponse>::connect(
         compute_addr,
+        // Test driver dials a specific address directly, so skip the CTP identity check.
+        None,
         version,
         Duration::from_secs(30),
         Duration::from_secs(60),

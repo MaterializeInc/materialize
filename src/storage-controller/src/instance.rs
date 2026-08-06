@@ -863,8 +863,16 @@ impl ReplicaTask {
                 .http2_keep_alive_timeout
                 .unwrap_or(Duration::MAX);
 
+            let addrs = self
+                .config
+                .location
+                .ctl_addrs
+                .iter()
+                .cloned()
+                .zip_eq(self.config.location.ctl_identities.iter().cloned())
+                .collect();
             let connect_result = StorageCtpClient::connect_partitioned(
-                self.config.location.ctl_addrs.clone(),
+                addrs,
                 version,
                 connect_timeout,
                 keepalive_timeout,

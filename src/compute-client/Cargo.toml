@@ -17,6 +17,7 @@ chrono.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
 futures.workspace = true
+itertools.workspace = true
 mz-build-info = { path = "../build-info" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute-types = { path = "../compute-types" }
