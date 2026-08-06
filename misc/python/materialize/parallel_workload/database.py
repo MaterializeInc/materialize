@@ -901,13 +901,14 @@ READ_THEN_WRITE_COUNTER_NAME = "materialize.public.pw_rtw_counter"
 
 # Error texts that prove an increment did not land.
 #
-# A concurrently modified dependency comes from two places: the coordinator
-# revalidating a plan before it sequences it, and group commit rejecting a staged
-# write that a concurrent ALTER TABLE made stale. Neither one appends anything.
-# The other error is a cluster-resolution failure during planning, which the
-# workload provokes on purpose by pointing the default cluster at a nonexistent
-# one, so the statement never reaches a write path at all. The trailing quote
-# keeps it from matching "unknown cluster replica size" errors.
+# A concurrently modified dependency is reported when the coordinator rejects a
+# statement whose dependency changed underneath it, before anything is appended:
+# a plan it revalidates before sequencing, or a staged write that group commit
+# drops because a concurrent ALTER TABLE left the rows stale against the table's
+# current schema. The other error is a cluster-resolution failure during planning,
+# which the workload provokes on purpose by pointing the default cluster at a
+# nonexistent one, so the statement never reaches a write path at all. The trailing
+# quote keeps it from matching "unknown cluster replica size" errors.
 #
 # Every other failure counts as unknown, a statement timeout and a cancellation
 # included, because either can race a commit that did happen. A wrong entry here

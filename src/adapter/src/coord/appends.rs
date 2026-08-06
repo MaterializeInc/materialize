@@ -760,11 +760,12 @@ impl Coordinator {
                 } => {
                     assert_none!(write_locks, "should have merged together all locks above");
 
-                    // These rows were packed against the table's RelationDesc as of whenever the
-                    // statement ran, but the append below picks up whatever version is latest
-                    // now. If an ALTER TABLE ... ADD COLUMN snuck in, that descriptor is wider
-                    // than the rows are, and the persist encoder panics on the mismatch rather
-                    // than erroring. Fail the transaction and let the client retry.
+                    // Group commit resolves each write to the table's latest GlobalId and encodes
+                    // the staged rows against that collection's RelationDesc. But the rows were
+                    // packed against whatever descriptor was latest when the statement ran. A
+                    // concurrent ALTER TABLE can move the latest descriptor out from under them, so
+                    // the staged rows no longer match what we are about to encode against. Reject
+                    // the transaction and let the client retry against the current schema.
                     if let Some(id) = Self::stale_write_target(self.catalog(), &writes) {
                         let err = AdapterError::ConcurrentDependencyMutation {
                             dependency_id: id.to_string(),
