@@ -317,14 +317,32 @@ COMPLETE 0
 statement ok
 CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
 
+# A zero timeout that commits already means "cut over now, hydrated or not", so
+# the reshape is transacted by the ALTER itself rather than by a later
+# controller tick. Both spellings of it take that path, which is why the size
+# below can be read back without retrying.
+
 statement ok
 ALTER CLUSTER foo set (SIZE 'scale=1,workers=2') WITH (WAIT FOR '0s')
+
+query T
+SELECT size FROM mz_clusters WHERE name = 'foo'
+----
+scale=1,workers=2
 
 statement ok
 ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT') )
 
+query TT
+SELECT c.size, r.size FROM mz_clusters c JOIN mz_cluster_replicas r ON r.cluster_id = c.id WHERE c.name = 'foo'
+----
+scale=1,workers=4  scale=1,workers=4
+
+# Any other WAIT writes a reconfiguration record the controller converges on, so
+# there is nothing synchronous to assert here.
+
 statement ok
-ALTER CLUSTER foo set (SIZE 'scale=1,workers=4') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
+ALTER CLUSTER foo set (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '10ms', ON TIMEOUT 'ROLLBACK') )
 
 statement ok
 DROP CLUSTER foo
@@ -361,9 +379,20 @@ statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, 
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
 
 # A `WAIT` clause paired with a real shape change is still accepted, including
-# alongside a non-shape option in the same statement.
+# alongside a non-shape option in the same statement. The zero-timeout cut-over
+# applies both in the one transaction it commits.
 statement ok
 ALTER CLUSTER foo SET (SIZE 'scale=1,workers=2', REPLICATION FACTOR 2) WITH (WAIT FOR '0s')
+
+query TT
+SELECT size, replication_factor FROM mz_clusters WHERE name = 'foo'
+----
+scale=1,workers=2  2
+
+query I
+SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'foo'
+----
+2
 
 statement ok
 DROP CLUSTER foo
@@ -380,8 +409,9 @@ ALTER CLUSTER foo SET (MANAGED = false) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON
 statement ok
 DROP CLUSTER foo
 
-# Regression: zero-downtime finalization (PR #28836) reads workload_class from
-# the catalog instead of the planned config, silently dropping the change.
+# A `WORKLOAD CLASS` change riding along with a shape change reaches the durable
+# config rather than being silently dropped by the reshape. Both statements below
+# request the synchronous cut-over, so the readback needs no retry.
 
 simple conn=mz_system,user=mz_system
 CREATE CLUSTER wc_test SIZE 'scale=1,workers=1'

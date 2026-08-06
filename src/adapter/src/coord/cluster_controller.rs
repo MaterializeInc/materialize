@@ -363,7 +363,11 @@ impl Coordinator {
 
     /// Build the controller's view of one managed cluster from the catalog.
     /// Returns `None` for a missing or unmanaged cluster.
-    fn observe_cluster_state(&self, cluster_id: ClusterId) -> Option<ClusterState> {
+    ///
+    /// Also used by the ALTER sequencer's synchronous cut-over, which runs the
+    /// controller's reconcile kernel against this same view so both paths
+    /// converge on the same replica set.
+    pub(crate) fn observe_cluster_state(&self, cluster_id: ClusterId) -> Option<ClusterState> {
         let cluster = self.catalog().try_get_cluster(cluster_id)?;
         let ClusterVariant::Managed(managed) = &cluster.config.variant else {
             return None;

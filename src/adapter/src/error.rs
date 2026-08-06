@@ -276,7 +276,6 @@ pub enum AdapterError {
     /// read-only mode.
     ReadOnly,
     AlterClusterTimeout,
-    AlterClusterWhilePendingReplicas,
     /// Attempt to convert a cluster to unmanaged while a graceful
     /// reconfiguration is in progress.
     AlterClusterUnmanagedWhileReconfiguring,
@@ -997,7 +996,6 @@ impl AdapterError {
             // transactions.
             AdapterError::ReadOnly => SqlState::READ_ONLY_SQL_TRANSACTION,
             AdapterError::AlterClusterTimeout => SqlState::QUERY_CANCELED,
-            AdapterError::AlterClusterWhilePendingReplicas => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterUnmanagedWhileBursting => SqlState::OBJECT_IN_USE,
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => {
@@ -1446,9 +1444,6 @@ impl fmt::Display for AdapterError {
                     )?;
                 }
                 Ok(())
-            }
-            AdapterError::AlterClusterWhilePendingReplicas => {
-                write!(f, "cannot alter clusters with pending updates")
             }
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => {
                 write!(
