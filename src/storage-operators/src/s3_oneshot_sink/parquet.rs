@@ -287,7 +287,7 @@ impl ParquetFile {
         let props = WriterProperties::builder()
             // This refers to the number of rows per row-group, which we don't want the writer
             // to enforce since we will flush based on the byte-size of the active row group
-            .set_max_row_group_size(usize::MAX)
+            .set_max_row_group_row_count(None)
             // Max compatibility
             .set_writer_version(WriterVersion::PARQUET_1_0)
             .set_compression(Compression::SNAPPY)
