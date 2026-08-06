@@ -126,6 +126,10 @@ Each finding has a concentrated reproducer, selectable via `--scenario`:
   after a metadata cut healed (`repro-postheal-stall`)
 - [PER-49](https://linear.app/materializeinc/issue/PER-49): compute halts
   hydrating a dataflow past its `as_of` (`repro-compute-asof`)
+- [SS-428](https://linear.app/materializeinc/issue/SS-428): adding a table to a
+  running Postgres source pins the source's frontier until the replay that
+  follows has caught up, and the persist sink holds every update of that replay
+  resident because it can commit none of them (`repro-storage-memory`)
 - not yet filed: a resumed `SUBSCRIBE` loses its carried state
   (`repro-durable-resume`)
 

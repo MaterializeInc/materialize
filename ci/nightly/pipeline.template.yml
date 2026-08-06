@@ -2126,7 +2126,7 @@ steps:
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=table-bank, --complexity=large, --runtime=1200]
+              args: [--scenario=table-bank, --complexity=large, --runtime=1800]
 
       - id: invariants-table-bank-upgrade
         topics: [copy-to-s3, kafka, mysql, postgres, sql-server, upgrade]
@@ -2135,7 +2135,7 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
@@ -2143,7 +2143,7 @@ steps:
                 [
                   --scenario=table-bank,
                   --complexity=high,
-                  --runtime=1200,
+                  --runtime=1800,
                   --upgrade-from=latest,
                 ]
 
@@ -2154,7 +2154,7 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
@@ -2173,11 +2173,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=table-bank, --complexity=high, --runtime=1200]
+              args: [--scenario=table-bank, --complexity=high, --runtime=1800]
 
       - id: invariants-txn-probe
         topics: [kafka, mysql, postgres, sql-server]
@@ -2186,11 +2186,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=txn-probe, --complexity=high, --runtime=1200]
+              args: [--scenario=txn-probe, --complexity=high, --runtime=1800]
 
       - id: invariants-graph
         topics: [kafka, mysql, postgres, sql-server]
@@ -2199,11 +2199,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=graph, --complexity=high, --runtime=1200]
+              args: [--scenario=graph, --complexity=high, --runtime=1800]
 
       - id: invariants-pg-cdc-bank
         topics: [kafka, mysql, postgres, sql-server]
@@ -2212,11 +2212,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=pg-cdc-bank, --complexity=high, --runtime=1200]
+              args: [--scenario=pg-cdc-bank, --complexity=high, --runtime=1800]
 
       - id: invariants-mysql-cdc-bank
         topics: [kafka, mysql, postgres, sql-server]
@@ -2225,11 +2225,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=mysql-cdc-bank, --complexity=high, --runtime=1200]
+              args: [--scenario=mysql-cdc-bank, --complexity=high, --runtime=1800]
 
       - id: invariants-sqlserver-cdc-bank
         topics: [kafka, mysql, postgres, sql-server]
@@ -2241,11 +2241,11 @@ steps:
           # The SQL Server Docker image isn't available on ARM.
           #
           # See: <https://github.com/microsoft/mssql-docker/issues/864>
-          queue: hetzner-x86-64-8cpu-16gb
+          queue: hetzner-x86-64-12cpu-24gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=sqlserver-cdc-bank, --complexity=high, --runtime=1200]
+              args: [--scenario=sqlserver-cdc-bank, --complexity=high, --runtime=1800]
 
       - id: invariants-kafka-ledger
         topics: [kafka, mysql, postgres, sql-server]
@@ -2254,11 +2254,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=kafka-ledger, --complexity=high, --runtime=1200]
+              args: [--scenario=kafka-ledger, --complexity=high, --runtime=1800]
 
       - id: invariants-kafka-upsert
         topics: [kafka, mysql, postgres, sql-server]
@@ -2267,11 +2267,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=kafka-upsert, --complexity=high, --runtime=1200]
+              args: [--scenario=kafka-upsert, --complexity=high, --runtime=1800]
 
       - id: invariants-sink-roundtrip
         topics: [kafka, kafka-sink, mysql, postgres, sql-server]
@@ -2280,11 +2280,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=sink-roundtrip, --complexity=high, --runtime=1200]
+              args: [--scenario=sink-roundtrip, --complexity=high, --runtime=1800]
 
       - id: invariants-webhook-set
         topics: [kafka, mysql, postgres, sql-server]
@@ -2293,11 +2293,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=webhook-set, --complexity=high, --runtime=1200]
+              args: [--scenario=webhook-set, --complexity=high, --runtime=1800]
 
       - id: invariants-avro-loopback
         topics: [kafka, kafka-sink, mysql, postgres, sql-server]
@@ -2306,11 +2306,11 @@ steps:
         artifact_paths: [invariants-events.log]
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: invariants
-              args: [--scenario=avro-loopback, --complexity=high, --runtime=1200]
+              args: [--scenario=avro-loopback, --complexity=high, --runtime=1800]
 
   - group: "Parallel Workload"
     key: parallel-workload

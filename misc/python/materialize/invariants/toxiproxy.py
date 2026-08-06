@@ -625,14 +625,21 @@ class Disruptor(threading.Thread):
                     kind,
                     "slicer",
                     {
-                        # NOTE: `delay` is microseconds, and it is spent per
-                        # slice. Small slices with a large delay would stall
-                        # the leg for far longer than any outage cap allows,
-                        # since a slicer is a degradation, not a cut, so
-                        # Leg.max_outage never applies to it.
+                        # NOTE: no inter-slice delay, deliberately. Toxiproxy
+                        # sleeps that delay inside the toxic's goroutine, and
+                        # removing a toxic waits for that goroutine, so on a
+                        # busy leg the removal outlives the admin API's own
+                        # deadline and wedges the API for everything else. The
+                        # cost is not this leg: it is that no other leg can be
+                        # healed either, which silently turns a capped outage
+                        # into an uncapped one (nightly 17986 held a metadata
+                        # cut for 122s against a 45s cap that way, and a
+                        # clusterd OOMed buffering through it). The coverage
+                        # this toxic exists for is the chopping, not the
+                        # waiting.
                         "average_size": self.rng.choice([64, 512, 4096]),
                         "size_variation": 32,
-                        "delay": self.rng.choice([0, 100, 1000]),
+                        "delay": 0,
                     },
                     stream=stream,
                 )
@@ -717,7 +724,15 @@ class Disruptor(threading.Thread):
         # whose peer is gone, so retrying alone cannot heal the network.
         # Restarting toxiproxy clears it, and comes back to the empty state
         # the proxy re-creation below already handles.
-        deadline = time.monotonic() + 60
+        # Two deadlines, because the two failures need opposite responses. A
+        # dropped or refused admin connection is worth retrying: toxiproxy is
+        # briefly busy and will answer. A 503 from its own handler timeout is
+        # not, since the goroutine holding it will never come back, and every
+        # second spent retrying is a second the other legs in the same cycle
+        # stay cut, past whatever max_outage was supposed to bound them to.
+        STALLED_DEADLINE = 10
+        UNREACHABLE_DEADLINE = 60
+        deadline = time.monotonic() + UNREACHABLE_DEADLINE
         restarted = False
         while True:
             try:
@@ -733,6 +748,8 @@ class Disruptor(threading.Thread):
                 self._record("all legs healed")
                 return
             except Exception as e:
+                if isinstance(e, ApiStalled):
+                    deadline = min(deadline, time.monotonic() + STALLED_DEADLINE)
                 if time.monotonic() > deadline:
                     if self.restart_toxiproxy is None or restarted:
                         self.on_error(
@@ -745,7 +762,7 @@ class Disruptor(threading.Thread):
                         self.restart_toxiproxy()
                     except Exception as restart_error:
                         self._record(f"toxiproxy restart failed ({restart_error})")
-                    deadline = time.monotonic() + 60
+                    deadline = time.monotonic() + UNREACHABLE_DEADLINE
                 time.sleep(1)
 
     def stop_and_heal(self) -> None:

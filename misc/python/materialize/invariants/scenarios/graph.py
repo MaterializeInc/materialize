@@ -46,6 +46,12 @@ from materialize.invariants.framework import (
 )
 from materialize.invariants.mz import MzClient
 
+# The final check runs on a quiesced system and legitimately scans everything
+# the run wrote, which the per-query watchdog is not sized for: that watchdog
+# exists to stop a checker hanging during chaos, and cancelling a final-check
+# query instead reports a wedge that is really just a big honest query.
+FINAL_TIMEOUT = 600
+
 # A DAG whose edges only ever point from a lower node to a higher one, so the
 # graph is acyclic no matter which inserts and deletes committed, and the
 # closure of whatever edges are currently visible is the thing to check. Small
@@ -237,7 +243,7 @@ class Graph(Scenario):
             ("has a self loop", GRAPH_SELF_LOOP_SQL),
             ("disagrees with a recomputation", GRAPH_DIFFERENTIAL_SQL),
         ):
-            bad = client.query(sql)
+            bad = client.query(sql, timeout=FINAL_TIMEOUT)
             if bad:
                 raise InvariantViolation(f"closure {name}: {bad[:10]}")
         client.reset()

@@ -23,6 +23,7 @@ import subprocess
 import threading
 import time
 from contextlib import ExitStack
+from typing import Any
 
 from materialize.invariants.executor import Runner
 from materialize.invariants.framework import (
@@ -120,6 +121,10 @@ def materialized_service(image: str | None = None) -> Materialized:
 # stops hearing about other processes' writes while the rest keep hearing
 # them, so it falls back to polling and lags behind a system that thinks it
 # is fine. Nothing else here produces two peers with different views.
+# CPU squeeze for the `throttle` disruption, as a cgroup quota per period.
+CPU_PERIOD = 100_000
+CPU_THROTTLED = 50_000
+
 PUBSUB_PORTS = {
     "clusterd-compute": 6879,
     "clusterd-compute2": 6880,
@@ -387,6 +392,83 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         log.close()
 
 
+class MemorySampler(threading.Thread):
+    """Records each container's resident memory into the event log.
+
+    A process that grows without bound is only visible here as a kernel OOM
+    line in a log nobody reads, after the fact, with no way to tell which
+    disruption drove the growth or how fast it went. The disruptor writes its
+    history to the same log, so sampling into it makes the two line up.
+
+    Growth past a fraction of the container's limit is echoed as well, so it
+    shows up in the job output while the process is still alive rather than
+    only in the artifact afterwards, and a clusterd that gets there has a heap
+    profile taken. A kernel OOM kill leaves no panic, no core, and no trace of
+    where the memory went, so the profile has to be taken while the process is
+    still alive or the evidence is gone for good.
+    """
+
+    ECHO_FRACTION = 0.7
+    # Far enough below ECHO_FRACTION that the profile is taken while the
+    # process still has room to answer the request, and above any settled
+    # working set we have measured.
+    PROFILE_FRACTION = 0.5
+    INTERVAL = 15.0
+
+    def __init__(self, c: Composition, log: EventLog) -> None:
+        super().__init__(name="memory-sampler", daemon=True)
+        self.c = c
+        self.log = log
+        self.stop_event = threading.Event()
+        self.peak: dict[str, float] = {}
+        self.profiled: set[str] = set()
+
+    def run(self) -> None:
+        while not self.stop_event.wait(self.INTERVAL):
+            try:
+                out = subprocess.run(
+                    [
+                        "docker",
+                        "stats",
+                        "--no-stream",
+                        "--format",
+                        "{{.Name}}\t{{.MemUsage}}\t{{.MemPerc}}",
+                    ],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                ).stdout
+            except Exception:
+                # Sampling is diagnostics. Docker being briefly unavailable
+                # (a container mid-restart, the daemon busy) must never
+                # disturb the run.
+                continue
+            rows = []
+            for line in out.splitlines():
+                parts = line.split("\t")
+                if len(parts) != 3 or "invariants-" not in parts[0]:
+                    continue
+                short = parts[0].removeprefix("invariants-").removesuffix("-1")
+                rows.append(f"{short}={parts[1].split(' / ')[0]}")
+                try:
+                    pct = float(parts[2].rstrip("%"))
+                except ValueError:
+                    continue
+                if (
+                    pct >= self.PROFILE_FRACTION * 100
+                    and short.startswith("clusterd-")
+                    and short not in self.profiled
+                ):
+                    self.profiled.add(short)
+                    _heap_profile(self.c, short, f"{pct:.0f}pct", self.log)
+                if pct >= self.ECHO_FRACTION * 100 and pct > self.peak.get(short, 0.0):
+                    self.peak[short] = pct
+                    self.log.log("mem", f"{short} at {pct:.0f}% of its memory limit")
+            if rows:
+                self.log.log("mem", " ".join(rows), echo=False)
+
+
 def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
     scenario_class = SCENARIOS[name]
     complexity = COMPLEXITIES[args.complexity]
@@ -490,8 +572,10 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
         midrun = (
             make_upgrade_swap(c, ctx, version_override) if args.upgrade_from else None
         )
+        sampler = MemorySampler(c, log)
+        sampler.start()
         try:
-            Runner(
+            runner = Runner(
                 scenario,
                 args.runtime,
                 toxiproxy,
@@ -503,10 +587,22 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                 ],
                 restart_toxiproxy=lambda: _restart_toxiproxy(c, toxiproxy),
                 kind_filter=kind_filter,
-            ).run()
-            # After the run, so it sees the whole history the run produced,
-            # and only when the run itself passed: a failure already has its
-            # explanation and its diagnostics.
+            )
+            try:
+                runner.run()
+            except BaseException:
+                # A failure is when the shard history is most worth having,
+                # not least: what a run reports is often a symptom (a wedged
+                # checker, a cancelled query) of a persist event that left no
+                # other trace, and the state history is the only place that
+                # event is still visible. Diagnostics only here, so nothing
+                # can mask or replace the failure being raised.
+                try:
+                    audit_persist_history(c, ctx, log)
+                except Exception as e:
+                    log.log("audit", f"post-failure state audit did not run: {e}")
+                raise
+            # After the run, so it sees the whole history the run produced.
             try:
                 audit_persist_history(c, ctx, log)
             except InvariantViolation:
@@ -517,6 +613,7 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                 # catalog query) failing is not a verdict on the run.
                 log.log("audit", f"persist state audit did not run: {e}")
         finally:
+            sampler.stop_event.set()
             scenario.teardown()
 
 
@@ -778,22 +875,54 @@ def process_targets(c: Composition) -> list[ProcessTarget]:
             # single attempt can race a crash-looping restart policy.
             c.up(name, detach=True, max_tries=3)
 
-        def set_cpus(cpus: str) -> None:
+        def update_cpu(*args: str) -> str:
             # `docker update`, not compose: changing the CPU allowance of a
             # running container in place is the only way to degrade a process
             # without restarting it, and compose has no equivalent. A
             # container the disruptor killed moments ago is simply gone, and
             # the caller treats a failed disruption as a lost cycle.
+            #
+            # The quota/period pair rather than `--cpus`, because only the
+            # quota can be cleared again: `--cpus=0` is read as "leave the
+            # limit alone", so a heal written that way silently does nothing
+            # and the process stays crippled for the rest of the run. The
+            # two also disagree in `docker inspect`, since setting `--cpus`
+            # reports through NanoCpus and leaves CpuQuota at 0.
+            container = f"{c.project_name}-{name}-1"
             subprocess.run(
-                [
-                    "docker",
-                    "update",
-                    f"--cpus={cpus}",
-                    f"{c.project_name}-{name}-1",
-                ],
+                ["docker", "update", *args, container],
                 check=True,
                 capture_output=True,
             )
+            quota = subprocess.run(
+                ["docker", "inspect", "-f", "{{.HostConfig.CpuQuota}}", container],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            return quota.stdout.strip()
+
+        def throttle() -> None:
+            update_cpu(f"--cpu-period={CPU_PERIOD}", f"--cpu-quota={CPU_THROTTLED}")
+
+        def unthrottle() -> None:
+            # Verified and retried, not assumed. A heal that quietly fails to
+            # restore the allowance turns one disruption into a permanent one,
+            # which is invisible except as everything downstream slowly
+            # falling apart. Retried because a container killed by another
+            # disruption cannot be updated while it is down, and a restart
+            # policy brings back the same container with the same limit.
+            last = ""
+            for attempt in range(3):
+                try:
+                    last = update_cpu("--cpu-quota=-1")
+                    if last == "-1":
+                        return
+                except Exception as e:
+                    last = str(e)
+                if attempt < 2:
+                    time.sleep(2.0)
+            raise RuntimeError(f"{name} still CPU limited after heal: {last}")
 
         return ProcessTarget(
             name=name,
@@ -802,13 +931,14 @@ def process_targets(c: Composition) -> list[ProcessTarget]:
             heal=heal,
             pause=lambda: c.pause(name),
             unpause=lambda: c.unpause(name),
-            # Enough CPU to make progress, far too little to keep up. A
-            # process that is merely slow is the case every timeout in the
-            # system is implicitly betting against, and unlike a pause it
-            # keeps answering, so peers see a live but lagging peer rather
-            # than an absent one.
-            throttle=lambda: set_cpus("0.15"),
-            unthrottle=lambda: set_cpus("0"),
+            # Half a core: a process that is merely slow is the case every
+            # timeout in the system is implicitly betting against, and unlike
+            # a pause it keeps answering, so peers see a live but lagging peer
+            # rather than an absent one. Squeezing harder than this makes the
+            # coordinator unable to drain its backlog at all, which is a plain
+            # outage with extra steps and is what `pause` is for.
+            throttle=throttle,
+            unthrottle=unthrottle,
         )
 
     return [
@@ -827,6 +957,8 @@ def process_targets(c: Composition) -> list[ProcessTarget]:
 REPROS = {
     "repro-blob-memory": "PER-31: unbounded clusterd memory while the blob"
     " store is cut",
+    "repro-storage-memory": "SS-428: unbounded clusterd-storage memory"
+    " replaying a source backlog while a new table's rewind pins the frontier",
     "repro-postheal-stall": "PER-32: writes stalled long after a metadata cut"
     " healed",
     "repro-per10": "PER-10: persist GC panic, earliest state without rollup",
@@ -842,8 +974,22 @@ REPROS = {
 }
 
 
+# Background load for a repro, as (scenario, actions). The first action runs
+# every tick for steady write pressure, the rest rotate slowly because they are
+# DDL. TableBank's ledger transfers keep consensus busy and its created and
+# dropped views mean shard finalization, which keeps persist GC busy, so a
+# finding only needs its own entry when it lives in another scenario's shape.
+DEFAULT_REPRO_LOAD = ("table-bank", ("ledger-transfer", "ddl-churn"))
+REPRO_LOAD = {
+    # The source-table churn is driven by the repro itself, at the moment in
+    # the sequence that matters, not at random.
+    "repro-storage-memory": ("pg-cdc-bank", ("cdc-transfer", "wide-txn")),
+}
+
+
 def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
-    from materialize.invariants.scenarios.table_bank import TableBank
+    scenario_name, load_actions = REPRO_LOAD.get(name, DEFAULT_REPRO_LOAD)
+    scenario_class = SCENARIOS[scenario_name]
 
     c.down(destroy_volumes=True)
     rng = random.Random(f"{args.seed}-{name}")
@@ -854,7 +1000,11 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
             for proxy in leg.proxies:
                 toxiproxy.create(proxy)
         c.up(
-            "materialized", "clusterd-compute", "clusterd-compute2", "clusterd-storage"
+            "materialized",
+            "clusterd-compute",
+            "clusterd-compute2",
+            "clusterd-storage",
+            *scenario_class.services,
         )
         c.sql(CLUSTER_SETUP_SQL, port=6877, user="mz_system")
         ctx = ScenarioContext(
@@ -862,13 +1012,18 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
                 mz_host="127.0.0.1",
                 mz_port=c.default_port("materialized"),
                 mz_system_port=c.port("materialized", 6877),
+                pg_port=(
+                    c.default_port("postgres")
+                    if "postgres" in scenario_class.services
+                    else None
+                ),
             ),
-            complexity=COMPLEXITIES["medium"],
+            complexity=COMPLEXITIES[args.complexity],
             rng=rng,
             log=log,
             seed=args.seed,
         )
-        scenario = TableBank(ctx)
+        scenario = scenario_class(ctx)
         scenario.setup()
         bundles = [
             scenario.make_worker(i, random.Random(rng.randrange(2**31)))
@@ -878,17 +1033,14 @@ def run_repro(c: Composition, name: str, args, log: EventLog) -> None:
 
         def drive(bundle) -> None:
             actions = {action.name: action for action in bundle.actions}
+            steady, *periodic = load_actions
             ticks = 0
             while not stop.is_set():
                 ticks += 1
-                # LedgerTransfer for steady writes (consensus churn), plus
-                # DdlChurn: created and dropped MVs mean shard finalization,
-                # which is what keeps persist GC busy.
-                action = (
-                    actions["ddl-churn"]
-                    if ticks % 40 == 0
-                    else actions["ledger-transfer"]
-                )
+                if periodic and ticks % 40 == 0:
+                    action = actions[periodic[(ticks // 40) % len(periodic)]]
+                else:
+                    action = actions[steady]
                 try:
                     action.run()
                 except Exception:
@@ -1003,6 +1155,202 @@ def repro_blob_memory(c, toxiproxy, ctx, log) -> None:
     finally:
         _toxiproxy_heal(toxiproxy, log)
     log.log("repro", "not reproduced within 240s")
+
+
+def _heap_profile(c: Composition, service: str, label: str, log: EventLog) -> None:
+    """Save a symbolized heap profile of `service` next to the event log.
+
+    Our images build jemalloc with profiling active, and clusterd's internal
+    HTTP server serves the dump, so nothing has to be arranged in advance. The
+    result is a folded-stack `.mzfg`, which both the flamegraph viewer and
+    `sort`/`grep` can read, so a run that grew can be attributed from the
+    artifacts alone.
+    """
+    path = f"heap-{service}-{label}.mzfg"
+    try:
+        port = c.port(service, 6878)
+        with open(path, "wb") as f:
+            subprocess.run(
+                [
+                    "curl",
+                    "-sS",
+                    "--max-time",
+                    "120",
+                    "-X",
+                    "POST",
+                    "-d",
+                    "action=dump_sym_mzfg",
+                    f"http://127.0.0.1:{port}/",
+                ],
+                check=True,
+                stdout=f,
+                timeout=180,
+            )
+        log.log("repro", f"heap profile of {service} written to {path}")
+    except Exception as e:
+        log.log("repro", f"heap profile of {service} ({label}) failed: {e}")
+
+
+def repro_storage_memory(c, toxiproxy, ctx, log) -> None:
+    """SS-428: add a table to a Postgres source that has a replication backlog.
+
+    Adding a table to a running source makes the snapshot operator emit a
+    rewind request for the new export, and the replication reader then holds
+    its data capability at offset zero until it has replayed past the new
+    table's snapshot LSN, because that is where the rewind's negated updates
+    go. The source's frontier therefore does not move for the whole replay.
+
+    A snapshot on its own survives that: all of its rows carry offset zero, so
+    they land in one persist batch builder, which spills parts to blob once it
+    passes `persist_blob_target_size`. The replay does not. Its rows carry
+    real timestamps, one per remap binding, so they land in one open builder
+    per second of replay, and none of them can be finished while the frontier
+    is pinned. Everything replayed stays resident until the rewind clears.
+
+    So the growth is the size of the backlog, and it does not stop until the
+    replay has caught up. This builds the backlog with a source-leg outage and
+    bulk upstream writes, then adds the table the moment the leg is whole
+    again. The comparison is the same sequence without the added table: that
+    replay commits as it goes and stays flat.
+
+    While it grows, `SELECT` on any of the source's tables blocks, which is
+    the same pinned frontier seen from the outside.
+    """
+    container = "invariants-clusterd-storage-1"
+    # The upstream keeps committing through this, so it sets the size of the
+    # replay. Also stops the slot's confirmed_flush_lsn from advancing, which
+    # is where the replay starts from.
+    OUTAGE_S = 150.0
+    # Rows per bulk statement. Server-side generate_series, so the harness is
+    # not the bottleneck and the outage is worth GiBs of WAL.
+    BULK_ROWS = 100_000
+    # Growth this far above the settled baseline is staged replay, not a
+    # replay working through: the same outage without the added table peaks
+    # 0.15GiB above its baseline and drains within a minute. Measured growth
+    # once the rewind is pending is 30-60MiB/min and does not stop, so the
+    # watch has to be long enough for the slow end of that to clear the
+    # threshold on a loaded agent.
+    GROWTH_GIB = 0.75
+    WATCH_S = 2400.0
+
+    import psycopg
+
+    client = MzClient(ctx, "repro-source-table")
+    stop_bulk = threading.Event()
+
+    def connect_upstream():
+        # Direct, not through the proxy: the upstream has to keep committing
+        # while the source's leg is cut.
+        return psycopg.connect(
+            host=ctx.endpoints.mz_host,
+            port=ctx.endpoints.pg_port,
+            user="postgres",
+            password="postgres",
+            dbname="postgres",
+            connect_timeout=10,
+        )
+
+    def bulk_writer(idx: int) -> None:
+        conn: Any = None
+        seq = 0
+        while not stop_bulk.is_set():
+            seq += 1
+            try:
+                if conn is None:
+                    conn = connect_upstream()
+                # Self-consistent rows, so the wide-transaction invariant
+                # still holds if this scenario is ever checked here.
+                conn.cursor().execute(
+                    "INSERT INTO wide_txn (txn_id, txn_rows, idx) SELECT"
+                    f" {900_000_000 + idx * 1_000_000 + seq}, {BULK_ROWS}, g"
+                    f" FROM generate_series(1, {BULK_ROWS}) g"
+                )
+                conn.commit()
+            except Exception:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    conn = None
+                stop_bulk.wait(1.0)
+
+    writers = [
+        threading.Thread(target=bulk_writer, args=(i,), daemon=True) for i in range(4)
+    ]
+    try:
+        time.sleep(30)
+        base = min(_rss_gb(container) for _ in range(3))
+        log.log("repro", f"baseline {base:.2f}GiB")
+        _heap_profile(c, "clusterd-storage", "baseline", log)
+
+        # Only while the leg is cut: the backlog should be this window's
+        # writes and nothing more, and the upstream should stop growing once
+        # the replay it feeds has started.
+        toxiproxy.set_enabled("pg", False)
+        log.log("repro", f"source leg cut for {OUTAGE_S:.0f}s, building a backlog")
+        for t in writers:
+            t.start()
+        try:
+            time.sleep(OUTAGE_S)
+        finally:
+            stop_bulk.set()
+            for t in writers:
+                t.join(timeout=30)
+            _toxiproxy_heal(toxiproxy, log)
+
+        # Immediately, while the backlog is still unreplayed: the rewind has
+        # to be pending for the replay, not after it.
+        deadline = time.monotonic() + 60
+        while True:
+            try:
+                client.write(
+                    "CREATE TABLE accounts_stuck FROM SOURCE bank_source"
+                    " (REFERENCE accounts)"
+                )
+                break
+            except Exception as e:
+                if time.monotonic() > deadline:
+                    raise AssertionError(
+                        f"could not add a table to the source: {e}"
+                    ) from e
+                time.sleep(0.5)
+        log.log("repro", "table added while the backlog replays, watching memory")
+
+        peak = base
+        started = time.monotonic()
+        deadline = started + WATCH_S
+        # The replay takes tens of minutes to clear the threshold, so the
+        # watch reports as it goes. A loop this long that prints only its
+        # verdict is indistinguishable from a hang.
+        next_report = started
+        while time.monotonic() < deadline:
+            time.sleep(5)
+            now = _rss_gb(container)
+            peak = max(peak, now)
+            if time.monotonic() >= next_report:
+                next_report = time.monotonic() + 30
+                log.log(
+                    "repro",
+                    f"{time.monotonic() - started:.0f}s into the replay:"
+                    f" clusterd-storage {now:.2f}GiB, {now - base:+.2f}GiB from"
+                    f" baseline, threshold {base + GROWTH_GIB:.2f}GiB",
+                )
+            if now > base + GROWTH_GIB:
+                _heap_profile(c, "clusterd-storage", "grown", log)
+                raise AssertionError(
+                    f"REPRODUCED: clusterd-storage grew {base:.2f} ->"
+                    f" {now:.2f}GiB staging a replay it cannot commit while a"
+                    " newly added table's rewind pins the source frontier"
+                )
+        log.log(
+            "repro", f"not reproduced, peaked at {peak:.2f}GiB (base {base:.2f}GiB)"
+        )
+    finally:
+        stop_bulk.set()
+        for t in writers:
+            if t.is_alive():
+                t.join(timeout=10)
 
 
 def repro_postheal_stall(c, toxiproxy, ctx, log) -> None:
@@ -1632,6 +1980,7 @@ def repro_alter_table_schema(c, toxiproxy, ctx, log) -> None:
 
 REPRO_FUNCS = {
     "repro-blob-memory": repro_blob_memory,
+    "repro-storage-memory": repro_storage_memory,
     "repro-postheal-stall": repro_postheal_stall,
     "repro-per10": repro_per10,
     "repro-durable-resume": repro_durable_resume,

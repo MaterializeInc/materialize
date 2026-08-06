@@ -102,6 +102,17 @@ class _Watchdog(threading.Thread):
             self.client.maybe_cancel()
 
 
+class ConnectFailed(TransientError):
+    """No connection could be established, so nothing was sent.
+
+    Worth distinguishing from every other transient failure: those leave the
+    outcome genuinely unknown, while a statement that never reached the
+    server definitely did not apply. Every unknown widens an op-log bound
+    permanently, so classifying these as failed is what keeps a bounds check
+    able to detect anything at all under heavy disruption.
+    """
+
+
 class MzClient:
     """One psycopg connection to Materialize, owned by a single thread.
 
@@ -143,7 +154,7 @@ class MzClient:
                     autocommit=True,
                 )
             except Exception as e:
-                raise TransientError(f"connect failed: {e}") from e
+                raise ConnectFailed(f"connect failed: {e}") from e
             with self._lock:
                 self._conn = conn
         return self._conn
@@ -287,6 +298,10 @@ class MzClient:
         try:
             self._bounded(sql, params, timeout)
             return Outcome.COMMITTED
+        except ConnectFailed:
+            # Never sent, so it cannot have applied.
+            self.reset()
+            return Outcome.FAILED
         except TransientError:
             self.reset()
             return Outcome.UNKNOWN

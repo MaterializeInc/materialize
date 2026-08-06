@@ -51,6 +51,12 @@ from materialize.invariants.framework import (
 )
 from materialize.invariants.mz import MzClient
 
+# The final check runs on a quiesced system and legitimately scans everything
+# the run wrote, which the per-query watchdog is not sized for: that watchdog
+# exists to stop a checker hanging during chaos, and cancelling a final-check
+# query instead reports a wedge that is really just a big honest query.
+FINAL_TIMEOUT = 600
+
 # Rows contended by the read-then-write action. Few enough that concurrent
 # workers collide on the same row, which is the case that can lose an update.
 COUNTER_KEYS = 8
@@ -439,18 +445,31 @@ class TxnProbe(Scenario):
         # the bounds above hold for the wrong reason.
         if high == 0:
             raise InvariantViolation("vacuous run: no increment was ever attempted")
+        # How blunt the check above actually is. A read-modify-write cannot be
+        # reconciled after the fact the way an insert can, since one increment
+        # is indistinguishable from another, so every op whose outcome stayed
+        # unknown widens the window forever. That makes this the one oracle
+        # here that gets *weaker* the harder the run is disrupted, and it does
+        # so silently, so the width is reported and a window wider than the
+        # thing it is measuring fails: at that point it cannot see a loss.
+        width = (high - low) / high
+        self.ctx.log.log(
+            "stats",
+            f"counter oracle resolution: [{low}, {high}], window is"
+            f" {width:.1%} of the upper bound",
+        )
         leaked = client.query("SELECT id FROM rollback_probe LIMIT 20")
         if leaked:
             raise InvariantViolation(
                 f"rows from transactions that never committed are visible: {leaked}"
             )
-        half_applied = client.query(MULTI_SHARD_DIFF_SQL)
+        half_applied = client.query(MULTI_SHARD_DIFF_SQL, timeout=FINAL_TIMEOUT)
         if half_applied:
             raise InvariantViolation(
                 f"multi-shard transactions half applied between {TXN_TABLES}:"
                 f" {half_applied[:20]}"
             )
-        disagrees = client.query(COUNTER_MV_DIFF_SQL)
+        disagrees = client.query(COUNTER_MV_DIFF_SQL, timeout=FINAL_TIMEOUT)
         if disagrees:
             raise InvariantViolation(
                 f"the counter MV disagrees with the table it sums: {disagrees}"

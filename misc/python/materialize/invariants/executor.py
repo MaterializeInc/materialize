@@ -210,9 +210,13 @@ class Runner:
 
         # Draw all child seeds in a fixed order so a given --seed yields the
         # same per-thread action/disruption sequences across runs.
+        # A scenario may cap the worker count below the complexity's, see
+        # Scenario.max_workers.
+        workers = ctx.complexity.workers
+        if self.scenario.max_workers is not None:
+            workers = min(workers, self.scenario.max_workers)
         worker_rngs = [
-            random.Random(ctx.rng.randrange(SEED_RANGE))
-            for _ in range(ctx.complexity.workers)
+            random.Random(ctx.rng.randrange(SEED_RANGE)) for _ in range(workers)
         ]
         self.checkers = self.scenario.checkers()
         checker_rngs = [

@@ -96,14 +96,18 @@ COMPLEXITIES = {
         query_timeout=60.0,
         agitation_interval=(3.0, 10.0),
     ),
+    # Nightly's default. Sized against the measured skipped-round rate: a
+    # checker that cannot get an answer during an outage skips, and at these
+    # settings the scenarios lose 10-20% of their rounds that way, which
+    # leaves headroom for the disruptions to be this frequent.
     "high": Complexity(
         name="high",
-        workers=8,
+        workers=12,
         accounts=32,
         op_delay=(0.001, 0.01),
-        disruption_interval=(10.0, 20.0),
+        disruption_interval=(6.0, 14.0),
         disruption_duration=(15.0, 90.0),
-        concurrent_disruptions=2,
+        concurrent_disruptions=3,
         query_timeout=90.0,
         agitation_interval=(1.0, 5.0),
     ),
@@ -111,12 +115,12 @@ COMPLEXITIES = {
     # trivial, so compaction, spills, and the AS OF probes do real work.
     "large": Complexity(
         name="large",
-        workers=8,
+        workers=12,
         accounts=200_000,
         op_delay=(0.001, 0.01),
-        disruption_interval=(10.0, 20.0),
+        disruption_interval=(6.0, 14.0),
         disruption_duration=(15.0, 90.0),
-        concurrent_disruptions=2,
+        concurrent_disruptions=3,
         query_timeout=90.0,
         agitation_interval=(1.0, 5.0),
     ),
@@ -380,6 +384,12 @@ class Scenario(ABC):
     services: list[str] = []
     # Toxiproxy legs this scenario disrupts, by leg name.
     legs: list[str] = []
+    # Cap on concurrent writers, below the complexity's worker count. For
+    # scenarios whose write path is bounded by something outside Materialize:
+    # more writers than the upstream can absorb only moves the bottleneck out
+    # of the system under test, and leaves a backlog the converge phase then
+    # has to drain.
+    max_workers: int | None = None
 
     def __init__(self, ctx: ScenarioContext) -> None:
         self.ctx = ctx

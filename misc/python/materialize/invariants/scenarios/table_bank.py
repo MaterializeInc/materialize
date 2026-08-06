@@ -56,6 +56,12 @@ from materialize.invariants.framework import (
 )
 from materialize.invariants.mz import MzClient, UnexpectedQueryError
 
+# The final check runs on a quiesced system and legitimately scans everything
+# the run wrote, which the per-query watchdog is not sized for: that watchdog
+# exists to stop a checker hanging during chaos, and cancelling a final-check
+# query instead reports a wedge that is really just a big honest query.
+FINAL_TIMEOUT = 600
+
 BALANCE_PER_ACCOUNT = 1000
 # Each ledger transfer writes one debit and one credit row.
 ROWS_PER_TRANSFER = 2
@@ -426,8 +432,6 @@ class ReplacementChurn(Action):
     REPLACEMENT switches the definition while preserving the name and all
     downstream objects. Because the definition is identical, every existing
     total checker must keep seeing the exact total through the switch.
-
-    The cutover itself is currently disabled, see the TODO on SQL-603 in run().
     """
 
     name = "replacement"
@@ -489,20 +493,14 @@ class ReplacementChurn(Action):
             # run is shutting down. Leave the replacement for the next
             # cycle's drop.
             return Outcome.UNKNOWN
-        # TODO: Reenable when SQL-603 is fixed. Applying the replacement
-        # finalizes the collection it replaces while the replacement still
-        # holds a read hold on it, and an interrupted apply leaves that state
-        # durable. The next bootstrap then halts on it ("dependency since
-        # frontier is empty while dependent upper is not empty"), and so does
-        # every restart after that, so environmentd never comes back: nightly
-        # 17740 spent 139 boots in that loop. Creating, hydrating and dropping
-        # the replacement stays in, only the cutover is out, so the read hold
-        # and its removal are still exercised. The next cycle's DROP cleans up.
-        #
-        # return self.client.write(
-        #     "ALTER MATERIALIZED VIEW total APPLY REPLACEMENT total_repl"
-        # )
-        return Outcome.COMMITTED
+        # An interrupted apply is the interesting case: the cutover finalizes
+        # the collection it replaces while the replacement still holds a read
+        # hold on it, and whatever that leaves behind has to survive a
+        # bootstrap. The next cycle's DROP cleans up an apply whose outcome
+        # was unknown.
+        return self.client.write(
+            "ALTER MATERIALIZED VIEW total APPLY REPLACEMENT total_repl"
+        )
 
     def close(self) -> None:
         self.client.reset()
@@ -1621,7 +1619,7 @@ class TableBank(Scenario):
         total = int(client.query("SELECT total FROM total")[0][0])
         if total != self.total:
             raise InvariantViolation(f"final total {total} != {self.total}")
-        broken = client.query(LEDGER_TORN_SQL)
+        broken = client.query(LEDGER_TORN_SQL, timeout=FINAL_TIMEOUT)
         if broken:
             raise InvariantViolation(f"non-atomic ledger transfers: {broken[:20]}")
         for worker in range(self.ctx.complexity.workers):

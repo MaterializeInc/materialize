@@ -833,6 +833,14 @@ class SqlServerCdcBank(CdcBank):
     name = "sqlserver-cdc-bank"
     rtr_supported = False
     upstream_ddl_supported = False
+    # SQL Server captures changes with a polling agent that scans the
+    # transaction log on a schedule, rather than streaming it the way Postgres
+    # logical replication and the MySQL binlog do. Its capture rate is
+    # therefore a ceiling the writers can exceed, and once they do the lag
+    # grows for the rest of the run and converge has to drain all of it.
+    # Fewer writers keeps the bottleneck inside Materialize, which is what
+    # this test is about.
+    max_workers = 6
     accounts_reference = "dbo.accounts"
     services = ["sql-server"]
     legs = [
