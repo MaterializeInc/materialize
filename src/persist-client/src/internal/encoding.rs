@@ -1977,6 +1977,7 @@ impl<T: Timestamp + Codec64> RustType<ProtoU64Antichain> for Antichain<T> {
 #[cfg(test)]
 mod tests {
     use mz_ore::assert_none;
+    use mz_persist_types::stats::{ProtoDynStats, ProtoStructStats};
 
     use bytes::Bytes;
     use mz_build_info::DUMMY_BUILD_INFO;
@@ -2665,5 +2666,29 @@ mod tests {
             .expect("stats bytes are stored undecoded");
         assert_err!(stats.try_decode());
         assert!(format!("{stats:?}").contains("undecodable"));
+    }
+
+    /// The exact shape version skew produces: valid protobuf whose stats
+    /// oneof uses a variant this version does not know (a newer writer's new
+    /// stats kind reaching an older reader).
+    fn version_skewed_part_stats() -> LazyPartStats {
+        let mut proto = ProtoStructStats::default();
+        proto.cols.insert("c".into(), ProtoDynStats::default());
+        let bytes = prost::Message::encode_to_vec(&proto);
+        LazyPartStats::from_proto(Bytes::from(bytes)).expect("stats bytes are stored undecoded")
+    }
+
+    /// `decode` panics on stats from a newer version, which is why the read
+    /// paths (the shard_source filter and the `stats()` accessors in fetch)
+    /// must use `try_decode` and fail open to fetching the part.
+    #[mz_ore::test]
+    #[should_panic(expected = "valid stats")]
+    fn part_stats_decode_panics_on_unknown_variant() {
+        let _ = version_skewed_part_stats().decode();
+    }
+
+    #[mz_ore::test]
+    fn part_stats_try_decode_fails_open_on_unknown_variant() {
+        assert_err!(version_skewed_part_stats().try_decode());
     }
 }
