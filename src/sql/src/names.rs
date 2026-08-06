@@ -2104,7 +2104,11 @@ impl<'a> Fold<Raw, Aug> for NameResolver<'a> {
         &mut self,
         name: <Raw as AstInfo>::NetworkPolicyName,
     ) -> <Aug as AstInfo>::NetworkPolicyName {
-        match self.catalog.resolve_network_policy(&name.to_string()) {
+        let name_str = match &name {
+            RawNetworkPolicyName::Unresolved(ident) => ident.as_str(),
+            RawNetworkPolicyName::Resolved(s) => s.as_str(),
+        };
+        match self.catalog.resolve_network_policy(name_str) {
             Ok(policy) => ResolvedNetworkPolicyName {
                 id: policy.id(),
                 name: policy.name().to_string(),
