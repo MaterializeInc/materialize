@@ -8807,6 +8807,7 @@ dependencies = [
  "aws-types",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "columnation",
  "criterion",
  "csv-core",
