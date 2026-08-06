@@ -123,6 +123,68 @@ WHERE ((CASE WHEN flag THEN j1 ELSE j2 END) ->> 'y') IS NULL
 ----
 3
 
+# Regression test for PER-53: A negative NaN must not poison the stats of the
+# float column it lands in.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET persist_stats_audit_percent = 0
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE floats (value double precision)
+
+# One INSERT, so both rows land in the same part and share its stats.
+statement ok
+INSERT INTO floats VALUES ('-NaN'), (1.0)
+
+# The part holds a matching row, so it must be selected.
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM floats WHERE value = 1.0::double precision
+----
+materialize.public.floats  1344  1344  1  1
+
+query I
+SELECT count(*) FROM floats WHERE value = 1.0::double precision
+----
+1
+
+# The same part, read through a dataflow rather than a one-shot peek.
+statement ok
+CREATE MATERIALIZED VIEW ones AS
+SELECT value FROM floats WHERE value = 1.0::double precision
+
+query I
+SELECT count(*) FROM ones
+----
+1
+
+# Variant with both NaN signs in one part: the bounds decode to the
+# non-inverted range (NaN, NaN), so widening inverted bounds alone does not
+# catch it. The spec then claimed the part holds nothing but NaN and a filter
+# on a finite value pruned the part, hiding the 0.0 row.
+
+statement ok
+CREATE TABLE mixed_nan (value double precision)
+
+statement ok
+INSERT INTO mixed_nan VALUES ('-NaN'), ('NaN'), (0.0)
+
+query TIIII
+EXPLAIN FILTER PUSHDOWN FOR SELECT * FROM mixed_nan WHERE value = 0.0::double precision
+----
+materialize.public.mixed_nan  1355  1355  1  1
+
+query I
+SELECT count(*) FROM mixed_nan WHERE value = 0.0::double precision
+----
+1
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET persist_stats_audit_percent
+----
+COMPLETE 0
+
 # Leap-second timestamps roll over at parse time (Postgres compat). The
 # chrono leap representation sorted below the next second while the epoch
 # family (extract epoch, casts to mz_timestamp, subtraction, date_bin)
