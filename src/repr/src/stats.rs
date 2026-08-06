@@ -41,7 +41,7 @@ use crate::adt::jsonb::{KeyClass, KeyClassifier, NumberParser};
 use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
-use crate::{Datum, RowArena, SqlScalarType};
+use crate::{Datum, Row, RowArena, SqlScalarType};
 
 fn soft_expect_or_log<A, B: Debug>(result: Result<A, B>) -> Option<A> {
     match result {
@@ -319,16 +319,37 @@ pub fn col_values<'a>(
             | SqlScalarType::Uuid,
             ColumnStatKinds::Bytes(BytesStats::Atomic(AtomicBytesStats { lower, upper })),
         ) => {
-            let lower = ProtoDatum::decode(lower.as_slice()).expect("should be a valid ProtoDatum");
-            let lower = arena.make_datum(|p| {
-                p.try_push_proto(&lower)
-                    .expect("ProtoDatum should be valid Datum")
-            });
-            let upper = ProtoDatum::decode(upper.as_slice()).expect("should be a valid ProtoDatum");
-            let upper = arena.make_datum(|p| {
-                p.try_push_proto(&upper)
-                    .expect("ProtoDatum should be valid Datum")
-            });
+            // The V0 encoding carries no type tag, so a decoded bound has to
+            // be validated against the column type before it is used: a
+            // wrong-typed bound would produce a range that excludes every
+            // value of the column's actual type. Malformed or mismatched
+            // legacy bytes degrade to "no stats" instead of panicking.
+            fn decode_v0<'a>(
+                bytes: &[u8],
+                typ: &SqlScalarType,
+                arena: &'a RowArena,
+            ) -> Option<Datum<'a>> {
+                let proto = soft_expect_or_log(ProtoDatum::decode(bytes))?;
+                let mut row = Row::default();
+                soft_expect_or_log(row.packer().try_push_proto(&proto))?;
+                let datum = arena.push_unary_row(row);
+                let type_matches = matches!(
+                    (typ, datum),
+                    (SqlScalarType::Numeric { .. }, Datum::Numeric(_))
+                        | (SqlScalarType::Time, Datum::Time(_))
+                        | (SqlScalarType::Timestamp { .. }, Datum::Timestamp(_))
+                        | (SqlScalarType::TimestampTz { .. }, Datum::TimestampTz(_))
+                        | (SqlScalarType::Interval, Datum::Interval(_))
+                        | (SqlScalarType::Uuid, Datum::Uuid(_))
+                );
+                if !type_matches {
+                    soft_panic_or_log!("V0 stats bound {datum:?} does not match column {typ:?}");
+                    return None;
+                }
+                Some(datum)
+            }
+            let lower = decode_v0(lower.as_slice(), typ, arena)?;
+            let upper = decode_v0(upper.as_slice(), typ, arena)?;
 
             Some((lower, upper))
         }
