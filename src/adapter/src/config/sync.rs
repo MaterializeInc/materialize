@@ -186,16 +186,8 @@ pub(crate) fn evaluate_scoped_parameters(
     // The synced parameters, partitioned by scope class. The scope declaration
     // bounds evaluation to exactly the flags in use: an environment with no
     // scoped flags evaluates neither pass.
-    let replica_param_names: Vec<&'static str> = system_config
-        .iter_synced()
-        .filter(|var| var.scope() == ParameterScope::Replica)
-        .map(|var| var.name())
-        .collect();
-    let cluster_param_names: Vec<&'static str> = system_config
-        .iter_synced()
-        .filter(|var| var.scope() == ParameterScope::Cluster)
-        .map(|var| var.name())
-        .collect();
+    let replica_param_names = system_config.synced_param_names_in_scope(ParameterScope::Replica);
+    let cluster_param_names = system_config.synced_param_names_in_scope(ParameterScope::Cluster);
 
     let replica = if replica_param_names.is_empty() {
         Default::default()

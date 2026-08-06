@@ -592,6 +592,97 @@ def run_scoped_feature_flag_cases(
                     ]
                 )
             )
+
+            # Create-time resolution on ALTER: recreating a replica at a new size
+            # family must fold its replica-local override into the alter
+            # transaction, the same way CREATE does. `ld_alter` starts cc-family,
+            # so its replica gets the env-wide `enable_lgalloc=true` and records no
+            # override.
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                        "$ postgres-execute connection=mz_system",
+                        "CREATE CLUSTER ld_alter SIZE 'scale=1,workers=1'",
+                    ]
+                )
+            )
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT count(*) FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_alter'",
+                        "0",
+                    ]
+                )
+            )
+            # `ALTER CLUSTER ... SET (SIZE ... legacy)` recreates the replica as
+            # legacy-family, where the rule serves `false`. The row appears
+            # immediately, before the (disabled) sync loop could write it, so it
+            # can only come from the alter-time fold. The recreated replica keeps
+            # the name `r1`.
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                        "$ postgres-execute connection=mz_system",
+                        "ALTER CLUSTER ld_alter SET (SIZE 'scale=1,workers=1,legacy')",
+                    ]
+                )
+            )
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT cr.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_alter'",
+                        "r1 false",
+                    ]
+                )
+            )
+
+            # Same fold on the zero-downtime path. `WITH (WAIT FOR ...)` creates
+            # the replacement replica as a pending replica (`r1-pending`) and then
+            # finalizes by renaming it to `r1`. The override is folded onto the
+            # pending replica at create time and is keyed by replica id, so it
+            # survives the rename. We assert on the value alone, not the replica
+            # name, since the row is recorded under the pending name first and the
+            # final name after finalization. The size family (the targeting axis
+            # here) is already correct on the pending replica, so this path is
+            # unaffected by the `-pending` name. Targeting `replica_name` for a
+            # render-frozen flag through a 0dt alter is the open policy question in
+            # DB-152, not covered here.
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                        "$ postgres-execute connection=mz_system",
+                        "CREATE CLUSTER ld_alter_zdt SIZE 'scale=1,workers=1'",
+                    ]
+                )
+            )
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT count(*) FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_alter_zdt'",
+                        "0",
+                    ]
+                )
+            )
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
+                        "$ postgres-execute connection=mz_system",
+                        "ALTER CLUSTER ld_alter_zdt SET (SIZE 'scale=1,workers=1,legacy') WITH (WAIT FOR '0s')",
+                    ]
+                )
+            )
+            c.testdrive(
+                "\n".join(
+                    [
+                        f"> SELECT p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_alter_zdt'",
+                        "false",
+                    ]
+                )
+            )
             c.stop("materialized")
     finally:
         for flag in (
