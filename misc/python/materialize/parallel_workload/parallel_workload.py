@@ -119,7 +119,7 @@ def run(
     ).timestamp()
 
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers
+        rng, seed, host, ports, complexity, scenario, naughty_identifiers, num_threads
     )
 
     system_conn = psycopg.connect(
@@ -210,31 +210,48 @@ def run(
             database.create(Executor(rng, cur, None, database), composition)
         conn.close()
 
+    weights: list[float]
+    if complexity == Complexity.DDL:
+        weights = [60, 30, 30, 30, 100]
+    elif complexity == Complexity.DML:
+        weights = [60, 30, 30, 30, 0]
+    elif complexity == Complexity.Read:
+        weights = [60, 30, 0, 0, 0]
+    elif complexity == Complexity.DDLOnly:
+        weights = [0, 0, 0, 0, 100]
+    else:
+        raise ValueError(f"Unknown complexity {complexity}")
+    candidate_lists = [
+        read_action_list,
+        fetch_action_list,
+        write_action_list,
+        dml_nontrans_action_list,
+        ddl_action_list,
+    ]
+    # Cover every list the complexity enables before sampling the rest. Drawing
+    # each worker independently leaves a list unmanned surprisingly often: at 8
+    # threads the fetch, write and dml lists each go empty in ~36% of runs and
+    # the DDL list in ~2%, and an unmanned list is silent, the run just reports
+    # zero attempts for its actions. That is how nightly 17774's
+    # `--scenario=rename` run ended up with no DDL worker, so it renamed
+    # nothing, created no source (leaving HttpPostAction and SourceInsertAction
+    # with nothing to write to for 100k attempts each), and never dropped the
+    # initial cross-product view that then OOM-killed its replica.
+    # Heaviest-first so a thread count below the number of enabled lists still
+    # covers the ones the complexity cares about most, with the seed breaking
+    # ties among equal weights.
+    covered = [lst for lst, weight in zip(candidate_lists, weights) if weight]
+    rng.shuffle(covered)
+    covered.sort(key=lambda lst: -weights[candidate_lists.index(lst)])
+
     workers = []
     threads = []
     for i in range(num_threads):
-        weights: list[float]
-        if complexity == Complexity.DDL:
-            weights = [60, 30, 30, 30, 100]
-        elif complexity == Complexity.DML:
-            weights = [60, 30, 30, 30, 0]
-        elif complexity == Complexity.Read:
-            weights = [60, 30, 0, 0, 0]
-        elif complexity == Complexity.DDLOnly:
-            weights = [0, 0, 0, 0, 100]
-        else:
-            raise ValueError(f"Unknown complexity {complexity}")
         worker_rng = random.Random(rng.randrange(SEED_RANGE))
-        action_list = worker_rng.choices(
-            [
-                read_action_list,
-                fetch_action_list,
-                write_action_list,
-                dml_nontrans_action_list,
-                ddl_action_list,
-            ],
-            weights,
-        )[0]
+        if i < len(covered):
+            action_list = covered[i]
+        else:
+            action_list = worker_rng.choices(candidate_lists, weights)[0]
         actions = [
             action_class(worker_rng, composition)
             for action_class in action_list.action_classes
@@ -301,6 +318,7 @@ def run(
             autocommit=False,
             system=False,
             composition=composition,
+            off_session_work=True,
         )
         workers.append(worker)
         thread = threading.Thread(
@@ -329,6 +347,7 @@ def run(
             autocommit=False,
             system=False,
             composition=composition,
+            off_session_work=True,
         )
         workers.append(worker)
         thread = threading.Thread(
@@ -350,10 +369,11 @@ def run(
             autocommit=False,
             system=False,
             composition=composition,
+            off_session_work=True,
         )
         workers.append(worker)
         thread = threading.Thread(
-            name="kill",
+            name="backup-restore",
             target=worker.run,
             args=(host, ports["materialized"], ports["http"], "materialize", database),
             daemon=True,
@@ -435,11 +455,21 @@ def run(
         # loop (exe is None), which can only be hanging inside a connect call
         # to the server. One that never waits on the server is stuck in the
         # workload's own code, e.g. deadlocked on two object locks taken in
-        # opposite orders, which no timeout ever clears. Nothing legitimate
-        # pauses without a round trip for the 300s above (the longest such
-        # pause is BackupRestoreAction's 240s sleep), but a single sample can
-        # catch a worker between round trips, so only call a worker wedged if
-        # it stays off the server for a whole confirmation window.
+        # opposite orders, which no timeout ever clears. A single sample can
+        # catch a worker between round trips, so only call a worker wedged if it
+        # stays off the server for a whole confirmation window.
+        #
+        # Workers doing off-session work are left out entirely, in both
+        # directions. `last_status` tracks session round trips, and a scenario
+        # worker driving the composition makes none for as long as its action
+        # takes: BackupRestoreAction sleeps up to 240s and then runs a CRDB
+        # backup, a restore and a blocking `up("materialized")` that waits on
+        # environmentd's health check, which together outlast the 300s join
+        # window. Reading its stale status would report a healthy backup as a
+        # workload deadlock. Reporting it as on the server instead would be just
+        # as wrong the other way, because one worker on the server clears the
+        # verdict for all of them, so a real deadlock elsewhere would go
+        # unreported for the whole scenario.
         #
         # A tolerated server-side hang also explains every other worker: the
         # hung statement holds its actions' object locks (an `ALTER SINK ...
@@ -451,19 +481,22 @@ def run(
         # diagnosed when no worker is on the server at all. Waiters and
         # deadlocks both resolve when the statement does, and calling a waiter
         # deadlocked costs the run its final checks.
+        def session_status(worker: Worker, thread: threading.Thread) -> str | None:
+            """This worker's last session status, or None when it has none worth
+            reading: already exited, not connected yet, or off-session work."""
+            if not thread.is_alive() or worker.exe is None or worker.off_session_work:
+                return None
+            return worker.exe.last_status
+
         def not_on_server() -> set[str]:
             return {
                 t.name
                 for w, t in alive
-                if t.is_alive() and w.exe is not None and w.exe.last_status != "running"
+                if (status := session_status(w, t)) is not None and status != "running"
             }
 
         def on_server() -> set[str]:
-            return {
-                t.name
-                for w, t in alive
-                if t.is_alive() and w.exe is not None and w.exe.last_status == "running"
-            }
+            return {t.name for w, t in alive if session_status(w, t) == "running"}
 
         wedged = not_on_server()
         confirm_until = time.time() + 60

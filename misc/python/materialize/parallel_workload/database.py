@@ -61,17 +61,15 @@ from materialize.parallel_workload.settings import Complexity, Scenario
 
 MAX_COLUMNS = 50
 MAX_INCLUDE_HEADERS = 5
-# The row count a view's join squares. A view over two tables joins them on a
-# random boolean predicate, so the join is a cross product and every read of
-# that view builds MAX_ROWS**2 wide intermediate rows, whatever LIMIT the
-# reading query carries. Measured at 500 with only four columns, one
-# `COPY (SELECT * FROM view WHERE .. LIMIT 100) TO 's3://..'` cost ~450 MiB of
-# replica RSS, and pw tables carry up to MAX_COLUMNS of them. A handful of such
-# reads at once is what grew a clusterd to 19 GiB and had the kernel OOM-killer
-# take it, plus environmentd and the Kafka broker, out of the one cgroup all of
-# a run's containers share (nightlies 17660-17701). 100 keeps enough rows for
-# the DML, persist and index paths to be interesting while cutting the
-# intermediate 25-fold.
+# The row count a table is held at. Measured with a view whose join was a cross
+# product, one `COPY (SELECT * FROM view WHERE .. LIMIT 100) TO 's3://..'` over
+# 500-row bases cost ~450 MiB of replica RSS with only four columns, and pw
+# tables carry up to MAX_COLUMNS of them. A handful of such reads at once is
+# what grew a clusterd to 19 GiB and had the kernel OOM-killer take it, plus
+# environmentd and the Kafka broker, out of the one cgroup all of a run's
+# containers share (nightlies 17660-17701). 100 keeps enough rows for the DML,
+# persist and index paths to be interesting. See also JOIN_KEY_TYPES, which
+# keeps a view's join from squaring this in the first place.
 MAX_ROWS = 100
 MAX_CLUSTERS = 4
 MAX_CLUSTER_REPLICAS = 2
@@ -94,7 +92,6 @@ MAX_NETWORK_POLICIES = 30
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
-MAX_INITIAL_CLUSTERS = 2
 MAX_INITIAL_TABLES = 2
 MAX_INITIAL_VIEWS = 2
 MAX_INITIAL_ROLES = 1
@@ -104,6 +101,16 @@ MAX_INITIAL_MYSQL_SOURCES = 1
 MAX_INITIAL_SQL_SERVER_SOURCES = 1
 MAX_INITIAL_POSTGRES_SOURCES = 1
 MAX_INITIAL_LOADGEN_SOURCES = 1
+
+# Types eligible as the equality anchor of a two-base view's join, see
+# `View.join_key_expr`. A type qualifies when Materialize has `=` for it (map
+# has none) and, less obviously, when its random values collide often enough
+# that the equality still lets rows through: every type here draws one of a
+# handful of sentinels (the type's min or max, 0, 1, one of five fixed strings)
+# about a fifth of the time, so on the order of a percent of the cross product
+# survives. An equality on uuid or timestamp columns would bound the join just
+# as well but always produce an empty view, which tests nothing.
+JOIN_KEY_TYPES = NUMBER_TYPES + [Text]
 
 
 class BodyFormat(Enum):
@@ -333,9 +340,17 @@ class View(DBObject):
         )
 
         if base_object2:
-            self.on_expr = expression(
+            # The random boolean alone references an arbitrary subset of the
+            # columns, so it usually names only one side or neither, and the
+            # join plans as a cross product whose output squares MAX_ROWS. The
+            # equality anchor makes the output linear in the input instead.
+            # Cross joins stay covered by the ad-hoc SELECTs, which carry a
+            # LIMIT the optimizer can push into the join.
+            join_key = self.join_key_expr(base_object, base_object2, rng)
+            predicate = expression(
                 Boolean, all_columns, rng, kind=ExprKind.MATERIALIZABLE
             )
+            self.on_expr = f"{join_key} AND ({predicate})"
 
         self.union = rng.random() < 0.1
         if self.union:
@@ -353,6 +368,32 @@ class View(DBObject):
             self.data_types = [Long]
             self.columns = [Column(rng, 0, Long, self)]
             self.union = False
+
+    @staticmethod
+    def join_key_expr(left: DBObject, right: DBObject, rng: random.Random) -> str:
+        """An equality between one column of each side, so that the join has a
+        key and its output stays linear in the input.
+
+        Matches the join shape `SelectAction.generate_select_query` emits, with
+        two additions. A `JOIN_KEY_TYPES` pair wins over an equally valid pair of
+        some other type, whose values would never collide and leave the view
+        permanently empty. And a pair of objects sharing no column type at all,
+        which a query can answer by not joining but a two-base view cannot, falls
+        back to comparing the columns as text. That bounds the join just as well,
+        only with a near-empty result."""
+        candidates = [
+            (left_column, right_column)
+            for left_column in left.columns
+            for right_column in right.columns
+            # Materialize has no `=` for map.
+            if left_column.data_type is right_column.data_type
+            and left_column.data_type is not TextTextMap
+        ]
+        colliding = [pair for pair in candidates if pair[0].data_type in JOIN_KEY_TYPES]
+        if candidates:
+            left_column, right_column = rng.choice(colliding or candidates)
+            return f"{left_column} = {right_column}"
+        return f"{rng.choice(left.columns)}::text = {rng.choice(right.columns)}::text"
 
     def name(self) -> str:
         if self.rename:
@@ -528,7 +569,6 @@ class KafkaSource(DBObject):
     lock: threading.Lock
     columns: list[KafkaColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -542,7 +582,6 @@ class KafkaSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(
@@ -759,7 +798,6 @@ class MySqlSource(DBObject):
     lock: threading.Lock
     columns: list[MySqlColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -773,7 +811,6 @@ class MySqlSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
         # Bias toward a single-column key: only tables with a single-column
         # integer primary key take the parallel PK-range snapshot path, the
         # rest fall back to a whole-table read by one worker.
@@ -823,7 +860,6 @@ class PostgresSource(DBObject):
     lock: threading.Lock
     columns: list[PostgresColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -837,7 +873,6 @@ class PostgresSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(
@@ -878,7 +913,6 @@ class SqlServerSource(DBObject):
     lock: threading.Lock
     columns: list[SqlServerColumn]
     schema: Schema
-    num_rows: int
 
     def __init__(
         self,
@@ -893,7 +927,6 @@ class SqlServerSource(DBObject):
         self.source_id = source_id
         self.cluster = cluster
         self.schema = schema
-        self.num_rows = 0
         fields = []
         for i in range(rng.randint(1, 10)):
             fields.append(Field(f"key{i}", rng.choice(DATA_TYPES_FOR_KEY), True))
@@ -1448,6 +1481,7 @@ class Database:
     seed: str
     sqlsmith_state: str
     flags: dict[str, str]
+    num_threads: int
 
     def __init__(
         self,
@@ -1458,12 +1492,14 @@ class Database:
         complexity: Complexity,
         scenario: Scenario,
         naughty_identifiers: bool,
+        num_threads: int,
     ):
         self.host = host
         self.ports = ports
         self.complexity = complexity
         self.scenario = scenario
         self.seed = seed
+        self.num_threads = num_threads
         set_naughty_identifiers(naughty_identifiers)
 
         self.s3_path = 0
@@ -1499,16 +1535,35 @@ class Database:
         self.view_id = len(self.views)
         self.roles = [Role(i) for i in range(rng.randint(0, MAX_INITIAL_ROLES))]
         self.role_id = len(self.roles)
-        # At least one storage cluster required for WebhookSources
+        # Cluster 0 is the one cluster whose shape nothing churns: every cluster
+        # action skips it and operates on `clusters[1:]`, so it stays available
+        # for sources and sinks. Which cluster a given source or sink actually
+        # lands on is still random, both here and in the Create*Action paths.
+        #
+        # Each of those actions needs a cluster of a specific kind past cluster
+        # 0: managed for AlterClusterSetAction and FlipFlagsAction's per-cluster
+        # arrangement compression, unmanaged for Create/DropClusterReplicaAction.
+        # Drawing the count and the kinds the way the other initial objects are
+        # drawn covers both in one run out of eight, and the rest spend the whole
+        # run skipping. Nightly 17774 reported 369 AlterClusterSet, 129
+        # ReconfigureCluster and 117 CreateClusterReplica attempts with not one
+        # success between them. So the kinds are fixed and only cluster 0's is
+        # left to the seed.
         self.clusters = [
             Cluster(
-                i,
-                managed=rng.choice([True, False]),
+                cluster_id,
+                managed=managed,
                 size=rng.choice(["scale=1,workers=1", "scale=1,workers=2"]),
+                # One replica each, which is what lets Create and
+                # DropClusterReplicaAction take turns on the unmanaged cluster:
+                # Create needs room below MAX_CLUSTER_REPLICAS, Drop needs more
+                # than one replica so the cluster keeps serving requests.
                 replication_factor=1,
                 introspection_interval="1s",
             )
-            for i in range(rng.randint(1, MAX_INITIAL_CLUSTERS))
+            for cluster_id, managed in enumerate(
+                [rng.choice([True, False]), True, False]
+            )
         ]
         self.cluster_id = len(self.clusters)
         self.indexes = set()
@@ -1517,6 +1572,9 @@ class Database:
             for i in range(rng.randint(0, MAX_INITIAL_WEBHOOK_SOURCES))
         ]
         self.webhook_source_id = len(self.webhook_sources)
+        # The CDC source lists are populated by `create_initial_sources`, not
+        # here: such a source's executor connects to the source's database on
+        # construction, and that database only exists once `create` has made it.
         self.kafka_sources = []
         self.mysql_sources = []
         self.postgres_sources = []
@@ -1621,6 +1679,70 @@ class Database:
             self.schemas + self.clusters + self.roles + self.db_objects()
         ).__iter__()
 
+    def create_initial_sources(self, exe: Executor) -> None:
+        """Populate the CDC source lists, once the databases they connect to
+        exist.
+
+        SourceInsertAction is the only writer of a CDC source, and DML
+        complexity gives the DDL action list weight 0, so nothing there ever
+        runs a Create*SourceAction. Without a source from the start that action
+        cannot succeed once in a whole run, which is why the Kafka source is
+        unconditional rather than randomized down to zero like the other initial
+        objects.
+
+        Skipped for a 0dt deploy. A source executor connects on construction and
+        picks one of the two environmentds at random every time it connects, and
+        the second one only comes up mid-run when ZeroDowntimeDeployAction
+        deploys it, so constructing a source here fails outright half the time.
+        That scenario runs at DDL complexity, so its actions create the sources
+        instead."""
+        if self.scenario == Scenario.ZeroDowntimeDeploy:
+            return
+        self.kafka_sources = [
+            KafkaSource(
+                i,
+                exe.rng.choice(self.clusters),
+                exe.rng.choice(self.schemas),
+                self.ports,
+                exe.rng,
+            )
+            for i in range(MAX_INITIAL_KAFKA_SOURCES)
+        ]
+        self.kafka_source_id = len(self.kafka_sources)
+        self.postgres_sources = [
+            PostgresSource(
+                i,
+                exe.rng.choice(self.clusters),
+                exe.rng.choice(self.schemas),
+                self.ports,
+                exe.rng,
+            )
+            # A Postgres source is not expected to survive a backup & restore,
+            # see database-issues#6881 and
+            # CreatePostgresSourceAction.applicable.
+            for i in range(
+                0
+                if self.scenario == Scenario.BackupRestore
+                else exe.rng.randint(0, MAX_INITIAL_POSTGRES_SOURCES)
+            )
+        ]
+        self.postgres_source_id = len(self.postgres_sources)
+        self.mysql_sources = [
+            MySqlSource(
+                i,
+                exe.rng.choice(self.clusters),
+                exe.rng.choice(self.schemas),
+                self.ports,
+                exe.rng,
+            )
+            for i in range(exe.rng.randint(0, MAX_INITIAL_MYSQL_SOURCES))
+        ]
+        self.mysql_source_id = len(self.mysql_sources)
+        # MAX_INITIAL_SQL_SERVER_SOURCES stays unused: a SQL Server source
+        # drives CPU far above the other source kinds (SS-290), enough to have
+        # starved whole runs, and one in every run's initial database would put
+        # that back for good.
+
     def create(self, exe: Executor, composition: Composition) -> None:
         for db in self.dbs:
             db.drop(exe)
@@ -1705,6 +1827,8 @@ class Database:
         self.read_then_write_counter.create(exe)
 
         print("Creating relations")
+
+        self.create_initial_sources(exe)
 
         for relation in self:
             relation.create(exe)

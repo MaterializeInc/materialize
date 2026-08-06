@@ -58,14 +58,6 @@ ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS = {
     # it on outside that scenario is harmless: no Parallel Workload codegen
     # emits `repeat_row` unless the scenario is active.
     "enable_repeat_row": "true",
-    # TODO: Reenable once the frontend-peek path stops acquiring a read hold
-    # whose `since` has compacted past the chosen `as_of`. The soft-assert
-    # assert_read_holds_correct (frontend_peek.rs:1759) fires for peeks in
-    # multi-statement transactions ("... read hold at .. is not enough for
-    # as_of .."), panicking the coordinator. Peeks still work via the classic
-    # coordinator path with this off.
-    # See https://linear.app/materializeinc/issue/SQL-520
-    "enable_frontend_peek_sequencing": "false",
     # 64 MiB, down from the 1 GiB default. A peek's result is materialized in
     # memory on the replica serving it before this bound errors it
     # (`to_error_if_exceeds`, compute_state.rs), and measured on a workload-like
