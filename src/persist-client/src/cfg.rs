@@ -299,6 +299,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&BLOB_OPERATION_ATTEMPT_TIMEOUT)
         .add(&BLOB_CONNECT_TIMEOUT)
         .add(&BLOB_READ_TIMEOUT)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_DRAIN_AWARE_RECYCLING)
+        .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_DRAIN_CULLS_PER_TICK)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_SIZE)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_MAX_WAIT)
         .add(&crate::cfg::CONSENSUS_CONNECTION_POOL_TTL_STAGGER)
@@ -427,6 +429,31 @@ const CONSENSUS_CONNECTION_POOL_TTL_STAGGER: Config<Duration> = Config::new(
     "persist_consensus_connection_pool_ttl_stagger",
     Duration::from_secs(6),
     "The minimum time between TTLing Consensus connections to Postgres/CRDB.",
+);
+
+/// Whether consensus connections whose CockroachDB node is draining are
+/// proactively recycled, ahead of the server hard-closing them at the end of
+/// its drain. Only effective on CockroachDB backends, and only where the
+/// consensus role can read `crdb_internal.gossip_liveness` (see
+/// [`mz_postgres_client::PostgresClientKnobs::drain_aware_recycling`]). Leave
+/// off for vanilla Postgres.
+pub const CONSENSUS_CONNECTION_POOL_DRAIN_AWARE_RECYCLING: Config<bool> = Config::new(
+    "persist_consensus_connection_pool_drain_aware_recycling",
+    false,
+    "\
+    Proactively recycle consensus connections whose CockroachDB node is \
+    draining. Requires a role that can read crdb_internal.gossip_liveness.",
+);
+
+/// How many idle consensus connections on draining CockroachDB nodes are
+/// discarded per sweep, bounding how fast the pool sheds them. See
+/// [`CONSENSUS_CONNECTION_POOL_DRAIN_AWARE_RECYCLING`].
+const CONSENSUS_CONNECTION_POOL_DRAIN_CULLS_PER_TICK: Config<usize> = Config::new(
+    "persist_consensus_connection_pool_drain_culls_per_tick",
+    2,
+    "\
+    How many idle consensus connections on draining CockroachDB nodes are \
+    discarded per sweep.",
 );
 
 /// The duration to wait for a Consensus Postgres/CRDB connection to be made
@@ -599,6 +626,14 @@ pub const USAGE_STATE_FETCH_CONCURRENCY_LIMIT: Config<usize> = Config::new(
 impl PostgresClientKnobs for PersistConfig {
     fn connection_pool_max_size(&self) -> usize {
         CONSENSUS_CONNECTION_POOL_MAX_SIZE.get(self)
+    }
+
+    fn drain_aware_recycling(&self) -> bool {
+        CONSENSUS_CONNECTION_POOL_DRAIN_AWARE_RECYCLING.get(self)
+    }
+
+    fn connection_pool_drain_culls_per_tick(&self) -> usize {
+        CONSENSUS_CONNECTION_POOL_DRAIN_CULLS_PER_TICK.get(self)
     }
 
     fn connection_pool_max_wait(&self) -> Option<Duration> {

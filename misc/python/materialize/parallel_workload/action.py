@@ -1840,6 +1840,9 @@ class FlipFlagsAction(Action):
         self.flags_with_values["persist_claim_unclaimed_compactions"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values[
+            "persist_consensus_connection_pool_drain_aware_recycling"
+        ] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["persist_optimize_ignored_data_fetch"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -2109,6 +2112,7 @@ class FlipFlagsAction(Action):
             "persist_consensus_connection_pool_max_wait",
             "persist_consensus_connection_pool_ttl",
             "persist_consensus_connection_pool_ttl_stagger",
+            "persist_consensus_connection_pool_drain_culls_per_tick",
             "persist_use_postgres_tuned_queries",
             "crdb_connect_timeout",
             "crdb_tcp_user_timeout",

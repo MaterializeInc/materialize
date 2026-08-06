@@ -160,6 +160,17 @@ def get_variable_system_parameters(
         ["true", "false"] if read_committed_safe else ["false"],
     )
 
+    # Drain-aware recycling stamps connections and polls gossip via
+    # crdb_internal, which only exists on CockroachDB. Default it on there for
+    # coverage; on other metadata stores the queries would fail (tolerated,
+    # but noisy), so keep it off.
+    drain_aware_safe = metadata_store == "cockroach"
+    persist_drain_aware_recycling = VariableSystemParameter(
+        "persist_consensus_connection_pool_drain_aware_recycling",
+        "true" if drain_aware_safe else "false",
+        ["true", "false"] if drain_aware_safe else ["false"],
+    )
+
     return [
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
@@ -455,6 +466,7 @@ def get_variable_system_parameters(
             "persist_blob_cache_scale_with_threads", "true", ["true", "false"]
         ),
         persist_pg_consensus_read_committed,
+        persist_drain_aware_recycling,
         VariableSystemParameter(
             "persist_state_update_lease_timeout", "1s", ["0s", "1s", "10s"]
         ),
@@ -623,6 +635,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_consensus_connection_pool_max_wait",
     "persist_consensus_connection_pool_ttl",
     "persist_consensus_connection_pool_ttl_stagger",
+    "persist_consensus_connection_pool_drain_culls_per_tick",
     "persist_use_postgres_tuned_queries",
     "crdb_connect_timeout",
     "crdb_tcp_user_timeout",
