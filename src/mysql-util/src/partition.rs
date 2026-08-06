@@ -8,16 +8,15 @@
 // by the Apache License, Version 2.0.
 
 use mz_ore::cast::CastLossy;
+use mz_ore::str::redact;
 
 use crate::{KeyProber, MySqlError, QualifiedTableRef};
 
-/// When partitioning the data, how many ranges per worker should we break the
-/// keyspace into. This helps avoid underestimates for large row counts resulting
-/// in severe skew.
-const TARGET_RANGES_PER_WORKER: f64 = 8.0;
-
 /// Computes up to `num_workers - 1` partition boundaries that divide the primary key space
-/// into `num_workers` roughly even partitions. This should be run in a transaction.
+/// into `num_workers` roughly even partitions.
+/// This should be run in a repeatable read transaction against a primary key varchar/char column
+/// with collation that compares character by character (no contractions, expansions or ignorable
+/// characters).
 pub async fn partition_table(
     conn: &mut mysql_async::Conn,
     table: QualifiedTableRef<'_>,
@@ -38,22 +37,26 @@ pub async fn partition_table(
     tracing::trace!(
         schema = schema_name,
         table = table_name,
-        ?boundaries,
+        // The boundaries are user data, redacted outside of CI.
+        boundaries = ?redact(&boundaries),
         "partitioned table by pk prefix"
     );
     Ok(boundaries)
 }
 
 #[derive(Debug)]
-struct Range {
-    /// `None` for the beginning of the key space.
-    prefix: Option<String>,
-    /// Exclusive end, `None` for the final open range.
+struct Prefix {
+    /// Empty for the beginning of the key space.
+    prefix: String,
+    /// Exclusive end, `None` for the final open prefix.
     end: Option<String>,
-    /// Row estimate for the range, at least 1.
-    estimated_rows: f64,
-    /// Prefix length this range was split at.
+    /// Row estimate for the prefix, at least 1.
+    estimated_rows: u64,
+    /// Length this prefix was split at.
     depth: usize,
+    /// Use the position within each parent as a surrogate sort key to maintain the sort ordering
+    /// specified by MySQL.
+    surrogate_sort_key: Vec<usize>,
 }
 
 async fn partition(
@@ -65,178 +68,122 @@ async fn partition(
     if workers <= 1 {
         return Ok(Vec::new());
     }
-    let estimated_row_count = f64::cast_lossy(estimated_row_count.max(1));
-    let min_rows_per_worker = f64::cast_lossy(min_rows_per_worker.max(1));
-    let target_max_rows_per_range =
-        get_target_max_rows_per_range(workers, estimated_row_count, min_rows_per_worker);
-    // Should be many more ranges than workers unless the overall row count of the table is quite small.
-    let ranges = split_into_ranges(db, estimated_row_count, target_max_rows_per_range).await?;
-    Ok(assign_boundaries(&ranges, workers))
+    let estimated_row_count = estimated_row_count.max(1);
+
+    // Estimates vary wildly especially near the full table size (see `KeyProber::estimate_range_rows` for more details).
+    // Estimates tend to get more useful as smaller chunks, so break up the table into at least 1/8ths before selecting partitions.
+    // Prefixes estimate at least one row, so a target below one never
+    // converges.
+    let target_max_rows_per_prefix = (f64::cast_lossy(estimated_row_count)
+        / f64::cast_lossy(workers.max(8)))
+    .max(f64::cast_lossy(min_rows_per_worker))
+    .max(1.0);
+
+    compute_boundaries(db, workers, estimated_row_count, target_max_rows_per_prefix).await
 }
 
-fn get_target_max_rows_per_range(
-    workers: usize,
-    estimated_row_count: f64,
-    min_rows_per_worker: f64,
-) -> f64 {
-    // Break up the key space into smaller ranges to more accurately rebuild the per-worker ranges later with less skew.
-    let estimated_rows_per_worker =
-        (estimated_row_count / f64::cast_lossy(workers)).max(min_rows_per_worker);
-    // Respect min_rows_per_worker as a lower bound for the granularity with which we attempt to break up the table.
-    // No need to add this overhead for small tables. Estimate accuracy isn't super clear for small numbers.
-    let target_rows_per_range =
-        (estimated_rows_per_worker / TARGET_RANGES_PER_WORKER).max(min_rows_per_worker);
-
-    tracing::debug!(
-        estimated_row_count,
-        workers,
-        estimated_rows_per_worker,
-        target_rows_per_range,
-        "partitioning key space"
-    );
-    target_rows_per_range
-}
-
-async fn split_into_ranges(
+async fn compute_boundaries(
     db: &mut KeyProber<'_>,
-    estimated_row_count: f64,
-    target_rows_per_bucket: f64,
-) -> Result<Vec<Range>, MySqlError> {
-    let mut ranges = vec![Range {
-        prefix: None,
+    workers: usize,
+    estimated_row_count: u64,
+    target_rows_per_prefix: f64,
+) -> Result<Vec<String>, MySqlError> {
+    // BFS of prefixes, splitting until estimates fall under the target.
+    let mut final_prefixes: Vec<Prefix> = vec![];
+    let mut pending_prefixes = vec![Prefix {
+        prefix: String::new(),
         end: None,
         estimated_rows: estimated_row_count,
         depth: 0,
+        surrogate_sort_key: Vec::new(),
     }];
-    loop {
-        let mut split_any = false;
-        let mut next: Vec<Range> = Vec::with_capacity(ranges.len());
-        for range in ranges {
-            if range.estimated_rows > target_rows_per_bucket {
-                split_any = true;
-                next.extend(split_range(db, &range, target_rows_per_bucket).await?);
-            } else {
-                next.push(range);
+
+    while !pending_prefixes.is_empty() {
+        let mut next: Vec<Prefix> = Vec::with_capacity(pending_prefixes.len());
+        for prefix in pending_prefixes {
+            for child in children_prefixes(db, &prefix).await? {
+                if f64::cast_lossy(child.estimated_rows) > target_rows_per_prefix {
+                    next.push(child);
+                } else {
+                    final_prefixes.push(child);
+                }
             }
         }
-        ranges = next;
-        if !split_any {
-            break;
-        }
+        pending_prefixes = next;
     }
-    Ok(ranges)
-}
+    final_prefixes.sort_unstable_by(|a, b| a.surrogate_sort_key.cmp(&b.surrogate_sort_key));
 
-/// Accumulates `ranges` (in key order) into `workers` buckets of roughly
-/// equal estimated rows and returns the bucket edges as boundaries.
-fn assign_boundaries(ranges: &[Range], workers: usize) -> Vec<String> {
-    // Emit a boundary each time the cumulative estimated rows pass the next
-    // worker's share.
-    let total: f64 = ranges.iter().map(|r| r.estimated_rows).sum();
+    // Recompute the total after partitioning the table to get more even splits because the actual row count and the
+    // granularly estimated row count can diverge from the original top level estimate.
+    let total: f64 = final_prefixes
+        .iter()
+        .map(|r| f64::cast_lossy(r.estimated_rows))
+        .sum();
     let per_worker = total / f64::cast_lossy(workers);
     tracing::debug!(
-        ranges = ranges.len(),
+        prefixes = final_prefixes.len(),
         total_estimated_rows = total,
         per_worker,
-        "assigning prefix ranges to workers"
+        "assigning prefixes to workers"
     );
     let mut boundaries: Vec<String> = Vec::with_capacity(workers - 1);
     let mut rows_seen = 0.0;
-    for range in ranges {
+    for prefix in &final_prefixes {
         if boundaries.len() == workers - 1 {
             break;
         }
-        rows_seen += range.estimated_rows;
+        rows_seen += f64::cast_lossy(prefix.estimated_rows);
         if rows_seen >= f64::cast_lossy(boundaries.len() + 1) * per_worker {
-            // The final range's end is None (open), it can never be a boundary.
-            if let Some(end) = &range.end {
+            // The final prefix's end is None (open), it can never be a boundary.
+            if let Some(end) = &prefix.end {
                 boundaries.push(end.clone());
             }
         }
     }
-    boundaries
+    Ok(boundaries)
 }
 
-/// Splits `parent` at every distinct key prefix one character longer than the
-/// prefix `parent`, i.e. "a" depth: 1 for a table with keys "a", "aa", "aaa", "ab" would be split to
-/// "a" depth: 2 estimate 1, "aa" depth: 2 estimate 2, "ab" depth 2, estimate 1.
-async fn split_range(
+/// Splits `parent` into prefixes one character longer. i.e. prefix "a", upper bound "b" in table
+/// with pks: ["a", "ab", "abc", "abd", "af", "bb"] will return: ["ab", "af"].
+///
+/// Note: This will drop the key "a" on the floor. We accept this because we only lose
+/// at max one row per prefix we step deeper into.
+async fn children_prefixes(
     db: &mut KeyProber<'_>,
-    parent: &Range,
-    target_rows: f64,
-) -> Result<Vec<Range>, MySqlError> {
+    parent: &Prefix,
+) -> Result<Vec<Prefix>, MySqlError> {
     let depth = parent.depth + 1;
     let mut children = Vec::new();
 
+    // Guaranteed to return None or a key longer than the current prefix assuming the upper
+    // bound correctly caps keys to the current prefix and we're in a transaction where
+    // new keys with a shorter length can't be inserted. Note that this only holds for
+    // collations that sort character-by-character.
     let Some(mut cur) = db
-        .prefix_of_first_key_in_range(parent.prefix.as_deref(), parent.end.as_deref(), depth)
+        .prefix_of_first_key_in_range(&parent.prefix, parent.end.as_deref(), depth)
         .await?
     else {
         return Ok(children);
     };
-    // The first child inherits the parent's start.
-    let mut start = parent.prefix.clone();
 
     loop {
-        // Small optimization to return early if the remaining rows past the current start prefix
-        // fits within the threshold we're looking for.
-        // A missing optimizer estimate reads as an empty range, which the
-        // splitting loop drops or leaves unsplit.
-        let remaining = db
-            .estimate_range_rows(start.as_deref(), parent.end.as_deref())
-            .await?
-            .unwrap_or(0);
-        let remaining = f64::cast_lossy(remaining).max(1.0);
-        if remaining <= target_rows {
-            children.push(Range {
-                prefix: start,
-                end: parent.end.clone(),
-                estimated_rows: remaining,
-                depth,
-            });
-            return Ok(children);
-        }
-        // When `cur` is an exact key shorter than `depth`, every key extending
-        // it matches `cur`, so next_prefix exhausts even though those
-        // extensions still need visiting. The first key past `cur` exposes
-        // them, so the walk can keep splitting instead of retrying the whole
-        // range at greater depths forever.
-        let next = match db
+        let next = db
             .prefix_of_first_row_not_matching_prefix(&cur, parent.end.as_deref(), depth)
-            .await?
-        {
-            Some(next) => Some(next),
-            None => {
-                db.prefix_of_first_key_in_range(Some(&cur), parent.end.as_deref(), depth)
-                    .await?
-            }
-        };
-        // A prefix equal to `cur` cannot advance the walk (only a misbehaving
-        // server produces one), stop splitting here.
-        match next.filter(|next| next != &cur) {
-            Some(next) => {
-                let estimated_rows = db
-                    .estimate_range_rows(start.as_deref(), Some(&next))
-                    .await?
-                    .unwrap_or(0);
-                children.push(Range {
-                    prefix: start.clone(),
-                    end: Some(next.clone()),
-                    estimated_rows: f64::cast_lossy(estimated_rows).max(1.0),
-                    depth,
-                });
-                start = Some(next.clone());
-                cur = next;
-            }
-            None => {
-                children.push(Range {
-                    prefix: start,
-                    end: parent.end.clone(),
-                    estimated_rows: remaining,
-                    depth,
-                });
-                return Ok(children);
-            }
+            .await?;
+        let end = next.clone().or_else(|| parent.end.clone());
+        let estimated_rows = db.estimate_range_rows(&cur, end.as_deref()).await?;
+        let mut surrogate_sort_key = parent.surrogate_sort_key.clone();
+        surrogate_sort_key.push(children.len());
+        children.push(Prefix {
+            prefix: cur,
+            end: end.clone(),
+            estimated_rows: estimated_rows.max(1),
+            depth,
+            surrogate_sort_key,
+        });
+        match next {
+            Some(next) => cur = next,
+            None => return Ok(children),
         }
     }
 }

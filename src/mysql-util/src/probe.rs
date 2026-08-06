@@ -9,6 +9,7 @@
 
 use mysql_async::prelude::Queryable;
 use mysql_async::{Params, Value};
+use mz_ore::str::redact;
 
 use crate::{MySqlError, QualifiedTableRef, quote_identifier};
 
@@ -59,16 +60,24 @@ impl<'a> KeyProber<'a> {
     /// as the sampled range shrinks on a static table.
     pub async fn estimate_range_rows(
         &mut self,
-        lower_bound_exclusive: Option<&str>,
+        lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
-    ) -> Result<Option<u64>, MySqlError> {
+    ) -> Result<u64, MySqlError> {
         let (clause, params) = self.range_filter(lower_bound_exclusive, upper_bound_exclusive);
         let select = format!(
             "SELECT {col} FROM {table} WHERE {clause}",
             col = self.col,
             table = self.table,
         );
-        explain_row_estimate(&mut *self.conn, &select, Params::Positional(params)).await
+        explain_row_estimate(&mut *self.conn, &select, Params::Positional(params))
+            .await?
+            .ok_or_else(|| MySqlError::MissingRowEstimate {
+                qualified_table_name: self.table_name.clone(),
+                // The bounds are column values, redact them so the error
+                // stays loggable outside of CI.
+                lower_bound: format!("{:?}", redact(&lower_bound_exclusive)),
+                upper_bound: format!("{:?}", redact(&upper_bound_exclusive)),
+            })
     }
 
     /// Grabs a prefix of up to `max_prefix_length` characters for the first
@@ -85,7 +94,7 @@ impl<'a> KeyProber<'a> {
     /// ```
     pub async fn prefix_of_first_key_in_range(
         &mut self,
-        lower_bound_exclusive: Option<&str>,
+        lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Result<Option<String>, MySqlError> {
@@ -115,7 +124,7 @@ impl<'a> KeyProber<'a> {
         else {
             return Ok(None);
         };
-        self.prefix_of_first_key_in_range(Some(&max_key), upper_bound_exclusive, max_prefix_length)
+        self.prefix_of_first_key_in_range(&max_key, upper_bound_exclusive, max_prefix_length)
             .await
     }
 
@@ -135,7 +144,7 @@ impl<'a> KeyProber<'a> {
         prefix: &str,
         upper_bound_exclusive: Option<&str>,
     ) -> Result<Option<String>, MySqlError> {
-        let (range_clause, range_params) = self.range_filter(None, upper_bound_exclusive);
+        let (range_clause, range_params) = self.range_filter("", upper_bound_exclusive);
         let sql = format!(
             "SELECT {col} FROM {table} WHERE {col} LIKE ? ESCAPE '{LIKE_ESCAPE}' \
              AND {range_clause} ORDER BY {col} DESC LIMIT 1",
@@ -147,30 +156,21 @@ impl<'a> KeyProber<'a> {
         self.query_string(sql, params).await
     }
 
-    /// Returns clause with upper and lower bounds enforced if present.
-    /// If both are None returns TRUE so this can plug in cleanly after a
-    /// leading "WHERE" or "AND".
+    /// Returns a clause enforcing the exclusive bounds. The empty lower
+    /// bound starts at the beginning of the key space.
     fn range_filter(
         &self,
-        lower_bound_exclusive: Option<&str>,
+        lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
     ) -> (String, Vec<Value>) {
         let col = &self.col;
-        let mut conditions = Vec::new();
-        let mut params: Vec<Value> = Vec::new();
-        if let Some(lower) = lower_bound_exclusive {
-            conditions.push(format!("{col} > ?"));
-            params.push(lower.into());
-        }
+        let mut conditions = vec![format!("{col} > ?")];
+        let mut params: Vec<Value> = vec![lower_bound_exclusive.into()];
         if let Some(upper) = upper_bound_exclusive {
             conditions.push(format!("{col} < ?"));
             params.push(upper.into());
         }
-        if conditions.is_empty() {
-            ("TRUE".to_string(), params)
-        } else {
-            (conditions.join(" AND "), params)
-        }
+        (conditions.join(" AND "), params)
     }
 
     async fn query_string(
@@ -261,7 +261,7 @@ mod tests {
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_range(p, "", None, 1).await,
             some("a")
         );
         assert_eq!(
@@ -278,7 +278,7 @@ mod tests {
         );
 
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a"), Some("b"), 2).await,
+            prefix_of_first_key_in_range(p, "a", Some("b"), 2).await,
             some("aa")
         );
         assert_eq!(
@@ -293,17 +293,14 @@ mod tests {
         // Bounds are exclusive: the exact key "b" is skipped as a split
         // point, and its extensions surface as their own prefixes.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("b"), Some("c"), 2).await,
+            prefix_of_first_key_in_range(p, "b", Some("c"), 2).await,
             some("bb")
         );
         assert_eq!(
             prefix_of_first_row_not_matching_prefix(p, "bb", Some("c"), 2).await,
             None
         );
-        assert_eq!(
-            prefix_of_first_key_in_range(p, Some("c"), None, 2).await,
-            None
-        );
+        assert_eq!(prefix_of_first_key_in_range(p, "c", None, 2).await, None);
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -323,17 +320,11 @@ mod tests {
 
         // Estimates are index dives, near reality but never exact by
         // contract, so the bounds are deliberately loose.
-        let all = p.estimate_range_rows(None, None).await?.expect("estimate");
+        let all = p.estimate_range_rows("", None).await?;
         assert!((500..=2000).contains(&all), "all={all}");
-        let half = p
-            .estimate_range_rows(Some("a00500"), None)
-            .await?
-            .expect("estimate");
+        let half = p.estimate_range_rows("a00500", None).await?;
         assert!((250..=1000).contains(&half), "half={half}");
-        let none = p
-            .estimate_range_rows(Some("zzz"), None)
-            .await?
-            .expect("estimate");
+        let none = p.estimate_range_rows("zzz", None).await?;
         assert!(none <= 5, "none={none}");
 
         drop_db(&mut conn, DB).await?;
@@ -355,7 +346,7 @@ mod tests {
         // Although the sorting is case-insensitive the values returned by mysql are not normalized, so
         // we need to use the correct character representation here to get the tests to pass.
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_range(p, "", None, 1).await,
             some("A")
         );
         assert_eq!(
@@ -372,7 +363,7 @@ mod tests {
         );
 
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("A"), Some("b"), 2).await,
+            prefix_of_first_key_in_range(p, "A", Some("b"), 2).await,
             some("Aa")
         );
         assert_eq!(
@@ -388,7 +379,7 @@ mod tests {
         // surface as their own prefixes under this case-insensitive
         // collation.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("b"), Some("C"), 2).await,
+            prefix_of_first_key_in_range(p, "b", Some("C"), 2).await,
             some("Bb")
         );
         assert_eq!(
@@ -401,10 +392,7 @@ mod tests {
             None
         );
 
-        assert_eq!(
-            prefix_of_first_key_in_range(p, Some("C"), None, 2).await,
-            None
-        );
+        assert_eq!(prefix_of_first_key_in_range(p, "C", None, 2).await, None);
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -426,7 +414,7 @@ mod tests {
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_range(p, "", None, 1).await,
             some("a")
         );
         assert_eq!(
@@ -434,7 +422,7 @@ mod tests {
             None
         );
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a"), None, 2).await,
+            prefix_of_first_key_in_range(p, "a", None, 2).await,
             some("a_")
         );
         assert_eq!(
@@ -456,7 +444,7 @@ mod tests {
 
         // Range bounds that are themselves wildcard characters.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a_"), Some("a\\"), 3).await,
+            prefix_of_first_key_in_range(p, "a_", Some("a\\"), 3).await,
             some("a_1")
         );
         assert_eq!(
@@ -464,7 +452,7 @@ mod tests {
             None
         );
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a\\"), Some("a%"), 3).await,
+            prefix_of_first_key_in_range(p, "a\\", Some("a%"), 3).await,
             some("a\\2")
         );
         assert_eq!(
@@ -476,7 +464,7 @@ mod tests {
             None
         );
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a%"), Some("a|"), 3).await,
+            prefix_of_first_key_in_range(p, "a%", Some("a|"), 3).await,
             some("a%4")
         );
         assert_eq!(
@@ -484,7 +472,7 @@ mod tests {
             some("a|5")
         );
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("a|"), None, 3).await,
+            prefix_of_first_key_in_range(p, "a|", None, 3).await,
             some("a|5")
         );
         assert_eq!(
@@ -513,7 +501,7 @@ mod tests {
         // Prefix lengths count characters, not bytes: a one-char prefix of a
         // four-byte emoji is the whole emoji, never a broken fragment.
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_range(p, "", None, 1).await,
             some("😀")
         );
         assert_eq!(
@@ -574,7 +562,7 @@ mod tests {
         // Every key shares the timestamp prefix, so short prefixes cannot
         // split the key space at all.
         assert_eq!(
-            prefix_of_first_key_in_range(&mut prober, None, None, 1).await,
+            prefix_of_first_key_in_range(&mut prober, "", None, 1).await,
             some("0")
         );
         assert_eq!(
@@ -593,8 +581,8 @@ mod tests {
             .collect();
         assert_eq!(walked, expected);
 
-        let all = prober.estimate_range_rows(None, None).await?;
-        assert!(all.unwrap_or(0) > 0, "all={all:?}");
+        let all = prober.estimate_range_rows("", None).await?;
+        assert!(all > 0, "all={all}");
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -621,7 +609,7 @@ mod tests {
 
         // Lowercase hex order matches byte order under this collation.
         assert_eq!(
-            prefix_of_first_key_in_range(&mut p, None, None, 36).await,
+            prefix_of_first_key_in_range(&mut p, "", None, 36).await,
             ids.iter().min().cloned()
         );
 
@@ -629,8 +617,8 @@ mod tests {
         let expected: BTreeSet<String> = ids.iter().map(|id| id[..1].to_string()).collect();
         assert_eq!(walked.iter().cloned().collect::<BTreeSet<_>>(), expected);
 
-        let all = p.estimate_range_rows(None, None).await?;
-        assert!(all.unwrap_or(0) > 0, "all={all:?}");
+        let all = p.estimate_range_rows("", None).await?;
+        assert!(all > 0, "all={all}");
 
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
@@ -751,7 +739,7 @@ mod tests {
         // Prefixes count characters in the column's charset and come back
         // converted, so a one-character prefix of é is the whole é.
         assert_eq!(
-            prefix_of_first_key_in_range(p, None, None, 1).await,
+            prefix_of_first_key_in_range(p, "", None, 1).await,
             some("a")
         );
         assert_eq!(
@@ -775,7 +763,7 @@ mod tests {
         // latin1, two UTF-8 bytes here), and its extensions surface as
         // their own prefixes.
         assert_eq!(
-            prefix_of_first_key_in_range(p, Some("é"), Some("ñ"), 2).await,
+            prefix_of_first_key_in_range(p, "é", Some("ñ"), 2).await,
             some("éa")
         );
         assert_eq!(
@@ -829,11 +817,11 @@ mod tests {
         let mut p = KeyProber::new(&mut conn, table, "id");
 
         // Estimates never decode key values, they keep working.
-        assert!(p.estimate_range_rows(None, None).await.is_ok());
+        assert!(p.estimate_range_rows("", None).await.is_ok());
 
         // ASCII keys order before the 0xff key and decode fine.
         assert_eq!(
-            prefix_of_first_key_in_range(&mut p, None, None, 2).await,
+            prefix_of_first_key_in_range(&mut p, "", None, 2).await,
             some("a1")
         );
         assert_eq!(
@@ -899,15 +887,9 @@ mod tests {
 
         // Range estimates come from index dives on the real B-tree, not the
         // stale table statistics, so they still reflect the actual data.
-        let all = prober
-            .estimate_range_rows(None, None)
-            .await?
-            .expect("estimate");
+        let all = prober.estimate_range_rows("", None).await?;
         assert!((500..=2000).contains(&all), "all={all}");
-        let range = prober
-            .estimate_range_rows(Some("a00100"), Some("a00200"))
-            .await?
-            .expect("estimate");
+        let range = prober.estimate_range_rows("a00100", Some("a00200")).await?;
         assert!((50..=200).contains(&range), "range={range}");
 
         drop_db(&mut conn, DB).await?;
@@ -942,7 +924,7 @@ mod tests {
         let before = handler_reads(&mut conn).await?;
         let got = prefix_of_first_key_in_range(
             &mut KeyProber::new(&mut conn, table.clone(), "id"),
-            Some("a00500"),
+            "a00500",
             None,
             6,
         )
@@ -1088,7 +1070,7 @@ mod tests {
     // Wrapped to limit boilerplate
     async fn prefix_of_first_key_in_range(
         prober: &mut KeyProber<'_>,
-        lower_bound_exclusive: Option<&str>,
+        lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
     ) -> Option<String> {
@@ -1133,7 +1115,7 @@ mod tests {
         len: usize,
     ) -> Result<Vec<String>, anyhow::Error> {
         let mut walked = Vec::new();
-        let Some(mut cur) = prober.prefix_of_first_key_in_range(None, None, len).await? else {
+        let Some(mut cur) = prober.prefix_of_first_key_in_range("", None, len).await? else {
             return Ok(walked);
         };
         loop {
