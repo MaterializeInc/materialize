@@ -176,12 +176,10 @@ impl RelationPartStats<'_> {
 
     pub fn ok_count(&self) -> Option<usize> {
         // The number of OKs is the number of rows whose error is None.
-        let stats = self
-            .stats
-            .key
-            .col("err")?
-            .try_as_optional_bytes()
-            .expect("err column should be a Option<Vec<u8>>");
+        // Malformed or wrong-shaped err stats (corrupt or version-skewed
+        // durable state) count as unknown, which callers treat as
+        // "may contain errors", rather than panicking the replica.
+        let stats = self.stats.key.col("err")?.try_as_optional_bytes().ok()?;
         Some(stats.none)
     }
 
@@ -374,6 +372,53 @@ mod tests {
             )),
         }));
         assert!(stats.may_match_mfp(ResultSpec::anything(), &mfp));
+    }
+
+    /// Wrong-shaped err-column stats (corrupt or version-skewed durable
+    /// state) must read as "err count unknown", which fails open to keeping
+    /// the part, not panic the replica.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn malformed_err_stats_fail_open() {
+        use mz_persist_types::stats::{ColumnNullStats, ColumnarStats, PrimitiveStats};
+
+        let schema = RelationDesc::builder()
+            .with_column("col", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(
+            &SourceData(Ok(Row::pack_slice(&[Datum::Int32(1)]))),
+            &(),
+            1u64,
+            1i64,
+        );
+        let part = builder.finish();
+        let key_col = part.key.as_struct();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
+            .expect("success");
+        let mut key_stats = decoder.stats();
+        // Overwrite the err column's stats with a wrong-shaped entry.
+        key_stats.cols.insert(
+            "err".to_string(),
+            ColumnarStats {
+                nulls: Some(ColumnNullStats { count: 0 }),
+                values: PrimitiveStats {
+                    lower: 0i32,
+                    upper: 0i32,
+                }
+                .into(),
+            },
+        );
+
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &metrics,
+            stats: &PartStats { key: key_stats },
+            desc: &schema,
+        };
+        assert_eq!(stats.ok_count(), None);
+        assert_eq!(stats.err_count(), None);
     }
 
     #[mz_ore::test]
