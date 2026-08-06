@@ -29,7 +29,6 @@ use timely::dataflow::{Scope, Stream};
 use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
-use crate::render::columnar::CollectionEdge;
 use crate::render::context::{CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 
@@ -52,10 +51,9 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
         // a batch. A `generate_series` can still cause unavailability if it generates many rows.
         let budget = COMPUTE_FLAT_MAP_FUEL.get(&self.config_set);
 
-        // The unarranged path (no key) reads the input `CollectionEdge` directly,
-        // so the columnar arm never decodes rows at the input. The keyed path
-        // materializes an existing arrangement, which `as_specific_collection`
-        // presents as a columnar edge.
+        // The unarranged path (no key) reads the input edge directly. The keyed
+        // path materializes an existing arrangement, which
+        // `as_specific_collection` presents as a columnar edge.
         let (edge, err_collection) = match input_key.as_deref() {
             None => input
                 .collection
@@ -64,17 +62,10 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
             Some(key) => input.as_specific_collection(Some(key)),
         };
 
-        let (oks, errs) = match edge {
-            CollectionEdge::Vec(c) => {
-                flat_map_stage(c.inner, scope, exprs, func, mfp_plan, until, budget)
-            }
-            CollectionEdge::Columnar(c) => {
-                flat_map_stage(c.inner, scope, exprs, func, mfp_plan, until, budget)
-            }
-        };
+        let (oks, errs) = flat_map_stage(edge.inner, scope, exprs, func, mfp_plan, until, budget);
 
         use differential_dataflow::AsCollection;
-        let ok_collection = CollectionEdge::Columnar(oks.as_collection());
+        let ok_collection = oks.as_collection();
         let new_err_collection = errs.as_collection();
         let err_collection = err_collection.concat(new_err_collection);
         CollectionBundle::from_edge(ok_collection, err_collection)
@@ -423,56 +414,27 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn flat_map_arms_agree() {
-        // The `Vec` and `Column` input arms must produce identical `(row, time,
-        // diff)` output. Multiple timestamps and a retraction exercise time
-        // handling and negative diffs. The columnar arm's `Columnar::into_owned`
-        // for time and diff runs on every ok record here (the input decode has
-        // no fallible/try_extend path, so the standing fallible-key rule does
-        // not apply), and this comparison proves it decodes correctly.
-        let (vec_captured, col_captured) = timely::execute_directly(move |worker| {
+    fn flat_map_reads_columnar_input() {
+        // Reads the columnar input edge, expands the table function, and emits the
+        // `(row, time, diff)` output. Multiple timestamps and a retraction exercise
+        // time handling and negative diffs; the columnar input's
+        // `Columnar::into_owned` for time and diff runs on every ok record.
+        let captured = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
-                let mut captures = Vec::new();
-                for columnar in [false, true] {
-                    let (exprs, func, mfp) = flat_map_args();
-                    let edge = if columnar {
-                        CollectionEdge::Columnar(vec_to_columnar(collection.clone()))
-                    } else {
-                        CollectionEdge::Vec(collection.clone())
-                    };
-                    let (oks, _errs) = match edge {
-                        CollectionEdge::Vec(c) => {
-                            let stream = c.inner;
-                            let scope = stream.scope();
-                            flat_map_stage(
-                                stream,
-                                scope,
-                                exprs,
-                                func,
-                                mfp,
-                                Antichain::new(),
-                                usize::MAX,
-                            )
-                        }
-                        CollectionEdge::Columnar(c) => {
-                            let stream = c.inner;
-                            let scope = stream.scope();
-                            flat_map_stage(
-                                stream,
-                                scope,
-                                exprs,
-                                func,
-                                mfp,
-                                Antichain::new(),
-                                usize::MAX,
-                            )
-                        }
-                    };
-                    captures.push(oks.capture());
-                }
-                let col = captures.pop().unwrap();
-                let vec = captures.pop().unwrap();
+                let (exprs, func, mfp) = flat_map_args();
+                let stream = vec_to_columnar(collection).inner;
+                let scope = stream.scope();
+                let (oks, _errs) = flat_map_stage(
+                    stream,
+                    scope,
+                    exprs,
+                    func,
+                    mfp,
+                    Antichain::new(),
+                    usize::MAX,
+                );
+                let captured = oks.capture();
                 // t=0: generate_series(1, 2); t=1: generate_series(1, 3);
                 // t=2: retract the t=0 row.
                 input.advance_to(Timestamp::from(0_u64));
@@ -483,17 +445,16 @@ mod tests {
                 input.update(input_row(2), -Diff::ONE);
                 input.advance_to(Timestamp::from(3_u64));
                 input.flush();
-                (vec, col)
+                captured
             })
         });
 
-        let vec_updates = extract_sorted_columns(vec_captured);
-        assert!(!vec_updates.is_empty());
+        let updates = extract_sorted_columns(captured);
+        assert!(!updates.is_empty());
         assert!(
-            vec_updates.iter().any(|(_, _, d)| *d < Diff::ZERO),
+            updates.iter().any(|(_, _, d)| *d < Diff::ZERO),
             "the retraction must survive as a negative diff"
         );
-        assert_eq!(vec_updates, extract_sorted_columns(col_captured));
     }
 
     /// Decodes a capture of the columnar FlatMap output into sorted owned
