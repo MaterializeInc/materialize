@@ -156,6 +156,11 @@ timestamp.
 
 The value in the `AS OF` clause is automatically [cast to `mz_timestamp`](../../sql/types/mz_timestamp/#valid-casts) with an assignment or implicit cast.
 
+`AS OF AT LEAST <timestamp>` is a _lower bound_ rather than an exact start:
+Materialize begins at the timestamp you specify, or later if that timestamp is no
+longer available. Plain `AS OF` instead requires the exact timestamp and returns an
+error if it has already fallen outside the underlying objects' retained history.
+
 ### `UP TO`
 
 The `UP TO` clause allows specifying a timestamp at which the `SUBSCRIBE` will cease running. If `UP TO` is specified, no rows whose timestamp is greater than or equal to the specified timestamp will be returned.
@@ -225,39 +230,69 @@ where `<object>` is a materialized view, table, source, or index, Materialize ca
 
 ### `PROGRESS`
 
-If the `PROGRESS` option is specified via `WITH (PROGRESS)`:
+The `PROGRESS` option (`WITH (PROGRESS)`) adds an `mz_progressed` column that lets
+you tell the difference between "nothing has changed yet" and "Materialize is
+stalled." It changes the output in two ways:
 
-  * An additional `mz_progressed` column appears in the output. When the column
-    is `false`, the rest of the row is a valid update. When the column is `true`
-    everything in the row except for `mz_timestamp` is not a valid update and its
-    content should be ignored; the row exists only to communicate that timestamps have advanced.
+  * An additional `mz_progressed` column appears. When it is `false`, the row is a
+    normal update. When it is `true`, the row is a **progress message**: every
+    column except `mz_timestamp` is `NULL` and should be ignored. The row exists
+    only to report that time has advanced.
 
-  * The first update emitted by the `SUBSCRIBE` is guaranteed to be a progress
-    message indicating the subscribe's [`AS OF`](#as-of) timestamp.
+  * The first row emitted is always a progress message at the subscribe's
+    [`AS OF`](#as-of) timestamp.
 
-Intuitively, progress messages communicate that no updates have occurred in a
-given time window. Without explicit progress messages, it is impossible to
-distinguish between a stall in Materialize and a legitimate period of no
-updates.
+#### What a progress message guarantees
 
-Not all timestamps that appear will have a corresponding row with `mz_progressed` set to `true`.
-For example, the following is a valid sequence of updates:
+{{< note >}}
+A progress message at `mz_timestamp = X` means: the `SUBSCRIBE` will never again
+emit an update at a time **strictly less than** X. It does **not** mean time X is
+finished—more updates can still arrive at exactly X.
+{{< /note >}}
+
+In other words, when you see a progress message at X, every timestamp _before_ X
+is now complete and safe to process. Timestamp X itself is only complete once you
+see a _later_ progress message (or any update at a time greater than X), since
+[`mz_timestamp` is always non-decreasing](#output).
+
+The same reasoning applies to ordinary updates: because timestamps never decrease,
+the moment you see _any_ row (a progress message or a data update) at timestamp X,
+all updates at times strictly less than X have already been delivered.
+
+A common misconception is that a progress message at X seals timestamp X. It does
+not—it seals everything _before_ X. This is why, when resuming a subscription, you
+restart `AS OF <last_progress_timestamp> - 1`: timestamp `last_progress_timestamp`
+was never sealed, so you must re-request it. See [Durable
+subscriptions](/transform-data/patterns/durable-subscriptions/).
+
+#### Progress messages are not emitted for every timestamp
+
+Materialize only emits an explicit progress message when it would otherwise have
+nothing to say for a while; ordinary updates already imply progress. The following
+is a valid sequence of updates:
 
 ```nofmt
 mz_timestamp | mz_progressed | mz_diff | column1
--------------|---------------|---------|--------------
-1            | false         | 1       | data
-2            | false         | 1       | more data
-3            | false         | 1       | even more data
-4            | true          | NULL    | NULL
+-------------|---------------|---------|---------------
+1            | false         | 1       | data            <- timestamp 1 update
+2            | false         | 1       | more data       <- proves timestamp 1 is complete
+3            | false         | 1       | even more data  <- proves timestamp 2 is complete
+4            | true          | NULL    | NULL            <- proves timestamp 3 is complete; 4 may still get data
 ```
 
-Notice how Materialize did not emit explicit progress messages for timestamps
-`1` or `2`. The receipt of the update at timestamp `2` implies that there
-are no more updates for timestamp `1`, because timestamps are always presented
-in non-decreasing order. The receipt of the explicit progress message at
-timestamp `4` implies that there are no more updates for either timestamp
-`2` or `3`—but that there may be more data arriving at timestamp `4`.
+Notice that there are no explicit progress messages for timestamps `1`, `2`, or
+`3`. The update at timestamp `2` already implies that there are no more updates for
+timestamp `1` (timestamps are always presented in non-decreasing order), and so
+on. The explicit progress message at timestamp `4` implies that there are no more
+updates for either timestamp `2` or `3`—but that there may be more data arriving at
+timestamp `4`.
+
+#### Using progress messages
+
+Buffer incoming rows and treat a timestamp's data as final only once you have seen
+a progress message (or an update) at a _later_ timestamp. The standard
+pattern—buffer until progress, then process and checkpoint atomically—is described
+in [Durable subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 ### Connection pooling
 
@@ -444,6 +479,12 @@ structure:
 
 * If [`PROGRESS`](#progress) is set, Materialize also returns the `mz_progressed`
 column. Each progress row will have a `NULL` key and a `NULL` value.
+
+* Within each timestamp, the rows are the _net_ result of all changes to each key
+  at that timestamp. As with the diff envelope, a key's value at timestamp X is
+  only final once that timestamp is sealed—that is, once you see a
+  [progress message](#progress) (or any row) at a _later_ timestamp. See
+  [What a progress message guarantees](#what-a-progress-message-guarantees).
 
 #### `ENVELOPE DEBEZIUM`
 
