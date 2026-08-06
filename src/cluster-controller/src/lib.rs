@@ -416,6 +416,10 @@ fn join<T: PartialEq>(
 /// desired replica slots and the actual replicas, match slots to replicas by
 /// shape and emit the creates and drops that close the gap.
 ///
+/// Public because the environment also runs it outside a tick, for the
+/// synchronous cut-over an `ALTER CLUSTER` can request. A reshape must converge
+/// on the same replica set whichever path performs it.
+///
 /// Semantics:
 /// - The desired set is the multiset **union** of every strategy's slots: a
 ///   given shape is desired `max` over strategies (not the sum), since a replica
@@ -427,7 +431,7 @@ fn join<T: PartialEq>(
 /// - Creates carry the winning [`CreateReason`] among the slots that
 ///   desired the shape (see [`CreateReason::outranks`]). Drops carry no
 ///   attribution. A drop happens exactly when no strategy desires the replica.
-fn reconcile_replicas(
+pub fn reconcile_replicas(
     state: &ClusterState,
     contributions: &[Vec<DesiredReplica>],
 ) -> Vec<Decision> {

@@ -839,7 +839,6 @@ impl Coordinator {
                     secret_key,
                     notice_tx,
                     drop_sinks: BTreeSet::new(),
-                    pending_cluster_alters: BTreeSet::new(),
                     connected_at: self.now(),
                     user,
                     application_name,
@@ -1984,8 +1983,6 @@ impl Coordinator {
         // SQL cancellation has no success response to delay. Each subscribe
         // still waits for its own retraction before it observes retirement.
         drop(retire_notify);
-        self.cancel_cluster_reconfigurations_for_conn(&conn_id)
-            .await;
         self.cancel_pending_copy(&conn_id);
         if let Some((tx, _rx)) = self.connection_cancel_watches.get_mut(&conn_id) {
             let _ = tx.send(true);

@@ -369,12 +369,12 @@ pub struct ClusterVariantManaged {
 /// A managed cluster's replicas are derived from its `replication_factor`: for a
 /// factor of N they are named `r1` through `rN`.
 ///
-/// `ALTER CLUSTER` computes the replicas it creates and drops by this rule, and
-/// so does the catalog-open reconciler that materializes builtin replicas. The
-/// two have to share it, or `ALTER` cannot find the replicas it means to change.
-/// The cluster controller deliberately does not: its `ReplicaNameGen` picks names
-/// that avoid the observed set, which is why `ALTER` against a controller-owned
-/// cluster drops by observed id rather than by derived name.
+/// The catalog-open reconciler that materializes builtin replicas converges on
+/// this rule, and so does the one `ALTER CLUSTER` path that still creates
+/// replicas itself (the synchronous cut-over). The cluster controller
+/// deliberately does not: its `ReplicaNameGen` picks names that avoid the
+/// observed set, which is why the cut-over drops by observed id rather than by
+/// derived name.
 pub fn managed_cluster_replica_name(index: u32) -> String {
     format!("r{}", index + 1)
 }

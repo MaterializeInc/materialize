@@ -51,7 +51,7 @@ use serde_json::json;
 use tracing::{Instrument, Level, event, info_span, warn};
 
 use crate::active_compute_sink::{ActiveComputeSink, ActiveComputeSinkRetireReason};
-use crate::catalog::{DropObjectInfo, Op, ReplicaCreateDropReason, TransactionResult};
+use crate::catalog::{DropObjectInfo, Op, TransactionResult};
 use crate::coord::Coordinator;
 use crate::coord::appends::{BuiltinTableAppendCompletion, BuiltinTableAppendNotify};
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
@@ -859,43 +859,6 @@ impl Coordinator {
         }))
     }
 
-    /// Drops all pending replicas for a set of clusters
-    /// that are undergoing reconfiguration.
-    pub async fn drop_reconfiguration_replicas(
-        &mut self,
-        cluster_ids: BTreeSet<ClusterId>,
-    ) -> Result<(), AdapterError> {
-        let pending_cluster_ops: Vec<Op> = cluster_ids
-            .iter()
-            .map(|c| {
-                self.catalog()
-                    .get_cluster(c.clone())
-                    .replicas()
-                    .filter_map(|r| match r.config.location {
-                        ReplicaLocation::Managed(ref l) if l.pending => {
-                            Some(DropObjectInfo::ClusterReplica((
-                                c.clone(),
-                                r.replica_id,
-                                ReplicaCreateDropReason::Manual,
-                            )))
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<DropObjectInfo>>()
-            })
-            .filter_map(|pending_replica_drop_ops_by_cluster| {
-                match pending_replica_drop_ops_by_cluster.len() {
-                    0 => None,
-                    _ => Some(Op::DropObjects(pending_replica_drop_ops_by_cluster)),
-                }
-            })
-            .collect();
-        if !pending_cluster_ops.is_empty() {
-            self.catalog_transact(None, pending_cluster_ops).await?;
-        }
-        Ok(())
-    }
-
     /// Cancels all active compute sinks for the identified connection.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn cancel_compute_sinks_for_conn(
@@ -904,15 +867,6 @@ impl Coordinator {
     ) -> BuiltinTableAppendCompletion {
         self.retire_compute_sinks_for_conn(conn_id, ActiveComputeSinkRetireReason::Canceled)
             .await
-    }
-
-    /// Cancels all active cluster reconfigurations sinks for the identified connection.
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn cancel_cluster_reconfigurations_for_conn(
-        &mut self,
-        conn_id: &ConnectionId,
-    ) {
-        self.retire_cluster_reconfigurations_for_conn(conn_id).await
     }
 
     /// Retires all active compute sinks for the identified connection with the
@@ -932,30 +886,6 @@ impl Coordinator {
             .map(|sink_id| (*sink_id, reason.clone()))
             .collect();
         self.retire_compute_sinks(drop_sinks).await
-    }
-
-    /// Cleans pending cluster reconfiguraiotns for the identified connection
-    #[mz_ore::instrument(level = "debug")]
-    pub(crate) async fn retire_cluster_reconfigurations_for_conn(
-        &mut self,
-        conn_id: &ConnectionId,
-    ) {
-        let reconfiguring_clusters = self
-            .active_conns
-            .get(conn_id)
-            .expect("must exist for active session")
-            .pending_cluster_alters
-            .clone();
-        // try to drop reconfig replicas
-        self.drop_reconfiguration_replicas(reconfiguring_clusters)
-            .await
-            .unwrap_or_terminate("cannot fail to drop reconfiguration replicas");
-
-        self.active_conns
-            .get_mut(conn_id)
-            .expect("must exist for active session")
-            .pending_cluster_alters
-            .clear();
     }
 
     pub(crate) fn drop_storage_sinks(&mut self, sink_gids: Vec<GlobalId>) {
