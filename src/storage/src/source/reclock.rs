@@ -264,6 +264,7 @@ mod tests {
             persist_location: PersistLocation {
                 blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
                 consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                fast_tier_blob_uri: None,
             },
             data_shard: shard,
             relation_desc: RelationDesc::empty(),
@@ -382,6 +383,7 @@ mod tests {
         let persist_location = PersistLocation {
             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
             consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            fast_tier_blob_uri: None,
         };
 
         let remap_shard = ShardId::new();
@@ -603,6 +605,7 @@ mod tests {
         let persist_location = PersistLocation {
             blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
             consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            fast_tier_blob_uri: None,
         };
 
         let persist_client = PERSIST_CACHE

@@ -48,6 +48,7 @@ use crate::internal::gc::GarbageCollector;
 use crate::internal::machine::Machine;
 use crate::internal::maintenance::RoutineMaintenance;
 use crate::internal::metrics::ShardMetrics;
+use crate::internal::paths::WriterKey;
 use crate::internal::state::{HollowBatch, RunMeta, RunOrder, RunPart};
 use crate::internal::trace::{
     ActiveCompaction, ApplyMergeResult, CompactionInput, FueledMergeRes, IdHollowBatch, SpineId,
@@ -404,8 +405,13 @@ where
                         .iter()
                         .all(|x| x.batch.runs().all(|(meta, _)| meta.len.is_some()));
 
-                    let compact_cfg =
+                    let mut compact_cfg =
                         CompactConfig::new(&machine_clone.applier.cfg, machine_clone.shard_id());
+                    // Always write to the base tier, as the writes are not
+                    // latency sensitive. In the future we could consider routing
+                    // between blob tiers depending on the total size or shape of
+                    // the compaction batch.
+                    compact_cfg.batch.writer_key = WriterKey::for_base_tier(&compact_cfg.version);
                     let incremental_enabled = compact_cfg.batch.enable_incremental_compaction
                         && all_runs_have_uuids
                         && all_runs_have_len;
