@@ -1973,7 +1973,7 @@ CREATE CLUSTER cluster REPLICAS ()
 ----
 CREATE CLUSTER cluster (REPLICAS = ())
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([])) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster WITH REPLICAS ()
@@ -1994,91 +1994,112 @@ CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['host1']))
 ----
 CREATE CLUSTER cluster (REPLICAS = (a (STORAGECTL ADDRESSES = ('host1'))))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("host1"))])) }] }])) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("host1"))])) }] }])) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (COMPUTECTL ADDRESSES ['host1']), b (SIZE 'scale=1,workers=1'))
 ----
 CREATE CLUSTER cluster (REPLICAS = (a (COMPUTECTL ADDRESSES = ('host1')), b (SIZE = 'scale=1,workers=1')))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1"))])) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }] }])) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1"))])) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }] }])) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (COMPUTE ADDRESSES ['host1'], INTROSPECTION INTERVAL '1s', INTROSPECTION DEBUGGING true), b (SIZE 'scale=1,workers=1', INTROSPECTION INTERVAL 0))
 ----
 CREATE CLUSTER cluster (REPLICAS = (a (COMPUTE ADDRESSES = ('host1'), INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = true), b (SIZE = 'scale=1,workers=1', INTROSPECTION INTERVAL = 0)))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }] }])) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1"))])) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }] }, ReplicaDefinition { name: Ident("b"), options: [ReplicaOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }] }])) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (SIZE 'scale=1,workers=1'))
 ----
 CREATE CLUSTER cluster (REPLICAS = (a (SIZE = 'scale=1,workers=1')))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }] }])) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }] }])) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster REPLICAS (a (STORAGECTL ADDRESSES ['123'], STORAGE ADDRESSES ['124'], COMPUTECTL ADDRESSES ['host1:2400', 'host2:2400'], COMPUTE ADDRESSES ['host1:2401', 'host2:2401'], WORKERS '1'))
 ----
 CREATE CLUSTER cluster (REPLICAS = (a (STORAGECTL ADDRESSES = ('123'), STORAGE ADDRESSES = ('124'), COMPUTECTL ADDRESSES = ('host1:2400', 'host2:2400'), COMPUTE ADDRESSES = ('host1:2401', 'host2:2401'), WORKERS = '1')))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("123"))])) }, ReplicaOption { name: StorageAddresses, value: Some(Sequence([Value(String("124"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Replicas, value: Some(ClusterReplicas([ReplicaDefinition { name: Ident("a"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("123"))])) }, ReplicaOption { name: StorageAddresses, value: Some(Sequence([Value(String("124"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("host1:2400")), Value(String("host2:2400"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("host1:2401")), Value(String("host2:2401"))])) }, ReplicaOption { name: Workers, value: Some(Value(String("1"))) }] }])) }], features: [], if_not_exists: false })
+
+parse-statement
+CREATE CLUSTER IF NOT EXISTS cluster SIZE 'scale=1,workers=1'
+----
+CREATE CLUSTER IF NOT EXISTS cluster (SIZE = 'scale=1,workers=1')
+=>
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }], features: [], if_not_exists: true })
+
+parse-statement
+CREATE CLUSTER IF EXISTS cluster SIZE 'scale=1,workers=1'
+----
+error: Expected NOT, found EXISTS
+CREATE CLUSTER IF EXISTS cluster SIZE 'scale=1,workers=1'
+                  ^
+
+parse-statement
+CREATE CLUSTER "if" SIZE 'scale=1,workers=1'
+----
+CREATE CLUSTER "if" (SIZE = 'scale=1,workers=1')
+=>
+CreateCluster(CreateClusterStatement { name: Ident("if"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster SIZE 'scale=1,workers=1'
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1')
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE 'scale=1,workers=1') FEATURES (enable eager delta joins = true)
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1') FEATURES (ENABLE EAGER DELTA JOINS = true)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }], features: [ClusterFeature { name: EnableEagerDeltaJoins, value: Some(Value(Boolean(true))) }] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }], features: [ClusterFeature { name: EnableEagerDeltaJoins, value: Some(Value(Boolean(true))) }], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster REPLICATION FACTOR 1
 ----
 CREATE CLUSTER cluster (REPLICATION FACTOR = 1)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: ReplicationFactor, value: Some(Value(Number("1"))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster AVAILABILITY ZONES ('1')
 ----
 CREATE CLUSTER cluster (AVAILABILITY ZONES = ('1'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1"))])) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: AvailabilityZones, value: Some(Sequence([Value(String("1"))])) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster MANAGED true
 ----
 CREATE CLUSTER cluster (MANAGED = true)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: Some(Value(Boolean(true))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster MANAGED
 ----
 CREATE CLUSTER cluster (MANAGED)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster MANAGED, DISK = true
 ----
 CREATE CLUSTER cluster (MANAGED, DISK = true)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (MANAGED, DISK = true)
 ----
 CREATE CLUSTER cluster (MANAGED, DISK = true)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Managed, value: None }, ClusterOption { name: Disk, value: Some(Value(Boolean(true))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (MANAGED, DISK = true
@@ -2099,56 +2120,56 @@ CREATE CLUSTER cluster INTROSPECTION INTERVAL '1'
 ----
 CREATE CLUSTER cluster (INTROSPECTION INTERVAL = '1')
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionInterval, value: Some(Value(String("1"))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster INTROSPECTION DEBUGGING true
 ----
 CREATE CLUSTER cluster (INTROSPECTION DEBUGGING = true)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: IntrospectionDebugging, value: Some(Value(Boolean(true))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
 ----
 CREATE CLUSTER cluster (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: ExperimentalArrangementCompression, value: Some(Value(Boolean(true))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("1"))) }, ClusterOption { name: ExperimentalArrangementCompression, value: Some(Value(Boolean(true))) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA cluster.r1 (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
 ----
 CREATE CLUSTER REPLICA cluster.r1 (SIZE = '1', EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("cluster"), definition: ReplicaDefinition { name: Ident("r1"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: ExperimentalArrangementCompression, value: Some(Value(Boolean(true))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("cluster"), definition: ReplicaDefinition { name: Ident("r1"), options: [ReplicaOption { name: Size, value: Some(Value(String("1"))) }, ReplicaOption { name: ExperimentalArrangementCompression, value: Some(Value(Boolean(true))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL)
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = MANUAL)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Manual)) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Manual)) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH)
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: None })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: None })) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE '1 hour'))
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '1 hour'))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: Schedule, value: Some(ClusterScheduleOptionValue(Refresh { hydration_time_estimate: Some(IntervalValue { value: "1 hour", precision_high: Year, precision_low: Second, fsec_max_precision: None }) })) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE))
@@ -2183,21 +2204,21 @@ CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON 
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc', LINGER DURATION = '600s')))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: Some(String("600s")) }) })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: Some(String("600s")) }) })) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: None }) })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: Some(OnHydrationOptionValue { hydration_size: String("400cc"), linger_duration: None }) })) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = ())
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', AUTO SCALING STRATEGY = ())
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: None })) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: AutoScalingStrategy, value: Some(ClusterAutoScalingStrategyOptionValue(ClusterAutoScalingStrategyOptionValue { on_hydration: None })) }], features: [], if_not_exists: false })
 
 parse-statement
 ALTER CLUSTER cluster SET (AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '400cc')))
@@ -2232,14 +2253,14 @@ CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', WORKLOAD CLASS NULL)
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', WORKLOAD CLASS = NULL)
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: WorkloadClass, value: Some(Value(Null)) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: WorkloadClass, value: Some(Value(Null)) }], features: [], if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', WORKLOAD CLASS 'production')
 ----
 CREATE CLUSTER cluster (SIZE = 'scale=1,workers=1', WORKLOAD CLASS = 'production')
 =>
-CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: WorkloadClass, value: Some(Value(String("production"))) }], features: [] })
+CreateCluster(CreateClusterStatement { name: Ident("cluster"), options: [ClusterOption { name: Size, value: Some(Value(String("scale=1,workers=1"))) }, ClusterOption { name: WorkloadClass, value: Some(Value(String("production"))) }], features: [], if_not_exists: false })
 
 parse-statement
 ALTER CLUSTER cluster SET (SIZE 'scale=1,workers=1')
@@ -2397,102 +2418,116 @@ CREATE CLUSTER REPLICA replica
                               ^
 
 parse-statement
+CREATE CLUSTER REPLICA IF NOT EXISTS default.replica SIZE 'small'
+----
+CREATE CLUSTER REPLICA IF NOT EXISTS default.replica (SIZE = 'small')
+=>
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }] }, if_not_exists: true })
+
+parse-statement
+CREATE CLUSTER REPLICA IF EXISTS default.replica SIZE 'small'
+----
+error: Expected NOT, found EXISTS
+CREATE CLUSTER REPLICA IF EXISTS default.replica SIZE 'small'
+                          ^
+
+parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small'
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL, BILLED AS 'free'
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', INTERNAL, BILLED AS = 'free')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: None }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: None }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica (SIZE 'small', INTERNAL, BILLED AS 'free')
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', INTERNAL, BILLED AS = 'free')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: None }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: None }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = true, BILLED AS 'free'
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', INTERNAL = true, BILLED AS = 'free')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(true))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(true))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', INTERNAL = false, BILLED AS 'free'
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', INTERNAL = false, BILLED AS = 'free')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(false))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: Internal, value: Some(Value(Boolean(false))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', BILLED AS 'free'
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', BILLED AS = 'free')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: BilledAs, value: Some(Value(String("free"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', AVAILABILITY ZONE = 'a')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a', DISK = false
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', AVAILABILITY ZONE = 'a', DISK = false)
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }, ReplicaOption { name: Disk, value: Some(Value(Boolean(false))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }, ReplicaOption { name: Disk, value: Some(Value(Boolean(false))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica AVAILABILITY ZONE 'a', AVAILABILITY ZONE 'b'
 ----
 CREATE CLUSTER REPLICA default.replica (AVAILABILITY ZONE = 'a', AVAILABILITY ZONE = 'b')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("b"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("b"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', AVAILABILITY ZONE 'a'
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', AVAILABILITY ZONE = 'a')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: AvailabilityZone, value: Some(Value(String("a"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica SIZE 'small', INTROSPECTION INTERVAL '1s', INTROSPECTION DEBUGGING = false
 ----
 CREATE CLUSTER REPLICA default.replica (SIZE = 'small', INTROSPECTION INTERVAL = '1s', INTROSPECTION DEBUGGING = false)
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(false))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: Size, value: Some(Value(String("small"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(String("1s"))) }, ReplicaOption { name: IntrospectionDebugging, value: Some(Value(Boolean(false))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica INTROSPECTION INTERVAL = 0, SIZE 'small'
 ----
 CREATE CLUSTER REPLICA default.replica (INTROSPECTION INTERVAL = 0, SIZE = 'small')
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }, ReplicaOption { name: Size, value: Some(Value(String("small"))) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IntrospectionInterval, value: Some(Value(Number("0"))) }, ReplicaOption { name: Size, value: Some(Value(String("small"))) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica INTROSPECTION INTERVAL NULL
 ----
 CREATE CLUSTER REPLICA default.replica (INTROSPECTION INTERVAL = NULL)
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] }, if_not_exists: false })
 
 parse-statement
 CREATE CLUSTER REPLICA default.replica STORAGECTL ADDRESSES ('1', '2'), COMPUTECTL ADDRESSES ('1', '2'), COMPUTE ADDRESSES ('3', '4'), WORKERS 2, INTROSPECTION INTERVAL = NULL
 ----
 CREATE CLUSTER REPLICA default.replica (STORAGECTL ADDRESSES = ('1', '2'), COMPUTECTL ADDRESSES = ('1', '2'), COMPUTE ADDRESSES = ('3', '4'), WORKERS = 2, INTROSPECTION INTERVAL = NULL)
 =>
-CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("3")), Value(String("4"))])) }, ReplicaOption { name: Workers, value: Some(Value(Number("2"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] } })
+CreateClusterReplica(CreateClusterReplicaStatement { of_cluster: Ident("default"), definition: ReplicaDefinition { name: Ident("replica"), options: [ReplicaOption { name: StoragectlAddresses, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputectlAddresses, value: Some(Sequence([Value(String("1")), Value(String("2"))])) }, ReplicaOption { name: ComputeAddresses, value: Some(Sequence([Value(String("3")), Value(String("4"))])) }, ReplicaOption { name: Workers, value: Some(Value(Number("2"))) }, ReplicaOption { name: IntrospectionInterval, value: Some(Value(Null)) }] }, if_not_exists: false })
 
 
 parse-statement
@@ -3781,3 +3816,13 @@ CREATE SINK snk FROM t INTO KAFKA CONNECTION conn1 (TOPIC 'topic') FORMAT AVRO U
 CREATE SINK snk FROM t INTO KAFKA CONNECTION conn1 (TOPIC = 'topic') FORMAT AVRO USING AWS GLUE SCHEMA REGISTRY CONNECTION glue_conn (KEY SCHEMA NAME = 'k', VALUE SCHEMA NAME = 'v', KEY COMPATIBILITY LEVEL = 'BACKWARD', VALUE COMPATIBILITY LEVEL = 'FULL') ENVELOPE UPSERT
 =>
 CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("snk")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("t")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("conn1")])), options: [KafkaSinkConfigOption { name: Topic, value: Some(Value(String("topic"))) }], key: None, headers: None }, format: Some(Bare(Avro(Glue { connection: Name(UnresolvedItemName([Ident("glue_conn")])), with_options: [GlueAvroOption { name: KeySchemaName, value: Some(Value(String("k"))) }, GlueAvroOption { name: ValueSchemaName, value: Some(Value(String("v"))) }, GlueAvroOption { name: KeyCompatibilityLevel, value: Some(Value(String("BACKWARD"))) }, GlueAvroOption { name: ValueCompatibilityLevel, value: Some(Value(String("FULL"))) }], seed: None }))), envelope: Some(Upsert), mode: None, with_options: [] })
+
+# An option value that is the bare identifier `map`. `MAP` only starts a map
+# literal when a `[` follows, so this is the item name `map`, which is what
+# `AstDisplay` prints for a quoted `"map"`.
+parse-statement
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = "map")
+----
+CREATE SINK foo FROM bar INTO KAFKA CONNECTION baz (TOPIC CONFIG = map)
+=>
+CreateSink(CreateSinkStatement { name: Some(UnresolvedItemName([Ident("foo")])), in_cluster: None, if_not_exists: false, from: Name(UnresolvedItemName([Ident("bar")])), connection: Kafka { connection: Name(UnresolvedItemName([Ident("baz")])), options: [KafkaSinkConfigOption { name: TopicConfig, value: Some(UnresolvedItemName(UnresolvedItemName([Ident("map")]))) }], key: None, headers: None }, format: None, envelope: None, mode: None, with_options: [] })

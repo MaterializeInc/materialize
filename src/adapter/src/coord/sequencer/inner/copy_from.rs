@@ -362,11 +362,9 @@ impl Coordinator {
                 session: &session_meta,
                 catalog_state,
             };
-            let mut optimizer = optimize::view::Optimizer::new_with_prep_no_limit(
-                optimizer_config.clone(),
-                None,
-                prep,
-            );
+            let mut optimizer =
+                optimize::view::Optimizer::new_with_prep(optimizer_config.clone(), None, prep)
+                    .without_fold_constants_limit();
 
             let hir = mz_sql::plan::plan_copy_from(
                 &pcx,

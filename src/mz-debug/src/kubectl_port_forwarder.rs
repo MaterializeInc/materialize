@@ -79,7 +79,7 @@ impl KubectlPortForwarder {
     /// Spawns a port forwarding process that resolves when
     /// the port forward is established.
     pub async fn spawn_port_forward(&self) -> Result<PortForwardConnection, anyhow::Error> {
-        let port_arg_str = format!(":{}", &self.target_port);
+        let port_arg_str = format!(":{}", self.target_port);
         let target_arg_str = self.target.kubectl_arg();
         let mut args = vec![
             "port-forward",

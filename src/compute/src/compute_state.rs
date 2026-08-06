@@ -1768,7 +1768,19 @@ impl IndexPeek {
                 // We use a threshold twice what we intend, to amortize the work
                 // across all of the insertions. We could tighten this, but it
                 // works for the moment.
-                if results.len() >= 2 * max_results {
+                //
+                // `max_results` is `limit + offset`, so a `LIMIT` near
+                // `i64::MAX` makes the doubling overflow. We then hold fewer
+                // rows than the threshold no matter what, and never thin. That
+                // is the right answer: such a peek cannot accumulate that many
+                // rows anyway, the result size limit stops it long before.
+                // Wrapping instead would make the threshold tiny, and we would
+                // thin while holding almost nothing, dropping rows past the end
+                // of the buffer.
+                if max_results
+                    .checked_mul(2)
+                    .is_some_and(|threshold| results.len() >= threshold)
+                {
                     if peek.finishing.order_by.is_empty() {
                         results.truncate(max_results);
                         metrics

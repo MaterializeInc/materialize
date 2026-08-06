@@ -1718,11 +1718,12 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                 let record_batch = handler
                                     .row_to_batch(diff_pair, time)
                                     .context("failed to convert row to recordbatch")?;
+                                staged_messages_since_flush +=
+                                    u64::cast_from(record_batch.num_rows());
                                 batch_writer
                                     .write(record_batch)
                                     .await
                                     .context("failed to write recordbatch")?;
-                                staged_messages_since_flush += 1;
                                 if staged_messages_since_flush >= 10_000 {
                                     statistics.inc_messages_staged_by(staged_messages_since_flush);
                                     staged_messages_since_flush = 0;
@@ -1767,7 +1768,6 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                     metrics.delete_files_written.inc();
                                 }
                             }
-                            statistics.inc_messages_staged_by(data_file.record_count());
                             statistics.inc_bytes_staged_by(data_file.file_size_in_bytes());
                             let file = BoundedDataFile::new(
                                 data_file,

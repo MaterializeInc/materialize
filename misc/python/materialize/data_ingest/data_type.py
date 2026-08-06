@@ -1030,6 +1030,16 @@ class Time(DataType):
             raise ValueError("Unsupported")
         elif backend == Backend.JSON:
             raise ValueError("Unsupported")
+        elif backend == Backend.MYSQL:
+            # Fractional-second precision spelled out, because a bare MySQL TIME
+            # has fsp 0 and *rounds* what it is given. The 23:59:59.999999 edge
+            # value above then lands as 24:00:00, which MySQL accepts (its TIME
+            # range is +/-838:59:59) but Materialize cannot represent: the source
+            # decodes TIME into a chrono::NaiveTime, so ingestion fails with
+            # "Couldn't convert the value Time(..) to a desired type" and the
+            # source has to be dropped and recreated. At fsp 6 nothing rounds and
+            # the value survives the round trip.
+            return "time(6)"
         else:
             return "time"
 

@@ -3667,6 +3667,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_packed_naive_time_sort_order() {
         let time = add_arb_duration(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
         let strat = proptest::collection::vec(time, 0..128);

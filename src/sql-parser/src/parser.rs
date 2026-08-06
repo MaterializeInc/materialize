@@ -4564,6 +4564,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         // For historical reasons, the parentheses around the options can be
         // omitted.
@@ -4586,6 +4587,7 @@ impl<'a> Parser<'a> {
             name,
             options,
             features,
+            if_not_exists,
         }))
     }
 
@@ -4871,6 +4873,7 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
+        let if_not_exists = self.parse_if_not_exists()?;
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
@@ -4885,6 +4888,7 @@ impl<'a> Parser<'a> {
             CreateClusterReplicaStatement {
                 of_cluster,
                 definition: ReplicaDefinition { name, options },
+                if_not_exists,
             },
         ))
     }
@@ -5721,6 +5725,15 @@ impl<'a> Parser<'a> {
     fn parse_option_map(
         &mut self,
     ) -> Result<Option<BTreeMap<String, WithOptionValue<Raw>>>, ParserError> {
+        // `MAP` only begins a map literal when a `[` follows it. Committing on
+        // the keyword alone makes a bare `map` in an option-value position a hard
+        // error on the missing bracket, rather than falling through to the item
+        // name it is: `TOPIC CONFIG = "map"` prints as `TOPIC CONFIG = map`,
+        // since `map` is a legal bare identifier everywhere else, and that output
+        // then failed to reparse.
+        if !(self.peek_keyword(MAP) && self.peek_nth_token(1) == Some(Token::LBracket)) {
+            return Ok(None);
+        }
         Ok(if self.parse_keyword(MAP) {
             self.expect_token(&Token::LBracket)?;
             let mut map = BTreeMap::new();

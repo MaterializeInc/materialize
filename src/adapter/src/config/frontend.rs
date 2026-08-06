@@ -471,7 +471,7 @@ async fn ld_client(
     let mut backoff = Duration::from_secs(5);
     let timeout = Duration::from_secs(10);
 
-    // TODO(materialize#32030): fix retry logic
+    // TODO(materialize#38055): fix retry logic
     loop {
         match ld_client.wait_for_initialization(timeout).await {
             Some(true) => break,

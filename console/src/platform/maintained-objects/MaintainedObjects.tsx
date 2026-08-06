@@ -28,7 +28,6 @@ import {
 import {
   ColumnFiltersState,
   createColumnHelper,
-  OnChangeFn,
   PaginationState,
 } from "@tanstack/react-table";
 import React from "react";
@@ -388,18 +387,13 @@ const MaintainedObjects = ({
   const [initialState] = React.useState(() =>
     getInitialTableState(location.search),
   );
-  const [columnFilters, setColumnFiltersState] =
-    React.useState<ColumnFiltersState>(() =>
-      initialColumnFiltersFromUrl(location.search),
-    );
+  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
+    () => initialColumnFiltersFromUrl(location.search),
+  );
   const [pagination, setPagination] = React.useState<PaginationState>(() => ({
     pageIndex: initialState.pageIndex ?? 0,
     pageSize: PAGE_SIZE,
   }));
-  const setColumnFilters: OnChangeFn<ColumnFiltersState> = (updater) => {
-    setColumnFiltersState(updater);
-    setPagination((p) => ({ ...p, pageIndex: 0 }));
-  };
 
   const clusterNames = React.useMemo(() => {
     if (!objects) return [];

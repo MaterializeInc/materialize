@@ -130,7 +130,11 @@ pub enum Command {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
-        outer_ctx_extra: Option<ExecuteContextGuard>,
+        /// The end-of-execution obligation of the statement this execution
+        /// serves, if any. `Coordinator::handle_execute` arms it again on
+        /// receipt. `None` means no log entry exists yet, so the coordinator
+        /// begins one.
+        outer_ctx_extra: Option<ExecuteContextExtra>,
     },
 
     /// Attempts to commit or abort the session's transaction. Guarantees that the Coordinator's

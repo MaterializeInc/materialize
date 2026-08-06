@@ -259,6 +259,7 @@ mod tests {
 
     #[crate::test]
     #[cfg(feature = "differential-dataflow")]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_consolidate_sorted() {
         proptest!(|(mut data in any::<Vec<(u64, i64)>>())| {
              data.sort();
@@ -270,6 +271,7 @@ mod tests {
 
     #[crate::test]
     #[cfg(feature = "differential-dataflow")]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_consolidate() {
         proptest!(|(mut data in any::<Vec<(u64, i64)>>())| {
              let streamed: Vec<_> = consolidate_iter(data.iter().copied()).collect();
@@ -279,6 +281,7 @@ mod tests {
     }
 
     #[crate::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn test_merge() {
         proptest!(|(mut data in vec(vec(0usize..100usize, 0..10), 0..10))| {
             let mut expected: Vec<_> = data.iter().flatten().copied().collect();

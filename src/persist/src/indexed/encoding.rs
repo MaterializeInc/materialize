@@ -611,7 +611,7 @@ impl TraceBatchMeta {
         // useful/harmful. Feel free to make this a less_than if empty descs end
         // up making sense.
         if PartialOrder::less_equal(self.desc.upper(), self.desc.lower()) {
-            return Err(format!("invalid desc: {:?}", &self.desc).into());
+            return Err(format!("invalid desc: {:?}", self.desc).into());
         }
 
         Ok(())
@@ -633,7 +633,7 @@ impl TraceBatchMeta {
             if batch.desc != self.desc {
                 return Err(format!(
                     "invalid trace batch part desc expected {:?} got {:?}",
-                    &self.desc, &batch.desc
+                    self.desc, batch.desc
                 )
                 .into());
             }
@@ -677,7 +677,7 @@ impl<T: Timestamp + Codec64> BlobTraceBatchPart<T> {
         // useful/harmful. Feel free to make this a less_than if empty descs end
         // up making sense.
         if PartialOrder::less_equal(self.desc.upper(), self.desc.lower()) {
-            return Err(format!("invalid desc: {:?}", &self.desc).into());
+            return Err(format!("invalid desc: {:?}", self.desc).into());
         }
 
         let uncompacted = PartialOrder::less_equal(self.desc.since(), self.desc.lower());

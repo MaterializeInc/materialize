@@ -319,7 +319,7 @@ impl Listener<SqlListenerConfig> {
 impl Listener<HttpListenerConfig> {
     #[instrument(name = "environmentd::serve_http")]
     pub async fn serve_http(self, config: HttpConfig) -> ListenerHandle {
-        let task_name = format!("{}_http_server", &config.source);
+        let task_name = format!("{}_http_server", config.source);
         task::spawn(|| task_name, {
             let http_server = HttpServer::new(config);
             mz_server_core::serve(ServeConfig {

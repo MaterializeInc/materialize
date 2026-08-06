@@ -15,6 +15,7 @@ use maplit::btreeset;
 use mz_adapter_types::cluster_state::ReconfigurationAudit;
 use mz_catalog::builtin::BUILTINS;
 use mz_catalog::durable::managed_cluster_replica_name;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
     ManagedReplicaConfigShape, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
@@ -31,7 +32,7 @@ use mz_repr::Timestamp;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
-use mz_sql::catalog::{CatalogCluster, ObjectType};
+use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan,
@@ -61,7 +62,7 @@ use crate::coord::{
     AlterClusterWaitForHydrated, ClusterReplicaStatuses, ClusterStage, Coordinator, Message,
     PlanValidity, StageResult, Staged,
 };
-use crate::{AdapterError, ExecuteContext, ExecuteResponse, session::Session};
+use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, session::Session};
 
 const PENDING_REPLICA_SUFFIX: &str = "-pending";
 
@@ -1210,6 +1211,7 @@ impl Coordinator {
             name,
             variant,
             workload_class,
+            if_not_exists,
         }: CreateClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
@@ -1260,14 +1262,26 @@ impl Coordinator {
 
         match variant {
             CreateClusterVariant::Managed(plan) => {
-                self.sequence_create_managed_cluster(session, plan, id, name, ops)
+                self.sequence_create_managed_cluster(session, plan, id, name.clone(), ops)
                     .await
             }
             CreateClusterVariant::Unmanaged(plan) => {
-                self.sequence_create_unmanaged_cluster(session, plan, id, name, ops)
+                self.sequence_create_unmanaged_cluster(session, plan, id, name.clone(), ops)
                     .await
             }
         }
+        .or_else(|err| match err {
+            AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ClusterAlreadyExists(_)),
+            }) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name,
+                    ty: "cluster",
+                });
+                Ok(ExecuteResponse::CreatedCluster)
+            }
+            err => Err(err),
+        })
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1668,6 +1682,7 @@ impl Coordinator {
             name,
             cluster_id,
             config,
+            if_not_exists,
         }: CreateClusterReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Choose default AZ if necessary
@@ -1765,6 +1780,9 @@ impl Coordinator {
 
         let cluster_name = cluster.name.clone();
         let is_builtin = cluster_id.is_system();
+        // A replica name is only unique within its cluster, so the notice on the
+        // `IF NOT EXISTS` path below has to name both.
+        let qualified_name = format!("{cluster_name}.{name}");
 
         // Pre-allocate the replica id out-of-band via the durable allocator,
         // picking the id type from the target cluster, which may be a system
@@ -1822,9 +1840,19 @@ impl Coordinator {
             }
         }
 
-        self.catalog_transact(Some(session), ops).await?;
-
-        Ok(ExecuteResponse::CreatedClusterReplica)
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => Ok(ExecuteResponse::CreatedClusterReplica),
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::DuplicateReplica(_, _)),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: qualified_name,
+                    ty: "cluster replica",
+                });
+                Ok(ExecuteResponse::CreatedClusterReplica)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should

@@ -94,7 +94,9 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// (address space costs nothing, and touched pages are bounded by peak
 /// residency) so that no realistic budget, on any machine size, reaches the
 /// heap-fallback path.
-const CLASS_CAPACITY_BYTES: usize = 1 << 40;
+///
+/// NOTE: Seen OoMs with Miri since it actually allocates the capacity.
+const CLASS_CAPACITY_BYTES: usize = if cfg!(miri) { 16 << 20 } else { 1 << 40 };
 
 /// A chunk-provided transform between a chunk's body bytes and the stored
 /// bytes its extent holds. The pool owns scheduling: spill threads, the
@@ -2987,6 +2989,7 @@ mod tests {
     /// the same victims (the pool's only two-chunk lock edge). Contents are
     /// asserted on every read.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn concurrent_admits_exercise_the_steal_path() {
         const CHUNKS: u64 = 8;
         let pool = test_pool(usize::MAX);
@@ -3069,6 +3072,7 @@ mod tests {
     /// contents stay correct, contended steals degrade to skips, and the
     /// accounting identity settles to zero.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn concurrent_admits_race_cleanly() {
         let pool = test_pool(64 << 10);
         let per_thread = rounds(50, 3);
@@ -3364,6 +3368,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn multithreaded_smoke() {
         // Budget of one small chunk: four inserting threads keep the pool
         // over budget, so every insert's enforcement pass selects victims
@@ -3399,6 +3404,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn concurrent_read_enforce_churn() {
         // Races the three actors that can touch one chunk's slot: readers
         // copying shared chunks out and verifying them, an enforcer evicting
@@ -3480,6 +3486,7 @@ mod tests {
     /// drops) extent-queue entries, and pruning alone must keep the queue
     /// proportional to the live resident extents.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn extent_queue_stays_bounded_under_cap() {
         let pool = test_pool(256 << 20);
         pool.set_rss_target(1 << 40);
@@ -3636,6 +3643,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn spill_threads_end_to_end() {
         let pool = test_pool(128 << 10);
         pool.set_spill_threads(2);

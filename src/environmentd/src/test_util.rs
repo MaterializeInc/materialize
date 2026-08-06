@@ -106,6 +106,12 @@ pub struct TestHarness {
     external_login_password_mz_system: Option<Password>,
     listeners_config: ListenersConfig,
     unsafe_mode: bool,
+    /// Whether the connection context carries the AWS external ID prefix and
+    /// connection role ARN. Default true, matching a cloud deployment. Set false
+    /// via [`TestHarness::without_aws_connection_context`] to model a deployment
+    /// that never configured the AWS context, where the context functions fold
+    /// to NULL.
+    aws_connection_context: bool,
     workers: usize,
     now: NowFn,
     seed: u32,
@@ -190,6 +196,7 @@ impl Default for TestHarness {
                 ],
             },
             unsafe_mode: false,
+            aws_connection_context: true,
             workers: 1,
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
@@ -303,6 +310,14 @@ impl TestHarness {
 
     pub fn unsafe_mode(mut self) -> Self {
         self.unsafe_mode = true;
+        self
+    }
+
+    /// Models a deployment that never configured the AWS context, so the AWS
+    /// external ID prefix and connection role ARN are absent and the plan-time
+    /// AWS context functions fold to NULL.
+    pub fn without_aws_connection_context(mut self) -> Self {
+        self.aws_connection_context = false;
         self
     }
 
@@ -803,7 +818,11 @@ impl Listeners {
         let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
 
         let secrets_controller = Arc::clone(&orchestrator);
-        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        if !config.aws_connection_context {
+            connection_context.aws_external_id_prefix = None;
+            connection_context.aws_connection_role_arn = None;
+        }
         let orchestrator = Arc::new(TracingOrchestrator::new(
             orchestrator,
             config.orchestrator_tracing_cli_args,

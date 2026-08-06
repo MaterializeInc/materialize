@@ -677,6 +677,10 @@ pub const NAMES: &[(u32, &str)] = &[
     (17105, "mz_internal.parse_postgres_source_details"),
     (17106, "mz_internal.parse_kafka_source_details"),
     (17111, "mz_internal.parse_source_export_details"),
+    (17112, "mz_internal.parse_connection_details"),
+    (17113, "mz_aws_account_id"),
+    (17114, "mz_aws_external_id_prefix"),
+    (17115, "mz_aws_connection_role_arn"),
 ];
 
 /// Returns the text that `regproc` OID `oid` renders as, or `None` when no

@@ -249,7 +249,7 @@ impl AwsAssumeRole {
         // The default session name identifies the environment and the
         // connection.
         let default_session_name =
-            format!("{}-{}", &connection_context.environment_id, connection_id);
+            format!("{}-{}", connection_context.environment_id, connection_id);
 
         // First we create a credentials provider that will assume the "jump
         // role" provided to this Materialize environment. This is the role that
@@ -283,6 +283,10 @@ impl AwsAssumeRole {
         Ok(credentials.build_from_provider(jump_credentials).await)
     }
 
+    // NOTE: the `mz_internal.mz_aws_connections` builtin materialized view
+    // reconstructs this `mz_<prefix>_<conn>` format in SQL (see
+    // MZ_AWS_CONNECTIONS in src/catalog/src/builtin/mz_internal.rs). Keep the
+    // two in sync.
     pub fn external_id(
         &self,
         connection_context: &ConnectionContext,
@@ -294,6 +298,10 @@ impl AwsAssumeRole {
         Ok(format!("mz_{}_{}", aws_external_id_prefix, connection_id))
     }
 
+    // NOTE: the `mz_internal.mz_aws_connections` builtin materialized view
+    // reconstructs this trust-policy JSON with `jsonb_build_object` (see
+    // MZ_AWS_CONNECTIONS in src/catalog/src/builtin/mz_internal.rs). Keep the
+    // structure (keys, nesting) in sync.
     pub fn example_trust_policy(
         &self,
         connection_context: &ConnectionContext,

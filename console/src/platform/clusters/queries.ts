@@ -227,12 +227,25 @@ export function useClusters(filters?: ClusterListFilters) {
   };
 }
 
+// Declared at module scope so react-query's select memoization holds. An inline
+// select is a new function every render, which makes react-query re-run it and
+// hand back a fresh Map, which in turn breaks `isOwner`'s referential stability.
+const selectOwnersById = (result: Awaited<ReturnType<typeof fetchOwners>>) =>
+  new Map(result.rows.map((row) => [row.id, row.isOwner]));
+
 /**
- * Returns a map from role id to whether the current user can act as that
- * role, for deriving `isOwner` on rows from the allClusters subscribe.
+ * Returns `isOwner`, a predicate on an object's owner id, for deriving
+ * ownership on rows from the allClusters subscribe.
+ *
+ * An unknown owner id and an in-flight query both resolve to false, so
+ * owner-only controls stay hidden until ownership is known rather than
+ * appearing and then disappearing.
+ *
+ * `isOwner` keeps a stable reference while the underlying data is unchanged, so
+ * callers can safely put it in a dependency array.
  */
 export function useOwners() {
-  return useQuery({
+  const { data: ownersById, isPending } = useQuery({
     // Role mutations invalidate this key, so this long interval is only a
     // backstop for external role changes while the page stays open.
     refetchInterval: 300_000,
@@ -240,9 +253,15 @@ export function useOwners() {
     queryFn: ({ queryKey, signal }) => {
       return fetchOwners({ queryKey, requestOptions: { signal } });
     },
-    select: (result) =>
-      new Map(result.rows.map((row) => [row.id, row.isOwner])),
+    select: selectOwnersById,
   });
+
+  const isOwner = useCallback(
+    (ownerId: string) => !isPending && (ownersById?.get(ownerId) ?? false),
+    [isPending, ownersById],
+  );
+
+  return { isOwner };
 }
 
 export type AlterClusterParams = AlterClusterSettingsParams &

@@ -57,7 +57,7 @@ The architecture consists of the following components:
     the events to a Kafka topic, while the Schema Registry ensures the data
     structure (schema) is consistent and readable.
 
-- **Materialize:** Materialize uses connects to Kafka to ingests data from
+- **Materialize:** Materialize connects to Kafka to ingest data from
   MongoDB.
 
 ## Prerequisites
