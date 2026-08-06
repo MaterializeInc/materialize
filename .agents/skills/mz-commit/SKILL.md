@@ -81,7 +81,9 @@ GitHub is public. Linear is not.
 ## Git conventions
 
 * Work against the `main` branch of `MaterializeInc/materialize`.
-* Push branches to your fork.
+* Push branches to your fork. Exception: a PR stack needs its branches
+  in `MaterializeInc/materialize`, since each stacked PR targets the
+  branch below it. Delete the branches once the stack merges.
 * Pull requests target `main` on `MaterializeInc/materialize`.
 * Each PR should contain one semantic change.
 
