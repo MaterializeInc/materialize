@@ -35,7 +35,9 @@ from typing import Any
 from materialize.invariants.checkers import (
     GroupCompletenessPeek,
     PeekChecker,
+    ReplicaDivergence,
     SubscribeChecker,
+    TernaryPartitionPeek,
 )
 from materialize.invariants.framework import (
     CONVERGE_TIMEOUT,
@@ -392,9 +394,12 @@ class SchemaSwap(Action):
 
     name = "schema-swap"
 
-    def __init__(self, rng: random.Random, client: MzClient) -> None:
+    def __init__(
+        self, rng: random.Random, client: MzClient, ctx: ScenarioContext
+    ) -> None:
         super().__init__(rng)
         self.client = client
+        self.ctx = ctx
         self.next_at = 0.0
 
     def run(self) -> Outcome | None:
@@ -402,6 +407,11 @@ class SchemaSwap(Action):
         if now < self.next_at:
             return None
         self.next_at = now + self.rng.uniform(8.0, 20.0)
+        # The cutover is one catalog transaction, and the swap-total checker
+        # asserts that readers never see a torn one. Cutting the coordinator
+        # off while it commits is the only way to test that against a
+        # transaction that may or may not have landed.
+        self.ctx.request_disruption("schema-swap")
         return self.client.write("ALTER SCHEMA blue SWAP WITH green")
 
     def close(self) -> None:
@@ -566,152 +576,44 @@ class DdlChurn(Action):
         self.client.reset()
 
 
-class ReadThenWrite(Action):
-    """Increment a counter, half of the time reading it back client-side.
+def ledger_predicate(rng: random.Random) -> str:
+    """A random total predicate over the ledger, for the partition oracle.
 
-    A lost update is invisible to every other oracle here. Conservation still
-    holds if a transfer's UPDATE vanishes outright, because nothing moved, and
-    the ledger's per-op accounting only covers rows that were inserted. This
-    counts instead: each committed op must add exactly one, so the sum over
-    all counters is pinned between the committed and the attempted op counts.
+    Total is the requirement: no division, no fallible cast, nothing that can
+    raise, or the three branches of the partition fail differently instead of
+    disagreeing. Everything here is a comparison, a NULL test, or a boolean
+    combination of them.
 
-    The increment is a server-side read-modify-write, and half the time it is
-    preceded by a read of the same row on the same session, so a peek and a
-    write on one key interleave.
+    The columns are chosen for the values that make filters and statistics
+    pushdown awkward. `flt` carries NaN, both infinities, negative zero and a
+    denormal, `day` is nullable, so predicates over it are the ones that put
+    rows in the IS NULL branch at all, and `amount` is signed.
     """
-
-    name = "read-then-write"
-
-    def __init__(
-        self, rng: random.Random, worker: int, client: MzClient, oplog: OpLog
-    ) -> None:
-        super().__init__(rng)
-        self.worker = worker
-        self.client = client
-        self.oplog = oplog
-        self.seq = 0
-
-    def run(self) -> Outcome | None:
-        self.seq += 1
-        seq = self.seq
-        key = self.rng.randrange(COUNTER_KEYS)
-        # Registered before sending: a thread that dies mid-call still counts
-        # as possibly-applied, which keeps the upper bound sound.
-        self.oplog.record(self.worker, seq, Outcome.UNKNOWN)
-        if self.rng.random() < 0.5:
-            # A read of the same row immediately before writing it, on the
-            # same session. NOTE: the increment cannot be moved inside an
-            # explicit transaction to make this a client-side
-            # read-then-write, because Materialize rejects UPDATE in a
-            # transaction block: multi-statement transactions are read-only
-            # or insert-only.
-            self.client.query(f"SELECT n FROM counters WHERE id = {key}")
-        outcome = self.client.write(f"UPDATE counters SET n = n + 1 WHERE id = {key}")
-        self.oplog.record(self.worker, seq, outcome)
-        return outcome
-
-    def close(self) -> None:
-        self.client.reset()
-
-
-class CounterSumPeek(PeekChecker):
-    """The counters must account for every increment that committed.
-
-    Bounds, not equality, because an op whose outcome is unknown may or may
-    not have applied. Sampling order is the framework's rule: lower bound
-    before the read, upper bound after.
-    """
-
-    def __init__(self, rng, ctx, oplog: OpLog) -> None:
-        super().__init__(rng, ctx, "counter-sum", ["quickstart", "compute"])
-        self.oplog = oplog
-
-    def check_once(self) -> None:
-        low = self.oplog.committed_count()
-        rows = self.peek("SELECT coalesce(sum(n), 0) FROM counters")
-        high = self.oplog.attempted_count()
-        total = int(rows[0][0])
-        if not low <= total <= high:
-            raise InvariantViolation(
-                f"counter sum {total} outside [{low}, {high}] on"
-                f" {self.last_cluster}: increments were lost or duplicated"
-            )
-        self.validations += 1
-
-
-class RollbackNoop(Action):
-    """A transaction that never commits must leave nothing behind.
-
-    Rolled back and abandoned transactions are the one write path with a
-    completely unambiguous oracle: the rows must never be visible, at any
-    timestamp, whatever the disruptions did. Every other action here has to
-    reason about unknown outcomes, this one does not.
-
-    Three ways to not commit, because they end the transaction differently:
-    an explicit ROLLBACK, a statement error that aborts it, and dropping the
-    connection mid-transaction, which is the case a disruption produces on
-    its own and the one where a server-side mistake would actually commit.
-    """
-
-    name = "rollback"
-
-    def __init__(self, rng: random.Random, worker: int, ctx: ScenarioContext) -> None:
-        super().__init__(rng)
-        self.worker = worker
-        self.ctx = ctx
-        self.client = MzClient(ctx, f"rollback-{worker}")
-        self.seq = 0
-
-    def run(self) -> Outcome | None:
-        self.seq += 1
-        marker = self.worker * 10_000_000 + self.seq
-        style = self.rng.choice(["rollback", "error", "drop"])
-        try:
-            self.client.query("BEGIN")
-            self.client.query(f"INSERT INTO rollback_probe VALUES ({marker})")
-            if style == "rollback":
-                self.client.query("ROLLBACK")
-            elif style == "error":
-                try:
-                    # Aborts the transaction server-side. The INSERT above must
-                    # go with it.
-                    self.client.query("SELECT 1 / 0")
-                except Exception:
-                    pass
-                self.client.query("ROLLBACK")
-            else:
-                # No ROLLBACK: the connection just goes away with the
-                # transaction open.
-                self.client.hard_close()
-        except TransientError:
-            # The disruption ended the transaction for us, which is the same
-            # contract: it must not have committed.
-            self.client.reset()
-            raise
-        except Exception:
-            self.client.reset()
-        return Outcome.FAILED
-
-    def close(self) -> None:
-        self.client.reset()
-
-
-class RollbackProbePeek(PeekChecker):
-    """Nothing a rolled back transaction wrote may ever be visible."""
-
-    pause = (0.5, 2.0)
-
-    def __init__(self, rng, ctx) -> None:
-        super().__init__(rng, ctx, "rollback-probe", ["quickstart", "compute"])
-
-    def check_once(self) -> None:
-        rows = self.peek("SELECT id FROM rollback_probe LIMIT 5")
-        if rows:
-            raise InvariantViolation(
-                f"rows from transactions that never committed are visible on"
-                f" {self.last_cluster}: {rows}"
-            )
-        self.validations += 1
+    atoms = [
+        f"amount > {rng.randint(-100, 100)}",
+        f"amount < {rng.randint(-100, 100)}",
+        f"amount = {rng.randint(-100, 100)}",
+        f"account >= {rng.randint(0, 32)}",
+        f"seq % {rng.randint(2, 9)} = 0",
+        "flt > 0",
+        "flt < 0",
+        "flt = 'NaN'::double precision",
+        "flt = 'Infinity'::double precision",
+        f"amount_dec > {rng.randint(-100, 100)}",
+        "tag LIKE 'w%'",
+        f"tag LIKE '%s{rng.randint(0, 9)}'",
+        "day IS NULL",
+        "day > DATE '2024-01-01'",
+        f"day < DATE '20{rng.randint(20, 30)}-06-01'",
+    ]
+    p = rng.choice(atoms)
+    # Compound predicates, since a filter can be right on each half and wrong
+    # on the combination, and NULL propagation through AND/OR is its own trap.
+    if rng.random() < 0.4:
+        p = f"({p}) {rng.choice(['AND', 'OR'])} ({rng.choice(atoms)})"
+    if rng.random() < 0.2:
+        p = f"NOT ({p})"
+    return p
 
 
 class CrossObjectTxn(Action):
@@ -737,89 +639,22 @@ class CrossObjectTxn(Action):
 
     def run(self) -> Outcome | None:
         self.client.query(f"SET cluster = {self.rng.choice(['quickstart', 'compute'])}")
-        return self.client.write_txn(
-            [("INSERT INTO cross_probe SELECT total FROM total", None)]
-        )
-
-    def close(self) -> None:
-        self.client.reset()
-
-
-class ShardChurn(Action):
-    """Create, write, and drop scratch tables to churn persist shards.
-
-    A table's lifecycle is the busiest sequence persist has: register the
-    shard with txn-wal, write batches, forget it, finalize it (tombstone,
-    then GC the whole trace away). DdlChurn covers dataflow install and
-    uninstall, but every object it creates lives on the same few shards,
-    so none of that runs. Doing it while the metadata leg is being severed
-    is the point: each step is a consensus write whose response can be lost,
-    and the shard is gone shortly after, which is when a botched state
-    transition stops being recoverable.
-
-    No checker reads these tables, so their contents never matter. What
-    matters is that the churn happens on the same envd and clusters the
-    invariants cover.
-    """
-
-    name = "shard-churn"
-
-    def __init__(self, rng: random.Random, worker: int, client: MzClient) -> None:
-        super().__init__(rng)
-        self.worker = worker
-        self.client = client
-        self.next_at = 0.0
-        self.nonce = 0
-        # Names whose DROP outcome was not COMMITTED. An UNKNOWN drop may not
-        # have applied, and forgetting the name would leak the shard for the
-        # rest of the run.
-        self.maybe_alive: list[str] = []
-
-    def run(self) -> Outcome | None:
-        now = time.monotonic()
-        if now < self.next_at:
-            return None
-        self.next_at = now + self.rng.uniform(3.0, 10.0)
-
-        self.maybe_alive = [
-            name
-            for name in self.maybe_alive
-            if self.client.write(f"DROP TABLE IF EXISTS {name}") != Outcome.COMMITTED
-        ]
-
-        self.nonce += 1
-        name = f"churn_tbl_{self.worker}_{self.nonce}"
-        outcome = self.client.write(f"CREATE TABLE {name} (a int, b text)")
-        if outcome == Outcome.FAILED:
-            return outcome
-        self.maybe_alive.append(name)
-        # Several small transactions rather than one big insert: each is its
-        # own txn-wal commit and data batch, so the shard accumulates batches
-        # to compact before it is dropped again.
-        for i in range(self.rng.randint(1, 5)):
-            self.client.write(
-                f"INSERT INTO {name} SELECT g, repeat('x', 100)"
-                f" FROM generate_series({i} * 50, {i} * 50 + 49) g"
-            )
-            # TODO: Reenable when SQL-616 and PER-59 are fixed. Evolving the
-            # schema
-            # mid-shard leaves batches written under both schemas in one
-            # shard, so the compaction that merges them has to migrate, and
-            # the registration is one more consensus write that a severed leg
-            # can leave in doubt. That last part is the problem: a restart
-            # re-runs the schema evolution against a persist shard that
-            # already carries it, and the coordinator panics on the mismatch
-            # instead of treating it as done (SQL-616).
-            #
-            # PER-59 is the sticky follow-on: once that evolution has failed,
-            # the catalog holds the new table version while the shard still
-            # only knows the old schema, so the next bootstrap registers the
-            # table with txn-wal presenting a desc the shard never registered
-            # and panics with "schema should be registered". That one repeats
-            # on every boot, so the environment does not come back.
-            if False and self.rng.random() < 0.3:
-                self.client.write(f"ALTER TABLE {name} ADD COLUMN c{i} int")
-        return outcome
+        # A read and a write in one transaction, which is only expressible
+        # this way: Materialize rejects both UPDATE and INSERT .. SELECT
+        # inside a transaction block, so the read has to be its own statement
+        # and the write has to carry the value the client saw.
+        try:
+            self.client.query("BEGIN")
+            rows = self.client.query("SELECT total FROM total")
+            self.client.query(f"INSERT INTO cross_probe VALUES ({int(rows[0][0])})")
+            self.client.query("COMMIT")
+        except TransientError:
+            self.client.reset()
+            raise
+        except Exception:
+            self.client.reset()
+            return Outcome.UNKNOWN
+        return Outcome.COMMITTED
 
     def close(self) -> None:
         self.client.reset()
@@ -832,126 +667,6 @@ LEDGER_TORN_SQL = (
     "SELECT worker, seq, count(*), sum(amount) FROM ledger"
     " GROUP BY worker, seq HAVING count(*) <> 2 OR sum(amount) <> 0"
 )
-
-
-# Rows contended by the read-then-write action. Few enough that concurrent
-# workers collide on the same row, which is the case that can lose an update.
-COUNTER_KEYS = 8
-
-# Three separate shards written by one transaction, see MultiShardTxn.
-TXN_TABLES = ("txn_a", "txn_b", "txn_c")
-
-# Markers present in one of the three tables but not the next, in both
-# directions around the ring, so any asymmetry shows up.
-MULTI_SHARD_DIFF_SQL = " UNION ALL ".join(
-    f"(SELECT '{left}' AS present_in, worker, seq, idx FROM {left}"
-    f" EXCEPT ALL SELECT '{left}', worker, seq, idx FROM {right})"
-    for left, right in zip(TXN_TABLES, TXN_TABLES[1:] + TXN_TABLES[:1])
-)
-
-
-class MultiShardTxn(Action):
-    """One transaction writing the same marker to three separate tables.
-
-    Every other write in this scenario lands in a single table, so txn-wal's
-    multi-shard commit never has to be atomic across shards. Here one
-    transaction touches three, which txn-wal commits by registering all three
-    batches in the txns shard at one timestamp and applying them to each data
-    shard afterwards. If a lost consensus response left that half-applied, a
-    marker would exist in some tables and not others.
-
-    The invariant needs no bookkeeping: the three tables must hold exactly the
-    same set of markers at every timestamp, whether a given transaction
-    committed or not.
-    """
-
-    name = "multi-shard-txn"
-
-    def __init__(self, rng: random.Random, worker: int, client: MzClient) -> None:
-        super().__init__(rng)
-        self.worker = worker
-        self.client = client
-        self.seq = 0
-
-    def run(self) -> Outcome | None:
-        self.seq += 1
-        # A one-row-per-table transaction is a small target: a reader has to
-        # land in the gap between three single-row writes. Widening it to
-        # tens of rows widens that gap proportionally, which is the only
-        # lever this action has on how often a tear is observable.
-        rows = self.rng.randint(1, 20)
-        values = ", ".join(f"({self.worker}, {self.seq}, {i})" for i in range(rows))
-        return self.client.write_txn(
-            [(f"INSERT INTO {table} VALUES {values}", None) for table in TXN_TABLES]
-        )
-
-    def close(self) -> None:
-        self.client.reset()
-
-
-class ReplicaDivergence(Checker):
-    """Both replicas of the compute cluster must answer identically.
-
-    The other checkers read through the cluster, so whichever replica the
-    coordinator picks is the one that gets verified, and a replica that
-    computes the wrong answer is caught only if it happens to be chosen. This
-    asks each replica directly, at one explicit timestamp, so the two answers
-    are comparable by construction: same query, same logical time, different
-    process. Any difference is a compute determinism bug, not a race.
-
-    A disrupted replica cannot serve the timestamp and the round is skipped,
-    which is the same contract every other checker follows.
-    """
-
-    name = "replica-divergence"
-    pause = (1.0, 3.0)
-
-    # Maintained by the compute cluster, so each replica computes them
-    # independently, unlike a table read which both serve from persist.
-    QUERIES = (
-        "SELECT total FROM total",
-        "SELECT cnt FROM ledger_agg",
-    )
-
-    def __init__(self, rng: random.Random, ctx: ScenarioContext) -> None:
-        super().__init__(rng)
-        self.ctx = ctx
-        self.client = MzClient(ctx, self.name)
-        self.replicas = ("r1", "r2")
-
-    def check_once(self) -> None:
-        self.client.query("SET cluster = compute")
-        # One timestamp for both reads. Slightly in the past so it is already
-        # readable rather than something both replicas have to wait for, and
-        # well inside the 600s RETAIN HISTORY of the objects involved.
-        now = int(self.client.query("SELECT mz_now()::text")[0][0])
-        as_of = now - 1000
-        for sql in self.QUERIES:
-            answers = {}
-            for replica in self.replicas:
-                self.client.query(f"SET cluster_replica = {replica}")
-                try:
-                    rows = self.client.query(f"{sql} AS OF {as_of}")
-                except UnexpectedQueryError as e:
-                    # Same race the history probes hit: a timestamp that was
-                    # readable when it was chosen can fall behind the since
-                    # while a disruption stalls this round. Unreadable is a
-                    # skip, disagreement at a readable one stays fatal.
-                    if "could not find a valid timestamp" in str(e):
-                        raise TransientError(f"{as_of} no longer readable") from None
-                    raise
-                answers[replica] = tuple(tuple(row) for row in rows)
-            self.validations += 1
-            if answers["r1"] != answers["r2"]:
-                raise InvariantViolation(
-                    f"replicas disagree at {as_of} on `{sql}`:"
-                    f" r1={answers['r1']} r2={answers['r2']}"
-                )
-        # Later rounds must not inherit a pin to one replica.
-        self.client.query("RESET cluster_replica")
-
-    def close(self) -> None:
-        self.client.reset()
 
 
 class BankTotalPeek(PeekChecker):
@@ -1728,16 +1443,20 @@ class LedgerCountAudit(SubscribeChecker):
 class TableBank(Scenario):
     name = "table-bank"
     services: list[str] = []
-    legs = ["metadata", "blob", "clusterd-compute", "clusterd-compute2"]
+    legs = [
+        "metadata",
+        "blob",
+        "clusterd-compute",
+        "clusterd-compute2",
+        "pubsub-compute",
+        "pubsub-storage",
+    ]
 
     def __init__(self, ctx: ScenarioContext) -> None:
         super().__init__(ctx)
         self.accounts = ctx.complexity.accounts
         self.total = self.accounts * BALANCE_PER_ACCOUNT
         self.oplog = OpLog()
-        # Separate from the ledger's: both key ops by (worker, seq) and
-        # sharing one would make each one's bounds count the other's ops.
-        self.counter_oplog = OpLog()
         self.ledger_rows = Watermark()
         # Recent mz timestamps observed by peeks, the AS OF history probes
         # stay within RETAIN HISTORY of this.
@@ -1766,14 +1485,7 @@ class TableBank(Scenario):
             " tag text, flt double precision, day date)"
             " WITH (RETAIN HISTORY = FOR '600s')",
             "CREATE TABLE registry (worker int, key int, ver bigint)",
-            "CREATE TABLE counters (id int, n bigint)",
-            "CREATE TABLE rollback_probe (id bigint)",
             "CREATE TABLE cross_probe (total bigint)",
-            f"INSERT INTO counters SELECT generate_series(0, {COUNTER_KEYS - 1}), 0",
-            *(
-                f"CREATE TABLE {table} (worker int, seq bigint, idx int)"
-                for table in TXN_TABLES
-            ),
             # RETAIN HISTORY keeps recent timestamps readable so the durable
             # subscribe checker can resume where it left off.
             "CREATE MATERIALIZED VIEW total IN CLUSTER compute"
@@ -1824,61 +1536,65 @@ class TableBank(Scenario):
             CopyTransfer(rng, index, client, self.oplog, forward),
             RegistryOp(rng, index, client, self),
             DdlChurn(rng, index, client),
-            ShardChurn(rng, index, client),
-            MultiShardTxn(rng, index, client),
-            ReadThenWrite(rng, index, client, self.counter_oplog),
-            RollbackNoop(rng, index, self.ctx),
             CrossObjectTxn(rng, MzClient(self.ctx, f"cross-{index}"), self),
         ]
         # The transfer actions carry the conservation and ledger-identity
         # oracles, which are the strongest ones here, so they keep the bulk of
         # the op budget. The rest only need to happen often enough to produce
         # the states their checkers watch continuously.
-        weights = [10, 10, 3, 3, 6, 1, 1, 2, 2, 1, 1]
+        weights = [10, 10, 3, 3, 6, 1, 1]
         if index == 0:
             # Single-instance churns: concurrent swaps of the same schema
             # pair or replacements of the same MV would only race each other
             # in the catalog, without adding coverage.
             actions += [
-                SchemaSwap(rng, client),
+                SchemaSwap(rng, client, self.ctx),
                 ReplacementChurn(rng, client, self.ctx),
             ]
             weights += [2, 2]
         return WorkerBundle(actions=actions, weights=weights)
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(19)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(17)]
         return [
             BankTotalPeek(rngs[0], self.ctx, self),
             LedgerDirectPeek(rngs[1], self.ctx, self),
-            LedgerIdentityPeek(rngs[10], self.ctx, self),
-            LedgerRowsSubscribe(rngs[11], self.ctx, self),
-            PredicateDifferentialPeek(rngs[12], self.ctx, self),
-            BankTotalSubscribe(rngs[2], self.ctx, self),
+            LedgerIdentityPeek(rngs[2], self.ctx, self),
+            LedgerRowsSubscribe(rngs[3], self.ctx, self),
+            PredicateDifferentialPeek(rngs[4], self.ctx, self),
+            BankTotalSubscribe(rngs[5], self.ctx, self),
             BankTotalSubscribe(
-                rngs[3], self.ctx, self, name="total-subscribe-durable", durable=True
+                rngs[6], self.ctx, self, name="total-subscribe-durable", durable=True
             ),
-            SnapshotTxnPeek(rngs[4], self.ctx, self),
-            TemporalPeek(rngs[5], self.ctx),
-            RefreshMvPeek(rngs[6], self.ctx, self),
-            SwapTotalPeek(rngs[7], self.ctx, self),
-            RegistryPeek(rngs[8], self.ctx, self),
-            CopyExportPeek(rngs[9], self.ctx, self),
-            GroupCompletenessPeek(
-                rngs[13], self.ctx, "multi-shard-txn", MULTI_SHARD_DIFF_SQL
-            ),
-            ReplicaDivergence(rngs[14], self.ctx),
-            CounterSumPeek(rngs[16], self.ctx, self.counter_oplog),
-            RollbackProbePeek(rngs[17], self.ctx),
-            GroupCompletenessPeek(
-                rngs[18],
+            SnapshotTxnPeek(rngs[7], self.ctx, self),
+            TemporalPeek(rngs[8], self.ctx),
+            RefreshMvPeek(rngs[9], self.ctx, self),
+            SwapTotalPeek(rngs[10], self.ctx, self),
+            RegistryPeek(rngs[11], self.ctx, self),
+            CopyExportPeek(rngs[12], self.ctx, self),
+            ReplicaDivergence(
+                rngs[13],
                 self.ctx,
-                "cross-object-total",
-                "SELECT total FROM cross_probe" f" WHERE total <> {self.total} LIMIT 5",
+                ("SELECT total FROM total", "SELECT cnt FROM ledger_agg"),
+            ),
+            TernaryPartitionPeek(
+                rngs[14],
+                self.ctx,
+                "ledger-partition",
+                "ledger",
+                ledger_predicate,
+                "amount",
                 history=self.recent_ts,
             ),
             GroupCompletenessPeek(
                 rngs[15],
+                self.ctx,
+                "cross-object-total",
+                f"SELECT total FROM cross_probe WHERE total <> {self.total} LIMIT 5",
+                history=self.recent_ts,
+            ),
+            GroupCompletenessPeek(
+                rngs[16],
                 self.ctx,
                 "ledger-atomicity",
                 LEDGER_TORN_SQL,
@@ -1934,25 +1650,6 @@ class TableBank(Scenario):
         if wrong:
             raise InvariantViolation(
                 f"a transaction reading the total MV recorded {wrong}, not {self.total}"
-            )
-        leaked = client.query("SELECT id FROM rollback_probe LIMIT 20")
-        if leaked:
-            raise InvariantViolation(
-                f"rows from transactions that never committed are visible: {leaked}"
-            )
-        low = self.counter_oplog.committed_count()
-        total = int(client.query("SELECT coalesce(sum(n), 0) FROM counters")[0][0])
-        high = self.counter_oplog.attempted_count()
-        if not low <= total <= high:
-            raise InvariantViolation(
-                f"final counter sum {total} outside [{low}, {high}]:"
-                " read-then-write increments were lost or duplicated"
-            )
-        half_applied = client.query(MULTI_SHARD_DIFF_SQL)
-        if half_applied:
-            raise InvariantViolation(
-                f"multi-shard transactions half applied between {TXN_TABLES}:"
-                f" {half_applied[:20]}"
             )
         swap_total = int(client.query("SELECT total FROM blue.total_swap")[0][0])
         if swap_total != self.total:

@@ -14,16 +14,20 @@ from materialize.invariants.scenarios.cdc_bank import (
     PgCdcBank,
     SqlServerCdcBank,
 )
+from materialize.invariants.scenarios.graph import Graph
 from materialize.invariants.scenarios.kafka_ledger import KafkaLedger
 from materialize.invariants.scenarios.kafka_upsert import KafkaUpsert
 from materialize.invariants.scenarios.sink_roundtrip import SinkRoundtrip
 from materialize.invariants.scenarios.table_bank import TableBank
+from materialize.invariants.scenarios.txn_probe import TxnProbe
 from materialize.invariants.scenarios.webhook_set import WebhookSet
 
 SCENARIOS: dict[str, type[Scenario]] = {
     scenario.name: scenario
     for scenario in [
         TableBank,
+        TxnProbe,
+        Graph,
         PgCdcBank,
         MySqlCdcBank,
         SqlServerCdcBank,

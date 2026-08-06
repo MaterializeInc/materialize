@@ -34,10 +34,20 @@ DISRUPTION_KINDS = [
     "bandwidth",
     "reset_peer",
     "flap",
+    "slicer",
+    "slow_close",
 ]
+
+# Faults applied to a process rather than to one of its connections.
+PROCESS_KINDS = {"kill", "pause", "crash_loop", "throttle"}
 
 # Kinds that cut the connection entirely, subject to Leg.max_outage.
 FULL_OUTAGE_KINDS = {"disable", "timeout", "reset_peer", "flap"}
+
+
+# Sentinel distinguishing "the run is over" from "the timer expired" (None)
+# and from a trigger reason (a string, possibly empty).
+_STOPPED = object()
 
 
 class ApiStalled(Exception):
@@ -99,6 +109,13 @@ class ProcessTarget:
     pause: Callable[[], None]
     unpause: Callable[[], None]
     max_outage: float = 120.0
+    # Squeeze the process's CPU allowance and restore it. Optional, and only
+    # offered as a disruption kind when both are present. Unlike everything
+    # else here this degrades the process without touching the network, which
+    # is what surfaces deadlines that are really assumptions about how fast a
+    # healthy peer answers.
+    throttle: Callable[[], None] | None = None
+    unthrottle: Callable[[], None] | None = None
 
 
 class ToxiproxyApi:
@@ -206,6 +223,7 @@ class Disruptor(threading.Thread):
         processes: list[ProcessTarget] | None = None,
         restore_proxies: list[Proxy] | None = None,
         restart_toxiproxy: Callable[[], None] | None = None,
+        kind_filter: set[str] | None = None,
     ) -> None:
         super().__init__(name="disruptor")
         self.api = api
@@ -217,6 +235,10 @@ class Disruptor(threading.Thread):
         self.concurrent = concurrent
         self.on_error = on_error
         self.processes = processes or []
+        # Restricts every choice below to these kinds, for verifying one kind
+        # or bisecting which one causes a failure. A leg or process left with
+        # no allowed kind is skipped rather than disrupted some other way.
+        self.kind_filter = kind_filter
         # Last resort for an admin API that no longer answers, see
         # _heal_network_with_retries.
         self.restart_toxiproxy = restart_toxiproxy
@@ -230,6 +252,15 @@ class Disruptor(threading.Thread):
             else [proxy for leg in legs for proxy in leg.proxies]
         )
         self.stop_event = threading.Event()
+        # Set by the workload to ask for a cut right now, see request_cycle.
+        self.trigger = threading.Event()
+        self.trigger_reason = ""
+        self.triggered = 0
+        self._last_trigger = 0.0
+        # Shortest gap between two triggered cuts. The high end of the timer
+        # interval, so triggered cuts are no more frequent than timer-driven
+        # ones and untargeted coverage survives.
+        self.trigger_min_gap = interval[1]
         self.cycles = 0
         # Set while any disruption is applied, read by the executor to
         # attribute checker validations to disruption windows.
@@ -243,6 +274,31 @@ class Disruptor(threading.Thread):
     def _record(self, message: str) -> None:
         self.history.append(f"{time.strftime('%H:%M:%S')} {message}")
         self.log.log("disrupt", message)
+
+    def request_cycle(self, reason: str) -> None:
+        """Ask for a disruption now, from the workload thread that knows why.
+
+        Timer-driven cuts land wherever they land, and the states worth
+        cutting through are brief: a catalog transaction committing, a shard
+        being registered, a schema evolving. The workload is the only thing
+        that knows when it is inside one, so it says so and the disruptor
+        cuts immediately.
+
+        Rate limited, because these fire far more often than the timer would
+        and a run made entirely of triggered cuts covers only the triggered
+        moments. Requests are dropped, never queued: a cut that arrives after
+        the moment has passed is just an untargeted cut.
+
+        NOTE: this makes the disruption sequence depend on workload timing,
+        so a `--seed` replay reproduces the same *choices* but not
+        necessarily at the same points.
+        """
+        now = time.monotonic()
+        if now - self._last_trigger < self.trigger_min_gap:
+            return
+        self._last_trigger = now
+        self.trigger_reason = reason
+        self.trigger.set()
 
     def _attempt(self, what: str, action: Callable[[], None]) -> None:
         """Run a process disruption or heal, tolerating a lost race.
@@ -271,7 +327,19 @@ class Disruptor(threading.Thread):
                 self._one_cycle(duration_scale=0.3, only=leg)
                 if self.stop_event.wait(self.rng.uniform(1.0, 5.0)):
                     return
-            while not self.stop_event.wait(self.rng.uniform(*self.interval)):
+            while True:
+                reason = self._wait_for_next_cycle()
+                if reason is _STOPPED:
+                    return
+                if reason is not None:
+                    # A cut aimed at the state the workload just announced,
+                    # short so it lands inside it rather than around it.
+                    self.triggered += 1
+                    self._record(f"triggered by {reason}")
+                    self._one_cycle(duration_scale=0.25)
+                    key = ("trigger", str(reason))
+                    self.coverage[key] = self.coverage.get(key, 0) + 1
+                    continue
                 # Occasionally a storm: several short back-to-back
                 # disruptions followed by a longer calm window, verifying
                 # that the system recovers repeatedly, not just once at the
@@ -298,6 +366,26 @@ class Disruptor(threading.Thread):
             self.on_error(e)
         finally:
             self._heal_all_with_retries()
+
+    def _wait_for_next_cycle(self) -> object:
+        """Block until the next cycle is due.
+
+        Returns the trigger reason if the workload asked for one, None if the
+        timer expired, and `_STOPPED` if the run is over.
+        """
+        deadline = time.monotonic() + self.rng.uniform(*self.interval)
+        while True:
+            if self.stop_event.is_set():
+                return _STOPPED
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            # Capped so a stop is noticed promptly even with no trigger.
+            if self.trigger.wait(min(remaining, 1.0)):
+                self.trigger.clear()
+                if self.stop_event.is_set():
+                    return _STOPPED
+                return self.trigger_reason
 
     def _one_cycle(self, duration_scale: float = 1.0, only: Leg | None = None) -> None:
         try:
@@ -333,25 +421,33 @@ class Disruptor(threading.Thread):
         else:
             count = min(len(self.legs), self.rng.randint(1, self.concurrent))
             targets = self.rng.sample(self.legs, count)
+        targets = [leg for leg in targets if self._allowed_kinds(leg)]
+        if not targets:
+            return
         victim = self.rng.choice(self.processes) if overlap_kill else None
         duration = self.rng.uniform(*self.duration) * duration_scale
-        applied: list[tuple[Leg, str]] = []
+        applied: list[tuple[Leg, str, tuple[Proxy, ...]]] = []
         for leg in targets:
-            kind = self.rng.choice(list(leg.kinds or DISRUPTION_KINDS))
+            kind = self.rng.choice(self._allowed_kinds(leg))
             if kind in FULL_OUTAGE_KINDS and leg.max_outage is not None:
                 duration = min(duration, leg.max_outage)
-            self._apply(leg, kind)
-            applied.append((leg, kind))
+            proxies = self._proxy_subset(leg)
+            self._apply(leg, kind, proxies)
+            applied.append((leg, kind, proxies))
             key = (leg.name, kind)
             self.coverage[key] = self.coverage.get(key, 0) + 1
         self.active.set()
         self._record(
             "applied "
-            + ", ".join(f"{kind} on {leg.name}" for leg, kind in applied)
+            + ", ".join(
+                f"{kind} on {leg.name}"
+                + ("" if len(proxies) == len(leg.proxies) else f"/{proxies[0].name}")
+                for leg, kind, proxies in applied
+            )
             + (f" overlapping kill of {victim.name}" if victim else "")
             + f" for {duration:.1f}s"
         )
-        flapping = [leg for leg, kind in applied if kind == "flap"]
+        flapping = [(leg, proxies) for leg, kind, proxies in applied if kind == "flap"]
         if victim is not None:
             self._wait_out(duration / 2, flapping)
             self._attempt(f"kill of {victim.name}", victim.kill)
@@ -361,8 +457,8 @@ class Disruptor(threading.Thread):
         else:
             self._wait_out(duration, flapping)
         self.active.clear()
-        for leg, kind in applied:
-            self._heal(leg, kind)
+        for leg, kind, proxies in applied:
+            self._heal(leg, kind, proxies)
         if victim is not None:
             # Heal the victim only after the legs: its heal blocks until the
             # process serves again (docker compose --wait), which can never
@@ -372,12 +468,41 @@ class Disruptor(threading.Thread):
             self._attempt(f"heal of {victim.name}", victim.heal)
         self.cycles += 1
         self._record(
-            "healed " + ", ".join(f"{kind} on {leg.name}" for leg, kind in applied)
+            "healed " + ", ".join(f"{kind} on {leg.name}" for leg, kind, _ in applied)
         )
+
+    def _allowed_kinds(self, leg: Leg) -> list[str]:
+        kinds = list(leg.kinds or DISRUPTION_KINDS)
+        if self.kind_filter is not None:
+            kinds = [k for k in kinds if k in self.kind_filter]
+        return kinds
+
+    def _proxy_subset(self, leg: Leg) -> tuple[Proxy, ...]:
+        """Which of a leg's proxies to cut, sometimes not all of them.
+
+        A leg groups the connections of one logical dependency, and cutting
+        all of them models that dependency being unreachable. Cutting a
+        proper subset models something a whole-leg cut cannot: one channel to
+        a peer is gone while another to the same peer still works, so the two
+        sides disagree about whether they can talk. For the clusterd legs
+        that is the storage controller keeping its connection while the
+        compute controller loses its, to the same process.
+        """
+        if len(leg.proxies) < 2 or self.rng.random() >= 0.25:
+            return leg.proxies
+        return (self.rng.choice(leg.proxies),)
 
     def _process_cycle(self, duration_scale: float, kind: str | None = None) -> None:
         target = self.rng.choice(self.processes)
-        kind = kind or self.rng.choice(["kill", "pause"])
+        if kind is None:
+            kinds = ["kill", "pause", "crash_loop"]
+            if target.throttle is not None and target.unthrottle is not None:
+                kinds.append("throttle")
+            if self.kind_filter is not None:
+                kinds = [k for k in kinds if k in self.kind_filter]
+            if not kinds:
+                return
+            kind = self.rng.choice(kinds)
         duration = min(
             self.rng.uniform(*self.duration) * duration_scale, target.max_outage
         )
@@ -391,6 +516,13 @@ class Disruptor(threading.Thread):
             # The up can also race a crash-looping restart policy and observe
             # an unhealthy moment.
             self._attempt(f"heal of {target.name}", target.heal)
+        elif kind == "crash_loop":
+            self._crash_loop(target, duration)
+        elif kind == "throttle":
+            assert target.throttle is not None and target.unthrottle is not None
+            self._attempt(f"throttle of {target.name}", target.throttle)
+            self.stop_event.wait(duration)
+            self._attempt(f"unthrottle of {target.name}", target.unthrottle)
         else:
             self._attempt(f"pause of {target.name}", target.pause)
             self.stop_event.wait(duration)
@@ -399,11 +531,38 @@ class Disruptor(threading.Thread):
         self.cycles += 1
         self._record(f"healed {kind} on process {target.name}")
 
-    def _apply(self, leg: Leg, kind: str) -> None:
+    def _crash_loop(self, target: ProcessTarget, duration: float) -> None:
+        """Kill repeatedly, never letting the process finish coming back.
+
+        A plain kill is followed by a heal that waits for healthy, so
+        everything the process does on the way up runs to completion every
+        time. Bootstrap is the least exercised code in the system and the
+        most consequential: it re-runs migrations, re-registers shards, and
+        re-applies whatever the last incarnation left half done. Killing
+        again a second or two in leaves those sequences interrupted at a
+        different point each time.
+
+        Relies on the container's restart policy to bring it back in
+        between, so no heal runs until the last kill. The final heal is the
+        normal one, which blocks until the process serves again.
+        """
+        deadline = time.monotonic() + duration
+        kills = 0
+        while time.monotonic() < deadline:
+            self._attempt(f"crash-loop kill of {target.name}", target.kill)
+            kills += 1
+            # Short enough that the restart policy has restarted the process
+            # but bootstrap is unlikely to have finished.
+            if self.stop_event.wait(self.rng.uniform(1.0, 4.0)):
+                break
+        self._record(f"crash loop killed {target.name} {kills} times")
+        self._attempt(f"heal of {target.name}", target.heal)
+
+    def _apply(self, leg: Leg, kind: str, proxies: tuple[Proxy, ...]) -> None:
         # Toxics attach to one direction only, so half of the disruptions
         # are asymmetric: one side of the connection keeps hearing the other.
         stream = self.rng.choice(["downstream", "upstream"])
-        for proxy in leg.proxies:
+        for proxy in proxies:
             if kind == "disable":
                 self.api.set_enabled(proxy.name, False)
             elif kind == "latency":
@@ -455,17 +614,53 @@ class Disruptor(threading.Thread):
                 )
             elif kind == "flap":
                 self.api.set_enabled(proxy.name, False)
+            elif kind == "slicer":
+                # Chops each write into small pieces and spaces them out, so
+                # every read on the other side returns a fraction of the
+                # message. A parser that assumes one read yields one framed
+                # message (length-prefixed gRPC, pgwire, chunked S3
+                # responses) only fails under this, never under a clean cut.
+                self.api.add_toxic(
+                    proxy.name,
+                    kind,
+                    "slicer",
+                    {
+                        # NOTE: `delay` is microseconds, and it is spent per
+                        # slice. Small slices with a large delay would stall
+                        # the leg for far longer than any outage cap allows,
+                        # since a slicer is a degradation, not a cut, so
+                        # Leg.max_outage never applies to it.
+                        "average_size": self.rng.choice([64, 512, 4096]),
+                        "size_variation": 32,
+                        "delay": self.rng.choice([0, 100, 1000]),
+                    },
+                    stream=stream,
+                )
+            elif kind == "slow_close":
+                # Delays the FIN, so the peer sees an established connection
+                # that will never carry data again. Distinct from `timeout`
+                # in that the close is in flight: whoever is waiting on the
+                # socket has to notice by its own deadline.
+                self.api.add_toxic(
+                    proxy.name,
+                    kind,
+                    "slow_close",
+                    {"delay": self.rng.randint(1000, 10_000)},
+                    stream=stream,
+                )
             else:
                 raise ValueError(f"unknown disruption kind {kind}")
 
-    def _heal(self, leg: Leg, kind: str) -> None:
-        for proxy in leg.proxies:
+    def _heal(self, leg: Leg, kind: str, proxies: tuple[Proxy, ...]) -> None:
+        for proxy in proxies:
             if kind in ("disable", "flap"):
                 self.api.set_enabled(proxy.name, True)
             else:
                 self.api.delete_toxic(proxy.name, kind)
 
-    def _wait_out(self, duration: float, flapping: list[Leg]) -> None:
+    def _wait_out(
+        self, duration: float, flapping: list[tuple[Leg, tuple[Proxy, ...]]]
+    ) -> None:
         """Wait out a disruption window, toggling the flapping legs.
 
         One long cut gives a request in flight one chance to be severed at
@@ -485,8 +680,8 @@ class Disruptor(threading.Thread):
             if self.stop_event.wait(min(remaining, self.rng.uniform(0.05, 0.5))):
                 return
             enabled = not enabled
-            for leg in flapping:
-                for proxy in leg.proxies:
+            for _leg, proxies in flapping:
+                for proxy in proxies:
                     self.api.set_enabled(proxy.name, enabled)
 
     def _heal_all_with_retries(self) -> None:
@@ -500,6 +695,15 @@ class Disruptor(threading.Thread):
                 target.unpause()
             except Exception:
                 pass
+            # A CPU squeeze outlives the disruptor thread: unlike a toxic it
+            # is container state, so an abandoned cycle would leave the
+            # process crippled through converge and turn a lost cycle into a
+            # liveness failure.
+            if target.unthrottle is not None:
+                try:
+                    target.unthrottle()
+                except Exception:
+                    pass
         self._heal_network_with_retries()
         for target in self.processes:
             try:

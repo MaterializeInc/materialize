@@ -23,6 +23,7 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -358,6 +359,12 @@ class ScenarioContext:
     # All MzClients ever created, so the shutdown ladder can unblock
     # stragglers by cancelling/closing their connections cross-thread.
     clients: list = field(default_factory=list)
+    # Ask for a disruption right now, naming the state being entered. Actions
+    # call this when they are about to do something worth cutting through,
+    # since only the workload knows when it is inside such a moment. A no-op
+    # when nothing is being disrupted, and rate limited by the disruptor, so
+    # callers may invoke it freely.
+    request_disruption: Callable[[str], None] = lambda reason: None
 
 
 class Scenario(ABC):

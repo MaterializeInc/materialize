@@ -35,7 +35,14 @@ from materialize.invariants.framework import (
 )
 from materialize.invariants.mz import MzClient
 from materialize.invariants.scenarios import SCENARIOS
-from materialize.invariants.toxiproxy import Leg, ProcessTarget, Proxy, ToxiproxyApi
+from materialize.invariants.toxiproxy import (
+    DISRUPTION_KINDS,
+    PROCESS_KINDS,
+    Leg,
+    ProcessTarget,
+    Proxy,
+    ToxiproxyApi,
+)
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
@@ -105,6 +112,21 @@ def materialized_service(image: str | None = None) -> Materialized:
     )
 
 
+# Persist pubsub, one toxiproxy listener per clusterd. Persist's blob and
+# consensus URLs are chosen by envd and handed to every clusterd verbatim, so
+# those legs can only be cut for all processes at once. Pubsub is the one
+# persist connection each clusterd is configured with individually, which
+# makes it the only place a *partial* partition is expressible: one process
+# stops hearing about other processes' writes while the rest keep hearing
+# them, so it falls back to polling and lags behind a system that thinks it
+# is fine. Nothing else here produces two peers with different views.
+PUBSUB_PORTS = {
+    "clusterd-compute": 6879,
+    "clusterd-compute2": 6880,
+    "clusterd-storage": 6881,
+}
+
+
 def clusterd_service(name: str, image: str | None = None) -> Clusterd:
     return Clusterd(
         name=name,
@@ -112,6 +134,7 @@ def clusterd_service(name: str, image: str | None = None) -> Clusterd:
         # The controller connects through toxiproxy, so the host in request
         # URIs doesn't match this clusterd's hostname.
         environment_extra=["CLUSTERD_GRPC_HOST=", *SOFT_ASSERTION_ENV],
+        persist_pubsub_url=f"http://toxiproxy:{PUBSUB_PORTS[name]}",
         # halt! is a designed recovery path for clusterd.
         restart="on-failure",
         # Bounded so that runaway memory (e.g. buffering while the blob leg
@@ -232,6 +255,18 @@ LEGS = {
         # needs: nightly 17743 OOM-killed clusterd at 6.2GiB during a 29s one.
         kinds=("disable", "timeout", "reset_peer", "flap"),
     ),
+    # One per clusterd, see PUBSUB_PORTS. Losing pubsub must cost latency and
+    # nothing else: it is a notification channel, and every reader that stops
+    # hearing from it falls back to polling. A correctness failure here is a
+    # real one, and a partial cut is the only way to reach the state where one
+    # process is behind and the others are not.
+    **{
+        f"pubsub-{name.removeprefix('clusterd-')}": Leg(
+            f"pubsub-{name.removeprefix('clusterd-')}",
+            (Proxy(f"pubsub_{name.replace('-', '_')}", port, "materialized:6879"),),
+        )
+        for name, port in PUBSUB_PORTS.items()
+    },
     "pg": Leg("pg", (Proxy("pg", 5432, "postgres:5432"),)),
     "mysql": Leg("mysql", (Proxy("mysql", 3306, "mysql:3306"),)),
     "sql-server": Leg("sql-server", (Proxy("sql_server", 1433, "sql-server:1433"),)),
@@ -312,6 +347,15 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         metavar="NAME,...",
         help="disrupt only these legs of the scenario's set, for bisecting"
         " which dependency a symptom depends on",
+    )
+    parser.add_argument(
+        "--kinds",
+        type=str,
+        default=None,
+        metavar="KIND,...",
+        help="use only these disruption kinds, both toxics and process"
+        " faults, for exercising one kind or bisecting which one a symptom"
+        " depends on. A leg or process left with no allowed kind is skipped",
     )
     parser.add_argument(
         "--persist-churn",
@@ -433,6 +477,11 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
         scenario = scenario_class(ctx)
         scenario.setup()
         legs = [] if args.no_disruptions else [LEGS[n] for n in scenario_class.legs]
+        kind_filter = None
+        if args.kinds:
+            kind_filter = {k.strip() for k in args.kinds.split(",") if k.strip()}
+            unknown = kind_filter - set(DISRUPTION_KINDS) - PROCESS_KINDS
+            assert not unknown, f"--kinds: unknown: {sorted(unknown)}"
         if args.legs:
             selected = set(args.legs.split(","))
             unknown = selected - {leg.name for leg in legs}
@@ -453,6 +502,7 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                     proxy for leg in LEGS.values() for proxy in leg.proxies
                 ],
                 restart_toxiproxy=lambda: _restart_toxiproxy(c, toxiproxy),
+                kind_filter=kind_filter,
             ).run()
             # After the run, so it sees the whole history the run produced,
             # and only when the run itself passed: a failure already has its
@@ -492,7 +542,23 @@ def make_upgrade_swap(
         ]
 
         unpause_quietly(c, *names)
-        c.kill(*names)
+        # The disruptor may kill one of these at any moment, and a
+        # `docker compose kill` naming a container that is not running fails
+        # the whole invocation. Kill what is running, and retry once the set
+        # has been re-observed if the disruptor won the race in between. A
+        # container the disruptor killed is already in the state the swap
+        # needs, and up() recreates it on the new image either way, so the
+        # guarantee that no process survives on the old image still holds.
+        for attempt in range(3):
+            running = [name for name in names if c.is_running(name)]
+            if not running:
+                break
+            try:
+                c.kill(*running)
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
         # up() renders the composition, which the version override pins to
         # the old image, so the override must be closed first.
         version_override.close()
@@ -712,6 +778,23 @@ def process_targets(c: Composition) -> list[ProcessTarget]:
             # single attempt can race a crash-looping restart policy.
             c.up(name, detach=True, max_tries=3)
 
+        def set_cpus(cpus: str) -> None:
+            # `docker update`, not compose: changing the CPU allowance of a
+            # running container in place is the only way to degrade a process
+            # without restarting it, and compose has no equivalent. A
+            # container the disruptor killed moments ago is simply gone, and
+            # the caller treats a failed disruption as a lost cycle.
+            subprocess.run(
+                [
+                    "docker",
+                    "update",
+                    f"--cpus={cpus}",
+                    f"{c.project_name}-{name}-1",
+                ],
+                check=True,
+                capture_output=True,
+            )
+
         return ProcessTarget(
             name=name,
             max_outage=max_outage,
@@ -719,6 +802,13 @@ def process_targets(c: Composition) -> list[ProcessTarget]:
             heal=heal,
             pause=lambda: c.pause(name),
             unpause=lambda: c.unpause(name),
+            # Enough CPU to make progress, far too little to keep up. A
+            # process that is merely slow is the case every timeout in the
+            # system is implicitly betting against, and unlike a pause it
+            # keeps answering, so peers see a live but lagging peer rather
+            # than an absent one.
+            throttle=lambda: set_cpus("0.15"),
+            unthrottle=lambda: set_cpus("0"),
         )
 
     return [

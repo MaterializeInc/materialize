@@ -172,6 +172,7 @@ class Runner:
         midrun_event=None,
         restore_proxies: list[Proxy] | None = None,
         restart_toxiproxy: Callable[[], None] | None = None,
+        kind_filter: set[str] | None = None,
     ) -> None:
         self.scenario = scenario
         self.ctx = scenario.ctx
@@ -182,6 +183,7 @@ class Runner:
         self.midrun_event = midrun_event
         self.restore_proxies = restore_proxies
         self.restart_toxiproxy = restart_toxiproxy
+        self.kind_filter = kind_filter
         self.failure: BaseException | None = None
         self._failure_lock = threading.Lock()
         self.worker_stats: list[Counter[tuple[str, str]]] = []
@@ -253,7 +255,10 @@ class Runner:
                 processes=self.processes,
                 restore_proxies=self.restore_proxies,
                 restart_toxiproxy=self.restart_toxiproxy,
+                kind_filter=self.kind_filter,
             )
+            # Let the workload aim a cut at a state only it knows it is in.
+            ctx.request_disruption = self.disruptor.request_cycle
             if ctx.complexity.agitation_interval is not None:
                 self.agitator = Agitator(ctx, agitator_rng, self.fail)
                 threads.append(self.agitator)

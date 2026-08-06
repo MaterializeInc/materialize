@@ -12,6 +12,7 @@
 import random
 from abc import abstractmethod
 from collections import Counter
+from collections.abc import Callable
 
 from materialize.invariants.framework import (
     Checker,
@@ -404,3 +405,154 @@ class GroupCompletenessPeek(PeekChecker):
                 f" {self.last_cluster}: {rows[:5]}"
             )
         self.validations += 1
+
+
+class TernaryPartitionPeek(PeekChecker):
+    """Splitting a relation by a predicate must not create or lose rows.
+
+    For any total predicate p, the rows where p holds, where it does not, and
+    where it is NULL partition the relation exactly, at every timestamp and
+    whatever the data is. So this holds without knowing anything about the
+    workload or which of its operations committed, which is what lets it run
+    during a disruption, and it is a different question from the conserved
+    totals the scenarios otherwise assert: it is about whether predicates are
+    evaluated correctly, including when persist skips parts by their
+    statistics rather than reading them.
+
+    Both the row count and a summed value are partitioned, because a filter
+    that drops one row and duplicates another keeps the count.
+
+    `predicate` must produce **total** expressions. Anything that can raise,
+    a division or a fallible cast, breaks the comparison: the three branches
+    would fail differently rather than disagree.
+    """
+
+    pause = (0.5, 2.0)
+
+    def __init__(
+        self,
+        rng,
+        ctx,
+        name: str,
+        relation: str,
+        predicate: Callable[[random.Random], str],
+        value: str,
+        history: Watermark | None = None,
+    ) -> None:
+        super().__init__(rng, ctx, name, ["quickstart", "compute"])
+        self.relation = relation
+        self.predicate = predicate
+        self.value = value
+        self.history = history
+
+    def check_once(self) -> None:
+        p = self.predicate(self.rng)
+        # One statement, so all four reads share a timestamp. Written as
+        # differences so the check is "both zero" rather than a comparison of
+        # four numbers that a disruption could interleave.
+        query = (
+            f"SELECT (SELECT count(*) FROM {self.relation})"
+            f" - (SELECT count(*) FROM {self.relation} WHERE {p})"
+            f" - (SELECT count(*) FROM {self.relation} WHERE NOT ({p}))"
+            f" - (SELECT count(*) FROM {self.relation} WHERE ({p}) IS NULL),"
+            f" (SELECT coalesce(sum({self.value}), 0) FROM {self.relation})"
+            f" - (SELECT coalesce(sum({self.value}), 0) FROM {self.relation}"
+            f" WHERE {p})"
+            f" - (SELECT coalesce(sum({self.value}), 0) FROM {self.relation}"
+            f" WHERE NOT ({p}))"
+            f" - (SELECT coalesce(sum({self.value}), 0) FROM {self.relation}"
+            f" WHERE ({p}) IS NULL)"
+        )
+        at = "now"
+        recent = self.history.get() if self.history is not None else 0
+        if recent > 0 and self.rng.random() < 0.25:
+            as_of = self.rng.randint(max(recent - 120_000, 1), recent)
+            query, at = f"{query} AS OF {as_of}", str(as_of)
+        try:
+            rows = self.peek(query)
+        except UnexpectedQueryError as e:
+            if "could not find a valid timestamp" in str(e):
+                raise TransientError(f"{at} no longer readable") from None
+            raise
+        count_diff, value_diff = int(rows[0][0]), int(rows[0][1])
+        if count_diff or value_diff:
+            raise InvariantViolation(
+                f"{self.name}: `{p}` does not partition {self.relation} at {at}"
+                f" on {self.last_cluster}: {count_diff} rows and {value_diff}"
+                f" of {self.value} unaccounted for"
+            )
+        self.validations += 1
+
+
+class ReplicaDivergence(Checker):
+    """Both replicas of a cluster must answer identically.
+
+    The other checkers read through the cluster, so whichever replica the
+    coordinator picks is the one that gets verified, and a replica that
+    computes the wrong answer is caught only if it happens to be chosen. This
+    asks each replica directly, at one explicit timestamp, so the two answers
+    are comparable by construction: same query, same logical time, different
+    process. Any difference is a compute determinism bug, not a race.
+
+    The queries must read objects the cluster maintains, so each replica
+    computes the answer independently, unlike a table read which every
+    replica serves from persist. Those objects also need a RETAIN HISTORY
+    long enough to cover the probed timestamp.
+
+    A disrupted replica cannot serve the timestamp and the round is skipped,
+    which is the same contract every other checker follows.
+    """
+
+    name = "replica-divergence"
+    pause = (1.0, 3.0)
+
+    def __init__(
+        self,
+        rng: random.Random,
+        ctx: ScenarioContext,
+        queries: tuple[str, ...],
+        cluster: str = "compute",
+        replicas: tuple[str, ...] = ("r1", "r2"),
+    ) -> None:
+        super().__init__(rng)
+        self.ctx = ctx
+        self.client = MzClient(ctx, self.name)
+        self.queries = queries
+        self.cluster = cluster
+        self.replicas = replicas
+
+    def check_once(self) -> None:
+        self.client.query(f"SET cluster = {self.cluster}")
+        # One timestamp for every read of a round. Slightly in the past so it
+        # is already readable rather than something both replicas have to wait
+        # for, and well inside the RETAIN HISTORY of the objects involved.
+        now = int(self.client.query("SELECT mz_now()::text")[0][0])
+        as_of = now - 1000
+        for sql in self.queries:
+            answers = {}
+            for replica in self.replicas:
+                self.client.query(f"SET cluster_replica = {replica}")
+                try:
+                    rows = self.client.query(f"{sql} AS OF {as_of}")
+                except UnexpectedQueryError as e:
+                    # Same race the history probes hit: a timestamp that was
+                    # readable when it was chosen can fall behind the since
+                    # while a disruption stalls this round. Unreadable is a
+                    # skip, disagreement at a readable one stays fatal.
+                    if "could not find a valid timestamp" in str(e):
+                        raise TransientError(f"{as_of} no longer readable") from None
+                    raise
+                answers[replica] = tuple(tuple(row) for row in rows)
+            self.validations += 1
+            first = self.replicas[0]
+            for replica in self.replicas[1:]:
+                if answers[replica] != answers[first]:
+                    raise InvariantViolation(
+                        f"replicas disagree at {as_of} on `{sql}`:"
+                        f" {first}={answers[first]} {replica}={answers[replica]}"
+                    )
+        # Later rounds must not inherit a pin to one replica.
+        self.client.query("RESET cluster_replica")
+
+    def close(self) -> None:
+        self.client.reset()
