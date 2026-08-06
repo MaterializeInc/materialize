@@ -31,7 +31,7 @@ import {
   isSystemCluster,
   isSystemId,
 } from "~/api/materialize";
-import { Replica } from "~/api/materialize/cluster/clusterList";
+import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import { Index } from "~/api/materialize/cluster/indexesList";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import IndexListEmptyState from "~/components/IndexListEmptyState";
@@ -50,8 +50,12 @@ import { useFlags } from "~/hooks/useFlags";
 import useLocalStorage from "~/hooks/useLocalStorage";
 import { InfoIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
-import { useBuildIndexPath } from "~/platform/routeHelpers";
+import {
+  absoluteClusterPath,
+  useBuildIndexPath,
+} from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
+import { useRegionSlug } from "~/store/environments";
 import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import { assert } from "~/util";
@@ -187,6 +191,7 @@ const IndexListInner = ({
       replicas={cluster?.replicas ?? []}
       memoryUsageMap={memoryUsageById}
       lagMap={lagMap}
+      cluster={cluster}
     />
   );
 };
@@ -196,14 +201,17 @@ interface IndexTableProps {
   replicas: Replica[];
   memoryUsageMap: ArrangmentsMemoryUsageMap | undefined;
   lagMap?: LagMap;
+  cluster: Cluster | undefined;
 }
 
 const IndexTable = (props: IndexTableProps) => {
   const navigate = useNavigate();
   const flags = useFlags();
   const indexPath = useBuildIndexPath();
+  const regionSlug = useRegionSlug();
   const dataflowVisualizerEnabled = flags["visualization-features"];
   const { colors } = useTheme<MaterializeTheme>();
+  const { cluster } = props;
 
   return (
     <>
@@ -275,7 +283,7 @@ const IndexTable = (props: IndexTableProps) => {
                   )}
                 </Td>
                 <Td>{formattedLag}</Td>
-                {dataflowVisualizerEnabled && (
+                {dataflowVisualizerEnabled && cluster && (
                   <Td width="16">
                     <OverflowMenu
                       items={[
@@ -285,7 +293,7 @@ const IndexTable = (props: IndexTableProps) => {
                             <MenuItem
                               key="dataflow-visualizer"
                               as={Link}
-                              to={`${indexPath(i)}/dataflow-visualizer`}
+                              to={`${absoluteClusterPath(regionSlug, cluster)}/dataflows?export=${i.id}`}
                               onClick={(e) => {
                                 e.stopPropagation();
                               }}
