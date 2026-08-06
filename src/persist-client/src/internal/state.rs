@@ -1589,6 +1589,28 @@ where
         let existing_id = self.schemas.iter().rev().find(|(_, x)| {
             K::decode_schema(&x.key) == *key_schema && V::decode_schema(&x.val) == *val_schema
         });
+
+        // If there's no exact match, fall back to matching on the arrow
+        // `DataType`. Persist encodes all top-level columns as nullable and
+        // identifies columns positionally (see database-issues#2488), so two
+        // schemas that produce the same `DataType` are byte-compatible and can
+        // safely share a `SchemaId`. In particular, schemas that differ only in
+        // column nullability are equivalent as far as persist is concerned.
+        //
+        // Without this, an otherwise-harmless nullability change -- e.g.
+        // improved non-null inference for a source's columns across an upgrade
+        // -- would fail to find its already-registered schema, return `None`,
+        // and trip the "fetching a schema id should only fail when the shard is
+        // tombstoned" assertion on the write path.
+        let existing_id = existing_id.or_else(|| {
+            let key_data_type = mz_persist_types::columnar::data_type::<K>(key_schema).ok()?;
+            let val_data_type = mz_persist_types::columnar::data_type::<V>(val_schema).ok()?;
+            self.schemas.iter().rev().find(|(_, x)| {
+                EncodedSchemas::decode_data_type(&x.key_data_type) == key_data_type
+                    && EncodedSchemas::decode_data_type(&x.val_data_type) == val_data_type
+            })
+        });
+
         match existing_id {
             Some((schema_id, _)) => {
                 // TODO: Validate that the decoded schemas still produce records
