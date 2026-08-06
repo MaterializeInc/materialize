@@ -18,10 +18,11 @@
 //! signals are pulled on demand, so a tick's round-trips scale with the number of
 //! managed clusters that need a live signal, not with a constant.
 //!
-//! The controller owns the *user* managed-cluster replica set. (System/builtin
-//! clusters are excluded here. Their config-implied replicas are materialized
-//! by `reconcile_builtin_cluster_replicas` at catalog open, which derives the
-//! same target from the same config.)
+//! The controller owns the replica set of every managed cluster, user and
+//! system alike. A builtin cluster's config-implied replicas are additionally
+//! materialized by `reconcile_builtin_cluster_replicas` at catalog open, which
+//! derives the same target from the same config, so the two converge rather
+//! than compete.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -55,9 +56,7 @@ use crate::error::AdapterError;
 /// per-cluster live signal a strategy pulls on demand.
 #[derive(Debug)]
 pub enum ClusterControllerRequest {
-    /// The ids of all *user* managed clusters the controller owns this tick.
-    /// System/builtin clusters are excluded. `reconcile_builtin_cluster_replicas`
-    /// has already materialized their config-implied replicas at catalog open.
+    /// The ids of all managed clusters the controller owns this tick.
     ManagedClusterIds { tx: oneshot::Sender<Vec<ClusterId>> },
     /// A consistent durable view of the given clusters and their replicas, plus
     /// the current time.
@@ -267,17 +266,15 @@ impl Coordinator {
         match request {
             ClusterControllerRequest::ManagedClusterIds { tx } => {
                 let ids = if active {
+                    // Every managed cluster, system ones included.
+                    // `reconcile_builtin_cluster_replicas` materializes a builtin
+                    // cluster's config-implied replica set at catalog open, so
+                    // those replicas already exist by the first tick. Both derive
+                    // the target from the cluster's own config, so the two
+                    // converge on the same set rather than fight over it.
                     self.catalog()
                         .clusters()
-                        // Only *user* managed clusters. System/builtin clusters
-                        // (mz_system, mz_catalog_server, …) are also managed, and
-                        // `reconcile_builtin_cluster_replicas` materializes their
-                        // config-implied replica set at catalog open, so those
-                        // replicas exist before the controller could ever tick.
-                        // Both derive the target from the cluster's
-                        // `replication_factor`, so extending ownership here would
-                        // converge rather than conflict.
-                        .filter(|c| c.is_managed() && c.id.is_user())
+                        .filter(|c| c.is_managed())
                         .map(|c| c.id)
                         .collect()
                 } else {
