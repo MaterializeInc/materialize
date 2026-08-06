@@ -21,6 +21,7 @@ use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 
+pub mod consensus_bench;
 pub mod maelstrom;
 pub mod open_loop;
 pub mod service;
@@ -37,6 +38,7 @@ struct Args {
 
 #[derive(Debug, clap::Subcommand)]
 enum Command {
+    ConsensusBench(crate::consensus_bench::Args),
     Maelstrom(crate::maelstrom::Args),
     MaelstromTxn(crate::maelstrom::Args),
     OpenLoop(crate::open_loop::Args),
@@ -68,6 +70,7 @@ fn main() {
         .expect("failed to init tracing");
 
     let res = match args.command {
+        Command::ConsensusBench(args) => runtime.block_on(crate::consensus_bench::run(args)),
         Command::Maelstrom(args) => runtime.block_on(crate::maelstrom::run::<
             crate::maelstrom::txn_list_append_single::TransactorService,
         >(args)),

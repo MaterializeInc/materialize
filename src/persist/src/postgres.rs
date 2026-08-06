@@ -11,8 +11,8 @@
 
 use std::fmt::Formatter;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use async_stream::try_stream;
@@ -23,12 +23,12 @@ use deadpool_postgres::tokio_postgres::Config;
 use deadpool_postgres::tokio_postgres::types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use futures_util::StreamExt;
 use mz_dyncfg::ConfigSet;
-use mz_ore::cast::CastFrom;
+use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::url::SensitiveUrl;
 use mz_postgres_client::metrics::PostgresClientMetrics;
 use mz_postgres_client::{
-    Connection, IsolationLevel, PostgresClient, PostgresClientConfig, PostgresClientKnobs,
+    Client, Connection, IsolationLevel, PostgresClient, PostgresClientConfig, PostgresClientKnobs,
 };
 use postgres_protocol::escape::escape_identifier;
 use tokio_postgres::error::SqlState;
@@ -60,6 +60,53 @@ pub const PG_CONSENSUS_READ_COMMITTED: mz_dyncfg::Config<bool> = mz_dyncfg::Conf
     PostgreSQL backends. This flag must be off when targetting CockroachDB.",
 );
 
+/// Maximum number of shared connections that single-statement consensus operations run on.
+/// 0 disables sharing entirely (each operation checks out an exclusive pooled connection).
+///
+/// The shared set scales with demand: an operation prefers an idle shared connection (behaving
+/// exactly like an exclusive checkout), grows the set while all connections are busy and the set
+/// is below the cap, and only once the cap is reached pipelines onto the least-loaded connection
+/// instead of queueing. tokio-postgres pipelines concurrent requests issued on the same
+/// connection at the wire protocol level, so one connection can carry many in-flight operations.
+/// Each operation is its own implicit transaction, so interleaving them on a shared session is
+/// indistinguishable from running them on separate sessions. The multi-statement shard
+/// initialization path always uses an exclusive pooled connection, since an explicit transaction
+/// must not interleave.
+///
+/// The effective cap is clamped below the pool's max size, reserving capacity for the exclusive
+/// paths so they cannot be starved by the shared set.
+///
+/// The default applies to CockroachDB as well, deliberately: with the network round trips real
+/// deployments have, sharing raises throughput and lowers median latency there too (throughput
+/// up to 1.7x and p50 down 1.3-1.7x at 2ms RTT in the committed benchmark). The one measured
+/// regression is sub-millisecond RTT combined with thousands of concurrently writing shards,
+/// where deeply pipelined commit bursts serve worse than pool queueing. Setting the flag to 0
+/// restores the exclusive-checkout behavior and frees the shared connections.
+pub const PG_CONSENSUS_PIPELINE_CONNECTIONS: mz_dyncfg::Config<usize> = mz_dyncfg::Config::new(
+    "persist_pg_consensus_pipeline_connections",
+    50,
+    "Maximum number of shared connections that consensus operations run on, pipelining once all \
+    are busy, instead of checking out an exclusive pooled connection per operation. 0 disables \
+    sharing.",
+);
+
+/// Maximum number of operations in flight on one shared connection before new operations wait
+/// for a slot instead of stacking deeper. 0 disables the limit.
+///
+/// Unbounded pipelines degrade at extreme concurrency: every queued operation waits behind the
+/// entire queue in front of it on its connection, and past roughly a thousand in-flight
+/// operations per connection both throughput and tail latency suffer. The default is high
+/// enough that the limit only engages once total in-flight operations exceed the cap times the
+/// shared set size (tens of thousands of concurrently writing shards at the default pool
+/// size), where the benchmark shows bounding depth recovers throughput that unbounded
+/// pipelines lose. The wait is signaled by operation completions, without polling.
+pub const PG_CONSENSUS_PIPELINE_DEPTH: mz_dyncfg::Config<usize> = mz_dyncfg::Config::new(
+    "persist_pg_consensus_pipeline_depth",
+    1024,
+    "Maximum operations in flight per shared consensus connection before new operations wait \
+    for a slot. 0 disables the limit.",
+);
+
 const SCHEMA: &str = "
 CREATE TABLE IF NOT EXISTS consensus (
     shard text NOT NULL,
@@ -87,13 +134,13 @@ const CRDB_CONFIGURE_ZONE: &str = "ALTER TABLE consensus CONFIGURE ZONE USING gc
 
 /// NOTE: `mz-persist` intentionally does not depend on `mz-postgres-util`.
 /// These helpers are the only direct driver-call boundary in this module.
-async fn pg_batch_execute(client: &Connection, query: &str) -> Result<(), tokio_postgres::Error> {
+async fn pg_batch_execute(client: &Client, query: &str) -> Result<(), tokio_postgres::Error> {
     #[allow(clippy::disallowed_methods)]
     client.batch_execute(query).await
 }
 
 async fn pg_query_prepared(
-    client: &Connection,
+    client: &Client,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<Vec<Row>, tokio_postgres::Error> {
@@ -102,7 +149,7 @@ async fn pg_query_prepared(
 }
 
 async fn pg_query_opt_prepared(
-    client: &Connection,
+    client: &Client,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<Option<Row>, tokio_postgres::Error> {
@@ -111,7 +158,7 @@ async fn pg_query_opt_prepared(
 }
 
 async fn pg_execute_prepared(
-    client: &Connection,
+    client: &Client,
     statement: &Statement,
     params: &[&(dyn ToSql + Sync)],
 ) -> Result<u64, tokio_postgres::Error> {
@@ -266,7 +313,7 @@ impl PostgresConsensusConfig {
             }
         }
 
-        let dyncfg = ConfigSet::default().add(&PG_CONSENSUS_READ_COMMITTED);
+        let dyncfg = crate::cfg::all_dyn_configs(ConfigSet::default());
         let config = PostgresConsensusConfig::new(
             &url,
             Box::new(TestConsensusKnobs),
@@ -290,6 +337,135 @@ enum PostgresMode {
 pub struct PostgresConsensus {
     postgres_client: PostgresClient,
     mode: PostgresMode,
+    dyncfg: Arc<ConfigSet>,
+    knobs: Arc<dyn PostgresClientKnobs>,
+    pipeline: SharedConns,
+    metrics: PostgresClientMetrics,
+}
+
+/// A demand-scaled set of connections shared by concurrent single-statement operations, used
+/// when [PG_CONSENSUS_PIPELINE_CONNECTIONS] is non-zero.
+///
+/// Entries hold checked-out pool objects, so shared connections count against the pool's max
+/// size and inherit its TLS, isolation, and timeout setup. An entry an operation is using is kept
+/// alive by the operation's own Arc clone, which means `Arc::strong_count - 1` is exactly the
+/// number of in-flight operations on that connection and is used for least-loaded dispatch.
+/// Dead or expired entries are shed at acquisition time; dropping the last Arc returns the
+/// object to the pool, where the pool's own recycling applies. The operation that was in flight
+/// when a connection died surfaces an error to the caller, which retries at the persist layer.
+#[derive(Default)]
+struct SharedConns {
+    conns: Mutex<Vec<SharedConn>>,
+    /// Signaled once per completed shared operation, waking one operation waiting out the
+    /// per-connection depth limit.
+    released: tokio::sync::Notify,
+}
+
+struct SharedConn {
+    conn: Arc<Connection>,
+    created_at: Instant,
+}
+
+enum SharedAcquire {
+    /// A connection with no other operation in flight, or the least-loaded one at cap.
+    Conn(Arc<Connection>),
+    /// All connections are busy and the set is below cap: the caller should check out a pool
+    /// connection and offer it via [SharedConns::insert].
+    Grow,
+    /// The set is at cap and every connection is at the depth limit: the caller must wait for
+    /// [SharedConns::released] and retry.
+    Full,
+}
+
+impl SharedConns {
+    fn acquire(&self, cap: usize, depth: usize, ttl: Duration) -> SharedAcquire {
+        let mut conns = self.conns.lock().expect("lock poisoned");
+        // Shed dead and expired entries. In-flight operations keep their entry alive through
+        // their own Arc; once the last clone drops, the object returns to the pool.
+        conns.retain(|c| !c.conn.is_closed() && c.created_at.elapsed() < ttl);
+        // Shed entries past the cap, so a lowered cap converges immediately instead of the
+        // excess staying in least-loaded dispatch until the TTL expires it. In-flight
+        // operations on a shed entry finish undisturbed through their own Arc.
+        conns.truncate(cap);
+        // Prefer the first idle connection, keeping low-index connections hot and letting the
+        // tail expire out after bursts.
+        if let Some(c) = conns.iter().find(|c| Arc::strong_count(&c.conn) == 1) {
+            return SharedAcquire::Conn(Arc::clone(&c.conn));
+        }
+        if conns.len() < cap {
+            return SharedAcquire::Grow;
+        }
+        let least_loaded = conns
+            .iter()
+            .min_by_key(|c| Arc::strong_count(&c.conn))
+            .expect("cap > 0 implies non-empty set");
+        if depth > 0 && Arc::strong_count(&least_loaded.conn) - 1 >= depth {
+            return SharedAcquire::Full;
+        }
+        SharedAcquire::Conn(Arc::clone(&least_loaded.conn))
+    }
+
+    /// Adds a connection to the shared set, unless a concurrent grower already filled it to
+    /// `cap`. Either way the caller keeps using the connection it passed in for its own
+    /// operation; an un-inserted surplus connection returns to the pool when the operation
+    /// drops it.
+    fn insert(&self, conn: &Arc<Connection>, cap: usize) {
+        let mut conns = self.conns.lock().expect("lock poisoned");
+        if conns.len() < cap {
+            conns.push(SharedConn {
+                conn: Arc::clone(conn),
+                created_at: Instant::now(),
+            });
+        }
+    }
+
+    /// Drops every entry, returning each connection to the pool once its in-flight operations
+    /// finish. Called when sharing is disabled, so the flag actually frees the pool capacity
+    /// the shared set was occupying.
+    ///
+    /// NOTE: an operation that read a non-zero cap may insert a connection after a concurrent
+    /// zero-cap operation cleared the set. Such a straggler lingers only until the next
+    /// zero-cap operation clears again, so this needs no synchronization.
+    fn clear(&self) {
+        self.conns.lock().expect("lock poisoned").clear();
+    }
+
+    fn len(&self) -> usize {
+        self.conns.lock().expect("lock poisoned").len()
+    }
+}
+
+/// A connection to run a single-statement consensus operation on: either an exclusively held
+/// pooled connection or a shared (possibly pipelined) one.
+enum OpConn<'a> {
+    Pooled(Connection),
+    Shared(SharedLease<'a>),
+}
+
+/// A shared connection held for the duration of one operation. Dropping it signals
+/// [SharedConns::released], admitting one operation waiting out the depth limit.
+struct SharedLease<'a> {
+    conn: Arc<Connection>,
+    set: &'a SharedConns,
+}
+
+impl Drop for SharedLease<'_> {
+    fn drop(&mut self) {
+        // With no waiter this stores a single permit, which at worst causes one spurious
+        // wakeup and re-check later.
+        self.set.released.notify_one();
+    }
+}
+
+impl std::ops::Deref for OpConn<'_> {
+    type Target = Client;
+
+    fn deref(&self) -> &Client {
+        match self {
+            OpConn::Pooled(conn) => conn,
+            OpConn::Shared(lease) => &lease.conn,
+        }
+    }
 }
 
 impl std::fmt::Debug for PostgresConsensus {
@@ -311,12 +487,14 @@ impl PostgresConsensus {
         );
 
         let dyncfg = Arc::clone(&config.dyncfg);
+        let knobs = Arc::clone(&config.knobs);
 
         // The resolver runs per connection, so a flag change takes effect as the pool cycles
         // connections. It unconditionally follows the flag: it does not know the backend. The
         // backend-specific safety check lives in `get_connection`, which asserts that CockroachDB
         // connections are SERIALIZABLE. The connection carries the level it was created with, so
         // that assertion is exact rather than a guess about what the resolver returned.
+        let metrics = config.metrics.clone();
         let client_config = PostgresClientConfig::new(config.url, config.knobs, config.metrics)
             .with_isolation(Arc::new(move || {
                 if PG_CONSENSUS_READ_COMMITTED.get(&dyncfg) {
@@ -370,6 +548,10 @@ impl PostgresConsensus {
         Ok(PostgresConsensus {
             postgres_client,
             mode,
+            dyncfg: Arc::clone(&config.dyncfg),
+            knobs,
+            pipeline: SharedConns::default(),
+            metrics,
         })
     }
 
@@ -430,6 +612,64 @@ impl PostgresConsensus {
         }
         Ok(conn)
     }
+
+    /// Returns the connection to run a single-statement operation on: a shared connection when
+    /// [PG_CONSENSUS_PIPELINE_CONNECTIONS] is non-zero, otherwise an exclusive pooled connection.
+    /// Multi-statement (explicit transaction) paths must use [Self::get_connection] instead, an
+    /// explicit transaction must not interleave with other operations on a shared session.
+    async fn op_connection(&self) -> Result<OpConn<'_>, PoolError> {
+        // Clamp below the pool's actual size so the exclusive paths (shard init, schema setup)
+        // always have at least one pool slot the shared set cannot occupy. This must use the
+        // pool's built size, not the `connection_pool_max_size` knob: the knob is a dyncfg that a
+        // system-parameter sync can raise after the pool was built (the pool only picks up a new
+        // size across a restart). Clamping against the raised knob would let the shared set try to
+        // occupy more slots than the pool has, seizing every connection and starving the exclusive
+        // paths.
+        let cap = PG_CONSENSUS_PIPELINE_CONNECTIONS.get(&self.dyncfg).min(
+            self.postgres_client
+                .connection_pool_max_size()
+                .saturating_sub(1),
+        );
+        if cap == 0 {
+            // Sharing is disabled: drop the shared set, otherwise its entries would stay
+            // checked out of the pool until process restart and the flag would degrade the
+            // exclusive path to whatever slots the set left over, instead of restoring the
+            // pre-sharing behavior it exists to roll back to.
+            self.pipeline.clear();
+            self.metrics.connpool_shared_size.set(0);
+            return Ok(OpConn::Pooled(self.get_connection().await?));
+        }
+        let depth = PG_CONSENSUS_PIPELINE_DEPTH.get(&self.dyncfg);
+        let ttl = self.knobs.connection_pool_ttl();
+        let conn = loop {
+            // Creating the future before the acquire check makes the wait race-free: a
+            // completion between the check and the await stores a permit that the first poll
+            // consumes.
+            let released = self.pipeline.released.notified();
+            match self.pipeline.acquire(cap, depth, ttl) {
+                SharedAcquire::Conn(conn) => break conn,
+                SharedAcquire::Grow => {
+                    let conn = Arc::new(self.get_connection().await?);
+                    self.pipeline.insert(&conn, cap);
+                    break conn;
+                }
+                SharedAcquire::Full => released.await,
+            }
+        };
+        // strong_count - 1 discounts the set's own entry, leaving the in-flight operations
+        // including this one. A surplus connection that lost the insert race has no set entry,
+        // so the max(1) keeps its (sole) operation counted.
+        self.metrics
+            .connpool_shared_inflight
+            .observe(f64::cast_lossy((Arc::strong_count(&conn) - 1).max(1)));
+        self.metrics
+            .connpool_shared_size
+            .set(u64::cast_from(self.pipeline.len()));
+        Ok(OpConn::Shared(SharedLease {
+            conn,
+            set: &self.pipeline,
+        }))
+    }
 }
 
 #[async_trait]
@@ -440,6 +680,11 @@ impl Consensus for PostgresConsensus {
         Box::pin(try_stream! {
             // NB: it's important that we hang on to this client for the lifetime of the stream,
             // to avoid returning it to the pool prematurely.
+            //
+            // This must be an exclusive connection, not a shared one: tokio-postgres delivers
+            // responses in request order and stops reading the socket while a consumer lags,
+            // so a lazily drained stream would head-of-line block every operation pipelined
+            // behind it. list_keys is rare (admin tooling) and not latency-sensitive.
             let client = self.get_connection().await?;
             let statement = client.prepare_cached(q).await?;
             let params: &[String] = &[];
@@ -455,7 +700,7 @@ impl Consensus for PostgresConsensus {
         let q = "SELECT sequence_number, data FROM consensus
              WHERE shard = $1 ORDER BY sequence_number DESC LIMIT 1";
         let row = {
-            let client = self.get_connection().await?;
+            let client = self.op_connection().await?;
             let statement = client.prepare_cached(q).await?;
             pg_query_opt_prepared(&client, &statement, &[&key]).await?
         };
@@ -607,7 +852,7 @@ impl Consensus for PostgresConsensus {
                     PostgresMode::CockroachDB => CRDB_CAS_QUERY,
                     PostgresMode::Postgres => POSTGRES_CAS_QUERY,
                 };
-                let client = self.get_connection().await?;
+                let client = self.op_connection().await?;
                 let statement = client.prepare_cached(q).await?;
                 pg_execute_prepared(
                     &client,
@@ -728,7 +973,7 @@ impl Consensus for PostgresConsensus {
                         NOT EXISTS (
                             SELECT * FROM consensus WHERE shard = $1
                         )";
-                        let client = self.get_connection().await?;
+                        let client = self.op_connection().await?;
                         let statement = client.prepare_cached(CRDB_INIT_QUERY).await?;
                         pg_execute_prepared(
                             &client,
@@ -767,7 +1012,7 @@ impl Consensus for PostgresConsensus {
             )));
         };
         let rows = {
-            let client = self.get_connection().await?;
+            let client = self.op_connection().await?;
             let statement = client.prepare_cached(q).await?;
             pg_query_prepared(&client, &statement, &[&key, &from, &limit]).await?
         };
@@ -799,7 +1044,7 @@ impl Consensus for PostgresConsensus {
         ";
 
         let result = {
-            let client = self.get_connection().await?;
+            let client = self.op_connection().await?;
             let statement = client.prepare_cached(TRUNCATE_QUERY).await?;
             pg_execute_prepared(&client, &statement, &[&key, &seqno]).await?
         };
@@ -865,6 +1110,10 @@ mod tests {
         {
             let mut updates = ConfigUpdates::default();
             updates.add(&PG_CONSENSUS_READ_COMMITTED, true);
+            // The default-config run above already covers the shared-connection path (the flag
+            // defaults on). Pin this run to the exclusive-checkout pool for coverage of that
+            // path.
+            updates.add(&PG_CONSENSUS_PIPELINE_CONNECTIONS, 0);
             updates.apply(&read_committed_config.dyncfg);
         }
         PostgresConsensus::open(read_committed_config.clone())
@@ -872,6 +1121,74 @@ mod tests {
             .drop_and_recreate()
             .await?;
         consensus_impl_test(|| PostgresConsensus::open(read_committed_config.clone())).await?;
+
+        // Re-run the contract with READ COMMITTED plus operations on shared connections, which
+        // must be observably identical to exclusive pooled connections. (The test knobs cap the
+        // pool at 2, so the effective shared cap is 1 and every operation pipelines onto a
+        // single connection, the most extreme sharing.)
+        let pipelined_config =
+            PostgresConsensusConfig::new_for_test()?.expect("postgres url was set above");
+        {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&PG_CONSENSUS_READ_COMMITTED, true);
+            updates.add(&PG_CONSENSUS_PIPELINE_CONNECTIONS, 2);
+            updates.apply(&pipelined_config.dyncfg);
+        }
+        PostgresConsensus::open(pipelined_config.clone())
+            .await?
+            .drop_and_recreate()
+            .await?;
+        consensus_impl_test(|| PostgresConsensus::open(pipelined_config.clone())).await?;
+
+        // Re-run the contract with the per-connection depth limit at its most extreme (cap 1,
+        // depth 1: every operation on the single shared connection makes concurrent ones wait),
+        // which must also be observably identical.
+        let depth_config =
+            PostgresConsensusConfig::new_for_test()?.expect("postgres url was set above");
+        {
+            let mut updates = ConfigUpdates::default();
+            updates.add(&PG_CONSENSUS_READ_COMMITTED, true);
+            updates.add(&PG_CONSENSUS_PIPELINE_CONNECTIONS, 2);
+            updates.add(&PG_CONSENSUS_PIPELINE_DEPTH, 1);
+            updates.apply(&depth_config.dyncfg);
+        }
+        PostgresConsensus::open(depth_config.clone())
+            .await?
+            .drop_and_recreate()
+            .await?;
+        consensus_impl_test(|| PostgresConsensus::open(depth_config.clone())).await?;
+
+        // The flag is a kill switch: flipping it to 0 at runtime must drain the shared set,
+        // returning its connections to the pool, rather than stranding them checked out until
+        // the process restarts.
+        {
+            let consensus = PostgresConsensus::open(pipelined_config.clone()).await?;
+            let key = Uuid::new_v4().to_string();
+            // A single-statement operation populates the shared set.
+            assert_eq!(consensus.head(&key).await, Ok(None));
+            assert_eq!(
+                consensus
+                    .pipeline
+                    .conns
+                    .lock()
+                    .expect("lock poisoned")
+                    .len(),
+                1
+            );
+            let mut updates = ConfigUpdates::default();
+            updates.add(&PG_CONSENSUS_PIPELINE_CONNECTIONS, 0);
+            updates.apply(&pipelined_config.dyncfg);
+            assert_eq!(consensus.head(&key).await, Ok(None));
+            assert_eq!(
+                consensus
+                    .pipeline
+                    .conns
+                    .lock()
+                    .expect("lock poisoned")
+                    .len(),
+                0
+            );
+        }
 
         // and now verify the implementation-specific `drop_and_recreate` works as intended
         let consensus = PostgresConsensus::open(config.clone()).await?;

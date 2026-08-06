@@ -33,7 +33,10 @@ use crate::s3::{S3Blob, S3BlobConfig};
 
 /// Adds the full set of all mz_persist `Config`s.
 pub fn all_dyn_configs(configs: ConfigSet) -> ConfigSet {
-    configs.add(&crate::postgres::PG_CONSENSUS_READ_COMMITTED)
+    configs
+        .add(&crate::postgres::PG_CONSENSUS_READ_COMMITTED)
+        .add(&crate::postgres::PG_CONSENSUS_PIPELINE_CONNECTIONS)
+        .add(&crate::postgres::PG_CONSENSUS_PIPELINE_DEPTH)
 }
 
 /// Config for an implementation of [Blob].
