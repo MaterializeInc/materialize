@@ -351,9 +351,20 @@ fn add_date_time(
     date: Date,
     time: chrono::NaiveTime,
 ) -> Result<CheckedTimestamp<NaiveDateTime>, EvalError> {
+    // A leap-second TIME (nanos >= 1e9) rolls over into the next minute,
+    // matching what parsing the equivalent timestamp literal produces. The
+    // leap representation must not enter a timestamp: it sorts before the
+    // next second while epoch-style conversions count it at or past it,
+    // breaking the monotonicity contracts filter pushdown relies on.
+    let (extra_sec, nanos) = match time.nanosecond().checked_sub(1_000_000_000) {
+        Some(nanos) => (1, nanos),
+        None => (0, time.nanosecond()),
+    };
     let dt = NaiveDate::from(date)
-        .and_hms_nano_opt(time.hour(), time.minute(), time.second(), time.nanosecond())
-        .unwrap();
+        .and_hms_nano_opt(time.hour(), time.minute(), time.second(), nanos)
+        .unwrap()
+        .checked_add_signed(chrono::Duration::try_seconds(extra_sec).unwrap())
+        .ok_or(EvalError::TimestampOutOfRange)?;
     Ok(CheckedTimestamp::from_timestamplike(dt)?)
 }
 
