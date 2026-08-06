@@ -1032,6 +1032,20 @@ metrics:
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_result_sort_rows_bucket
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_rows_count
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_rows_sum
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_result_sort_seconds_bucket
   help: Time sorting intermediate results during peek collection.
   labels:
@@ -1058,6 +1072,20 @@ metrics:
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_sum
   help: Time constructing RowCollection from peek results.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_bucket
+  help: Number of arrangement rows evaluated by the index peek result iterator.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_count
+  help: Number of arrangement rows evaluated by the index peek result iterator.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_sum
+  help: Number of arrangement rows evaluated by the index peek result iterator.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
