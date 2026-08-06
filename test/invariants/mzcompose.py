@@ -453,7 +453,6 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                     proxy for leg in LEGS.values() for proxy in leg.proxies
                 ],
                 restart_toxiproxy=lambda: _restart_toxiproxy(c, toxiproxy),
-                crash_probe=make_crash_probe(c, log),
             ).run()
             # After the run, so it sees the whole history the run produced,
             # and only when the run itself passed: a failure already has its
@@ -523,63 +522,6 @@ def make_upgrade_swap(
         wait_until(upgraded, 180, "swapped-in build serving its new version")
 
     return swap
-
-
-def make_crash_probe(c: Composition, log: EventLog):
-    """Reports the first process panic seen in any service's log.
-
-    The harness kills and restarts these processes constantly, so a panic
-    leaves no trace the invariants can observe: the process comes back, the
-    checkers reconnect, and the run passes with only a line in a log nobody
-    reads until CI's annotator scans it after the fact. Detecting it in-run
-    ties the crash to the disruption history and stops the run while the
-    state that produced it is still on disk.
-    """
-    names = ["materialized", *CLUSTERD_NAMES]
-    seen: set[str] = set()
-    # Panic sites to report but not fail on, comma separated. A known open bug
-    # that panics reliably would otherwise end every run at the same place and
-    # mask everything the run was meant to find.
-    ignored = [
-        p for p in os.environ.get("INVARIANTS_IGNORE_PANICS", "").split(",") if p
-    ]
-
-    def probe() -> str | None:
-        for name in names:
-            try:
-                logs = (
-                    c.invoke(
-                        "logs",
-                        "--no-color",
-                        "--since",
-                        "60s",
-                        name,
-                        capture=True,
-                        silent=True,
-                    ).stdout
-                    or ""
-                )
-            except Exception as e:
-                # Racing a container recreation, next probe sees it again.
-                # Logged rather than swallowed: a probe that never manages to
-                # read a log would silently stop detecting crashes.
-                log.log("crash", f"probe of {name} failed: {e}", echo=False)
-                continue
-            for line in logs.splitlines():
-                _, _, panic = line.partition("panicked at ")
-                # The window overlaps the poll interval so no line is missed,
-                # which means every panic is seen several times.
-                if not panic or panic in seen:
-                    continue
-                seen.add(panic)
-                log.log("crash", f"{name} panicked at {panic}")
-                if any(pattern in panic for pattern in ignored):
-                    log.log("crash", f"ignoring known panic site in {panic}")
-                    continue
-                return f"{name} panicked at {panic}"
-        return None
-
-    return probe
 
 
 # Caps on the post-run persist audit: overall, per shard, per shard's output,

@@ -566,6 +566,185 @@ class DdlChurn(Action):
         self.client.reset()
 
 
+class ReadThenWrite(Action):
+    """Increment a counter, half of the time reading it back client-side.
+
+    A lost update is invisible to every other oracle here. Conservation still
+    holds if a transfer's UPDATE vanishes outright, because nothing moved, and
+    the ledger's per-op accounting only covers rows that were inserted. This
+    counts instead: each committed op must add exactly one, so the sum over
+    all counters is pinned between the committed and the attempted op counts.
+
+    The increment is a server-side read-modify-write, and half the time it is
+    preceded by a read of the same row on the same session, so a peek and a
+    write on one key interleave.
+    """
+
+    name = "read-then-write"
+
+    def __init__(
+        self, rng: random.Random, worker: int, client: MzClient, oplog: OpLog
+    ) -> None:
+        super().__init__(rng)
+        self.worker = worker
+        self.client = client
+        self.oplog = oplog
+        self.seq = 0
+
+    def run(self) -> Outcome | None:
+        self.seq += 1
+        seq = self.seq
+        key = self.rng.randrange(COUNTER_KEYS)
+        # Registered before sending: a thread that dies mid-call still counts
+        # as possibly-applied, which keeps the upper bound sound.
+        self.oplog.record(self.worker, seq, Outcome.UNKNOWN)
+        if self.rng.random() < 0.5:
+            # A read of the same row immediately before writing it, on the
+            # same session. NOTE: the increment cannot be moved inside an
+            # explicit transaction to make this a client-side
+            # read-then-write, because Materialize rejects UPDATE in a
+            # transaction block: multi-statement transactions are read-only
+            # or insert-only.
+            self.client.query(f"SELECT n FROM counters WHERE id = {key}")
+        outcome = self.client.write(f"UPDATE counters SET n = n + 1 WHERE id = {key}")
+        self.oplog.record(self.worker, seq, outcome)
+        return outcome
+
+    def close(self) -> None:
+        self.client.reset()
+
+
+class CounterSumPeek(PeekChecker):
+    """The counters must account for every increment that committed.
+
+    Bounds, not equality, because an op whose outcome is unknown may or may
+    not have applied. Sampling order is the framework's rule: lower bound
+    before the read, upper bound after.
+    """
+
+    def __init__(self, rng, ctx, oplog: OpLog) -> None:
+        super().__init__(rng, ctx, "counter-sum", ["quickstart", "compute"])
+        self.oplog = oplog
+
+    def check_once(self) -> None:
+        low = self.oplog.committed_count()
+        rows = self.peek("SELECT coalesce(sum(n), 0) FROM counters")
+        high = self.oplog.attempted_count()
+        total = int(rows[0][0])
+        if not low <= total <= high:
+            raise InvariantViolation(
+                f"counter sum {total} outside [{low}, {high}] on"
+                f" {self.last_cluster}: increments were lost or duplicated"
+            )
+        self.validations += 1
+
+
+class RollbackNoop(Action):
+    """A transaction that never commits must leave nothing behind.
+
+    Rolled back and abandoned transactions are the one write path with a
+    completely unambiguous oracle: the rows must never be visible, at any
+    timestamp, whatever the disruptions did. Every other action here has to
+    reason about unknown outcomes, this one does not.
+
+    Three ways to not commit, because they end the transaction differently:
+    an explicit ROLLBACK, a statement error that aborts it, and dropping the
+    connection mid-transaction, which is the case a disruption produces on
+    its own and the one where a server-side mistake would actually commit.
+    """
+
+    name = "rollback"
+
+    def __init__(self, rng: random.Random, worker: int, ctx: ScenarioContext) -> None:
+        super().__init__(rng)
+        self.worker = worker
+        self.ctx = ctx
+        self.client = MzClient(ctx, f"rollback-{worker}")
+        self.seq = 0
+
+    def run(self) -> Outcome | None:
+        self.seq += 1
+        marker = self.worker * 10_000_000 + self.seq
+        style = self.rng.choice(["rollback", "error", "drop"])
+        try:
+            self.client.query("BEGIN")
+            self.client.query(f"INSERT INTO rollback_probe VALUES ({marker})")
+            if style == "rollback":
+                self.client.query("ROLLBACK")
+            elif style == "error":
+                try:
+                    # Aborts the transaction server-side. The INSERT above must
+                    # go with it.
+                    self.client.query("SELECT 1 / 0")
+                except Exception:
+                    pass
+                self.client.query("ROLLBACK")
+            else:
+                # No ROLLBACK: the connection just goes away with the
+                # transaction open.
+                self.client.hard_close()
+        except TransientError:
+            # The disruption ended the transaction for us, which is the same
+            # contract: it must not have committed.
+            self.client.reset()
+            raise
+        except Exception:
+            self.client.reset()
+        return Outcome.FAILED
+
+    def close(self) -> None:
+        self.client.reset()
+
+
+class RollbackProbePeek(PeekChecker):
+    """Nothing a rolled back transaction wrote may ever be visible."""
+
+    pause = (0.5, 2.0)
+
+    def __init__(self, rng, ctx) -> None:
+        super().__init__(rng, ctx, "rollback-probe", ["quickstart", "compute"])
+
+    def check_once(self) -> None:
+        rows = self.peek("SELECT id FROM rollback_probe LIMIT 5")
+        if rows:
+            raise InvariantViolation(
+                f"rows from transactions that never committed are visible on"
+                f" {self.last_cluster}: {rows}"
+            )
+        self.validations += 1
+
+
+class CrossObjectTxn(Action):
+    """Read a compute-maintained MV and write a table, in one transaction.
+
+    Everything else here reads and writes within one side of the system. This
+    crosses it: the SELECT is served by the compute cluster and the INSERT
+    lands in storage, inside a single transaction, which is where write-lock
+    scope and timestamp selection have to agree with each other.
+
+    The invariant is that the value copied is the conserved total, so a read
+    that ever observes a torn or stale state records a wrong number durably.
+    Unlike a peek, which sees a transient inconsistency only if it happens to
+    look at that instant, this keeps the evidence.
+    """
+
+    name = "cross-object-txn"
+
+    def __init__(self, rng: random.Random, client: MzClient, scenario) -> None:
+        super().__init__(rng)
+        self.client = client
+        self.scenario = scenario
+
+    def run(self) -> Outcome | None:
+        self.client.query(f"SET cluster = {self.rng.choice(['quickstart', 'compute'])}")
+        return self.client.write_txn(
+            [("INSERT INTO cross_probe SELECT total FROM total", None)]
+        )
+
+    def close(self) -> None:
+        self.client.reset()
+
+
 class ShardChurn(Action):
     """Create, write, and drop scratch tables to churn persist shards.
 
@@ -655,14 +834,18 @@ LEDGER_TORN_SQL = (
 )
 
 
+# Rows contended by the read-then-write action. Few enough that concurrent
+# workers collide on the same row, which is the case that can lose an update.
+COUNTER_KEYS = 8
+
 # Three separate shards written by one transaction, see MultiShardTxn.
 TXN_TABLES = ("txn_a", "txn_b", "txn_c")
 
 # Markers present in one of the three tables but not the next, in both
 # directions around the ring, so any asymmetry shows up.
 MULTI_SHARD_DIFF_SQL = " UNION ALL ".join(
-    f"(SELECT '{left}' AS present_in, worker, seq FROM {left}"
-    f" EXCEPT ALL SELECT '{left}', worker, seq FROM {right})"
+    f"(SELECT '{left}' AS present_in, worker, seq, idx FROM {left}"
+    f" EXCEPT ALL SELECT '{left}', worker, seq, idx FROM {right})"
     for left, right in zip(TXN_TABLES, TXN_TABLES[1:] + TXN_TABLES[:1])
 )
 
@@ -692,9 +875,14 @@ class MultiShardTxn(Action):
 
     def run(self) -> Outcome | None:
         self.seq += 1
-        row = f"({self.worker}, {self.seq})"
+        # A one-row-per-table transaction is a small target: a reader has to
+        # land in the gap between three single-row writes. Widening it to
+        # tens of rows widens that gap proportionally, which is the only
+        # lever this action has on how often a tear is observable.
+        rows = self.rng.randint(1, 20)
+        values = ", ".join(f"({self.worker}, {self.seq}, {i})" for i in range(rows))
         return self.client.write_txn(
-            [(f"INSERT INTO {table} VALUES {row}", None) for table in TXN_TABLES]
+            [(f"INSERT INTO {table} VALUES {values}", None) for table in TXN_TABLES]
         )
 
     def close(self) -> None:
@@ -1547,6 +1735,9 @@ class TableBank(Scenario):
         self.accounts = ctx.complexity.accounts
         self.total = self.accounts * BALANCE_PER_ACCOUNT
         self.oplog = OpLog()
+        # Separate from the ledger's: both key ops by (worker, seq) and
+        # sharing one would make each one's bounds count the other's ops.
+        self.counter_oplog = OpLog()
         self.ledger_rows = Watermark()
         # Recent mz timestamps observed by peeks, the AS OF history probes
         # stay within RETAIN HISTORY of this.
@@ -1575,7 +1766,14 @@ class TableBank(Scenario):
             " tag text, flt double precision, day date)"
             " WITH (RETAIN HISTORY = FOR '600s')",
             "CREATE TABLE registry (worker int, key int, ver bigint)",
-            *(f"CREATE TABLE {table} (worker int, seq bigint)" for table in TXN_TABLES),
+            "CREATE TABLE counters (id int, n bigint)",
+            "CREATE TABLE rollback_probe (id bigint)",
+            "CREATE TABLE cross_probe (total bigint)",
+            f"INSERT INTO counters SELECT generate_series(0, {COUNTER_KEYS - 1}), 0",
+            *(
+                f"CREATE TABLE {table} (worker int, seq bigint, idx int)"
+                for table in TXN_TABLES
+            ),
             # RETAIN HISTORY keeps recent timestamps readable so the durable
             # subscribe checker can resume where it left off.
             "CREATE MATERIALIZED VIEW total IN CLUSTER compute"
@@ -1628,8 +1826,15 @@ class TableBank(Scenario):
             DdlChurn(rng, index, client),
             ShardChurn(rng, index, client),
             MultiShardTxn(rng, index, client),
+            ReadThenWrite(rng, index, client, self.counter_oplog),
+            RollbackNoop(rng, index, self.ctx),
+            CrossObjectTxn(rng, MzClient(self.ctx, f"cross-{index}"), self),
         ]
-        weights = [10, 10, 3, 3, 6, 1, 1, 5]
+        # The transfer actions carry the conservation and ledger-identity
+        # oracles, which are the strongest ones here, so they keep the bulk of
+        # the op budget. The rest only need to happen often enough to produce
+        # the states their checkers watch continuously.
+        weights = [10, 10, 3, 3, 6, 1, 1, 2, 2, 1, 1]
         if index == 0:
             # Single-instance churns: concurrent swaps of the same schema
             # pair or replacements of the same MV would only race each other
@@ -1642,7 +1847,7 @@ class TableBank(Scenario):
         return WorkerBundle(actions=actions, weights=weights)
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(16)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(19)]
         return [
             BankTotalPeek(rngs[0], self.ctx, self),
             LedgerDirectPeek(rngs[1], self.ctx, self),
@@ -1663,6 +1868,15 @@ class TableBank(Scenario):
                 rngs[13], self.ctx, "multi-shard-txn", MULTI_SHARD_DIFF_SQL
             ),
             ReplicaDivergence(rngs[14], self.ctx),
+            CounterSumPeek(rngs[16], self.ctx, self.counter_oplog),
+            RollbackProbePeek(rngs[17], self.ctx),
+            GroupCompletenessPeek(
+                rngs[18],
+                self.ctx,
+                "cross-object-total",
+                "SELECT total FROM cross_probe" f" WHERE total <> {self.total} LIMIT 5",
+                history=self.recent_ts,
+            ),
             GroupCompletenessPeek(
                 rngs[15],
                 self.ctx,
@@ -1714,6 +1928,26 @@ class TableBank(Scenario):
                     f"worker {worker}: transfers present that never committed:"
                     f" {sorted(phantom)[:20]}"
                 )
+        wrong = client.query(
+            f"SELECT total FROM cross_probe WHERE total <> {self.total} LIMIT 20"
+        )
+        if wrong:
+            raise InvariantViolation(
+                f"a transaction reading the total MV recorded {wrong}, not {self.total}"
+            )
+        leaked = client.query("SELECT id FROM rollback_probe LIMIT 20")
+        if leaked:
+            raise InvariantViolation(
+                f"rows from transactions that never committed are visible: {leaked}"
+            )
+        low = self.counter_oplog.committed_count()
+        total = int(client.query("SELECT coalesce(sum(n), 0) FROM counters")[0][0])
+        high = self.counter_oplog.attempted_count()
+        if not low <= total <= high:
+            raise InvariantViolation(
+                f"final counter sum {total} outside [{low}, {high}]:"
+                " read-then-write increments were lost or duplicated"
+            )
         half_applied = client.query(MULTI_SHARD_DIFF_SQL)
         if half_applied:
             raise InvariantViolation(
