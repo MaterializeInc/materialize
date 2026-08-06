@@ -52,9 +52,12 @@ Never regenerate the entire Cargo.lock — bare `cargo update` bumps every semve
 
 GitHub is public. Linear is not.
 
-* Link the Linear issue a PR addresses with a magic word and bare ID
-  in the PR description, e.g. `Closes CS-639`. A branch name
-  containing the issue ID links the PR even without a magic word.
+* Every PR links a Linear issue with a magic word and bare ID in the
+  PR description, e.g. `Closes CS-639`. A branch name containing the
+  issue ID links the PR even without a magic word.
+* Exception: a docs-only change needs no issue. Say so in the
+  description with a parenthetical: "(No Linear reference: docs-only
+  change.)"
 * Closing words move the issue to Done when the PR merges:
   close(s/d/ing), fix(es/ed/ing), resolve(s/d/ing), complete(s/d/ing),
   implement(s/ed/ing).
