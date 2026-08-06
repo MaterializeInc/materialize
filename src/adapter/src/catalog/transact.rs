@@ -752,14 +752,6 @@ impl Catalog {
             .collect();
 
         let temporary_ids = self.temporary_ids(&ops, temporary_drops)?;
-        let system_config_modified = ops.iter().any(|op| {
-            matches!(
-                op,
-                Op::UpdateSystemConfiguration { .. }
-                    | Op::ResetSystemConfiguration { .. }
-                    | Op::ResetAllSystemConfiguration
-            )
-        });
         let mut builtin_table_updates = vec![];
         let mut catalog_updates = vec![];
         let mut audit_events = vec![];
@@ -807,17 +799,6 @@ impl Catalog {
             self.shared_transient_revision
                 .store(self.transient_revision, atomic::Ordering::SeqCst);
             self.state = new_state;
-
-            // Now that the new state is committed and swapped in, let the
-            // system-var callbacks mirror the fresh values into out-of-band
-            // state (e.g. connection limits). We do this here rather than back
-            // in `transact_inner` so that aborted or dry-run transactions
-            // never notify on values they only speculated on. The callbacks
-            // are cheap idempotent reads, so we just fire all of them instead
-            // of tracking which vars actually changed.
-            if system_config_modified {
-                self.state.system_config().notify_all_callbacks();
-            }
         }
 
         Ok(TransactionResult {
@@ -4617,36 +4598,10 @@ mod tests {
         }
     }
 
-    /// A committed system-config transaction notifies registered callbacks with
-    /// the committed value.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
-    async fn test_system_config_callback_fires_at_commit() {
-        Catalog::with_debug(|mut catalog| async move {
-            let observed = record_max_connections(&mut catalog);
-
-            let oracle_write_ts = catalog.current_upper().await;
-            catalog
-                .transact(
-                    None,
-                    oracle_write_ts,
-                    None,
-                    vec![set_max_connections_op(42)],
-                )
-                .await
-                .expect("set max_connections");
-
-            assert_eq!(catalog.system_config().max_connections(), 42);
-            assert_eq!(
-                observed.lock().expect("recorder lock").last().copied(),
-                Some(catalog.system_config().max_connections()),
-                "callback must observe the committed value"
-            );
-
-            catalog.expire().await;
-        })
-        .await
-    }
+    // The commit-boundary firing now lives in
+    // `Coordinator::apply_catalog_implications`, so it is not observable from a
+    // bare `Catalog`. The tests below stay here to guard the speculative path:
+    // `Catalog::transact` itself must never notify.
 
     /// A dry-run transaction is never committed, so it must not notify.
     #[mz_ore::test(tokio::test)]

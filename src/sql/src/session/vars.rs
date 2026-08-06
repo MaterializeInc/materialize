@@ -1630,9 +1630,10 @@ impl SystemVars {
     /// because we don't promise to only call it when its var actually changed.
     /// It runs once right now against the current values, and then again at
     /// every catalog commit boundary whose transaction touched a system var
-    /// (see `Catalog::transact` and [`SystemVars::notify_all_callbacks`]).
-    /// Speculative mutations never trigger it, so an aborted or dry-run
-    /// transaction leaves the mirror untouched.
+    /// (see `Coordinator::apply_catalog_implications` and
+    /// [`SystemVars::notify_all_callbacks`]). Speculative mutations never
+    /// trigger it, so an aborted or dry-run transaction leaves the mirror
+    /// untouched.
     ///
     /// NOTE: a callback on a `feature_flags!` var won't observe the transient
     /// flip that `CatalogState::with_enable_for_item_parsing` performs during
