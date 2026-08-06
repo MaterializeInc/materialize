@@ -73,3 +73,12 @@ def test_credentials_type():
     assert credentials.type == "materialize"
     assert "cluster" in credentials._connection_keys()
     assert "options" in credentials._connection_keys()
+
+
+def test_non_string_values_are_stringified():
+    options = parse_options(
+        _build_options_string({"welcome_message": True, "statement_timeout": 5}, None)
+    )
+
+    assert options["welcome_message"] == "True"
+    assert options["statement_timeout"] == "5"

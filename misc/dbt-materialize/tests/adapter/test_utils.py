@@ -32,6 +32,7 @@ from dbt.tests.adapter.utils.test_get_intervals_between import BaseGetIntervalsB
 from dbt.tests.adapter.utils.test_get_powers_of_two import BaseGetPowersOfTwo
 from dbt.tests.adapter.utils.test_listagg import BaseListagg
 from dbt.tests.adapter.utils.test_timestamps import BaseCurrentTimestamps
+from dbt.tests.util import run_dbt
 
 models__test_cast_bool_to_text_sql = """
 with data_bool as (
@@ -170,3 +171,25 @@ class TestGetIntervalsBeteween(BaseGetIntervalsBetween):
 
 class TestGetPowersOfTwo(BaseGetPowersOfTwo):
     pass
+
+
+listagg_model = """
+SELECT {{ dbt.listagg("a", "','") }} FROM (SELECT 1 AS a)
+"""
+
+
+class TestListaggExplainsAlternative:
+    """The listagg macro must show its explanation instead of failing on the
+    way to raising the error."""
+
+    @pytest.fixture(scope="class")
+    def models(self):
+        return {"my_listagg_model.sql": listagg_model}
+
+    def test_listagg_explains_alternative(self, project):
+        # The macro raises while dbt renders the model during manifest
+        # parsing, so the error surfaces as an exception rather than a
+        # failed node result.
+        with pytest.raises(Exception) as excinfo:
+            run_dbt(["compile"], expect_pass=False)
+        assert "Materialize supports the list_agg() function" in str(excinfo.value)

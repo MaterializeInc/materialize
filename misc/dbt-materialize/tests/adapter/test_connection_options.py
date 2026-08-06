@@ -106,3 +106,34 @@ class TestConnectionOptionsOverrideEscapeSpaces:
         result = project.run_sql(f"SELECT current_setting('{setting}')", fetch="one")
         print(result)
         assert result[0] == expected
+
+
+class TestConnectionOptionsOverrideEscapeBackslashes:
+    """Verify backslashes in options survive the round trip through libpq's
+    options-string parser, including a backslash directly before a space,
+    which pins the escaping order (backslashes first, then spaces)."""
+
+    @pytest.fixture(scope="class")
+    def dbt_profile_target(self):
+        return {
+            "type": "materialize",
+            "threads": 1,
+            "host": "{{ env_var('DBT_HOST', 'localhost') }}",
+            "user": "materialize",
+            "pass": "password",
+            "database": "materialize",
+            "options": {
+                "application_name": "app\\with\\ backslashes",
+            },
+            "port": "{{ env_var('DBT_PORT', 6875) }}",
+        }
+
+    @pytest.mark.parametrize(
+        "setting,expected",
+        [
+            ("application_name", "app\\with\\ backslashes"),
+        ],
+    )
+    def test_defaults(self, project, setting, expected):
+        result = project.run_sql(f"SELECT current_setting('{setting}')", fetch="one")
+        assert result[0] == expected

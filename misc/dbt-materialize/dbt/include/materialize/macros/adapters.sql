@@ -141,7 +141,7 @@
 {% macro materialize__rename_relation(from_relation, to_relation) -%}
   {% set target_name = adapter.quote_as_configured(to_relation.identifier, 'identifier') %}
   {% call statement('rename_relation') -%}
-    {% if relation.type == 'view' %}
+    {% if from_relation.type == 'view' %}
       alter view {{ from_relation }} rename to {{ target_name }}
     {% else %}
       alter materialized view {{ from_relation }} rename to {{ target_name }}
@@ -165,6 +165,8 @@
     -- but seeds and source tables are materialized as tables.
     {% elif relation.type == 'table' %}
       drop table if exists {{ relation }} cascade
+    {% else %}
+      {{ exceptions.raise_compiler_error("Don't know how to drop relation " ~ relation ~ " of type " ~ relation.type) }}
     {% endif %}
   {%- endcall %}
 {% endmacro %}

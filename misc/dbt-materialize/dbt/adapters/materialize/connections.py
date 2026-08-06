@@ -54,10 +54,11 @@ DEFAULT_SESSION_PARAMETERS = {
 }
 
 
-def _escape_option_value(v: str) -> str:
-    # libpq's options-string parser splits on spaces so values containing
-    # them either must be escaped
-    return v.replace(" ", "\\ ")
+def _escape_option_value(v: object) -> str:
+    # libpq's options-string parser treats a backslash as an escape and splits
+    # on spaces, so both must be escaped. Backslashes go first, otherwise the
+    # ones this adds to escape spaces get escaped in turn.
+    return str(v).replace("\\", "\\\\").replace(" ", "\\ ")
 
 
 def _build_options_string(
@@ -191,6 +192,12 @@ class MaterializeConnectionManager(PostgresConnectionManager):
         mz_version = connection.handle.info.parameter_status(
             "mz_version"
         )  # e.g. v0.79.0-dev (937dfde5e)
+        if mz_version is None:
+            raise dbt_common.exceptions.DbtRuntimeError(
+                "Server did not report an mz_version. Make sure you are "
+                "connecting to Materialize and not to another PostgreSQL-"
+                "compatible database."
+            )
         mz_version = mz_version.split()[0]  # e.g. v0.79.0-dev
         mz_version = mz_version[1:]  # e.g. 0.79.0-dev
         if not versions_compatible(mz_version, SUPPORTED_MATERIALIZE_VERSIONS):
@@ -217,7 +224,9 @@ class MaterializeConnectionManager(PostgresConnectionManager):
 
         connection_name = connection.name
         try:
-            logger.debug("Closing connection '{}' to force cancellation")
+            logger.debug(
+                f"Closing connection '{connection_name}' to force cancellation"
+            )
             connection.handle.close()
         except psycopg2.InterfaceError as exc:
             # if the connection is already closed, not much to cancel!
