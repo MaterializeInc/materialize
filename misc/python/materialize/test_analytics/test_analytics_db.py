@@ -29,6 +29,7 @@ from materialize.test_analytics.data.build_annotation.build_annotation_storage i
 from materialize.test_analytics.data.cluster_spec_sheet.cluster_spec_sheet_result_storage import (
     ClusterSpecSheetEnvironmentdResultStorage,
     ClusterSpecSheetResultStorage,
+    ClusterSpecSheetTestExplanationStorage,
 )
 from materialize.test_analytics.data.feature_benchmark.feature_benchmark_result_storage import (
     FeatureBenchmarkResultStorage,
@@ -86,6 +87,9 @@ class TestAnalyticsDb:
         )
         self.cluster_spec_sheet_environmentd_results = (
             ClusterSpecSheetEnvironmentdResultStorage(self.database_connector)
+        )
+        self.cluster_spec_sheet_test_explanations = (
+            ClusterSpecSheetTestExplanationStorage(self.database_connector)
         )
         self.upgrade_downtime_results = UpgradeDowntimeResultStorage(
             self.database_connector

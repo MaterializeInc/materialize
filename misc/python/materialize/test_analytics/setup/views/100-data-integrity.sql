@@ -97,6 +97,11 @@ CREATE OR REPLACE VIEW v_data_integrity (table_name, own_item_key, referenced_it
     FROM issue
     GROUP BY issue_id
     HAVING count(*) > 1
+    UNION
+    SELECT 'cluster_spec_sheet_test_explanation', test_name, NULL, 'more than one explanation entry exists'
+    FROM cluster_spec_sheet_test_explanation
+    GROUP BY test_name
+    HAVING count(*) > 1
 ;
 
 ALTER VIEW v_data_integrity OWNER TO qa;
