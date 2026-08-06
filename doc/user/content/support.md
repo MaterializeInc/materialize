@@ -13,8 +13,6 @@ Whether you're building, scaling, or debugging, we're here to help.
 
 ## Materialize Support
 
-We offer multiple support pathways depending on your platform and plan:
-
 You can reach us directly from:
 - **materialize.com**
 - **Materialize Console** (for Cloud customers)
