@@ -18,6 +18,7 @@ from materialize.invariants.framework import (
     InvariantViolation,
     ScenarioContext,
     TransientError,
+    Watermark,
 )
 from materialize.invariants.mz import MzClient, UnexpectedQueryError
 
@@ -339,4 +340,67 @@ class ProgressPeek(PeekChecker):
                 f" {value} < {self.last}"
             )
         self.last = value
+        self.validations += 1
+
+
+class GroupCompletenessPeek(PeekChecker):
+    """Every group written by one upstream transaction must be whole.
+
+    A write that spans several rows is only atomic if all of its rows become
+    visible at the same timestamp. Per-row checks cannot see a violation of
+    that, and a conserved-sum check only sees the ones that happen to change
+    the sum, so this asks the question directly: group the rows by the
+    transaction that wrote them and require every group to have the size that
+    transaction gave it.
+
+    The invariant is carried by the data rather than by the checker, so
+    nothing here has to know which transactions ran or which of them
+    committed. That is what makes it usable during chaos, where most op
+    outcomes are unknown. It also holds at every timestamp, so it can be
+    asked of retained history, where a tear that has since healed is still
+    recorded.
+
+    `predicate` must select the offending groups and return no rows when the
+    invariant holds.
+    """
+
+    pause = (0.5, 2.0)
+
+    def __init__(
+        self,
+        rng,
+        ctx,
+        name: str,
+        predicate: str,
+        clusters: list[str] | None = None,
+        history: Watermark | None = None,
+    ) -> None:
+        super().__init__(rng, ctx, name, clusters or ["quickstart", "compute"])
+        self.predicate = predicate
+        # When given, some rounds ask the same question of a past timestamp.
+        # A torn transaction is durable in the shard's history even after the
+        # live state has converged, which turns a race that reproduces once a
+        # week into an artifact that can be found after the fact.
+        self.history = history
+
+    def check_once(self) -> None:
+        query, at = self.predicate, "now"
+        recent = self.history.get() if self.history is not None else 0
+        if recent > 0 and self.rng.random() < 0.25:
+            as_of = self.rng.randint(max(recent - 120_000, 1), recent)
+            query, at = f"{self.predicate} AS OF {as_of}", str(as_of)
+        try:
+            rows = self.peek(query)
+        except UnexpectedQueryError as e:
+            # The probed timestamp can fall behind the since while a
+            # disruption stalls this round, the same race the other history
+            # probes hit. Unreadable is a skip, a torn group is not.
+            if "could not find a valid timestamp" in str(e):
+                raise TransientError(f"{at} no longer readable") from None
+            raise
+        if rows:
+            raise InvariantViolation(
+                f"{self.name}: transaction not applied atomically at {at} on"
+                f" {self.last_cluster}: {rows[:5]}"
+            )
         self.validations += 1

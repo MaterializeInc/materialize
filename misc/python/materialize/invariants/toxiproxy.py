@@ -26,10 +26,18 @@ import requests
 
 from materialize.invariants.framework import EventLog, TransientError
 
-DISRUPTION_KINDS = ["disable", "latency", "timeout", "limit_data", "bandwidth"]
+DISRUPTION_KINDS = [
+    "disable",
+    "latency",
+    "timeout",
+    "limit_data",
+    "bandwidth",
+    "reset_peer",
+    "flap",
+]
 
 # Kinds that cut the connection entirely, subject to Leg.max_outage.
-FULL_OUTAGE_KINDS = {"disable", "timeout"}
+FULL_OUTAGE_KINDS = {"disable", "timeout", "reset_peer", "flap"}
 
 
 class ApiStalled(Exception):
@@ -78,6 +86,11 @@ class ProcessTarget:
     None of the four may assume the process is still the one the previous
     call saw. Anything else in the test can replace it, so all four are free
     to fail and the disruptor treats that as a lost cycle.
+
+    `kill` and `heal` must also tolerate the container being paused, by
+    something else in the test or by a `pause` whose `unpause` was lost:
+    docker refuses to start a paused container and does not reliably kill
+    one, so both have to unpause first.
     """
 
     name: str
@@ -338,14 +351,15 @@ class Disruptor(threading.Thread):
             + (f" overlapping kill of {victim.name}" if victim else "")
             + f" for {duration:.1f}s"
         )
+        flapping = [leg for leg, kind in applied if kind == "flap"]
         if victim is not None:
-            self.stop_event.wait(duration / 2)
+            self._wait_out(duration / 2, flapping)
             self._attempt(f"kill of {victim.name}", victim.kill)
             key = (f"process:{victim.name}", "kill")
             self.coverage[key] = self.coverage.get(key, 0) + 1
-            self.stop_event.wait(duration / 2)
+            self._wait_out(duration / 2, flapping)
         else:
-            self.stop_event.wait(duration)
+            self._wait_out(duration, flapping)
         self.active.clear()
         for leg, kind in applied:
             self._heal(leg, kind)
@@ -424,15 +438,56 @@ class Disruptor(threading.Thread):
                     {"rate": self.rng.randint(1, 64)},
                     stream=stream,
                 )
+            elif kind == "reset_peer":
+                # RSTs the connection after letting `timeout` ms of traffic
+                # through, so a request can reach the peer and take effect
+                # while its response never arrives. That is what turns a
+                # persist CaS into an Indeterminate error, which is the input
+                # to every "state transition retried as if it were idempotent"
+                # bug. A plain cut mostly yields determinate connection
+                # failures instead.
+                self.api.add_toxic(
+                    proxy.name,
+                    kind,
+                    "reset_peer",
+                    {"timeout": self.rng.randint(0, 1000)},
+                    stream=stream,
+                )
+            elif kind == "flap":
+                self.api.set_enabled(proxy.name, False)
             else:
                 raise ValueError(f"unknown disruption kind {kind}")
 
     def _heal(self, leg: Leg, kind: str) -> None:
         for proxy in leg.proxies:
-            if kind == "disable":
+            if kind in ("disable", "flap"):
                 self.api.set_enabled(proxy.name, True)
             else:
                 self.api.delete_toxic(proxy.name, kind)
+
+    def _wait_out(self, duration: float, flapping: list[Leg]) -> None:
+        """Wait out a disruption window, toggling the flapping legs.
+
+        One long cut gives a request in flight one chance to be severed at
+        the moment its response is due. Flapping gives it one per toggle, so
+        an in-flight write that already committed is far more likely to be
+        reported as unknown to its caller.
+        """
+        if not flapping:
+            self.stop_event.wait(duration)
+            return
+        deadline = time.monotonic() + duration
+        enabled = False
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return
+            if self.stop_event.wait(min(remaining, self.rng.uniform(0.05, 0.5))):
+                return
+            enabled = not enabled
+            for leg in flapping:
+                for proxy in leg.proxies:
+                    self.api.set_enabled(proxy.name, enabled)
 
     def _heal_all_with_retries(self) -> None:
         # Unpausing is instant, but a process heal blocks until the process

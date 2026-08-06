@@ -63,6 +63,13 @@ CONNECTION_ERROR_SNIPPETS = [
     "consuming input failed",
     "terminating connection",
     "current transaction is aborted",
+    # A peer that RSTs rather than closing cleanly, which is what the
+    # reset_peer toxic produces and what a SIGKILLed process leaves behind.
+    # Materialize surfaces these as its own error when the connection it
+    # cannot reach is an upstream source or the metadata store, so the text
+    # arrives as a server error reply rather than a psycopg OperationalError.
+    "Connection reset by peer",
+    "Broken pipe",
 ]
 
 

@@ -2147,6 +2147,25 @@ steps:
                   --upgrade-from=latest,
                 ]
 
+      - id: invariants-table-bank-soak
+        topics: [copy-to-s3, kafka, mysql, postgres, sql-server]
+        label: "Invariants (table-bank, soak past the reader lease)"
+        depends_on: build-aarch64
+        artifact_paths: [invariants-events.log]
+        timeout_in_minutes: 60
+        agents:
+          queue: hetzner-aarch64-8cpu-16gb
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: invariants
+              args:
+                [
+                  --scenario=table-bank,
+                  --complexity=high,
+                  --runtime=2400,
+                  --persist-churn,
+                ]
+
       - id: invariants-table-bank
         topics: [copy-to-s3, kafka, mysql, postgres, sql-server]
         label: "Invariants (table-bank)"

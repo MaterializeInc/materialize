@@ -32,7 +32,11 @@ import time
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from materialize.invariants.checkers import PeekChecker, SubscribeChecker
+from materialize.invariants.checkers import (
+    GroupCompletenessPeek,
+    PeekChecker,
+    SubscribeChecker,
+)
 from materialize.invariants.framework import (
     CONVERGE_TIMEOUT,
     SEED_RANGE,
@@ -557,6 +561,206 @@ class DdlChurn(Action):
             )
             self.present = True
         return outcome
+
+    def close(self) -> None:
+        self.client.reset()
+
+
+class ShardChurn(Action):
+    """Create, write, and drop scratch tables to churn persist shards.
+
+    A table's lifecycle is the busiest sequence persist has: register the
+    shard with txn-wal, write batches, forget it, finalize it (tombstone,
+    then GC the whole trace away). DdlChurn covers dataflow install and
+    uninstall, but every object it creates lives on the same few shards,
+    so none of that runs. Doing it while the metadata leg is being severed
+    is the point: each step is a consensus write whose response can be lost,
+    and the shard is gone shortly after, which is when a botched state
+    transition stops being recoverable.
+
+    No checker reads these tables, so their contents never matter. What
+    matters is that the churn happens on the same envd and clusters the
+    invariants cover.
+    """
+
+    name = "shard-churn"
+
+    def __init__(self, rng: random.Random, worker: int, client: MzClient) -> None:
+        super().__init__(rng)
+        self.worker = worker
+        self.client = client
+        self.next_at = 0.0
+        self.nonce = 0
+        # Names whose DROP outcome was not COMMITTED. An UNKNOWN drop may not
+        # have applied, and forgetting the name would leak the shard for the
+        # rest of the run.
+        self.maybe_alive: list[str] = []
+
+    def run(self) -> Outcome | None:
+        now = time.monotonic()
+        if now < self.next_at:
+            return None
+        self.next_at = now + self.rng.uniform(3.0, 10.0)
+
+        self.maybe_alive = [
+            name
+            for name in self.maybe_alive
+            if self.client.write(f"DROP TABLE IF EXISTS {name}") != Outcome.COMMITTED
+        ]
+
+        self.nonce += 1
+        name = f"churn_tbl_{self.worker}_{self.nonce}"
+        outcome = self.client.write(f"CREATE TABLE {name} (a int, b text)")
+        if outcome == Outcome.FAILED:
+            return outcome
+        self.maybe_alive.append(name)
+        # Several small transactions rather than one big insert: each is its
+        # own txn-wal commit and data batch, so the shard accumulates batches
+        # to compact before it is dropped again.
+        for i in range(self.rng.randint(1, 5)):
+            self.client.write(
+                f"INSERT INTO {name} SELECT g, repeat('x', 100)"
+                f" FROM generate_series({i} * 50, {i} * 50 + 49) g"
+            )
+            # TODO: Reenable when SQL-616 and PER-59 are fixed. Evolving the
+            # schema
+            # mid-shard leaves batches written under both schemas in one
+            # shard, so the compaction that merges them has to migrate, and
+            # the registration is one more consensus write that a severed leg
+            # can leave in doubt. That last part is the problem: a restart
+            # re-runs the schema evolution against a persist shard that
+            # already carries it, and the coordinator panics on the mismatch
+            # instead of treating it as done (SQL-616).
+            #
+            # PER-59 is the sticky follow-on: once that evolution has failed,
+            # the catalog holds the new table version while the shard still
+            # only knows the old schema, so the next bootstrap registers the
+            # table with txn-wal presenting a desc the shard never registered
+            # and panics with "schema should be registered". That one repeats
+            # on every boot, so the environment does not come back.
+            if False and self.rng.random() < 0.3:
+                self.client.write(f"ALTER TABLE {name} ADD COLUMN c{i} int")
+        return outcome
+
+    def close(self) -> None:
+        self.client.reset()
+
+
+# One transfer writes exactly two ledger rows, a debit and its credit, in one
+# transaction. Any other group size means the transaction became visible in
+# pieces, and a non-zero sum means the pieces do not belong together.
+LEDGER_TORN_SQL = (
+    "SELECT worker, seq, count(*), sum(amount) FROM ledger"
+    " GROUP BY worker, seq HAVING count(*) <> 2 OR sum(amount) <> 0"
+)
+
+
+# Three separate shards written by one transaction, see MultiShardTxn.
+TXN_TABLES = ("txn_a", "txn_b", "txn_c")
+
+# Markers present in one of the three tables but not the next, in both
+# directions around the ring, so any asymmetry shows up.
+MULTI_SHARD_DIFF_SQL = " UNION ALL ".join(
+    f"(SELECT '{left}' AS present_in, worker, seq FROM {left}"
+    f" EXCEPT ALL SELECT '{left}', worker, seq FROM {right})"
+    for left, right in zip(TXN_TABLES, TXN_TABLES[1:] + TXN_TABLES[:1])
+)
+
+
+class MultiShardTxn(Action):
+    """One transaction writing the same marker to three separate tables.
+
+    Every other write in this scenario lands in a single table, so txn-wal's
+    multi-shard commit never has to be atomic across shards. Here one
+    transaction touches three, which txn-wal commits by registering all three
+    batches in the txns shard at one timestamp and applying them to each data
+    shard afterwards. If a lost consensus response left that half-applied, a
+    marker would exist in some tables and not others.
+
+    The invariant needs no bookkeeping: the three tables must hold exactly the
+    same set of markers at every timestamp, whether a given transaction
+    committed or not.
+    """
+
+    name = "multi-shard-txn"
+
+    def __init__(self, rng: random.Random, worker: int, client: MzClient) -> None:
+        super().__init__(rng)
+        self.worker = worker
+        self.client = client
+        self.seq = 0
+
+    def run(self) -> Outcome | None:
+        self.seq += 1
+        row = f"({self.worker}, {self.seq})"
+        return self.client.write_txn(
+            [(f"INSERT INTO {table} VALUES {row}", None) for table in TXN_TABLES]
+        )
+
+    def close(self) -> None:
+        self.client.reset()
+
+
+class ReplicaDivergence(Checker):
+    """Both replicas of the compute cluster must answer identically.
+
+    The other checkers read through the cluster, so whichever replica the
+    coordinator picks is the one that gets verified, and a replica that
+    computes the wrong answer is caught only if it happens to be chosen. This
+    asks each replica directly, at one explicit timestamp, so the two answers
+    are comparable by construction: same query, same logical time, different
+    process. Any difference is a compute determinism bug, not a race.
+
+    A disrupted replica cannot serve the timestamp and the round is skipped,
+    which is the same contract every other checker follows.
+    """
+
+    name = "replica-divergence"
+    pause = (1.0, 3.0)
+
+    # Maintained by the compute cluster, so each replica computes them
+    # independently, unlike a table read which both serve from persist.
+    QUERIES = (
+        "SELECT total FROM total",
+        "SELECT cnt FROM ledger_agg",
+    )
+
+    def __init__(self, rng: random.Random, ctx: ScenarioContext) -> None:
+        super().__init__(rng)
+        self.ctx = ctx
+        self.client = MzClient(ctx, self.name)
+        self.replicas = ("r1", "r2")
+
+    def check_once(self) -> None:
+        self.client.query("SET cluster = compute")
+        # One timestamp for both reads. Slightly in the past so it is already
+        # readable rather than something both replicas have to wait for, and
+        # well inside the 600s RETAIN HISTORY of the objects involved.
+        now = int(self.client.query("SELECT mz_now()::text")[0][0])
+        as_of = now - 1000
+        for sql in self.QUERIES:
+            answers = {}
+            for replica in self.replicas:
+                self.client.query(f"SET cluster_replica = {replica}")
+                try:
+                    rows = self.client.query(f"{sql} AS OF {as_of}")
+                except UnexpectedQueryError as e:
+                    # Same race the history probes hit: a timestamp that was
+                    # readable when it was chosen can fall behind the since
+                    # while a disruption stalls this round. Unreadable is a
+                    # skip, disagreement at a readable one stays fatal.
+                    if "could not find a valid timestamp" in str(e):
+                        raise TransientError(f"{as_of} no longer readable") from None
+                    raise
+                answers[replica] = tuple(tuple(row) for row in rows)
+            self.validations += 1
+            if answers["r1"] != answers["r2"]:
+                raise InvariantViolation(
+                    f"replicas disagree at {as_of} on `{sql}`:"
+                    f" r1={answers['r1']} r2={answers['r2']}"
+                )
+        # Later rounds must not inherit a pin to one replica.
+        self.client.query("RESET cluster_replica")
 
     def close(self) -> None:
         self.client.reset()
@@ -1371,6 +1575,7 @@ class TableBank(Scenario):
             " tag text, flt double precision, day date)"
             " WITH (RETAIN HISTORY = FOR '600s')",
             "CREATE TABLE registry (worker int, key int, ver bigint)",
+            *(f"CREATE TABLE {table} (worker int, seq bigint)" for table in TXN_TABLES),
             # RETAIN HISTORY keeps recent timestamps readable so the durable
             # subscribe checker can resume where it left off.
             "CREATE MATERIALIZED VIEW total IN CLUSTER compute"
@@ -1421,8 +1626,10 @@ class TableBank(Scenario):
             CopyTransfer(rng, index, client, self.oplog, forward),
             RegistryOp(rng, index, client, self),
             DdlChurn(rng, index, client),
+            ShardChurn(rng, index, client),
+            MultiShardTxn(rng, index, client),
         ]
-        weights = [10, 10, 3, 3, 6, 1]
+        weights = [10, 10, 3, 3, 6, 1, 1, 5]
         if index == 0:
             # Single-instance churns: concurrent swaps of the same schema
             # pair or replacements of the same MV would only race each other
@@ -1435,7 +1642,7 @@ class TableBank(Scenario):
         return WorkerBundle(actions=actions, weights=weights)
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(13)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(16)]
         return [
             BankTotalPeek(rngs[0], self.ctx, self),
             LedgerDirectPeek(rngs[1], self.ctx, self),
@@ -1452,6 +1659,17 @@ class TableBank(Scenario):
             SwapTotalPeek(rngs[7], self.ctx, self),
             RegistryPeek(rngs[8], self.ctx, self),
             CopyExportPeek(rngs[9], self.ctx, self),
+            GroupCompletenessPeek(
+                rngs[13], self.ctx, "multi-shard-txn", MULTI_SHARD_DIFF_SQL
+            ),
+            ReplicaDivergence(rngs[14], self.ctx),
+            GroupCompletenessPeek(
+                rngs[15],
+                self.ctx,
+                "ledger-atomicity",
+                LEDGER_TORN_SQL,
+                history=self.recent_ts,
+            ),
         ]
 
     def converge(self) -> None:
@@ -1473,10 +1691,7 @@ class TableBank(Scenario):
         total = int(client.query("SELECT total FROM total")[0][0])
         if total != self.total:
             raise InvariantViolation(f"final total {total} != {self.total}")
-        broken = client.query(
-            "SELECT worker, seq, count(*), sum(amount) FROM ledger"
-            " GROUP BY worker, seq HAVING count(*) <> 2 OR sum(amount) <> 0"
-        )
+        broken = client.query(LEDGER_TORN_SQL)
         if broken:
             raise InvariantViolation(f"non-atomic ledger transfers: {broken[:20]}")
         for worker in range(self.ctx.complexity.workers):
@@ -1499,6 +1714,12 @@ class TableBank(Scenario):
                     f"worker {worker}: transfers present that never committed:"
                     f" {sorted(phantom)[:20]}"
                 )
+        half_applied = client.query(MULTI_SHARD_DIFF_SQL)
+        if half_applied:
+            raise InvariantViolation(
+                f"multi-shard transactions half applied between {TXN_TABLES}:"
+                f" {half_applied[:20]}"
+            )
         swap_total = int(client.query("SELECT total FROM blue.total_swap")[0][0])
         if swap_total != self.total:
             raise InvariantViolation(

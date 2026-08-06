@@ -15,8 +15,10 @@ toxiproxy disrupts the envd<->clusterd, metadata-store, source, and sink
 connections, and strictly again after healing.
 """
 
+import json
 import os
 import random
+import re
 import subprocess
 import threading
 import time
@@ -38,8 +40,9 @@ from materialize.mzcompose.composition import Composition, WorkflowArgumentParse
 from materialize.mzcompose.services.clusterd import Clusterd
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
-from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.minio import Minio, minio_blob_uri
 from materialize.mzcompose.services.mysql import MySql
+from materialize.mzcompose.services.persistcli import Persistcli
 from materialize.mzcompose.services.postgres import Postgres, PostgresMetadata
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.mzcompose.services.sql_server import SqlServer
@@ -56,10 +59,20 @@ KAFKA_HOST_PORT = 30993
 # are parsed.
 INVARIANTS_IMAGE = os.environ.get("INVARIANTS_IMAGE")
 
+# Turns every soft assertion in the processes under test into a panic, which
+# the crash probe then reports. Our images build with debug assertions off, so
+# without this a soft assertion only writes a line to a log. An environment
+# variable for the same reason as INVARIANTS_IMAGE: the services are
+# constructed before workflow arguments are parsed.
+SOFT_ASSERTIONS = os.environ.get("INVARIANTS_SOFT_ASSERTIONS")
+
+SOFT_ASSERTION_ENV = ["MZ_SOFT_ASSERTIONS=1"] if SOFT_ASSERTIONS else []
+
 
 def materialized_service(image: str | None = None) -> Materialized:
     return Materialized(
         image=image or INVARIANTS_IMAGE,
+        environment_extra=SOFT_ASSERTION_ENV,
         # Route the metadata store (persist consensus and the timestamp
         # oracle) and the persist blob store through toxiproxy. The proxies
         # must exist before this service starts.
@@ -84,6 +97,9 @@ def materialized_service(image: str | None = None) -> Materialized:
             "enable_bounded_staleness_isolation": "true",
             "enable_replacement_materialized_views": "true",
             "enable_within_timestamp_order_by_in_subscribe": "true",
+            # ShardChurn evolves the schema of its scratch tables, so
+            # compaction has to migrate batches written under both.
+            "enable_alter_table_add_column": "true",
         },
         depends_on=["toxiproxy"],
     )
@@ -95,7 +111,7 @@ def clusterd_service(name: str, image: str | None = None) -> Clusterd:
         image=image or INVARIANTS_IMAGE,
         # The controller connects through toxiproxy, so the host in request
         # URIs doesn't match this clusterd's hostname.
-        environment_extra=["CLUSTERD_GRPC_HOST="],
+        environment_extra=["CLUSTERD_GRPC_HOST=", *SOFT_ASSERTION_ENV],
         # halt! is a designed recovery path for clusterd.
         restart="on-failure",
         # Bounded so that runaway memory (e.g. buffering while the blob leg
@@ -145,6 +161,8 @@ SERVICES = [
     # infrastructure for the broker); Materialize reaches it through the
     # csr leg.
     SchemaRegistry(kafka_servers=[("kafka", "9096")]),
+    # Idle sidecar, started only for the post-run persist state audit.
+    Persistcli(),
 ]
 
 # One leg per connection of the system under test. All proxies are created
@@ -212,7 +230,7 @@ LEGS = {
         # on this leg kills every connection past its byte budget, so it stalls
         # blob writes for its whole uncapped duration, which is all PER-31
         # needs: nightly 17743 OOM-killed clusterd at 6.2GiB during a 29s one.
-        kinds=("disable", "timeout"),
+        kinds=("disable", "timeout", "reset_peer", "flap"),
     ),
     "pg": Leg("pg", (Proxy("pg", 5432, "postgres:5432"),)),
     "mysql": Leg("mysql", (Proxy("mysql", 3306, "mysql:3306"),)),
@@ -286,6 +304,20 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "--no-disruptions",
         action="store_true",
         help="run the workload and checkers without any disruptions",
+    )
+    parser.add_argument(
+        "--legs",
+        type=str,
+        default=None,
+        metavar="NAME,...",
+        help="disrupt only these legs of the scenario's set, for bisecting"
+        " which dependency a symptom depends on",
+    )
+    parser.add_argument(
+        "--persist-churn",
+        action="store_true",
+        help="drive persist compaction, rollups, and GC as hard as the"
+        " workload allows, see PERSIST_CHURN_SQL",
     )
     args = parser.parse_args()
 
@@ -363,6 +395,8 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
         services += scenario_class.services
         c.up(*services)
         c.sql(CLUSTER_SETUP_SQL, port=6877, user="mz_system")
+        if args.persist_churn:
+            c.sql(PERSIST_CHURN_SQL, port=6877, user="mz_system")
 
         endpoints = Endpoints(
             mz_host="127.0.0.1",
@@ -399,6 +433,11 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
         scenario = scenario_class(ctx)
         scenario.setup()
         legs = [] if args.no_disruptions else [LEGS[n] for n in scenario_class.legs]
+        if args.legs:
+            selected = set(args.legs.split(","))
+            unknown = selected - {leg.name for leg in legs}
+            assert not unknown, f"--legs: not in this scenario: {sorted(unknown)}"
+            legs = [leg for leg in legs if leg.name in selected]
         midrun = (
             make_upgrade_swap(c, ctx, version_override) if args.upgrade_from else None
         )
@@ -414,7 +453,20 @@ def run_scenario(c: Composition, name: str, args, log: EventLog) -> None:
                     proxy for leg in LEGS.values() for proxy in leg.proxies
                 ],
                 restart_toxiproxy=lambda: _restart_toxiproxy(c, toxiproxy),
+                crash_probe=make_crash_probe(c, log),
             ).run()
+            # After the run, so it sees the whole history the run produced,
+            # and only when the run itself passed: a failure already has its
+            # explanation and its diagnostics.
+            try:
+                audit_persist_history(c, ctx, log)
+            except InvariantViolation:
+                raise
+            except Exception as e:
+                # The audit is a second opinion on a run whose own invariants
+                # already held. Its plumbing (a sidecar container, a CLI, a
+                # catalog query) failing is not a verdict on the run.
+                log.log("audit", f"persist state audit did not run: {e}")
         finally:
             scenario.teardown()
 
@@ -439,11 +491,23 @@ def make_upgrade_swap(
             "clusterd-compute2",
             "clusterd-storage",
         ]
+
+        unpause_quietly(c, *names)
         c.kill(*names)
         # up() renders the composition, which the version override pins to
         # the old image, so the override must be closed first.
         version_override.close()
-        c.up(*names, detach=True, max_tries=3)
+        # A pause can also land between the kill and the up, so retry around
+        # unpausing rather than relying on up()'s own retries, which would
+        # hit the same paused container three times.
+        for attempt in range(3):
+            try:
+                c.up(*names, detach=True)
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                unpause_quietly(c, *names)
 
         def upgraded() -> bool:
             version = str(client.query("SELECT mz_version()", timeout=30)[0][0])
@@ -461,6 +525,230 @@ def make_upgrade_swap(
     return swap
 
 
+def make_crash_probe(c: Composition, log: EventLog):
+    """Reports the first process panic seen in any service's log.
+
+    The harness kills and restarts these processes constantly, so a panic
+    leaves no trace the invariants can observe: the process comes back, the
+    checkers reconnect, and the run passes with only a line in a log nobody
+    reads until CI's annotator scans it after the fact. Detecting it in-run
+    ties the crash to the disruption history and stops the run while the
+    state that produced it is still on disk.
+    """
+    names = ["materialized", *CLUSTERD_NAMES]
+    seen: set[str] = set()
+    # Panic sites to report but not fail on, comma separated. A known open bug
+    # that panics reliably would otherwise end every run at the same place and
+    # mask everything the run was meant to find.
+    ignored = [
+        p for p in os.environ.get("INVARIANTS_IGNORE_PANICS", "").split(",") if p
+    ]
+
+    def probe() -> str | None:
+        for name in names:
+            try:
+                logs = (
+                    c.invoke(
+                        "logs",
+                        "--no-color",
+                        "--since",
+                        "60s",
+                        name,
+                        capture=True,
+                        silent=True,
+                    ).stdout
+                    or ""
+                )
+            except Exception as e:
+                # Racing a container recreation, next probe sees it again.
+                # Logged rather than swallowed: a probe that never manages to
+                # read a log would silently stop detecting crashes.
+                log.log("crash", f"probe of {name} failed: {e}", echo=False)
+                continue
+            for line in logs.splitlines():
+                _, _, panic = line.partition("panicked at ")
+                # The window overlaps the poll interval so no line is missed,
+                # which means every panic is seen several times.
+                if not panic or panic in seen:
+                    continue
+                seen.add(panic)
+                log.log("crash", f"{name} panicked at {panic}")
+                if any(pattern in panic for pattern in ignored):
+                    log.log("crash", f"ignoring known panic site in {panic}")
+                    continue
+                return f"{name} panicked at {panic}"
+        return None
+
+    return probe
+
+
+# Caps on the post-run persist audit: overall, per shard, per shard's output,
+# and on the size of shard it looks at in the first place.
+AUDIT_BUDGET_S = 240.0
+AUDIT_SHARD_TIMEOUT_S = 20
+AUDIT_MAX_BYTES = 50_000_000
+AUDIT_MAX_PARTS = 500
+
+
+def audit_persist_history(c: Composition, ctx: ScenarioContext, log: EventLog) -> None:
+    """Fails the run if a shard's live state history resurrects a blob.
+
+    Every blob key a shard references must be live over one contiguous run of
+    seqnos: it enters state when a batch referencing it is added and leaves
+    when the last one is removed, and nothing may bring it back. A key that is
+    live, gone, and live again means a state transition was applied to a state
+    it was not computed from, which is how a stale merge res or a replayed
+    rollup insert corrupts a shard.
+
+    Persist notices this itself only in narrow circumstances: GC's part check
+    (`gc.rs`) needs the key to land in the same delete batch it is walking, and
+    `ReferencedBlobValidator` is compiled out of the profiles that build our
+    images. This audit sees every resurrection in the live window regardless
+    of whether GC happened to run, so it is worth the one pass per shard.
+    """
+    from materialize.mzcompose.composition import Service as ServiceName
+
+    c.up(ServiceName("persistcli", idle=True))
+
+    def inspect(*args: str) -> str:
+        return c.exec(
+            "persistcli",
+            "persistcli",
+            "inspect",
+            *args,
+            f"--blob-uri={minio_blob_uri()}",
+            capture=True,
+            silent=True,
+        ).stdout
+
+    # Enumerated from blob rather than from mz_storage_shards, which knows
+    # only about storage objects, so this also covers the catalog and txn-wal
+    # shards. Big shards are skipped: `state-diff` prints the whole state
+    # twice per transition, which for the bank tables is gigabytes. Those are
+    # also the shards GC walks constantly under --persist-churn, so its own
+    # part check covers them. What it does not cover is a shard that is
+    # dropped before GC ever gets to it, which is exactly what is left here.
+    counts = json.loads(inspect("blob-count"))
+    shards = sorted(
+        (
+            shard
+            for shard, count in counts.items()
+            if count["batch_part_count"] <= AUDIT_MAX_PARTS
+        ),
+        key=lambda shard: -counts[shard]["batch_part_count"],
+    )
+    # Keys are "<writer>/<part>", and only their identity matters here.
+    key_re = re.compile(r'"([a-z0-9]+/[a-z][0-9a-f-]{36})"')
+    findings = []
+    audited = 0
+    truncated = 0
+    # An environment has more shards than a post-run check should spend
+    # minutes on, and the ones a run churned are as good a sample as any.
+    deadline = time.monotonic() + AUDIT_BUDGET_S
+    for shard in shards:
+        if time.monotonic() > deadline:
+            break
+        try:
+            # Bounded in both time and bytes: state size times version count
+            # has no useful upper bound, and this runs inside a test.
+            out = c.exec(
+                "persistcli",
+                "bash",
+                "-c",
+                f"timeout {AUDIT_SHARD_TIMEOUT_S} persistcli inspect state-diff"
+                f" --shard-id={shard}"
+                " --consensus-uri=postgres://root@postgres-metadata:26257"
+                "?options=--search_path=consensus"
+                f" --blob-uri='{minio_blob_uri()}' 2>/dev/null"
+                f" | head -c {AUDIT_MAX_BYTES}",
+                capture=True,
+                silent=True,
+            ).stdout
+        except Exception as e:
+            # A shard finalized between the query and here, or a persistcli
+            # that cannot reach its stores. Neither says anything about the
+            # invariant, and the audit is not the run's purpose.
+            log.log("audit", f"{shard}: inspect failed ({e})", echo=False)
+            continue
+        # One JSON object per line, each holding the states before and after
+        # one transition, oldest first.
+        states = []
+        for line in out.splitlines():
+            if not line.strip():
+                continue
+            try:
+                transition = json.loads(line)
+            except json.JSONDecodeError:
+                # The byte cap cuts the last line in half. Everything before
+                # it is still a valid prefix of the history, so the shard is
+                # audited, just not to its end.
+                truncated += 1
+                break
+            if not states:
+                states.append(transition["previous"])
+            states.append(transition["new"])
+        live_at: dict[str, list[int]] = {}
+        for index, state in enumerate(states):
+            for key in set(key_re.findall(json.dumps(state))):
+                live_at.setdefault(key, []).append(index)
+        for key, indexes in live_at.items():
+            if indexes != list(range(indexes[0], indexes[-1] + 1)):
+                seqnos = [states[i].get("seqno") for i in indexes]
+                findings.append(f"{shard} resurrects {key}, live at seqnos {seqnos}")
+        audited += 1
+    if findings:
+        raise InvariantViolation("persist state history: " + "; ".join(findings[:5]))
+    log.log(
+        "audit",
+        f"no resurrected blobs across {audited}/{len(shards)} shards"
+        f" ({truncated} truncated at the byte cap)",
+    )
+
+
+# Makes persist take as many state transitions per second as it can: small
+# batches so every write compacts, compaction claimable by any process so two
+# of them race on the same spine range, and rollups often enough that GC has
+# something to truncate on every pass. The disruptions then have something to
+# interleave with, which is what turns a lost consensus response into a
+# retried non-idempotent state transition.
+PERSIST_CHURN_SQL = """
+ALTER SYSTEM SET persist_inline_writes_single_max_bytes = 0;
+ALTER SYSTEM SET persist_inline_writes_total_max_bytes = 0;
+ALTER SYSTEM SET persist_blob_target_size = 4096;
+ALTER SYSTEM SET persist_compaction_heuristic_min_inputs = 2;
+ALTER SYSTEM SET persist_compaction_heuristic_min_parts = 1;
+ALTER SYSTEM SET persist_compaction_heuristic_min_updates = 1;
+ALTER SYSTEM SET persist_claim_unclaimed_compactions = true;
+ALTER SYSTEM SET persist_claim_compaction_percent = 100;
+-- A partial replacement keeps the spine id of the batch it rewrites, which is
+-- the one state change that leaves a previously applied merge res still
+-- matching the range it was computed for. Short runs make partial
+-- replacements the common case. (The agitator flips both back and forth, so
+-- these are starting points, not pins.)
+ALTER SYSTEM SET persist_enable_incremental_compaction = true;
+ALTER SYSTEM SET persist_batch_max_run_len = 2;
+ALTER SYSTEM SET persist_rollup_threshold = 8;
+ALTER SYSTEM SET persist_gc_min_versions = 8;
+"""
+
+
+def unpause_quietly(c: Composition, *names: str) -> None:
+    """Unpause containers, ignoring those that were not paused.
+
+    A paused container can be neither killed nor started: docker refuses a
+    start with "cannot start a paused container", and a kill of a paused
+    container is not reliable either. Everything in the harness that kills or
+    starts a container races the disruptor's pause of the same container, so
+    they all unpause first. Unpausing a running container is an error rather
+    than a no-op, which is why the result is discarded.
+    """
+    for name in names:
+        try:
+            c.unpause(name)
+        except Exception:
+            pass
+
+
 def process_targets(c: Composition) -> list[ProcessTarget]:
     """Processes the disruptor may kill or pause.
 
@@ -471,14 +759,22 @@ def process_targets(c: Composition) -> list[ProcessTarget]:
     """
 
     def target(name: str, max_outage: float = 120.0) -> ProcessTarget:
-        return ProcessTarget(
-            name=name,
-            max_outage=max_outage,
-            kill=lambda: c.kill(name),
+        def kill() -> None:
+            unpause_quietly(c, name)
+            c.kill(name)
+
+        def heal() -> None:
+            unpause_quietly(c, name)
             # Bounded retries: an up that cannot succeed (e.g. dead
             # proxies) must not wedge the disruptor for minutes, but a
             # single attempt can race a crash-looping restart policy.
-            heal=lambda: c.up(name, detach=True, max_tries=3),
+            c.up(name, detach=True, max_tries=3)
+
+        return ProcessTarget(
+            name=name,
+            max_outage=max_outage,
+            kill=kill,
+            heal=heal,
             pause=lambda: c.pause(name),
             unpause=lambda: c.unpause(name),
         )
@@ -507,6 +803,10 @@ REPROS = {
     " as_of",
     "repro-replacement-brick": "SQL-603: bootstrap halts forever on an"
     " interrupted replacement apply",
+    "repro-stale-merge-res": "a merge res retried after a lost consensus"
+    " response overwrites a newer compaction",
+    "repro-alter-table-schema": "SQL-616 / PER-59: a kill inside ALTER TABLE"
+    " ADD COLUMN leaves the catalog and the shard's schema out of step",
 }
 
 
@@ -1107,6 +1407,197 @@ def repro_replacement_brick(c, toxiproxy, ctx, log) -> None:
     log.log("repro", "not reproduced in 15 iterations")
 
 
+def repro_stale_merge_res(c, toxiproxy, ctx, log) -> None:
+    """Race a forced compaction against a merge res whose response is lost.
+
+    The organic version of this needs two compactions of the *same* spine id
+    to be applied around one indeterminate retry, and nothing in a short run
+    produces the second one reliably: claiming an unclaimed compaction needs
+    the previous one to be older than the writer lease, which is a hardcoded
+    60 minutes. `persistcli admin force-compaction` has no such rule, it
+    ignores active compactions entirely, and its own writes go straight to the
+    metadata store rather than through toxiproxy. So it can land a competing
+    res for the same range while envd's merge res is stuck retrying.
+
+    Each iteration: start a forced compaction, flap the metadata leg so envd's
+    own merge res CaS comes back indeterminate and retries against a state the
+    forced compaction has moved, heal, then force a GC to walk the diffs.
+    Reproduced means envd panicking in gc.rs, or GC deleting a part current
+    state still references, which the post-run audit would catch.
+    """
+    from materialize.invariants.mz import MzClient
+
+    system = MzClient(
+        ctx, "stale-merge-res", user="mz_system", port=ctx.endpoints.mz_system_port
+    )
+    # envd force-compacts the catalog shard in a background task whose fuel and
+    # period are dyncfgs ("we're going to gradually turn this on via dyncfgs").
+    # Turned up, it produces a merge res for the same spine ids regular
+    # compaction is working on, from the same process, over the same proxied
+    # consensus connection. That is the racing pair the bug needs, and unlike
+    # `persistcli admin force-compaction` it runs with the real codecs.
+    system.query("ALTER SYSTEM SET persist_catalog_force_compaction_wait = '1s'")
+    system.query("ALTER SYSTEM SET persist_catalog_force_compaction_fuel = 1000000")
+    system.query("ALTER SYSTEM SET persist_rollup_threshold = 8")
+    system.query("ALTER SYSTEM SET persist_inline_writes_single_max_bytes = 0")
+    system.query("ALTER SYSTEM SET persist_inline_writes_total_max_bytes = 0")
+    system.query("ALTER SYSTEM SET persist_blob_target_size = 4096")
+    log.log("repro", "catalog forced compaction turned up")
+
+    def panicked() -> bool:
+        logs = c.invoke("logs", "materialized", capture=True, silent=True).stdout or ""
+        return "batch_parts_to_delete" in logs or "should only be appended once" in logs
+
+    for iteration in range(40):
+        # Short cuts, so a CaS that already reached consensus loses only its
+        # response. A long outage would just fail the call outright.
+        for _ in range(24):
+            try:
+                toxiproxy.set_enabled("metadata", False)
+                time.sleep(0.15)
+                toxiproxy.set_enabled("metadata", True)
+                time.sleep(0.25)
+            except Exception:
+                break
+        _toxiproxy_heal(toxiproxy, log)
+        # Let the retries land and GC walk what they produced.
+        time.sleep(8)
+        if panicked():
+            raise AssertionError(
+                f"REPRODUCED: stale merge res corrupted a shard, iteration {iteration}"
+            )
+        retries = (
+            c.invoke("logs", "materialized", capture=True, silent=True).stdout or ""
+        ).count("merge_res received an indeterminate")
+        log.log(
+            "repro",
+            f"iteration {iteration}: no corruption yet, {retries} merge_res retries",
+        )
+    log.log("repro", "not reproduced in 40 iterations")
+
+
+def repro_alter_table_schema(c, toxiproxy, ctx, log) -> None:
+    """Kill environmentd between ALTER TABLE's two halves, then fail to boot.
+
+    The catalog transaction commits first and the persist schema evolution
+    runs afterwards, as a catalog implication. A crash in between leaves the
+    catalog holding a table version whose schema the data shard never
+    registered.
+
+    Two panics come out of that state. Re-running the evolution finds persist
+    already past the version it expects and soft-panics instead of treating it
+    as done (SQL-616). Once it has failed, bootstrap registers the table with
+    txn-wal presenting a desc the shard never registered and dies with "schema
+    should be registered" (PER-59), on every boot.
+
+    Hitting that gap needs the offset to be measured rather than guessed. A
+    latency toxic on the metadata leg stretches every round trip the ALTER
+    makes, not only the evolution, so the pre-commit half alone runs for tens
+    of seconds. This calibrates the whole window, bisects it for the moment
+    the catalog commit lands, and then kills just after it.
+    """
+    from materialize.invariants.mz import MzClient
+
+    MARKERS = ("schema should be registered", "schema expectation mismatch")
+
+    def panicked() -> str | None:
+        logs = c.invoke("logs", "materialized", capture=True, silent=True).stdout or ""
+        return next((m for m in MARKERS if m in logs), None)
+
+    driver = MzClient(ctx, "alter-driver")
+    system = MzClient(
+        ctx, "alter-system", user="mz_system", port=ctx.endpoints.mz_system_port
+    )
+    system.query("ALTER SYSTEM SET enable_alter_table_add_column = true")
+
+    def with_delay(add: bool) -> None:
+        for stream in ("upstream", "downstream"):
+            if add:
+                toxiproxy.add_toxic(
+                    "metadata",
+                    f"alter-delay-{stream}",
+                    "latency",
+                    {"latency": 1500, "jitter": 500},
+                    stream=stream,
+                )
+            else:
+                toxiproxy.delete_toxic("metadata", f"alter-delay-{stream}")
+
+    def attempt(table: str, offset: float) -> tuple[bool, str | None]:
+        """ALTER, kill at `offset`, restart. Returns (committed, panic)."""
+        driver.write(f"CREATE TABLE {table} (a int, b text)")
+        driver.write(f"INSERT INTO {table} VALUES (1, 'x')")
+
+        def alter() -> None:
+            try:
+                MzClient(ctx, f"alter-{table}").write(
+                    f"ALTER TABLE {table} ADD COLUMN c int", timeout=300
+                )
+            except Exception:
+                pass
+
+        with_delay(True)
+        thread = threading.Thread(target=alter, daemon=True)
+        thread.start()
+        time.sleep(offset)
+        c.kill("materialized")
+        with_delay(False)
+        try:
+            c.up("materialized", detach=True, max_tries=2)
+        except Exception as e:
+            log.log("repro", f"{table}: did not come up ({e})")
+        thread.join(timeout=60)
+        marker = panicked()
+        driver.reset()
+        try:
+            committed = bool(
+                driver.query(
+                    "SELECT 1 FROM mz_catalog.mz_columns c"
+                    " JOIN mz_catalog.mz_tables t ON c.id = t.id"
+                    f" WHERE t.name = '{table}' AND c.name = 'c'"
+                )
+            )
+        except Exception:
+            committed = False
+        return committed, marker
+
+    # 1. How long is one uninterrupted ALTER under the delay?
+    driver.write("CREATE TABLE alter_calibrate (a int, b text)")
+    with_delay(True)
+    started = time.monotonic()
+    driver.write("ALTER TABLE alter_calibrate ADD COLUMN c int", timeout=300)
+    window = time.monotonic() - started
+    with_delay(False)
+    log.log("repro", f"one ALTER takes {window:.1f}s under the metadata delay")
+
+    # 2. Bisect for the earliest offset whose kill still leaves the catalog
+    #    change committed. That is the moment the transaction lands, and the
+    #    implication runs in the seconds right after it.
+    low, high = 0.0, window
+    for step in range(6):
+        mid = (low + high) / 2
+        committed, marker = attempt(f"alter_bisect_{step}", mid)
+        if marker is not None:
+            raise AssertionError(f"REPRODUCED {marker!r} while bisecting at {mid:.1f}s")
+        log.log("repro", f"bisect {mid:.1f}s: committed={committed}")
+        if committed:
+            high = mid
+        else:
+            low = mid
+    log.log("repro", f"catalog commit lands at ~{high:.1f}s of {window:.1f}s")
+
+    # 3. Kill just after the commit, walking outwards until the implication
+    #    has certainly finished.
+    for step, delta in enumerate([0.2, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]):
+        committed, marker = attempt(f"alter_exploit_{step}", high + delta)
+        if marker is not None:
+            raise AssertionError(
+                f"REPRODUCED {marker!r} killing {delta:.1f}s after the commit"
+            )
+        log.log("repro", f"commit+{delta:.1f}s: committed={committed}, booted again")
+    log.log("repro", "not reproduced")
+
+
 REPRO_FUNCS = {
     "repro-blob-memory": repro_blob_memory,
     "repro-postheal-stall": repro_postheal_stall,
@@ -1114,4 +1605,6 @@ REPRO_FUNCS = {
     "repro-durable-resume": repro_durable_resume,
     "repro-compute-asof": repro_compute_asof,
     "repro-replacement-brick": repro_replacement_brick,
+    "repro-alter-table-schema": repro_alter_table_schema,
+    "repro-stale-merge-res": repro_stale_merge_res,
 }

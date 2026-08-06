@@ -46,12 +46,18 @@ from materialize.invariants.toxiproxy import (
 
 REPORT_INTERVAL = 10.0
 
+# Each probe shells out to `docker compose logs` once per service, so it is
+# kept well below the report cadence.
+CRASH_PROBE_INTERVAL = 20.0
+
 # Behavior-preserving system flags the agitator flips mid-run, a subset of
 # parallel-workload's FlipFlagsAction catalog. Plan- and performance-affecting
 # flags are fair game, results-changing ones are not: every invariant must
 # hold under any combination of these.
 AGITATOR_FLAGS: dict[str, list[str]] = {
-    "persist_blob_target_size": ["1048576", "16777216", "134217728"],
+    # The small value keeps batches many-parted, so compaction, GC part
+    # deletion, and the run/part boundaries do real work on small tables too.
+    "persist_blob_target_size": ["65536", "1048576", "16777216", "134217728"],
     "persist_batch_max_run_len": ["2", "4", "16", "1000"],
     "persist_compaction_memory_bound_bytes": [
         "67108864",
@@ -170,6 +176,7 @@ class Runner:
         midrun_event=None,
         restore_proxies: list[Proxy] | None = None,
         restart_toxiproxy: Callable[[], None] | None = None,
+        crash_probe: Callable[[], str | None] = lambda: None,
     ) -> None:
         self.scenario = scenario
         self.ctx = scenario.ctx
@@ -180,6 +187,7 @@ class Runner:
         self.midrun_event = midrun_event
         self.restore_proxies = restore_proxies
         self.restart_toxiproxy = restart_toxiproxy
+        self.crash_probe = crash_probe
         self.failure: BaseException | None = None
         self._failure_lock = threading.Lock()
         self.worker_stats: list[Counter[tuple[str, str]]] = []
@@ -293,6 +301,12 @@ class Runner:
             ctx.log.log("phase", "final check")
             self.scenario.final_check()
             self._check_vacuity()
+            # The probe only runs while the monitor does, so a process that
+            # died during converge or the final check would otherwise be
+            # noticed by nobody: both phases tolerate reconnecting.
+            crash = self.crash_probe()
+            if crash is not None:
+                raise InvariantViolation(crash)
         except BaseException as e:
             self.fail(e)
             self._dump_diagnostics()
@@ -305,8 +319,19 @@ class Runner:
         end = time.monotonic() + self.runtime
         half = end - self.runtime / 2
         last_report = time.monotonic()
+        last_probe = time.monotonic()
         while time.monotonic() < end and not self.ctx.stop.is_set():
             time.sleep(1)
+            # The harness kills processes itself, so a process that died of a
+            # panic looks exactly like a disruption from the outside and the
+            # run would otherwise pass. Failing here attributes the crash to
+            # the disruptions that were active when it happened.
+            if time.monotonic() - last_probe >= CRASH_PROBE_INTERVAL:
+                last_probe = time.monotonic()
+                crash = self.crash_probe()
+                if crash is not None:
+                    self.fail(InvariantViolation(crash))
+                    return
             if self._half_marks is None and time.monotonic() >= half:
                 self._half_marks = (
                     [checker.validations for checker in self.checkers],

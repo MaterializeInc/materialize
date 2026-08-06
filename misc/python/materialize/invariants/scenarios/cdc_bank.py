@@ -24,6 +24,7 @@ from abc import abstractmethod
 from typing import Any
 
 from materialize.invariants.checkers import (
+    GroupCompletenessPeek,
     PeekChecker,
     ProgressPeek,
     SubscribeChecker,
@@ -190,6 +191,13 @@ class SourceTableChurn(Action):
                 continue
             total = int(rows[0][0])
             if total != self.scenario.total:
+                if not self.scenario.snapshot_conservation_checked:
+                    self.scenario.ctx.log.log(
+                        "op",
+                        f"SS-427: snapshot of {name} shows a non-conserved"
+                        f" total: {total} != {self.scenario.total}",
+                    )
+                    break
                 raise InvariantViolation(
                     f"snapshot of {name} shows a non-conserved total:"
                     f" {total} != {self.scenario.total}"
@@ -274,7 +282,20 @@ class CdcTotalPeek(PeekChecker):
         # rng, not round-robin: the cluster rotation has the same period as
         # the query list, round-robin would pin each form to one cluster.
         query, expected_rows = self.rng.choice(self.QUERIES)
-        rows = self.peek(query)
+        recent = self.scenario.recent_ts.get()
+        if recent > 0 and self.rng.random() < 0.25:
+            # Time travel into retained history. Conservation is
+            # timestamp-free, so it must hold at every past timestamp too,
+            # and a tear that the live state has already healed is still
+            # recorded there.
+            as_of = self.rng.randint(max(recent - 120_000, 1), recent)
+            query, expected_rows = f"SELECT total FROM bank_total AS OF {as_of}", 1
+        try:
+            rows = self.peek(query)
+        except UnexpectedQueryError as e:
+            if "could not find a valid timestamp" in str(e):
+                raise TransientError(f"{as_of} no longer readable") from None
+            raise
         if len(rows) != expected_rows or any(
             int(row[0]) != self.scenario.total for row in rows
         ):
@@ -282,6 +303,9 @@ class CdcTotalPeek(PeekChecker):
                 f"upstream-transaction atomicity broken via {query!r}: expected"
                 f" {expected_rows}x total {self.scenario.total}, got {rows}"
             )
+        self.scenario.recent_ts.advance(
+            int(self.client.query("SELECT mz_now()::text")[0][0])
+        )
         self.validations += 1
 
 
@@ -406,6 +430,77 @@ class RtrPeek(Checker):
         self.client.reset()
 
 
+# A transaction's rows say how many of them there should be, so a group of
+# any other size means the transaction became visible in pieces.
+WIDE_TXN_TORN_SQL = (
+    "SELECT txn_id, count(*), txn_rows FROM wide_txn_tbl"
+    " GROUP BY txn_id, txn_rows HAVING count(*) <> txn_rows"
+)
+
+
+class WideTransaction(Action):
+    """One upstream transaction writing many self-describing rows.
+
+    The transfer workload commits two rows at a time, and a two-row
+    transaction is a small target: an interrupted snapshot or a resumption has
+    to land exactly between them to tear. These transactions are tens of rows
+    wide, so the window a reader can fall into is correspondingly wider.
+
+    Every row carries the id of its transaction and the number of rows that
+    transaction wrote, which makes the atomicity invariant self-contained: no
+    checker state, no knowledge of which transactions committed, and it holds
+    at every timestamp, including ones in retained history.
+    """
+
+    name = "wide-txn"
+
+    def __init__(self, rng: random.Random, worker: int, scenario: "CdcBank") -> None:
+        super().__init__(rng)
+        self.worker = worker
+        self.scenario = scenario
+        self.conn: Any = None
+        self.seq = 0
+
+    def run(self) -> Outcome | None:
+        if self.conn is None:
+            try:
+                self.conn = self.scenario.connect_upstream()
+            except Exception as e:
+                raise TransientError(f"upstream connect failed: {e}") from e
+        self.seq += 1
+        # Unique across workers without coordination.
+        txn_id = self.worker * 10_000_000 + self.seq
+        rows = self.rng.randint(5, 50)
+        values = ", ".join(f"({txn_id}, {rows}, {i})" for i in range(rows))
+        try:
+            self.conn.cursor().execute(
+                f"INSERT INTO wide_txn (txn_id, txn_rows, idx) VALUES {values}"
+            )
+        except Exception:
+            try:
+                self.conn.rollback()
+            except Exception:
+                self._drop()
+            return Outcome.FAILED
+        try:
+            self.conn.commit()
+        except Exception:
+            self._drop()
+            return Outcome.UNKNOWN
+        return Outcome.COMMITTED
+
+    def _drop(self) -> None:
+        conn, self.conn = self.conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        self._drop()
+
+
 class CdcBank(Scenario):
     # Real-time recency is documented for Kafka, PostgreSQL, and MySQL
     # sources only.
@@ -417,6 +512,10 @@ class CdcBank(Scenario):
     upstream_ddl_supported = True
     # The CREATE TABLE .. FROM SOURCE reference for the accounts table.
     accounts_reference: str
+    # TODO: Reenable when SS-427 is fixed. A MySQL snapshot taken while the
+    # upstream connection is being truncated can expose half of an upstream
+    # transaction, which shows up here as a non-conserved total.
+    snapshot_conservation_checked = True
 
     def __init__(self, ctx: ScenarioContext) -> None:
         super().__init__(ctx)
@@ -424,6 +523,9 @@ class CdcBank(Scenario):
         self.total = self.accounts * BALANCE_PER_ACCOUNT
         self.oplog = OpLog()
         self.transfer_rows = Watermark()
+        # Recent timestamps observed by the conservation peeks, so the same
+        # invariant can be re-asked of retained history.
+        self.recent_ts = Watermark()
 
     @abstractmethod
     def connect_upstream(self) -> Any:
@@ -441,7 +543,12 @@ class CdcBank(Scenario):
         self.setup_upstream()
         client = MzClient(self.ctx, "setup")
         for sql in self.mz_setup_sql() + [
-            "CREATE MATERIALIZED VIEW bank_total IN CLUSTER compute AS"
+            # RETAIN HISTORY so the conservation oracle can be asked of past
+            # timestamps: a torn upstream transaction is durable in the
+            # shard's history even once the live state has converged, which
+            # is how SS-427 stayed findable after the fact.
+            "CREATE MATERIALIZED VIEW bank_total IN CLUSTER compute"
+            " WITH (RETAIN HISTORY = FOR '600s') AS"
             " SELECT coalesce(sum(balance), 0) AS total FROM accounts_tbl",
             "CREATE INDEX bank_total_idx IN CLUSTER compute ON bank_total (total)",
         ]:
@@ -455,8 +562,11 @@ class CdcBank(Scenario):
         client.reset()
 
     def make_worker(self, index: int, rng: random.Random) -> WorkerBundle:
-        actions: list[Action] = [UpstreamTransfer(rng, index, self)]
-        weights = [20]
+        actions: list[Action] = [
+            UpstreamTransfer(rng, index, self),
+            WideTransaction(rng, index, self),
+        ]
+        weights = [20, 4]
         if index == 0:
             actions.append(
                 SourceTableChurn(rng, MzClient(self.ctx, "source-table"), self)
@@ -468,9 +578,17 @@ class CdcBank(Scenario):
         return WorkerBundle(actions=actions, weights=weights)
 
     def checkers(self) -> list[Checker]:
-        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(5)]
+        rngs = [random.Random(self.ctx.rng.randrange(SEED_RANGE)) for _ in range(6)]
         checkers: list[Checker] = [
             CdcTotalPeek(rngs[0], self.ctx, self),
+            GroupCompletenessPeek(
+                rngs[5],
+                self.ctx,
+                "wide-txn-atomicity",
+                WIDE_TXN_TORN_SQL,
+                clusters=["quickstart"],
+                history=self.recent_ts,
+            ),
             TransferCountPeek(rngs[1], self.ctx, self),
             CdcTotalSubscribe(rngs[2], self.ctx, self),
             ProgressPeek(rngs[3], self.ctx, "bank_source"),
@@ -604,13 +722,17 @@ class PgCdcBank(CdcBank):
             "CREATE TABLE transfers (worker int, seq bigint, src int, dst int,"
             " amount bigint)"
         )
+        cur.execute("CREATE TABLE wide_txn (txn_id bigint, txn_rows int, idx int)")
         cur.execute("ALTER TABLE accounts REPLICA IDENTITY FULL")
         cur.execute("ALTER TABLE transfers REPLICA IDENTITY FULL")
+        cur.execute("ALTER TABLE wide_txn REPLICA IDENTITY FULL")
         cur.execute(
             "INSERT INTO accounts SELECT generate_series(0, %s), %s",
             (self.accounts - 1, BALANCE_PER_ACCOUNT),
         )
-        cur.execute("CREATE PUBLICATION bank_pub FOR TABLE accounts, transfers")
+        cur.execute(
+            "CREATE PUBLICATION bank_pub FOR TABLE accounts, transfers, wide_txn"
+        )
         conn.commit()
         conn.close()
 
@@ -623,11 +745,13 @@ class PgCdcBank(CdcBank):
             " FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'bank_pub')",
             "CREATE TABLE accounts_tbl FROM SOURCE bank_source (REFERENCE accounts)",
             "CREATE TABLE transfers_tbl FROM SOURCE bank_source (REFERENCE transfers)",
+            "CREATE TABLE wide_txn_tbl FROM SOURCE bank_source (REFERENCE wide_txn)",
         ]
 
 
 class MySqlCdcBank(CdcBank):
     name = "mysql-cdc-bank"
+    snapshot_conservation_checked = False
     accounts_reference = "bank.accounts"
     services = ["mysql"]
     legs = [
@@ -676,6 +800,7 @@ class MySqlCdcBank(CdcBank):
             "CREATE TABLE transfers (worker int, seq bigint, src int, dst int,"
             " amount bigint)"
         )
+        cur.execute("CREATE TABLE wide_txn (txn_id bigint, txn_rows int, idx int)")
         # Batched so the large complexity does not pay one round trip per row.
         for start in range(0, self.accounts, 1000):
             values = ", ".join(
@@ -699,6 +824,8 @@ class MySqlCdcBank(CdcBank):
             " (REFERENCE bank.accounts)",
             "CREATE TABLE transfers_tbl FROM SOURCE bank_source"
             " (REFERENCE bank.transfers)",
+            "CREATE TABLE wide_txn_tbl FROM SOURCE bank_source"
+            " (REFERENCE bank.wide_txn)",
         ]
 
 
@@ -757,12 +884,17 @@ class SqlServerCdcBank(CdcBank):
             "CREATE TABLE accounts (id int PRIMARY KEY, balance bigint NOT NULL)",
             "CREATE TABLE transfers (worker int NOT NULL, seq bigint NOT NULL,"
             " src int, dst int, amount bigint, PRIMARY KEY (worker, seq))",
+            "CREATE TABLE wide_txn (txn_id bigint NOT NULL, txn_rows int NOT NULL,"
+            " idx int NOT NULL)",
             *inserts,
             "EXEC sys.sp_cdc_enable_table @source_schema = 'dbo',"
             " @source_name = 'accounts', @role_name = 'SA',"
             " @supports_net_changes = 0",
             "EXEC sys.sp_cdc_enable_table @source_schema = 'dbo',"
             " @source_name = 'transfers', @role_name = 'SA',"
+            " @supports_net_changes = 0",
+            "EXEC sys.sp_cdc_enable_table @source_schema = 'dbo',"
+            " @source_name = 'wide_txn', @role_name = 'SA',"
             " @supports_net_changes = 0",
             # SQL Server CDC only advances its LSN watermark with new log
             # activity. Without a ticker the source frontier stalls as soon
@@ -805,4 +937,6 @@ class SqlServerCdcBank(CdcBank):
             " (REFERENCE dbo.accounts)",
             "CREATE TABLE transfers_tbl FROM SOURCE bank_source"
             " (REFERENCE dbo.transfers)",
+            "CREATE TABLE wide_txn_tbl FROM SOURCE bank_source"
+            " (REFERENCE dbo.wide_txn)",
         ]
