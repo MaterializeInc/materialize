@@ -161,7 +161,7 @@ steps:
         artifact_paths: [sbom.json, inspector-results.json]
 
   - id: miri-test
-    topics: [kafka, postgres]
+    topics: [kafka, mysql, postgres]
     label: ":rust: Miri test (full)"
     depends_on: build-aarch64
     timeout_in_minutes: 60

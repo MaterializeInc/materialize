@@ -41,6 +41,10 @@ pub use privileges::validate_source_privileges;
 
 pub mod decoding;
 pub use decoding::pack_mysql_row;
+
+pub mod probe;
+pub use probe::KeyProber;
+
 mod aws_rds;
 
 #[derive(Debug, Clone)]
@@ -96,6 +100,12 @@ pub enum MySqlError {
     ValueDecodeError {
         column_name: String,
         qualified_table_name: String,
+        error: String,
+    },
+    #[error("non-UTF-8 key value in '{qualified_table_name}' column '{column_name}': {error}")]
+    NonUtf8KeyValue {
+        qualified_table_name: String,
+        column_name: String,
         error: String,
     },
     #[error("unsupported data types: {columns:?}")]
