@@ -43,6 +43,31 @@ class RefreshIntervalConfigError(CompilationError):
         return msg
 
 
+class IndexConfigNotDictError(CompilationError):
+    def __init__(self, raw_index: Any):
+        self.raw_index = raw_index
+        super().__init__(msg=self.get_message())
+
+    def get_message(self) -> str:
+        msg = (
+            f"Invalid index config:\n"
+            f"  Got: {self.raw_index}\n"
+            f'  Expected a dictionary with at minimum a "columns" key'
+        )
+        return msg
+
+
+class IndexConfigError(CompilationError):
+    def __init__(self, exc: TypeError):
+        self.exc = exc
+        super().__init__(msg=self.get_message())
+
+    def get_message(self) -> str:
+        validator_msg = self.validator_error_message(self.exc)
+        msg = f"Could not parse index config: {validator_msg}"
+        return msg
+
+
 class PartitionByConfigError(CompilationError):
     def __init__(self, raw_partition_by: Any):
         self.raw_partition_by = raw_partition_by
