@@ -516,6 +516,12 @@ metrics:
   - server_name
   source: src/service/src/transport/metrics.rs
   visibility: internal
+- name: mz_cluster_server_tls_handshake_failures_total
+  help: The number of connection attempts that failed the TLS handshake, including client identity verification. A nonzero rate means some peer is reaching the server port without valid credentials, or the controller's and the server's credentials have diverged.
+  labels:
+  - server_name
+  source: src/service/src/transport/metrics.rs
+  visibility: internal
 - name: mz_column_pager_budget_configured_bytes
   help: Most-recently-configured total budget for the column-pager tiered policy.
   source: src/timely-util/src/column_pager/metrics.rs
@@ -894,6 +900,10 @@ metrics:
 - name: mz_coordinator_message_batch_size_sum
   help: Message batch size handled by the coordinator.
   source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_ctp_tls_cert_not_after
+  help: The expiry of this process's cluster transport TLS certificate, in seconds since the Unix epoch.
+  source: src/clusterd/src/lib.rs
   visibility: internal
 - name: mz_dataflow_events_read_total
   help: Count of events we have read from the wire

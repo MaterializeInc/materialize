@@ -803,6 +803,7 @@ impl Listeners {
         let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
 
         let secrets_controller = Arc::clone(&orchestrator);
+        let secrets_controller: Arc<dyn mz_secrets::SecretsController> = secrets_controller;
         let connection_context = ConnectionContext::for_tests(orchestrator.reader());
         let orchestrator = Arc::new(TracingOrchestrator::new(
             orchestrator,
@@ -875,6 +876,15 @@ impl Listeners {
                         secrets_reader_name_prefix: None,
                     },
                     connection_context,
+                    // Enabled in tests so the TLS path is exercised by every test that starts a
+                    // cluster, while production deployments opt in explicitly.
+                    cluster_tls: Some(Arc::new(
+                        mz_service::transport::tls::ClusterTlsContext::bootstrap(
+                            Arc::clone(&secrets_controller),
+                            "materialize-test",
+                        )
+                        .await?,
+                    )),
                     replica_http_locator: Default::default(),
                 },
                 secrets_controller,

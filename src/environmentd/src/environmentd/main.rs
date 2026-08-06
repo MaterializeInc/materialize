@@ -68,6 +68,7 @@ use mz_secrets::SecretsController;
 use mz_server_core::TlsCliArgs;
 use mz_service::emit_boot_diagnostics;
 use mz_service::secrets::{SecretsControllerKind, SecretsReaderCliArgs};
+use mz_service::transport::tls::ClusterTlsContext;
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use opentelemetry::trace::TraceContextExt;
@@ -329,6 +330,13 @@ pub struct Args {
         required_if_eq("secrets_controller", "aws-secrets-manager")
     )]
     aws_secrets_controller_tags: Vec<KeyValueArg<String, String>>,
+    /// Whether to secure cluster transport (controller to replica) connections with mutual TLS.
+    ///
+    /// When enabled, environmentd maintains a per-environment certificate authority in an
+    /// internal secret and distributes per-replica credentials through the secrets controller.
+    /// Replicas then require TLS on their controller listeners.
+    #[clap(long, env = "CLUSTER_TRANSPORT_TLS")]
+    cluster_transport_tls: bool,
     /// The clusterd image reference to use.
     #[structopt(
         long,
@@ -1047,6 +1055,17 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
     );
     let orchestrator = Arc::new(TracingOrchestrator::new(orchestrator, args.tracing.clone()));
     let replica_http_locator = Arc::new(ReplicaHttpLocator::default());
+    let cluster_tls = if args.cluster_transport_tls {
+        let ctx = runtime
+            .block_on(ClusterTlsContext::bootstrap(
+                Arc::clone(&secrets_controller),
+                &args.environment_id.to_string(),
+            ))
+            .context("bootstrapping cluster transport TLS")?;
+        Some(Arc::new(ctx))
+    } else {
+        None
+    };
     let controller = ControllerConfig {
         build_info: &BUILD_INFO,
         orchestrator,
@@ -1071,6 +1090,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
             secrets_reader_aws_prefix: Some(aws_secrets_controller_prefix(&args.environment_id)),
             secrets_reader_name_prefix: args.orchestrator_kubernetes_name_prefix.clone(),
         },
+        cluster_tls,
         replica_http_locator: Arc::clone(&replica_http_locator),
     };
 
