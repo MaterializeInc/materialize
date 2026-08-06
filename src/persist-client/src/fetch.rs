@@ -656,8 +656,11 @@ where
     }
 
     /// Returns the pushdown stats for this part.
+    ///
+    /// Stats written by a newer version may not decode; those return `None`,
+    /// the same as a part that carries no stats.
     pub fn stats(&self) -> Option<PartStats> {
-        self.part.stats().map(|x| x.decode())
+        self.part.stats().and_then(|x| x.try_decode().ok())
     }
 
     /// Apply any relevant projection pushdown optimizations, assuming that the data in the part
@@ -870,9 +873,14 @@ impl<K: Codec, V: Codec, T: Timestamp + Lattice + Codec64, D> FetchedBlob<K, V, 
     }
 
     /// Decodes and returns the pushdown stats for this part, if known.
+    ///
+    /// Stats written by a newer version may not decode; those return `None`,
+    /// the same as a part that carries no stats.
     pub fn stats(&self) -> Option<PartStats> {
         match &self.buf {
-            FetchedBlobBuf::Hollow { part, .. } => part.stats.as_ref().map(|x| x.decode()),
+            FetchedBlobBuf::Hollow { part, .. } => {
+                part.stats.as_ref().and_then(|x| x.try_decode().ok())
+            }
             FetchedBlobBuf::Inline { .. } => None,
         }
     }
