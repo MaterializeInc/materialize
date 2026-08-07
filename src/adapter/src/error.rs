@@ -129,7 +129,9 @@ pub enum AdapterError {
     },
     /// A dependency's definition changed while a statement was being sequenced.
     /// Raised by `PlanValidity::check` when a dependency's `create_sql` hash no
-    /// longer matches what we captured at plan time.
+    /// longer matches what we captured at plan time, and by
+    /// `Coordinator::stage_group_commit` when a table's `RelationDesc` no longer
+    /// matches the rows a staged write packed against it.
     ConcurrentDependencyMutation {
         dependency_id: String,
     },
