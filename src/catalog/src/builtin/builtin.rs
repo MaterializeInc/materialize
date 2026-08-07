@@ -338,7 +338,7 @@ SELECT * FROM builtin_sources");
             ("size", "*Deprecated* The size of the source."),
             (
                 "envelope_type",
-                "For Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for other source types.",
+                "For old-syntax Kafka sources, the envelope type: `none`, `upsert`, or `debezium`. `NULL` for new-syntax Kafka sources, whose envelopes are defined per source table (see `mz_kafka_source_tables`), and for other source types.",
             ),
             (
                 "key_format",

@@ -1353,7 +1353,7 @@ SELECT STDDEV(a) FROM t8
 ----
 4611686017711549096.944
 
-# Avoid overflow (known issue https://github.com/MaterializeInc/database-issues/issues/4341)
+# Avoid overflow (known issue DB-191)
 statement ok
 DROP TABLE t8
 

@@ -19,7 +19,9 @@
 // limitations under the License.
 
 use mz_ore::str::StrExt;
-use mz_sql_lexer::keywords::{ALL, ANY, AS, DISTINCT, INTO, Keyword, LIST, PREPARE, SOME, WHEN};
+use mz_sql_lexer::keywords::{
+    ALL, ANY, AS, DISTINCT, IF, INTO, Keyword, LIST, PREPARE, SOME, WHEN,
+};
 use mz_sql_lexer::lexer::{IdentString, MAX_IDENTIFIER_LENGTH};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -359,6 +361,12 @@ impl Ident {
                         // (`COPY into FROM x` -> `COPY INTO <name=from> …`, which
                         // then fails expecting the FROM/TO direction).
                         || kw == INTO
+                        // The `IF [NOT] EXISTS` clauses of CREATE/DROP/ALTER sit
+                        // exactly where the object name goes, so a bare `if` name
+                        // is consumed as the start of such a clause on reparse
+                        // (`CREATE CLUSTER if (SIZE …)` -> "expected NOT, found
+                        // left parenthesis").
+                        || kw == IF
                 })
                 .unwrap_or(false)
     }

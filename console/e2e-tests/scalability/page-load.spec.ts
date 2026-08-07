@@ -30,10 +30,12 @@ import {
   sourcesListUrl,
 } from "./helpers";
 
+// Generous ceiling: this suite measures load times rather than asserting
+// them, and 30s renders were observed under CI workload-replay load.
 async function measureUntilVisible(
   page: Page,
   selectors: string | string[],
-  timeoutMs = 30_000,
+  timeoutMs = 120_000,
 ): Promise<number> {
   const start = performance.now();
   const selectorList = Array.isArray(selectors) ? selectors : [selectors];

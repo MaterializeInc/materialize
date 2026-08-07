@@ -323,6 +323,7 @@ impl CatalogState {
                 connection_context: ConnectionContext::for_tests(Arc::new(
                     InMemorySecretsController::new(),
                 )),
+                aws_account_id: None,
                 helm_chart_version: None,
             },
             cluster_replica_sizes: ClusterReplicaSizeMap::for_tests(),

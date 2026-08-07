@@ -4564,6 +4564,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_create_cluster(&mut self) -> Result<Statement<Raw>, ParserError> {
+        let if_not_exists = self.parse_if_not_exists()?;
         let name = self.parse_identifier()?;
         // For historical reasons, the parentheses around the options can be
         // omitted.
@@ -4586,6 +4587,7 @@ impl<'a> Parser<'a> {
             name,
             options,
             features,
+            if_not_exists,
         }))
     }
 
@@ -4871,6 +4873,7 @@ impl<'a> Parser<'a> {
 
     fn parse_create_cluster_replica(&mut self) -> Result<Statement<Raw>, ParserError> {
         self.next_token();
+        let if_not_exists = self.parse_if_not_exists()?;
         let of_cluster = self.parse_identifier()?;
         self.expect_token(&Token::Dot)?;
         let name = self.parse_identifier()?;
@@ -4885,6 +4888,7 @@ impl<'a> Parser<'a> {
             CreateClusterReplicaStatement {
                 of_cluster,
                 definition: ReplicaDefinition { name, options },
+                if_not_exists,
             },
         ))
     }

@@ -189,7 +189,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # TODO(def-) Increase number of actions when database-issues#7257 is fixed
+            # TODO(def-) Increase number of actions when SS-422 is fixed
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=50000, --max-execution-time=4h]
 
   - group: Benchmarks

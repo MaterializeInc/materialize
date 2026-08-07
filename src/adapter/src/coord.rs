@@ -362,6 +362,8 @@ pub enum Message {
         responses: Vec<crate::util::CompletedClientTransmitter>,
         /// Statement executions associated with this commit.
         statement_logging_ids: Vec<StatementLoggingId>,
+        /// Frontend-sequenced writes to complete after local timestamp bookkeeping.
+        internal_results: Vec<crate::coord::appends::InternalWriteResponder>,
         /// The applied write timestamp.
         write_ts: Timestamp,
     },

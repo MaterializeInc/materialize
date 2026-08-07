@@ -4778,7 +4778,9 @@ pub fn plan_alter_network_policy(
     ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
 
     let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
-    let policy = ctx.catalog.resolve_network_policy(&name.to_string())?;
+    let policy = ctx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))?;
 
     let Some(rule_defs) = policy_options.rules else {
         sql_bail!("RULES must be specified when creating network policies.");
@@ -4936,6 +4938,7 @@ pub fn plan_create_cluster_inner(
         name,
         options,
         features,
+        if_not_exists,
     }: CreateClusterStatement<Aug>,
 ) -> Result<CreateClusterPlan, PlanError> {
     let ClusterOptionExtracted {
@@ -5072,6 +5075,7 @@ pub fn plan_create_cluster_inner(
                 auto_scaling_strategy,
             }),
             workload_class,
+            if_not_exists,
         })
     } else {
         let Some(replica_defs) = replicas else {
@@ -5119,19 +5123,24 @@ pub fn plan_create_cluster_inner(
             name: normalize::ident(name),
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
             workload_class,
+            if_not_exists,
         })
     }
 }
 
 /// Convert a [`CreateClusterPlan`] into a [`CreateClusterStatement`].
 ///
-/// The reverse of [`plan_create_cluster`].
+/// The reverse of [`plan_create_cluster`], so this renders `IF NOT EXISTS`
+/// when the plan carries it. A caller that wants the cluster's canonical
+/// definition rather than a faithful reverse must pass `if_not_exists: false`,
+/// which is what `Cluster::try_to_plan` produces for `SHOW CREATE CLUSTER`.
 pub fn unplan_create_cluster(
     scx: &StatementContext,
     CreateClusterPlan {
         name,
         variant,
         workload_class,
+        if_not_exists,
     }: CreateClusterPlan,
 ) -> Result<CreateClusterStatement<Aug>, PlanError> {
     match variant {
@@ -5232,6 +5241,7 @@ pub fn unplan_create_cluster(
                 name,
                 options,
                 features,
+                if_not_exists,
             })
         }
         CreateClusterVariant::Unmanaged(_) => {
@@ -5561,6 +5571,7 @@ pub fn plan_create_cluster_replica(
     CreateClusterReplicaStatement {
         definition: ReplicaDefinition { name, options },
         of_cluster,
+        if_not_exists,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let cluster = scx
@@ -5581,6 +5592,7 @@ pub fn plan_create_cluster_replica(
         name: normalize::ident(name),
         cluster_id: cluster.id(),
         config,
+        if_not_exists,
     }))
 }
 
@@ -8335,7 +8347,10 @@ pub(crate) fn resolve_network_policy<'a>(
     name: Ident,
     if_exists: bool,
 ) -> Result<Option<ResolvedNetworkPolicyName>, PlanError> {
-    match scx.catalog.resolve_network_policy(&name.to_string()) {
+    match scx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))
+    {
         Ok(policy) => Ok(Some(ResolvedNetworkPolicyName {
             id: policy.id(),
             name: policy.name().to_string(),

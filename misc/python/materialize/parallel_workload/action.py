@@ -46,7 +46,6 @@ from materialize.data_ingest.data_type import (
     VarChar,
 )
 from materialize.data_ingest.query_error import QueryError
-from materialize.data_ingest.row import Operation
 from materialize.mzcompose import get_default_system_parameters
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.services.materialized import (
@@ -242,6 +241,25 @@ class Action:
         without counting as attempts, which keeps the end-of-run action
         coverage check meaningful."""
         return True
+
+    def insert_batch_size(self, exe: Executor, table: Table) -> int:
+        """How many rows the next insert into `table` may add, 0 once the table
+        sits at MAX_ROWS."""
+        available = MAX_ROWS - table.num_rows
+        if available < 1:
+            return 0
+        # A per-worker share of the budget, not the whole remainder: `num_rows`
+        # is read here but only bumped once the statement returns, so every
+        # worker would otherwise size a full-budget batch off the same stale
+        # counter and the table would overshoot MAX_ROWS by roughly a
+        # worker-count factor, which is what kept the cap from binding at all.
+        # A share bounds the overshoot at one extra round of concurrent batches.
+        # Charging the budget up front instead would bind exactly, but a claim
+        # is not given back when the statement's transaction rolls back, so the
+        # insert actions would stall against tables that read as full while
+        # holding far fewer rows.
+        share = max(1, MAX_ROWS // exe.db.num_threads)
+        return self.rng.randint(1, min(available, share))
 
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
@@ -1066,10 +1084,13 @@ class InsertAction(Action):
                 return False
             table = self.rng.choice(tables)
 
+        num_rows = self.insert_batch_size(exe, table)
+        if not num_rows:
+            return False
+
         column_names = ", ".join(column.name(True) for column in table.columns)
         column_values = []
-        max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
+        for i in range(num_rows):
             column_values.append(
                 ", ".join(column.value(self.rng, True) for column in table.columns)
             )
@@ -1081,7 +1102,7 @@ class InsertAction(Action):
             self.exe_prepared(query, f"insert{self.stmt_id}", exe)
         else:
             exe.execute(query, http=Http.RANDOM)
-        table.num_rows += len(column_values)
+        table.num_rows += num_rows
         exe.insert_table = table.table_id
         return True
 
@@ -1137,10 +1158,11 @@ class InsertSelectAction(Action):
             f"({expression(column.data_type, source.columns, self.rng, kind=ExprKind.WRITE)})::{column.data_type.name()}"
             for column in table.columns
         )
-        # `num_rows` can be stale, so clamp instead of trusting the filter
-        # above. The LIMIT keeps a self-insert from doubling the table on every
+        # The LIMIT keeps a self-insert from doubling the table on every
         # attempt.
-        limit = self.rng.randint(1, max(1, min(100, MAX_ROWS - table.num_rows)))
+        limit = self.insert_batch_size(exe, table)
+        if not limit:
+            return False
         query = (
             f"INSERT INTO {table} ({column_names}) SELECT {expressions} FROM {source}"
             f" WHERE {expression(Boolean, source.columns, self.rng, kind=ExprKind.WRITE)}"
@@ -1199,13 +1221,16 @@ class CopyFromStdinAction(Action):
                 return False
             table = self.rng.choice(tables)
 
+        num_rows = self.insert_batch_size(exe, table)
+        if not num_rows:
+            return False
+
         values = []
-        max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
+        for i in range(num_rows):
             values.append([column.value(self.rng, False) for column in table.columns])
         query = f"COPY INTO {table} FROM STDIN"
         exe.copy(query, values)
-        table.num_rows += len(values)
+        table.num_rows += num_rows
         exe.insert_table = table.table_id
         return True
 
@@ -1250,10 +1275,13 @@ class InsertReturningAction(Action):
                 return False
             table = self.rng.choice(tables)
 
+        num_rows = self.insert_batch_size(exe, table)
+        if not num_rows:
+            return False
+
         column_names = ", ".join(column.name(True) for column in table.columns)
         column_values = []
-        max_rows = min(100, MAX_ROWS - table.num_rows)
-        for i in range(self.rng.randrange(1, max_rows + 1)):
+        for i in range(num_rows):
             column_values.append(
                 ", ".join(column.value(self.rng, True) for column in table.columns)
             )
@@ -1280,7 +1308,7 @@ class InsertReturningAction(Action):
             self.exe_prepared(query, f"insert_returning{self.stmt_id}", exe)
         else:
             exe.execute(query, http=Http.RANDOM)
-        table.num_rows += len(column_values)
+        table.num_rows += num_rows
         exe.insert_table = table.table_id
         return True
 
@@ -1319,16 +1347,28 @@ class CopyToStdoutAction(Action):
 
 
 class SourceInsertAction(Action):
+    """Feed one workload transaction to a random CDC source's upstream system.
+
+    Unlike the table DML actions this carries no MAX_ROWS gate, because a
+    `data_ingest` workload bounds its own upstream table: the upsert workloads
+    only ever write key 0, and the delete-at-end-of-day workloads insert
+    `Records.SOME` keys and then delete exactly those keys again, so the table
+    oscillates and every cycle nets to zero. A gate could only ever misfire.
+    `next()` has already consumed a transaction by the time a row count could be
+    checked, so refusing to run it would drop one half of an insert/delete pair
+    and leave the count drifting away from the upstream table for the rest of the
+    run. A workload that grows without bound would need a different mechanism,
+    not a row count, since `MySqlSource.prepopulate_rows` already puts up to
+    30,000 rows upstream before the source is even created."""
+
     def run(self, exe: Executor) -> bool:
         with exe.db.lock:
-            sources = [
-                source
-                for source in exe.db.kafka_sources
+            sources = (
+                exe.db.kafka_sources
                 + exe.db.postgres_sources
                 + exe.db.mysql_sources
                 + exe.db.sql_server_sources
-                if source.num_rows < MAX_ROWS
-            ]
+            )
             if not sources:
                 return False
             source = self.rng.choice(sources)
@@ -1341,14 +1381,7 @@ class SourceInsertAction(Action):
             ]:
                 return False
 
-            transaction = next(source.generator)
-            for row_list in transaction.row_lists:
-                for row in row_list.rows:
-                    if row.operation == Operation.INSERT:
-                        source.num_rows += 1
-                    elif row.operation == Operation.DELETE:
-                        source.num_rows -= 1
-            source.executor.run(transaction, logging_exe=exe)
+            source.executor.run(next(source.generator), logging_exe=exe)
         return True
 
 
@@ -1469,7 +1502,7 @@ class DeleteAction(Action):
             for t in exe.db.tables
             if t != table and (not t.temp or t in exe.temp_objects)
         ]
-        # TODO: Drop the RepeatRow gate once database-issues#9308 is fixed.
+        # TODO: Drop the RepeatRow gate once STG-36 is fixed.
         # DELETE .. USING lowers to a semijoin whose DistinctBy can leave the
         # target table with a net-negative row, and every later reader of that
         # table then surfaces the corruption. Tolerating that class outside
@@ -2768,6 +2801,18 @@ class CommitRollbackAction(Action):
 
 
 class FlipFlagsAction(Action):
+    # Shortest gap between two flips, fleet-wide. Every worker's action list
+    # carries this action, so weights alone put it at ~30 flips/s, which drove
+    # ~43k dyncfg applications per replica and most of a 132 MB services.log.
+    # What this action is after is a flag changing under a running dataflow, and
+    # one change per second is plenty for that.
+    MIN_INTERVAL_SEC = 1.0
+
+    # Guards `last_flip`, which is shared across workers since each holds its
+    # own instance of this action.
+    interval_lock = threading.Lock()
+    last_flip = 0.0
+
     def __init__(
         self,
         rng: random.Random,
@@ -2927,10 +2972,10 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["cluster"] = ["quickstart", "dont_exist"]
-        # NOTE: enable_frontend_peek_sequencing is pinned off in
-        # ADDITIONAL_SYSTEM_PARAMETER_DEFAULTS (frontend-peek read-hold vs
-        # compaction race, https://linear.app/materializeinc/issue/SQL-520), so
-        # it is not flipped here.
+        self.flags_with_values["enable_frontend_peek_sequencing"] = [
+            "true",
+            "false",
+        ]
         self.flags_with_values["enable_frontend_subscribes"] = [
             "true",
             "false",
@@ -3251,6 +3296,12 @@ class FlipFlagsAction(Action):
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
+        with FlipFlagsAction.interval_lock:
+            now = time.time()
+            if now - FlipFlagsAction.last_flip < FlipFlagsAction.MIN_INTERVAL_SEC:
+                return False
+            FlipFlagsAction.last_flip = now
+
         # A tenth of the time set a random cluster's arrangement dictionary
         # compression instead of flipping a global flag. The per-cluster option
         # and the global `enable_arrangement_dictionary_compression_alpha` flag
@@ -3895,6 +3946,20 @@ class ReconfigureClusterAction(Action):
                         f"{new_size} sat in-progress {read_ts_ms - int(record_deadline)}ms "
                         f"past its deadline {record_deadline}"
                     )
+                # A settled record is retained with its terminal status, so a
+                # NULL from the LEFT JOIN means the record this ALTER wrote is
+                # gone, which no code path is allowed to do. Every writer of the
+                # durable field keeps the record and only moves its status:
+                # `reshape_alter_cluster_managed` writes InProgress or, for an
+                # ALTER back to the realized shape, Cancelled;
+                # `cancel_carried_reconfiguration` mutates the status in place;
+                # and the controller's three writes are Finalized, TimedOut and
+                # ResourceExhausted. `ReconfigurationWrite.record` is an Option
+                # documented as "None to clear it", but nothing constructs that.
+                # The relation also drops a cluster that stops being managed, and
+                # environmentd's bootstrap is the one place that resets the field
+                # outright, hence the scenario carve-outs in `applicable` and no
+                # `SET (MANAGED ...)` anywhere in the workload.
                 if read_ts_ms > our_deadline_ms and status is None:
                     raise ValueError(
                         f"Reconfiguration record of cluster {cluster} is gone as of "
@@ -5624,10 +5689,16 @@ class HttpPostAction(Action):
             log = f"POST {url} Headers: {', '.join(headers_strs)} Body: {payload.encode('utf-8')}"
             exe.log(log)
             try:
-                source.num_rows += 1
                 result = requests.post(url, data=payload.encode(), headers=headers)
                 if result.status_code != 200:
                     raise QueryError(f"{result.status_code}: {result.text}", log)
+                # Count after the POST landed. A webhook source is append-only,
+                # so its row budget is never released, and counting rejected
+                # POSTs retires the source without a single row ever reaching
+                # it. A source whose POSTs all 404 (a concurrent cascading drop,
+                # a rename) then silently stops being posted to for the rest of
+                # the run.
+                source.num_rows += 1
             except requests.exceptions.ConnectionError:
                 # Expected when Mz is killed
                 if exe.db.scenario not in (
@@ -6177,13 +6248,7 @@ read_action_list = ActionList(
         (CopyToStdoutAction, 20),
         (ShowAction, 10),
         (SystemCatalogReadAction, 10),
-        # TODO: Reenable once EXPLAIN FILTER PUSHDOWN can no longer panic the
-        # coordinator when a referenced compute collection is concurrently
-        # dropped. sequence_explain_pushdown -> acquire_read_holds().expect(
-        # "missing compute collection") at read_policy.rs:389 (normal peeks and
-        # EXPLAIN ANALYZE handle the drop gracefully).
-        # See https://linear.app/materializeinc/issue/SQL-519
-        # (ExplainFilterPushdownAction, 5),
+        (ExplainFilterPushdownAction, 5),
         # PREPARED BUT DISABLED (see class docstrings): enabling these now just
         # re-detects known-unfixed coordinator bugs rather than finding new ones.
         # (DependencyConsistencyAction, 5),  # TODO: enable once SQL-521 fixed
@@ -6279,9 +6344,8 @@ ddl_action_list = ActionList(
         (DropLoadGeneratorSourceAction, 4),
         (CreateMultiLoadGeneratorSourceAction, 2),
         (DropMultiLoadGeneratorSourceAction, 2),
-        # TODO: Reenable when https://linear.app/materializeinc/issue/SS-307 is fixed
-        # (CreateMySqlSourceAction, 4),
-        # (DropMySqlSourceAction, 4),
+        (CreateMySqlSourceAction, 4),
+        (DropMySqlSourceAction, 4),
         (CreatePostgresSourceAction, 4),
         (DropPostgresSourceAction, 4),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SS-290 is fixed
@@ -6343,10 +6407,7 @@ ddl_action_list = ActionList(
         (DDLTransactionAction, 2),
         (SystemCatalogReadAction, 4),
         (ExplainAnalyzeAction, 4),
-        # TODO: Reenable with EXPLAIN FILTER PUSHDOWN's coordinator panic on a
-        # concurrently-dropped compute collection (read_policy.rs:389).
-        # See https://linear.app/materializeinc/issue/SQL-519
-        # (ExplainFilterPushdownAction, 2),
+        (ExplainFilterPushdownAction, 2),
         (FlipFlagsAction, 2),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
         # (AlterTableAddColumnAction, 10),
