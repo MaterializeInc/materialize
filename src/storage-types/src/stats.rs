@@ -190,7 +190,9 @@ impl RelationPartStats<'_> {
         // then subtract that from the total.
         let num_results = self.stats.key.len;
         let num_oks = self.ok_count();
-        num_oks.map(|num_oks| num_results - num_oks)
+        // An ok count exceeding the part length is corrupt stats; report the
+        // err count as unknown (callers keep the part) instead of underflowing.
+        num_oks.and_then(|num_oks| num_results.checked_sub(num_oks))
     }
 
     fn col_values<'a>(&'a self, idx: &ColumnIndex, arena: &'a RowArena) -> Option<ResultSpec<'a>> {
@@ -489,6 +491,28 @@ mod tests {
             desc: &schema,
         };
         assert_eq!(stats.ok_count(), None);
+        assert_eq!(stats.err_count(), None);
+
+        // Well-shaped err stats whose none count exceeds the part length
+        // (corrupt or version-skewed) must read as unknown, not underflow.
+        let mut key_stats = decoder.stats();
+        match key_stats.cols.get_mut("err") {
+            Some(err_stats) => match &mut err_stats.values {
+                ColumnStatKinds::Bytes(BytesStats::Primitive(_)) => {
+                    err_stats.nulls = Some(mz_persist_types::stats::ColumnNullStats {
+                        count: key_stats.len + 1,
+                    });
+                }
+                other => panic!("unexpected err stats {other:?}"),
+            },
+            None => panic!("err stats missing"),
+        }
+        let stats = RelationPartStats {
+            name: "test",
+            metrics: &metrics,
+            stats: &PartStats { key: key_stats },
+            desc: &schema,
+        };
         assert_eq!(stats.err_count(), None);
     }
 
