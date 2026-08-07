@@ -989,7 +989,14 @@ impl StorageController for Controller {
                 // environmentd/controller deletes a collection. We exit
                 // gracefully, which means we'll get restarted and get to try
                 // again.
-                if dependency_since.is_empty() {
+                //
+                // We only do this when our own upper is not empty. An empty
+                // upper means the collection is sealed and no-one can write to
+                // it anymore, so an empty dependency since cannot hurt us. And
+                // a sealed collection is durable state rather than a race, so
+                // halting on it would wedge bootstrap forever instead of
+                // resolving on the next attempt.
+                if dependency_since.is_empty() && !write_frontier.is_empty() {
                     halt!(
                         "dependency since frontier is empty while dependent upper \
                         is not empty (dependent id={id}, write_frontier={:?}, dependency_read_holds={:?}), \
