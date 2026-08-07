@@ -876,7 +876,7 @@ pub static MZ_CLUSTER_RECONFIGURATIONS: LazyLock<BuiltinMaterializedView> = Lazy
             ),
             (
                 "target",
-                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`.",
+                "The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`.",
             ),
             (
                 "changes",
@@ -953,7 +953,9 @@ SELECT
     CASE WHEN r.target->'availability_zones' != r.config->'availability_zones'
         THEN jsonb_build_object('availability_zones', r.target->'availability_zones') ELSE '{}'::jsonb END ||
     CASE WHEN r.target->'logging' != r.config->'logging'
-        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END
+        THEN jsonb_build_object('logging', r.target->'logging') ELSE '{}'::jsonb END ||
+    CASE WHEN r.target->'arrangement_compression' != r.config->'arrangement_compression'
+        THEN jsonb_build_object('arrangement_compression', r.target->'arrangement_compression') ELSE '{}'::jsonb END
     AS changes
 FROM records r",
         is_retained_metrics_object: false,
@@ -5651,7 +5653,8 @@ pub static MZ_SHOW_CLUSTERS: LazyLock<BuiltinView> = LazyLock::new(|| {
                 'size to ' || (changes->>'size'),
                 'replication factor to ' || (changes->>'replication_factor'),
                 CASE WHEN changes->'availability_zones' IS NOT NULL THEN 'availability zones' END,
-                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END
+                CASE WHEN changes->'logging' IS NOT NULL THEN 'introspection settings' END,
+                CASE WHEN changes->'arrangement_compression' IS NOT NULL THEN 'arrangement compression' END
             ], ', '), '') AS summary
         FROM mz_internal.mz_cluster_reconfigurations
         WHERE status = 'in-progress'

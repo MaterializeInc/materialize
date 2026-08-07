@@ -361,16 +361,17 @@ DROP CLUSTER foo
 
 # Regression: a `WAIT` clause on an `ALTER` that touches no replica config
 # shape dimension (`SIZE`, `AVAILABILITY ZONES`, either `INTROSPECTION`
-# option) has nothing to hydrate-overlap on, so it is rejected outright
-# rather than silently accepted as a no-op wait.
+# option, `EXPERIMENTAL ARRANGEMENT COMPRESSION`) has nothing to
+# hydrate-overlap on, so it is rejected outright rather than silently
+# accepted as a no-op wait.
 
 statement ok
 CREATE CLUSTER foo (SIZE 'scale=1,workers=1')
 
-statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, or INTROSPECTION change
+statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change
 ALTER CLUSTER foo SET (SCHEDULE MANUAL) WITH (WAIT FOR '0s')
 
-statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, or INTROSPECTION change
+statement error WAIT can only be used together with a SIZE, AVAILABILITY ZONES, INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change
 ALTER CLUSTER foo SET (REPLICATION FACTOR 2) WITH (WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT'))
 
 # A `WAIT` clause paired with a real shape change is still accepted, including
@@ -449,8 +450,12 @@ SHOW CREATE CLUSTER ac_test
 ----
 ac_test  CREATE␠CLUSTER␠"ac_test"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠true,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
 
+# The zero-timeout WAIT requests the synchronous cut-over, so the realized
+# config (what SHOW CREATE renders) reflects the change as soon as the ALTER
+# returns. Without it the change transitions through a reconfiguration record
+# and the readback would race the controller.
 statement ok
-ALTER CLUSTER ac_test RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)
+ALTER CLUSTER ac_test SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = false) WITH (WAIT FOR '0s')
 
 query TT
 SHOW CREATE CLUSTER ac_test
@@ -458,12 +463,18 @@ SHOW CREATE CLUSTER ac_test
 ac_test  CREATE␠CLUSTER␠"ac_test"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠false,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
 
 statement ok
-ALTER CLUSTER ac_test SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+ALTER CLUSTER ac_test SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true) WITH (WAIT FOR '0s')
 
 query TT
 SHOW CREATE CLUSTER ac_test
 ----
 ac_test  CREATE␠CLUSTER␠"ac_test"␠(EXPERIMENTAL␠ARRANGEMENT␠COMPRESSION␠=␠true,␠INTROSPECTION␠DEBUGGING␠=␠false,␠INTROSPECTION␠INTERVAL␠=␠INTERVAL␠'00:00:01',␠MANAGED␠=␠true,␠REPLICATION␠FACTOR␠=␠1,␠SIZE␠=␠'scale=1,workers=1',␠SCHEDULE␠=␠MANUAL)
+
+# ALTER CLUSTER ... RESET takes no WITH clause, so a shape-dimension RESET
+# always transitions through a reconfiguration record and offers no
+# deterministic readback here. Exercised for acceptance only.
+statement ok
+ALTER CLUSTER ac_test RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)
 
 statement ok
 DROP CLUSTER ac_test
