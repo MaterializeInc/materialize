@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+* Fix `strict_mode` schema isolation for `view`, `materialized_view` and
+  `table` models. The check that blocks these materializations from schemas
+  holding sources, source tables or sinks never fired, because the flags it
+  set inside a loop did not survive the loop. Building one of these models on
+  its own in a reserved schema now raises an error, as documented.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)

@@ -208,10 +208,10 @@
   {# Step 1: Only run validation when strict_mode is enabled #}
   {% if var('strict_mode', False) %}
 
-    {# Step 2: Initialize flags to track if we find isolated types #}
-    {% set has_source = false %}
-    {% set has_sink = false %}
-    {% set has_source_table = false %}
+    {# Step 2: Initialize flags to track if we find isolated types. These live
+       in a namespace because assignments made inside a for loop do not survive
+       the loop otherwise. #}
+    {% set found = namespace(source=false, sink=false, source_table=false) %}
 
     {# Step 3: Iterate through all nodes in the dbt manifest #}
     {% for node in graph.nodes.values() %}
@@ -221,18 +221,18 @@
 
         {# Step 5: Check if this node is a source, sink, or source_table #}
         {% if node.config.materialized == 'source' %}
-          {% set has_source = true %}
+          {% set found.source = true %}
         {% elif node.config.materialized == 'sink' %}
-          {% set has_sink = true %}
+          {% set found.sink = true %}
         {% elif node.config.materialized == 'source_table' %}
-          {% set has_source_table = true %}
+          {% set found.source_table = true %}
         {% endif %}
 
       {% endif %}
     {% endfor %}
 
     {# Step 6: If schema contains sources, block creation of this object #}
-    {% if has_source %}
+    {% if found.source %}
       {{ exceptions.raise_compiler_error(
         "Cannot create object in schema '" ~ target_schema ~ "'. " ~
         "Schema contains source objects. " ~
@@ -241,7 +241,7 @@
     {% endif %}
 
     {# Step 7: If schema contains sinks, block creation of this object #}
-    {% if has_sink %}
+    {% if found.sink %}
       {{ exceptions.raise_compiler_error(
         "Cannot create object in schema '" ~ target_schema ~ "'. " ~
         "Schema contains sink objects. " ~
@@ -250,7 +250,7 @@
     {% endif %}
 
     {# Step 8: If schema contains source_tables, block creation of this object #}
-    {% if has_source_table %}
+    {% if found.source_table %}
       {{ exceptions.raise_compiler_error(
         "Cannot create object in schema '" ~ target_schema ~ "'. " ~
         "Schema contains source_table objects. " ~
