@@ -25,6 +25,9 @@ pub static NON_ZERO_DURATION: NonZeroDuration = NonZeroDuration;
 pub static NUMERIC_BOUNDED_0_1_INCLUSIVE: NumericInRange<RangeInclusive<f64>> =
     NumericInRange(0.0f64..=1.0);
 
+pub static BYTESIZE_AT_LEAST_1KB: ByteSizeInRange<RangeFrom<ByteSize>> =
+    ByteSizeInRange(ByteSize::kb(1)..);
+
 pub static BYTESIZE_AT_LEAST_1MB: ByteSizeInRange<RangeFrom<ByteSize>> =
     ByteSizeInRange(ByteSize::mb(1)..);
 

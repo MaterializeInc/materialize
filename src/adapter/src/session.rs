@@ -26,6 +26,7 @@ use mz_adapter_types::connection::ConnectionId;
 use mz_auth::AuthenticatorKind;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_controller_types::ClusterId;
+use mz_ore::cast::CastFrom;
 use mz_ore::metrics::{MetricsFutureExt, MetricsRegistry};
 use mz_ore::now::{EpochMillis, NowFn};
 use mz_pgwire_common::Format;
@@ -38,10 +39,13 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::{
     INTERNAL_USER_NAME_TO_DEFAULT_CLUSTER, RoleMetadata, SYSTEM_USER, User,
 };
-use mz_sql::session::vars::IsolationLevel;
 pub use mz_sql::session::vars::{
     DEFAULT_DATABASE_NAME, EndTransactionAction, SERVER_MAJOR_VERSION, SERVER_MINOR_VERSION,
     SERVER_PATCH_VERSION, SessionVars, Var,
+};
+use mz_sql::session::vars::{
+    IsolationLevel, MAX_PREPARED_STATEMENTS_PER_SESSION, MAX_PREPARED_STATEMENTS_SIZE_PER_SESSION,
+    SystemVars,
 };
 use mz_sql_parser::ast::TransactionIsolationLevel;
 use mz_storage_client::client::TableData;
@@ -638,6 +642,9 @@ impl Session {
     }
 
     /// Registers the prepared statement under `name`.
+    ///
+    /// Fails without registering the statement if doing so would exceed the
+    /// per-session prepared statement limits in `system_vars`.
     pub fn set_prepared_statement(
         &mut self,
         name: String,
@@ -646,7 +653,10 @@ impl Session {
         desc: StatementDesc,
         state_revision: StateRevision,
         now: EpochMillis,
-    ) {
+        system_vars: &SystemVars,
+    ) -> Result<(), AdapterError> {
+        self.check_prepared_statement_limits(&name, raw_sql.len(), system_vars)?;
+        let sql_text_len = raw_sql.len();
         let logging = PreparedStatementLoggingInfo::still_to_log(
             raw_sql,
             stmt.as_ref(),
@@ -659,9 +669,68 @@ impl Session {
             stmt,
             desc,
             state_revision,
+            sql_text_len,
             logging: Arc::new(QCell::new(&self.qcell_owner, logging)),
         };
         self.prepared_statements.insert(name, statement);
+        Ok(())
+    }
+
+    /// Errors if registering a prepared statement under `name` with `sql_len`
+    /// bytes of SQL text would exceed the per-session limits in `system_vars`.
+    ///
+    /// A session retains each prepared statement's SQL text and parsed AST
+    /// until the statement is deallocated, so both the number of statements
+    /// and their total SQL text size are bounded to protect the process from a
+    /// single session accumulating unbounded memory. The size limit counts raw
+    /// SQL text only. The actual retained memory is larger, a redacted copy of
+    /// the text plus the parsed AST, which is why the limit's default is
+    /// conservative.
+    fn check_prepared_statement_limits(
+        &self,
+        name: &str,
+        sql_len: usize,
+        system_vars: &SystemVars,
+    ) -> Result<(), AdapterError> {
+        let replaced_len = self.prepared_statements.get(name).map(|ps| ps.sql_text_len);
+        let count = self.prepared_statements.len();
+
+        // Replacing an existing statement (e.g. re-`Parse`ing the unnamed
+        // statement) leaves the count unchanged, so only new names are checked
+        // against the count limit.
+        if replaced_len.is_none() {
+            let limit = usize::cast_from(system_vars.max_prepared_statements_per_session());
+            if count >= limit {
+                return Err(AdapterError::ResourceExhaustion {
+                    resource_type: "prepared statement".into(),
+                    limit_name: MAX_PREPARED_STATEMENTS_PER_SESSION.name().to_string(),
+                    desired: (count + 1).to_string(),
+                    limit: limit.to_string(),
+                    current: count.to_string(),
+                });
+            }
+        }
+
+        let size_limit = system_vars.max_prepared_statements_size_per_session();
+        let current_size: usize = self
+            .prepared_statements
+            .values()
+            .map(|ps| ps.sql_text_len)
+            .sum();
+        let desired_size = current_size - replaced_len.unwrap_or(0) + sql_len;
+        // Only growth is rejected. A replacement that shrinks the total is
+        // allowed even when the total exceeds the limit, so a session that is
+        // over a freshly lowered limit can still make progress.
+        if u64::cast_from(desired_size) > size_limit && desired_size > current_size {
+            return Err(AdapterError::ResourceExhaustion {
+                resource_type: "prepared statement".into(),
+                limit_name: MAX_PREPARED_STATEMENTS_SIZE_PER_SESSION.name().to_string(),
+                desired: desired_size.to_string(),
+                limit: size_limit.to_string(),
+                current: current_size.to_string(),
+            });
+        }
+        Ok(())
     }
 
     /// Removes the prepared statement associated with `name`.
@@ -952,6 +1021,9 @@ pub struct PreparedStatement {
     desc: StatementDesc,
     /// The most recent state revision that has verified this statement.
     pub state_revision: StateRevision,
+    /// Byte length of the SQL text the statement was prepared from, counted
+    /// against the session's prepared statement size limit.
+    sql_text_len: usize,
     #[derivative(Debug = "ignore")]
     logging: Arc<QCell<PreparedStatementLoggingInfo>>,
 }
@@ -1891,5 +1963,132 @@ impl Drop for GroupCommitWriteLocks {
                 "dropping group commit write locks",
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_sql::session::vars::VarInput;
+
+    use super::*;
+
+    fn prepare(
+        session: &mut Session,
+        system_vars: &SystemVars,
+        name: &str,
+        sql: &str,
+    ) -> Result<(), AdapterError> {
+        session.set_prepared_statement(
+            name.into(),
+            None,
+            sql.into(),
+            StatementDesc::new(None),
+            StateRevision {
+                catalog_revision: 0,
+                session_state_revision: 0,
+            },
+            0,
+            system_vars,
+        )
+    }
+
+    #[mz_ore::test]
+    fn test_prepared_statement_count_limit() {
+        let mut session = Session::dummy();
+        let mut system_vars = SystemVars::new();
+        system_vars
+            .set("max_prepared_statements_per_session", VarInput::Flat("2"))
+            .unwrap();
+
+        prepare(&mut session, &system_vars, "a", "SELECT 1").unwrap();
+        prepare(&mut session, &system_vars, "b", "SELECT 1").unwrap();
+        let err = prepare(&mut session, &system_vars, "c", "SELECT 1").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("max_prepared_statements_per_session"),
+            "unexpected error: {err}"
+        );
+
+        // Replacing an existing statement is allowed at the limit.
+        prepare(&mut session, &system_vars, "b", "SELECT 2").unwrap();
+
+        // Removing a statement frees up a slot.
+        assert!(session.remove_prepared_statement("a"));
+        prepare(&mut session, &system_vars, "c", "SELECT 1").unwrap();
+    }
+
+    #[mz_ore::test]
+    fn test_prepared_statement_size_limit() {
+        let sql = |len: usize| "a".repeat(len);
+        let mut session = Session::dummy();
+        let mut system_vars = SystemVars::new();
+        system_vars
+            .set(
+                "max_prepared_statements_size_per_session",
+                VarInput::Flat("2000"),
+            )
+            .unwrap();
+
+        prepare(&mut session, &system_vars, "a", &sql(1600)).unwrap();
+        let err = prepare(&mut session, &system_vars, "b", &sql(600)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("max_prepared_statements_size_per_session"),
+            "unexpected error: {err}"
+        );
+
+        // A replacement that does not grow the total past the limit is
+        // allowed.
+        prepare(&mut session, &system_vars, "a", &sql(2000)).unwrap();
+
+        // A replacement that grows the total past the limit is rejected.
+        let err = prepare(&mut session, &system_vars, "a", &sql(2200)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("max_prepared_statements_size_per_session"),
+            "unexpected error: {err}"
+        );
+
+        // A session over a freshly lowered limit can still shrink via
+        // replacement.
+        system_vars
+            .set(
+                "max_prepared_statements_size_per_session",
+                VarInput::Flat("1024"),
+            )
+            .unwrap();
+        prepare(&mut session, &system_vars, "a", &sql(1200)).unwrap();
+        let err = prepare(&mut session, &system_vars, "a", &sql(1400)).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("max_prepared_statements_size_per_session"),
+            "unexpected error: {err}"
+        );
+
+        // Removing statements frees up budget.
+        assert!(session.remove_prepared_statement("a"));
+        prepare(&mut session, &system_vars, "b", &sql(1024)).unwrap();
+    }
+
+    #[mz_ore::test]
+    fn test_prepared_statement_size_limit_floor() {
+        let mut system_vars = SystemVars::new();
+        for invalid in ["0", "1023"] {
+            assert!(
+                system_vars
+                    .set(
+                        "max_prepared_statements_size_per_session",
+                        VarInput::Flat(invalid),
+                    )
+                    .is_err(),
+                "setting the size limit to {invalid} bytes should violate the 1kB floor"
+            );
+        }
+        system_vars
+            .set(
+                "max_prepared_statements_size_per_session",
+                VarInput::Flat("1024"),
+            )
+            .unwrap();
     }
 }
