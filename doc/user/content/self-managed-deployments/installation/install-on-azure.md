@@ -199,6 +199,7 @@ authentication mechanisms.
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
+   # enable_observability = true   # Set to true to enable observability stack.
    ```
 
    {{% include-from-yaml data="self_managed/installation"
