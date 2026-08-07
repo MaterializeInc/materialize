@@ -790,6 +790,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "balancerd_inject_proxy_protocol_header_http",
     "balancerd_max_connections",
     "balancerd_pre_resolved_timeout",
+    "balancerd_https_enable_http2_alpn",
     "balancerd_log_filter",
     "balancerd_opentelemetry_filter",
     "balancerd_log_filter_defaults",
