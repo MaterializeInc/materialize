@@ -120,11 +120,11 @@ For more information, refer to:
 ## v26.34.1
 *Released to Materialize Self-Managed: 2026-07-24* <br>
 
-### Asynchronous Cluster Reconfiguration {#v26.34.1-graceful-cluster-reconfiguration}
+### Graceful Cluster Reconfiguration {#v26.34.1-graceful-cluster-reconfiguration}
 
 <red>*Materialize Self-Managed only*</red>
 
-`ALTER CLUSTER` now runs configuration changes (such as resizing) in the background, rather than blocking until the new replica set is ready. This means you can start a reconfiguration and move on to other tasks while the process completes.
+`ALTER CLUSTER` for configuration changes (such as resizing) now returns immediately and runs in the background, rather than blocking until the new replica set is ready.
 
 Because the command is now asynchronous, you can monitor the
 progress of an in-flight reconfiguration using `SHOW CLUSTERS`.
