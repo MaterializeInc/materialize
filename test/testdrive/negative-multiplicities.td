@@ -19,16 +19,20 @@ ALTER SYSTEM SET enable_repeat_row  = true
 
 > INSERT INTO base VALUES (1, 1, -1), (1, 1, -1)
 
-> SELECT count(*) FROM data
--1
+# The whole collection is now net-negative, so the empty key of the global
+# aggregate carries a negative record count. An accumulable aggregate rejects
+# that rather than returning it, which for count(*) would be a bare negative
+# number with no error.
+! SELECT count(*) FROM data
+contains:saw negative record count
 
 ! SELECT * FROM data
 contains:Invalid data in source, saw retractions (1) for row that does not exist: [Int64
 
 > INSERT INTO base VALUES (1, 1, -1)
 
-> SELECT count(*) FROM data
--2
+! SELECT count(*) FROM data
+contains:saw negative record count
 
 ! SELECT * FROM data
 contains:Invalid data in source, saw retractions (2) for row that does not exist: [Int64
