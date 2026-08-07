@@ -288,7 +288,7 @@ const stepsData: Array<{
               >
                 CREATE SOURCE
               </TextLink>
-            </Code>
+            </Code>{" "}
             with the <Code variant="inline-syntax">FROM LOAD GENERATOR</Code>{" "}
             clause that works specifically with Materialize&apos;s sample data
             generators. The tutorial specifies that the generator should emit
@@ -317,7 +317,10 @@ const stepsData: Array<{
               </TextLink>
             </Code>{" "}
             in a{" "}
-            <TextLink target="_blank" href={docUrls["/docs/sql/create-table/"]}>
+            <TextLink
+              target="_blank"
+              href={`${docUrls["/docs/sql/begin/"]}#ddl-only-transactions`}
+            >
               DDL transaction block
             </TextLink>{" "}
             to create <strong>read-only</strong> tables for the{" "}
@@ -779,9 +782,9 @@ WHERE w2.amount > w1.amount
                 The query may take a while to return, even though it uses the{" "}
                 <Code variant="inline-syntax">wins_by_item</Code> index. The{" "}
                 <Code variant="inline-syntax">flip_activities</Code> view
-                self-joins <Code variant="inline-syntax">winning_bids</Code>
-                on <Code variant="inline-syntax">item</Code> and the
-                corresponding <Code variant="inline-syntax">buyer</Code> and{" "}
+                self-joins <Code variant="inline-syntax">winning_bids</Code> on{" "}
+                <Code variant="inline-syntax">item</Code> and the corresponding{" "}
+                <Code variant="inline-syntax">buyer</Code> and{" "}
                 <Code variant="inline-syntax">seller</Code> columns (
                 <Code variant="inline-syntax">
                   w1.buyer = w2.seller AND w1.item = w2.item
@@ -853,13 +856,21 @@ FROM (
           </ListItem>
         </OrderedList>
         <Text>
-          Both the <Code variant="inline-syntax">known_flippers</Code> and{" "}
-          <Code variant="inline-syntax">flippers</Code> views can use the index
-          created on <Code variant="inline-syntax">winning_bids</Code> view to
-          provide up-to-date data. Depending upon your query patterns and usage,
-          an existing index may be sufficient, such as in this quickstart. In
-          other use cases, creating an index only on the view(s) from which you
-          will serve results may be preferred.
+          Both the <Code variant="inline-syntax">flip_activities</Code> and{" "}
+          <Code variant="inline-syntax">flippers</Code> views can use the
+          indexes created on the{" "}
+          <Code variant="inline-syntax">winning_bids</Code> view to provide
+          up-to-date results. Index keys matter: the{" "}
+          <Code variant="inline-syntax">wins_by_item</Code> index serves point
+          lookups on <Code variant="inline-syntax">item</Code>, while the{" "}
+          <Code variant="inline-syntax">wins_by_item_seller</Code> and{" "}
+          <Code variant="inline-syntax">wins_by_item_buyer</Code> indexes serve
+          the <Code variant="inline-syntax">flip_activities</Code> self-join on
+          its join keys. Depending on your query patterns and usage, indexing
+          the upstream views may be sufficient, such as indexing
+          <Code variant="inline-syntax">winning_bids</Code> in this quickstart.
+          In other use cases, it may be preferable to index only the views from
+          which applications directly read results.
         </Text>
       </>
     ),
