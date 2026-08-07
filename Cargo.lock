@@ -7724,6 +7724,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mz-orchestratord-console"
+version = "26.38.0-dev.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "clap",
+ "futures",
+ "http 1.4.2",
+ "humantime",
+ "k8s-openapi",
+ "kube",
+ "mz-cloud-resources",
+ "mz-ore",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "mz-ore"
 version = "0.1.0"
 dependencies = [
