@@ -237,6 +237,30 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
+### Reclamation of durable items must mirror the graceful drop
+
+Storage collection metadata is only cleaned up through the drop path.
+`Op::DropObjects` hands the dropped collections to
+`StorageCollections::prepare_state`, which deletes their
+`storage_collection_metadata` rows and enqueues the backing shards in the
+`unfinalized_shards` WAL, all in the same catalog commit. Nothing revisits
+leftovers. Bootstrap (`initialize_state`) only ever inserts metadata for
+collections present in the catalog, and shard finalization is driven solely
+by the WAL. A metadata row that outlives its item is therefore invisible
+forever and leaks the persist shard permanently.
+
+So any path that deletes durable items outside a normal catalog transaction
+(for example ephemeral-item reclamation at catalog open) must remove the same
+associated state the graceful drop removes: collection metadata rows (moving
+unreferenced shards to the WAL), comments (item ids are reused, so a dangling
+comment can re-attach to a later object), and source references.
+
+Related: txn-wal tolerates finalizing a data shard whose txns-shard
+registration was never forgotten. Every write path to a data shard
+early-returns when the shard's upper is empty (`apply_caa`, `empty_caa`,
+`unblock_read`), and `forget` skips unregistered ids. The dangling
+registration is a small bounded leak, not a correctness hazard.
+
 ### Group commits and generation handover
 
 At runtime, one group committer per `environmentd` serializes txns-shard operations:
@@ -307,3 +331,32 @@ real, but the solution must maintain strict serializability. Correct alternative
 might include: reducing oracle round-trip latency, colocating the oracle,
 using the batching oracle's existing mechanism to serve more callers per batch,
 or relaxing the isolation level for queries that opt in.
+
+### Session records in the durable catalog
+
+**What:** Write a durable catalog record (`StateUpdateKind::Session`) on every
+session connect and delete it on close, so that `mz_sessions` becomes a
+materialized view over `mz_catalog_raw` and cleanup logic has a durable
+session inventory.
+
+**Why it was rejected:** Connection lifecycle events are far more frequent
+than DDL, and the catalog shard has a single writer. Every connect became a
+timestamp oracle round-trip plus a compare-and-append against the catalog
+shard, serialized on the coordinator loop. Startup could not respond before
+the record was durable (otherwise temp DDL could race its own session
+record), so connect latency was coupled to catalog commit latency, and
+connection churn queued real DDL behind session commits. Batching session ops
+into shared catalog transactions and bounding the flush rate reduced the
+commit count but kept both couplings.
+
+The durable records also bought nothing for garbage collection in the
+single-envd world. Cleanup at promotion deletes all ephemeral rows, justified
+by the deploy-generation fence alone, and graceful session close knows the
+session UUID from in-memory connection metadata.
+
+**The general lesson:** high-frequency per-connection state belongs in builtin
+tables written through group commit, which is fire-and-forget from the
+coordinator loop, batched with all other builtin writes, and never touches
+the catalog shard. Reserve durable catalog writes for state that must be
+transactional with DDL. See
+`doc/developer/design/20260706_sql_150_durable_temporary_objects.md`.

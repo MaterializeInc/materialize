@@ -25,7 +25,6 @@ use mz_audit_log::{
     CreateOrDropClusterReplicaReasonV1, EventDetails, EventType, ObjectType, VersionedEvent,
 };
 use mz_auth::hash::scram256_hash;
-use mz_catalog::SYSTEM_CONN_ID;
 use mz_catalog::builtin::{
     BUILTIN_CLUSTERS, BUILTIN_PREFIXES, BUILTIN_ROLES, BUILTINS, Builtin, Fingerprint,
     MZ_CATALOG_RAW, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
@@ -43,7 +42,7 @@ use mz_catalog::expr_cache::{
 };
 use mz_catalog::memory::error::{Error, ErrorKind};
 use mz_catalog::memory::objects::{
-    BootstrapStateUpdateKind, CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate,
+    CommentsMap, DefaultPrivileges, RoleAuth, StateUpdate, StateUpdateKind,
 };
 use mz_controller::clusters::ReplicaLogging;
 use mz_controller_types::ClusterId;
@@ -155,7 +154,7 @@ impl Catalog {
             comments: Arc::new(CommentsMap::default()),
             source_references: imbl::OrdMap::new(),
             storage_metadata: Arc::new(StorageMetadata::default()),
-            temporary_schemas: imbl::OrdMap::new(),
+            temporary_namespaces: Default::default(),
             mock_authentication_nonce: Default::default(),
             config: mz_sql::catalog::CatalogConfig {
                 start_time: to_datetime((config.now)()),
@@ -249,7 +248,6 @@ impl Catalog {
                     Err(e) => return Err(e.into()),
                 };
             }
-            state.create_temporary_schema(&SYSTEM_CONN_ID, MZ_SYSTEM_ROLE_ID)?;
         }
 
         // Make life easier by consolidating all updates, so that we end up with only positive
@@ -268,46 +266,44 @@ impl Catalog {
         let mut audit_log_updates = Vec::new();
         for (kind, ts, diff) in updates {
             match kind {
-                BootstrapStateUpdateKind::Role(_)
-                | BootstrapStateUpdateKind::RoleAuth(_)
-                | BootstrapStateUpdateKind::Database(_)
-                | BootstrapStateUpdateKind::Schema(_)
-                | BootstrapStateUpdateKind::DefaultPrivilege(_)
-                | BootstrapStateUpdateKind::SystemPrivilege(_)
-                | BootstrapStateUpdateKind::SystemConfiguration(_)
-                | BootstrapStateUpdateKind::ClusterSystemConfiguration(_)
-                | BootstrapStateUpdateKind::ReplicaSystemConfiguration(_)
-                | BootstrapStateUpdateKind::Cluster(_)
-                | BootstrapStateUpdateKind::NetworkPolicy(_)
-                | BootstrapStateUpdateKind::ClusterReplica(_) => {
-                    pre_item_updates.push(StateUpdate {
-                        kind: kind.into(),
-                        ts,
-                        diff: diff.try_into().expect("valid diff"),
-                    })
-                }
-                BootstrapStateUpdateKind::IntrospectionSourceIndex(_)
-                | BootstrapStateUpdateKind::SystemObjectMapping(_) => {
-                    system_item_updates.push(StateUpdate {
-                        kind: kind.into(),
-                        ts,
-                        diff: diff.try_into().expect("valid diff"),
-                    })
-                }
-                BootstrapStateUpdateKind::Item(_) => item_updates.push(StateUpdate {
-                    kind: kind.into(),
+                StateUpdateKind::Role(_)
+                | StateUpdateKind::RoleAuth(_)
+                | StateUpdateKind::Database(_)
+                | StateUpdateKind::Schema(_)
+                | StateUpdateKind::DefaultPrivilege(_)
+                | StateUpdateKind::SystemPrivilege(_)
+                | StateUpdateKind::SystemConfiguration(_)
+                | StateUpdateKind::ClusterSystemConfiguration(_)
+                | StateUpdateKind::ReplicaSystemConfiguration(_)
+                | StateUpdateKind::Cluster(_)
+                | StateUpdateKind::NetworkPolicy(_)
+                | StateUpdateKind::ClusterReplica(_) => pre_item_updates.push(StateUpdate {
+                    kind,
                     ts,
                     diff: diff.try_into().expect("valid diff"),
                 }),
-                BootstrapStateUpdateKind::Comment(_)
-                | BootstrapStateUpdateKind::StorageCollectionMetadata(_)
-                | BootstrapStateUpdateKind::SourceReferences(_)
-                | BootstrapStateUpdateKind::UnfinalizedShard(_) => {
+                StateUpdateKind::IntrospectionSourceIndex(_)
+                | StateUpdateKind::SystemObjectMapping(_) => {
+                    system_item_updates.push(StateUpdate {
+                        kind,
+                        ts,
+                        diff: diff.try_into().expect("valid diff"),
+                    })
+                }
+                StateUpdateKind::Item(_) => item_updates.push(StateUpdate {
+                    kind,
+                    ts,
+                    diff: diff.try_into().expect("valid diff"),
+                }),
+                StateUpdateKind::Comment(_)
+                | StateUpdateKind::StorageCollectionMetadata(_)
+                | StateUpdateKind::SourceReferences(_)
+                | StateUpdateKind::UnfinalizedShard(_) => {
                     post_item_updates.push((kind, ts, diff));
                 }
-                BootstrapStateUpdateKind::AuditLog(_) => {
+                StateUpdateKind::AuditLog(_) => {
                     audit_log_updates.push(StateUpdate {
-                        kind: kind.into(),
+                        kind,
                         ts,
                         diff: diff.try_into().expect("valid diff"),
                     });
@@ -488,7 +484,7 @@ impl Catalog {
         let post_item_updates = post_item_updates
             .into_iter()
             .map(|(kind, ts, diff)| StateUpdate {
-                kind: kind.into(),
+                kind,
                 ts,
                 diff: diff.try_into().expect("valid diff"),
             })
@@ -865,6 +861,7 @@ fn add_new_remove_old_builtin_items_migration(
                     *c.owner_id,
                     acl_items,
                     versions,
+                    None,
                 )?;
                 true
             }
@@ -1524,32 +1521,18 @@ impl BuiltinBootstrapClusterConfigMap {
 
 /// Convert `updates` into a `Vec` that can be consolidated by doing the following:
 ///
-///   - Convert each update into a type that implements [`std::cmp::Ord`].
 ///   - Update the timestamp of each update to the same value.
 ///   - Convert the diff of each update to a type that implements
 ///     [`differential_dataflow::difference::Semigroup`].
-///
-/// [`mz_catalog::memory::objects::StateUpdateKind`] does not implement [`std::cmp::Ord`] only
-/// because it contains a variant for temporary items, which do not implement [`std::cmp::Ord`].
-/// However, we know that during bootstrap no temporary items exist, because they are not persisted
-/// and are only created after bootstrap is complete. So we forcibly convert each
-/// [`mz_catalog::memory::objects::StateUpdateKind`] into an [`BootstrapStateUpdateKind`], which is
-/// identical to [`mz_catalog::memory::objects::StateUpdateKind`] except it doesn't have a
-/// temporary item variant and does implement [`std::cmp::Ord`].
 ///
 /// WARNING: Do not call outside of startup.
 pub(crate) fn into_consolidatable_updates_startup(
     updates: Vec<StateUpdate>,
     ts: Timestamp,
-) -> Vec<(BootstrapStateUpdateKind, Timestamp, Diff)> {
+) -> Vec<(StateUpdateKind, Timestamp, Diff)> {
     updates
         .into_iter()
-        .map(|StateUpdate { kind, ts: _, diff }| {
-            let kind: BootstrapStateUpdateKind = kind
-                .try_into()
-                .unwrap_or_else(|e| panic!("temporary items do not exist during bootstrap: {e:?}"));
-            (kind, ts, Diff::from(diff))
-        })
+        .map(|StateUpdate { kind, ts: _, diff }| (kind, ts, Diff::from(diff)))
         .collect()
 }
 

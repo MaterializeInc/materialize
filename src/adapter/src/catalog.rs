@@ -59,7 +59,6 @@ use mz_ore::result::ResultExt as _;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
@@ -1163,35 +1162,42 @@ impl Catalog {
         self.state.try_get_role_auth_by_id(id)
     }
 
-    /// Creates a new schema in the `Catalog` for temporary items
-    /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(
-        &mut self,
-        conn_id: &ConnectionId,
-        owner_id: RoleId,
-    ) -> Result<(), Error> {
-        self.state.create_temporary_schema(conn_id, owner_id)
+    /// Registers the connection's temporary namespace: the `uuid` <->
+    /// `conn_id` mapping used to stamp and apply durable temporary items
+    /// owned by the session. The `mz_temp` schema itself materializes when
+    /// the first temporary item is applied.
+    ///
+    /// The coordinator calls this at a session's first temporary-item
+    /// creation, strictly before the transaction that persists the item, and
+    /// guards on [`CatalogState::has_temporary_namespace`], so registering
+    /// an already-registered namespace is a bug.
+    pub fn register_temporary_namespace(&mut self, conn_id: &ConnectionId, uuid: Uuid) {
+        self.state
+            .temporary_namespaces
+            .register(conn_id.clone(), uuid);
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        // A temporary namespace is registered at the connection's first
+        // temporary-item creation, so it's valid for one to not exist yet.
         self.state
-            .temporary_schemas
-            .get(conn_id)
+            .temporary_namespaces
+            .schema(conn_id)
             .map(|schema| schema.items.contains_key(item_name))
             .unwrap_or(false)
     }
 
-    /// Drops schema for connection if it exists. Returns an error if it exists and has items.
-    /// Returns Ok if conn_id's temp schema does not exist.
-    pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
-        let Some(schema) = self.state.temporary_schemas.remove(conn_id) else {
-            return Ok(());
-        };
-        if !schema.items.is_empty() {
-            return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
-        }
-        Ok(())
+    /// Removes the connection's temporary namespace, if it has one. Returns
+    /// Ok if none exists.
+    ///
+    /// Callers must only do this after the transaction dropping the
+    /// session's temporary items has been applied, since applying an
+    /// ephemeral item update resolves the owning connection through the
+    /// namespace. If the schema still contains items (the drop transaction
+    /// failed, e.g. because this process is being fenced out), this returns
+    /// an error and leaves the namespace fully in place.
+    pub fn drop_temporary_namespace(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
+        self.state.temporary_namespaces.unregister(conn_id)
     }
 
     pub(crate) fn object_dependents(
@@ -2036,7 +2042,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                 self.state
                     .ambient_schemas_by_id
                     .values()
-                    .chain(self.state.temporary_schemas.values())
+                    .chain(self.state.temporary_namespaces.schemas())
                     .map(|schema| schema as &dyn CatalogSchema),
             )
             .collect()
@@ -2770,6 +2776,10 @@ mod tests {
                 ]
             );
 
+            // A session's temporary namespace is registered at its first
+            // temporary-item creation, so until then `mz_temp` drops out of
+            // the resolved search path and temporary resolution comes only
+            // from the implicit leading temporary schema.
             let mut session = Session::dummy();
             session
                 .vars_mut()
@@ -2781,25 +2791,14 @@ mod tests {
                 )
                 .expect("failed to set search_path");
             let conn_catalog = catalog.for_session(&session);
-            assert_ne!(
-                conn_catalog.effective_search_path(false),
-                conn_catalog.search_path
-            );
-            assert_ne!(
-                conn_catalog.effective_search_path(true),
-                conn_catalog.search_path
-            );
+            assert_eq!(conn_catalog.search_path, vec![]);
             assert_eq!(
                 conn_catalog.effective_search_path(false),
-                vec![
-                    mz_catalog_schema.clone(),
-                    pg_catalog_schema.clone(),
-                    mz_temp_schema.clone()
-                ]
+                vec![mz_catalog_schema.clone(), pg_catalog_schema.clone()]
             );
             assert_eq!(
                 conn_catalog.effective_search_path(true),
-                vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
+                vec![mz_temp_schema, mz_catalog_schema, pg_catalog_schema]
             );
             catalog.expire().await;
         })

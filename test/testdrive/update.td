@@ -76,7 +76,7 @@ contains:invalid input syntax for type double precision
 contains:cannot mutate materialized view
 
 ! UPDATE mz_tables SET a = 1
-contains:cannot mutate system table
+contains:cannot mutate materialized view 'mz_catalog.mz_tables'
 
 ! UPDATE t SET a = 1
 contains:unknown column a

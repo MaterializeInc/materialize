@@ -565,6 +565,18 @@ impl Coordinator {
         let catalog = Arc::make_mut(catalog);
         let conn = conn_id.map(|id| active_conns.get(id).expect("connection must exist"));
 
+        // Register the session as an ephemeral owner (its uuid <-> connection
+        // mapping) at its first temporary-item creation. This must happen
+        // before `transact`:
+        if let Some(conn) = conn {
+            let creates_temp_item = ops.iter().any(
+                |op| matches!(op, catalog::Op::CreateItem { item, .. } if item.is_temporary()),
+            );
+            if creates_temp_item && !catalog.state().has_temporary_namespace(conn.conn_id()) {
+                catalog.register_temporary_namespace(conn.conn_id(), conn.uuid());
+            }
+        }
+
         // NOTE: This phase contains every durable `sync` and `commit` a catalog
         // transaction performs, which is what makes `transact` minus those two
         // histograms an estimate of the in-memory work. Two caveats. More than

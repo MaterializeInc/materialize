@@ -48,10 +48,18 @@ use mz_sql::names::{CommentObjectId, DatabaseId, SchemaId};
 use mz_sql::plan::{AutoScalingStrategy, ClusterSchedule, NetworkPolicyRule, OnTimeoutAction};
 #[cfg(test)]
 use proptest_derive::Arbitrary;
+use uuid::Uuid;
 
 use crate::builtin::RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL;
 use crate::durable::Epoch;
 use crate::durable::objects::serialization::proto;
+
+/// A proptest strategy for [`Uuid`]s, which don't implement `Arbitrary`.
+#[cfg(test)]
+fn any_uuid() -> impl proptest::strategy::Strategy<Value = Uuid> {
+    use proptest::strategy::Strategy;
+    proptest::arbitrary::any::<u128>().prop_map(Uuid::from_u128)
+}
 
 // Structs used to pass information to outside modules.
 
@@ -623,6 +631,9 @@ pub struct Item {
     pub owner_id: RoleId,
     pub privileges: Vec<MzAclItem>,
     pub extra_versions: BTreeMap<RelationVersion, GlobalId>,
+    /// `Some(uuid)` marks a temporary item owned by, and only visible to, the
+    /// session with that UUID. `None` is a normal durable item.
+    pub ephemeral_owner_session: Option<Uuid>,
 }
 
 impl Item {
@@ -647,6 +658,7 @@ impl DurableType for Item {
                 owner_id: self.owner_id,
                 privileges: self.privileges,
                 extra_versions: self.extra_versions,
+                ephemeral_owner_session: self.ephemeral_owner_session,
             },
         )
     }
@@ -662,6 +674,7 @@ impl DurableType for Item {
             owner_id: value.owner_id,
             privileges: value.privileges,
             extra_versions: value.extra_versions,
+            ephemeral_owner_session: value.ephemeral_owner_session,
         }
     }
 
@@ -1515,6 +1528,8 @@ pub struct ItemValue {
     pub(crate) oid: u32,
     pub(crate) global_id: GlobalId,
     pub(crate) extra_versions: BTreeMap<RelationVersion, GlobalId>,
+    #[cfg_attr(test, proptest(strategy = "proptest::option::of(any_uuid())"))]
+    pub(crate) ephemeral_owner_session: Option<Uuid>,
 }
 
 impl ItemValue {

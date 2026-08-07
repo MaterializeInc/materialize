@@ -40,6 +40,7 @@ use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageTxn;
 use mz_storage_types::controller::StorageError;
 use tracing::warn;
+use uuid::Uuid;
 
 use crate::builtin::BuiltinLog;
 use crate::durable::initialize::{
@@ -204,21 +205,29 @@ impl<'a> Transaction<'a> {
                 schema_unique_fn,
                 schema_unique_fn,
             )?,
+            // Temporary items from different sessions may share a name in the
+            // temporary schema (whose durable schema id is a sentinel shared
+            // by every session), so name uniqueness is additionally scoped by
+            // the owning session.
             items: TableTransaction::new_with_uniqueness_fn(
                 items,
                 |a: &ItemValue, b| {
-                    a.schema_id == b.schema_id && a.name == b.name && {
-                        // `item_type` is slow, only compute if needed.
-                        let a_type = a.item_type();
-                        let b_type = b.item_type();
-                        (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
-                            || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
-                            || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
-                    }
+                    a.schema_id == b.schema_id
+                        && a.name == b.name
+                        && a.ephemeral_owner_session == b.ephemeral_owner_session
+                        && {
+                            // `item_type` is slow, only compute if needed.
+                            let a_type = a.item_type();
+                            let b_type = b.item_type();
+                            (a_type != CatalogItemType::Type && b_type != CatalogItemType::Type)
+                                || (a_type == CatalogItemType::Type && b_type.conflicts_with_type())
+                                || (b_type == CatalogItemType::Type && a_type.conflicts_with_type())
+                        }
                 },
                 |prev: &ItemValue, next| {
                     prev.schema_id == next.schema_id
                         && prev.name == next.name
+                        && prev.ephemeral_owner_session == next.ephemeral_owner_session
                         // `item_type` is slow, only compute it once name and schema match.
                         && prev.item_type() == next.item_type()
                 },
@@ -742,10 +751,20 @@ impl<'a> Transaction<'a> {
         privileges: Vec<MzAclItem>,
         temporary_oids: &HashSet<u32>,
         versions: BTreeMap<RelationVersion, GlobalId>,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<u32, CatalogError> {
         let oid = self.allocate_oid(temporary_oids)?;
         self.insert_item(
-            id, oid, global_id, schema_id, item_name, create_sql, owner_id, privileges, versions,
+            id,
+            oid,
+            global_id,
+            schema_id,
+            item_name,
+            create_sql,
+            owner_id,
+            privileges,
+            versions,
+            ephemeral_owner_session,
         )?;
         Ok(oid)
     }
@@ -761,6 +780,7 @@ impl<'a> Transaction<'a> {
         owner_id: RoleId,
         privileges: Vec<MzAclItem>,
         extra_versions: BTreeMap<RelationVersion, GlobalId>,
+        ephemeral_owner_session: Option<Uuid>,
     ) -> Result<(), CatalogError> {
         match self.items.insert(
             ItemKey { id },
@@ -773,12 +793,99 @@ impl<'a> Transaction<'a> {
                 oid,
                 global_id,
                 extra_versions,
+                ephemeral_owner_session,
             },
             self.op_id,
         ) {
             Ok(_) => Ok(()),
             Err(_) => Err(SqlCatalogError::ItemAlreadyExists(id, item_name.to_owned()).into()),
         }
+    }
+
+    /// Removes every item owned by an ephemeral session from the transaction,
+    /// along with the durable state a graceful drop would have removed with
+    /// it: storage collection metadata (moving the backing shards to the
+    /// finalization WAL), comments, and source references.
+    ///
+    /// Used to reclaim temporary items when the catalog is opened with write
+    /// intent, at which point every session that could own one is dead.
+    ///
+    /// This must mirror everything the graceful `Op::DropObjects` path
+    /// persists for a temporary item, because nothing revisits the leftovers:
+    /// bootstrap only ever inserts collection metadata for items present in
+    /// the catalog, and shard finalization is driven solely by the
+    /// `unfinalized_shards` collection, so a metadata row that outlives its
+    /// item leaks the persist shard permanently.
+    pub fn remove_ephemeral_items(&mut self) {
+        let mut keys = Vec::new();
+        let mut item_ids = BTreeSet::new();
+        let mut global_ids = BTreeSet::new();
+        for (key, value) in self.items.items() {
+            if value.ephemeral_owner_session.is_none() {
+                continue;
+            }
+            item_ids.insert(key.id);
+            global_ids.insert(value.global_id);
+            global_ids.extend(value.extra_versions.values().copied());
+            keys.push(key.clone());
+        }
+        self.items.delete_by_keys(keys, self.op_id);
+
+        // Move the items' storage mappings to the finalization WAL, like
+        // `StorageCollections::prepare_state` does for a graceful drop. Every
+        // version of a table maps to the same shard, and a shard that a
+        // remaining mapping still references must not be finalized. No
+        // remaining mapping can reference one today (only replacement
+        // materialized views share shards, and those cannot be temporary),
+        // so this mirrors `prepare_state`'s guard defensively.
+        let dropped_mappings = self.delete_collection_metadata(global_ids);
+        let mut dropped_shards: BTreeSet<_> = dropped_mappings
+            .into_iter()
+            .map(|(_, shard)| shard)
+            .collect();
+        let live_shards: BTreeSet<_> = self.get_collection_metadata().into_values().collect();
+        dropped_shards.retain(|shard| {
+            let live = live_shards.contains(shard);
+            if live {
+                soft_panic_or_log!(
+                    "shard {shard} of a reclaimed ephemeral item is still referenced by a \
+                     live collection, not finalizing it"
+                );
+            }
+            !live
+        });
+        self.insert_unfinalized_shards(dropped_shards).expect(
+            "inserting unfinalized shards only fails on duplicate values, which it ignores",
+        );
+
+        // Comments on ephemeral items would otherwise dangle and, because
+        // item ids are reused, could later re-attach to an unrelated object.
+        self.comments.delete(
+            |key, _value| match key.object_id {
+                CommentObjectId::Table(item_id)
+                | CommentObjectId::View(item_id)
+                | CommentObjectId::MaterializedView(item_id)
+                | CommentObjectId::Source(item_id)
+                | CommentObjectId::Sink(item_id)
+                | CommentObjectId::Index(item_id)
+                | CommentObjectId::Func(item_id)
+                | CommentObjectId::Connection(item_id)
+                | CommentObjectId::Type(item_id)
+                | CommentObjectId::Secret(item_id) => item_ids.contains(&item_id),
+                CommentObjectId::Role(_)
+                | CommentObjectId::Database(_)
+                | CommentObjectId::Schema(_)
+                | CommentObjectId::Cluster(_)
+                | CommentObjectId::ClusterReplica(_)
+                | CommentObjectId::NetworkPolicy(_) => false,
+            },
+            self.op_id,
+        );
+
+        // Only sources hold source references and sources cannot be temporary
+        // today, so this is defensive.
+        self.source_references
+            .delete(|key, _value| item_ids.contains(&key.source_id), self.op_id);
     }
 
     pub fn get_and_increment_id(&mut self, key: String) -> Result<u64, CatalogError> {

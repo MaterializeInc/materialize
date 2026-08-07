@@ -1,0 +1,206 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Behavioural tests for mz_catalog.mz_tables. It is a BuiltinMaterializedView
+# over mz_internal.mz_catalog_raw (see MZ_TABLES in
+# src/catalog/src/builtin/mz_catalog.rs) with two union branches, user tables
+# and builtin tables, and it derives every column from the durable catalog JSON
+# through parse_catalog_id, parse_catalog_privileges, redact_sql and
+# parse_catalog_create_sql (src/expr/src/scalar/func/impls/jsonb.rs).
+#
+# Before that it was a BuiltinTable populated by pack_table_update in the
+# adapter, so the values pinned here are a compatibility surface:
+# information_schema.tables, pg_tables and pg_class all read through it.
+#
+# Assertions filter by object name rather than counting rows, so the file also
+# holds under --auto-index-selects, which creates extra views.
+
+mode cockroach
+
+# Stable object ids, so create_sql can name dependencies by id.
+reset-server
+
+# --- user_tables branch -------------------------------------------------------
+
+# `t` is the first object created after the reset, so it is u1 and create_sql
+# below can name it.
+statement ok
+CREATE TABLE t (a int, b text NOT NULL)
+
+query T
+SELECT id FROM mz_tables WHERE name = 't'
+----
+u1
+
+query T
+SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'public' AND database_id IS NOT NULL)
+FROM mz_tables WHERE name = 't'
+----
+true
+
+query T
+SELECT owner_id = (SELECT id FROM mz_roles WHERE name = 'materialize')
+FROM mz_tables WHERE name = 't'
+----
+true
+
+query T multiline
+SELECT create_sql FROM mz_tables WHERE name = 't'
+----
+CREATE TABLE "materialize"."public"."t" ("a" [s20 AS "pg_catalog"."int4"], "b" [s46 AS "pg_catalog"."text"] NOT NULL)
+EOF
+
+query T multiline
+SELECT redacted_create_sql FROM mz_tables WHERE name = 't'
+----
+CREATE TABLE materialize.public.t (a [s20 AS pg_catalog.int4], b [s46 AS pg_catalog.text] NOT NULL)
+EOF
+
+# A table with no source omits `source_id` from the parsed create_sql, so the
+# column must be NULL rather than absent or empty.
+query T
+SELECT source_id IS NULL FROM mz_tables WHERE name = 't'
+----
+true
+
+# --- Cross-check against the in-memory catalog --------------------------------
+
+# The oid column is read out of the durable JSON, while a regclass cast resolves
+# the name through the in-memory catalog. Two independent paths that must agree.
+#
+# NB create_sql cannot be compared against SHOW CREATE TABLE the same way: SHOW
+# humanizes item ids back to names and pretty-prints, so it is deliberately not
+# the stored string.
+query T
+SELECT oid = 't'::regclass::oid FROM mz_tables WHERE name = 't'
+----
+true
+
+# --- source_id, for a table created from a source -----------------------------
+
+statement ok
+CREATE SOURCE lg FROM LOAD GENERATOR COUNTER
+
+statement ok
+CREATE TABLE lg_tbl FROM SOURCE lg (REFERENCE counter)
+
+query T
+SELECT source_id = (SELECT id FROM mz_sources WHERE name = 'lg')
+FROM mz_tables WHERE name = 'lg_tbl'
+----
+true
+
+# --- Temporary tables ---------------------------------------------------------
+
+# Temporary items are durable catalog items tagged with their owning session,
+# parented to a sentinel schema id shared by every session. The MV maps that
+# sentinel to schema_id '0', which is what the old SchemaSpecifier::Temporary
+# populator printed (src/sql/src/names.rs).
+
+statement ok
+CREATE TEMP TABLE tt (x int)
+
+query TTT
+SELECT id LIKE 'u%', schema_id, create_sql IS NOT NULL FROM mz_tables WHERE name = 'tt'
+----
+true  0  true
+
+# Two sessions may each hold a temporary table of the same name: name
+# uniqueness is scoped by the owning session. Both rows show up here, since
+# mz_tables reports every item and per-session visibility lives in name
+# resolution, not in this MV.
+simple conn=other
+CREATE TEMP TABLE tt (y text);
+----
+COMPLETE 0
+
+query I
+SELECT count(*) FROM mz_tables WHERE name = 'tt'
+----
+2
+
+query T
+SELECT array_agg(DISTINCT schema_id) FROM mz_tables WHERE name = 'tt'
+----
+{0}
+
+# --- builtin_tables branch ----------------------------------------------------
+
+query TTTT
+SELECT id LIKE 's%', owner_id, create_sql IS NULL, source_id IS NULL
+FROM mz_tables WHERE name = 'mz_kafka_sinks'
+----
+true  s1  true  true
+
+query T
+SELECT schema_id = (SELECT id FROM mz_schemas WHERE name = 'mz_catalog' AND database_id IS NULL)
+FROM mz_tables WHERE name = 'mz_kafka_sinks'
+----
+true
+
+# Exactly once: the user and builtin branches must not both claim a row.
+query I
+SELECT count(*) FROM mz_tables WHERE name = 'mz_kafka_sinks'
+----
+1
+
+# Every builtin table the catalog generates must be reported.
+query T
+SELECT array_agg(name ORDER BY name) FROM (
+  SELECT name FROM mz_internal.mz_builtin_tables
+  EXCEPT
+  SELECT name FROM mz_tables WHERE id LIKE 's%'
+)
+----
+NULL
+
+# --- Robustness over the whole catalog ----------------------------------------
+
+# The MV runs parse_catalog_create_sql over every Item row in the catalog, in
+# its WHERE clause, so a single item whose create_sql the parser rejects makes
+# the entire relation unreadable rather than dropping one row. Create one item
+# of every kind reachable here and confirm the relation still resolves.
+
+statement ok
+CREATE VIEW v AS SELECT a FROM t
+
+statement ok
+CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t
+
+statement ok
+CREATE INDEX t_idx ON t (a)
+
+statement ok
+CREATE TYPE ty AS LIST (ELEMENT TYPE = int4)
+
+statement ok
+CREATE SECRET sec AS 'hunter2'
+
+query T
+SELECT count(*) > 0 FROM mz_tables
+----
+true
+
+# --- NOT NULL invariants ------------------------------------------------------
+
+# The MV declares ASSERT NOT NULL for these columns.
+query I
+SELECT count(*)
+FROM mz_tables
+WHERE id IS NULL
+   OR oid IS NULL
+   OR schema_id IS NULL
+   OR name IS NULL
+   OR owner_id IS NULL
+   OR privileges IS NULL
+----
+0
+
+statement ok
+DROP TABLE t CASCADE
