@@ -67,6 +67,20 @@ pub const PRE_RESOLVED_TIMEOUT: Config<Duration> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether to advertise HTTP/2 via ALPN on the HTTPS listener.
+///
+/// balancerd is a byte proxy: it terminates TLS and forwards the decrypted
+/// stream to environmentd. If this is enabled before environmentd supports
+/// HTTP/2, clients negotiate h2 but environmentd receives frames it cannot
+/// parse. Enable only after all environmentd instances support HTTP/2.
+pub const HTTPS_ENABLE_HTTP2_ALPN: Config<bool> = Config::new(
+    "balancerd_https_enable_http2_alpn",
+    false,
+    "Whether to advertise HTTP/2 via ALPN on the HTTPS listener. \
+    Enable only after all environmentd instances support HTTP/2.",
+    ParameterScope::Environment,
+);
+
 /// Sets the filter to apply to stderr logging.
 pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
@@ -129,6 +143,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
         .add(&MAX_CONNECTIONS)
         .add(&PRE_RESOLVED_TIMEOUT)
+        .add(&HTTPS_ENABLE_HTTP2_ALPN)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)
