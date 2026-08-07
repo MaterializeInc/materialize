@@ -66,7 +66,7 @@ pub struct ComputeMetrics {
     index_peek_error_scan_seconds: Histogram,
     index_peek_cursor_setup_seconds: Histogram,
     index_peek_row_iteration_seconds: Histogram,
-    index_peek_result_sort_seconds: Histogram,
+    index_peek_result_thinning_seconds: Histogram,
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
 
@@ -209,9 +209,9 @@ impl ComputeMetrics {
                 help: "Time iterating rows and evaluating MFP, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
-            index_peek_result_sort_seconds: registry.register(metric!(
-                name: "mz_index_peek_result_sort_seconds",
-                help: "Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.",
+            index_peek_result_thinning_seconds: registry.register(metric!(
+                name: "mz_index_peek_result_thinning_seconds",
+                help: "Time thinning intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
             index_peek_frontier_check_seconds: registry.register(metric!(
@@ -275,7 +275,7 @@ impl ComputeMetrics {
         let index_peek_error_scan_seconds = self.index_peek_error_scan_seconds.clone();
         let index_peek_cursor_setup_seconds = self.index_peek_cursor_setup_seconds.clone();
         let index_peek_row_iteration_seconds = self.index_peek_row_iteration_seconds.clone();
-        let index_peek_result_sort_seconds = self.index_peek_result_sort_seconds.clone();
+        let index_peek_result_thinning_seconds = self.index_peek_result_thinning_seconds.clone();
         let index_peek_frontier_check_seconds = self.index_peek_frontier_check_seconds.clone();
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
         let replica_expiration_timestamp_seconds = self
@@ -303,7 +303,7 @@ impl ComputeMetrics {
             index_peek_error_scan_seconds,
             index_peek_cursor_setup_seconds,
             index_peek_row_iteration_seconds,
-            index_peek_result_sort_seconds,
+            index_peek_result_thinning_seconds,
             index_peek_frontier_check_seconds,
             index_peek_row_collection_seconds,
             replica_expiration_timestamp_seconds,
@@ -347,8 +347,8 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_cursor_setup_seconds: Histogram,
     /// Histogram of index peek row iteration durations.
     pub(crate) index_peek_row_iteration_seconds: Histogram,
-    /// Histogram of index peek result sort durations.
-    pub(crate) index_peek_result_sort_seconds: Histogram,
+    /// Histogram of index peek result thinning durations.
+    pub(crate) index_peek_result_thinning_seconds: Histogram,
     /// Histogram of index peek frontier check durations.
     pub(crate) index_peek_frontier_check_seconds: Histogram,
     /// Histogram of index peek row collection construction durations.

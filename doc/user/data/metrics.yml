@@ -1038,18 +1038,18 @@ metrics:
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_result_sort_seconds_bucket
-  help: Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
+- name: mz_index_peek_result_thinning_seconds_bucket
+  help: Time thinning intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_result_sort_seconds_count
-  help: Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
+- name: mz_index_peek_result_thinning_seconds_count
+  help: Time thinning intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
-- name: mz_index_peek_result_sort_seconds_sum
-  help: Time sorting intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
+- name: mz_index_peek_result_thinning_seconds_sum
+  help: Time thinning intermediate peek results down to the rows the finishing can need, summed over the activations an index peek took and reported once it is done. Peeks that are cancelled or dropped before finishing report nothing.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_bucket
