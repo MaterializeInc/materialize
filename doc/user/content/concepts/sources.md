@@ -32,3 +32,4 @@ See also [Operational guidelines](/manage/operational-guidelines/).
 ## Related pages
 
 - [`CREATE SOURCE`](/sql/create-source)
+- [Snapshotting](/concepts/snapshotting/)
