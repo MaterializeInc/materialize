@@ -1,3 +1,7 @@
+---
+headless: true
+---
+
 - A Kafka or Redpanda cluster. Materialize and the destination system must
   both connect to this cluster.
 

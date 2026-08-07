@@ -1,3 +1,7 @@
+---
+headless: true
+---
+
 {{< warning >}}
 A new sink's snapshot inserts only the rows that exist when it starts. The
 snapshot does not remove old documents from the destination.

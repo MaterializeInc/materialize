@@ -1,3 +1,7 @@
+---
+headless: true
+---
+
 The examples in this guide build a search document for an article catalog tracking its content and page views.
 
 ### Create the connections

@@ -12,9 +12,19 @@ This guide shows how to send results from Materialize to OpenSearch. A
 [Kafka sink](/sql/create-sink/kafka/) writes the results to a Kafka topic.
 Kafka Connect reads that topic and writes the documents to OpenSearch.
 
-The [`perfect-embedding`](https://github.com/MaterializeInc/perfect-embedding)
-transform runs inside the connector. It updates each vector embedding only
-when the text for that embedding changes.
+Use this pipeline to keep an OpenSearch search index up to date to within
+hundreds of milliseconds, just using SQL. Materialize maintains the search
+document as an incrementally updated view over your operational data, and
+pushes precise deltas to OpenSearch as upstream data changes, so only the
+affected documents are rewritten.
+
+In this guide, we also use
+[`perfect-embedding`](https://github.com/MaterializeInc/perfect-embedding), a
+Kafka Connect SMT (single message transform) that we developed.
+`perfect-embedding` runs inside the connector and compares the `before` and
+`after` values of each change to find the columns that actually changed. It
+recomputes a vector embedding only for those columns, so embedding costs scale
+with what changed rather than with how often the pipeline runs.
 
 ## Before you begin
 
@@ -31,11 +41,11 @@ when the text for that embedding changes.
   authentication with an internal user under fine-grained access control,
   SigV4, or mTLS.
 
-{{< include-md file="shared-content/kafka-sink-search-prerequisites.md" >}}
+{{% include-headless "/headless/kafka-sink-search/prerequisites" %}}
 
 ## Step 1. Set up the sink in Materialize
 
-{{< include-md file="shared-content/kafka-sink-search-debezium-setup.md" >}}
+{{% include-headless "/headless/kafka-sink-search/debezium-setup" %}}
 
 ## Step 2. Create the OpenSearch index
 
@@ -103,7 +113,7 @@ The output should resemble the following:
 { "acknowledged": true }
 ```
 
-{{< include-md file="shared-content/kafka-sink-empty-destination.md" >}}
+{{% include-headless "/headless/kafka-sink-search/empty-destination" %}}
 
 ## Step 3. Deploy the connector
 
