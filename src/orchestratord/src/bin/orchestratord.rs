@@ -42,7 +42,7 @@ use mz_build_info::{BuildInfo, build_info};
 use mz_orchestrator_kubernetes::{KubernetesImagePullPolicy, util::create_client};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_orchestratord::{
-    controller, gcp_node_upgrade,
+    api, controller, gcp_node_upgrade,
     k8s::{ConversionWebhookConfig, register_crds},
     metrics::{self, Metrics},
     tls::DefaultCertificateSpecs,
@@ -92,6 +92,8 @@ pub struct Args {
     metrics_listen_address: SocketAddr,
     #[clap(long, default_value = "[::]:8001")]
     webhook_listen_address: SocketAddr,
+    #[clap(long, default_value = "[::]:8002")]
+    api_listen_address: SocketAddr,
 
     /// Whether to install the v1 version of the Materialize CRD and the
     /// conversion webhook between v1 and v1alpha1. When false, only the
@@ -546,6 +548,34 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             .await
             {
                 panic!("metrics server failed: {}", e.display_with_causes());
+            }
+        });
+    }
+
+    // Deliberately outside the leadership lease. This serves status and its
+    // writes go through the Kubernetes API, so every replica behind the
+    // operator's Service can answer, rather than only the elected leader.
+    {
+        let router = api::router(Arc::new(api::Context::new(
+            client.clone(),
+            api::Info {
+                version: VERSION.clone(),
+                cloud_provider: args.cloud_provider.to_string(),
+                region: args.region.clone(),
+                helm_chart_version: args.helm_chart_version.clone(),
+                create_balancers: args.create_balancers,
+                create_console: args.create_console,
+            },
+        )));
+        let address = args.api_listen_address;
+        mz_ore::task::spawn(|| "status API server", async move {
+            if let Err(e) = axum::serve(
+                tokio::net::TcpListener::bind(&address).await.unwrap(),
+                router.into_make_service(),
+            )
+            .await
+            {
+                panic!("status API server failed: {}", e.display_with_causes());
             }
         });
     }

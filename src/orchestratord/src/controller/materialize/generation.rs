@@ -73,7 +73,10 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 pub const V161: Version = Version::new(0, 161, 0);
 
-static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
+/// First version whose `environmentd` is given the system parameter ConfigMap
+/// mount and the config sync loop that reads it. Below this the ConfigMap is
+/// never mounted, so its contents have no effect at all.
+pub static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
     patch: 0,
