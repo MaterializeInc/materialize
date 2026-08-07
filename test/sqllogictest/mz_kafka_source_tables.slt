@@ -33,7 +33,7 @@ ORDER BY c.position
 ----
 id  text  false
 topic  text  false
-envelope_type  text  true
+envelope_type  text  false
 key_format  text  true
 value_format  text  true
 

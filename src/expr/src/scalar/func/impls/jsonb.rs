@@ -18,9 +18,10 @@ use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::{
-    AstInfo, AvroSchema, CreateSubsourceOptionName, Format, FormatSpecifier,
-    KafkaSourceConfigOptionName, PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName,
-    SourceEnvelope, SourceErrorPolicy, Value, WithOptionValue,
+    AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
+    CreateSubsourceOptionName, Format, FormatSpecifier, KafkaSourceConfigOptionName,
+    PgConfigOptionName, ProtobufSchema, RawClusterName, RawItemName, SourceEnvelope,
+    SourceErrorPolicy, UnresolvedItemName, Value, WithOptionValue,
 };
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
@@ -380,6 +381,27 @@ fn parse_catalog_acl_mode<'a>(a: JsonbRef<'a>) -> Result<String, EvalError> {
         .map_err(|e| EvalError::InvalidCatalogJson(e.into()))
 }
 
+/// Extracts the string form of a `WithOptionValue`, matching how the planner
+/// coerces option values. The blanket `TryFromValue<WithOptionValue<T>>` impl in
+/// `src/sql/src/plan/with_options.rs` accepts a quoted string, a bare identifier,
+/// and a 1-part unresolved item name, all yielding a string. Any other variant
+/// yields None.
+///
+/// `AstDisplay` does not re-quote bare identifiers or 1-part names, so those
+/// forms persist unquoted in `create_sql`. Matching only `Value::String` here
+/// would miss them and silently fall back to a default, so the catalog-raw
+/// parsers below route their string options through this helper.
+fn option_string<T: AstInfo>(value: &WithOptionValue<T>) -> Option<String> {
+    match value {
+        WithOptionValue::Value(Value::String(s)) => Some(s.clone()),
+        WithOptionValue::Ident(ident) => Some(ident.clone().into_string()),
+        WithOptionValue::UnresolvedItemName(UnresolvedItemName(parts)) if parts.len() == 1 => {
+            Some(parts[0].clone().into_string())
+        }
+        _ => None,
+    }
+}
+
 /// Parses a catalog `create_sql` string into a JSONB object.
 ///
 /// The returned JSONB does not fully reflect the parsed SQL and instead contains only fields
@@ -478,14 +500,32 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                     Some(mz_sql_parser::ast::SourceEnvelope::Debezium)
                 );
 
-                if let Some(envelope) = stmt.envelope {
-                    use mz_sql_parser::ast::SourceEnvelope::*;
-                    let envelope_type = match envelope {
-                        None => "none",
-                        Debezium => "debezium",
-                        Upsert { .. } => "upsert",
-                        CdcV2 => "materialize",
-                    };
+                // An old-syntax kafka source ingests into its own relation, so an
+                // omitted ENVELOPE means the default ENVELOPE NONE and the pre-MV
+                // packer reported 'none'. A new-syntax source (no progress
+                // subsource, hence no EXPOSE PROGRESS AS in create_sql) ingests
+                // nothing itself. Its envelopes live on the per-table exports, so
+                // its own envelope_type stays absent (SQL NULL), matching released
+                // behavior. `progress_subsource.is_some()` is the planner's own
+                // old-vs-new discriminator (see `OldSyntaxIngestion` in
+                // plan_create_source). Non-kafka sources carry no envelope either.
+                // See the `mz_sources.envelope_type` column.
+                let envelope_type = match &stmt.envelope {
+                    Some(envelope) => {
+                        use mz_sql_parser::ast::SourceEnvelope::*;
+                        Some(match envelope {
+                            None => "none",
+                            Debezium => "debezium",
+                            Upsert { .. } => "upsert",
+                            CdcV2 => "materialize",
+                        })
+                    }
+                    None if source_type == "kafka" && stmt.progress_subsource.is_some() => {
+                        Some("none")
+                    }
+                    None => None,
+                };
+                if let Some(envelope_type) = envelope_type {
                     info.insert("envelope_type", json!(envelope_type));
                 }
 
@@ -676,10 +716,7 @@ fn parse_kafka_source_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
         let mut topic: Option<String> = None;
         let mut group_id_prefix: Option<String> = None;
         for opt in options {
-            let string_value = match opt.value {
-                Some(WithOptionValue::Value(Value::String(s))) => Some(s),
-                _ => None,
-            };
+            let string_value = opt.value.as_ref().and_then(option_string);
             match opt.name {
                 KafkaSourceConfigOptionName::Topic => topic = string_value,
                 KafkaSourceConfigOptionName::GroupIdPrefix => group_id_prefix = string_value,
@@ -889,6 +926,163 @@ fn parse_source_export_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
     Ok(jsonb)
 }
 
+/// Extracts connection-detail metadata from a catalog `create_sql`.
+///
+/// Returns a per-connection-type object with the fields that the
+/// `mz_kafka_connections`, `mz_ssh_tunnel_connections`, and `mz_aws_connections`
+/// builtin views need. For everything else (other connection types, including
+/// aws-privatelink whose only detail is context-derived, and non-connection
+/// statements) it returns jsonb `null`, so callers filter on `IS NOT NULL` and
+/// gate on the connection type separately (via
+/// `parse_catalog_create_sql(...)->>'connection_type'`, the way `mz_connections`
+/// already does).
+///
+/// The shape per type:
+///
+/// ```json
+/// // kafka
+/// { "brokers": ["host:port", ...], "progress_topic": <text | null> }
+/// // ssh-tunnel
+/// { "public_key_1": "<text>", "public_key_2": "<text>" }
+/// // aws
+/// {
+///   "auth_kind": "credentials" | "assume-role",
+///   "endpoint": <text | null>, "region": <text | null>,
+///   "access_key_id": <text | null>, "access_key_id_secret_id": <text | null>,
+///   "secret_access_key_secret_id": <text | null>,
+///   "session_token": <text | null>, "session_token_secret_id": <text | null>,
+///   "assume_role_arn": <text | null>, "assume_role_session_name": <text | null>
+/// }
+/// ```
+///
+/// `progress_topic` is null when the connection does not set an explicit
+/// `PROGRESS TOPIC`. The default (`_materialize-progress-<env>-<conn_id>`) is
+/// reconstructed by the view, not here, because it needs the environment id and
+/// the connection's own id. Values derived only from environment context
+/// (AWS principal, external id, trust policy, privatelink principal) are also
+/// left to the view. This keeps the helper a pure function of the `create_sql`.
+///
+/// For aws, an option is either an inline value or a secret reference. Inline
+/// values land in `access_key_id`/`session_token`; a secret reference lands in
+/// the matching `*_secret_id` as the referenced secret's catalog item id (the
+/// persisted `create_sql` stores resolved references as `[uNNN AS name]`).
+/// `auth_kind` is `assume-role` when `ASSUME ROLE ARN` is present, else
+/// `credentials`, matching the `AwsAuth` variant the removed packer read.
+///
+/// Errors if the statement fails to parse.
+#[sqlfunc]
+fn parse_connection_details<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    // The persisted `create_sql` stores an inline broker as a single `BROKER`
+    // option and a broker list as a `BROKERS (...)` sequence. Either way we
+    // only need the addresses, which are present regardless of the tunnel
+    // (direct, SSH, or PrivateLink).
+    fn broker_addresses<T: AstInfo>(values: &[ConnectionOption<T>]) -> Vec<String> {
+        let mut brokers = Vec::new();
+        for opt in values {
+            match (&opt.name, &opt.value) {
+                (ConnectionOptionName::Broker, Some(WithOptionValue::ConnectionKafkaBroker(b))) => {
+                    brokers.push(b.address.clone());
+                }
+                (ConnectionOptionName::Brokers, Some(WithOptionValue::Sequence(seq))) => {
+                    for v in seq {
+                        if let WithOptionValue::ConnectionKafkaBroker(b) = v {
+                            brokers.push(b.address.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        brokers
+    }
+
+    fn string_option<T: AstInfo>(
+        values: &[ConnectionOption<T>],
+        name: ConnectionOptionName,
+    ) -> Option<String> {
+        values
+            .iter()
+            .find(|o| o.name == name)
+            .and_then(|o| o.value.as_ref())
+            .and_then(option_string)
+    }
+
+    // The catalog id of the secret a `SECRET ...` option references. Resolved
+    // references persist as `RawItemName::Id`, so an unresolved name yields
+    // None (the same treatment `parse_source_export_details` gives item names).
+    fn secret_id_option<T: AstInfo<ItemName = RawItemName>>(
+        values: &[ConnectionOption<T>],
+        name: ConnectionOptionName,
+    ) -> Option<String> {
+        values.iter().find_map(|o| match &o.value {
+            Some(WithOptionValue::Secret(RawItemName::Id(id, _, _))) if o.name == name => {
+                Some(id.clone())
+            }
+            _ => None,
+        })
+    }
+
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        use mz_sql_parser::ast::Statement::CreateConnection;
+        let stmt = match stmt {
+            CreateConnection(stmt) => stmt,
+            _ => return Ok(serde_json::Value::Null),
+        };
+
+        match stmt.connection_type {
+            CreateConnectionType::Kafka => Ok(json!({
+                "brokers": broker_addresses(&stmt.values),
+                "progress_topic": string_option(&stmt.values, ConnectionOptionName::ProgressTopic),
+            })),
+            CreateConnectionType::Ssh => Ok(json!({
+                "public_key_1": string_option(&stmt.values, ConnectionOptionName::PublicKey1),
+                "public_key_2": string_option(&stmt.values, ConnectionOptionName::PublicKey2),
+            })),
+            CreateConnectionType::Aws => {
+                let assume_role_arn =
+                    string_option(&stmt.values, ConnectionOptionName::AssumeRoleArn);
+                let auth_kind = if assume_role_arn.is_some() {
+                    "assume-role"
+                } else {
+                    "credentials"
+                };
+                Ok(json!({
+                    "auth_kind": auth_kind,
+                    // Planning coerces an empty ENDPOINT to None (see
+                    // `src/sql/src/plan/statement/ddl/connection.rs`), so the
+                    // removed packer wrote NULL for `ENDPOINT = ''`. Match that.
+                    "endpoint": string_option(&stmt.values, ConnectionOptionName::Endpoint)
+                        .filter(|s| !s.is_empty()),
+                    "region": string_option(&stmt.values, ConnectionOptionName::Region),
+                    "access_key_id": string_option(&stmt.values, ConnectionOptionName::AccessKeyId),
+                    "access_key_id_secret_id":
+                        secret_id_option(&stmt.values, ConnectionOptionName::AccessKeyId),
+                    "secret_access_key_secret_id":
+                        secret_id_option(&stmt.values, ConnectionOptionName::SecretAccessKey),
+                    "session_token": string_option(&stmt.values, ConnectionOptionName::SessionToken),
+                    "session_token_secret_id":
+                        secret_id_option(&stmt.values, ConnectionOptionName::SessionToken),
+                    "assume_role_arn": assume_role_arn,
+                    "assume_role_session_name":
+                        string_option(&stmt.values, ConnectionOptionName::AssumeRoleSessionName),
+                }))
+            }
+            _ => Ok(serde_json::Value::Null),
+        }
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
 #[cfg(test)]
 mod tests {
     use mz_repr::adt::jsonb::Jsonb;
@@ -1065,6 +1259,21 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn kafka_unquoted_topic_and_prefix() {
+        // Planning accepts a bare identifier for TOPIC / GROUP ID PREFIX, and it
+        // persists unquoted in create_sql. Matching only quoted strings would
+        // drop TOPIC and error the whole mz_kafka_source_tables view.
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k_src\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC = my_topic, GROUP ID PREFIX = my_prefix) FORMAT TEXT";
+        let out = super::parse_kafka_source_details(sql).expect("ok");
+        let out = as_serde(out);
+        assert_eq!(out["topic"], json!("my_topic"));
+        assert_eq!(out["group_id_prefix"], json!("my_prefix"));
+    }
+
+    #[mz_ore::test]
     fn kafka_unresolved_connection_errors() {
         // A bare-name connection reference never happens after purification,
         // but the decoder must reject it explicitly rather than silently
@@ -1122,6 +1331,16 @@ mod tests {
                 "value_format": "text",
             }),
         );
+    }
+
+    #[mz_ore::test]
+    fn export_table_kafka_omitted_envelope_is_null() {
+        // Omitting ENVELOPE persists as absent in create_sql, so this
+        // source-type-agnostic helper reports null. The mz_kafka_source_tables
+        // view is responsible for defaulting kafka's null envelope to 'none'.
+        let sql = table_from_source_sql("\"topic\"", " FORMAT TEXT");
+        let out = super::parse_source_export_details(&sql).expect("ok");
+        assert_eq!(as_serde(out)["envelope_type"], serde_json::Value::Null);
     }
 
     #[mz_ore::test]
@@ -1236,5 +1455,246 @@ mod tests {
             matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("unresolved item name")),
             "wrong error variant/message"
         );
+    }
+
+    // --- parse_connection_details --------------------------------------------
+
+    #[mz_ore::test]
+    fn connection_kafka_single_broker_default_progress() {
+        // No explicit PROGRESS TOPIC: the helper leaves it null and the view
+        // reconstructs the default.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["localhost:9092"],
+                "progress_topic": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_kafka_explicit_progress_topic() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', PROGRESS TOPIC = 'override', \
+              SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["localhost:9092"],
+                "progress_topic": "override",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_kafka_broker_list() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKERS ('b1:9092', 'b2:9092'), SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "brokers": ["b1:9092", "b2:9092"],
+                "progress_topic": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_ssh_public_keys() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO SSH TUNNEL \
+             (HOST = 'ssh.example.com', PORT = 22, USER = 'mz', \
+              PUBLIC KEY 1 = 'ssh-ed25519 AAAA', PUBLIC KEY 2 = 'ssh-ed25519 BBBB')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "public_key_1": "ssh-ed25519 AAAA",
+                "public_key_2": "ssh-ed25519 BBBB",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_credentials_inline_key() {
+        // Inline ACCESS KEY ID, secret SECRET ACCESS KEY. Assume-role columns
+        // stay null and auth_kind is credentials.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ACCESS KEY ID = 'AKIAEXAMPLE', \
+              SECRET ACCESS KEY = SECRET [u1 AS \"materialize\".\"public\".\"sk\"])";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "auth_kind": "credentials",
+                "endpoint": null,
+                "region": null,
+                "access_key_id": "AKIAEXAMPLE",
+                "access_key_id_secret_id": null,
+                "secret_access_key_secret_id": "u1",
+                "session_token": null,
+                "session_token_secret_id": null,
+                "assume_role_arn": null,
+                "assume_role_session_name": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_credentials_secret_key_and_session_token() {
+        // Every credential provided as a secret reference lands in the matching
+        // *_secret_id column as the referenced secret's catalog id.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ENDPOINT = 'http://localhost', REGION = 'us-east-1', \
+              ACCESS KEY ID = SECRET [u1 AS \"materialize\".\"public\".\"ak\"], \
+              SECRET ACCESS KEY = SECRET [u2 AS \"materialize\".\"public\".\"sk\"], \
+              SESSION TOKEN = SECRET [u3 AS \"materialize\".\"public\".\"st\"])";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "auth_kind": "credentials",
+                "endpoint": "http://localhost",
+                "region": "us-east-1",
+                "access_key_id": null,
+                "access_key_id_secret_id": "u1",
+                "secret_access_key_secret_id": "u2",
+                "session_token": null,
+                "session_token_secret_id": "u3",
+                "assume_role_arn": null,
+                "assume_role_session_name": null,
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_assume_role() {
+        // Assume-role sets auth_kind and the assume-role columns; credential
+        // columns stay null.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ASSUME ROLE ARN 'arn:aws:iam::123:role/mz', \
+              ASSUME ROLE SESSION NAME 'sess')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(
+            as_serde(out),
+            json!({
+                "auth_kind": "assume-role",
+                "endpoint": null,
+                "region": null,
+                "access_key_id": null,
+                "access_key_id_secret_id": null,
+                "secret_access_key_secret_id": null,
+                "session_token": null,
+                "session_token_secret_id": null,
+                "assume_role_arn": "arn:aws:iam::123:role/mz",
+                "assume_role_session_name": "sess",
+            }),
+        );
+    }
+
+    #[mz_ore::test]
+    fn connection_kafka_unquoted_progress_topic() {
+        // A bare identifier PROGRESS TOPIC persists unquoted in create_sql. The
+        // helper must surface it, else the view substitutes the default topic.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO KAFKA \
+             (BROKER = 'localhost:9092', PROGRESS TOPIC = my_topic, \
+              SECURITY PROTOCOL = plaintext)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out)["progress_topic"], json!("my_topic"));
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_unquoted_option_values() {
+        // Planning accepts bare identifiers for these options and persists them
+        // unquoted. The helper must surface them, not fall back to NULL.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ENDPOINT = localhost, REGION = useast1, \
+              ASSUME ROLE ARN 'arn:aws:iam::123:role/mz', \
+              ASSUME ROLE SESSION NAME = mysession)";
+        let out = super::parse_connection_details(sql).expect("ok");
+        let out = as_serde(out);
+        assert_eq!(out["endpoint"], json!("localhost"));
+        assert_eq!(out["region"], json!("useast1"));
+        assert_eq!(out["assume_role_session_name"], json!("mysession"));
+    }
+
+    #[mz_ore::test]
+    fn connection_aws_empty_endpoint_is_null() {
+        // Planning coerces ENDPOINT = '' to None, so the packer wrote NULL. The
+        // view must match, not report an empty string.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO AWS \
+             (ENDPOINT = '', ASSUME ROLE ARN 'arn:aws:iam::123:role/mz')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out)["endpoint"], serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    fn connection_other_type_returns_null_jsonb() {
+        // A connection type without a detail view (postgres) yields null.
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"c\" TO POSTGRES \
+             (HOST = 'db', DATABASE = 'postgres', USER = 'mz')";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn connection_non_connection_returns_null_jsonb() {
+        let sql = "CREATE VIEW v AS SELECT 1";
+        let out = super::parse_connection_details(sql).expect("ok");
+        assert_eq!(as_serde(out), serde_json::Value::Null);
+    }
+
+    // --- parse_catalog_create_sql envelope_type ------------------------------
+
+    #[mz_ore::test]
+    fn catalog_kafka_old_syntax_omitted_envelope_defaults_none() {
+        // An old-syntax kafka source (carries EXPOSE PROGRESS AS) ingests into
+        // its own relation, so an omitted ENVELOPE means the default NONE, which
+        // the pre-MV packer reported as 'none'.
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC 'test') FORMAT TEXT \
+             EXPOSE PROGRESS AS [u12 AS \"materialize\".\"public\".\"k_progress\"]";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out)["envelope_type"], json!("none"));
+    }
+
+    #[mz_ore::test]
+    fn catalog_kafka_old_syntax_explicit_envelope() {
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"] \
+             (TOPIC 'test') FORMAT BYTES ENVELOPE UPSERT \
+             EXPOSE PROGRESS AS [u12 AS \"materialize\".\"public\".\"k_progress\"]";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out)["envelope_type"], json!("upsert"));
+    }
+
+    #[mz_ore::test]
+    fn catalog_kafka_new_syntax_source_omits_envelope_type() {
+        // A new-syntax kafka source has no progress subsource (no EXPOSE PROGRESS
+        // AS). It ingests nothing itself. Envelopes live on the per-table exports,
+        // so its own envelope_type stays absent (SQL NULL).
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"k\" \
+             IN CLUSTER [u42] \
+             FROM KAFKA CONNECTION [u11 AS \"materialize\".\"public\".\"k_conn\"]";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out).get("envelope_type"), None);
+    }
+
+    #[mz_ore::test]
+    fn catalog_non_kafka_source_omits_envelope_type() {
+        // Non-kafka sources carry no envelope, so envelope_type stays absent
+        // (SQL NULL), not 'none'.
+        let sql = "CREATE SOURCE \"materialize\".\"public\".\"lg\" \
+             IN CLUSTER [u42] FROM LOAD GENERATOR COUNTER";
+        let out = super::parse_catalog_create_sql(sql).expect("ok");
+        assert_eq!(as_serde(out).get("envelope_type"), None);
     }
 }

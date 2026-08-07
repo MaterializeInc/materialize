@@ -19,6 +19,7 @@ import random
 import threading
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any
 
 from materialize.docker import image_registry
@@ -93,8 +94,13 @@ def test(
     run_ingestions: bool,
     run_queries: bool,
     max_concurrent_queries: int,
+    during_continuous: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
-    """Run a single workload test."""
+    """Run a single workload test.
+
+    When `during_continuous` is set, the continuous phase runs until the
+    callback returns instead of for `runtime` seconds.
+    """
     print(f"--- {posixpath.relpath(file, LOCATION)}")
     services = set()
 
@@ -272,12 +278,17 @@ def test(
             thread.start()
 
         try:
-            stop_event.wait(timeout=runtime)
+            if during_continuous is not None:
+                during_continuous()
+            else:
+                stop_event.wait(timeout=runtime)
         finally:
             stop_event.set()
             for thread in threads:
                 thread.join()
             print_replay_stats(stats)
+    elif during_continuous is not None:
+        during_continuous()
     else:
         print("No continuous ingestions or queries defined, skipping phase")
 

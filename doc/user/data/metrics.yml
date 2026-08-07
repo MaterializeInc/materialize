@@ -96,6 +96,12 @@ metrics:
   - session_type
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_active_internal_subscribes
+  help: The number of active internal subscribes, which serve frontend-sequenced read-then-write.
+  labels:
+  - session_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_active_sessions
   help: The number of active coordinator sessions.
   labels:
