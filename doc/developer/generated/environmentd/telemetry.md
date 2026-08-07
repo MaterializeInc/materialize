@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/telemetry.rs
-revision: 4e2b6c0984
+revision: d92a868ee9
 ---
 
 # environmentd::telemetry

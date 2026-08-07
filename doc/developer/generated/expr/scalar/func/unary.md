@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/unary.rs
-revision: 5053b7013e
+revision: fd1dd6e62b
 ---
 
 # mz-expr::scalar::func::unary
