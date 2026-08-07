@@ -32,6 +32,7 @@ from psycopg import Cursor
 from psycopg.errors import (
     DatabaseError,
     InternalError_,
+    OperationalError,
     QueryCanceled,
 )
 
@@ -3684,6 +3685,100 @@ def workflow_test_concurrent_connections(c: Composition) -> None:
         assert (
             p99 < p99_limit
         ), f"p99 is {p99:.2f}s, should be less than {p99_limit:.2f}s"
+
+
+def workflow_test_connection_limit_tracks_committed_vars(c: Composition) -> None:
+    """
+    Assert that the connection limit enforced when a connection is established
+    tracks the committed values of `max_connections` and
+    `superuser_reserved_connections`.
+
+    Both are mirrored into the connection counter by `SystemVars` callbacks that
+    the catalog fires once per committed transaction that changed a system var,
+    so this covers every catalog op that can change them (`ALTER SYSTEM SET`,
+    `RESET` and `RESET ALL`), plus a rejected `ALTER SYSTEM SET`, which must
+    leave both the committed value and the enforced limit alone.
+    """
+    c.up("materialized")
+
+    def alter_system(statement: str) -> None:
+        # Internal users are exempt from the connection limit, so this keeps
+        # working while the limit is exhausted.
+        c.sql(statement, port=6877, user="mz_system")
+
+    def assert_committed(name: str, expected: str) -> None:
+        actual = c.sql_query(f"SHOW {name}", port=6877, user="mz_system")[0][0]
+        assert actual == expected, f"{name} is {actual}, expected {expected}"
+
+    def assert_connection_allowed() -> None:
+        with c.sql_connection(reuse_connection=False) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+                assert cur.fetchone() == (1,)
+
+    def assert_connection_refused() -> None:
+        try:
+            conn = c.sql_connection(reuse_connection=False)
+        except OperationalError as e:
+            assert "creating connection would violate max_connections limit" in str(
+                e
+            ), f"Unexpected error: {e}"
+        else:
+            conn.close()
+            raise AssertionError("connecting succeeded, expected it to be refused")
+
+    alter_system("ALTER SYSTEM SET superuser_reserved_connections = 0")
+    alter_system("ALTER SYSTEM SET max_connections = 100")
+
+    # Held open for the rest of the test so that a limit of 1 is exhausted.
+    held_connection = c.sql_connection(reuse_connection=False)
+
+    try:
+        # Op::UpdateSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_committed("max_connections", "1")
+        assert_connection_refused()
+
+        # A mirror stuck on the previous value would keep refusing here.
+        alter_system("ALTER SYSTEM SET max_connections = 100")
+        assert_connection_allowed()
+
+        # Op::ResetSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM RESET max_connections")
+        assert_connection_allowed()
+
+        # Op::ResetAllSystemConfiguration.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM RESET ALL")
+        assert_connection_allowed()
+
+        # The same callback mirrors `superuser_reserved_connections`, so
+        # reserving every connection leaves none for a non-superuser.
+        alter_system("ALTER SYSTEM SET max_connections = 100")
+        alter_system("ALTER SYSTEM SET superuser_reserved_connections = 100")
+        assert_connection_refused()
+        alter_system("ALTER SYSTEM SET superuser_reserved_connections = 0")
+        assert_connection_allowed()
+
+        # A rejected `ALTER SYSTEM SET` commits nothing, so neither the
+        # committed value nor the enforced limit may move.
+        alter_system("ALTER SYSTEM SET max_connections = 1")
+        assert_connection_refused()
+        try:
+            alter_system("ALTER SYSTEM SET max_connections = 'not-a-number'")
+        except DatabaseError as e:
+            assert 'parameter "max_connections" requires' in str(
+                e
+            ), f"Unexpected error: {e}"
+        else:
+            raise AssertionError("ALTER SYSTEM succeeded, expected it to be rejected")
+        assert_committed("max_connections", "1")
+        assert_connection_refused()
+    finally:
+        held_connection.close()
 
 
 def workflow_test_profile_fetch(c: Composition) -> None:
