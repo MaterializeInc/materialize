@@ -573,6 +573,37 @@ impl Coordinator {
         };
         active_subscribe.initialize();
 
+        // A subscribe whose `as_of` equals its `up_to` covers the empty range
+        // `[as_of, up_to)` and is guaranteed to produce no data. The adapter
+        // reports this with the `EqualSubscribeBounds` notice. Skip installing a
+        // dataflow for it: the only observable output is the initial progress row
+        // that `initialize` already emitted (WITH PROGRESS only). Dropping
+        // `active_subscribe` closes the channel, which completes the subscribe on
+        // the client side.
+        let is_empty = df_desc
+            .as_of
+            .as_ref()
+            .is_some_and(|as_of| as_of == &df_desc.until);
+        if is_empty {
+            drop(active_subscribe);
+            drop(read_holds);
+            let resp = ExecuteResponse::Subscribing {
+                rx,
+                ctx_extra: std::mem::take(ctx_extra),
+                instance_id: cluster_id,
+            };
+            let resp = match plan.copy_to {
+                None => resp,
+                Some(format) => ExecuteResponse::CopyTo {
+                    format,
+                    resp: Box::new(resp),
+                },
+            };
+            // No `mz_subscriptions` bookkeeping was deferred, so hand back an
+            // already-satisfied notify.
+            return Ok((resp, Box::pin(std::future::ready(()))));
+        }
+
         // Register bookkeeping for the new SUBSCRIBE and ship its dataflow. The
         // `mz_subscriptions` write is deferred to a group commit (see
         // `add_active_compute_sink`) rather than committed inline, so it does not block
