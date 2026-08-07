@@ -26,9 +26,11 @@ use mz_http_util::DynamicFilterTarget;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
-use mz_ore::metrics::{MetricsRegistry, register_runtime_metrics};
+use mz_ore::metric;
+use mz_ore::metrics::{MetricsRegistry, UIntGauge, register_runtime_metrics};
 use mz_ore::netio::{Listener, SocketAddr};
 use mz_ore::now::SYSTEM_TIME;
+use mz_ore::retry::Retry;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::rpc::{GrpcPubSubClient, PersistPubSubClient, PersistPubSubClientConfig};
@@ -124,6 +126,15 @@ struct Args {
     // === Secrets reader options. ===
     #[clap(flatten)]
     secrets: SecretsReaderCliArgs,
+
+    /// The name of the internal secret holding this process's cluster transport TLS
+    /// credentials.
+    ///
+    /// When set, the controller listeners require mutual TLS. The secret is read through the
+    /// secrets reader, with retries: the controller writes it asynchronously relative to
+    /// process creation, so it may not exist yet at boot.
+    #[clap(long, env = "CTP_TLS_SECRET", value_name = "NAME")]
+    ctp_tls_secret: Option<String>,
 
     // === Tracing options. ===
     #[clap(flatten)]
@@ -281,6 +292,40 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
         .load()
         .await
         .context("loading secrets reader")?;
+
+    let ctp_tls = match &args.ctp_tls_secret {
+        None => None,
+        Some(secret_name) => {
+            let loaded = Retry::default()
+                .clamp_backoff(Duration::from_secs(1))
+                .retry_async(async |state| {
+                    match secrets_reader.read_internal(secret_name).await {
+                        Ok(Some(bytes)) => transport::tls::server_tls_from_secret(&bytes),
+                        Ok(None) => {
+                            // The controller writes the secret asynchronously relative to
+                            // process creation, so wait for it to appear.
+                            if state.i % 10 == 0 {
+                                info!(%secret_name, "waiting for CTP TLS credential secret");
+                            }
+                            Err(anyhow::anyhow!("credential secret does not exist yet"))
+                        }
+                        Err(e) => Err(e.context("reading CTP TLS credential secret")),
+                    }
+                })
+                .await?;
+            info!(
+                cert_not_after = %loaded.cert_not_after,
+                "requiring TLS on controller connections",
+            );
+            let cert_not_after_gauge: UIntGauge = metrics_registry.register(metric!(
+                name: "mz_ctp_tls_cert_not_after",
+                help: "The expiry of this process's cluster transport TLS certificate, in \
+                       seconds since the Unix epoch.",
+            ));
+            cert_not_after_gauge.set(loaded.cert_not_after);
+            Some(loaded.config)
+        }
+    };
 
     let usage_collector = Arc::new(usage_metrics::Collector {
         disk_root: args.scratch_directory.clone(),
@@ -460,6 +505,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.storage_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
+            ctp_tls.clone(),
             Duration::MAX,
             storage_client_builder,
             cluster_server_metrics.for_server("storage"),
@@ -492,6 +538,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             args.compute_controller_listen_addr,
             BUILD_INFO.semver_version(),
             grpc_host.clone(),
+            ctp_tls,
             Duration::MAX,
             compute_client_builder,
             cluster_server_metrics.for_server("compute"),

@@ -55,6 +55,7 @@ use mz_ore::now::NowFn;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
+use mz_service::transport::tls::ClientTlsConfig;
 use mz_storage_client::controller::StorageController;
 use mz_storage_types::dyncfgs::ORE_OVERFLOWING_BEHAVIOR;
 use mz_storage_types::read_holds::ReadHold;
@@ -703,6 +704,7 @@ impl ComputeController {
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
         config: ComputeReplicaConfig,
+        tls: Option<ClientTlsConfig>,
     ) -> Result<(), ReplicaCreationError> {
         use ReplicaCreationError::*;
 
@@ -739,6 +741,7 @@ impl ComputeController {
                 index_logs: Default::default(),
             },
             grpc_client: self.config.grpc_client.clone(),
+            tls,
             expiration_offset: (!expiration_offset.is_zero()).then_some(expiration_offset),
             arrangement_dictionary_compression,
         };

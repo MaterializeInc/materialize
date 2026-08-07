@@ -51,6 +51,7 @@ use mz_persist_client::{Diagnostics, PersistClient, PersistLocation, ShardId};
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
+use mz_service::transport::tls::ClientTlsConfig;
 use mz_storage_client::client::{
     AppendOnlyUpdate, RunIngestionCommand, RunOneshotIngestion, RunSinkCommand, Status,
     StatusUpdate, StorageCommand, StorageResponse, TableData,
@@ -598,6 +599,7 @@ impl StorageController for Controller {
         instance_id: StorageInstanceId,
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
+        tls: Option<ClientTlsConfig>,
     ) {
         let instance = self
             .instances
@@ -608,6 +610,7 @@ impl StorageController for Controller {
             build_info: self.build_info,
             location,
             grpc_client: self.config.parameters.grpc_client.clone(),
+            tls,
         };
         instance.add_replica(replica_id, config);
     }
