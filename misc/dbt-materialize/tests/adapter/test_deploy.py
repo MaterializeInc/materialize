@@ -264,6 +264,24 @@ class TestPermissionValidation:
     macros because the materialize user is a superuser and we'd short
     circuit these checks if executing deploy_validate_permissions"""
 
+    @pytest.fixture(autouse=True)
+    def cleanup(self, project):
+        for role in ["other_role", "team_role"]:
+            role_exists = project.run_sql(
+                f"SELECT count(*) = 1 FROM mz_roles WHERE name = '{role}'",
+                fetch="one",
+            )[0]
+            if role_exists:
+                # Membership is needed to drop what the role owns.
+                project.run_sql(f"GRANT {role} TO materialize")
+                project.run_sql(f"DROP OWNED BY {role}")
+                project.run_sql(f"DROP ROLE {role}")
+        project.run_sql("DROP SCHEMA IF EXISTS my_schema CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS not_my_schema CASCADE")
+        project.run_sql("DROP SCHEMA IF EXISTS team_schema CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS not_my_cluster CASCADE")
+        project.run_sql("DROP CLUSTER IF EXISTS team_cluster CASCADE")
+
     def test_createcluster_permissions(self, project):
         run_dbt(["run-operation", "internal_ensure_createcluster_permission"])
 
@@ -290,6 +308,78 @@ class TestPermissionValidation:
                 "{clusters: ['quickstart']}",
             ]
         )
+
+    def test_schema_owner_permissions_via_role_membership(self, project):
+        project.run_sql("CREATE ROLE team_role")
+        project.run_sql("GRANT team_role TO materialize")
+        project.run_sql("CREATE SCHEMA team_schema")
+        project.run_sql("ALTER SCHEMA team_schema OWNER TO team_role")
+
+        # Materialize counts a member of the owning role as an owner, and lets
+        # it run the swap deploy_promote performs, so this must be accepted.
+        run_dbt(
+            [
+                "run-operation",
+                "internal_ensure_schema_ownership",
+                "--args",
+                "{schemas: ['team_schema']}",
+            ]
+        )
+
+    def test_cluster_owner_permissions_via_role_membership(self, project):
+        project.run_sql("CREATE ROLE team_role")
+        project.run_sql("GRANT team_role TO materialize")
+        project.run_sql("CREATE CLUSTER team_cluster SIZE = 'scale=1,workers=1'")
+        project.run_sql("ALTER CLUSTER team_cluster OWNER TO team_role")
+
+        run_dbt(
+            [
+                "run-operation",
+                "internal_ensure_cluster_ownership",
+                "--args",
+                "{clusters: ['team_cluster']}",
+            ]
+        )
+
+    def test_schema_owner_permissions_missing(self, project):
+        project.run_sql("CREATE ROLE other_role")
+        project.run_sql("GRANT other_role TO materialize")
+        project.run_sql("CREATE SCHEMA not_my_schema")
+        project.run_sql("ALTER SCHEMA not_my_schema OWNER TO other_role")
+        # Handing ownership over requires membership in the target role, so
+        # give it back to end up with a schema this role has no claim on.
+        project.run_sql("REVOKE other_role FROM materialize")
+
+        _, output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "internal_ensure_schema_ownership",
+                "--args",
+                "{schemas: ['not_my_schema']}",
+            ],
+            expect_pass=False,
+        )
+
+        assert "needs to be an owner of schema not_my_schema" in output
+
+    def test_cluster_owner_permissions_missing(self, project):
+        project.run_sql("CREATE ROLE other_role")
+        project.run_sql("GRANT other_role TO materialize")
+        project.run_sql("CREATE CLUSTER not_my_cluster SIZE = 'scale=1,workers=1'")
+        project.run_sql("ALTER CLUSTER not_my_cluster OWNER TO other_role")
+        project.run_sql("REVOKE other_role FROM materialize")
+
+        _, output = run_dbt_and_capture(
+            [
+                "run-operation",
+                "internal_ensure_cluster_ownership",
+                "--args",
+                "{clusters: ['not_my_cluster']}",
+            ],
+            expect_pass=False,
+        )
+
+        assert "needs to be an owner of cluster not_my_cluster" in output
 
 
 class TestRunWithDeploy:
