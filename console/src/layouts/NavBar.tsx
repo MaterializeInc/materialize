@@ -149,9 +149,15 @@ export const NavBarEnvironmentSelect = () => {
 
 export interface NavBarProps {
   isCollapsed: boolean;
+  /**
+   * Renders only account-scoped navigation (the Admin group), hiding
+   * region-scoped items and object creation. Used by flows where no
+   * environment is usable yet, such as environment-not-ready.
+   */
+  accountOnly?: boolean;
 }
 
-export const NavBar = ({ isCollapsed }: NavBarProps) => {
+export const NavBar = ({ isCollapsed, accountOnly }: NavBarProps) => {
   const {
     isOpen: isConnectModalOpen,
     onClose: onCloseConnectModal,
@@ -224,6 +230,7 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                   offsetY={navBarContainerHeight}
                   runtimeConfig={runtimeConfig}
                   isMobile={true}
+                  accountOnly={accountOnly}
                 />
               )}
               selfManagedConfigElement={
@@ -231,22 +238,28 @@ export const NavBar = ({ isCollapsed }: NavBarProps) => {
                   closeMenu={closeMobileNav}
                   offsetY={navBarContainerHeight}
                   isMobile={true}
+                  accountOnly={accountOnly}
                 />
               }
             />
           </Box>
         )}
-        <CreateObjectButton isCollapsed={isCollapsed} />
+        {!accountOnly && <CreateObjectButton isCollapsed={isCollapsed} />}
         <AppConfigSwitch
           cloudConfigElement={({ runtimeConfig }) => (
             <CloudNavMenu
               isCollapsed={isCollapsed}
               runtimeConfig={runtimeConfig}
               isMobile={false}
+              accountOnly={accountOnly}
             />
           )}
           selfManagedConfigElement={
-            <SelfManagedNavMenu isCollapsed={isCollapsed} isMobile={false} />
+            <SelfManagedNavMenu
+              isCollapsed={isCollapsed}
+              isMobile={false}
+              accountOnly={accountOnly}
+            />
           }
         />
         {!isMobile && <Spacer />}

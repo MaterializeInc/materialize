@@ -206,10 +206,12 @@ export const createProviderWrapper = async ({
                   <SentryRoutes>
                     <Route index path="*" element={children} />
                   </SentryRoutes>
+                  {/* Inside the router to match the app's provider nesting,
+                      so toasts can render router Links. */}
+                  <ToastProvider />
                 </Router>
               </QueryClientProvider>
             </React.Suspense>
-            <ToastProvider />
           </EnvironmentProvider>
         </ThemeProvider>
       </JotaiProvider>

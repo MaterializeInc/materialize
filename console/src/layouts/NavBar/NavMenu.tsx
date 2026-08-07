@@ -347,6 +347,8 @@ const NavMenuMobile = (props: {
 
 type BaseCloudNavMenuProps = {
   runtimeConfig: CloudRuntimeConfig;
+  /** Renders only account-scoped (forceShow) items. */
+  accountOnly?: boolean;
 };
 
 type MobileNavMenuProps = {
@@ -365,9 +367,12 @@ export const CloudNavMenu = (
     | (BaseCloudNavMenuProps & DesktopNavMenuProps)
     | (BaseCloudNavMenuProps & MobileNavMenuProps),
 ) => {
-  const items = useCloudNavMenuItems({
+  const allItems = useCloudNavMenuItems({
     runtimeConfig: props.runtimeConfig,
   });
+  const items = props.accountOnly
+    ? allItems.filter((item) => item.forceShow)
+    : allItems;
 
   if (props.isMobile) {
     return <NavMenuMobile {...props} items={items} />;
@@ -377,9 +382,15 @@ export const CloudNavMenu = (
 };
 
 export const SelfManagedNavMenu = (
-  props: DesktopNavMenuProps | MobileNavMenuProps,
+  props: (DesktopNavMenuProps | MobileNavMenuProps) & {
+    /** Renders only account-scoped (forceShow) items. */
+    accountOnly?: boolean;
+  },
 ) => {
-  const items = useSelfManagedNavMenuItems();
+  const allItems = useSelfManagedNavMenuItems();
+  const items = props.accountOnly
+    ? allItems.filter((item) => item.forceShow)
+    : allItems;
 
   if (props.isMobile) {
     return <NavMenuMobile {...props} items={items} />;
