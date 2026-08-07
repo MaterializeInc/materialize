@@ -348,6 +348,7 @@ mod tests {
     use mz_sql::names::ResolvedIds;
     use mz_sql::plan::{WebhookBodyFormat, WebhookHeaders};
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_storage_types::configuration::{StorageReplicaConfig, StorageReplicaLogging};
     use mz_storage_types::sinks::{
         KafkaIdStyle, KafkaSinkCompressionType, KafkaSinkConnection, KafkaSinkFormat,
         KafkaSinkFormatType, SinkEnvelope, StorageSinkConnection,
@@ -500,6 +501,9 @@ mod tests {
                 compute: ComputeReplicaConfig {
                     logging: Default::default(),
                     arrangement_compression: false,
+                },
+                storage: StorageReplicaConfig {
+                    logging: StorageReplicaLogging::default(),
                 },
             },
             owner_id: RoleId::User(1),
@@ -683,6 +687,9 @@ mod tests {
                 compute: ComputeReplicaConfig {
                     logging: Default::default(),
                     arrangement_compression: false,
+                },
+                storage: StorageReplicaConfig {
+                    logging: StorageReplicaLogging::default(),
                 },
             },
             owner_id: RoleId::User(1),

@@ -9,7 +9,9 @@
 
 //! Configuration parameter types.
 
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::time::Duration;
 
 use mz_dyncfg::ConfigSet;
 
@@ -63,5 +65,40 @@ impl StorageConfiguration {
         // top-level. Eventually, all of `StorageParameters` goes away.
         parameters.dyncfg_updates.apply(&self.config_set);
         self.parameters.update(parameters);
+    }
+}
+
+/// Replica configuration
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StorageReplicaConfig {
+    /// TODO(database-issues#7533): Add documentation.
+    pub logging: StorageReplicaLogging,
+}
+
+/// Logging configuration of a replica.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize
+)]
+pub struct StorageReplicaLogging {
+    /// Whether to enable logging for the logging dataflows.
+    pub log_logging: bool,
+    /// The interval at which to log.
+    ///
+    /// A `None` value indicates that logging is disabled.
+    pub interval: Option<Duration>,
+}
+
+impl StorageReplicaLogging {
+    /// Return whether logging is enabled.
+    pub fn enabled(&self) -> bool {
+        self.interval.is_some()
     }
 }
