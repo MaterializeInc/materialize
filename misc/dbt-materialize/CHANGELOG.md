@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Fix `deploy_init` when the `CI_TAG` environment variable is set. The
+  deployment schema was tagged without passing the schema name, so the
+  operation failed with `COMMENT ON SCHEMA ""`. The deployment schema is
+  now also created with a quoted name, matching how it is dropped.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)

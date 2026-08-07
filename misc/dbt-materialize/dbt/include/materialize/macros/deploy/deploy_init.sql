@@ -98,10 +98,10 @@
     {% else %}
         {{ log("Creating deployment schema " ~ deploy_schema, info=True)}}
         {% set create_schema %}
-        CREATE SCHEMA {{ deploy_schema }};
+        CREATE SCHEMA {{ adapter.quote(deploy_schema) }};
         {% endset %}
         {{ run_query(create_schema) }}
-        {{ set_schema_ci_tag() }}
+        {{ set_schema_ci_tag(deploy_schema) }}
         {{ internal_copy_schema_default_privs(schema, deploy_schema) }}
         {{ internal_copy_schema_grants(schema, deploy_schema) }}
     {% endif %}

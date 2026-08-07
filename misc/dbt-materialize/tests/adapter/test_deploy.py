@@ -544,6 +544,28 @@ class TestTargetDeploy:
                 "on" in tagged_schema_comment[0]
             ), f"Missing timestamp in {schema_name} comment"
 
+    def test_dbt_deploy_init_tags_schema_with_ci_tag(self, project, monkeypatch):
+        monkeypatch.setenv("CI_TAG", "gh_ci_123")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        for schema_name in ["prod_dbt_deploy", "staging_dbt_deploy"]:
+            comment = project.run_sql(
+                f"""
+                SELECT c.comment
+                FROM mz_internal.mz_comments c
+                JOIN mz_schemas s USING (id)
+                WHERE s.name = '{schema_name}';
+                """,
+                fetch="one",
+            )
+
+            assert comment is not None, f"No CI tag on schema {schema_name}"
+            assert comment[0] == "gh_ci_123"
+
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
         project.run_sql("CREATE CLUSTER prod_dbt_deploy SIZE = 'scale=1,workers=1'")
