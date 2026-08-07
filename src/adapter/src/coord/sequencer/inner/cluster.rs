@@ -325,11 +325,14 @@ impl Coordinator {
         // cancel. With nothing in flight the values decide: a shape option set
         // to its current value reconfigures nothing, and reshaping it anyway
         // would write a spurious pre-cancelled record.
-        let mut cut_over = false;
-        // The folded target the cut-over must materialize, when a
-        // reconfiguration is in flight. Applied to `new_config` below, once the
-        // borrow taken here is released.
-        let mut folded_target = None;
+        //
+        // The target the cut-over must materialize: the shape and factor the
+        // statement asks for, folded onto any in-flight record's target,
+        // exactly as the reshape path computes it. Applied to `new_config`
+        // below, once the borrow taken here is released. With nothing in
+        // flight the fold returns the statement's shape unchanged, so applying
+        // it is the identity.
+        let mut cut_over_target = None;
         if let (Managed(old_managed), Managed(new_managed)) = (&config.variant, &new_config.variant)
         {
             let needs_record = if reconfiguration_in_flight {
@@ -363,18 +366,15 @@ impl Coordinator {
             }
             if needs_record && !scheduled_direct {
                 if requests_immediate_cut_over(strategy) {
-                    cut_over = true;
-                    // The cut-over transacts the same target the reshape path
-                    // would have written, so it folds onto an in-flight one the
-                    // same way. With nothing in flight there is nothing to fold
-                    // and `new_config` already carries the target.
-                    folded_target = old_managed
+                    let in_flight = old_managed
                         .reconfiguration
                         .as_ref()
-                        .filter(|record| record.is_in_progress())
-                        .map(|record| {
-                            alter_reconfiguration_target(new_managed, options, Some(&record.target))
-                        });
+                        .filter(|record| record.is_in_progress());
+                    cut_over_target = Some(alter_reconfiguration_target(
+                        new_managed,
+                        options,
+                        in_flight.map(|record| &record.target),
+                    ));
                 } else {
                     return self
                         .reshape_alter_cluster_managed(
@@ -389,24 +389,12 @@ impl Coordinator {
                 }
             }
         }
-        if let Some(target) = folded_target {
+        let cut_over = cut_over_target.is_some();
+        if let Some(target) = cut_over_target {
             let Managed(target_managed) = &mut new_config.variant else {
-                unreachable!("a folded target is produced only for a managed config");
+                unreachable!("a cut-over target is produced only for a managed config");
             };
-            // Destructured so a new target dimension fails to compile until it
-            // is applied here too.
-            let ReconfigurationTarget {
-                size,
-                replication_factor,
-                availability_zones,
-                logging,
-                arrangement_compression,
-            } = target;
-            target_managed.size = size;
-            target_managed.replication_factor = replication_factor;
-            target_managed.availability_zones = availability_zones;
-            target_managed.logging = logging;
-            target_managed.arrangement_compression = arrangement_compression;
+            target_managed.apply_reconfiguration_target(target);
         }
 
         match (&config.variant, &new_config.variant) {
@@ -951,15 +939,20 @@ impl Coordinator {
 
         self.ensure_valid_azs(availability_zones.iter())?;
 
-        // The same logging the cluster's own config carries (see
-        // `sequence_create_cluster`), so the replicas created below match the
-        // shape the controller will reconcile them against.
-        let replica_logging = match compute.introspection {
-            Some(config) => ReplicaLogging {
-                log_logging: config.debugging,
-                interval: Some(config.interval),
+        // The shape every replica below is created at, matching the cluster's
+        // own config (see `sequence_create_cluster`) so the controller
+        // reconciles the replicas as already conforming.
+        let replica_shape = ReplicaShape {
+            size: size.clone(),
+            availability_zones: AvailabilityZones(availability_zones.clone()),
+            logging: match compute.introspection {
+                Some(config) => ReplicaLogging {
+                    log_logging: config.debugging,
+                    interval: Some(config.interval),
+                },
+                None => ReplicaLogging::default(),
             },
-            None => ReplicaLogging::default(),
+            arrangement_compression: compute.arrangement_compression,
         };
 
         let role_id = session.role_metadata().current_role;
@@ -1028,12 +1021,7 @@ impl Coordinator {
                 cluster_id,
                 replica_id,
                 replica_name.clone(),
-                &ReplicaShape {
-                    size: size.clone(),
-                    availability_zones: AvailabilityZones(availability_zones.clone()),
-                    logging: replica_logging.clone(),
-                    arrangement_compression: compute.arrangement_compression,
-                },
+                &replica_shape,
                 &mut ops,
                 *session.current_role_id(),
                 ReplicaCreateDropReason::Manual,
@@ -1523,15 +1511,17 @@ impl Coordinator {
     ///
     /// `cut_over` is the direct path an explicitly zero-timeout commit `WAIT`
     /// requests (see [`requests_immediate_cut_over`]): the observed owned
-    /// replica set is dropped and recreated at the target shape and factor, and
-    /// any carried reconfiguration record is retired as cancelled, all in this
-    /// one catalog transaction with no controller involvement. It is the one
-    /// reshape that still works when the controller itself is the problem, and
-    /// it simultaneously unsticks a reconfiguration nothing else would retire.
-    /// Requesting it under a live controller stays safe: the config write
-    /// invalidates any in-flight tick's compare-and-append witness, so a stale
-    /// controller batch is rejected like it would be for any user DDL landing
-    /// mid-tick.
+    /// replica set is converged onto the target shape and factor (replicas
+    /// that already match are kept, up to the factor), and any carried
+    /// reconfiguration record is settled to a terminal status (see
+    /// [`retire_carried_reconfiguration`]), all in this one catalog
+    /// transaction with no controller involvement. It
+    /// is the one reshape that still works when the controller itself is the
+    /// problem, and it simultaneously unsticks a reconfiguration nothing else
+    /// would retire. Requesting it under a live controller stays safe: the
+    /// config write invalidates any in-flight tick's compare-and-append
+    /// witness, so a stale controller batch is rejected like it would be for
+    /// any user DDL landing mid-tick.
     ///
     /// # Panics
     ///
