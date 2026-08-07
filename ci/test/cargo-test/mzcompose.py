@@ -20,6 +20,7 @@ import sys
 import tempfile
 from argparse import Namespace
 from typing import Any, Literal
+from urllib.parse import quote
 
 from materialize import MZ_ROOT, buildkite, rustc_flags, spawn, ui
 from materialize.cli.run import SANITIZER_TARGET
@@ -35,6 +36,7 @@ from materialize.mzcompose.services.foundationdb import FoundationDB
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.metadata_store import CockroachOrPostgresMetadata
 from materialize.mzcompose.services.minio import Minio
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
 from materialize.rustc_flags import Sanitizer
@@ -59,6 +61,7 @@ SERVICES = [
     ),
     SchemaRegistry(),
     Postgres(),
+    MySql(),
     CockroachOrPostgresMetadata(),
     FoundationDB(
         # We need the same port inside and outside because FDB validates
@@ -124,6 +127,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         "kafka",
         "schema-registry",
         "postgres",
+        "mysql",
         c.metadata_store(),
         "foundationdb",
         "minio",
@@ -133,6 +137,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     # image. See database-issues#3739.
     postgres_url = (
         f"postgres://postgres:postgres@localhost:{c.default_port('postgres')}"
+    )
+    mysql_url = (
+        f"mysql://root:{quote(MySql.DEFAULT_ROOT_PASSWORD, safe='')}"
+        f"@localhost:{c.default_port('mysql')}"
     )
     metadata_backend_url = (
         f"postgres://root@localhost:{c.default_port(c.metadata_store())}"
@@ -150,6 +158,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         KAFKA_ADDRS="localhost:30123",
         SCHEMA_REGISTRY_URL=f"http://localhost:{c.default_port('schema-registry')}",
         POSTGRES_URL=postgres_url,
+        MZ_TEST_MYSQL_URL=mysql_url,
         METADATA_BACKEND_URL=metadata_backend_url,
         MZ_SOFT_ASSERTIONS="1",
         MZ_PERSIST_EXTERNAL_STORAGE_TEST_S3_BUCKET="mz-test-persist-1d-lifecycle-delete",

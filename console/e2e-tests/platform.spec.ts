@@ -130,9 +130,8 @@ for (const region of REGIONS) {
     //   await testAccountBlocking(page, context, region);
     // }
 
-    // Wait for the onboarding survey to load then skip it
-    await page.getByTestId("onboarding-survey").waitFor();
-    await context.goto(`${CONSOLE_ADDR}/environment-not-ready/enable-region`);
+    // Wait for the enable region page to load
+    await page.getByTestId("enable-region").waitFor();
 
     await retry(
       async () => {

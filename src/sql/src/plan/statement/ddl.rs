@@ -4778,7 +4778,9 @@ pub fn plan_alter_network_policy(
     ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
 
     let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
-    let policy = ctx.catalog.resolve_network_policy(&name.to_string())?;
+    let policy = ctx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))?;
 
     let Some(rule_defs) = policy_options.rules else {
         sql_bail!("RULES must be specified when creating network policies.");
@@ -8345,7 +8347,10 @@ pub(crate) fn resolve_network_policy<'a>(
     name: Ident,
     if_exists: bool,
 ) -> Result<Option<ResolvedNetworkPolicyName>, PlanError> {
-    match scx.catalog.resolve_network_policy(&name.to_string()) {
+    match scx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))
+    {
         Ok(policy) => Ok(Some(ResolvedNetworkPolicyName {
             id: policy.id(),
             name: policy.name().to_string(),
