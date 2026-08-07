@@ -61,6 +61,8 @@ export interface BaseLayoutProps {
    * dialog doesn't cover them.
    */
   hideWelcomeDialog?: boolean;
+  /** Renders only account-scoped navigation. See NavBarProps.accountOnly. */
+  accountOnlyNav?: boolean;
   navBarOverride?: React.FunctionComponent;
   sectionNav?: React.ReactNode;
 }
@@ -114,7 +116,10 @@ export const BaseLayout = (props: BaseLayoutProps) => {
         flexGrow="1"
         minHeight="0"
       >
-        <NavigationBar isCollapsed={Boolean(props.sectionNav)} />
+        <NavigationBar
+          isCollapsed={Boolean(props.sectionNav)}
+          accountOnly={props.accountOnlyNav}
+        />
         <HStack
           alignItems="stretch"
           flexGrow="1"

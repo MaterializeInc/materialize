@@ -97,7 +97,7 @@ export const EnvironmentNotReadyRoutes = ({ user }: { user: User }) => {
     // The welcome dialog is suppressed here because this flow has its own
     // region-ready affordances (the toast and the tutorial's "Open console"
     // button), which the dialog would cover.
-    <BaseLayout hideWelcomeDialog>
+    <BaseLayout hideWelcomeDialog accountOnlyNav>
       <RegionReadyToast />
       <SentryRoutes>
         <Route path="enable-region" element={<EnableRegion user={user} />} />
