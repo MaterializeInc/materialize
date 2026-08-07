@@ -14,7 +14,7 @@
 -- limitations under the License.
 
 {% macro materialize__listagg(measure, delimiter_text, order_by_clause, limit_num) -%}
-    {{ exceptions.CompilationError(
+    {{ exceptions.raise_compiler_error(
         """
         Materialize supports the list_agg() function; use it directly.
 

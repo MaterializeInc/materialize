@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+* Report errors instead of failing in odd ways on a few paths:
+
+  * A malformed `indexes` config now raises a clear parse error. It used to
+    hit a `dbt_common` helper that no longer exists and crash with an
+    unhandled `AttributeError`.
+  * Incremental models and the `listagg` macro now show the explanation they
+    were written to show. Both called an exception class that dbt does not
+    expose to Jinja, so users saw a message about a `dict object` instead.
+  * `rename_relation` looked at an undefined variable to pick between a view
+    and a materialized view, which made every rename fail.
+  * `drop_relation` now errors for relation types it does not handle, rather
+    than sending an empty statement to the server.
+  * Option values in the `options` profile field are no longer mangled when
+    they contain a backslash, and non-string values no longer raise an
+    `AttributeError`.
+  * Connecting to a PostgreSQL-compatible database that is not Materialize
+    now explains that, instead of failing on a missing version string.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)
