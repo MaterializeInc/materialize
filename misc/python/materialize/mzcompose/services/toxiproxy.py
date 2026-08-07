@@ -22,12 +22,14 @@ class Toxiproxy(Service):
         image: str = "jauderho/toxiproxy:v2.12.0",
         port: int = 8474,
         seed: int = random.randrange(2**63),
+        restart: str = "no",
     ) -> None:
         super().__init__(
             name=name,
             config={
                 "image": image,
                 "command": ["-host=0.0.0.0", f"-seed={seed}"],
+                "restart": restart,
                 "ports": [port],
                 "healthcheck": {
                     "test": ["CMD", "nc", "-z", "localhost", "8474"],
