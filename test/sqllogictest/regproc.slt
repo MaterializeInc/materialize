@@ -85,6 +85,18 @@ SELECT NULL::regproc::text
 ----
 NULL
 
+# OID 0 is the absent reference, rendered as `-` like PostgreSQL's `regprocout`.
+# A nonzero OID that names no function keeps its digits.
+query T
+SELECT 0::regproc::text
+----
+-
+
+query T
+SELECT 99999::regproc::text
+----
+99999
+
 query error more than one function named "max"
 SELECT 'max'::regproc
 
@@ -191,6 +203,32 @@ true
 true
 true
 true
+
+# The pgwire text encoding resolves a regproc to its function name. These must be
+# `simple` records: `query` records read results in the binary format, where a
+# regproc is a bare OID.
+
+# 1398 is one of six abs overloads, so it is qualified. 99999 names no function.
+simple
+SELECT 1242::regproc, 1398::regproc, 99999::regproc, 0::regproc
+----
+boolin,pg_catalog.abs,99999,-
+COMPLETE 1
+
+# Type I/O function names, which is what clients read to decode values
+simple
+SELECT typinput, typreceive FROM pg_type WHERE typname = 'bool'
+----
+boolin,boolrecv
+COMPLETE 1
+
+# regclass and regtype keep rendering as digits, since they can name objects a
+# user created
+simple
+SELECT 1082::regtype, 1242::regclass
+----
+1082,1242
+COMPLETE 1
 
 # ensure that catalog functions can be resolved if the active database is invalid
 

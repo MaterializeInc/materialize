@@ -679,6 +679,17 @@ steps:
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
+  - id: adbc
+    label: Arrow ADBC driver
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
+    inputs: [test/adbc]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: adbc
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
   - group: Docs
     key: docs-tests
     steps:
