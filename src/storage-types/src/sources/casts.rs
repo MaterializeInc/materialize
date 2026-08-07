@@ -223,9 +223,17 @@ impl CastFunc {
             CastFunc::CastStringToDate => Ok(Datum::Date(
                 strconv::parse_date_legacy(a).map_err(parse_err)?,
             )),
-            CastFunc::CastStringToTime => {
-                Ok(Datum::Time(strconv::parse_time(a).map_err(parse_err)?))
-            }
+            // NOTE: Uses the frozen `parse_time_legacy`, which reads a string
+            // carrying no time field at all as midnight, to satisfy the
+            // stability contract above. `parse_time` now rejects such a string
+            // as PostgreSQL does, but replication re-casts the old tuple on
+            // delete, so tightening this persisted cast would let a row ingested
+            // as a value later be retracted as an error. A PostgreSQL `time`
+            // column never renders as one of those strings, so no export loses
+            // a value it could have had.
+            CastFunc::CastStringToTime => Ok(Datum::Time(
+                strconv::parse_time_legacy(a).map_err(parse_err)?,
+            )),
             CastFunc::CastStringToInterval => Ok(Datum::Interval(
                 strconv::parse_interval(a).map_err(parse_err)?,
             )),
@@ -514,6 +522,24 @@ mod tests {
             let mut buf = String::new();
             strconv::format_date(&mut buf, d);
             assert_eq!(buf, expected, "for input {input:?}");
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_cast_string_to_time_frozen_fieldless() {
+        // A string carrying no time field keeps the frozen reading of midnight,
+        // diverging from the SQL layer, which rejects it as PostgreSQL does.
+        // This must not change (see the stability contract above).
+        let arena = RowArena::new();
+        let expr = cast_col0(CastFunc::CastStringToTime);
+        for input in ["", " ", ":"] {
+            let result = expr.eval(&[Datum::String(input)], &arena).unwrap();
+            let Datum::Time(t) = result else {
+                panic!("expected Time, got {:?}", result);
+            };
+            let mut buf = String::new();
+            strconv::format_time(&mut buf, t);
+            assert_eq!(buf, "00:00:00", "for input {input:?}");
         }
     }
 
@@ -1128,11 +1154,15 @@ mod tests {
         #[mz_ore::test]
         fn parity_time() {
             use mz_expr::func::CastStringToTime;
+            // No fieldless input here on purpose. The storage cast is frozen on
+            // `parse_time_legacy`, which reads `""`, `" "` and `":"` as midnight,
+            // while the SQL cast rejects them, so the two intentionally diverge
+            // there. See `test_cast_string_to_time_frozen_fieldless`.
             assert_parity(
                 "Time",
                 CastFunc::CastStringToTime,
                 UnaryFunc::CastStringToTime(CastStringToTime),
-                &["12:34:56", "bad", ""],
+                &["12:34:56", "bad"],
             );
         }
 

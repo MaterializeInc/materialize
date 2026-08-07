@@ -9,9 +9,7 @@
 
 use std::fmt;
 
-use chrono::{
-    DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
-};
+use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
 use mz_expr_derive::sqlfunc;
 use mz_ore::result::ResultExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
@@ -19,7 +17,10 @@ use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
-use mz_repr::adt::timestamp::{CheckedTimestamp, MAX_PRECISION, TimestampPrecision};
+use mz_repr::adt::timestamp::{
+    CheckedTimestamp, MAX_PRECISION, TimestampPrecision, checked_add_with_leapsecond,
+    checked_sub_with_leapsecond,
+};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
@@ -728,42 +729,6 @@ pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Result<NaiveDat
         Timezone::Tz(tz) => tz.offset_from_utc_datetime(&utc.naive_utc()).fix(),
     };
     checked_add_with_leapsecond(&utc.naive_utc(), &offset).ok_or(EvalError::TimestampOutOfRange)
-}
-
-/// Checked addition that is missing from chrono. Adapt its methods here but add a check.
-fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option<NaiveDateTime> {
-    // extract and temporarily remove the fractional part and later recover it
-    let nanos = lhs.nanosecond();
-    let lhs = lhs.with_nanosecond(0).unwrap();
-    let rhs = rhs.local_minus_utc();
-    let dt = lhs.checked_add_signed(chrono::Duration::try_seconds(i64::from(rhs))?)?;
-    // chrono represents a leap second as `nanos >= 1_000_000_000`, but only on a
-    // second-of-minute of 59. If the offset shifted us off `:59`, we can't keep
-    // the leap-second representation: the resulting `NaiveTime` would be
-    // unconstructable via `from_num_seconds_from_midnight_opt` and would panic
-    // when round-tripped through `Row` encoding. In that case, fold the leap
-    // second into the next regular second.
-    if nanos >= 1_000_000_000 && dt.second() != 59 {
-        dt.checked_add_signed(chrono::Duration::nanoseconds(i64::from(nanos)))
-    } else {
-        Some(dt.with_nanosecond(nanos).unwrap())
-    }
-}
-
-/// Checked subtraction that is missing from chrono. Adapt its methods here but add a check.
-fn checked_sub_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option<NaiveDateTime> {
-    // extract and temporarily remove the fractional part and later recover it
-    let nanos = lhs.nanosecond();
-    let lhs = lhs.with_nanosecond(0).unwrap();
-    let rhs = rhs.local_minus_utc();
-    let dt = lhs.checked_sub_signed(chrono::Duration::try_seconds(i64::from(rhs))?)?;
-    // See `checked_add_with_leapsecond` for why we have to special-case
-    // leap-second nanos that no longer land on `:59` after applying the offset.
-    if nanos >= 1_000_000_000 && dt.second() != 59 {
-        dt.checked_add_signed(chrono::Duration::nanoseconds(i64::from(nanos)))
-    } else {
-        Some(dt.with_nanosecond(nanos).unwrap())
-    }
 }
 
 #[derive(
