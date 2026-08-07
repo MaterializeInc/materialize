@@ -2363,26 +2363,32 @@ impl Coordinator {
             }
         }
 
-        // Only the compute controller's per-replica dyncfg layer is pushed, but on
-        // `clusterd` that also reaches storage. Compute and storage share one
-        // process, and the compute worker's `handle_update_configuration` applies
-        // the pushed dyncfg updates both to compute's own worker `ConfigSet` and to
-        // the shared persist client `ConfigSet` (`persist_clients.cfg()`) that the
-        // co-located storage server reads from the same `Arc`. So persist-backed and
-        // process-global replica-local configs such as the persist pager, LZ4,
-        // persist client tuning, and `lgalloc` take effect on storage too. The only
-        // gap would be a future `Replica`-scoped config realized solely in the
-        // storage worker's own `ConfigSet`, of which none exists today.
+        // Both controllers carry a per-replica dyncfg layer, because the two
+        // protocols realize configs in different worker `ConfigSet`s on
+        // `clusterd`. The compute worker's `handle_update_configuration`
+        // applies the pushed dyncfg updates to compute's own worker
+        // `ConfigSet` and to the shared persist client `ConfigSet`
+        // (`persist_clients.cfg()`) that the co-located storage server reads
+        // from the same `Arc`, which covers persist-backed and process-global
+        // configs such as persist client tuning and `lgalloc`. Configs
+        // realized from the storage worker's own `ConfigSet` (read in its
+        // `UpdateConfiguration` handler) are reached only by the storage
+        // controller's layer.
         self.controller
             .compute
+            .update_replica_dyncfg_overrides(instance_overrides.clone());
+        self.controller
+            .storage
             .update_replica_dyncfg_overrides(instance_overrides);
-        // Re-push the env-wide compute config so existing replicas pick up their
-        // (possibly changed) overrides. This also reverts a removed override: the
-        // per-replica layer no longer carries the key, so the replica falls back
-        // to the env-wide value, which `compute_config` always includes because it
-        // renders the full dyncfg set.
+        // Re-push the env-wide configs so existing replicas pick up their
+        // (possibly changed) overrides. This also reverts a removed override:
+        // the per-replica layer no longer carries the key, so the replica
+        // falls back to the env-wide value, which both configs always include
+        // because they render the full dyncfg set.
         let compute_config = crate::flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
+        let storage_config = crate::flags::storage_config(self.catalog().system_config());
+        self.controller.storage.update_parameters(storage_config);
     }
 
     /// Returns the cluster-coherent scoped optimizer-feature overrides for
