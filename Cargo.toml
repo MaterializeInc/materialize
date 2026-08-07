@@ -279,8 +279,8 @@ annotate-snippets = "0.12.15"
 anyhow = "1.0.102"
 array-concat = "0.5.5"
 arrayvec = "0.7.6"
-arrow = { version = "57", default-features = false }
-arrow-ipc = "57"
+arrow = { version = "58", default-features = false }
+arrow-ipc = "58"
 askama = { version = "0.12.1", default-features = false, features = ["config", "serde-json"] }
 assert_cmd = "2.2.2"
 async-compression = { version = "0.4.27", features = ["bzip2-sys", "gzip", "tokio", "xz", "zstd"] }
@@ -385,9 +385,9 @@ hyper-0-14 = { package = "hyper", version = "0.14", features = ["client", "tcp"]
 hyper-openssl = "0.10.2"
 hyper-util = "0.1.20"
 tower-service = "0.3.3"
-iceberg = "0.9.0"
-iceberg-catalog-rest = "0.9.0"
-iceberg-storage-opendal = { version = "0.9.0", default-features = false, features = ["opendal-s3", "opendal-gcs"] }
+iceberg = "0.10.1"
+iceberg-catalog-rest = "0.10.1"
+iceberg-storage-opendal = { version = "0.10.1", default-features = false, features = ["opendal-s3", "opendal-gcs"] }
 imbl = { version = "7.0.0", features = ["serde"] }
 include_dir = "0.7.4"
 indexmap = { version = "2.10.0", default-features = false, features = ["std"] }
@@ -435,7 +435,7 @@ opentelemetry_sdk = { version = "0.31.0", features = ["experimental_trace_batch_
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 owo-colors = "4.3.0"
-parquet = { version = "57", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
+parquet = { version = "58", default-features = false, features = ["arrow", "async", "brotli", "flate2", "flate2-zlib-rs", "lz4", "snap", "zstd"] }
 paste = "1.0.15"
 pem = "3.0.6"
 phf = { version = "0.13.1", features = ["uncased"] }
@@ -474,6 +474,9 @@ rdkafka = { version = "0.29.0", features = ["cmake-build", "libz-static", "ssl-v
 rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ssl-vendored", "zstd"] }
 regex = "1.12.3"
 regex-syntax = "0.8.10"
+# Must stay compatible with the version `iceberg-storage-opendal` uses, otherwise
+# the `ProvideCredential` we implement is a different trait than the one it wants.
+reqsign-core = "3.0.0"
 reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "default-tls", "http2", "json", "native-tls-vendored", "stream"] }
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
@@ -663,10 +666,10 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_v0.9.0` branch.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "dedd9231ee88ee979b648e14792878b40e74c20a" }
+# All changes should go to the `mz_v0.10.x` branch.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "a51ff2c8dce700a1c158c372f8ce94906b5631b1" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "a51ff2c8dce700a1c158c372f8ce94906b5631b1" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "a51ff2c8dce700a1c158c372f8ce94906b5631b1" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.
