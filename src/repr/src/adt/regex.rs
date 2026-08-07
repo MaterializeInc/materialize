@@ -11,11 +11,13 @@
 
 use std::borrow::Cow;
 use std::cmp::Ordering;
+use std::convert::Infallible;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use regex::{Error, RegexBuilder};
+use regex_syntax::ast::{self, Ast, ClassSetItem, Visitor};
 use serde::de::Error as DeError;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
@@ -33,9 +35,99 @@ const MAX_REGEX_SIZE_AFTER_COMPILATION: usize = 10 * 1024 * 1024;
 /// be the case. Since we compile regexes in envd, we need strict limits to prevent envd OOMs.
 /// See <https://github.com/MaterializeInc/database-issues/issues/9907> for an example.
 ///
+/// This bounds the AST parse, which is what `estimate_compile_memory` needs before it can say
+/// anything about the pattern. It does not bound the compile itself, see
+/// `MAX_REGEX_COMPILE_MEMORY`.
+///
 /// Note: This number is mentioned in our user-facing docs at the "String operators" in the function
 /// reference.
 const MAX_REGEX_SIZE_BEFORE_COMPILATION: usize = 1 * 1024 * 1024;
+
+/// The maximum heap a single compile may be projected to allocate.
+///
+/// Neither limit above bounds what a compile actually spends. `size_limit` bounds the compiled
+/// NFA, and a pattern's byte length bounds only itself. The memory goes to `regex-syntax`
+/// translating the pattern's AST into its HIR, a stage that runs before anything `size_limit`
+/// measures. Cost there is linear in the AST's node count, but the cost *per node* spans two
+/// orders of magnitude, so a byte budget cannot bound it. Peak RSS per node, measured under the
+/// flags this module sets:
+///
+/// | node kind                                    | peak RSS per node |
+/// |----------------------------------------------|-------------------|
+/// | group, alternation, repetition, assertion    | 0.33 - 0.53 KB    |
+/// | literal, `.`, `[a-c]`                        | 0.42 - 0.60 KB    |
+/// | `\d`, `\s`                                   | 0.65 - 1.1 KB     |
+/// | `\w`, `\W`, case-sensitive `\p{L}`           | 6 - 18 KB         |
+/// | case-insensitive `\p{L}`, `\p{Alphabetic}`   | 39 - 41 KB        |
+///
+/// A 1 MiB pattern of `\p{L}` under the `i` flag, one byte under
+/// `MAX_REGEX_SIZE_BEFORE_COMPILATION`, therefore allocates ~7.8 GB before returning
+/// `CompiledTooBig`. Since we compile regexes in envd, that made any `SELECT` an OOM vector,
+/// which is what this limit exists to close.
+///
+/// NOTE: a counted repetition needs no budget of its own. `\p{L}{200000}` stays two AST nodes,
+/// and the expansion happens later in the NFA compiler, where `size_limit` already rejects it
+/// incrementally.
+const MAX_REGEX_COMPILE_MEMORY: usize = 1024 * 1024 * 1024;
+
+/// Charged per AST node against `MAX_REGEX_COMPILE_MEMORY`. Upper-bounds every node kind that
+/// expands to at most a handful of Unicode ranges: literals, `.`, `[a-c]`, `\d`, `\s`, groups,
+/// repetitions, assertions. The worst of those measured 0.60 KB, so this carries some headroom
+/// for allocator differences, but not so much that a 1 MiB pattern of plain literals, which is
+/// what a machine-generated alternation looks like and which costs ~0.5 GB, gets rejected.
+const COMPILE_MEMORY_PER_NODE: usize = 768;
+
+/// Charged in place of `COMPILE_MEMORY_PER_NODE` for a Unicode-property or Perl class item, the
+/// node kinds that expand to hundreds of ranges. Upper-bounds the worst case measured above,
+/// `\p{Alphabetic}` under the `i` flag at ~41 KB.
+const COMPILE_MEMORY_PER_CLASS: usize = 48 * 1024;
+
+/// Sums the projected translation cost of every node in an AST.
+struct CompileMemoryEstimator {
+    estimate: usize,
+}
+
+impl Visitor for CompileMemoryEstimator {
+    type Output = usize;
+    type Err = Infallible;
+
+    fn finish(self) -> Result<usize, Infallible> {
+        Ok(self.estimate)
+    }
+
+    fn visit_pre(&mut self, ast: &Ast) -> Result<(), Infallible> {
+        self.estimate = self.estimate.saturating_add(match ast {
+            Ast::ClassUnicode(_) | Ast::ClassPerl(_) => COMPILE_MEMORY_PER_CLASS,
+            _ => COMPILE_MEMORY_PER_NODE,
+        });
+        Ok(())
+    }
+
+    fn visit_class_set_item_pre(&mut self, item: &ClassSetItem) -> Result<(), Infallible> {
+        // Items nested inside a bracketed class, e.g. the `\p{L}` in `[a\p{L}]`. Each contributes
+        // its own ranges to the one translated class, so each is charged. A union can only merge
+        // ranges, never add them, so the sum of the parts is an upper bound on the whole.
+        self.estimate = self.estimate.saturating_add(match item {
+            ClassSetItem::Unicode(_) | ClassSetItem::Perl(_) => COMPILE_MEMORY_PER_CLASS,
+            _ => COMPILE_MEMORY_PER_NODE,
+        });
+        Ok(())
+    }
+}
+
+/// Projects the heap that compiling `pattern` would allocate, or `None` if it does not parse.
+///
+/// A pattern we cannot parse is left to [`RegexBuilder`], which rejects it with the message users
+/// already see. That is not an escape hatch: both parse through the same `regex-syntax` version
+/// with the same default configuration (`nest_limit` 250, `octal` off), so a pattern that fails
+/// here fails there too.
+fn estimate_compile_memory(pattern: &str) -> Option<usize> {
+    let ast = ast::parse::Parser::new().parse(pattern).ok()?;
+    match ast::visit(&ast, CompileMemoryEstimator { estimate: 0 }) {
+        Ok(estimate) => Some(estimate),
+        Err(infallible) => match infallible {},
+    }
+}
 
 /// A hashable, comparable, and serializable regular expression type.
 ///
@@ -89,6 +181,11 @@ impl Regex {
                 pattern_size: pattern.len(),
             });
         }
+        if let Some(estimate) = estimate_compile_memory(pattern) {
+            if estimate > MAX_REGEX_COMPILE_MEMORY {
+                return Err(RegexCompilationError::PatternTooExpensive { estimate });
+            }
+        }
         let mut regex_builder = RegexBuilder::new(pattern);
         regex_builder.case_insensitive(case_insensitive);
         regex_builder.dot_matches_new_line(dot_matches_new_line);
@@ -115,6 +212,9 @@ pub enum RegexCompilationError {
     RegexError(Error),
     /// Regex pattern size exceeds MAX_REGEX_SIZE_BEFORE_COMPILATION.
     PatternTooLarge { pattern_size: usize },
+    /// Compiling the pattern is projected to allocate more than
+    /// MAX_REGEX_COMPILE_MEMORY.
+    PatternTooExpensive { estimate: usize },
 }
 
 impl fmt::Display for RegexCompilationError {
@@ -127,6 +227,12 @@ impl fmt::Display for RegexCompilationError {
                 f,
                 "regex pattern too large ({} bytes, max {} bytes)",
                 patter_size, MAX_REGEX_SIZE_BEFORE_COMPILATION
+            ),
+            RegexCompilationError::PatternTooExpensive { estimate } => write!(
+                f,
+                "regex pattern too expensive to compile (needs about {} bytes, max {} bytes); \
+                 reduce the number of character classes",
+                estimate, MAX_REGEX_COMPILE_MEMORY
             ),
         }
     }
@@ -325,6 +431,102 @@ impl<'de> Deserialize<'de> for Regex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A class-heavy pattern one byte under `MAX_REGEX_SIZE_BEFORE_COMPILATION` used to allocate
+    /// ~7.8 GB in envd before erroring, reachable from an unprivileged `SELECT 'x' ~* <pattern>`.
+    /// It must now be rejected without compiling.
+    #[mz_ore::test]
+    fn regex_class_heavy_pattern_rejected_before_compiling() {
+        let pattern = r"\p{L}".repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION / r"\p{L}".len());
+        assert!(pattern.len() <= MAX_REGEX_SIZE_BEFORE_COMPILATION);
+        // Case-insensitive is the expensive direction, but the estimate does not depend on the
+        // flag, so both must be rejected.
+        for case_insensitive in [true, false] {
+            let err = Regex::new(&pattern, case_insensitive).expect_err("must be rejected");
+            assert!(
+                matches!(err, RegexCompilationError::PatternTooExpensive { .. }),
+                "expected PatternTooExpensive, got {err:?}"
+            );
+        }
+    }
+
+    /// The guard has to charge classes nested in a bracketed class too, else `[\p{L}]` repeated
+    /// evades it while costing the same as `\p{L}` repeated.
+    #[mz_ore::test]
+    fn regex_bracketed_class_is_charged() {
+        let unit = r"[\p{L}]";
+        let pattern = unit.repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION / unit.len());
+        let err = Regex::new(&pattern, true).expect_err("must be rejected");
+        assert!(
+            matches!(err, RegexCompilationError::PatternTooExpensive { .. }),
+            "expected PatternTooExpensive, got {err:?}"
+        );
+    }
+
+    /// The budget must not cost legitimate long patterns. A pattern of plain literals is ~70x
+    /// cheaper per node than a Unicode class, so a large one still has to compile.
+    #[mz_ore::test]
+    fn regex_long_literal_pattern_still_compiles() {
+        // A long alternation of literals, the shape a generated pattern takes. Kept at 12000
+        // branches: past that the compiled NFA runs into MAX_REGEX_SIZE_AFTER_COMPILATION, which
+        // would make this pass or fail for an unrelated reason.
+        let pattern = vec!["abcdefgh"; 12_000].join("|");
+        assert!(pattern.len() > 100 * 1024);
+        assert!(Regex::new(&pattern, true).is_ok());
+    }
+
+    /// `COMPILE_MEMORY_PER_NODE` has to stay low enough that the largest pattern
+    /// `MAX_REGEX_SIZE_BEFORE_COMPILATION` admits still fits the budget when every byte is a cheap
+    /// node. Otherwise the two limits collide and the byte limit becomes unreachable, silently
+    /// tightening what users can submit.
+    #[mz_ore::test]
+    fn regex_cheap_nodes_do_not_collide_with_the_byte_limit() {
+        let pattern = "a".repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION);
+        assert!(
+            estimate_compile_memory(&pattern).unwrap() <= MAX_REGEX_COMPILE_MEMORY,
+            "a pattern of single-byte nodes at the byte limit must fit the memory budget"
+        );
+    }
+
+    /// A counted repetition needs no budget of its own: it stays small in the AST, and the NFA
+    /// compiler's incremental `size_limit` check rejects it. Pin that, since the budget
+    /// deliberately does not multiply by repetition bounds.
+    #[mz_ore::test]
+    fn regex_counted_repetition_rejected_by_size_limit() {
+        let err = Regex::new(r"\p{L}{200000}", true).expect_err("must be rejected");
+        assert!(
+            matches!(err, RegexCompilationError::RegexError(_)),
+            "expected the regex crate's own error, got {err:?}"
+        );
+    }
+
+    /// Short patterns, the overwhelmingly common case, must be unaffected.
+    #[mz_ore::test]
+    fn regex_ordinary_patterns_unaffected() {
+        for pattern in [
+            r"a+b",
+            r"^\d{3}-\d{4}$",
+            r"\p{L}+",
+            r"[a-zA-Z0-9_]*",
+            r"(?i)foo|bar",
+        ] {
+            assert!(
+                Regex::new(pattern, false).is_ok(),
+                "{pattern} should compile"
+            );
+        }
+    }
+
+    /// A pattern we cannot parse must fall through to `RegexBuilder`, so users keep getting the
+    /// regex crate's error message rather than one about the budget.
+    #[mz_ore::test]
+    fn regex_unparseable_pattern_reports_regex_error() {
+        let err = Regex::new("(", false).expect_err("must be rejected");
+        assert!(
+            matches!(err, RegexCompilationError::RegexError(_)),
+            "expected the regex crate's own error, got {err:?}"
+        );
+    }
 
     /// This was failing before due to the derived serde serialization being incorrect, because of
     /// <https://github.com/tailhook/serde-regex/issues/14>.
