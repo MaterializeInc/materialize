@@ -100,9 +100,24 @@ describe("EnvironmentNotReadyRoutes", () => {
     expect(await screen.findByText("Admin")).toBeInTheDocument();
     expect(screen.getByText("App Passwords")).toBeInTheDocument();
     expect(screen.getByText("Usage & Billing")).toBeInTheDocument();
-    // Region-scoped items are hidden until an environment is ready.
+    // Region-scoped items and object creation are hidden in this flow.
     expect(screen.queryByText("Clusters")).not.toBeInTheDocument();
     expect(screen.queryByText("SQL Shell")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create New")).not.toBeInTheDocument();
+  });
+
+  it("keeps the nav account-only in this flow regardless of environment health", async () => {
+    // The nav in this flow is gated on the route, not on health state, so a
+    // transient "crashed" reading during boot cannot flash the full sidebar.
+    await renderRoutes(["/creating-environment"], ({ set }) =>
+      setFakeEnvironment(set, "aws/us-east-1", {
+        ...healthyEnvironment,
+        status: { ...healthyEnvironment.status, health: "crashed" },
+      }),
+    );
+    expect(await screen.findByText("Admin")).toBeInTheDocument();
+    expect(screen.queryByText("Clusters")).not.toBeInTheDocument();
+    expect(screen.queryByText("Create New")).not.toBeInTheDocument();
   });
 
   it("does not show the welcome dialog when a region becomes ready", async () => {
