@@ -76,8 +76,8 @@ use uuid::Uuid;
 
 use crate::codec::{BackendMessage, FramedConn};
 use crate::dyncfgs::{
-    INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT, SIGTERM_LISTEN_WAIT,
-    has_tracing_config_update, tracing_config,
+    HTTPS_ENABLE_HTTP2_ALPN, INJECT_PROXY_PROTOCOL_HEADER_HTTP, SIGTERM_CONNECTION_WAIT,
+    SIGTERM_LISTEN_WAIT, has_tracing_config_update, tracing_config,
 };
 
 /// Balancer build information.
@@ -301,7 +301,12 @@ impl BalancerService {
     pub async fn serve(self) -> Result<(), anyhow::Error> {
         let (pgwire_tls, https_tls) = match &self.cfg.tls {
             Some(tls) => {
-                let context = tls.reloading_context(self.cfg.reload_certs)?;
+                // Controlled by dyncfg: only advertise HTTP/2 via ALPN when the
+                // upstream environmentd is known to support it. balancerd is a
+                // byte proxy, so if we advertise h2 before environmentd supports
+                // it, clients send h2 frames that environmentd cannot parse.
+                let enable_http2_alpn = HTTPS_ENABLE_HTTP2_ALPN.get(&self.configs);
+                let context = tls.reloading_context(self.cfg.reload_certs, enable_http2_alpn)?;
                 (
                     Some(ReloadingTlsConfig {
                         context: context.clone(),
