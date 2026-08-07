@@ -48,6 +48,11 @@ error: key column 5 out of range for a 2-column schema
 
 # Replica behavior: an unscheduled dataflow makes no progress, so awaiting its
 # output frontier times out. A strict await renders the timeout as an error.
+#
+# The message distinguishes a frontier that was never reported from one that was
+# reported and stopped short, which have different causes. An unscheduled dataflow
+# is the first case, and pinning it here is what keeps the two apart: a timeout
+# that cannot say which it saw is a diagnostic dead end.
 write-single-ts shard=e ts=0 count=100
 ----
 wrote 100
@@ -58,4 +63,4 @@ ok
 
 await-frontier id=1001 ts=1 timeout-secs=3
 ----
-error: frontier for u1001 did not reach 1 in time
+error: frontier for u1001 did not reach 1 in time; the replica never reported an output frontier for it

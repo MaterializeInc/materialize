@@ -93,3 +93,105 @@ select coalesce(a, (select a/b from test)) from test;
 
 query error Evaluation error: division by zero
 select *, case when a = 5 then (select a/b from test) else 7 end from test;
+
+# Whether an error raised above an EXCEPT ALL surfaces depends on how many rows
+# each side contributes. As everywhere in this file, the results record what
+# happens today, not a decision about what should.
+#
+# EXCEPT ALL plans to Threshold(Union(lhs, Negate(rhs))). An error is emitted with
+# the multiplicity of the row it was raised on, and `Negate` negates its input's
+# rows while passing errors through, so a predicate evaluated above the Negate
+# raises errors with negative multiplicity, which cancel against the other
+# branch's positive ones. Predicate pushdown deliberately leaves a literal-error
+# predicate above the Negate: pushing it through breaks database-issues#5691,
+# where that same cancellation is what stops the null-extended branch of an outer
+# join from raising.
+#
+# So errors cancel between unrelated rows, and the accounting decides the outcome:
+#
+#   equal contributions -> the errors cancel, no error, an empty result
+#   right side heavier  -> a negative remainder
+#   left side heavier   -> the error
+#
+# STG-54's 1.8.1 is exactly this question and leans towards errors from different
+# records never cancelling, while noting that we rely on them cancelling
+# internally. An error keyed only by its message cannot tell "this error was
+# retracted" from "a different row raised the same one", which is why STG-54
+# reaches for error provenance. Pinning the three cases here gives that decision a
+# baseline to change deliberately.
+
+statement ok
+create table except_l (x int);
+
+statement ok
+create table except_r (x int);
+
+statement ok
+insert into except_l values (1);
+
+statement ok
+insert into except_r values (2);
+
+statement ok
+create view except_err as
+select * from (select x from except_l except all select x from except_r) t where 1/0 > 0;
+
+# The literal error stays above the Negate, so it evaluates over negated rows.
+query T multiline
+explain optimized plan as verbose text for select * from except_err;
+----
+Explained Query:
+  Threshold
+    Union
+      Filter error("division by zero")
+        ReadStorage materialize.public.except_l
+      Filter error("division by zero")
+        Negate
+          ReadStorage materialize.public.except_r
+
+Source materialize.public.except_l
+  filter=(error("division by zero"))
+Source materialize.public.except_r
+
+Target cluster: quickstart
+
+EOF
+
+statement ok
+create default index on except_err;
+
+statement ok
+create materialized view except_err_mv as
+select * from (select x from except_l except all select x from except_r) t where 1/0 > 0;
+
+# One row each side, so the errors cancel and the division by zero is not
+# reported. Both reads return an empty result.
+query I
+select * from except_err;
+----
+
+query I
+select * from except_err_mv;
+----
+
+# Right side heavier, so the remainder is negative. The error is reported as
+# itself: a negative accumulation says nothing about which error it is, and the
+# persist and subscribe read paths of the same collection report it this way too.
+statement ok
+insert into except_r values (3), (4);
+
+query error Evaluation error: division by zero
+select * from except_err;
+
+query error Evaluation error: division by zero
+select * from except_err_mv;
+
+# Left side heavier, so a positive remainder survives and the error is reported.
+statement ok
+insert into except_l values (5), (6), (7), (8);
+
+query error Evaluation error: division by zero
+select * from except_err;
+
+query error Evaluation error: division by zero
+select * from except_err_mv;

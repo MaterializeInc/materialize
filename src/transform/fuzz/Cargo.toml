@@ -19,7 +19,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 mz-expr = { path = "../../expr" }
 mz-repr = { path = "../../repr" }
-mz-transform = { path = ".." }
+mz-transform = { path = "..", features = ["mirgen"] }
 
 # Shared generators and oracle helpers used by every target below.
 [lib]

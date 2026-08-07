@@ -2884,16 +2884,69 @@ steps:
     agents:
       queue: hetzner-x86-64-4cpu-8gb
 
-  - id: clusterd-test-driver
-    label: Clusterd test driver
-    depends_on: build-aarch64
-    timeout_in_minutes: 20
-    inputs: [test/clusterd-test-driver]
-    plugins:
-      - ./ci/plugins/mzcompose:
-          composition: clusterd-test-driver
-    agents:
-      queue: hetzner-aarch64-4cpu-8gb
+  # `-group` suffix: a group key and a step id share one namespace, and the
+  # `clusterd-test-driver` id below already claims the bare name.
+  - group: "Clusterd test driver"
+    key: clusterd-test-driver-group
+    steps:
+      - id: clusterd-test-driver
+        label: Clusterd test driver
+        depends_on: build-aarch64
+        timeout_in_minutes: 20
+        inputs: [test/clusterd-test-driver, src/clusterd-test-driver]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: clusterd-test-driver
+              run: scripts
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      # Split from the scenarios above rather than run as one `default` workflow: a
+      # failure in either would otherwise mask the other entirely, and a scenario
+      # failure has already hidden a whole run of this suite once.
+      #
+      # The `inputs` are wider because the corpus is generated in process from the
+      # LIR surface and the shared MIR generator, so a change to compute's plan types
+      # or to the generator changes what this runs, with nothing under
+      # `test/clusterd-test-driver` touched.
+      - id: clusterd-test-driver-workloads
+        label: Clusterd test driver (generated workloads)
+        depends_on: build-aarch64
+        timeout_in_minutes: 30
+        inputs:
+          [
+            test/clusterd-test-driver,
+            src/clusterd-test-driver,
+            src/compute-types,
+            src/transform/src/mirgen.rs,
+          ]
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: clusterd-test-driver
+              run: workloads
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
+
+      # The workloads step above renders the same plans on every run, by design: it is
+      # the regression suite, and a fixed seed is what makes a change in behaviour
+      # attributable. This step is the other half. It seeds from the build number, so
+      # every night renders plans nothing has rendered before, which is the only way
+      # this suite finds a bug it was not already written to catch.
+      #
+      # No `inputs:` filter. Step trimming exists to skip work a diff cannot affect,
+      # and that reasoning does not apply here: the point is to explore new plans
+      # against whatever is on main, so it should run whether or not the compute or
+      # driver sources were touched.
+      - id: clusterd-test-driver-soak
+        label: Clusterd test driver (soak, new plans each run)
+        depends_on: build-aarch64
+        timeout_in_minutes: 40
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: clusterd-test-driver
+              run: soak
+        agents:
+          queue: hetzner-aarch64-4cpu-8gb
 
   - id: dbt-materialize
     topics: [kafka]

@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 futures.workspace = true
+itertools.workspace = true
 mz-compute-client = { path = "../compute-client" }
 mz-compute-types = { path = "../compute-types" }
 mz-dyncfg = { path = "../dyncfg" }
@@ -44,8 +45,9 @@ mz-storage-types = { path = "../storage-types" }
 # Needed for shapes that don't lower from raw MIR (notably joins, whose
 # `implementation` defaults to `Unimplemented`); the default path lowers faithfully
 # without it.
-mz-transform = { path = "../transform" }
+mz-transform = { path = "../transform", features = ["mirgen"] }
 serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 timely.workspace = true
 tokio = { workspace = true, features = ["full"] }
 tokio-stream.workspace = true

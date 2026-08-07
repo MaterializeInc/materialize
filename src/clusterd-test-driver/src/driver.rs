@@ -120,6 +120,33 @@ impl Driver {
         )))
     }
 
+    /// Log every `ComputeResponse` the replica sends, for diagnosing a dataflow
+    /// that is installed but never reports progress.
+    ///
+    /// Frontier and subscribe waits report only that they timed out, which cannot
+    /// distinguish "the replica said nothing" from "the replica reported a
+    /// frontier that never advanced". Those have different causes, so the raw
+    /// stream is the only way to tell them apart. Enabled by
+    /// `DRIVER_DEBUG_RESPONSES`; the task ends when the connection does.
+    pub fn log_raw_responses(&self, label: &str) {
+        let mut rx = self.responses.subscribe_raw();
+        let label = label.to_string();
+        mz_ore::task::spawn(|| "driver-response-log", async move {
+            while let Ok(response) = rx.recv().await {
+                // Peek responses carry whole result sets; log only their shape.
+                let rendered = match &response {
+                    mz_compute_client::protocol::response::ComputeResponse::PeekResponse(
+                        uuid,
+                        _,
+                        _,
+                    ) => format!("PeekResponse({uuid})"),
+                    other => format!("{other:?}"),
+                };
+                tracing::info!(target: "driver_responses", "[{label}] {rendered}");
+            }
+        });
+    }
+
     /// Sends a raw `ComputeCommand`. The primitive behind every interaction;
     /// use cases drive side effects (`AllowCompaction`, `CancelPeek`, ...) through
     /// this without the mechanism interpreting them.
@@ -156,14 +183,20 @@ impl Driver {
     ) -> anyhow::Result<()> {
         let mut rx = self.responses.frontier(id);
         let want = Antichain::from_elem(target);
-        tokio::time::timeout(timeout, async {
+        // Remember what was last observed, so a timeout can say whether the
+        // replica reported nothing at all or reported a frontier that stopped
+        // short. Those have entirely different causes, and a bare "did not reach
+        // X in time" cannot tell them apart.
+        let last_seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let seen = std::sync::Arc::clone(&last_seen);
+        let result = tokio::time::timeout(timeout, async move {
             loop {
-                let reached = rx
-                    .borrow_and_update()
-                    .output_frontier
+                let observed = rx.borrow_and_update().output_frontier.clone();
+                *seen.lock().expect("lock") = observed.clone();
+                if observed
                     .as_ref()
-                    .is_some_and(|of| timely::PartialOrder::less_equal(&want, of));
-                if reached {
+                    .is_some_and(|of| timely::PartialOrder::less_equal(&want, of))
+                {
                     return;
                 }
                 if rx.changed().await.is_err() {
@@ -174,8 +207,20 @@ impl Driver {
                 }
             }
         })
-        .await
-        .map_err(|_| anyhow::anyhow!("frontier for {id} did not reach {target:?} in time"))
+        .await;
+        result.map_err(|_| {
+            let seen = last_seen.lock().expect("lock").clone();
+            match seen {
+                Some(of) => anyhow::anyhow!(
+                    "frontier for {id} did not reach {target:?} in time; last \
+                     reported output frontier was {of:?}"
+                ),
+                None => anyhow::anyhow!(
+                    "frontier for {id} did not reach {target:?} in time; the \
+                     replica never reported an output frontier for it"
+                ),
+            }
+        })
     }
 
     /// Peeks `target` at `ts`, returning the decoded rows. The target is an index
@@ -189,6 +234,26 @@ impl Driver {
         result_desc: RelationDesc,
         ts: Timestamp,
     ) -> anyhow::Result<Vec<Row>> {
+        match self.peek_result(target, result_desc, ts).await? {
+            Ok(rows) => Ok(rows),
+            Err(e) => anyhow::bail!("peek error: {e}"),
+        }
+    }
+
+    /// Like [`Self::peek`], but reports a collection error as a value rather than
+    /// as a failure.
+    ///
+    /// `Ok(Err(msg))` means the peek succeeded and the collection it read holds an
+    /// error, which is a legitimate result: a computation over erroring input
+    /// *should* produce that error, and a caller comparing against a reference
+    /// needs to see it rather than have it collapsed into the same channel as a
+    /// timeout or a dropped connection. Those stay `Err`.
+    pub async fn peek_result(
+        &self,
+        target: PeekTarget,
+        result_desc: RelationDesc,
+        ts: Timestamp,
+    ) -> anyhow::Result<Result<Vec<Row>, String>> {
         let uuid = uuid::Uuid::new_v4();
         let rx = self.responses.register_peek(uuid);
         let arity = result_desc.arity();
@@ -218,9 +283,9 @@ impl Driver {
                         rows.push(row_ref.to_owned());
                     }
                 }
-                Ok(rows)
+                Ok(Ok(rows))
             }
-            PeekResponse::Error(e) => anyhow::bail!("peek error: {e}"),
+            PeekResponse::Error(e) => Ok(Err(e)),
             PeekResponse::Canceled => anyhow::bail!("peek canceled"),
             PeekResponse::Stashed(_) => anyhow::bail!("unexpected stashed peek result"),
         }
@@ -251,6 +316,22 @@ impl Driver {
         up_to: Timestamp,
         timeout: Duration,
     ) -> anyhow::Result<Vec<(Row, Timestamp, i64)>> {
+        let outcome = self.await_subscribe_result(id, up_to, timeout).await?;
+        if let Some(poison) = outcome.poison {
+            anyhow::bail!("subscribe {id} reported an error: {}", poison.message);
+        }
+        Ok(outcome.updates)
+    }
+
+    /// Like [`Self::await_subscribe`], but reports a subscribe error as a value
+    /// rather than as a failure. See [`Self::peek_result`] and
+    /// [`crate::responses::SubscribePoison`].
+    pub async fn await_subscribe_result(
+        &self,
+        id: GlobalId,
+        up_to: Timestamp,
+        timeout: Duration,
+    ) -> anyhow::Result<crate::responses::SubscribeOutcome> {
         let mut rx = self.responses.ensure_subscribe(id);
         let want = Antichain::from_elem(up_to);
         tokio::time::timeout(timeout, async {
@@ -270,6 +351,6 @@ impl Driver {
         })
         .await
         .map_err(|_| anyhow::anyhow!("subscribe {id} did not reach {up_to:?} in time"))?;
-        self.responses.drain_subscribe(id)
+        self.responses.drain_subscribe_result(id)
     }
 }
