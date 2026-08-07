@@ -124,9 +124,20 @@ impl RelationPartStats<'_> {
         let typ = &self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.col("ok")?;
-        let ok_stats = ok_stats
-            .try_as_optional_struct()
-            .expect("ok column should be nullable struct");
+        // These stats come straight off durable state, so a corrupt or
+        // version-skewed encoding can carry any shape here. Report the column
+        // range as unknown rather than panicking the process reading it.
+        let ok_stats = match ok_stats.try_as_optional_struct() {
+            Ok(ok_stats) => ok_stats,
+            Err(err) => {
+                self.metrics.mismatched_count.inc();
+                tracing::error!(
+                    "expected nullable struct stats for the 'ok' column of {}: {err}",
+                    self.name
+                );
+                return None;
+            }
+        };
         let col_stats = ok_stats.some.cols.get(name.as_str())?;
 
         if let SqlColumnType {
@@ -200,8 +211,16 @@ impl RelationPartStats<'_> {
         let typ = self.desc.get_type(idx);
 
         let ok_stats = self.stats.key.cols.get("ok")?;
+        // See the note in `col_json`: durable stats can be any shape, so a
+        // wrong-shaped 'ok' column makes the range unknown, not a panic.
         let ColumnStatKinds::Struct(ok_stats) = &ok_stats.values else {
-            panic!("'ok' column stats should be a struct")
+            self.metrics.mismatched_count.inc();
+            tracing::error!(
+                "expected struct stats for the 'ok' column of {}, found {:?}",
+                self.name,
+                ok_stats.values
+            );
+            return None;
         };
         let col_stats = ok_stats.cols.get(name.as_str())?;
 
@@ -514,6 +533,101 @@ mod tests {
             desc: &schema,
         };
         assert_eq!(stats.err_count(), None);
+    }
+
+    /// Wrong-shaped ok-column stats must read as "column range unknown",
+    /// which fails open to keeping the part. Both column paths run here: a
+    /// plain column goes through `col_values`, a JSON one adds `col_json`,
+    /// and neither may panic the process reading durable state.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn malformed_ok_stats_fail_open() {
+        use mz_expr::{BinaryFunc, MirScalarExpr, func};
+        use mz_persist_types::stats::{ColumnNullStats, ColumnarStats, PrimitiveStats};
+        use mz_repr::ReprScalarType;
+
+        let schema = RelationDesc::builder()
+            .with_column("col", SqlScalarType::Int32.nullable(false))
+            .with_column("json", SqlScalarType::Jsonb.nullable(true))
+            .finish();
+        let mut builder = PartBuilder::new(&schema, &UnitSchema);
+        builder.push(
+            &SourceData(Ok(Row::pack_slice(&[Datum::Int32(1), Datum::JsonNull]))),
+            &(),
+            1u64,
+            1i64,
+        );
+        let part = builder.finish();
+        let key_col = part.key.as_struct();
+        let decoder = <RelationDesc as Schema<SourceData>>::decoder(&schema, key_col.clone())
+            .expect("success");
+
+        let json_idx = schema
+            .iter_all()
+            .map(|(idx, _name, _typ)| idx)
+            .nth(1)
+            .expect("two columns");
+        // A filter no Ok row in this part satisfies. With well-shaped stats
+        // the part is skipped, so keeping it proves the fallback ran.
+        let mfp = MapFilterProject::new(2).filter(std::iter::once(MirScalarExpr::CallBinary {
+            func: BinaryFunc::Eq(func::Eq),
+            expr1: Box::new(MirScalarExpr::column(0)),
+            expr2: Box::new(MirScalarExpr::literal_ok(
+                Datum::Int32(999),
+                ReprScalarType::Int32,
+            )),
+        }));
+
+        let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+        let arena = RowArena::new();
+        let well_shaped = PartStats {
+            key: decoder.stats(),
+        };
+        let well_shaped = RelationPartStats::new("test", &metrics, &schema, &well_shaped);
+        assert!(!well_shaped.may_match_mfp(ResultSpec::anything(), &mfp));
+
+        // `col_values` matched the ok column's kind infallibly. A wrong kind
+        // makes every column's range unknown.
+        let mut not_a_struct = decoder.stats();
+        not_a_struct.cols.insert(
+            "ok".to_string(),
+            ColumnarStats {
+                nulls: Some(ColumnNullStats { count: 0 }),
+                values: PrimitiveStats {
+                    lower: 0i32,
+                    upper: 0i32,
+                }
+                .into(),
+            },
+        );
+        let not_a_struct = PartStats { key: not_a_struct };
+        let not_a_struct = RelationPartStats::new("test", &metrics, &schema, &not_a_struct);
+        for (idx, _name, _typ) in schema.iter_all() {
+            assert_eq!(not_a_struct.col_stats(idx, &arena), ResultSpec::anything());
+        }
+        assert!(not_a_struct.may_match_mfp(ResultSpec::anything(), &mfp));
+
+        // `col_json` additionally required the ok column to be nullable. A
+        // struct that is not widens the JSON range alone, so assert on that
+        // rather than on the part-level decision.
+        let mut not_nullable = decoder.stats();
+        match not_nullable.cols.get_mut("ok") {
+            Some(ok_stats) => ok_stats.nulls = None,
+            None => panic!("ok stats missing"),
+        }
+        let not_nullable = PartStats { key: not_nullable };
+        let not_nullable = RelationPartStats::new("test", &metrics, &schema, &not_nullable);
+        let other_json = Datum::String("a");
+        assert!(
+            !well_shaped
+                .col_stats(json_idx, &arena)
+                .may_contain(other_json)
+        );
+        assert!(
+            not_nullable
+                .col_stats(json_idx, &arena)
+                .may_contain(other_json)
+        );
     }
 
     #[mz_ore::test]

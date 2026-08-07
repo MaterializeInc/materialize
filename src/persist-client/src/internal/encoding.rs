@@ -1756,17 +1756,11 @@ impl LazyPartStats {
     /// This does not cache the returned value, it decodes each time it's
     /// called.
     ///
-    /// Panics if the encoded bytes are malformed. Only call this where the value
-    /// is known to have come from `Self::encode` rather than straight off blob.
-    pub fn decode(&self) -> PartStats {
-        self.try_decode().expect("valid stats")
-    }
-
-    /// Like [Self::decode], but surfaces a malformed encoding as an error.
-    ///
-    /// The bytes are stored undecoded (see the [RustType] impl), so a corrupted
-    /// or crafted blob reaches here intact. Anything running on state that has
-    /// not been validated yet must use this.
+    /// The bytes are stored undecoded (see the [RustType] impl) and are never
+    /// validated on the way in, so a corrupted, crafted, or newer-version blob
+    /// reaches here intact. There is deliberately no infallible variant: every
+    /// caller reads stats straight off durable state, where a decode failure
+    /// must fail open (keep the part, report it selected) rather than panic.
     pub fn try_decode(&self) -> Result<PartStats, TryFromProtoError> {
         let key = self
             .key
@@ -2678,15 +2672,12 @@ mod tests {
         LazyPartStats::from_proto(Bytes::from(bytes)).expect("stats bytes are stored undecoded")
     }
 
-    /// `decode` panics on stats from a newer version, which is why the read
-    /// paths (the shard_source filter and the `stats()` accessors in fetch)
-    /// must use `try_decode` and fail open to fetching the part.
-    #[mz_ore::test]
-    #[should_panic(expected = "valid stats")]
-    fn part_stats_decode_panics_on_unknown_variant() {
-        let _ = version_skewed_part_stats().decode();
-    }
-
+    /// Stats from a newer version are an error rather than a value this
+    /// version misreads, which is what lets every read path fail open on
+    /// them: the `shard_source` filter and the fast-path peek filter keep the
+    /// part, the `stats()` accessors in fetch report `None`, `EXPLAIN FILTER
+    /// PUSHDOWN` reports the part as selected, and inspect-state serializes
+    /// the stats as absent.
     #[mz_ore::test]
     fn part_stats_try_decode_fails_open_on_unknown_variant() {
         assert_err!(version_skewed_part_stats().try_decode());

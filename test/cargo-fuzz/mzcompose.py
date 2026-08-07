@@ -439,7 +439,10 @@ class FuzzRunner:
         ):
             # Killed by a signal (Ctrl-C, step timeout, an external kill)
             # without a crash artifact: an interrupted run, not a crash.
-            # Crashes always leave an artifact, so this cannot mask one.
+            # libFuzzer-detected crashes always leave an artifact, so this
+            # cannot mask one. A kernel OOM SIGKILL is also reported as
+            # interrupted; the rss limit passed to libFuzzer catches memory
+            # blowups as artifact-producing OOMs well before the kernel does.
             self.succeeded.append(job)
             say(
                 f"- {job.name} interrupted by signal {-job.returncode} [{secs}s]  "

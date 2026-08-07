@@ -711,10 +711,15 @@ impl PendingWork {
                         sentry::with_scope(
                             |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
                             || {
+                                // `err` is redacted for the same reason the
+                                // `Ok`-row arm redacts its MFP output: these
+                                // events go to Sentry, and a `DecodeError`
+                                // carries the raw source record bytes while
+                                // several `EvalError`s embed user input.
                                 error!(
                                     ?stats,
                                     name,
-                                    ?err,
+                                    err = ?redact(&err),
                                     "persist filter pushdown correctness violation!"
                                 );
                                 if self.panic_on_audit_failure {
@@ -1534,6 +1539,7 @@ mod tests {
     /// column stat range that fails to contain a real value). See
     /// database-issues#9656 / PER-50.
     mod filter_pushdown_audit {
+        use itertools::Itertools;
         use mz_expr::func::variadic::{And, Or};
         use mz_expr::func::{
             AddFloat32, AddTimestampInterval, CastNumericToFloat32, CastNumericToMzTimestamp, Eq,
@@ -1549,6 +1555,7 @@ mod tests {
         use mz_repr::{Diff, ReprScalarType, SqlScalarType};
         use proptest::prelude::*;
         use proptest::sample::{Index, select};
+        use proptest::strategy::Union;
 
         use super::*;
 
@@ -1945,14 +1952,14 @@ mod tests {
             let ok_row = prop::collection::vec(any::<Index>(), WIDE_ARITY).prop_map(move |picks| {
                 let datums = picks
                     .iter()
-                    .zip(&pools)
+                    .zip_eq(&pools)
                     .map(|(pick, pool)| pool[pick.index(pool.len())]);
                 SourceData(Ok(Row::pack(datums)))
             });
             let err_row = Just(SourceData(Err(DataflowError::from(
                 EvalError::DivisionByZero,
             ))));
-            let row = prop_oneof![9 => ok_row, 1 => err_row];
+            let row = Union::new_weighted(vec![(9, ok_row.boxed()), (1, err_row.boxed())]);
             prop::collection::vec(row, 2..8)
         }
 
@@ -2154,15 +2161,15 @@ mod tests {
         }
 
         fn arb_wide_predicate() -> impl Strategy<Value = MirScalarExpr> {
-            let leaf = prop_oneof![
-                arb_cmp_col_lit(),
-                arb_is_null_pred(),
-                arb_jsonb_pred(),
-                arb_case_jsonb_pred(),
-                arb_iso_parse_pred(),
-                arb_ts_interval_pred(),
-                arb_float_mul_pred(),
-                arb_temporal_pred(),
+            let leaf = Union::new(vec![
+                arb_cmp_col_lit().boxed(),
+                arb_is_null_pred().boxed(),
+                arb_jsonb_pred().boxed(),
+                arb_case_jsonb_pred().boxed(),
+                arb_iso_parse_pred().boxed(),
+                arb_ts_interval_pred().boxed(),
+                arb_float_mul_pred().boxed(),
+                arb_temporal_pred().boxed(),
                 // The numeric shapes from the narrow test, aimed at the
                 // fallible-interior mechanisms; both reference column 0.
                 (
@@ -2170,21 +2177,31 @@ mod tests {
                     f32_consts(),
                     f32_consts(),
                     f32_consts(),
-                    comparison_funcs()
+                    comparison_funcs(),
                 )
-                    .prop_map(|(s, a, b, c, cmp)| float_arith_predicate(s, a, b, c, cmp)),
+                    .prop_map(|(s, a, b, c, cmp)| float_arith_predicate(s, a, b, c, cmp))
+                    .boxed(),
                 (select(vec![0u64, 1, 2, 100, u64::MAX]), comparison_funcs())
-                    .prop_map(|(ts, cmp)| cast_mz_timestamp_predicate(ts, cmp)),
-            ]
+                    .prop_map(|(ts, cmp)| cast_mz_timestamp_predicate(ts, cmp))
+                    .boxed(),
+            ])
             .boxed();
-            prop_oneof![
-                3 => leaf.clone(),
-                1 => (leaf.clone(), leaf.clone(), any::<bool>()).prop_map(|(a, b, is_and)| {
-                    let func = if is_and { And.into() } else { Or.into() };
-                    MirScalarExpr::CallVariadic { func, exprs: vec![a, b] }
-                }),
-                1 => leaf.prop_map(not),
-            ]
+            Union::new_weighted(vec![
+                (3, leaf.clone()),
+                (
+                    1,
+                    (leaf.clone(), leaf.clone(), any::<bool>())
+                        .prop_map(|(a, b, is_and)| {
+                            let func = if is_and { And.into() } else { Or.into() };
+                            MirScalarExpr::CallVariadic {
+                                func,
+                                exprs: vec![a, b],
+                            }
+                        })
+                        .boxed(),
+                ),
+                (1, leaf.prop_map(not).boxed()),
+            ])
         }
 
         /// The zero-column count(*) path: when the read desc projects away

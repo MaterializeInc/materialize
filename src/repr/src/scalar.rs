@@ -4113,8 +4113,12 @@ impl SqlScalarType {
                 Datum::Time(NaiveTime::from_hms_micro_opt(0, 0, 0, 0).unwrap()),
                 Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 999_999).unwrap()),
                 // Leap second: chrono represents it as a fractional part of
-                // one second or more.
-                Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 1_999_999).unwrap()),
+                // one second or more. `TIME '23:59:60'` is the largest value
+                // parsing admits, since fractional leap seconds are rejected,
+                // and it encodes to exactly PostgreSQL's 24:00:00 bound. A
+                // fractional leap second here would leave the type's
+                // PostgreSQL wire domain.
+                Datum::Time(NaiveTime::from_hms_micro_opt(23, 59, 59, 1_000_000).unwrap()),
             ])
         });
         static TIMESTAMP: LazyLock<Row> = LazyLock::new(|| {

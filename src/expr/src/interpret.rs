@@ -256,7 +256,6 @@ impl<'a> ResultSpec<'a> {
         }
     }
 
-    /// A spec that matches values between the given (non-null) min and max.
     /// A spec for the values between `min` and `max` inclusive.
     ///
     /// Unordered bounds widen to [`ResultSpec::value_all`] instead of collapsing

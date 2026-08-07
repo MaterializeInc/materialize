@@ -1163,10 +1163,12 @@ pub(crate) async fn explain_pushdown_future_inner<
                 let bytes = u64::cast_from(*bytes);
                 total_bytes += bytes;
                 total_parts += 1u64;
-                let selected = match stats {
+                let selected = match stats.as_ref().and_then(|x| x.try_decode().ok()) {
+                    // Also the arm for stats that do not decode, which a
+                    // newer writer's stats kind can produce. Both report the
+                    // part as selected, matching what a read of it would do.
                     None => true,
                     Some(stats) => {
-                        let stats = stats.decode();
                         let stats = RelationPartStats::new(
                             name.as_str(),
                             &snapshot_stats.metrics.pushdown.part_stats,
