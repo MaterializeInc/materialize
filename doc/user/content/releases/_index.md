@@ -20,8 +20,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.36.0
-*Released to Materialize Cloud: 2026-08-05* <br>
-*Released to Materialize Self-Managed: 2026-08-06* <br>
+*Released to Materialize Cloud: 2026-08-07 on as-needs basis* <br>
+*Released to Materialize Self-Managed: 2026-08-07* <br>
 
 ### Improvements {#v26.36-improvements}
 - **`dbt-materialize`: `AUTO SCALING STRATEGY` support**: The dbt adapter now supports the `AUTO SCALING STRATEGY` cluster option, so you can speed up cluster hydration from your dbt workflows. You can set, reset, and disable it on a cluster, and `deploy_init` will automatically copy strategy configuration during blue/green deploys.
