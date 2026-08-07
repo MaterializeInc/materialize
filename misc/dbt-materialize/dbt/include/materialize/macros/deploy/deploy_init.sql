@@ -13,16 +13,25 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 
+{#
+Returns the deployment configuration for the current target, raising a compiler
+error when the `deployment` variable has no entry for it. Every deploy operation
+starts from this configuration.
+#}
+{% macro internal_get_deployment_config() %}
+    {% set target_config = var('deployment')[target.name] %}
+
+    {% if not target_config %}
+        {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ target.name) }}
+    {% endif %}
+
+    {{ return(target_config) }}
+{% endmacro %}
+
 {% macro deploy_init(ignore_existing_objects=False) %}
 
 {% set current_target_name = target.name %}
-{% set deployment = var('deployment') %}
-{% set target_config = deployment[current_target_name] %}
-
--- Check if the target-specific configuration exists
-{% if not target_config %}
-    {{ exceptions.raise_compiler_error("No deployment configuration found for target " ~ current_target_name) }}
-{% endif %}
+{% set target_config = internal_get_deployment_config() %}
 
 {{ log("Creating deployment environment for target " ~ current_target_name, info=True) }}
 
