@@ -176,19 +176,63 @@ where
     type Item = Result<(Row, NonZeroI64), String>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let mut fuel = usize::MAX;
+        match self.step(&mut fuel) {
+            Step::Row(row) => Some(row),
+            Step::Done => None,
+            Step::OutOfFuel => unreachable!("stepped with unbounded fuel"),
+        }
+    }
+}
+
+/// The outcome of a single fueled [`PeekResultIterator::step`].
+pub enum Step {
+    /// A result row, or the error that ended the scan.
+    Row(Result<(Row, NonZeroI64), String>),
+    /// The cursor is exhausted. Further steps also return `Done`.
+    Done,
+    /// The fuel ran out before a row was found. The cursor sits at the next
+    /// position to attempt, so stepping again resumes exactly there.
+    OutOfFuel,
+}
+
+impl<Tr> PeekResultIterator<Tr>
+where
+    Tr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<Tr>: Cursor<
+            Key<'a>: ExtendDatums + Eq,
+            KeyContainer: BatchContainer<Owned = Row>,
+            Val<'a>: ExtendDatums,
+            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+{
+    /// Advances the cursor until it produces a row, the cursor is exhausted,
+    /// or `fuel` runs out, whichever comes first. Decrements `fuel` by the
+    /// number of cursor positions visited.
+    ///
+    /// Fuel is charged per cursor position, not per row returned, so a
+    /// selective `map_filter_project` cannot starve the caller of yield
+    /// points. Returning with fuel left over means the cursor is exhausted.
+    pub fn step(&mut self, fuel: &mut usize) -> Step {
         let result = loop {
+            if *fuel == 0 {
+                return Step::OutOfFuel;
+            }
+            *fuel -= 1;
+
             if self.literals_exhausted() {
-                return None;
+                return Step::Done;
             }
 
             if !self.cursor.key_valid(&self.storage) {
-                return None;
+                return Step::Done;
             }
 
             if !self.cursor.val_valid(&self.storage) {
                 let exhausted = self.step_key();
                 if exhausted {
-                    return None;
+                    return Step::Done;
                 }
             }
 
@@ -204,21 +248,9 @@ where
 
         self.cursor.step_val(&self.storage);
 
-        Some(result)
+        Step::Row(result)
     }
-}
 
-impl<Tr> PeekResultIterator<Tr>
-where
-    Tr: TraceReader<Batch: Navigable>,
-    for<'a> BatchCursor<Tr>: Cursor<
-            Key<'a>: ExtendDatums + Eq,
-            KeyContainer: BatchContainer<Owned = Row>,
-            Val<'a>: ExtendDatums,
-            TimeGat<'a>: PartialOrder<mz_repr::Timestamp>,
-            DiffGat<'a> = &'a Diff,
-        >,
-{
     /// Extracts and returns the row currently pointed at by our cursor. Returns
     /// `Ok(None)` if our MapFilterProject evaluates to `None`. Also returns any
     /// errors that arise from evaluating the MapFilterProject.

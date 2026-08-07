@@ -183,11 +183,18 @@ impl Driver {
     /// materialized-view sink's output shard, which is how `SELECT * FROM mv` reads.
     /// A persist peek blocks (async-friendly) until the shard seals through `ts`, so
     /// it doubles as a wait for the writing sink to catch up.
+    /// Peeks `target` at `ts`, optionally restricted to `literal_constraints`.
+    ///
+    /// Each literal is a row of the index's key columns, the same shape the
+    /// optimizer produces for `WHERE key IN (..)`. Only valid against an index
+    /// peek whose key the literals match. The replica sorts them itself, so they
+    /// may be passed in any order. `None` scans the whole arrangement.
     pub async fn peek(
         &self,
         target: PeekTarget,
         result_desc: RelationDesc,
         ts: Timestamp,
+        literal_constraints: Option<Vec<Row>>,
     ) -> anyhow::Result<Vec<Row>> {
         let uuid = uuid::Uuid::new_v4();
         let rx = self.responses.register_peek(uuid);
@@ -201,7 +208,7 @@ impl Driver {
         let peek = Peek {
             target,
             result_desc: result_desc.clone(),
-            literal_constraints: None,
+            literal_constraints,
             uuid,
             timestamp: ts,
             finishing: RowSetFinishing::trivial(arity),
@@ -232,8 +239,12 @@ impl Driver {
         target: PeekTarget,
         result_desc: RelationDesc,
         ts: Timestamp,
+        literal_constraints: Option<Vec<Row>>,
     ) -> anyhow::Result<usize> {
-        Ok(self.peek(target, result_desc, ts).await?.len())
+        Ok(self
+            .peek(target, result_desc, ts, literal_constraints)
+            .await?
+            .len())
     }
 
     /// Registers a subscribe-sink buffer for `id`, so the response pump accumulates

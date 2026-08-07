@@ -45,8 +45,8 @@ use mz_expr_parser::{TestCatalog, try_parse_mir};
 use mz_persist_client::PersistClient;
 use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{
-    GlobalId, RelationDesc, ReprRelationType, Row, SqlColumnType, SqlRelationType, SqlScalarType,
-    Timestamp, strconv,
+    Datum, GlobalId, RelationDesc, ReprRelationType, Row, SqlColumnType, SqlRelationType,
+    SqlScalarType, Timestamp, strconv,
 };
 use mz_storage_types::controller::CollectionMetadata;
 use serde::{Deserialize, Serialize};
@@ -462,6 +462,24 @@ pub enum Command {
         /// The timestamp to count at.
         ts: u64,
     },
+    /// Peek `id` directly and emit only how many rows came back.
+    ///
+    /// Unlike [`Command::Count`], which tallies through an ephemeral reduce
+    /// dataflow and then peeks its single-row result, this peeks `id` itself. So
+    /// the peek walks `id`'s whole arrangement, which is what makes it useful
+    /// for exercising the peek scan over many rows without a golden that has to
+    /// spell every one of them out.
+    PeekCount {
+        /// The index's global id.
+        id: u64,
+        /// The timestamp to peek at.
+        ts: u64,
+        /// Restrict the peek to these key values, as `WHERE key IN (..)` would.
+        ///
+        /// Only meaningful for a single-column `Int64` key, which is what the
+        /// sample schema's first column is. `None` scans the whole arrangement.
+        literals: Option<Vec<i64>>,
+    },
     /// Submit (without scheduling) a dataflow built from generic MIR — the
     /// abstraction behind index / materialized-view / subscribe / copy-to.
     ///
@@ -664,6 +682,7 @@ impl ScriptState {
                 PeekTarget::Index { id: out_index_id },
                 count_desc,
                 Timestamp::from(ts),
+                None,
             )
             .await?;
         match rows.as_slice() {
@@ -1049,8 +1068,28 @@ impl ScriptState {
                         id: GlobalId::User(id),
                     },
                 };
-                let rows = self.driver.peek(target, desc, Timestamp::from(ts)).await?;
+                let rows = self
+                    .driver
+                    .peek(target, desc, Timestamp::from(ts), None)
+                    .await?;
                 Ok(render_rows(&rows))
+            }
+            Command::PeekCount { id, ts, literals } => {
+                let desc = self.resolve_schema(&None)?;
+                let target = PeekTarget::Index {
+                    id: GlobalId::User(id),
+                };
+                let literal_constraints = literals.map(|literals| {
+                    literals
+                        .into_iter()
+                        .map(|literal| Row::pack_slice(&[Datum::Int64(literal)]))
+                        .collect()
+                });
+                let count = self
+                    .driver
+                    .peek_count(target, desc, Timestamp::from(ts), literal_constraints)
+                    .await?;
+                Ok(count.to_string())
             }
             Command::AwaitSubscribe {
                 id,
