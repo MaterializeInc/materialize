@@ -8,14 +8,24 @@
 // by the Apache License, Version 2.0.
 
 //! Coordinator-side support machinery for (frontend) read-then write.
+//!
+//! TODO(aljoscha): Write submission still goes through the coordinator. In the
+//! long run we want a group-commit task that runs independently, so that
+//! session tasks can submit write requests to it directly.
 
 use std::collections::BTreeSet;
 
 use mz_catalog::memory::objects::CatalogItem;
 use mz_repr::CatalogItemId;
+use mz_repr::{GlobalId, Timestamp};
 use mz_sql::catalog::CatalogItemType;
+use mz_sql::plan::SubscribeOutput;
+use tokio::sync::mpsc;
 
+use crate::PeekResponseUnary;
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::catalog::Catalog;
+use crate::coord::Coordinator;
 use crate::error::AdapterError;
 
 /// Adds `id` to the worklist the first time it is seen, enforcing the
@@ -39,6 +49,102 @@ fn enqueue(
         stack.push(id);
     }
     Ok(())
+}
+
+// Every handler here is driven by the read-then-write path, which lands later
+// in this stack. This attribute goes away with it.
+#[allow(dead_code)]
+impl Coordinator {
+    /// Creates a subscribe that introspection does not see.
+    ///
+    /// Takes ownership of `read_holds` and drops them only once the dataflow is
+    /// shipped, so the `since` cannot advance past `as_of` in between.
+    ///
+    /// Answers through `response_tx`, with an error if the connection went away
+    /// or if a dependency was dropped since the plan was optimized.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn handle_create_internal_subscribe(
+        &mut self,
+        df_desc: crate::optimize::LirDataflowDescription,
+        cluster_id: mz_compute_types::ComputeInstanceId,
+        replica_id: Option<mz_cluster_client::ReplicaId>,
+        depends_on: BTreeSet<GlobalId>,
+        as_of: Timestamp,
+        arity: usize,
+        sink_id: GlobalId,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        session_uuid: uuid::Uuid,
+        start_time: mz_ore::now::EpochMillis,
+        read_holds: crate::ReadHolds,
+        response_tx: tokio::sync::oneshot::Sender<
+            Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>,
+        >,
+    ) {
+        // Client disconnected while waiting for the semaphore.
+        if !self.active_conns.contains_key(&conn_id) {
+            let _ = response_tx.send(Err(AdapterError::Canceled));
+            return;
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        let active_subscribe = ActiveSubscribe {
+            conn_id: conn_id.clone(),
+            session_uuid,
+            channel: tx,
+            emit_progress: true, // We need progress updates for OCC
+            as_of,
+            arity,
+            cluster_id,
+            depends_on,
+            start_time,
+            output: SubscribeOutput::Diffs,
+            internal: true, // no mz_subscriptions row and no active-subscribes metric
+        };
+        active_subscribe.initialize();
+
+        // Ship the dataflow before registering the sink, so a failure has
+        // nothing to unwind.
+        //
+        // Creation can fail here: the plan was optimized against a catalog
+        // snapshot taken off the coordinator loop, so a dependency can be
+        // dropped before this message is handled. That makes it a conflict to
+        // report rather than an invariant violation, hence `try_ship_dataflow`.
+        if let Err(err) = self
+            .try_ship_dataflow(df_desc, cluster_id, replica_id)
+            .await
+        {
+            let _ = response_tx.send(Err(
+                AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(err),
+            ));
+            return;
+        }
+
+        self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+            .await;
+
+        if response_tx.send(Ok(rx)).is_err() {
+            // The receiver is gone, so cancellation or a statement timeout
+            // dropped the caller's future between the command being sent and
+            // this handler running. Retire the sink here, rather than leave a
+            // dataflow running against a closed channel. The cancel path
+            // retires it too, but only because its command is queued behind
+            // ours, and that ordering is not ours to depend on.
+            self.drop_internal_subscribe(sink_id).await;
+            return;
+        }
+
+        // Drop read holds only after `ship_dataflow` returns, so the since
+        // can't advance past `as_of` before the dataflow is running.
+        drop(read_holds);
+    }
+
+    /// Drop an internal subscribe.
+    pub(crate) async fn drop_internal_subscribe(&mut self, sink_id: GlobalId) {
+        // Use drop_compute_sink instead of remove_active_compute_sink to also
+        // cancel the dataflow on the compute side, not just remove bookkeeping.
+        let _ = self.drop_compute_sink(sink_id).await;
+    }
 }
 
 /// Validates that all dependencies are valid for read-then-write operations.
