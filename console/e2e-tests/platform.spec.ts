@@ -200,19 +200,42 @@ for (const region of REGIONS) {
       { retries: 5 },
     );
 
-    // Step through the onboarding guide
-    await page
-      .getByRole("link", { name: /get to know materialize →/i })
-      .click();
-    await page
-      .getByRole("link", { name: /the materialize ecosystem →/i })
-      .click();
-    await page
-      .getByRole("link", { name: /learn about incremental updates →/i })
-      .click();
-    await page
-      .getByRole("link", { name: /integrate with your data stack →/i })
-      .click();
+    // Step through the onboarding guide. A click can be swallowed when the
+    // environment flips to healthy mid-transition (the slide content
+    // re-renders and the anchor briefly detaches), so verify each click
+    // landed on the next slide and retry it when it didn't.
+    const SLIDE_CLICK_TIMEOUT = 30_000;
+    const slideSteps = [
+      {
+        button: /get to know materialize →/i,
+        nextTitle: "Incremental updates",
+      },
+      {
+        button: /the materialize ecosystem →/i,
+        nextTitle: "Standard SQL support",
+      },
+      {
+        button: /learn about incremental updates →/i,
+        nextTitle: "Strong consistency guarantees",
+      },
+      {
+        button: /integrate with your data stack →/i,
+        nextTitle: "Integrate with your data stack",
+      },
+    ];
+    for (const step of slideSteps) {
+      await retry(
+        async () => {
+          await page
+            .getByRole("link", { name: step.button })
+            .click({ timeout: SLIDE_CLICK_TIMEOUT });
+          await page
+            .getByRole("heading", { name: step.nextTitle })
+            .waitFor({ timeout: 5_000 });
+        },
+        { retries: 3 },
+      );
+    }
     await page.getByRole("link", { name: /open console →/i }).click({
       // This button will be disabled until the region is fully provisioned,
       // which can take several minutes in production.
