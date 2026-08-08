@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/metrics.rs
-revision: ff68428395
+revision: 50f9dad7b2
 ---
 
 # adapter::metrics
@@ -14,3 +14,4 @@ The `mz_time_to_first_row_seconds` histogram carries an `application_name` label
 Several public metrics carry `MetricTag` annotations for categorization: `mz_query_total`, `mz_active_sessions`, `mz_active_subscribes`, and `mz_adapter_commands` carry `MetricTag::Environment`.
 Helper functions `session_type_label_value`, `statement_type_label_value`, and `subscribe_output_label_value` produce the label strings used for partitioning these metrics.
 `Metrics` includes a `subscribe_outputs` `IntCounterVec` (labeled via `subscribe_output_label_value`) counting subscribe output rows; `SessionMetrics` vends per-call counters from it via `Metrics::subscribe_outputs`.
+`Metrics` includes `active_internal_subscribes: IntGaugeVec` (labeled by `session_type`) tracking the number of active internal subscribes, which serve frontend-sequenced read-then-write operations. Internal subscribes are not reflected in `active_subscribes` or in the `mz_subscriptions` builtin table.
