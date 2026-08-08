@@ -7,18 +7,34 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import Intercom from "@intercom/messenger-js-sdk";
 import { useEffect } from "react";
 
 import { useIntercomJwt } from "~/api/auth";
 const APP_ID = "r8661p0d";
 
+/**
+ * Loads the Intercom SDK and boots it off the critical path. The SDK module is
+ * dynamically imported (own chunk) and the boot call is scheduled in idle time
+ * so it does not compete with first-paint bandwidth/CPU.
+ */
+function bootIntercomDeferred(config: {
+  app_id: string;
+  intercom_user_jwt?: string;
+}) {
+  const schedule =
+    typeof window.requestIdleCallback === "function"
+      ? (cb: () => void) =>
+          window.requestIdleCallback(cb, { timeout: 3000 })
+      : (cb: () => void) => window.setTimeout(cb, 1000);
+  schedule(async () => {
+    const { default: Intercom } = await import("@intercom/messenger-js-sdk");
+    Intercom(config);
+  });
+}
+
 export function useIntercomAnonymous() {
   useEffect(() => {
-    const anonymousConfig = {
-      app_id: APP_ID,
-    };
-    Intercom(anonymousConfig);
+    bootIntercomDeferred({ app_id: APP_ID });
   }, []);
 }
 
@@ -28,7 +44,7 @@ export function useIntercom() {
 
   useEffect(() => {
     if (jwt) {
-      Intercom({ app_id: APP_ID, intercom_user_jwt: jwt });
+      bootIntercomDeferred({ app_id: APP_ID, intercom_user_jwt: jwt });
     }
   }, [jwt]);
 }

@@ -12,7 +12,6 @@ import { Navigate, Outlet, Route, useNavigate } from "react-router-dom";
 
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { LoadingContainer } from "~/components/LoadingContainer";
-import WorkflowGraph from "~/components/WorkflowGraph/WorkflowGraph";
 import { Tab } from "~/layouts/BaseLayout";
 import { useSinkList } from "~/platform/sinks/queries";
 import SinkErrors from "~/platform/sinks/SinkErrors";
@@ -23,6 +22,10 @@ import { SchemaObjectHeader } from "./SchemaObjectHeader";
 import { SimpleObjectDetailsContainer } from "./SimpleObjectDetailRoutes";
 import { useSchemaObjectParams } from "./useSchemaObjectParams";
 import { useToastIfObjectNotExtant } from "./useToastIfObjectNotExtant";
+
+const WorkflowGraph = React.lazy(
+  () => import("~/components/WorkflowGraph/WorkflowGraph"),
+);
 
 const WORKFLOW_TAB = {
   label: "Workflow",
@@ -120,7 +123,11 @@ export const SinkDetailRoutes = () => {
         <Route path="errors" element={<SinkErrorsContainer />} />
         <Route
           path="workflow"
-          element={<WorkflowGraph focusedObjectId={id} />}
+          element={
+            <React.Suspense fallback={<LoadingContainer />}>
+              <WorkflowGraph focusedObjectId={id} />
+            </React.Suspense>
+          }
         />
         <Route path="*" element={<Navigate to="../.." replace />} />
       </Route>

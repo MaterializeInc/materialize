@@ -25,7 +25,6 @@ import { ConnectionDependency } from "~/api/materialize/object-explorer/connecti
 import { ShowCreateObjectType } from "~/api/materialize/showCreate";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { LoadingContainer } from "~/components/LoadingContainer";
-import { ShowCreateBlock } from "~/components/ShowCreateBlock";
 import TextLink from "~/components/TextLink";
 import { MainContentContainer } from "~/layouts/BaseLayout";
 import { MaterializeTheme } from "~/theme";
@@ -36,6 +35,10 @@ import { ObjectDetailsContainer, ObjectDetailsStrip } from "./detailComponents";
 import { useConnectionDependencies, useObjectDetails } from "./queries";
 import { relativeObjectPath } from "./routerHelpers";
 import { ObjectDetailsParams } from "./useSchemaObjectParams";
+
+const ShowCreateBlock = React.lazy(
+  () => import("~/components/ShowCreateBlock"),
+);
 
 const ConnectionDependencyTable = ({
   connectionDependencies,
@@ -126,10 +129,12 @@ export const ConnectionDetailsContent = ({
     <MainContentContainer>
       <ObjectDetailsContainer>
         <ObjectDetailsStrip {...object} />
-        <ShowCreateBlock
-          {...object}
-          objectType={object.type as ShowCreateObjectType}
-        />
+        <React.Suspense fallback={<LoadingContainer />}>
+          <ShowCreateBlock
+            {...object}
+            objectType={object.type as ShowCreateObjectType}
+          />
+        </React.Suspense>
         {connectionDependencies.length > 0 && (
           <ConnectionDependencyTable
             connectionDependencies={connectionDependencies}
