@@ -19,17 +19,12 @@ use mz_persist_client::Schemas;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{RelationDesc, Row, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
-
-use crate::arrangement::manager::{PaddedTrace, TraceBundle};
-use crate::compute_state::peek_result_iterator;
-use crate::compute_state::peek_result_iterator::PeekResultIterator;
-use crate::typedefs::RowRowAgent;
 
 /// An async task that stashes a peek response in persist and yields a handle to
 /// the batch in a [PeekResponse::Stashed].
@@ -41,14 +36,15 @@ pub struct StashingPeek {
     pub peek: Peek,
     /// Iterator for the results. The worker thread has to continually pump
     /// results from this to the `rows_tx` channel.
-    peek_iterator: Option<PeekResultIterator<PaddedTrace<RowRowAgent<Timestamp, Diff>>>>,
-    /// We can't give a PeekResultIterator to our async upload task because the
-    /// underlying trace reader is not Send/Sync. So we need to use a channel to
-    /// send result rows from the worker thread to the async background task.
     ///
-    /// The `peek_iterator` above is built with `PeekResultIterator::new`, which borrows the
-    /// cursor live off `trace_bundle` (a `PaddedTrace<RowRowAgent<..>>`, `Rc`-based and
-    /// `!Send`), so `pump_rows` has to keep walking it on this worker thread.
+    /// Boxed because the two peek paths walk different trace types: the maintenance path a local
+    /// `TraceBundle`, the interactive path a registry `SharedOksHandle`. Only the row stream
+    /// matters here, not which trace produced it.
+    peek_iterator: Option<Box<dyn Iterator<Item = Result<(Row, NonZeroI64), String>>>>,
+    /// We can't give the row iterator to our async upload task because a trace cursor is not
+    /// Send/Sync. So we need to use a channel to send result rows from the worker thread to the
+    /// async background task, and `pump_rows` has to keep walking the iterator on this worker
+    /// thread.
     rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, String>>>,
     /// The result of the background task, eventually.
     pub result: oneshot::Receiver<(PeekResponse, Duration)>,
@@ -60,11 +56,14 @@ pub struct StashingPeek {
 }
 
 impl StashingPeek {
+    /// Starts the background upload for `peek`, pulling its rows from `peek_iterator`.
+    ///
+    /// The caller builds the iterator, since only it knows which trace the peek reads.
     pub fn start_upload(
         persist_clients: Arc<PersistClientCache>,
         persist_location: &PersistLocation,
-        mut peek: Peek,
-        mut trace_bundle: TraceBundle,
+        peek: Peek,
+        peek_iterator: Box<dyn Iterator<Item = Result<(Row, NonZeroI64), String>>>,
         batch_max_runs: usize,
     ) -> Self {
         let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(10);
@@ -75,16 +74,6 @@ impl StashingPeek {
 
         let peek_uuid = peek.uuid;
         let relation_desc = peek.result_desc.clone();
-
-        let oks_handle = trace_bundle.oks_mut();
-
-        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
-            peek.target.id(),
-            peek.map_filter_project.clone(),
-            peek.timestamp,
-            peek.literal_constraints.as_deref_mut(),
-            oks_handle,
-        );
 
         let rows_needed_by_finishing = peek.finishing.num_rows_needed();
 
@@ -215,7 +204,7 @@ impl StashingPeek {
         Ok(result)
     }
 
-    /// Pumps rows from the [PeekResultIterator] to the async task, via our
+    /// Pumps rows from the row iterator to the async task, via our
     /// `rows_tx`. Will pump at most `batch_size` rows in one batch, and at most
     /// the given `num_batches` batches.
     pub fn pump_rows(&mut self, mut num_batches: usize, batch_size: usize) {

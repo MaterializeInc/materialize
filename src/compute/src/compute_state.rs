@@ -708,12 +708,13 @@ impl<'a> ActiveComputeState<'a> {
         // runtime's read path assumes that. A violation means the predicate upstream is out of sync
         // with this one, and the dataflow would be rendered against a runtime that cannot serve it.
         //
-        // Checked unconditionally rather than through `debug_assert!`, which compiles out under
+        // `soft_assert_or_log!` rather than `debug_assert!`, which compiles out under
         // `[profile.optimized]` and `[profile.release]`. Those are the profiles mzcompose and
         // `bin/environmentd` build, so a debug assertion here would be absent from the suites that
-        // exercise two-runtime most broadly. One antichain and two iterator peeks per dataflow
-        // creation is nothing against the cost of rendering it.
-        assert!(
+        // exercise two-runtime most broadly. This panics where soft assertions are on and logs an
+        // error everywhere else, so a routing bug is visible in production without taking the
+        // replica down for a dataflow that may still render correctly.
+        mz_ore::soft_assert_or_log!(
             self.compute_state.role() != ComputeRuntimeRole::Interactive
                 || (dataflow.is_transient()
                     && !dataflow.until.is_empty()
@@ -947,11 +948,14 @@ impl<'a> ActiveComputeState<'a> {
     /// driven re-attempt (`resolve_dirty`), so both walk the registry identically.
     fn serve_shared_peek_once(&mut self, peek: SharedIndexPeek) -> Option<SharedIndexPeek> {
         let mut upper = Antichain::new();
+        let (peek_stash_usable, peek_stash_threshold_bytes) = self.peek_stash_config(&peek.peek);
         match shared_index_peek_response(
             &peek.registry,
             peek.worker_index,
             &peek.peek,
             peek.max_result_size,
+            peek_stash_usable,
+            peek_stash_threshold_bytes,
             &mut upper,
         ) {
             PeekStatus::Ready(response) => {
@@ -962,7 +966,52 @@ impl<'a> ActiveComputeState<'a> {
             }
             PeekStatus::NotReady => Some(peek),
             PeekStatus::UsePeekStash => {
-                unreachable!("the interactive peek is never peek-stash eligible")
+                let _span = span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
+
+                // A fresh walk over the same published arrangement: the iterator that produced
+                // `UsePeekStash` was consumed deciding that the result is too big to return
+                // inline. Re-minting the handle is what makes that walk possible, since the
+                // registry hands out an owned cursor rather than a borrow.
+                let Some((mut oks, _errs)) = peek
+                    .registry
+                    .handles(&peek.peek.target.id(), peek.worker_index)
+                else {
+                    // The publication went away between the walk above and here, which the
+                    // controller's read-hold discipline is supposed to prevent. Keep the peek
+                    // pending rather than answering it wrongly.
+                    return Some(peek);
+                };
+                let (oks_cursor, oks_storage) = oks.cursor();
+                let mut literal_constraints = peek.peek.literal_constraints.clone();
+                let peek_iterator =
+                    peek_result_iterator::PeekResultIterator::<SharedOksHandle>::new_over_cursor(
+                        peek.peek.target.id(),
+                        peek.peek.map_filter_project.clone(),
+                        peek.peek.timestamp,
+                        literal_constraints.as_deref_mut(),
+                        oks_cursor,
+                        oks_storage,
+                    );
+
+                let peek_stash_batch_max_runs =
+                    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.get(&self.compute_state.worker_config);
+                let stash_task = peek_stash::StashingPeek::start_upload(
+                    Arc::clone(&self.compute_state.persist_clients),
+                    self.compute_state
+                        .peek_stash_persist_location
+                        .as_ref()
+                        .expect("peek_stash_config verified a location is configured"),
+                    peek.peek.clone(),
+                    Box::new(peek_iterator),
+                    peek_stash_batch_max_runs,
+                );
+
+                // From here the peek retires through `pending_peeks`, which every runtime scans
+                // each step, not through the sharing registry's dirty set.
+                self.compute_state
+                    .pending_peeks
+                    .insert(peek.peek.uuid, PendingPeek::Stash(stash_task));
+                None
             }
         }
     }
@@ -1290,29 +1339,33 @@ impl<'a> ActiveComputeState<'a> {
         }
     }
 
+    /// Whether `peek`'s result may be stashed in persist rather than returned inline, and the size
+    /// above which it should be.
+    ///
+    /// Stashing needs both a peek whose finishing streams (so rows can be shipped as they are
+    /// produced) and a configured stash location. Both peek paths consult this, so the interactive
+    /// runtime stashes exactly the results the maintenance runtime would.
+    fn peek_stash_config(&self, peek: &Peek) -> (bool, usize) {
+        let eligible = peek.finishing.is_streamable(peek.result_desc.arity());
+
+        let enabled = ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
+        let location_available = self.compute_state.peek_stash_persist_location.is_some();
+        if enabled && !location_available {
+            error!("missing peek_stash_persist_location but peek stash is enabled");
+        }
+
+        let threshold = PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
+        (eligible && enabled && location_available, threshold)
+    }
+
     /// Either complete the peek (and send the response) or put it in the pending set.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {
             PendingPeek::Index(peek) => {
                 let start = Instant::now();
 
-                let peek_stash_eligible = peek
-                    .peek
-                    .finishing
-                    .is_streamable(peek.peek.result_desc.arity());
-
-                let peek_stash_enabled = {
-                    let enabled = ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
-                    let peek_persist_stash_available =
-                        self.compute_state.peek_stash_persist_location.is_some();
-                    if !peek_persist_stash_available && enabled {
-                        error!("missing peek_stash_persist_location but peek stash is enabled");
-                    }
-                    enabled && peek_persist_stash_available
-                };
-
-                let peek_stash_threshold_bytes =
-                    PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
+                let (peek_stash_usable, peek_stash_threshold_bytes) =
+                    self.peek_stash_config(&peek.peek);
 
                 let metrics = IndexPeekMetrics {
                     seek_fulfillment_seconds: &self
@@ -1344,7 +1397,7 @@ impl<'a> ActiveComputeState<'a> {
                 let status = peek.seek_fulfillment(
                     upper,
                     self.compute_state.max_result_size,
-                    peek_stash_enabled && peek_stash_eligible,
+                    peek_stash_usable,
                     peek_stash_threshold_bytes,
                     &metrics,
                 );
@@ -1364,6 +1417,19 @@ impl<'a> ActiveComputeState<'a> {
                         let peek_stash_batch_max_runs = PEEK_RESPONSE_STASH_BATCH_MAX_RUNS
                             .get(&self.compute_state.worker_config);
 
+                        // A fresh walk over the same trace: the iterator that produced
+                        // `UsePeekStash` was consumed deciding that the result is too big to
+                        // return inline.
+                        let mut trace_bundle = peek.trace_bundle.clone();
+                        let mut literal_constraints = peek.peek.literal_constraints.clone();
+                        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
+                            peek.peek.target.id(),
+                            peek.peek.map_filter_project.clone(),
+                            peek.peek.timestamp,
+                            literal_constraints.as_deref_mut(),
+                            trace_bundle.oks_mut(),
+                        );
+
                         let stash_task = peek_stash::StashingPeek::start_upload(
                             Arc::clone(&self.compute_state.persist_clients),
                             self.compute_state
@@ -1371,7 +1437,7 @@ impl<'a> ActiveComputeState<'a> {
                                 .as_ref()
                                 .expect("verified above"),
                             peek.peek.clone(),
-                            peek.trace_bundle.clone(),
+                            Box::new(peek_iterator),
                             peek_stash_batch_max_runs,
                         );
 
@@ -2303,6 +2369,8 @@ fn shared_index_peek_response(
     worker_index: usize,
     peek: &Peek,
     max_result_size: u64,
+    peek_stash_usable: bool,
+    peek_stash_threshold_bytes: usize,
     upper: &mut Antichain<Timestamp>,
 ) -> PeekStatus {
     let id = peek.target.id();
@@ -2361,9 +2429,14 @@ fn shared_index_peek_response(
             oks_storage,
         );
 
-    // The interactive peek is never peek-stash eligible (stash_eligible = false), so draining
-    // always resolves to `Ready`.
-    IndexPeek::drain_ok_iterator(peek_iterator, peek, max_result_size, false, 0, None)
+    IndexPeek::drain_ok_iterator(
+        peek_iterator,
+        peek,
+        max_result_size,
+        peek_stash_usable,
+        peek_stash_threshold_bytes,
+        None,
+    )
 }
 
 #[cfg(test)]
@@ -2589,6 +2662,8 @@ mod index_peek_tests {
             0,
             &make_peek(peek_ts),
             u64::MAX,
+            false,
+            0,
             &mut shared_upper,
         ) {
             PeekStatus::Ready(response) => response,
@@ -2598,6 +2673,74 @@ mod index_peek_tests {
         assert_eq!(
             local_response, shared_response,
             "shared-registry peek must return the local path's rows"
+        );
+    }
+
+    /// The interactive walk defers an over-threshold result to the peek stash, exactly as the
+    /// maintenance walk does, rather than returning it inline.
+    ///
+    /// Hard-coding the interactive walk to stash-ineligible made every result return inline, so a
+    /// result over `max_result_size` failed with "result exceeds max size" on a query that streams
+    /// fine through the stash on the maintenance runtime. Since every peek routes to interactive
+    /// while the feature is on, that was a user-visible regression no test could catch: test
+    /// results never approach the limit.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // differential-dataflow's Columnation isn't miri-clean
+    fn interactive_shared_peek_defers_over_threshold_result_to_the_stash() {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = test_metrics(&registry).for_worker(0);
+        let index_metrics = index_metrics(&metrics);
+
+        let kv = vec![(row(1), row(10)), (row(2), row(20)), (row(3), row(30))];
+        let peek_ts = Timestamp::new(0);
+        let trace_upper = Timestamp::new(1);
+        // Any non-empty result is over a zero threshold, which keeps the test about the decision
+        // rather than about row sizes.
+        let threshold = 0;
+
+        let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
+        let mut shared_upper = Antichain::new();
+        let shared_status = shared_index_peek_response(
+            &shared_registry,
+            0,
+            &make_peek(peek_ts),
+            u64::MAX,
+            true,
+            threshold,
+            &mut shared_upper,
+        );
+        assert!(
+            matches!(shared_status, PeekStatus::UsePeekStash),
+            "interactive walk must defer an over-threshold result to the stash"
+        );
+
+        // The maintenance walk over the same rows makes the same call, which is the property that
+        // matters: routing a peek to interactive must not change whether it stashes.
+        let mut local_peek = IndexPeek {
+            peek: make_peek(peek_ts),
+            trace_bundle: TraceBundle::new(
+                oks_trace_with_rows(
+                    trace_upper,
+                    kv.iter()
+                        .cloned()
+                        .map(|(k, v)| ((k, v), peek_ts, Diff::ONE))
+                        .collect(),
+                ),
+                errs_trace_empty(trace_upper),
+            ),
+            span: tracing::Span::none(),
+        };
+        let mut local_upper = Antichain::new();
+        let local_status = local_peek.seek_fulfillment(
+            &mut local_upper,
+            u64::MAX,
+            true,
+            threshold,
+            &index_metrics,
+        );
+        assert!(
+            matches!(local_status, PeekStatus::UsePeekStash),
+            "maintenance walk must defer the same result"
         );
     }
 
@@ -2658,6 +2801,8 @@ mod index_peek_tests {
                     0,
                     &make_peek(Timestamp::new(0)),
                     u64::MAX,
+                    false,
+                    0,
                     &mut upper,
                 ),
                 PeekStatus::NotReady,
@@ -2675,6 +2820,8 @@ mod index_peek_tests {
                     0,
                     &make_peek(Timestamp::new(0)),
                     u64::MAX,
+                    false,
+                    0,
                     &mut upper,
                 ),
                 PeekStatus::Ready(PeekResponse::Rows(_)),
@@ -2741,6 +2888,8 @@ mod index_peek_tests {
                         worker_index,
                         &make_peek(Timestamp::new(1)),
                         u64::MAX,
+                        false,
+                        0,
                         &mut upper,
                     ),
                     PeekStatus::NotReady,
@@ -2765,6 +2914,8 @@ mod index_peek_tests {
                         worker_index,
                         &make_peek(Timestamp::new(1)),
                         u64::MAX,
+                        false,
+                        0,
                         &mut upper,
                     ),
                     PeekStatus::Ready(PeekResponse::Rows(_)),
