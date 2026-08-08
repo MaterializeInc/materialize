@@ -264,11 +264,14 @@ per-worker slot holding the published `oks` and `errs` points.
   independent, and the lost-wakeup argument that lets them stay separate is a
   map-lock total order plus drain-before-reread plus a sticky activation token.
   The per-step `process_peeks` scan is removed on the interactive runtime.
-* **Two closes, no withdrawal command.** An adopted point closes when its
-  publisher drops. A never-adopted placeholder is evicted when its last reader
-  leaves. So no explicit withdrawal command is needed. Eviction reads the slot's
-  adoption flag and its `Arc` strong count under one lock so an adopter in flight
-  is always observed as either adopted or still-referenced.
+* **One close, no withdrawal command.** An adopted point closes when its publisher
+  drops, so no explicit withdrawal command is needed. A placeholder that is never
+  adopted, because the index creation it anticipated was cancelled, leaves an empty
+  slot in the registry for the life of the process. Correctness does not depend on
+  reclaiming it: whether an imported index may compact or drop rests on the
+  controller's read-hold discipline, and the leaked slot is an empty publication
+  point, not a retained arrangement. Reclaiming it would need a reader-teardown
+  hygiene path that does not exist.
 * **Re-exports.** A `Trace` re-export, where one index aliases another's
   arrangement, shares the existing `Arc` under the new id rather than
   republishing. The source's seal signal wakes the re-export transitively.
@@ -425,8 +428,9 @@ than panicking.
 * A shared-fate subprocess test verifies a panic in either runtime aborts the
   process.
 * Unit tests cover the sharing primitive and registry, including the single-source
-  feed, placeholder-adopted-late joins, cross-thread reads, and the compaction and
-  eviction invariants.
+  feed, placeholder-adopted-late joins, cross-thread reads, the compaction
+  invariants, and a join and a reduce over a chain the publisher's spine has merged
+  across, read at a stale `as_of`.
 * The `TwoRuntimeReadIsolation` parallel-benchmark scenario measures read latency
   while the maintenance runtime is saturated by hydration churn. On a box with CPU
   headroom, two-runtime holds the point-read p50 flat while a single-runtime

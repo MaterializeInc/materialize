@@ -575,11 +575,9 @@ pub fn build_compute_dataflow(
 /// rather than deferring a build whose dependency is not yet published.
 ///
 /// Returns the slot `Arc<SharedIndexArrangement>` alongside the arrangements and read holds. The
-/// caller MUST retain it for as long as the import is alive:
-/// [`ArrangementSharingRegistry::evict_unadopted`] detects the last reader of an unadopted placeholder
-/// by the slot Arc's strong count, and a `SharedTraceHandle` holds only the inner `Arc<SharedTrace>`
-/// one level down, which does not count. Dropping the slot Arc while the import is still live would let
-/// eviction remove a slot this reader depends on.
+/// caller MUST retain it for as long as the import is alive. A `SharedTraceHandle` holds only the
+/// inner `Arc<SharedTrace>` one level down, so the slot's strong count is the registry's only measure
+/// of whether a reader still depends on it.
 ///
 /// The returned handle clones are the importing dataflow's read hold on the shared trace, advanced
 /// to `as_of`. Keeping them alive (for example in the dataflow's token set) pins the shared trace at
@@ -897,7 +895,7 @@ where
         self.update_id(Id::Global(idx.on_id), bundle);
 
         // The read hold releases when this token drops with the dataflow. The slot Arc rides along so
-        // the import counts as a live reader for `evict_unadopted` for the dataflow's whole lifetime.
+        // the slot's strong count marks a live reader for the dataflow's whole lifetime.
         tokens.insert(idx_id, Rc::new((oks_hold, errs_hold, slot)));
     }
 }

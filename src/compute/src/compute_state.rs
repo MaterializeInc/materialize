@@ -703,11 +703,17 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
-        // Tripwire for a Multiplexer routing bug. The Multiplexer's `to_interactive` predicate
-        // already guarantees that only bounded-read dataflows reach the interactive runtime, so
-        // this runtime assumes a correct protocol and does not re-check it outside of debug
-        // builds. A violation here means the predicate upstream is out of sync with this one.
-        debug_assert!(
+        // Tripwire for a Multiplexer routing bug. The Multiplexer's `to_interactive` predicate is
+        // what guarantees that only bounded-read dataflows reach the interactive runtime, and this
+        // runtime's read path assumes that. A violation means the predicate upstream is out of sync
+        // with this one, and the dataflow would be rendered against a runtime that cannot serve it.
+        //
+        // Checked unconditionally rather than through `debug_assert!`, which compiles out under
+        // `[profile.optimized]` and `[profile.release]`. Those are the profiles mzcompose and
+        // `bin/environmentd` build, so a debug assertion here would be absent from the suites that
+        // exercise two-runtime most broadly. One antichain and two iterator peeks per dataflow
+        // creation is nothing against the cost of rendering it.
+        assert!(
             self.compute_state.role() != ComputeRuntimeRole::Interactive
                 || (dataflow.is_transient()
                     && !dataflow.until.is_empty()

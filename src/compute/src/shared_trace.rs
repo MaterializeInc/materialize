@@ -50,11 +50,13 @@
 //! not on any differential-side `Arc` batch impls.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use differential_dataflow::lattice::{Lattice, antichain_meet};
 use differential_dataflow::operators::arrange::{Arranged, TraceAgent, TraceReplayInstruction};
-use differential_dataflow::trace::cursor::{CursorList, Navigable, cursor_list};
+use differential_dataflow::trace::cursor::Navigable;
+#[cfg(test)]
+use differential_dataflow::trace::cursor::{CursorList, cursor_list};
 use differential_dataflow::trace::wrappers::frontier::{BatchFrontier, TraceFrontier};
 use differential_dataflow::trace::{BatchReader, TraceReader};
 use timely::dataflow::Scope;
@@ -114,12 +116,6 @@ struct SharedTraceState<Tr: TraceReader> {
     /// Set when the publisher drops. A terminal empty frontier is enqueued to each importer, so
     /// readers close only after draining what was already published.
     closed: bool,
-    /// Set true by [`PublishArrangement::adopt`] when a publisher takes over this point. A point
-    /// created by [`Published::placeholder`] and never adopted stays false, which the registry uses
-    /// to decide it may evict the never-adopted slot when its last reader leaves. Read under this
-    /// same mutex so an eviction check that also reads the slot's Arc strong count observes a
-    /// consistent (adopted, count) pair. See [`crate::sharing::ArrangementSharingRegistry::evict_unadopted`].
-    adopted: bool,
 }
 
 impl<Tr: TraceReader> SharedTraceState<Tr>
@@ -148,12 +144,9 @@ where
     }
 }
 
-/// A publication point paired with its live [`Condvar`], so peek waiters can block for `upper` to
-/// advance without a lost-wakeup race: the publisher signals under the same lock it uses to move
-/// `upper`.
+/// A publication point: the shared state every reader of one published arrangement sees.
 struct SharedTrace<Tr: TraceReader> {
     state: Mutex<SharedTraceState<Tr>>,
-    upper_changed: Condvar,
     /// Total peer count (workers-per-process times processes) of the scope that published this
     /// arrangement. Set once at publish time and never mutated afterward, so `import` reads it
     /// without taking `state`'s lock. Pairwise import (importer worker `i` reads publisher worker
@@ -186,9 +179,7 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 queues: BTreeMap::new(),
                 next_id: 0,
                 closed: false,
-                adopted: false,
             }),
-            upper_changed: Condvar::new(),
             peers,
         }
     }
@@ -228,53 +219,6 @@ where
         Published {
             shared: Arc::new(SharedTrace::new_empty(peers)),
         }
-    }
-
-    /// Closes this publication point without a publisher attached, terminating every importer.
-    ///
-    /// Marks the point closed and pushes a terminal empty frontier ([`Antichain::new`]) to each
-    /// importer queue, waking them so they drain and drop their capability. This is the never-adopted
-    /// counterpart to `Publisher::drop`, which performs the same close for an adopted point. Use it
-    /// for a placeholder whose index creation was cancelled before it published: without it the
-    /// placeholder's importers would hold their frontier at the minimum forever.
-    ///
-    /// Idempotent. Closing an already-closed point re-enqueues the terminal frontier, which a drained
-    /// importer ignores. Do NOT call this on a point that will still be adopted: the terminal frontier
-    /// would tear down importers that a later publisher is meant to feed.
-    ///
-    /// Has no production caller today. Under a correct protocol a placeholder is not left both
-    /// unadopted and imported by a live reader: the controller does not drop or cancel an index while
-    /// a reader depends on it (its read-hold discipline, see
-    /// `mz_compute_client::controller::instance::Instance::finish_peek`), and a reader whose own
-    /// dataflow is dropped tears its importer down directly. So the wedge this method resolves arises
-    /// only from an incorrect protocol instantiation. It is retained for a future explicit cancellation
-    /// or hygiene path and exercised by tests.
-    pub fn close(&self) {
-        if let Ok(mut state) = self.shared.state.lock() {
-            state.closed = true;
-            // Empty frontier = sealed through the end of time, the same terminal signal `Publisher::drop`
-            // sends. Never `from_elem(minimum)`, which would read as "no progress" and wedge instead.
-            let empty = Antichain::new();
-            for queue in state.queues.values_mut() {
-                queue
-                    .instructions
-                    .push_back(TraceReplayInstruction::Frontier(empty.clone()));
-                let _ = queue.activator.activate();
-            }
-        }
-        self.shared.upper_changed.notify_all();
-    }
-
-    /// Reads this point's adoption flag and runs `f` while holding the state lock, returning both.
-    ///
-    /// The registry pairs the flag with the slot's Arc strong count under one lock acquisition so an
-    /// adopter in flight is always observed as either adopted or still-referenced. `f` MUST NOT lock
-    /// this point's state again (it would deadlock) nor acquire the registry map lock (it would invert
-    /// the map-then-state lock order the eviction path relies on).
-    pub(crate) fn adopted_and<R>(&self, f: impl FnOnce() -> R) -> (bool, R) {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        let adopted = state.adopted;
-        (adopted, f())
     }
 
     /// Records the controller's logical compaction frontier for this arrangement.
@@ -329,38 +273,41 @@ where
         }
     }
 
-    /// Takes a consistent snapshot of the published arrangement as of `time`, blocking until `upper`
+    /// Takes a consistent snapshot of the published arrangement as of `time`, waiting until `upper`
     /// passes `time`.
     ///
-    /// Works from any thread. Returns `None` when the snapshot cannot serve `time`, which is either
-    /// the publisher closed before `upper` passed `time`, or compaction has advanced `since` beyond
-    /// `time` so the accumulation at `time` is no longer accurate. The gate on `since` mirrors the
-    /// single-runtime peek path, which errors when the compaction frontier is beyond the read time
-    /// rather than returning coalesced results. A caller that needs to tell the two `None` cases
-    /// apart should inspect `since` before the read.
-    pub fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>> {
-        let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        // `upper` not less-equal `time` means all updates at `time` are sealed.
-        while state.upper.less_equal(time) {
-            if state.closed {
-                return None;
+    /// Test-only. Production reads go through [`Self::import_snapshot_at`], which is notification
+    /// driven and never parks a worker. This waits by polling, so it must not be called from a
+    /// timely worker thread: a worker blocked here cannot step, and on a single-worker test that
+    /// includes the publisher it is waiting for.
+    ///
+    /// Returns `None` when the snapshot cannot serve `time`, which is either the publisher closed
+    /// before `upper` passed `time`, or compaction has advanced `since` beyond `time` so the
+    /// accumulation at `time` is no longer accurate. The gate on `since` mirrors the single-runtime
+    /// peek path, which errors when the compaction frontier is beyond the read time rather than
+    /// returning coalesced results.
+    #[cfg(test)]
+    pub(crate) fn snapshot_at(&self, time: &Tr::Time) -> Option<TraceSnapshot<Tr>> {
+        loop {
+            {
+                let state = self.shared.state.lock().expect("shared trace poisoned");
+                // `upper` not less-equal `time` means all updates at `time` are sealed.
+                if !state.upper.less_equal(time) {
+                    // `since` beyond `time` means times at `time` have been coalesced and a read
+                    // there would be inaccurate. Fail to `None` rather than serve stale data.
+                    if !state.since.less_equal(time) {
+                        return None;
+                    }
+                    return Some(TraceSnapshot {
+                        chain: state.chain.clone(),
+                    });
+                }
+                if state.closed {
+                    return None;
+                }
             }
-            state = self
-                .shared
-                .upper_changed
-                .wait(state)
-                .expect("shared trace poisoned");
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        // `since` beyond `time` means times at `time` have been coalesced and a read there would be
-        // inaccurate. Fail to `None` rather than serve stale data.
-        if !state.since.less_equal(time) {
-            return None;
-        }
-        Some(TraceSnapshot {
-            chain: state.chain.clone(),
-            since: state.since.clone(),
-            upper: state.upper.clone(),
-        })
     }
 
     /// The published arrangement's current `(since, upper)` frontiers, read under the state lock.
@@ -519,25 +466,17 @@ fn seed_frontier<Tr: TraceReader>(
 
 /// An owned, consistent snapshot of a published arrangement: an immutable chain plus its frontiers.
 ///
-/// Holding it pins the chain's batches, keeping their memory alive even as the publishing worker
-/// merges. Dropping it releases them, from whatever thread drops last.
-pub struct TraceSnapshot<Tr: TraceReader> {
+/// Test-only, the result of [`SharedTraceHandle::snapshot_at`]. Holding it pins the chain's batches,
+/// keeping their memory alive even as the publishing worker merges.
+#[cfg(test)]
+pub(crate) struct TraceSnapshot<Tr: TraceReader> {
     chain: Vec<Tr::Batch>,
-    since: Antichain<Tr::Time>,
-    upper: Antichain<Tr::Time>,
 }
 
+#[cfg(test)]
 impl<Tr: TraceReader> TraceSnapshot<Tr> {
-    /// The logical compaction frontier of the snapshot. Times not beyond it are not accurate.
-    pub fn since(&self) -> AntichainRef<'_, Tr::Time> {
-        self.since.borrow()
-    }
-    /// The seal frontier of the snapshot. Times strictly below it are complete.
-    pub fn upper(&self) -> AntichainRef<'_, Tr::Time> {
-        self.upper.borrow()
-    }
     /// A cursor merging the snapshot's batch cursors, with the batches as its storage.
-    pub fn cursor(&self) -> (CursorList<<Tr::Batch as Navigable>::Cursor>, Vec<Tr::Batch>)
+    pub(crate) fn cursor(&self) -> (CursorList<<Tr::Batch as Navigable>::Cursor>, Vec<Tr::Batch>)
     where
         Tr::Batch: Navigable,
     {
@@ -596,20 +535,6 @@ where
             placeholder.shared.peers,
             "adopt requires equal total peers (workers_per_process * num_processes)"
         );
-
-        // Mark the point adopted before installing the publisher. The registry reads this flag (under
-        // the same state mutex) to distinguish a live, published slot from a never-adopted placeholder
-        // it may evict. Setting it before the caller can drop its `Arc<SharedIndexArrangement>` clone
-        // (the borrow of `placeholder` keeps that clone alive across this call) is what makes the
-        // eviction race sound. See `crate::sharing::ArrangementSharingRegistry::evict_unadopted`.
-        {
-            let mut state = placeholder
-                .shared
-                .state
-                .lock()
-                .expect("shared trace poisoned");
-            state.adopted = true;
-        }
 
         // The publisher owns a `TraceAgent` clone: its read capability is the aggregate lease for
         // all readers, so the trace cannot compact or drop out from under them.
@@ -737,9 +662,6 @@ where
                     for queue in state.queues.values() {
                         let _ = queue.activator.activate();
                     }
-                    if upper_advanced {
-                        sink_shared.upper_changed.notify_all();
-                    }
 
                     (logical, physical, upper_advanced)
                 };
@@ -782,7 +704,6 @@ impl<Tr: TraceReader> Drop for Publisher<Tr> {
                 let _ = queue.activator.activate();
             }
         }
-        self.shared.upper_changed.notify_all();
     }
 }
 
@@ -1130,11 +1051,10 @@ mod tests {
     /// Ported from the differential-dataflow primitive's own `tests/sharing.rs`
     /// `snapshot_from_another_thread`. Unlike `crate::sharing`'s cross-runtime coverage, which reads
     /// only after the publishing worker has already torn down, this keeps the publisher stepping
-    /// concurrently on its own thread so the reader's `snapshot_at` genuinely blocks on the
-    /// `Condvar` wait and is woken by the publisher's `notify_all`, rather than observing an
-    /// already-sealed chain.
+    /// concurrently on its own thread so the reader genuinely waits for a seal that has not happened
+    /// yet, rather than observing an already-sealed chain.
     #[mz_ore::test]
-    fn snapshot_at_blocks_until_upper_passes_time() {
+    fn snapshot_at_waits_until_upper_passes_time() {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::mpsc;
 
