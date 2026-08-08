@@ -2182,9 +2182,10 @@ mod tests {
         // and the two versions would not consolidate out.
         // This can impact correctness!
         //
-        // If you need to change how SourceDatas are encoded, that's still fine...
-        // but we'll also need to increase
-        // the MINIMUM_CONSOLIDATED_VERSION as part of the same release.
+        // If you need to change how SourceDatas are encoded, that can be
+        // okay, but think through the consequences: a record whose old and
+        // new encodings differ never consolidates away inside existing
+        // persist shards. Loop in the persist team.
         assert_eq!(
             encoded,
             reencoded.as_str(),
