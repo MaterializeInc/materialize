@@ -520,6 +520,95 @@ ORDER BY dataflow_name, region_name;
 
 The column `hint` provides the estimated value to be provided to the `AGGREGATE INPUT GROUP SIZE` in the case of a `MIN` or `MAX` aggregation or to the `DISTINCT ON INPUT GROUP SIZE` or `LIMIT INPUT GROUP SIZE` in the case of a Top K pattern.
 
+## Temporal filters
+
+[Temporal filters](/transform-data/patterns/temporal-filters/) bound a
+query's results using [`mz_now()`](/sql/functions/now_and_mz_now), e.g.:
+
+```mzsql
+WHERE mz_now() <= event_ts + INTERVAL '24 hours'
+```
+
+Because `mz_now()` advances continuously (down to the millisecond), every
+distinct input row can produce its own, only-slightly-different retraction
+timestamp as it ages out of the window. When a query's computation is
+expensive to maintain incrementally, this fine-grained ticking can force
+Materialize to redo a disproportionate amount of work for each individual
+input change, hurting CPU usage and freshness.
+
+**Rounding**, i.e., snapping the `mz_now()` bound down to a coarser interval
+using [`date_bin`](/sql/functions/date-bin), collapses many of these
+distinct timestamps together. Rows that would otherwise expire at slightly
+different times now expire in the same batch, so Materialize can consolidate
+the overlapping intermediate state into a single update instead of tracking
+each one separately.
+
+### When it helps
+
+Rounding is most effective for temporal filters with **high input update
+rates** where consecutive updates touch **heavily overlapping data**, and
+where the underlying computation is expensive to recompute per update (for
+example, a filter feeding into joins or aggregations that can't be
+maintained cheaply per row). In this situation, coarsening the timestamp
+granularity can meaningfully reduce CPU usage and improve freshness (lower
+wallclock lag), since Materialize processes fewer, larger batches instead of
+many nearly-identical small ones.
+
+It's not helpful, or not applicable, when:
+
+- The filter already needs fine-grained (sub-interval) precision, e.g., a
+  sliding window that must expire records to the millisecond.
+- The comparison against `mz_now()` isn't a monotonic bound (for example, an
+  equality check), since rounding doesn't apply to those the same way.
+- The query is already cheap to maintain incrementally, in which case
+  rounding adds complexity for negligible benefit.
+
+### Example
+
+Before: a materialized view with a temporal filter that admits rows for
+exactly 24 hours, using the raw, continuously-advancing `event_ts`:
+
+```mzsql
+CREATE MATERIALIZED VIEW recent_events AS
+SELECT *
+FROM events
+WHERE mz_now() <= event_ts + INTERVAL '24 hours';
+```
+
+After: round the upper bound down to the nearest minute with `date_bin`, so
+all rows whose `event_ts` falls in the same 1-minute bucket expire together:
+
+```mzsql
+CREATE MATERIALIZED VIEW recent_events AS
+SELECT *
+FROM events
+WHERE mz_now() <= date_bin('1 minute', event_ts, TIMESTAMP '1970-01-01') + INTERVAL '24 hours';
+```
+
+The same idea applies to indexes with a temporal filter in their underlying
+view, and to filters expressed via arithmetic on a numeric `mz_timestamp`
+(e.g., `extract('epoch', ...)`) rather than `date_bin` directly.
+
+### Tradeoffs
+
+- **This trades timing precision for performance.** Rows now become valid or
+  invalid only at the rounding interval's boundary, which adds up to one
+  interval's worth of imprecision to the filter's effective bound.
+- **Round in the direction that keeps the filter conservative.** `date_bin`
+  always rounds *down*, which is the safe direction when `mz_now()` is
+  compared against an upper bound (as above): the view never retains rows
+  past their intended window, it can only expire them up to one interval
+  early. If instead `mz_now()` is compared against a lower bound (e.g., a
+  window's start), round that bound *up* so results don't appear early. Don't
+  round blindly; check which direction preserves the guarantee your query
+  depends on.
+- **Choosing the interval matters.** Too coarse an interval measurably hurts
+  freshness precision (you're adding up to that much latency); too fine an
+  interval loses most of the consolidation benefit.
+- **This is a manual, per-query rewrite**, not an optimization Materialize
+  applies automatically. You need to identify which temporal filters are
+  costly to maintain and rewrite each one.
+
 ## Learn more
 
 Check out the blog post [Delta Joins and Late Materialization](https://materialize.com/blog/delta-joins/) to go deeper on join optimization in Materialize.
