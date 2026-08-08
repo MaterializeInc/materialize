@@ -358,15 +358,26 @@ impl<D: Data> CorrectionV2<D> {
         &'a mut self,
         upper: &Antichain<Timestamp>,
     ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + 'a {
+        self.consolidate_before(upper);
+        self.consolidated_updates_before(upper)
+    }
+
+    /// Return the updates before the given `upper`, as consolidated by a preceding
+    /// [`CorrectionV2::consolidate_before`] call.
+    ///
+    /// The caller must have invoked `consolidate_before` with the same `upper` and must not have
+    /// mutated the buffer since. Otherwise the returned updates are neither consolidated nor
+    /// necessarily complete.
+    pub fn consolidated_updates_before<'a>(
+        &'a self,
+        upper: &Antichain<Timestamp>,
+    ) -> impl Iterator<Item = (D, Timestamp, Diff)> + Send + 'a {
         // All contained times are advanced to at least the `since`, so a read at an `upper` that
-        // is not beyond the `since` is always empty. Short-circuit to avoid the eager peel, merge,
-        // and `boundary` advancement that `consolidate_before` would otherwise perform. Normal
-        // reads and `consolidate_at_since` always pass an `upper` beyond the `since`.
+        // is not beyond the `since` is always empty. This mirrors the short-circuit in
+        // `consolidate_before`, which leaves `emitted` untouched in that case.
         if !PartialOrder::less_than(&self.since, upper) {
             return None.into_iter().flatten();
         }
-
-        self.consolidate_before(upper);
 
         // After `consolidate_before`, `emitted` holds exactly the updates before `upper`: every
         // path that populates it splits at `upper` (pushing the remainder to `pending_low`), and
@@ -385,9 +396,17 @@ impl<D: Data> CorrectionV2<D> {
     /// Consolidate all updates before the given `upper` into the `emitted` chain.
     ///
     /// Once this method returns, `emitted` contains all updates at times before `upper`,
-    /// consolidated. It can also contain updates at times at or beyond `upper` if `upper` is not
-    /// beyond the `since`.
-    fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
+    /// consolidated.
+    ///
+    /// Does nothing if `upper` is not beyond the `since`: all contained times are advanced to at
+    /// least the `since`, so such a read is empty anyway, and skipping avoids an eager peel,
+    /// merge, and `boundary` advancement. Normal reads and `consolidate_at_since` always pass an
+    /// `upper` beyond the `since`.
+    pub fn consolidate_before(&mut self, upper: &Antichain<Timestamp>) {
+        if !PartialOrder::less_than(&self.since, upper) {
+            return;
+        }
+
         if let Some(mut ready) = self.stage.flush() {
             self.route(&mut ready);
         }
