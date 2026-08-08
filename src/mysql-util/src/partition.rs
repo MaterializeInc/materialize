@@ -674,4 +674,253 @@ mod tests {
         conn.disconnect().await?;
         Ok(())
     }
+
+    async fn live_conn() -> Result<Option<mysql_async::Conn>, anyhow::Error> {
+        let Ok(url) = std::env::var("MZ_TEST_MYSQL_URL") else {
+            if mz_ore::env::is_var_truthy("CI") {
+                panic!("CI is supposed to run this test but something has gone wrong!");
+            }
+            return Ok(None);
+        };
+        Ok(Some(
+            mysql_async::Conn::new(mysql_async::Opts::from_url(&url)?).await?,
+        ))
+    }
+
+    /// Creates `{db}.t` with an `id` key column and one block of keys per
+    /// `(sql_prefix_expr, count)`.
+    #[allow(clippy::disallowed_methods)]
+    async fn setup_blocks(
+        conn: &mut mysql_async::Conn,
+        db: &str,
+        collate: &str,
+        blocks: &[(&str, usize)],
+    ) -> Result<(), anyhow::Error> {
+        conn.query_drop(format!("DROP DATABASE IF EXISTS {db}"))
+            .await?;
+        conn.query_drop(format!("CREATE DATABASE {db}")).await?;
+        conn.query_drop(format!(
+            "CREATE TABLE {db}.t (id VARCHAR(32) {collate} PRIMARY KEY NOT NULL)"
+        ))
+        .await?;
+        for (prefix, n) in blocks {
+            conn.query_drop(format!(
+                "INSERT INTO {db}.t \
+                 WITH RECURSIVE n AS (SELECT 1 x UNION ALL SELECT x+1 FROM n WHERE x < {n}) \
+                 SELECT CONCAT({prefix}, LPAD(x, 5, '0')) FROM n",
+            ))
+            .await?;
+        }
+        conn.query_drop(format!("ANALYZE TABLE {db}.t")).await?;
+        Ok(())
+    }
+
+    /// The walk must build an inverted range and fail with
+    /// [`MySqlError::MissingRowEstimate`].
+    async fn expect_missing_estimate(
+        conn: &mut mysql_async::Conn,
+        db: &'static str,
+        rows: u64,
+    ) -> Result<(), anyhow::Error> {
+        let table = QualifiedTableRef {
+            schema_name: db,
+            table_name: "t",
+        };
+        match partition_table(conn, table, "id", 4, rows, 10, 10_000).await {
+            Err(MySqlError::MissingRowEstimate {
+                qualified_table_name,
+                ..
+            }) => assert_eq!(qualified_table_name, format!("{db}.t")),
+            other => panic!("expected MissingRowEstimate, got {other:?}"),
+        }
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop(format!("DROP DATABASE {db}")).await?;
+        Ok(())
+    }
+
+    /// Czech `ch` collates as one letter between `h` and `i`, so a key
+    /// starting with `ch` truncates to a `c` prefix that sorts below the
+    /// range it was found in.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // needs a network connection
+    async fn test_live_contraction_breaks_walk() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = live_conn().await? else {
+            return Ok(());
+        };
+        let facts: Option<(i64, i64, i64)> = conn
+            .exec_first(
+                "SELECT _utf8mb4'ch' COLLATE utf8mb4_cs_0900_ai_ci > 'h',
+                        _utf8mb4'c'  COLLATE utf8mb4_cs_0900_ai_ci < 'h',
+                        _utf8mb4'chleba' COLLATE utf8mb4_cs_0900_ai_ci LIKE 'c%'",
+                (),
+            )
+            .await?;
+        assert_eq!(facts, Some((1, 1, 1)));
+
+        setup_blocks(
+            &mut conn,
+            "mz_contraction_test",
+            "COLLATE utf8mb4_cs_0900_ai_ci",
+            &[
+                ("'duha'", 300),
+                ("'hora'", 300),
+                ("'chleba'", 600),
+                ("'ibis'", 300),
+            ],
+        )
+        .await?;
+        expect_missing_estimate(&mut conn, "mz_contraction_test", 1500).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// `ß` expands to two collation elements (`ß` = `ss`) under the stock
+    /// default collation, so truncations of `aß...` and `asz...` keys sort
+    /// opposite to the keys themselves.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // needs a network connection
+    async fn test_live_expansion_breaks_walk() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = live_conn().await? else {
+            return Ok(());
+        };
+        // Literal comparisons use the connection collation, pin the column's.
+        let facts: Option<(i64, i64, i64)> = conn
+            .exec_first(
+                "SELECT 'ß'  COLLATE utf8mb4_0900_ai_ci = 'ss',
+                        'as' COLLATE utf8mb4_0900_ai_ci < 'aß',
+                        'assx' COLLATE utf8mb4_0900_ai_ci LIKE 'aß%'",
+                (),
+            )
+            .await?;
+        assert_eq!(facts, Some((1, 1, 0)));
+
+        setup_blocks(
+            &mut conn,
+            "mz_expansion_test",
+            "",
+            &[("'aaa'", 300), ("'aßx'", 600), ("'asz'", 300)],
+        )
+        .await?;
+        expect_missing_estimate(&mut conn, "mz_expansion_test", 1200).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// NUL carries zero collation elements in any position under the default
+    /// collation: a NUL key collates equal to its NUL-free twin, and a
+    /// leading-NUL key truncates to a prefix that sorts below everything.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // needs a network connection
+    async fn test_live_nul_breaks_walk() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = live_conn().await? else {
+            return Ok(());
+        };
+        let facts: Option<(i64, i64, i64, i64)> = conn
+            .exec_first(
+                "SELECT CONCAT('a', CHAR(0 USING utf8mb4)) COLLATE utf8mb4_0900_ai_ci = 'a',
+                        CONCAT('a', CHAR(0 USING utf8mb4), 'b') COLLATE utf8mb4_0900_ai_ci = 'ab',
+                        CONCAT(CHAR(0 USING utf8mb4), 'ab') COLLATE utf8mb4_0900_ai_ci = 'ab',
+                        LENGTH(WEIGHT_STRING(CHAR(0 USING utf8mb4) COLLATE utf8mb4_0900_ai_ci))",
+                (),
+            )
+            .await?;
+        assert_eq!(facts, Some((1, 1, 1, 0)));
+
+        setup_blocks(
+            &mut conn,
+            "mz_nul_test",
+            "",
+            &[
+                ("'aa'", 300),
+                ("'mm'", 300),
+                ("CONCAT(CHAR(0 USING utf8mb4), 'zz')", 600),
+            ],
+        )
+        .await?;
+
+        // NUL twins collate equal, the unique PK rejects the second.
+        conn.exec_drop("INSERT INTO mz_nul_test.t VALUES (?)", ("ab",))
+            .await?;
+        match conn
+            .exec_drop("INSERT INTO mz_nul_test.t VALUES (?)", ("a\0b",))
+            .await
+        {
+            Err(mysql_async::Error::Server(err)) => assert_eq!(err.code, 1062, "{err}"),
+            other => panic!("expected duplicate-key error, got {other:?}"),
+        }
+        conn.exec_drop("DELETE FROM mz_nul_test.t WHERE id = ?", ("ab",))
+            .await?;
+
+        expect_missing_estimate(&mut conn, "mz_nul_test", 1200).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
+    /// Under the PAD SPACE collations that snapshot integration splits,
+    /// a truncation cut after an intermediate space (`'a '`) compares equal
+    /// to its space-free prefix. The walk must still produce ordered
+    /// boundaries.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // needs a network connection
+    async fn test_live_pad_space_cuts_split_cleanly() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = live_conn().await? else {
+            return Ok(());
+        };
+        let facts: Option<(i64, i64, i64)> = conn
+            .exec_first(
+                "SELECT 'ab ' COLLATE utf8mb4_general_ci = 'ab',
+                        'ab ' COLLATE utf8mb4_bin = 'ab',
+                        'a b' COLLATE utf8mb4_general_ci < 'aa'",
+                (),
+            )
+            .await?;
+        assert_eq!(facts, Some((1, 1, 1)));
+
+        for collation in ["utf8mb4_general_ci", "utf8mb4_bin"] {
+            setup_blocks(
+                &mut conn,
+                "mz_pad_test",
+                &format!("COLLATE {collation}"),
+                &[("'a b'", 600), ("'aa'", 300), ("'ax'", 300)],
+            )
+            .await?;
+
+            // Space twins collate equal, the unique PK rejects the second.
+            conn.exec_drop("INSERT INTO mz_pad_test.t VALUES (?)", ("zz",))
+                .await?;
+            match conn
+                .exec_drop("INSERT INTO mz_pad_test.t VALUES (?)", ("zz ",))
+                .await
+            {
+                Err(mysql_async::Error::Server(err)) => assert_eq!(err.code, 1062, "{err}"),
+                other => panic!("expected duplicate-key error, got {other:?}"),
+            }
+            conn.exec_drop("DELETE FROM mz_pad_test.t WHERE id = ?", ("zz",))
+                .await?;
+
+            let table = QualifiedTableRef {
+                schema_name: "mz_pad_test",
+                table_name: "t",
+            };
+            let boundaries = partition_table(&mut conn, table, "id", 4, 1200, 10, 10_000).await?;
+            assert!(
+                !boundaries.is_empty() && boundaries.len() <= 3,
+                "{collation}: {boundaries:?}"
+            );
+            for pair in boundaries.windows(2) {
+                let increasing: Option<i64> = conn
+                    .exec_first(
+                        format!("SELECT ? COLLATE {collation} < ?"),
+                        (&pair[0], &pair[1]),
+                    )
+                    .await?;
+                assert_eq!(increasing, Some(1), "{collation}: {boundaries:?}");
+            }
+        }
+
+        #[allow(clippy::disallowed_methods)]
+        conn.query_drop("DROP DATABASE mz_pad_test").await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
 }
