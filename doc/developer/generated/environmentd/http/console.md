@@ -1,6 +1,6 @@
 ---
 source: src/environmentd/src/http/console.rs
-revision: 964fd6a0ab
+revision: 253293ef87
 ---
 
 # environmentd::http::console

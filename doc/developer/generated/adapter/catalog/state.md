@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/state.rs
-revision: 3713eed996
+revision: fd1dd6e62b
 ---
 
 # adapter::catalog::state
