@@ -5829,7 +5829,6 @@ def workflow_test_zero_downtime_reconfigure(
             key${kafka-ingest.iteration}:value${kafka-ingest.iteration}
 
             $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-            ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
             CREATE CLUSTER cluster1 ( SIZE = 'scale=1,workers=1');
             GRANT ALL ON CLUSTER cluster1 TO materialize;
 
@@ -5946,13 +5945,6 @@ def workflow_test_zero_downtime_reconfigure(
             > SELECT count(*) FROM kafka_tbl
             1000
             """))
-        c.sql(
-            """
-            ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
-            """,
-            port=6877,
-            user="mz_system",
-        )
 
 
 def workflow_test_pending_replica_audit_events(
@@ -5968,11 +5960,10 @@ def workflow_test_pending_replica_audit_events(
     """
     c.up("materialized")
 
-    # Enable the WAIT surface and drive the controller tick down so the (empty)
-    # cluster's reconfiguration converges quickly.
+    # Drive the controller tick down so the (empty) cluster's reconfiguration
+    # converges quickly.
     c.sql(
         """
-        ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true;
         ALTER SYSTEM SET cluster_controller_tick_interval = '5ms';
         CREATE CLUSTER test_audit (SIZE = 'scale=1,workers=1');
         GRANT ALL ON CLUSTER test_audit TO materialize;
@@ -6067,7 +6058,6 @@ def workflow_test_pending_replica_audit_events(
     c.sql(
         """
         DROP CLUSTER test_audit CASCADE;
-        ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration;
         """,
         port=6877,
         user="mz_system",
