@@ -4638,6 +4638,161 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
         ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
 
 
+def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
+    """A read-then-write that reports zero rows must not retire before the write
+    that emptied its selection is readable through the timestamp oracle.
+
+    The OCC path linearizes only its initial `as_of`, and its internal subscribe
+    follows Persist visibility, which runs ahead of the oracle: the group
+    committer appends before it applies the write timestamp. A DELETE or UPDATE
+    can therefore consolidate its selection to empty against state no
+    oracle-timestamped read can reach yet, report zero rows through
+    `NoRowsMatched`, and return. A strict-serializable read issued after that
+    response then still sees the row the response said was not there, and no
+    serial order explains that history.
+
+    The `group_commit_before_apply_write` failpoint holds the winning writer
+    inside that window, the same one a second `environmentd` process opens on
+    its own with no ordering against local Persist visibility.
+    """
+
+    # Every txns-shard write parks here while armed, including the keepalives
+    # that advance table uppers, so this has to be a bounded `sleep` and not a
+    # `pause`: a keepalive would take the `pause` first and the winning DELETE
+    # would never get to append. The window only has to outlast a peek and one
+    # subscribe dataflow installation.
+    failpoint = "group_commit_before_apply_write"
+    arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
+    disarm = f"SET failpoints = '{failpoint}=off'"
+
+    def occ_writes() -> tuple[int, int]:
+        """Read-then-writes the OCC path sequenced, and how many of their write
+        attempts lost the race for their write timestamp."""
+        metric = "mz_occ_read_then_write_retry_count"
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        values = {
+            line.split()[0]: int(float(line.split()[1]))
+            for line in metrics.splitlines()
+            if line.startswith((f"{metric}_count ", f"{metric}_sum "))
+        }
+        return values[f"{metric}_count"], values[f"{metric}_sum"]
+
+    def count(cur: Cursor, key: int) -> int:
+        cur.execute(f"SELECT count(*) FROM t WHERE k = {key}".encode())
+        row = cur.fetchone()
+        assert row is not None
+        return int(row[0])
+
+    with c.override(
+        Materialized(
+            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
+            additional_system_parameter_defaults={
+                "enable_adapter_frontend_occ_read_then_write": "true"
+            },
+        )
+    ):
+        c.up("materialized")
+        c.sql("CREATE TABLE t (k int, v int)")
+
+        # Ask the process rather than the catalog which path it takes: the UPDATE
+        # only reaches the histogram if the frontend sequenced it.
+        sequenced = occ_writes()[0]
+        c.sql("UPDATE t SET v = v + 1 WHERE k = 0")
+        assert occ_writes()[0] > sequenced, (
+            "the UPDATE did not go through the OCC path, so this would exercise the "
+            "coordinator's lock-based path instead"
+        )
+
+        # Connections are opened before the failpoint is armed: starting a session
+        # appends to `mz_sessions`, which parks like any other write.
+        with (
+            c.sql_cursor() as control,
+            c.sql_cursor() as probe,
+            c.sql_cursor() as winner_cur,
+            c.sql_cursor() as session,
+        ):
+            # A serializable read may pick a timestamp past the oracle's read
+            # timestamp, so it sees the winner's append while a strict-serializable
+            # read cannot.
+            probe.execute("SET transaction_isolation = 'serializable'")
+
+            # The UPDATE's subscribe can instead report progress at the table's
+            # pre-append upper, with the row still there, then submit a write,
+            # queue behind the parked committer, and conclude zero rows only once
+            # the oracle has caught up. That proves nothing either way, so such an
+            # attempt is retried; the write conflict count tells the two apart.
+            for attempt in range(1, 4):
+                key = attempt
+                c.sql(f"INSERT INTO t VALUES ({key}, 1)")
+                armed = Event()
+
+                def delete_winner(key: int = key) -> None:
+                    armed.wait()
+                    # Lands its append and advances t's upper, then the committer
+                    # parks before applying that timestamp to the oracle.
+                    winner_cur.execute(f"DELETE FROM t WHERE k = {key}".encode())
+
+                winner = PropagatingThread(target=delete_winner, name="winner")
+                winner.start()
+                control.execute(arm)
+                armed.set()
+
+                # The winner's append is visible in Persist from here on ...
+                deadline = time.time() + 120
+                while count(probe, key) > 0:
+                    assert (
+                        time.time() < deadline
+                    ), "the winning DELETE never became visible in Persist"
+                    time.sleep(0.1)
+                # ... and the oracle cannot serve reads at it yet, which is what
+                # puts us inside the window. This witness says nothing about the
+                # UPDATE, so it stays valid once the zero-row path waits.
+                before = count(session, key)
+
+                conflicts = occ_writes()[1]
+                started = time.time()
+                session.execute(f"UPDATE t SET v = v + 1 WHERE k = {key}".encode())
+                matched = session.rowcount
+                elapsed = time.time() - started
+                after = count(session, key)
+                conflicts = occ_writes()[1] - conflicts
+
+                control.execute(disarm)
+                # `off` does not interrupt a `sleep` under way, so this waits out
+                # the rest of the window.
+                winner.join(timeout=120)
+                assert not winner.is_alive(), "the winning DELETE never finished"
+
+                print(
+                    f"attempt {attempt}: UPDATE matched {matched} row(s) in "
+                    f"{elapsed:.1f}s with {conflicts} write conflict(s); "
+                    f"strict-serializable reads saw {before} row(s) before it and "
+                    f"{after} row(s) after"
+                )
+                assert matched == 0, (
+                    f"the UPDATE matched {matched} row(s) with the winner's delete "
+                    "already visible, so it never took the zero-row path"
+                )
+                if before == 0 or conflicts > 0:
+                    continue
+
+                assert after == 0, (
+                    "the UPDATE reported zero rows matched from state the oracle had "
+                    f"not applied yet, and a strict-serializable read after it saw "
+                    f"{after} row(s): the zero-row response was not linearized against "
+                    "the write that emptied the selection"
+                )
+                break
+            else:
+                raise AssertionError(
+                    "no attempt got the UPDATE to report zero rows from the newer "
+                    "state without first submitting a write, so the window was never "
+                    "observed"
+                )
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
