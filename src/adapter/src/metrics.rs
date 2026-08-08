@@ -21,6 +21,7 @@ pub struct Metrics {
     pub query_total: IntCounterVec,
     pub active_sessions: IntGaugeVec,
     pub active_subscribes: IntGaugeVec,
+    pub active_internal_subscribes: IntGaugeVec,
     pub active_copy_tos: IntGaugeVec,
     pub queue_busy_seconds: Histogram,
     pub determine_timestamp: IntCounterVec,
@@ -85,6 +86,11 @@ impl Metrics {
                 var_labels: ["session_type"],
                 visibility: MetricVisibility::Public,
                 tags: [MetricTag::Environment],
+            )),
+            active_internal_subscribes: registry.register(metric!(
+                name: "mz_active_internal_subscribes",
+                help: "The number of active internal subscribes, which serve frontend-sequenced read-then-write.",
+                var_labels: ["session_type"],
             )),
             active_copy_tos: registry.register(metric!(
                 name: "mz_active_copy_tos",
