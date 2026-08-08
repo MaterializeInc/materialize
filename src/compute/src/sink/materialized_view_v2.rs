@@ -551,6 +551,9 @@ mod write {
         }
     }
 
+    /// The correction buffers owned by the Tokio write task.
+    type Corrections = OkErr<Correction<Row>, Correction<DataflowErrorSer>>;
+
     /// A response from the Tokio write task back to the Timely operator.
     struct WriteResponse {
         /// The written batch, or `None` if the corrections buffer had no updates.
@@ -628,7 +631,7 @@ mod write {
         // Construct corrections on the Timely thread (reads ConfigSet), then move to the
         // Tokio task. The ChannelLogging sends events back to the Timely thread.
         let worker_metrics = sink_metrics.for_worker(worker_id);
-        let mut corrections: OkErr<Correction<Row>, Correction<DataflowErrorSer>> = OkErr::new(
+        let mut corrections: Corrections = OkErr::new(
             Correction::new(
                 sink_metrics.clone(),
                 worker_metrics.clone(),
@@ -685,7 +688,8 @@ mod write {
                     let mut writer = persist_api.open_writer().await;
 
                     while let Some(cmd) = cmd_rx.recv().await {
-                        apply_command(&mut corrections, &mut writer, cmd, &resp_tx).await;
+                        corrections =
+                            apply_command(sink_id, corrections, &mut writer, cmd, &resp_tx).await;
                         // Activate the operator to drain logging events and process batch responses.
                         // ArcActivator suppresses redundant activations, so this is cheap.
                         activator.activate();
@@ -831,19 +835,99 @@ mod write {
         batches_output_stream
     }
 
-    /// Apply a single command to the task state.
+    /// Apply a single command to the task state, returning the correction buffers.
     ///
     /// `desired` updates enter `corrections` as positive contributions and `persist` updates as
     /// negative contributions, so the buffer contains `desired - persist`, i.e. the updates that
     /// need to be written to bring the shard in line with `desired`.
+    ///
+    /// Correction maintenance is CPU-bound and unbounded in duration: an insert can merge chains
+    /// spanning the whole buffer and a consolidation sorts it, neither with an await point in
+    /// between. Running that inline occupies a Tokio worker thread for the entire time, which
+    /// stops it from polling every other task scheduled on it. It therefore runs on a blocking
+    /// thread, which the OS can preempt. The buffers move into the blocking closure and back out
+    /// again because this task owns them exclusively.
     async fn apply_command(
-        corrections: &mut OkErr<Correction<Row>, Correction<DataflowErrorSer>>,
+        sink_id: GlobalId,
+        mut corrections: Corrections,
         writer: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         cmd: WriteCommand,
         resp_tx: &mpsc::UnboundedSender<WriteResponse>,
-    ) {
+    ) -> Corrections {
         match cmd {
-            WriteCommand::Batch(mut batch) => {
+            WriteCommand::Batch(batch) => apply_batch(sink_id, corrections, batch).await,
+            WriteCommand::WriteBatch(desc) => {
+                let upper = desc.upper.clone();
+                corrections = mz_ore::task::spawn_blocking(
+                    || operator_name(sink_id, "write::consolidate"),
+                    move || {
+                        corrections.ok.consolidate_before(&upper);
+                        corrections.err.consolidate_before(&upper);
+                        corrections
+                    },
+                )
+                .await;
+
+                // Reading the consolidated updates back only clones them into the batch builder,
+                // which awaits at every part flush, so it stays on the async task. Chain ok and
+                // err correction iterators directly, avoiding an intermediate Vec allocation.
+                let oks = corrections
+                    .ok
+                    .consolidated_updates_before(&desc.upper)
+                    .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
+                let errs = corrections
+                    .err
+                    .consolidated_updates_before(&desc.upper)
+                    .map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
+                let mut updates = oks.chain(errs).peekable();
+
+                if updates.peek().is_none() {
+                    // No corrections to write.
+                    let _ = resp_tx.send(WriteResponse { batch: None });
+                    drop(updates);
+                    return corrections;
+                }
+
+                let batch = writer
+                    .batch(updates, desc.lower, desc.upper)
+                    .await
+                    .expect("valid usage");
+                let proto_batch = batch.into_transmittable_batch();
+                if let Err(err) = resp_tx.send(WriteResponse {
+                    batch: Some(proto_batch),
+                }) {
+                    let batch =
+                        writer.batch_from_transmittable_batch(err.0.batch.expect("just sent"));
+                    batch.delete().await;
+                }
+
+                corrections
+            }
+        }
+    }
+
+    /// Apply a coalesced batch of updates to the correction buffers, on a blocking thread.
+    ///
+    /// See [`apply_command`] for why this work must not run on a Tokio worker thread.
+    async fn apply_batch(
+        sink_id: GlobalId,
+        mut corrections: Corrections,
+        mut batch: BatchUpdates,
+    ) -> Corrections {
+        mz_ore::task::spawn_blocking(
+            || operator_name(sink_id, "write::apply_batch"),
+            move || {
+                // Stands in for the page-in storm this code produces when the process is under
+                // memory pressure: the buffer's chunks come back one blocking read at a time, from
+                // inside the sorts and merges below, where no await point can be placed. The
+                // failpoint's `sleep` action blocks its thread the same way, so it has to sit on
+                // the same side of the `spawn_blocking` boundary as the work it stands for.
+                //
+                // NOTE: activate it with the `FAILPOINTS` env var on the clusterd process, e.g.
+                // `FAILPOINTS=mv_sink_correction=sleep(30000)`. The `failpoints` session variable
+                // only reaches environmentd, never a cluster.
+                fail::fail_point!("mv_sink_correction");
+
                 // Apply the same logical sequence of operations that the per-chunk commands
                 // used to: positive desired inserts, negated persist inserts, then optional
                 // frontier advancement and forced consolidation.
@@ -860,8 +944,8 @@ mod write {
                     corrections.err.insert_negated(&mut batch.persist_err);
                 }
                 if let Some(frontier) = batch.persist_frontier {
-                    // We will only emit times at or after the `persist` frontier, so now is a
-                    // good time to advance the times of stashed updates.
+                    // We will only emit times at or after the `persist` frontier, so now is a good
+                    // time to advance the times of stashed updates.
                     corrections.ok.advance_since(frontier.clone());
                     corrections.err.advance_since(frontier);
                 }
@@ -869,40 +953,10 @@ mod write {
                     corrections.ok.consolidate_at_since();
                     corrections.err.consolidate_at_since();
                 }
-            }
-            WriteCommand::WriteBatch(desc) => {
-                // Chain ok and err correction iterators directly, avoiding an
-                // intermediate Vec allocation.
-                let oks = corrections
-                    .ok
-                    .updates_before(&desc.upper)
-                    .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-                let errs = corrections
-                    .err
-                    .updates_before(&desc.upper)
-                    .map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
-                let mut updates = oks.chain(errs).peekable();
-
-                if updates.peek().is_none() {
-                    // No corrections to write.
-                    let _ = resp_tx.send(WriteResponse { batch: None });
-                    return;
-                }
-
-                let batch = writer
-                    .batch(updates, desc.lower, desc.upper)
-                    .await
-                    .expect("valid usage");
-                let proto_batch = batch.into_transmittable_batch();
-                if let Err(err) = resp_tx.send(WriteResponse {
-                    batch: Some(proto_batch),
-                }) {
-                    let batch =
-                        writer.batch_from_transmittable_batch(err.0.batch.expect("just sent"));
-                    batch.delete().await;
-                }
-            }
-        }
+                corrections
+            },
+        )
+        .await
     }
 
     /// State maintained by the `write` operator on the Timely thread.
@@ -1113,6 +1167,104 @@ mod write {
                 .send(WriteCommand::WriteBatch(desc.clone()))
                 .expect("write task unexpectedly gone");
             Some((desc, cap))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::{Duration, Instant};
+
+        use mz_ore::metrics::MetricsRegistry;
+        use mz_persist_client::cfg::PersistConfig;
+        use mz_persist_client::metrics::Metrics;
+
+        use super::*;
+
+        /// One stall per worker thread would leave scheduling to chance, so oversubscribe: with
+        /// more stalls than workers every worker is guaranteed to pick one up.
+        const WORKER_THREADS: usize = 2;
+        const STALLS: usize = WORKER_THREADS * 2;
+        /// How long a stalled `apply_batch` blocks its thread.
+        const STALL: Duration = Duration::from_millis(1_000);
+        /// The largest tick gap the canary may observe. Generous enough to absorb scheduling noise
+        /// on a loaded CI host, while far below the `STALL` an inline correction pass produces.
+        const MAX_GAP: Duration = Duration::from_millis(500);
+        const TICK: Duration = Duration::from_millis(10);
+
+        fn corrections() -> Corrections {
+            let registry = MetricsRegistry::new();
+            let metrics = Metrics::new(&PersistConfig::new_for_tests(), &registry);
+            let sink_metrics = metrics.sink.clone();
+            let worker_metrics = sink_metrics.for_worker(0);
+            let config = mz_dyncfgs::all_dyncfgs();
+            OkErr::new(
+                Correction::new(sink_metrics.clone(), worker_metrics.clone(), None, &config),
+                Correction::new(sink_metrics, worker_metrics, None, &config),
+            )
+        }
+
+        /// Tick every [`TICK`], recording the largest gap between consecutive ticks in millis.
+        ///
+        /// A gap only opens up if no worker thread was available to poll this task.
+        async fn canary(max_gap_millis: Arc<AtomicU64>) {
+            let mut last = Instant::now();
+            loop {
+                tokio::time::sleep(TICK).await;
+                let now = Instant::now();
+                let gap = u64::try_from(now.duration_since(last).as_millis()).unwrap_or(u64::MAX);
+                max_gap_millis.fetch_max(gap, Ordering::Relaxed);
+                last = now;
+            }
+        }
+
+        /// Correction maintenance must not occupy a Tokio worker thread.
+        ///
+        /// Run inline, a pass over a large buffer pins a worker for its whole duration. Under
+        /// memory pressure it is blocked in the kernel paging chunks back in rather than
+        /// computing, which is why yielding cannot fix it.
+        ///
+        /// Stalls every worker thread inside `apply_batch` and asserts an unrelated task keeps
+        /// getting polled throughout.
+        #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 2))]
+        #[cfg_attr(miri, ignore)] // depends on real thread scheduling
+        async fn correction_work_does_not_stall_the_runtime() {
+            let max_gap_millis = Arc::new(AtomicU64::new(0));
+            let _canary = mz_ore::task::spawn(|| "canary", canary(Arc::clone(&max_gap_millis)))
+                .abort_on_drop();
+
+            // Let the canary settle, then discard the gaps observed while it did.
+            tokio::time::sleep(TICK * 5).await;
+            max_gap_millis.store(0, Ordering::Relaxed);
+
+            let action = format!("sleep({})", STALL.as_millis());
+            fail::cfg("mv_sink_correction", &action).expect("valid failpoint action");
+
+            let stalls: Vec<_> = (0..STALLS)
+                .map(|i| {
+                    // A forced consolidation is the operation that hurt: it sweeps the whole
+                    // buffer, so its cost is unbounded by the size of the incoming batch.
+                    let batch = BatchUpdates {
+                        force_consolidation: true,
+                        ..BatchUpdates::new()
+                    };
+                    let sink_id = GlobalId::User(u64::cast_from(i));
+                    mz_ore::task::spawn(|| "stall", apply_batch(sink_id, corrections(), batch))
+                })
+                .collect();
+            for stall in stalls {
+                let _ = stall.await;
+            }
+
+            fail::remove("mv_sink_correction");
+
+            let max_gap = Duration::from_millis(max_gap_millis.load(Ordering::Relaxed));
+            assert!(
+                max_gap < MAX_GAP,
+                "runtime went unpolled for {max_gap:?}, so correction work is occupying a \
+                 worker thread",
+            );
         }
     }
 }
