@@ -56,6 +56,8 @@ core_affinity = "0.8.3"
 
 [dev-dependencies]
 criterion.workspace = true
+libc.workspace = true
+mz-secrets = { path = "../secrets" }
 mz-storage-types = { path = "../storage-types", features = ["proptest"] }
 proptest.workspace = true
 rand.workspace = true

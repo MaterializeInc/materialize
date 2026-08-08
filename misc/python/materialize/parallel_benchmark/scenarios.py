@@ -1274,3 +1274,119 @@ class StagingBench(Scenario):
             ],
             conn_pool_size=100,
         )
+
+
+class HydrationChurn(Action):
+    """Continuously builds a heavy maintained materialized view, forces it to
+    hydrate, then drops it, keeping the replica's maintenance runtime busy.
+
+    `SELECT count(*)` blocks until the view has hydrated, so each iteration does
+    real hydration work on the maintenance workers before the drop. Runs in a
+    `ClosedLoop`, which is single-threaded, so a fixed view name is safe.
+    """
+
+    def __init__(self, conn_info: PgConnInfo, name: str, view_sql: str):
+        self.conn_info = conn_info
+        self.name = name
+        self.view_sql = view_sql
+        self.conn = conn_info.connect()
+        self.conn.autocommit = True
+        self.cur = self.conn.cursor()
+
+    def _run(self, conns: queue.Queue):
+        self.cur.execute(
+            f"CREATE MATERIALIZED VIEW {self.name} AS {self.view_sql}".encode()
+        )
+        # Force hydration to complete before we drop, so the maintenance runtime
+        # actually does the build work rather than cancelling it immediately.
+        self.cur.execute(f"SELECT count(*) FROM {self.name}".encode())
+        self.cur.fetchall()
+        self.cur.execute(f"DROP MATERIALIZED VIEW {self.name}".encode())
+
+    def __str__(self) -> str:
+        return f"hydration churn {self.name}"
+
+
+class TwoRuntimeReadIsolation(Scenario):
+    """Measures whether peeks stay fast while the replica's maintenance runtime
+    is saturated by continuous dataflow hydration.
+
+    Run the same scenario twice and compare the SELECT p50/p99/qps:
+        bin/mzcompose --find parallel-benchmark run default \
+            --scenario TwoRuntimeReadIsolation \
+            --this-params enable_two_runtime_compute=true
+        bin/mzcompose --find parallel-benchmark run default \
+            --scenario TwoRuntimeReadIsolation \
+            --this-params enable_two_runtime_compute=false
+
+    With two runtimes ON the interactive runtime serves the peeks off the shared
+    arrangements, isolated from the maintenance workers hydrating the churn MVs.
+    OFF, the peeks contend with hydration on the same workers.
+
+    The peeks run open-loop at a fixed rate, so a serving runtime that cannot
+    keep up under contention accumulates queue-wait latency the reported p50/p99
+    capture. That queue backlog is the signal: it is exactly what a user issuing
+    reads at a steady rate experiences when the maintenance runtime steals the
+    serving capacity.
+    """
+
+    def __init__(self, c: Composition, conn_infos: dict[str, PgConnInfo]):
+        mz = conn_infos["materialized"]
+        # Heavy enough that one build takes real CPU, small enough that two
+        # concurrent churn loops do not exhaust memory.
+        churn_view_sql = "SELECT a, count(*) AS c FROM big GROUP BY a"
+        self.init(
+            [
+                TdPhase("""
+                    > DROP TABLE IF EXISTS hot CASCADE
+                    > DROP TABLE IF EXISTS big CASCADE
+
+                    # The peek target: a small indexed table, pre-hydrated.
+                    > CREATE TABLE hot (k int, v int)
+                    > INSERT INTO hot SELECT n, n * 2 FROM generate_series(1, 100000) AS n
+                    > CREATE INDEX hot_k ON hot (k)
+
+                    # The contention source: a large table churned into heavy MVs.
+                    > CREATE TABLE big (a int, b int)
+                    > INSERT INTO big SELECT n, n % 1000 FROM generate_series(1, 1000000) AS n
+
+                    # Wait for the hot index to hydrate before measuring.
+                    > SELECT v FROM hot WHERE k = 42
+                    84
+                    """),
+                LoadPhase(
+                    duration=120,
+                    actions=[
+                        # Measured: fast-path index point lookup.
+                        OpenLoop(
+                            action=ReuseConnQuery(
+                                "SELECT v FROM hot WHERE k = 42",
+                                mz,
+                                strict_serializable=False,
+                            ),
+                            dist=Periodic(per_second=50),
+                            report_regressions=False,
+                        ),
+                        # Measured: slow-path range scan + reduce peek (more
+                        # sensitive to serving-runtime contention).
+                        OpenLoop(
+                            action=ReuseConnQuery(
+                                "SELECT count(*) FROM hot WHERE k < 50000",
+                                mz,
+                                strict_serializable=False,
+                            ),
+                            dist=Periodic(per_second=12),
+                            report_regressions=False,
+                        ),
+                    ]
+                    + [
+                        # Contention: continuous hydration churn on the same replica.
+                        ClosedLoop(
+                            action=HydrationChurn(mz, f"churn_{i}", churn_view_sql),
+                            report_regressions=False,
+                        )
+                        for i in range(2)
+                    ],
+                ),
+            ],
+        )

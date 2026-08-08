@@ -26,13 +26,14 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_TWO_RUNTIME_COMPUTE,
+    TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
 use mz_orchestrator::{
-    CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service, ServiceConfig,
-    ServiceEvent, ServicePort,
+    CpuLimit, DiskLimit, LabelSelectionLogic, LabelSelector, MemoryLimit, Service,
+    ServiceAssignments, ServiceConfig, ServiceEvent, ServicePort,
 };
 use mz_ore::cast::CastInto;
 use mz_ore::task::{self, AbortOnDropHandle};
@@ -710,6 +711,10 @@ impl Controller {
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
             ..Default::default()
         };
+        // Whether to launch a second, interactive compute timely runtime alongside the primary
+        // one. `interactive_compute_arg` and `interactive_compute_port` must be gated on the same
+        // flag: `peer_addresses` panics if asked for a port that isn't in `ServiceConfig::ports`.
+        let two_runtime = ENABLE_TWO_RUNTIME_COMPUTE.get(&self.dyncfg);
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -728,6 +733,35 @@ impl Controller {
                 let request = ByteSize::b(limit.as_u64() - 1);
                 MemoryLimit(request)
             });
+        }
+
+        let mut ports = vec![
+            ServicePort {
+                name: "storagectl".into(),
+                port_hint: 2100,
+            },
+            // To simplify the changes to tests, the port
+            // chosen here is _after_ the compute ones.
+            // TODO(petrosagg): fix the numerical ordering here
+            ServicePort {
+                name: "storage".into(),
+                port_hint: 2103,
+            },
+            ServicePort {
+                name: "computectl".into(),
+                port_hint: 2101,
+            },
+            ServicePort {
+                name: "compute".into(),
+                port_hint: 2102,
+            },
+            ServicePort {
+                name: "internal-http".into(),
+                port_hint: 6878,
+            },
+        ];
+        if let Some(interactive_port) = interactive_compute_port(two_runtime) {
+            ports.push(interactive_port);
         }
 
         let service = self.orchestrator.ensure_service(
@@ -774,6 +808,14 @@ impl Controller {
                             compute_timely_config.to_string(),
                         ),
                     ];
+                    if let Some(interactive_arg) = interactive_compute_arg(
+                        two_runtime,
+                        location.allocation.workers.get(),
+                        &compute_proto_timely_config,
+                        &assigned,
+                    ) {
+                        args.push(interactive_arg);
+                    }
                     if let Some(aws_external_id_prefix) = &aws_external_id_prefix {
                         args.push(format!(
                             "--aws-external-id-prefix={}",
@@ -819,31 +861,7 @@ impl Controller {
                     args.extend(secrets_args.clone());
                     args
                 }),
-                ports: vec![
-                    ServicePort {
-                        name: "storagectl".into(),
-                        port_hint: 2100,
-                    },
-                    // To simplify the changes to tests, the port
-                    // chosen here is _after_ the compute ones.
-                    // TODO(petrosagg): fix the numerical ordering here
-                    ServicePort {
-                        name: "storage".into(),
-                        port_hint: 2103,
-                    },
-                    ServicePort {
-                        name: "computectl".into(),
-                        port_hint: 2101,
-                    },
-                    ServicePort {
-                        name: "compute".into(),
-                        port_hint: 2102,
-                    },
-                    ServicePort {
-                        name: "internal-http".into(),
-                        port_hint: 6878,
-                    },
-                ],
+                ports,
                 cpu_limit: location.allocation.cpu_limit,
                 cpu_request: location.allocation.cpu_request,
                 memory_limit,
@@ -1038,5 +1056,103 @@ impl FromStr for ReplicaServiceName {
             // TODO: remove this in the next version of Materialize.
             generation: caps.get(3).map_or("0", |m| m.as_str()).parse().unwrap(),
         })
+    }
+}
+
+/// The `ServicePort` clusterd needs to advertise the second, interactive compute timely
+/// runtime, if [`ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added to `ServiceConfig::ports`
+/// together with the `--interactive-compute-timely-config` argument produced by
+/// [`interactive_compute_arg`]: `ServiceAssignments::peer_addresses` panics if asked for a port
+/// name that isn't present in `ServiceConfig::ports`.
+fn interactive_compute_port(two_runtime: bool) -> Option<ServicePort> {
+    two_runtime.then(|| ServicePort {
+        name: "compute-interactive".into(),
+        port_hint: 2104,
+    })
+}
+
+/// The `--interactive-compute-timely-config` clusterd argument for the second, interactive
+/// compute timely runtime, if [`ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added together with
+/// the `compute-interactive` port from [`interactive_compute_port`]: this reads the peer
+/// addresses for that port name, which panics if the port wasn't advertised.
+fn interactive_compute_arg(
+    two_runtime: bool,
+    workers: usize,
+    compute_proto_timely_config: &TimelyConfig,
+    assigned: &ServiceAssignments,
+) -> Option<String> {
+    two_runtime.then(|| {
+        let interactive_compute_timely_config = TimelyConfig {
+            workers,
+            addresses: assigned.peer_addresses("compute-interactive"),
+            ..compute_proto_timely_config.clone()
+        };
+        format!(
+            "--interactive-compute-timely-config={}",
+            interactive_compute_timely_config.to_string(),
+        )
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_cluster_client::client::TimelyConfig;
+    use mz_orchestrator::{ServiceAssignments, ServicePort};
+
+    use super::{interactive_compute_arg, interactive_compute_port};
+
+    fn assignments_with_compute_interactive<'a>(
+        listen_addrs: &'a BTreeMap<String, String>,
+        peer_addrs: &'a [BTreeMap<String, String>],
+    ) -> ServiceAssignments<'a> {
+        ServiceAssignments {
+            listen_addrs,
+            peer_addrs,
+        }
+    }
+
+    #[mz_ore::test]
+    fn interactive_compute_port_only_when_two_runtime_enabled() {
+        assert_eq!(
+            interactive_compute_port(true),
+            Some(ServicePort {
+                name: "compute-interactive".into(),
+                port_hint: 2104,
+            }),
+        );
+        assert_eq!(interactive_compute_port(false), None);
+    }
+
+    #[mz_ore::test]
+    fn interactive_compute_arg_only_when_two_runtime_enabled() {
+        let listen_addrs = BTreeMap::new();
+        let peer_addrs = vec![BTreeMap::from([(
+            "compute-interactive".to_string(),
+            "127.0.0.1:2104".to_string(),
+        )])];
+        let assigned = assignments_with_compute_interactive(&listen_addrs, &peer_addrs);
+        let proto = TimelyConfig {
+            arrangement_exert_proportionality: 42,
+            ..Default::default()
+        };
+
+        let arg = interactive_compute_arg(true, 4, &proto, &assigned)
+            .expect("arg present when two_runtime is enabled");
+        assert!(arg.starts_with("--interactive-compute-timely-config="));
+        let json = arg
+            .strip_prefix("--interactive-compute-timely-config=")
+            .unwrap();
+        let parsed: TimelyConfig = json.parse().unwrap();
+        assert_eq!(parsed.workers, 4);
+        assert_eq!(parsed.addresses, vec!["127.0.0.1:2104".to_string()]);
+        assert_eq!(parsed.arrangement_exert_proportionality, 42);
+
+        assert_eq!(
+            interactive_compute_arg(false, 4, &proto, &assigned),
+            None,
+            "no arg when two_runtime is disabled"
+        );
     }
 }
