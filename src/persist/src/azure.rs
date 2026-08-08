@@ -36,6 +36,10 @@ use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
 /// Configuration for opening an [AzureBlob].
+///
+/// NOTE: cloning shares the underlying client and therefore its HTTP
+/// connection pool. Connection-pool isolation (as hedged gets require, see
+/// [crate::hedge]) needs a fresh [AzureBlobConfig::new].
 #[derive(Clone, Debug)]
 pub struct AzureBlobConfig {
     metrics: S3BlobMetrics,

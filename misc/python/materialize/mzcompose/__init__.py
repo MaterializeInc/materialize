@@ -48,7 +48,15 @@ DEFAULT_MZ_VOLUMES = [
 # a new feature causes benchmarks to become flaky, consider that this can also
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
-ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
+ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {
+    # Benchmarks measure the intended production configuration. For hedged
+    # blob gets that is the planned enablement state (on, at production
+    # tuning), not the CI-wide coverage tuning below, whose short delay
+    # would add duplicate fetches to any measured get slower than it.
+    "persist_blob_hedged_get_enabled": "true",
+    "persist_blob_hedged_get_delay": "2s",
+    "persist_blob_hedged_get_budget_ratio": "0.01",
+}
 
 
 def get_minimal_system_parameters(
@@ -188,6 +196,19 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_source_fetch_concurrency", "1", ["1", "2", "8", "16"]
+        ),
+        VariableSystemParameter(
+            "persist_blob_hedged_get_enabled", "true", ["true", "false"]
+        ),
+        # 10ms (vs the 2s production default) makes hedges actually fire in
+        # every CI run; 0s makes every blob get hedge under randomized seeds.
+        VariableSystemParameter(
+            "persist_blob_hedged_get_delay", "10ms", ["0s", "10ms", "2s"]
+        ),
+        # Full refill so the delay=0s variant keeps hedging instead of
+        # draining the budget after the first few gets.
+        VariableSystemParameter(
+            "persist_blob_hedged_get_budget_ratio", "1.0", ["1.0", "0.01"]
         ),
         # -----
         # Others (ordered by name),
@@ -643,6 +664,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "persist_blob_operation_attempt_timeout",
     "persist_blob_connect_timeout",
     "persist_blob_read_timeout",
+    "persist_blob_hedged_get_max_concurrent",
+    "persist_blob_hedged_get_warm_interval",
     "persist_stats_collection_enabled",
     "persist_stats_filter_enabled",
     "persist_stats_budget_bytes",
