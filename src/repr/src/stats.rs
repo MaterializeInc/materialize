@@ -96,6 +96,28 @@ pub fn fixed_stats_from_column(
     .into()
 }
 
+/// Persist computes float column bounds in IEEE-754 total order, in which
+/// negative NaNs sort below -Infinity. `Datum` floats compare via
+/// `OrderedFloat`, which ranks every NaN (of either sign) above every other
+/// value. A lower bound that is a negative NaN therefore admits both NaNs
+/// (the largest values under `Datum` ordering) and ordinary values up to
+/// `upper`, a set no `Datum` interval can bound, so no bounds are returned
+/// and the column is treated as unconstrained. The one exception is an upper
+/// bound that is also a negative NaN, which under total order means every
+/// value in the column is a NaN.
+///
+/// NOTE: the widening `ResultSpec::value_between` does for inverted bounds is
+/// not sufficient here. A part holding both `-NaN` and `+NaN` decodes to the
+/// non-inverted bounds `(NaN, NaN)`, which would wrongly claim the part holds
+/// nothing but NaN. Only this layer still sees the NaN signs.
+fn float_bounds<F: num_traits::Float>(lower: F, upper: F) -> Option<(F, F)> {
+    if lower.is_nan() && lower.is_sign_negative() && !(upper.is_nan() && upper.is_sign_negative()) {
+        None
+    } else {
+        Some((lower, upper))
+    }
+}
+
 /// Returns a `(lower, upper)` bound from the provided [`ColumnStatKinds`], if applicable.
 pub fn col_values<'a>(
     typ: &SqlScalarType,
@@ -145,10 +167,18 @@ pub fn col_values<'a>(
             map_stats(stats, Datum::Int64)
         }
         (SqlScalarType::Float32, ColumnStatKinds::Primitive(F32(stats))) => {
-            map_stats(stats, |x| Datum::Float32(OrderedFloat(x)))
+            let (lower, upper) = float_bounds(stats.lower, stats.upper)?;
+            Some((
+                Datum::Float32(OrderedFloat(lower)),
+                Datum::Float32(OrderedFloat(upper)),
+            ))
         }
         (SqlScalarType::Float64, ColumnStatKinds::Primitive(F64(stats))) => {
-            map_stats(stats, |x| Datum::Float64(OrderedFloat(x)))
+            let (lower, upper) = float_bounds(stats.lower, stats.upper)?;
+            Some((
+                Datum::Float64(OrderedFloat(lower)),
+                Datum::Float64(OrderedFloat(upper)),
+            ))
         }
         (
             SqlScalarType::Numeric { .. },
