@@ -185,6 +185,35 @@ ALTER SYSTEM RESET persist_stats_audit_percent
 ----
 COMPLETE 0
 
+# Leap-second timestamps roll over at parse time (Postgres compat). The
+# chrono leap representation sorted below the next second while the epoch
+# family (extract epoch, casts to mz_timestamp, subtraction, date_bin)
+# counted it at or past that second, breaking the monotonicity contracts
+# pushdown narrows ranges with.
+
+query TT
+SELECT TIMESTAMP '2015-06-30 23:59:60' = TIMESTAMP '2015-07-01 00:00:00', TIMESTAMPTZ '2015-06-30 23:59:60+00' = TIMESTAMPTZ '2015-07-01 00:00:00+00'
+----
+true  true
+
+statement ok
+CREATE TABLE leap (ts timestamp)
+
+statement ok
+INSERT INTO leap VALUES ('2015-06-30 23:59:59.4'), ('2015-06-30 23:59:60'), ('2015-07-01 00:00:00.2')
+
+query I
+SELECT count(*) FROM leap WHERE ts::mz_timestamp = 1435708800000::mz_timestamp
+----
+1
+
+# DATE + TIME rolls a leap second over the same way the timestamp literal
+# does, so the two spellings agree.
+query T
+SELECT DATE '2015-06-30' + TIME '23:59:60' = TIMESTAMP '2015-07-01 00:00:00'
+----
+true
+
 # EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
 
 statement ok

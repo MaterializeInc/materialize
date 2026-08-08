@@ -525,9 +525,36 @@ fn parse_timestamp_inner(
     order: DateOrder,
 ) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
     match parse_timestamp_string(s, order) {
-        Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
-            .map_err(|_| ParseError::out_of_range("timestamp", s)),
+        Ok((date, time, _)) => roll_over_leap_second(date.and_time(time))
+            .ok_or_else(|| ParseError::out_of_range("timestamp", s))
+            .and_then(|dt| {
+                CheckedTimestamp::from_timestamplike(dt)
+                    .map_err(|_| ParseError::out_of_range("timestamp", s))
+            }),
         Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
+    }
+}
+
+/// Postgres normalizes a parsed `:60` second by rolling it into the next
+/// minute. chrono instead keeps a leap-second representation (nanos >= 1e9)
+/// that sorts before the following second while epoch-style conversions
+/// count it at or past that second, which breaks the monotonicity contracts
+/// persist filter pushdown derives ranges with. Roll it over at the parse
+/// boundary so the leap representation never enters a parsed timestamp.
+/// `TIME` keeps the leap representation: rolling it over would wrap to
+/// 00:00:00 and reverse its ordering, and the whole-second leap time is
+/// harmless.
+///
+/// Returns `None` when the rollover overflows chrono's range (a leap second
+/// on the maximum date), which callers report as out of range.
+fn roll_over_leap_second(dt: NaiveDateTime) -> Option<NaiveDateTime> {
+    use chrono::Timelike;
+    match dt.nanosecond().checked_sub(1_000_000_000) {
+        Some(nanos) => dt
+            .with_nanosecond(nanos)
+            .expect("in range")
+            .checked_add_signed(Duration::try_seconds(1).unwrap()),
+        None => Some(dt),
     }
 }
 
@@ -569,7 +596,8 @@ fn parse_timestamptz_inner(
     parse_timestamp_string(s, order)
         .and_then(|(date, time, timezone)| {
             use Timezone::*;
-            let mut dt = date.and_time(time);
+            let mut dt = roll_over_leap_second(date.and_time(time))
+                .ok_or_else(|| "timestamp out of range".to_owned())?;
             let offset = match timezone {
                 FixedOffset(offset) => offset,
                 Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
@@ -2235,6 +2263,17 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    /// Rolling a leap second over must not panic at the timestamp maximum:
+    /// chrono's max date parses, and adding the rollover second overflows.
+    /// The leap value on the max date errors as out of range instead.
+    #[mz_ore::test]
+    fn leap_second_rollover_at_max_date_errors() {
+        assert!(parse_timestamp("262142-12-31 23:59:60").is_err());
+        assert!(parse_timestamptz("262142-12-31 23:59:60+00").is_err());
+        // One second below the maximum still rolls over successfully.
+        assert_ok!(parse_timestamp("262142-12-31 23:59:59"));
+    }
 
     proptest! {
         #[mz_ore::test]
