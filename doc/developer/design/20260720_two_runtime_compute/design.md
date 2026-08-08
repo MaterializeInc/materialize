@@ -12,8 +12,11 @@ through a per-process sharing registry, so nothing is re-materialized.
 
 The feature is gated by the `ENABLE_TWO_RUNTIME_COMPUTE` dyncfg, off in
 production and on by default in CI. With the dyncfg off, a replica runs a single
-`Solo` runtime that is behaviorally identical to a deployment from before this
-work existed.
+`Solo` runtime that takes the same code paths, with no sharing registry, no second
+runtime, and no `role` metric label. It is not a byte-identical deployment: the
+`Rc` to `Arc` spine migration is unconditional and applies with the feature off,
+which the goldens show (`relations.slt` prints batch type names, and the `ii_t4`
+arrangement-size bound moved).
 
 This document is the single design of record. It supersedes the four planning
 and design documents that preceded it in this directory (see [Implementation
@@ -94,12 +97,30 @@ single coordinator thread. For non-introspection reads under load that control
 plane can be the first-order bottleneck, and this work is necessary but not
 sufficient there. See [Known limitations](#known-limitations-and-follow-ups).
 
+Most importantly, it does not remove the dependency on maintenance sealing the
+read timestamp. An interactive peek at `T` waits for the published arrangement's
+`upper` to pass `T`, and that `upper` is the maintenance stream frontier, which
+advances only when the maintenance worker steps. So the win is scoped by
+isolation level:
+
+* Stale and serializable reads take a timestamp at or below an already-sealed
+  frontier. Full win.
+* Strict serializable reads, the default isolation level, take their timestamp at
+  the write frontier, so the peek waits for maintenance to seal it either way.
+  Close to no win.
+
+The flagship introspection-during-hydration case falls under the same rule. The
+logging dataflows sit on the same stalled maintenance workers, so their frontiers
+stall too, and "introspection stays answerable" means answerable with stale data.
+That is the useful property during an incident, but it is a staleness claim, not a
+freshness one.
+
 ### The commitment
 
 Two properties make this close to irreversible.
 
-* The off switch is not a clean exit. `Solo` keeps single-runtime deployments
-  byte-identical, but once users depend on the isolated low-latency reads,
+* The off switch is not a clean exit. `Solo` keeps single-runtime deployments on
+  the same code paths, but once users depend on the isolated low-latency reads,
   turning the feature off is a visible query-latency regression, not a no-op.
 * The capability we lean on will atrophy. Once reads live in the interactive
   runtime, the maintenance runtime no longer needs to accommodate interactivity
@@ -291,12 +312,26 @@ The interactive runtime serves everything through the registry.
   required for correctness. Downstream operators, delta joins especially, are
   rendered assuming the arrangement, its key, and its permutation exist.
   Substituting a collection loses that contract.
+
+  `src/compute/CLAUDE.md` asks that rendering stay generic and that special-interest
+  structures be absorbed elsewhere, so a new `ArrangementFlavor` variant on the
+  generic surface needs a justification. It is not special-interest data, it is a
+  second provenance for the same thing rendering already consumes: an arrangement
+  whose trace handle is `Send` and shared rather than worker-local. The flavor enum
+  is exactly where rendering already discriminates trace provenance, and the
+  alternative, hiding a shared trace behind the existing `Trace` variant, would
+  require the two trace types to unify, which they do not (`dyn TraceReader` is not
+  object safe, so every consumer is monomorphized over the concrete handle). The
+  visible cost is that the linear join now spells nine `(stream, lookup)`
+  combinations so mixed pairs that never occur still type-check. Absorbing the
+  variant is worth revisiting if trace handles ever unify behind one type.
 * **Transient outputs are republished.** A query's own transient output is
   published into the registry, so its result peek is served the same way as any
   other read.
-* **Deferred dataflows.** A query dataflow whose imported dependencies are not yet
-  published is deferred, not built, and built via the unchanged path once all
-  dependencies publish.
+* **Late-bound imports, never a deferred build.** A query dataflow whose imported
+  dependencies are not yet published is built immediately anyway, against a real
+  but empty publication point that a maintenance publisher later adopts in place.
+  Deferring the build would break the deterministic-construction principle above.
 
 ## The multiplexer
 
@@ -305,9 +340,11 @@ two runtimes.
 
 * It routes peeks and one-shot work to interactive, maintained work to
   maintenance, and lifecycle commands to both.
-* It emits exactly one `PeekResponse` per uuid. A cancel and a completion can race
-  for the same peek, so the first terminal response wins and any later duplicate
-  is dropped. State: `live_peeks` tracks in-flight uuids.
+* It does not deduplicate peek responses, and keeps no per-peek state. The
+  exactly-one-`PeekResponse`-per-uuid contract is upheld below and above it, by the
+  per-worker `PartitionedComputeState` in each process and the controller's
+  per-process one. Peeks route only to the interactive runtime, so the multiplexer
+  sees exactly one response per uuid and forwards it verbatim.
 * It forwards each collection's `Frontiers` only from the runtime that owns the
   collection. Both runtimes install the internal logging dataflows, so without
   this rule the interactive runtime's empty copies would regress the controller's
@@ -345,8 +382,7 @@ There is no cross-runtime lease. A process-global panic hook
 before either `serve` call, so a panic on any worker or reader thread of either
 runtime aborts the whole process. A stuck or torn read hold can never outlive the
 process, which is what makes the import hold safe without a lease-expiry
-mechanism. Dropping a still-deferred interactive dataflow cancels cleanly rather
-than panicking.
+mechanism.
 
 ## Configuration
 
@@ -358,6 +394,9 @@ than panicking.
   runtime configured by the `--interactive-compute-timely-config` CLI argument
   (its own worker ports). The dyncfg controls whether the controller passes that
   argument.
+* Flipping the dyncfg changes `ServiceConfig::ports`, so it is not a live toggle:
+  enabling or disabling it rolls every compute replica in the environment. Plan the
+  flip as a fleet restart, not as a configuration nudge.
 
 ## Non-goals
 
@@ -371,6 +410,12 @@ than panicking.
   slow interactive-side reader. The cost, unbounded memory growth for a
   pathological long-lived importer, is accepted for now and recorded as deferred
   work, not silently ignored.
+
+  Note that this decouples maintenance *progress*, not maintenance *memory*.
+  Memory is coupled in both directions: beyond the unbounded queue, an interactive
+  reader's hold forwards into the maintenance trace's compaction, so a clogged
+  interactive step loop delays the hold's release and with it maintenance
+  compaction.
 
 ## Known limitations and follow-ups
 
@@ -406,6 +451,21 @@ than panicking.
   separate introspection channel, rather than turning its local logging back on.
 * **Per-runtime memory attribution.** Arrangement-size introspection does not yet
   attribute memory per runtime, a specific case of the blind spot above.
+* **Publishing an index doubles its reported arrangement size.** With the feature
+  on, a published index reports twice the heap size, capacity, and allocations of
+  the same index with the feature off, while its record and batch counts are
+  unchanged (measured on a 16-worker replica: a one-record index reports 8740 bytes
+  and 132 allocations against 4370 and 66). What is established: it is not the
+  `Rc` to `Arc` migration, since an unpublished materialized-view arrangement is
+  byte-identical either way. It is not a reader, since it is present before anything
+  imports the index. It is not the published chain lagging a spine merge, since
+  re-reading the chain after compaction is forwarded does not change it. The
+  arrangement-size logger identifies batches by address and sums every batch it can
+  still upgrade a `Weak` to, so a second live batch per worker is being held
+  somewhere in the publish path. Whether that is a reporting artifact or real
+  retention decides whether the feature carries a memory regression, so it should be
+  settled before the flag is considered for production. `test/testdrive/introspection-sources.td`
+  carries the raised bound and a pointer to this entry.
 * **Storage introspection is patched into maintenance introspection.** A
   pre-existing coupling, where storage's introspection is merged into the compute
   runtime's introspection, is inherited unchanged by the split. It complicates
@@ -423,8 +483,7 @@ than panicking.
 * A `clusterd-test-driver` workflow drives an interactive query dataflow that
   imports an unpublished maintenance index, scheduled before the index publishes,
   and asserts its result peek resolves correctly only after publication. This
-  proves the defer, build, resolve read path is served off the maintenance
-  worker.
+  proves the bind, fill, resolve read path is served off the maintenance worker.
 * A shared-fate subprocess test verifies a panic in either runtime aborts the
   process.
 * Unit tests cover the sharing primitive and registry, including the single-source
@@ -432,10 +491,14 @@ than panicking.
   invariants, and a join and a reduce over a chain the publisher's spine has merged
   across, read at a stale `as_of`.
 * The `TwoRuntimeReadIsolation` parallel-benchmark scenario measures read latency
-  while the maintenance runtime is saturated by hydration churn. On a box with CPU
-  headroom, two-runtime holds the point-read p50 flat while a single-runtime
-  baseline backlogs. On a CPU-saturated runner both backlog, which is the expected
-  degradation without spare cores.
+  while the maintenance runtime is saturated by hydration churn, at a read rate
+  below the two-runtime serving drain. It reads `strict_serializable=False`, so it
+  measures the sealed-timestamp population the feature helps, not the strict
+  serializable one it does not. On a box with CPU headroom, two-runtime holds the
+  point-read p50 flat while a single-runtime baseline backlogs without bound. Above
+  the two-runtime drain both configurations backlog and the comparison degenerates
+  into a statement about offered rate, which is why the scenario's rate was lowered
+  rather than left where the baseline's percentiles were pure queueing artifacts.
 
 ## Implementation history
 

@@ -16,17 +16,18 @@
 #
 # The maintenance index is created but deliberately left unscheduled before the
 # query dataflow is submitted, so nothing has been published to the shared
-# arrangement-sharing registry yet: the interactive runtime's `CreateDataflow`
-# handler finds the import missing and defers the build (N3) instead of
-# building against a nonexistent arrangement. The query's own `schedule` is
-# then sent immediately, before the maintenance index is scheduled, mirroring
-# what the real compute controller always does for a transient collection
-# (`Instance::maybe_schedule_collection`: scheduled right away, without waiting
-# for its inputs). Only afterward is the maintenance index scheduled, which
-# renders and publishes it; that publication (never a bare poll) wakes the
-# deferred dataflow, which builds and runs. The result peek then returns the
-# correct reduced rows, proving the defer -> build -> resolve path completed off
-# the maintenance worker.
+# arrangement-sharing registry yet. The interactive runtime builds the query
+# dataflow immediately anyway, binding its import to a real but empty publication
+# point (a placeholder) rather than deferring the build, which would break the
+# deterministic construction order every worker must follow. The query's own
+# `schedule` is then sent immediately, before the maintenance index is scheduled,
+# mirroring what the real compute controller always does for a transient
+# collection (`Instance::maybe_schedule_collection`: scheduled right away, without
+# waiting for its inputs). Only afterward is the maintenance index scheduled, which
+# renders it and adopts the placeholder in place; that publication (never a bare
+# poll) wakes the import, which begins producing. The result peek then returns the
+# correct reduced rows, proving the bind -> fill -> resolve path completed off the
+# maintenance worker.
 create-instance
 ----
 ok
@@ -76,22 +77,22 @@ create-dataflow name=interactive-count as-of=0
 ----
 ok
 
-# Scheduled before the maintenance index: the build is still deferred at this
-# point (its import is unpublished), so this `Schedule` races ahead of it,
-# exactly as the real controller's immediate-schedule-of-transient behavior
-# would.
+# Scheduled before the maintenance index: the dataflow is built but its import is
+# still an empty placeholder at this point, so this `Schedule` races ahead of the
+# publication, exactly as the real controller's immediate-schedule-of-transient
+# behavior would.
 schedule id=t4000
 ----
 ok
 
-# Scheduling the maintenance index renders and publishes it, waking the deferred
-# interactive query dataflow via the publication notification.
+# Scheduling the maintenance index renders it and adopts the placeholder, waking
+# the interactive query dataflow's import via the publication notification.
 schedule id=2001
 ----
 ok
 
-# The interactive runtime built and ran the reduce once notified of the
-# publication, off the maintenance worker; the result is the correct count.
+# The interactive runtime ran the reduce once notified of the publication, off the
+# maintenance worker. The result is the correct count.
 peek id=t4000 schema=count_out ts=0
 ----
 3
