@@ -256,7 +256,6 @@ impl<'a> ResultSpec<'a> {
         }
     }
 
-    /// A spec that matches values between the given (non-null) min and max.
     /// A spec for the values between `min` and `max` inclusive.
     ///
     /// Unordered bounds widen to [`ResultSpec::value_all`] instead of collapsing
@@ -1393,11 +1392,18 @@ mod tests {
         ReprScalarType::Bool,
         ReprScalarType::Jsonb,
         NUM_TYPE,
+        ReprScalarType::Int16,
         ReprScalarType::Int32,
+        ReprScalarType::Int64,
+        ReprScalarType::UInt16,
+        ReprScalarType::UInt32,
+        ReprScalarType::UInt64,
         ReprScalarType::Float32,
         ReprScalarType::Float64,
         ReprScalarType::Date,
+        ReprScalarType::Time,
         ReprScalarType::Timestamp,
+        ReprScalarType::TimestampTz,
         ReprScalarType::MzTimestamp,
         ReprScalarType::Interval,
         ReprScalarType::String,
@@ -1419,22 +1425,266 @@ mod tests {
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::IsFalse(IsFalse),
             UnaryFunc::TryParseMonotonicIso8601Timestamp(TryParseMonotonicIso8601Timestamp),
+            // Declared-monotone functions whose claims are otherwise
+            // unvalidated, chosen for fallible or lossy interiors: the
+            // equivalence proptests catch a wrong claim as a spec that fails
+            // to contain the evaluated result.
+            UnaryFunc::NegInt32(NegInt32),
+            UnaryFunc::NegInt64(NegInt64),
+            UnaryFunc::CastInt32ToUint32(CastInt32ToUint32),
+            UnaryFunc::CastInt64ToInt32(CastInt64ToInt32),
+            UnaryFunc::CastInt64ToNumeric(CastInt64ToNumeric(None)),
+            UnaryFunc::CastFloat64ToInt64(CastFloat64ToInt64),
+            UnaryFunc::CastFloat64ToFloat32(CastFloat64ToFloat32),
+            UnaryFunc::CastFloat32ToFloat64(CastFloat32ToFloat64),
+            UnaryFunc::CastNumericToInt64(CastNumericToInt64),
+            UnaryFunc::CeilNumeric(CeilNumeric),
+            UnaryFunc::FloorNumeric(FloorNumeric),
+            UnaryFunc::CastDateToTimestamp(CastDateToTimestamp(None)),
+            UnaryFunc::CastTimestampToTimestampTz(CastTimestampToTimestampTz {
+                from: None,
+                to: None,
+            }),
+            UnaryFunc::CastTimestampTzToTimestamp(CastTimestampTzToTimestamp {
+                from: None,
+                to: None,
+            }),
+            // Conditionally monotone (most significant unit) and its
+            // non-monotone sibling.
+            UnaryFunc::ExtractTimestamp(ExtractTimestamp(DateTimeUnits::Year)),
+            UnaryFunc::ExtractTimestamp(ExtractTimestamp(DateTimeUnits::Month)),
+            UnaryFunc::ExtractTimestampTz(ExtractTimestampTz(DateTimeUnits::Epoch)),
+            UnaryFunc::ExtractTimestampTz(ExtractTimestampTz(DateTimeUnits::Year)),
+            // Batch 2 of the declared-monotone sweep: the remaining cast
+            // families, ordered-domain arithmetic helpers, and functions with
+            // partial domains (errors on part of the range).
+            UnaryFunc::CastBoolToInt32(CastBoolToInt32),
+            UnaryFunc::CastBoolToString(CastBoolToString),
+            UnaryFunc::NegInt16(NegInt16),
+            UnaryFunc::CastInt16ToInt32(CastInt16ToInt32),
+            UnaryFunc::CastInt16ToInt64(CastInt16ToInt64),
+            UnaryFunc::CastInt16ToFloat32(CastInt16ToFloat32),
+            UnaryFunc::CastInt16ToFloat64(CastInt16ToFloat64),
+            UnaryFunc::CastInt16ToUint16(CastInt16ToUint16),
+            UnaryFunc::CastInt16ToNumeric(CastInt16ToNumeric(None)),
+            UnaryFunc::CastInt32ToInt16(CastInt32ToInt16),
+            UnaryFunc::CastInt32ToInt64(CastInt32ToInt64),
+            UnaryFunc::CastInt32ToFloat32(CastInt32ToFloat32),
+            UnaryFunc::CastInt32ToFloat64(CastInt32ToFloat64),
+            UnaryFunc::CastInt32ToUint16(CastInt32ToUint16),
+            UnaryFunc::CastInt32ToNumeric(CastInt32ToNumeric(None)),
+            UnaryFunc::CastInt32ToMzTimestamp(CastInt32ToMzTimestamp),
+            UnaryFunc::CastInt64ToInt16(CastInt64ToInt16),
+            UnaryFunc::CastInt64ToFloat32(CastInt64ToFloat32),
+            UnaryFunc::CastInt64ToFloat64(CastInt64ToFloat64),
+            UnaryFunc::CastInt64ToUint64(CastInt64ToUint64),
+            UnaryFunc::CastInt64ToMzTimestamp(CastInt64ToMzTimestamp),
+            UnaryFunc::CastUint64ToUint32(CastUint64ToUint32),
+            UnaryFunc::CastUint64ToInt32(CastUint64ToInt32),
+            UnaryFunc::CastUint64ToNumeric(CastUint64ToNumeric(None)),
+            UnaryFunc::CastUint64ToMzTimestamp(CastUint64ToMzTimestamp),
+            UnaryFunc::NegFloat32(NegFloat32),
+            UnaryFunc::FloorFloat32(FloorFloat32),
+            UnaryFunc::CastFloat32ToInt32(CastFloat32ToInt32),
+            UnaryFunc::CastFloat32ToNumeric(CastFloat32ToNumeric(None)),
+            UnaryFunc::FloorFloat64(FloorFloat64),
+            UnaryFunc::CastFloat64ToInt32(CastFloat64ToInt32),
+            UnaryFunc::CastFloat64ToUint64(CastFloat64ToUint64),
+            UnaryFunc::CastFloat64ToNumeric(CastFloat64ToNumeric(None)),
+            UnaryFunc::RoundNumeric(RoundNumeric),
+            UnaryFunc::TruncNumeric(TruncNumeric),
+            UnaryFunc::Log10Numeric(Log10Numeric),
+            UnaryFunc::CastNumericToFloat64(CastNumericToFloat64),
+            UnaryFunc::CastNumericToInt32(CastNumericToInt32),
+            UnaryFunc::CastTimestampToDate(CastTimestampToDate),
+            UnaryFunc::CastDateToMzTimestamp(CastDateToMzTimestamp),
+            UnaryFunc::StepMzTimestamp(StepMzTimestamp),
+            // Batch 3: every remaining declared-monotone cast family, the
+            // anti-monotone bitwise complements, and the conditional
+            // most-significant-unit extracts for date and timestamptz.
+            UnaryFunc::CastBoolToStringNonstandard(CastBoolToStringNonstandard),
+            UnaryFunc::CastBoolToInt64(CastBoolToInt64),
+            UnaryFunc::CastInt16ToUint32(CastInt16ToUint32),
+            UnaryFunc::CastInt16ToUint64(CastInt16ToUint64),
+            UnaryFunc::CastInt32ToUint64(CastInt32ToUint64),
+            UnaryFunc::CastInt64ToUint16(CastInt64ToUint16),
+            UnaryFunc::CastInt64ToUint32(CastInt64ToUint32),
+            UnaryFunc::CastUint16ToUint32(CastUint16ToUint32),
+            UnaryFunc::CastUint16ToUint64(CastUint16ToUint64),
+            UnaryFunc::CastUint16ToInt16(CastUint16ToInt16),
+            UnaryFunc::CastUint16ToInt32(CastUint16ToInt32),
+            UnaryFunc::CastUint16ToFloat32(CastUint16ToFloat32),
+            UnaryFunc::CastUint16ToFloat64(CastUint16ToFloat64),
+            UnaryFunc::CastUint16ToNumeric(CastUint16ToNumeric(None)),
+            UnaryFunc::CastUint16ToInt64(CastUint16ToInt64),
+            UnaryFunc::BitNotUint16(BitNotUint16),
+            UnaryFunc::CastUint32ToUint16(CastUint32ToUint16),
+            UnaryFunc::CastUint32ToUint64(CastUint32ToUint64),
+            UnaryFunc::CastUint32ToInt32(CastUint32ToInt32),
+            UnaryFunc::CastUint32ToInt64(CastUint32ToInt64),
+            UnaryFunc::CastUint32ToFloat32(CastUint32ToFloat32),
+            UnaryFunc::CastUint32ToFloat64(CastUint32ToFloat64),
+            UnaryFunc::CastUint32ToNumeric(CastUint32ToNumeric(None)),
+            UnaryFunc::CastUint32ToInt16(CastUint32ToInt16),
+            UnaryFunc::CastUint32ToMzTimestamp(CastUint32ToMzTimestamp),
+            UnaryFunc::BitNotUint32(BitNotUint32),
+            UnaryFunc::CastUint64ToUint16(CastUint64ToUint16),
+            UnaryFunc::CastUint64ToInt16(CastUint64ToInt16),
+            UnaryFunc::CastUint64ToInt64(CastUint64ToInt64),
+            UnaryFunc::CastUint64ToFloat32(CastUint64ToFloat32),
+            UnaryFunc::CastUint64ToFloat64(CastUint64ToFloat64),
+            UnaryFunc::BitNotUint64(BitNotUint64),
+            UnaryFunc::CastFloat32ToInt16(CastFloat32ToInt16),
+            UnaryFunc::CastFloat32ToInt64(CastFloat32ToInt64),
+            UnaryFunc::CastFloat32ToUint16(CastFloat32ToUint16),
+            UnaryFunc::CastFloat32ToUint32(CastFloat32ToUint32),
+            UnaryFunc::CastFloat32ToUint64(CastFloat32ToUint64),
+            UnaryFunc::CastFloat64ToInt16(CastFloat64ToInt16),
+            UnaryFunc::CastFloat64ToUint16(CastFloat64ToUint16),
+            UnaryFunc::CastFloat64ToUint32(CastFloat64ToUint32),
+            UnaryFunc::CastJsonbToInt16(CastJsonbToInt16),
+            UnaryFunc::CastJsonbToInt32(CastJsonbToInt32),
+            UnaryFunc::CastJsonbToInt64(CastJsonbToInt64),
+            UnaryFunc::CastJsonbToFloat32(CastJsonbToFloat32),
+            UnaryFunc::CastJsonbToFloat64(CastJsonbToFloat64),
+            UnaryFunc::CastNumericToInt16(CastNumericToInt16),
+            UnaryFunc::CastNumericToFloat32(CastNumericToFloat32),
+            UnaryFunc::CastNumericToUint16(CastNumericToUint16),
+            UnaryFunc::CastNumericToUint32(CastNumericToUint32),
+            UnaryFunc::CastNumericToUint64(CastNumericToUint64),
+            UnaryFunc::CastTimestampTzToDate(CastTimestampTzToDate),
+            UnaryFunc::CastTimestampTzToMzTimestamp(CastTimestampTzToMzTimestamp),
+            UnaryFunc::DateTruncTimestampTz(DateTruncTimestampTz(DateTimeUnits::Epoch)),
+            UnaryFunc::CastDateToTimestampTz(CastDateToTimestampTz(None)),
+            UnaryFunc::ExtractDate(ExtractDate(DateTimeUnits::Year)),
+            UnaryFunc::ExtractDate(ExtractDate(DateTimeUnits::Day)),
         ]
     };
 
     fn unary_typecheck(func: &UnaryFunc, arg: &ReprColumnType) -> bool {
         use UnaryFunc::*;
         match func {
-            CastNumericToMzTimestamp(_) | NegNumeric(_) => arg.scalar_type == NUM_TYPE,
-            NegFloat64(_) => arg.scalar_type == ReprScalarType::Float64,
-            CastTimestampToMzTimestamp(_) => arg.scalar_type == ReprScalarType::Timestamp,
-            CastJsonbToNumeric(_) | CastJsonbToBool(_) | CastJsonbToString(_) => {
-                arg.scalar_type == ReprScalarType::Jsonb
-            }
+            CastNumericToMzTimestamp(_)
+            | NegNumeric(_)
+            | CastNumericToInt64(_)
+            | CeilNumeric(_)
+            | FloorNumeric(_)
+            | RoundNumeric(_)
+            | TruncNumeric(_)
+            | Log10Numeric(_)
+            | CastNumericToFloat64(_)
+            | CastNumericToInt32(_)
+            | CastNumericToInt16(_)
+            | CastNumericToFloat32(_)
+            | CastNumericToUint16(_)
+            | CastNumericToUint32(_)
+            | CastNumericToUint64(_) => arg.scalar_type == NUM_TYPE,
+            NegFloat64(_)
+            | CastFloat64ToInt64(_)
+            | CastFloat64ToFloat32(_)
+            | FloorFloat64(_)
+            | CastFloat64ToInt32(_)
+            | CastFloat64ToUint64(_)
+            | CastFloat64ToNumeric(_)
+            | CastFloat64ToInt16(_)
+            | CastFloat64ToUint16(_)
+            | CastFloat64ToUint32(_) => arg.scalar_type == ReprScalarType::Float64,
+            CastFloat32ToFloat64(_)
+            | NegFloat32(_)
+            | FloorFloat32(_)
+            | CastFloat32ToInt32(_)
+            | CastFloat32ToNumeric(_)
+            | CastFloat32ToInt16(_)
+            | CastFloat32ToInt64(_)
+            | CastFloat32ToUint16(_)
+            | CastFloat32ToUint32(_)
+            | CastFloat32ToUint64(_) => arg.scalar_type == ReprScalarType::Float32,
+            NegInt16(_)
+            | CastInt16ToInt32(_)
+            | CastInt16ToInt64(_)
+            | CastInt16ToFloat32(_)
+            | CastInt16ToFloat64(_)
+            | CastInt16ToUint16(_)
+            | CastInt16ToNumeric(_)
+            | CastInt16ToUint32(_)
+            | CastInt16ToUint64(_) => arg.scalar_type == ReprScalarType::Int16,
+            NegInt32(_)
+            | CastInt32ToUint32(_)
+            | CastInt32ToInt16(_)
+            | CastInt32ToInt64(_)
+            | CastInt32ToFloat32(_)
+            | CastInt32ToFloat64(_)
+            | CastInt32ToUint16(_)
+            | CastInt32ToNumeric(_)
+            | CastInt32ToMzTimestamp(_)
+            | CastInt32ToUint64(_) => arg.scalar_type == ReprScalarType::Int32,
+            NegInt64(_)
+            | CastInt64ToInt32(_)
+            | CastInt64ToNumeric(_)
+            | CastInt64ToInt16(_)
+            | CastInt64ToFloat32(_)
+            | CastInt64ToFloat64(_)
+            | CastInt64ToUint64(_)
+            | CastInt64ToMzTimestamp(_)
+            | CastInt64ToUint16(_)
+            | CastInt64ToUint32(_) => arg.scalar_type == ReprScalarType::Int64,
+            CastUint16ToUint32(_)
+            | CastUint16ToUint64(_)
+            | CastUint16ToInt16(_)
+            | CastUint16ToInt32(_)
+            | CastUint16ToFloat32(_)
+            | CastUint16ToFloat64(_)
+            | CastUint16ToNumeric(_)
+            | CastUint16ToInt64(_)
+            | BitNotUint16(_) => arg.scalar_type == ReprScalarType::UInt16,
+            CastUint32ToUint16(_)
+            | CastUint32ToUint64(_)
+            | CastUint32ToInt32(_)
+            | CastUint32ToInt64(_)
+            | CastUint32ToFloat32(_)
+            | CastUint32ToFloat64(_)
+            | CastUint32ToNumeric(_)
+            | CastUint32ToInt16(_)
+            | CastUint32ToMzTimestamp(_)
+            | BitNotUint32(_) => arg.scalar_type == ReprScalarType::UInt32,
+            CastUint64ToUint32(_)
+            | CastUint64ToInt32(_)
+            | CastUint64ToNumeric(_)
+            | CastUint64ToMzTimestamp(_)
+            | CastUint64ToUint16(_)
+            | CastUint64ToInt16(_)
+            | CastUint64ToInt64(_)
+            | CastUint64ToFloat32(_)
+            | CastUint64ToFloat64(_)
+            | BitNotUint64(_) => arg.scalar_type == ReprScalarType::UInt64,
+            StepMzTimestamp(_) => arg.scalar_type == ReprScalarType::MzTimestamp,
+            CastBoolToInt32(_)
+            | CastBoolToString(_)
+            | CastBoolToStringNonstandard(_)
+            | CastBoolToInt64(_) => arg.scalar_type == ReprScalarType::Bool,
+            CastTimestampToMzTimestamp(_)
+            | CastTimestampToTimestampTz(_)
+            | CastTimestampToDate(_) => arg.scalar_type == ReprScalarType::Timestamp,
+            CastTimestampTzToTimestamp(_)
+            | ExtractTimestampTz(_)
+            | CastTimestampTzToDate(_)
+            | CastTimestampTzToMzTimestamp(_)
+            | DateTruncTimestampTz(_) => arg.scalar_type == ReprScalarType::TimestampTz,
+            CastJsonbToNumeric(_)
+            | CastJsonbToBool(_)
+            | CastJsonbToString(_)
+            | CastJsonbToInt16(_)
+            | CastJsonbToInt32(_)
+            | CastJsonbToInt64(_)
+            | CastJsonbToFloat32(_)
+            | CastJsonbToFloat64(_) => arg.scalar_type == ReprScalarType::Jsonb,
             ExtractTimestamp(_) | DateTruncTimestamp(_) => {
                 arg.scalar_type == ReprScalarType::Timestamp
             }
-            ExtractDate(_) => arg.scalar_type == ReprScalarType::Date,
+            ExtractDate(_)
+            | CastDateToTimestamp(_)
+            | CastDateToMzTimestamp(_)
+            | CastDateToTimestampTz(_) => arg.scalar_type == ReprScalarType::Date,
             Not(_) => arg.scalar_type == ReprScalarType::Bool,
             IsNull(_) => true,
             TryParseMonotonicIso8601Timestamp(_) => arg.scalar_type == ReprScalarType::String,
@@ -1464,6 +1714,52 @@ mod tests {
             DateTruncUnitsTimestamp.into(),
             JsonbGetString.into(),
             JsonbGetStringStringify.into(),
+            // Declared-monotone integer arithmetic: overflow and
+            // division-by-zero are interior error conditions the endpoints
+            // need not reveal.
+            AddInt32.into(),
+            SubInt32.into(),
+            MulInt32.into(),
+            DivInt32.into(),
+            AddInt64.into(),
+            MulInt64.into(),
+            AddFloat32.into(),
+            SubFloat32.into(),
+            // Monotone in the right argument only.
+            TextConcatBinary.into(),
+            // Monotone left, and a declared non-monotone control.
+            AddDateInterval.into(),
+            AddTimeInterval.into(),
+            // Batch 2: remaining ordered-domain arithmetic.
+            SubInt64.into(),
+            DivInt64.into(),
+            SubTimestamp.into(),
+            SubDate.into(),
+            AddInterval.into(),
+            SubInterval.into(),
+            // Batch 3: the int16 and unsigned arithmetic families, remaining
+            // date/time arithmetic, and binary date_bin.
+            AddInt16.into(),
+            SubInt16.into(),
+            MulInt16.into(),
+            DivInt16.into(),
+            AddUint16.into(),
+            SubUint16.into(),
+            MulUint16.into(),
+            DivUint16.into(),
+            AddUint32.into(),
+            SubUint32.into(),
+            MulUint32.into(),
+            DivUint32.into(),
+            AddUint64.into(),
+            SubUint64.into(),
+            MulUint64.into(),
+            DivUint64.into(),
+            SubTime.into(),
+            SubTimestampTz.into(),
+            AddDateTime.into(),
+            SubDateInterval.into(),
+            DateBinTimestamp.into(),
         ]
     }
 
@@ -1496,6 +1792,75 @@ mod tests {
             JsonbGetString(_) | JsonbGetStringStringify(_) => {
                 arg0.scalar_type == ReprScalarType::Jsonb
                     && arg1.scalar_type == ReprScalarType::String
+            }
+            AddInt32(_) | SubInt32(_) | MulInt32(_) | DivInt32(_) => {
+                arg0.scalar_type == ReprScalarType::Int32
+                    && arg1.scalar_type == ReprScalarType::Int32
+            }
+            AddInt64(_) | MulInt64(_) | SubInt64(_) | DivInt64(_) => {
+                arg0.scalar_type == ReprScalarType::Int64
+                    && arg1.scalar_type == ReprScalarType::Int64
+            }
+            SubTimestamp(_) => {
+                arg0.scalar_type == ReprScalarType::Timestamp
+                    && arg1.scalar_type == ReprScalarType::Timestamp
+            }
+            SubDate(_) => {
+                arg0.scalar_type == ReprScalarType::Date && arg1.scalar_type == ReprScalarType::Date
+            }
+            AddInterval(_) | SubInterval(_) => {
+                arg0.scalar_type == ReprScalarType::Interval
+                    && arg1.scalar_type == ReprScalarType::Interval
+            }
+            AddInt16(_) | SubInt16(_) | MulInt16(_) | DivInt16(_) => {
+                arg0.scalar_type == ReprScalarType::Int16
+                    && arg1.scalar_type == ReprScalarType::Int16
+            }
+            AddUint16(_) | SubUint16(_) | MulUint16(_) | DivUint16(_) => {
+                arg0.scalar_type == ReprScalarType::UInt16
+                    && arg1.scalar_type == ReprScalarType::UInt16
+            }
+            AddUint32(_) | SubUint32(_) | MulUint32(_) | DivUint32(_) => {
+                arg0.scalar_type == ReprScalarType::UInt32
+                    && arg1.scalar_type == ReprScalarType::UInt32
+            }
+            AddUint64(_) | SubUint64(_) | MulUint64(_) | DivUint64(_) => {
+                arg0.scalar_type == ReprScalarType::UInt64
+                    && arg1.scalar_type == ReprScalarType::UInt64
+            }
+            SubTime(_) => {
+                arg0.scalar_type == ReprScalarType::Time && arg1.scalar_type == ReprScalarType::Time
+            }
+            SubTimestampTz(_) => {
+                arg0.scalar_type == ReprScalarType::TimestampTz
+                    && arg1.scalar_type == ReprScalarType::TimestampTz
+            }
+            AddDateTime(_) => {
+                arg0.scalar_type == ReprScalarType::Date && arg1.scalar_type == ReprScalarType::Time
+            }
+            SubDateInterval(_) => {
+                arg0.scalar_type == ReprScalarType::Date
+                    && arg1.scalar_type == ReprScalarType::Interval
+            }
+            DateBinTimestamp(_) => {
+                arg0.scalar_type == ReprScalarType::Interval
+                    && arg1.scalar_type == ReprScalarType::Timestamp
+            }
+            AddFloat32(_) | SubFloat32(_) => {
+                arg0.scalar_type == ReprScalarType::Float32
+                    && arg1.scalar_type == ReprScalarType::Float32
+            }
+            TextConcat(_) => {
+                arg0.scalar_type == ReprScalarType::String
+                    && arg1.scalar_type == ReprScalarType::String
+            }
+            AddDateInterval(_) => {
+                arg0.scalar_type == ReprScalarType::Date
+                    && arg1.scalar_type == ReprScalarType::Interval
+            }
+            AddTimeInterval(_) => {
+                arg0.scalar_type == ReprScalarType::Time
+                    && arg1.scalar_type == ReprScalarType::Interval
             }
             _ => false,
         }
@@ -1892,10 +2257,20 @@ mod tests {
         // (see the `prop_filter_map`s in `gen_expr_for_relation`), so the
         // per-run local-reject budget has to be raised well above proptest's
         // default to let enough cases through.
+        // An explicit PROPTEST_CASES (already parsed into the default config)
+        // wins, for long local or nightly runs. The generator rejects at a
+        // roughly fixed rate per case, so the reject budget scales with the
+        // case count.
+        let default = ProptestConfig::default();
+        let cases = if std::env::var_os("PROPTEST_CASES").is_some() {
+            default.cases
+        } else {
+            2048
+        };
         let config = ProptestConfig {
-            cases: 2048,
-            max_local_rejects: 1 << 20,
-            ..ProptestConfig::default()
+            cases,
+            max_local_rejects: cases.saturating_mul(512),
+            ..default
         };
         proptest!(config, |(data in gen_range_expr_data())| {
             check(data)?;

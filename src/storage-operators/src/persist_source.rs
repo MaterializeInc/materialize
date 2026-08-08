@@ -702,6 +702,30 @@ impl PendingWork {
                     }
                 }
                 (SourceData(Err(err)), ()) => {
+                    // A discarded part that turns out to hold an error row is
+                    // as much a pushdown violation as one whose MFP yields
+                    // output: errors must surface regardless of any filter.
+                    // Without this arm the audit was blind to exactly the
+                    // undercounted-err-stats violation class.
+                    if let Some(stats) = &is_filter_pushdown_audit {
+                        sentry::with_scope(
+                            |scope| scope.set_tag("alert_id", "persist_pushdown_audit_violation"),
+                            || {
+                                error!(
+                                    ?stats,
+                                    name,
+                                    ?err,
+                                    "persist filter pushdown correctness violation!"
+                                );
+                                if self.panic_on_audit_failure {
+                                    panic!(
+                                        "persist filter pushdown correctness violation! {}",
+                                        name
+                                    );
+                                }
+                            },
+                        );
+                    }
                     let mut emit_time = *self.capability.time();
                     emit_time.0 = time;
                     session.give((Err(E::from(err)), emit_time, diff.into()));
@@ -1510,18 +1534,21 @@ mod tests {
     /// column stat range that fails to contain a real value). See
     /// database-issues#9656 / PER-50.
     mod filter_pushdown_audit {
+        use mz_expr::func::variadic::{And, Or};
         use mz_expr::func::{
-            AddFloat32, CastNumericToFloat32, CastNumericToMzTimestamp, Eq, Gt, Gte, Lt, Lte,
-            MulFloat32, RoundNumericBinary,
+            AddFloat32, AddTimestampInterval, CastNumericToFloat32, CastNumericToMzTimestamp, Eq,
+            Gt, Gte, IsNull, JsonbGetString, JsonbGetStringStringify, Lt, Lte, MulFloat32,
+            MulFloat64, Not, RoundNumericBinary, TryParseMonotonicIso8601Timestamp,
         };
         use mz_expr::{BinaryFunc, MapFilterProject, MirScalarExpr, UnaryFunc};
         use mz_ore::metrics::MetricsRegistry;
         use mz_persist_types::part::PartBuilder;
         use mz_persist_types::stats::{PartStats, PartStatsMetrics};
+        use mz_repr::adt::interval::Interval;
         use mz_repr::adt::numeric::Numeric;
         use mz_repr::{Diff, ReprScalarType, SqlScalarType};
         use proptest::prelude::*;
-        use proptest::sample::select;
+        use proptest::sample::{Index, select};
 
         use super::*;
 
@@ -1548,10 +1575,10 @@ mod tests {
 
         /// Compute the real production `PartStats` from a set of rows, the same
         /// way the storage read path does.
-        fn build_part_stats(desc: &RelationDesc, rows: &[Row]) -> PartStats {
+        fn build_part_stats(desc: &RelationDesc, rows: &[SourceData]) -> PartStats {
             let mut builder = PartBuilder::new(desc, &UnitSchema);
             for row in rows {
-                builder.push(&SourceData(Ok(row.clone())), &(), 1u64, 1i64);
+                builder.push(row, &(), 1u64, 1i64);
             }
             let part = builder.finish();
             PartStats::new::<SourceData, RelationDesc>(&part, desc).expect("stats")
@@ -1696,7 +1723,8 @@ mod tests {
                     .into_plan()
                     .expect("into_plan");
 
-                let part_stats = build_part_stats(&desc, &rows);
+                let source_rows: Vec<_> = rows.iter().map(|r| SourceData(Ok(r.clone()))).collect();
+                let part_stats = build_part_stats(&desc, &source_rows);
                 let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
                 let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
 
@@ -1732,7 +1760,8 @@ mod tests {
                  rows={rows:?}\nplan={plan:?}",
             );
 
-            let part_stats = build_part_stats(desc, rows);
+            let source_rows: Vec<_> = rows.iter().map(|r| SourceData(Ok(r.clone()))).collect();
+            let part_stats = build_part_stats(desc, &source_rows);
             let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
             let stats = RelationPartStats::new("test", &metrics, desc, &part_stats);
             let decision = filter_result(desc, ResultSpec::anything(), stats, &plan);
@@ -1841,6 +1870,627 @@ mod tests {
                     expr2: Box::new(f64_lit(0.0)),
                 },
             );
+        }
+
+        // Wide-schema variant: multiple column types populated from
+        // `interesting_datums`, a predicate vocabulary that reaches the
+        // interpreter's special cases (jsonb map specs and their unions,
+        // `TryParseMonotonicIso8601Timestamp`, dynamically-monotone
+        // timestamp+interval, the infinity guard on float multiplication),
+        // Err rows, and real mz_now bounds instead of an unconstrained time
+        // range.
+
+        const NUM: usize = 0;
+        const F32: usize = 1;
+        const F64: usize = 2;
+        const STR: usize = 3;
+        const J1: usize = 4;
+        const J2: usize = 5;
+        const BOOL: usize = 6;
+        const TS: usize = 7;
+        const MZTS: usize = 8;
+        const WIDE_ARITY: usize = 9;
+
+        fn wide_scalar_type(col: usize) -> SqlScalarType {
+            match col {
+                NUM => SqlScalarType::Numeric { max_scale: None },
+                F32 => SqlScalarType::Float32,
+                F64 => SqlScalarType::Float64,
+                STR => SqlScalarType::String,
+                J1 | J2 => SqlScalarType::Jsonb,
+                BOOL => SqlScalarType::Bool,
+                TS => SqlScalarType::Timestamp { precision: None },
+                MZTS => SqlScalarType::MzTimestamp,
+                _ => unreachable!("no such column"),
+            }
+        }
+
+        fn wide_repr_type(col: usize) -> ReprScalarType {
+            match col {
+                NUM => ReprScalarType::Numeric,
+                F32 => ReprScalarType::Float32,
+                F64 => ReprScalarType::Float64,
+                STR => ReprScalarType::String,
+                J1 | J2 => ReprScalarType::Jsonb,
+                BOOL => ReprScalarType::Bool,
+                TS => ReprScalarType::Timestamp,
+                MZTS => ReprScalarType::MzTimestamp,
+                _ => unreachable!("no such column"),
+            }
+        }
+
+        fn wide_desc() -> RelationDesc {
+            let mut builder = RelationDesc::builder();
+            for col in 0..WIDE_ARITY {
+                // The bool column stays non-nullable so an all-Err part
+                // exercises the fabricated default bounds a non-nullable
+                // column gets when no Ok row provides a value.
+                let nullable = col != BOOL;
+                builder = builder
+                    .with_column(format!("c{col}"), wide_scalar_type(col).nullable(nullable));
+            }
+            builder.finish()
+        }
+
+        fn wide_pool(col: usize) -> Vec<Datum<'static>> {
+            let mut pool: Vec<_> = wide_scalar_type(col).interesting_datums().collect();
+            if col != BOOL {
+                pool.push(Datum::Null);
+            }
+            pool
+        }
+
+        fn arb_wide_rows() -> impl Strategy<Value = Vec<SourceData>> {
+            let pools: Vec<Vec<Datum<'static>>> = (0..WIDE_ARITY).map(wide_pool).collect();
+            let ok_row = prop::collection::vec(any::<Index>(), WIDE_ARITY).prop_map(move |picks| {
+                let datums = picks
+                    .iter()
+                    .zip(&pools)
+                    .map(|(pick, pool)| pool[pick.index(pool.len())]);
+                SourceData(Ok(Row::pack(datums)))
+            });
+            let err_row = Just(SourceData(Err(DataflowError::from(
+                EvalError::DivisionByZero,
+            ))));
+            let row = prop_oneof![9 => ok_row, 1 => err_row];
+            prop::collection::vec(row, 2..8)
+        }
+
+        fn lit(datum: Datum<'static>, typ: ReprScalarType) -> MirScalarExpr {
+            if datum.is_null() {
+                MirScalarExpr::literal_null(typ)
+            } else {
+                MirScalarExpr::literal_ok(datum, typ)
+            }
+        }
+
+        fn is_null(expr: MirScalarExpr) -> MirScalarExpr {
+            MirScalarExpr::CallUnary {
+                func: UnaryFunc::IsNull(IsNull),
+                expr: Box::new(expr),
+            }
+        }
+
+        fn not(expr: MirScalarExpr) -> MirScalarExpr {
+            MirScalarExpr::CallUnary {
+                func: UnaryFunc::Not(Not),
+                expr: Box::new(expr),
+            }
+        }
+
+        fn binary(func: BinaryFunc, a: MirScalarExpr, b: MirScalarExpr) -> MirScalarExpr {
+            MirScalarExpr::CallBinary {
+                func,
+                expr1: Box::new(a),
+                expr2: Box::new(b),
+            }
+        }
+
+        /// `col <cmp> lit`, with the literal drawn from the same interesting
+        /// pool as the row values, so poison values show up on both sides.
+        fn arb_cmp_col_lit() -> impl Strategy<Value = MirScalarExpr> {
+            (0..WIDE_ARITY, any::<Index>(), comparison_funcs()).prop_map(|(col, pick, cmp)| {
+                let pool = wide_pool(col);
+                let datum = pool[pick.index(pool.len())];
+                binary(
+                    cmp,
+                    MirScalarExpr::column(col),
+                    lit(datum, wide_repr_type(col)),
+                )
+            })
+        }
+
+        fn arb_is_null_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (0..WIDE_ARITY, any::<bool>()).prop_map(|(col, negate)| {
+                let expr = is_null(MirScalarExpr::column(col));
+                if negate { not(expr) } else { expr }
+            })
+        }
+
+        fn jsonb_keys() -> impl Strategy<Value = &'static str> {
+            select(vec!["x", "y", "nested", "absent"])
+        }
+
+        fn jsonb_get(expr: MirScalarExpr, key: &'static str, stringify: bool) -> MirScalarExpr {
+            let func = if stringify {
+                BinaryFunc::JsonbGetStringStringify(JsonbGetStringStringify)
+            } else {
+                BinaryFunc::JsonbGetString(JsonbGetString)
+            };
+            binary(
+                func,
+                expr,
+                MirScalarExpr::literal_ok(Datum::String(key), ReprScalarType::String),
+            )
+        }
+
+        /// `(jN -> 'key') IS NULL` or `(jN ->> 'key') = 'a'`, the shapes that
+        /// consume the Nested specs built from real jsonb map stats.
+        fn arb_jsonb_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (
+                select(vec![J1, J2]),
+                jsonb_keys(),
+                any::<bool>(),
+                any::<bool>(),
+            )
+                .prop_map(|(col, key, stringify, wrap_eq)| {
+                    let get = jsonb_get(MirScalarExpr::column(col), key, stringify);
+                    if wrap_eq {
+                        let typ = if stringify {
+                            ReprScalarType::String
+                        } else {
+                            ReprScalarType::Jsonb
+                        };
+                        binary(BinaryFunc::Eq(Eq), get, lit(Datum::String("a"), typ))
+                    } else {
+                        is_null(get)
+                    }
+                })
+        }
+
+        /// `((CASE WHEN <cond> THEN j1 ELSE j2 END) ->> 'key') IS NULL`, the
+        /// PER-6 shape: unioning the two columns' Nested specs.
+        fn arb_case_jsonb_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (any::<bool>(), jsonb_keys(), any::<bool>()).prop_map(
+                |(cond_is_col, key, stringify)| {
+                    let cond = if cond_is_col {
+                        MirScalarExpr::column(BOOL)
+                    } else {
+                        is_null(MirScalarExpr::column(STR))
+                    };
+                    let case = MirScalarExpr::If {
+                        cond: Box::new(cond),
+                        then: Box::new(MirScalarExpr::column(J1)),
+                        els: Box::new(MirScalarExpr::column(J2)),
+                    };
+                    is_null(jsonb_get(case, key, stringify))
+                },
+            )
+        }
+
+        /// `try_parse_monotonic_iso8601_timestamp(c_str) <cmp> <ts>`, the one
+        /// SpecialUnary implementation in the interpreter.
+        fn arb_iso_parse_pred() -> impl Strategy<Value = MirScalarExpr> {
+            (comparison_funcs(), any::<Index>(), any::<bool>()).prop_map(
+                |(cmp, pick, wrap_null)| {
+                    let parse = MirScalarExpr::CallUnary {
+                        func: UnaryFunc::TryParseMonotonicIso8601Timestamp(
+                            TryParseMonotonicIso8601Timestamp,
+                        ),
+                        expr: Box::new(MirScalarExpr::column(STR)),
+                    };
+                    if wrap_null {
+                        is_null(parse)
+                    } else {
+                        let pool: Vec<_> = SqlScalarType::Timestamp { precision: None }
+                            .interesting_datums()
+                            .collect();
+                        let datum = pool[pick.index(pool.len())];
+                        binary(cmp, parse, lit(datum, ReprScalarType::Timestamp))
+                    }
+                },
+            )
+        }
+
+        /// `(c_ts + <interval>) <cmp> <ts>`, the DynamicMonotone handler:
+        /// day-only intervals are treated as monotone, month-bearing ones must
+        /// stay conservative.
+        fn arb_ts_interval_pred() -> impl Strategy<Value = MirScalarExpr> {
+            let intervals = select(vec![
+                Interval::new(0, 2, 0),
+                Interval::new(0, 0, 3_600_000_000),
+                Interval::new(1, 0, 0),
+                Interval::new(-1, 0, 0),
+            ]);
+            (comparison_funcs(), intervals, any::<Index>()).prop_map(|(cmp, iv, pick)| {
+                let add = binary(
+                    BinaryFunc::AddTimestampInterval(AddTimestampInterval),
+                    MirScalarExpr::column(TS),
+                    lit(Datum::Interval(iv), ReprScalarType::Interval),
+                );
+                let pool: Vec<_> = SqlScalarType::Timestamp { precision: None }
+                    .interesting_datums()
+                    .collect();
+                let datum = pool[pick.index(pool.len())];
+                binary(cmp, add, lit(datum, ReprScalarType::Timestamp))
+            })
+        }
+
+        /// `(c_f64 * <const>) <cmp> <const>`, aimed at the interpreter's
+        /// infinity guard: multiplication is monotone but not
+        /// infinity-monotone.
+        fn arb_float_mul_pred() -> impl Strategy<Value = MirScalarExpr> {
+            let consts = || select(vec![0.0f64, 1.0, -1.0, 1e300, -1e300, f64::INFINITY]);
+            (comparison_funcs(), consts(), consts()).prop_map(|(cmp, a, c)| {
+                let mul = binary(
+                    BinaryFunc::MulFloat64(MulFloat64),
+                    MirScalarExpr::column(F64),
+                    lit(Datum::from(a), ReprScalarType::Float64),
+                );
+                binary(cmp, mul, lit(Datum::from(c), ReprScalarType::Float64))
+            })
+        }
+
+        /// `mz_now() <cmp> <mz_timestamp expr>`, compiled by `into_plan` into
+        /// the temporal lower/upper bounds that `filter_result` checks against
+        /// the part's time range.
+        fn arb_temporal_pred() -> impl Strategy<Value = MirScalarExpr> {
+            let cmps = select(vec![
+                BinaryFunc::Lte(Lte),
+                BinaryFunc::Lt(Lt),
+                BinaryFunc::Gte(Gte),
+                BinaryFunc::Gt(Gt),
+            ]);
+            (cmps, any::<bool>(), any::<Index>()).prop_map(|(cmp, use_col, pick)| {
+                let mz_now = MirScalarExpr::CallUnmaterializable(UnmaterializableFunc::MzNow);
+                let rhs = if use_col {
+                    MirScalarExpr::column(MZTS)
+                } else {
+                    let pool = wide_pool(MZTS);
+                    lit(pool[pick.index(pool.len())], ReprScalarType::MzTimestamp)
+                };
+                binary(cmp, mz_now, rhs)
+            })
+        }
+
+        fn arb_wide_predicate() -> impl Strategy<Value = MirScalarExpr> {
+            let leaf = prop_oneof![
+                arb_cmp_col_lit(),
+                arb_is_null_pred(),
+                arb_jsonb_pred(),
+                arb_case_jsonb_pred(),
+                arb_iso_parse_pred(),
+                arb_ts_interval_pred(),
+                arb_float_mul_pred(),
+                arb_temporal_pred(),
+                // The numeric shapes from the narrow test, aimed at the
+                // fallible-interior mechanisms; both reference column 0.
+                (
+                    select(vec![0i32, 2, -5, 24699]),
+                    f32_consts(),
+                    f32_consts(),
+                    f32_consts(),
+                    comparison_funcs()
+                )
+                    .prop_map(|(s, a, b, c, cmp)| float_arith_predicate(s, a, b, c, cmp)),
+                (select(vec![0u64, 1, 2, 100, u64::MAX]), comparison_funcs())
+                    .prop_map(|(ts, cmp)| cast_mz_timestamp_predicate(ts, cmp)),
+            ]
+            .boxed();
+            prop_oneof![
+                3 => leaf.clone(),
+                1 => (leaf.clone(), leaf.clone(), any::<bool>()).prop_map(|(a, b, is_and)| {
+                    let func = if is_and { And.into() } else { Or.into() };
+                    MirScalarExpr::CallVariadic { func, exprs: vec![a, b] }
+                }),
+                1 => leaf.prop_map(not),
+            ]
+        }
+
+        /// The zero-column count(*) path: when the read desc projects away
+        /// every column and each row is known to pass, `filter_result`
+        /// replaces the part with a synthesized single-row KV instead of
+        /// keeping or discarding it. Errors and filters that can skip rows
+        /// must suppress the substitution.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn zero_column_relation_replace_with() {
+            let desc = RelationDesc::empty();
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+            let ok_rows = vec![
+                SourceData(Ok(Row::default())),
+                SourceData(Ok(Row::default())),
+            ];
+
+            // No predicates, no errors: every row passes, so the part is
+            // replaced with the synthesized KV.
+            let plan = MapFilterProject::new(0).into_plan().expect("into_plan");
+            let part_stats = build_part_stats(&desc, &ok_rows);
+            let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+            let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                matches!(decision, FilterResult::ReplaceWith { .. }),
+                "expected ReplaceWith, got {decision:?}",
+            );
+
+            // An error row must disable the substitution: the part has to be
+            // fetched so the error surfaces.
+            let mixed_rows = vec![
+                SourceData(Ok(Row::default())),
+                SourceData(Err(DataflowError::from(EvalError::DivisionByZero))),
+            ];
+            let part_stats = build_part_stats(&desc, &mixed_rows);
+            let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+            let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                matches!(decision, FilterResult::Keep),
+                "expected Keep, got {decision:?}",
+            );
+
+            // A constant-false filter never keeps anything: plain Discard.
+            let plan = MapFilterProject::new(0)
+                .filter(std::iter::once(MirScalarExpr::literal_ok(
+                    Datum::False,
+                    ReprScalarType::Bool,
+                )))
+                .into_plan()
+                .expect("into_plan");
+            let part_stats = build_part_stats(&desc, &ok_rows);
+            let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+            let decision = filter_result(&desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                matches!(decision, FilterResult::Discard),
+                "expected Discard, got {decision:?}",
+            );
+        }
+
+        /// Schema drift between the stats and the read desc must degrade to
+        /// "no stats", never to a narrower spec.
+        ///
+        /// Two real shapes: a column appended by `ALTER TABLE ... ADD COLUMN`
+        /// after the part was written (present in the read desc, absent from
+        /// the stats), and demand pushdown projecting the read desc down to a
+        /// subset of the written columns (stats carry extra columns).
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn schema_drift_degrades_to_no_stats() {
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+
+            // Part written before ALTER TABLE ... ADD COLUMN b.
+            let write_desc = RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int32.nullable(false))
+                .finish();
+            let rows = vec![SourceData(Ok(Row::pack_slice(&[Datum::Int32(1)])))];
+            let part_stats = build_part_stats(&write_desc, &rows);
+
+            let read_desc = RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int32.nullable(false))
+                .with_column("b", SqlScalarType::Float64.nullable(true))
+                .finish();
+            let stats = RelationPartStats::new("test", &metrics, &read_desc, &part_stats);
+            // Old rows read the new column as null, so `b IS NULL` matches
+            // them and the part must be kept.
+            let plan = MapFilterProject::new(2)
+                .filter(std::iter::once(is_null(MirScalarExpr::column(1))))
+                .into_plan()
+                .expect("into_plan");
+            let decision = filter_result(&read_desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                !matches!(decision, FilterResult::Discard),
+                "part written before ADD COLUMN was discarded: {decision:?}",
+            );
+
+            // Demand pushdown: the read desc is a projection of the written
+            // schema. The surviving column's stats must still line up with it
+            // by name, so a matching filter keeps the part.
+            let write_desc = RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int32.nullable(false))
+                .with_column("b", SqlScalarType::Float64.nullable(true))
+                .finish();
+            let rows = vec![SourceData(Ok(Row::pack_slice(&[
+                Datum::Int32(1),
+                Datum::from(5.0f64),
+            ])))];
+            let part_stats = build_part_stats(&write_desc, &rows);
+
+            let read_desc = RelationDesc::builder()
+                .with_column("b", SqlScalarType::Float64.nullable(true))
+                .finish();
+            let stats = RelationPartStats::new("test", &metrics, &read_desc, &part_stats);
+            let plan = MapFilterProject::new(1)
+                .filter(std::iter::once(binary(
+                    BinaryFunc::Eq(Eq),
+                    MirScalarExpr::column(0),
+                    lit(Datum::from(5.0f64), ReprScalarType::Float64),
+                )))
+                .into_plan()
+                .expect("into_plan");
+            let decision = filter_result(&read_desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                !matches!(decision, FilterResult::Discard),
+                "projected read desc discarded a matching part: {decision:?}",
+            );
+        }
+
+        /// Ground truth, mirroring [`PendingWork::do_work`]: a part yields
+        /// output if any Err row survives `until`, or if the MFP applied to
+        /// any Ok row at its effective time produces anything at all. The
+        /// runtime audit fires on any result from `evaluate`, before the
+        /// additional `until` filtering of the produced rows, so this must
+        /// not post-filter either.
+        fn part_yields_output(
+            plan: &MfpPlan,
+            rows: &[SourceData],
+            eval_time: Timestamp,
+            until: &Antichain<Timestamp>,
+        ) -> bool {
+            if until.less_equal(&eval_time) {
+                return false;
+            }
+            let arena = RowArena::new();
+            let mut row_builder = Row::default();
+            for source_data in rows {
+                match &source_data.0 {
+                    Err(_) => return true,
+                    Ok(row) => {
+                        let mut datums: Vec<Datum> = row.iter().collect();
+                        let mut results = plan.evaluate::<DataflowError, _>(
+                            &mut datums,
+                            &arena,
+                            eval_time,
+                            Diff::from(1),
+                            |time| !until.less_equal(time),
+                            &mut row_builder,
+                        );
+                        if results.next().is_some() {
+                            return true;
+                        }
+                    }
+                }
+            }
+            false
+        }
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow, and decNumber FFI is unsupported
+        fn wide_filter_result_never_discards_matching_part() {
+            fn check(
+                rows: Vec<SourceData>,
+                predicate: MirScalarExpr,
+                eval_time: u64,
+                until: Option<u64>,
+            ) -> Result<(), TestCaseError> {
+                let desc = wide_desc();
+                // Predicate shapes that use mz_now in a way the temporal
+                // filter machinery does not support fail to plan; there is
+                // nothing to check for those.
+                let Ok(plan) = MapFilterProject::new(desc.arity())
+                    .filter(std::iter::once(predicate))
+                    .into_plan()
+                else {
+                    return Ok(());
+                };
+                let eval_time = Timestamp::from(eval_time);
+                let until =
+                    until.map_or_else(Antichain::new, |t| Antichain::from_elem(Timestamp::from(t)));
+
+                let part_stats = build_part_stats(&desc, &rows);
+                let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+                let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+
+                // Mirror the read path: mz_now is bounded by the part's
+                // frontier and the dataflow's until, both inclusive, with an
+                // empty until standing in for MAX. A frontier past the until
+                // is discarded before stats are consulted.
+                let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
+                if eval_time > upper {
+                    return Ok(());
+                }
+                let time_range = ResultSpec::value_between(
+                    Datum::MzTimestamp(eval_time),
+                    Datum::MzTimestamp(upper),
+                );
+                let decision = filter_result(&desc, time_range, stats, &plan);
+
+                if part_yields_output(&plan, &rows, eval_time, &until) {
+                    prop_assert!(
+                        !matches!(decision, FilterResult::Discard),
+                        "filter pushdown discarded a part whose MFP yields output on a real \
+                         row (wrongly-skipped part; the runtime audit would panic).\n\
+                         rows={rows:?}\nplan={plan:?}\neval_time={eval_time}\nuntil={until:?}",
+                    );
+                }
+                Ok(())
+            }
+
+            // The vocabulary is wide (9 columns, 10 predicate shapes), so a
+            // specific poison-value-plus-predicate coincidence is rare per
+            // case. The default 256 cases demonstrably miss known bugs; 4096
+            // still runs in a couple of seconds because each case is cheap.
+            // An explicit PROPTEST_CASES (already parsed into the default
+            // config) wins, for long local or nightly runs.
+            let default = ProptestConfig::default();
+            let cases = if std::env::var_os("PROPTEST_CASES").is_some() {
+                default.cases
+            } else {
+                4096
+            };
+            let config = ProptestConfig { cases, ..default };
+            proptest!(config, |(
+                rows in arb_wide_rows(),
+                predicate in arb_wide_predicate(),
+                eval_time in select(vec![1u64, 5]),
+                until in select(vec![None, Some(1u64), Some(5), Some(8), Some(100)]),
+            )| {
+                check(rows, predicate, eval_time, until)?;
+            });
+        }
+
+        /// Filter decisions are made per part: rows split across several
+        /// parts get an independent decision per part, and a part whose own
+        /// rows yield output must never be discarded, regardless of what the
+        /// sibling parts contain (e.g. a poison value in one part must not
+        /// affect another part's decision, and vice versa).
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow, and decNumber FFI is unsupported
+        fn multi_part_decisions_are_independent() {
+            fn check(
+                parts: Vec<Vec<SourceData>>,
+                predicate: MirScalarExpr,
+                eval_time: u64,
+                until: Option<u64>,
+            ) -> Result<(), TestCaseError> {
+                let desc = wide_desc();
+                let Ok(plan) = MapFilterProject::new(desc.arity())
+                    .filter(std::iter::once(predicate))
+                    .into_plan()
+                else {
+                    return Ok(());
+                };
+                let eval_time = Timestamp::from(eval_time);
+                let until =
+                    until.map_or_else(Antichain::new, |t| Antichain::from_elem(Timestamp::from(t)));
+                let upper = until.as_option().copied().unwrap_or(Timestamp::MAX);
+                if eval_time > upper {
+                    return Ok(());
+                }
+                let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+
+                for rows in &parts {
+                    let part_stats = build_part_stats(&desc, rows);
+                    let stats = RelationPartStats::new("test", &metrics, &desc, &part_stats);
+                    let time_range = ResultSpec::value_between(
+                        Datum::MzTimestamp(eval_time),
+                        Datum::MzTimestamp(upper),
+                    );
+                    let decision = filter_result(&desc, time_range, stats, &plan);
+                    if part_yields_output(&plan, rows, eval_time, &until) {
+                        prop_assert!(
+                            !matches!(decision, FilterResult::Discard),
+                            "filter pushdown discarded a part whose MFP yields output on a \
+                             real row.\nrows={rows:?}\nplan={plan:?}\neval_time={eval_time}\n\
+                             until={until:?}",
+                        );
+                    }
+                }
+                Ok(())
+            }
+
+            let default = ProptestConfig::default();
+            let cases = if std::env::var_os("PROPTEST_CASES").is_some() {
+                default.cases
+            } else {
+                1024
+            };
+            let config = ProptestConfig { cases, ..default };
+            proptest!(config, |(
+                parts in prop::collection::vec(arb_wide_rows(), 2..4),
+                predicate in arb_wide_predicate(),
+                eval_time in select(vec![1u64, 5]),
+                until in select(vec![None, Some(5u64), Some(100)]),
+            )| {
+                check(parts, predicate, eval_time, until)?;
+            });
         }
     }
 }
