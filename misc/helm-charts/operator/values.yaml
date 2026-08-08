@@ -51,6 +51,15 @@ operator:
     # default. Only used if `installV1CRD` is true.
     webhookCertReloadInterval:
 
+  # Status API and UI served by the operator on port 8002. Provides read-only
+  # visibility into managed Materialize environments plus rollout and system
+  # parameter management. Has no authentication, and is only reachable via the
+  # operator's ClusterIP service or a port-forward.
+  api:
+    # -- Whether to expose the orchestratord status API and UI port on the
+    # operator's service.
+    enabled: true
+
   # -- Additional columns to display when printing the Materialize CRD in table format.
   additionalMaterializeCRDColumns: {}
     ## Example:

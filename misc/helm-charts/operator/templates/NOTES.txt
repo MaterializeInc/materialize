@@ -17,5 +17,12 @@ To learn more about the release, try:
   $ helm get all {{ .Release.Name }}
 
 The Materialize operator is now deployed in your cluster. It will manage Materialize environments as defined by custom resources.
+{{- if .Values.operator.api.enabled }}
+
+To open the operator's status UI (unauthenticated, cluster-internal):
+
+  $ kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "materialize-operator.fullname" . }} 8002
+  then visit http://localhost:8002
+{{- end }}
 
 For more information on how to use the operator, please refer to the Materialize documentation.

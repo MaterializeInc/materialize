@@ -303,6 +303,8 @@ spec:
         ports:
         - containerPort: 3100
           name: metrics
+        - containerPort: 8002
+          name: api
         {{- if .Values.operator.args.installV1CRD }}
         - containerPort: 8001
           name: webhook

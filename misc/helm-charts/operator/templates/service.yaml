@@ -7,7 +7,7 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-{{- if .Values.operator.args.installV1CRD -}}
+{{- if or .Values.operator.args.installV1CRD .Values.operator.api.enabled -}}
 ---
 apiVersion: v1
 kind: Service
@@ -20,8 +20,16 @@ spec:
   selector:
     {{- include "materialize-operator.selectorLabels" . | nindent 4 }}
   ports:
+    {{- if .Values.operator.args.installV1CRD }}
     - name: webhook
       protocol: TCP
       port: 8001
       targetPort: 8001
+    {{- end }}
+    {{- if .Values.operator.api.enabled }}
+    - name: api
+      protocol: TCP
+      port: 8002
+      targetPort: 8002
+    {{- end }}
 {{- end -}}

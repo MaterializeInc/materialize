@@ -37,6 +37,14 @@ rules:
   - get
   - list
   - watch
+# Read-only, for the events feed in the status API.
+- apiGroups: [""]
+  resources:
+  - events
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups: ["coordination.k8s.io"]
   resources:
   - leases

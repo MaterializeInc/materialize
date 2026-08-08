@@ -9,6 +9,7 @@
 
 use std::fmt::Display;
 
+pub mod api;
 pub mod controller;
 pub mod gcp_node_upgrade;
 pub mod k8s;

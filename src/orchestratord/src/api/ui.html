@@ -1,0 +1,1207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Materialize Operator</title>
+<style>
+  /*
+    Design tokens mirror the Materialize console's theme (console/src/theme):
+    semantic color roles from light.ts / dark.ts, the type scale from
+    typography.ts, and the StatusPill / Table / Button component shapes. The
+    console defaults to system color mode, so this page does too.
+  */
+  :root {
+    --bg-primary: #FFF;
+    --bg-secondary: #F7F7F8;
+    --bg-tertiary: #ECECEF;
+    --bg-accent: rgba(90, 52, 203, 0.08);
+    --border-primary: #EAE9EC;
+    --border-secondary: #E0DEE3;
+    --fg-primary: #0D1116;
+    --fg-secondary: #66626A;
+    --fg-tertiary: #949197;
+    --accent-purple: #5A34CB;
+    --accent-purple-deep: #472F85;
+    --accent-green: #07a44a;
+    --accent-red: #e50644;
+    --accent-blue: #0093e6;
+    --accent-orange: #d9622b;
+
+    /* StatusPill color schemes, verbatim from console/src/components/StatusPill.tsx */
+    --pill-blue-bg: #ECE5FF;      --pill-blue-fg: #1C1561;      --pill-blue-border: transparent;
+    --pill-lightblue-bg: #DAEEFD; --pill-lightblue-fg: #0D1116; --pill-lightblue-border: #9AC6F2;
+    --pill-green-bg: #DEF7E2;     --pill-green-fg: #00471D;     --pill-green-border: transparent;
+    --pill-yellow-bg: #F5E8CF;    --pill-yellow-fg: #8A5B01;    --pill-yellow-border: transparent;
+    --pill-red-bg: #F5D4D9;       --pill-red-fg: #B80F25;       --pill-red-border: transparent;
+    --pill-gray-bg: #F7F7F8;      --pill-gray-fg: #736F7B;      --pill-gray-border: transparent;
+
+    --callout-error-bg: #FBECEC; --callout-error-border: #F3C0BF;
+    --callout-info-bg: #DAEEFD;  --callout-info-border: #9AC6F2;
+    --callout-warn-bg: #FEFABF;  --callout-warn-border: #EED879;
+
+    --shadow-level1:
+      0px 2px 2px -1px rgba(0, 0, 0, 0.08),
+      0px 0.5px 0.5px -0.25px rgba(0, 0, 0, 0.08),
+      0px 0px 0px 1px rgba(0, 0, 0, 0.08);
+    --shadow-level2:
+      0px 4px 4px -2px rgba(0, 0, 0, 0.06),
+      0px 2px 2px -1px rgba(0, 0, 0, 0.06),
+      0px 1px 1px 0.5px rgba(0, 0, 0, 0.06),
+      0px 0px 0px 1px rgba(0, 0, 0, 0.06);
+    --shadow-focus: 0px 0px 0px 2px hsla(257, 100%, 65%, 0.24);
+
+    --font-ui: Inter, "Inter var", ui-sans-serif, system-ui, -apple-system,
+      BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: "Roboto Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo,
+      Consolas, "Liberation Mono", monospace;
+    /* Tabular, lining figures so counts and versions align down a column. */
+    --numeric: "tnum" on, "lnum" on, "cv06" on, "cv10" on;
+
+    color-scheme: light;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg-primary: #0D1116;
+      --bg-secondary: #232225;
+      --bg-tertiary: #323135;
+      --bg-accent: rgba(181, 154, 255, 0.08);
+      --border-primary: #323135;
+      --border-secondary: #3D3B40;
+      --fg-primary: #F7F7F8;
+      --fg-secondary: #BCB9C0;
+      --fg-tertiary: #807B84;
+      --accent-purple: #7F4EFF;
+      --accent-purple-deep: #B59AFF;
+      --accent-green: #13D461;
+      --accent-red: #fe1d5e;
+      --accent-blue: #1EAEFF;
+      --accent-orange: #d9622b;
+
+      --pill-blue-bg: #2A2440;      --pill-blue-fg: #C8B5FF;      --pill-blue-border: #443A66;
+      --pill-lightblue-bg: #2F324C; --pill-lightblue-fg: #D6E7FA; --pill-lightblue-border: #4E547E;
+      --pill-green-bg: #14331F;     --pill-green-fg: #75FF86;     --pill-green-border: #245733;
+      --pill-yellow-bg: #354E04;    --pill-yellow-fg: #EEEF8F;    --pill-yellow-border: #82840A;
+      --pill-red-bg: #562525;       --pill-red-fg: #FFD1D1;       --pill-red-border: #813737;
+      --pill-gray-bg: #232225;      --pill-gray-fg: #BCB9C0;      --pill-gray-border: #3D3B40;
+
+      --callout-error-bg: #562525; --callout-error-border: #813737;
+      --callout-info-bg: #2F324C;  --callout-info-border: #4E547E;
+      --callout-warn-bg: #354E04;  --callout-warn-border: #82840A;
+
+      --shadow-level1:
+        0px 2px 2px -1px rgba(0, 0, 0, 0.24),
+        0px 0.5px 0.5px -0.25px rgba(0, 0, 0, 0.24),
+        0px 0px 0px 1px rgba(0, 0, 0, 0.24),
+        0px 0px 0px 1px rgba(255, 255, 255, 0.08) inset;
+      --shadow-level2:
+        0px 4px 4px -2px rgba(0, 0, 0, 0.24),
+        0px 2px 2px -1px rgba(0, 0, 0, 0.24),
+        0px 0px 0px 1px rgba(0, 0, 0, 0.24),
+        0px 0px 0px 1px rgba(255, 255, 255, 0.08) inset;
+      --shadow-focus: 0px 0px 0px 2px rgba(181, 154, 255, 0.40);
+
+      color-scheme: dark;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --bg-primary: #0D1116;
+    --bg-secondary: #232225;
+    --bg-tertiary: #323135;
+    --bg-accent: rgba(181, 154, 255, 0.08);
+    --border-primary: #323135;
+    --border-secondary: #3D3B40;
+    --fg-primary: #F7F7F8;
+    --fg-secondary: #BCB9C0;
+    --fg-tertiary: #807B84;
+    --accent-purple: #7F4EFF;
+    --accent-purple-deep: #B59AFF;
+    --accent-green: #13D461;
+    --accent-red: #fe1d5e;
+    --accent-blue: #1EAEFF;
+    --accent-orange: #d9622b;
+
+    --pill-blue-bg: #2A2440;      --pill-blue-fg: #C8B5FF;      --pill-blue-border: #443A66;
+    --pill-lightblue-bg: #2F324C; --pill-lightblue-fg: #D6E7FA; --pill-lightblue-border: #4E547E;
+    --pill-green-bg: #14331F;     --pill-green-fg: #75FF86;     --pill-green-border: #245733;
+    --pill-yellow-bg: #354E04;    --pill-yellow-fg: #EEEF8F;    --pill-yellow-border: #82840A;
+    --pill-red-bg: #562525;       --pill-red-fg: #FFD1D1;       --pill-red-border: #813737;
+    --pill-gray-bg: #232225;      --pill-gray-fg: #BCB9C0;      --pill-gray-border: #3D3B40;
+
+    --callout-error-bg: #562525; --callout-error-border: #813737;
+    --callout-info-bg: #2F324C;  --callout-info-border: #4E547E;
+    --callout-warn-bg: #354E04;  --callout-warn-border: #82840A;
+
+    --shadow-level1:
+      0px 2px 2px -1px rgba(0, 0, 0, 0.24),
+      0px 0.5px 0.5px -0.25px rgba(0, 0, 0, 0.24),
+      0px 0px 0px 1px rgba(0, 0, 0, 0.24),
+      0px 0px 0px 1px rgba(255, 255, 255, 0.08) inset;
+    --shadow-level2:
+      0px 4px 4px -2px rgba(0, 0, 0, 0.24),
+      0px 2px 2px -1px rgba(0, 0, 0, 0.24),
+      0px 0px 0px 1px rgba(0, 0, 0, 0.24),
+      0px 0px 0px 1px rgba(255, 255, 255, 0.08) inset;
+    --shadow-focus: 0px 0px 0px 2px rgba(181, 154, 255, 0.40);
+
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--bg-primary);
+    color: var(--fg-primary);
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 20px;
+    letter-spacing: -0.006px;
+    font-feature-settings: var(--numeric);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  a { color: var(--accent-purple); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  :focus-visible { outline: none; box-shadow: var(--shadow-focus); border-radius: 8px; }
+
+  code, .mono { font-family: var(--font-mono); font-size: 13px; }
+
+  /* ---------- app chrome ---------- */
+
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 0 24px;
+    height: 56px;
+    border-bottom: 1px solid var(--border-primary);
+    background: var(--bg-primary);
+    position: sticky;
+    top: 0;
+    z-index: 3;
+  }
+  .wordmark {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -0.006px;
+    color: var(--fg-primary);
+  }
+  .wordmark svg { display: block; }
+  .wordmark .sep { color: var(--fg-tertiary); font-weight: 400; }
+  .wordmark .sub { color: var(--fg-secondary); font-weight: 500; }
+  .head-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--fg-secondary);
+    letter-spacing: 0;
+  }
+  .head-meta .dot { color: var(--border-secondary); }
+
+  main { padding: 24px; max-width: 1240px; margin: 0 auto; }
+
+  /* ---------- typography roles (console typography.ts) ---------- */
+
+  h1 {
+    font-size: 20px; line-height: 32px; font-weight: 500;
+    letter-spacing: -0.017px; margin: 0;
+  }
+  h2 {
+    font-size: 16px; line-height: 24px; font-weight: 500;
+    letter-spacing: -0.011px; margin: 32px 0 12px;
+  }
+  h2:first-child { margin-top: 0; }
+  .muted { color: var(--fg-secondary); }
+  .small { font-size: 12px; line-height: 16px; letter-spacing: 0; }
+
+  .crumbs { font-size: 12px; line-height: 16px; color: var(--fg-secondary); margin-bottom: 12px; }
+  .crumbs a { color: var(--fg-secondary); }
+  .crumbs a:hover { color: var(--accent-purple); }
+
+  /* ---------- surfaces ---------- */
+
+  .card {
+    border: 1px solid var(--border-primary);
+    border-radius: 12px;
+    background: var(--bg-primary);
+    overflow: hidden;
+  }
+  .table-scroll { overflow-x: auto; }
+
+  table { width: 100%; border-collapse: separate; border-spacing: 0; }
+  th {
+    text-align: left;
+    font-size: 14px;
+    line-height: 20px;
+    font-weight: 500;
+    color: var(--fg-secondary);
+    background: var(--bg-secondary);
+    padding: 8px 16px;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border-secondary);
+  }
+  th.num, td.num { text-align: right; }
+  td {
+    padding: 10px 16px;
+    line-height: 18px;
+    border-bottom: 1px solid var(--border-primary);
+    white-space: nowrap;
+  }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr.linkable { cursor: pointer; }
+  tbody tr.linkable:hover td { background: var(--bg-secondary); }
+  td.wrap { white-space: normal; overflow-wrap: anywhere; min-width: 240px; }
+
+  .empty {
+    padding: 24px 16px;
+    color: var(--fg-secondary);
+    font-size: 14px;
+    text-align: center;
+  }
+
+  /* ---------- status pills (console StatusPill.tsx geometry) ---------- */
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    border-radius: 40px;
+    padding: 2px 8px;
+    font-size: 12px;
+    line-height: 16px;
+    letter-spacing: 0;
+    font-weight: 500;
+    width: fit-content;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .pill.green      { background: var(--pill-green-bg);      color: var(--pill-green-fg);      border-color: var(--pill-green-border); }
+  .pill.blue       { background: var(--pill-blue-bg);       color: var(--pill-blue-fg);       border-color: var(--pill-blue-border); }
+  .pill.lightblue  { background: var(--pill-lightblue-bg);  color: var(--pill-lightblue-fg);  border-color: var(--pill-lightblue-border); }
+  .pill.yellow     { background: var(--pill-yellow-bg);     color: var(--pill-yellow-fg);     border-color: var(--pill-yellow-border); }
+  .pill.red        { background: var(--pill-red-bg);        color: var(--pill-red-fg);        border-color: var(--pill-red-border); }
+  .pill.gray       { background: var(--pill-gray-bg);       color: var(--pill-gray-fg);       border-color: var(--pill-gray-border); }
+
+  /* 12px spinner at 0.75s, matching the console's in-progress pill affordance. */
+  .spinner {
+    width: 12px; height: 12px;
+    border: 1.5px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.75s linear infinite;
+    flex: none;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- rollout rail: the controller's own state machine ---------- */
+
+  .rail {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 16px;
+    border: 1px solid var(--border-primary);
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    margin-bottom: 16px;
+  }
+  .rail-gen {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--fg-secondary);
+    padding: 2px 8px;
+    border: 1px solid var(--border-secondary);
+    border-radius: 6px;
+    background: var(--bg-primary);
+    white-space: nowrap;
+  }
+  .rail-gen.target { color: var(--accent-purple); border-color: var(--accent-purple); }
+  .rail-steps { display: flex; align-items: center; gap: 0; list-style: none; margin: 0; padding: 0; flex: 1; min-width: 260px; }
+  .rail-step { display: flex; align-items: center; gap: 8px; }
+  .rail-step .marker {
+    width: 10px; height: 10px; border-radius: 50%;
+    border: 2px solid var(--border-secondary);
+    background: var(--bg-primary);
+    flex: none;
+  }
+  .rail-step .name { font-size: 12px; line-height: 16px; letter-spacing: 0; color: var(--fg-tertiary); white-space: nowrap; }
+  .rail-step.done .marker { background: var(--accent-green); border-color: var(--accent-green); }
+  .rail-step.done .name { color: var(--fg-secondary); }
+  .rail-step.active .marker { background: var(--accent-purple); border-color: var(--accent-purple); }
+  .rail-step.active .name { color: var(--fg-primary); font-weight: 500; }
+  .rail-connector { height: 2px; background: var(--border-secondary); flex: 1; min-width: 16px; margin: 0 8px; }
+  .rail-connector.done { background: var(--accent-green); }
+
+  /* ---------- callouts ---------- */
+
+  .callout {
+    padding: 12px 16px;
+    border-radius: 12px;
+    border: 1px solid;
+    margin-bottom: 16px;
+    font-size: 14px;
+    line-height: 20px;
+    overflow-wrap: anywhere;
+  }
+  .callout { color: var(--fg-primary); }
+  .callout.error { background: var(--callout-error-bg); border-color: var(--callout-error-border); }
+  .callout.info  { background: var(--callout-info-bg);  border-color: var(--callout-info-border); }
+  .callout.warn  { background: var(--callout-warn-bg);  border-color: var(--callout-warn-border); }
+  .callout .when { display: block; margin-top: 4px; font-size: 12px; line-height: 16px; opacity: 0.75; }
+
+  /* ---------- detail header ---------- */
+
+  .detail-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  .detail-head .actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  .version {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--font-mono); font-size: 12px;
+    color: var(--fg-secondary);
+    max-width: 320px;
+  }
+  .version .to { color: var(--fg-primary); }
+  .version .arrow { color: var(--accent-orange); flex: none; }
+  /* Dev image tags run long; keep them on one line and hoverable for the full ref. */
+  .version .tag {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* ---------- facts grid ---------- */
+
+  .facts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+    border: 1px solid var(--border-primary);
+    border-radius: 12px;
+    overflow: hidden;
+    background: var(--bg-primary);
+  }
+  /* Separators live on the cells, not as grid gaps, so a partly-filled last
+     row leaves plain background rather than a slab of the gap color. */
+  .facts > div {
+    padding: 12px 16px;
+    border-right: 1px solid var(--border-primary);
+    border-bottom: 1px solid var(--border-primary);
+  }
+  .facts dt {
+    font-size: 12px; line-height: 16px; letter-spacing: 0;
+    color: var(--fg-secondary); margin-bottom: 4px;
+  }
+  .facts dd { margin: 0; font-size: 14px; line-height: 20px; overflow-wrap: anywhere; }
+  .facts dd.mono { font-family: var(--font-mono); font-size: 13px; }
+
+  /* ---------- controls (console Button.ts) ---------- */
+
+  button {
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 16px;
+    font-weight: 500;
+    border-radius: 8px;
+    padding: 8px 12px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+    color: var(--fg-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-secondary);
+    box-shadow: var(--shadow-level1);
+  }
+  button:hover { background: var(--bg-secondary); box-shadow: none; }
+  button.primary {
+    background: var(--accent-purple);
+    border-color: var(--accent-purple);
+    color: #FFF;
+    box-shadow: var(--shadow-level1);
+  }
+  button.primary:hover { background: var(--accent-purple-deep); border-color: var(--accent-purple-deep); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  button.icon { padding: 6px 8px; box-shadow: none; background: transparent; border-color: transparent; color: var(--fg-secondary); }
+  button.icon:hover { background: var(--bg-secondary); }
+
+  label.check {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 12px; line-height: 16px; letter-spacing: 0;
+    color: var(--fg-secondary); cursor: pointer;
+  }
+  label.check input { accent-color: var(--accent-purple); margin: 0; }
+
+  textarea {
+    width: 100%;
+    min-height: 200px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 20px;
+    color: var(--fg-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-secondary);
+    border-radius: 8px;
+    padding: 12px;
+    resize: vertical;
+  }
+  .editor-actions { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .editor-status { font-size: 12px; line-height: 16px; letter-spacing: 0; color: var(--fg-secondary); }
+  .editor-status.err { color: var(--accent-red); }
+  .editor-status.ok { color: var(--accent-green); }
+
+  .section-note {
+    font-size: 12px; line-height: 16px; letter-spacing: 0;
+    color: var(--fg-secondary); margin: -4px 0 12px; max-width: 90ch;
+  }
+
+  input[type="text"] {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 18px;
+    color: var(--fg-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-secondary);
+    border-radius: 8px;
+    padding: 7px 10px;
+  }
+  input[type="text"]::placeholder { color: var(--fg-tertiary); }
+  input.version-input { flex: 1; min-width: 280px; }
+  input.qty { width: 100%; }
+
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row .grow { flex: 1; min-width: 240px; }
+
+  /* Configuration card: label / current value / edit affordance. */
+  table.config td { vertical-align: top; }
+  td.cfg-label { color: var(--fg-secondary); width: 260px; white-space: nowrap; }
+  td.cfg-value { white-space: normal; }
+  td.cfg-edit { width: 52px; text-align: right; padding: 6px 12px; }
+  button.pencil {
+    padding: 4px 8px; background: transparent; border-color: transparent;
+    box-shadow: none; color: var(--fg-tertiary);
+  }
+  button.pencil:hover { background: var(--bg-secondary); color: var(--fg-primary); border-color: var(--border-secondary); }
+  button.pencil svg { display: block; }
+  tr.editing td { background: var(--bg-secondary); }
+  .cfg-editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .cfg-editor .actions { display: flex; gap: 8px; margin-left: auto; }
+  .cfg-hint { flex-basis: 100%; font-size: 12px; line-height: 16px; letter-spacing: 0; color: var(--fg-secondary); }
+  .cfg-error { flex-basis: 100%; font-size: 12px; line-height: 16px; color: var(--accent-red); }
+  .qty-grid { display: grid; grid-template-columns: repeat(4, minmax(96px, 1fr)); gap: 8px; flex: 1; min-width: 320px; }
+  .qty-grid label { font-size: 12px; line-height: 16px; letter-spacing: 0; color: var(--fg-secondary); }
+
+  select {
+    font-family: var(--font-ui);
+    font-size: 14px;
+    line-height: 18px;
+    color: var(--fg-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-secondary);
+    border-radius: 8px;
+    padding: 7px 10px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .spinner { animation: none; }
+    * { transition: none !important; }
+  }
+
+  @media (max-width: 640px) {
+    main { padding: 16px; }
+    header { padding: 0 16px; }
+    .head-meta { width: 100%; margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="wordmark">
+    <!-- Materialize mark, from console/img/materialize-mark-*.svg -->
+    <svg width="19" height="16" viewBox="0 0 67 56" fill="none" aria-hidden="true">
+      <g fill="var(--accent-purple)">
+        <path d="M67.558-.392v8.203l-.013 48.566H54.37V4.384L58.499.18a1.78 1.78 0 0 1 1.373-.571z" opacity=".7"/>
+        <path fill-rule="evenodd" d="M47.406 37.9c-.93-1.192-1.857-2.38-2.767-3.29a1006 1006 0 0 1-5.026-5.056q-1.25-1.263-2.5-2.524v-5.843l.002-.013a1.78 1.78 0 0 1 .404-1.182L50.292 7.755v31.928l.003.392c.005.453.012 1.138-.003 1.24-.954-.936-1.921-2.177-2.886-3.415" clip-rule="evenodd" opacity=".7"/>
+        <path d="M-.055 14.768V33.2L23.2 56.377h18.495zM-.055 56.377h17.094L-.055 39.344zM47.93 56.377h18.314L11.012.18a1.78 1.78 0 0 0-1.373-.57H-.037v8.194z"/>
+      </g>
+    </svg>
+    Materialize <span class="sep">/</span> <span class="sub">Operator</span>
+  </div>
+  <div class="head-meta">
+    <span id="info-facts"></span>
+    <span class="dot" id="info-dot" hidden>·</span>
+    <span id="refreshed"></span>
+    <button class="icon" id="theme-toggle" title="Switch between light and dark" aria-label="Switch color theme">◐</button>
+  </div>
+</header>
+<main id="main"><div class="card"><div class="empty">Loading environments…</div></div></main>
+
+<script>
+"use strict";
+
+const REFRESH_MS = 5000;
+let flash = null; // one-shot banner: {kind, text}
+
+// Auto-refresh must never overwrite something the user is part way through
+// typing. Every editable field records what it was rendered with in
+// `data-initial`, so a field that diverges (or simply has focus) holds off the
+// next refresh until it is saved or reverted.
+function hasUnsavedEdits() {
+  if (editingRow !== null) return true;
+  const active = document.activeElement;
+  if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) return true;
+  return Array.from(document.querySelectorAll("[data-initial]"))
+    .some(field => field.value !== field.getAttribute("data-initial"));
+}
+
+// Accept the field's current text as saved, releasing the refresh hold.
+function markSaved(field) {
+  field.setAttribute("data-initial", field.value);
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+async function api(path, options) {
+  const response = await fetch(path, options);
+  let body = null;
+  try { body = await response.json(); } catch (e) { /* error bodies may not be JSON */ }
+  if (!response.ok) {
+    throw new Error((body && body.error) || (response.status + " " + response.statusText));
+  }
+  return body;
+}
+
+/* ---------- theme (console defaults to system color mode) ---------- */
+
+function applyTheme(mode) {
+  if (mode === "light" || mode === "dark") {
+    document.documentElement.setAttribute("data-theme", mode);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+}
+function currentlyDark() {
+  const stored = localStorage.getItem("mz-operator-theme");
+  if (stored === "dark") return true;
+  if (stored === "light") return false;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches;
+}
+applyTheme(localStorage.getItem("mz-operator-theme"));
+
+/* ---------- rollout state ---------- */
+
+// The controller writes these reasons onto the UpToDate condition. The first
+// four are the ordered happy path of a rollout; the rest are off-path states
+// that stop it, so they are surfaced as a callout instead of a rail stage.
+const ROLLOUT_STAGES = ["Applying", "ReadyToPromote", "Promoting", "Applied"];
+
+const REASON_PILL = {
+  Applied: { cls: "green", label: "Up to date" },
+  Applying: { cls: "blue", label: "Applying", busy: true },
+  Promoting: { cls: "blue", label: "Promoting", busy: true },
+  ReadyToPromote: { cls: "lightblue", label: "Ready to promote" },
+  WaitingForApproval: { cls: "yellow", label: "Waiting for approval" },
+  FailedDeploy: { cls: "red", label: "Failed deploy" },
+  RolloutTimeout: { cls: "red", label: "Rollout timed out" },
+};
+
+function statePill(condition, rolloutRequested) {
+  if (!condition) return `<span class="pill gray">No status</span>`;
+  const spec = REASON_PILL[condition.reason]
+    || { cls: condition.status === "True" ? "green" : "gray", label: condition.reason };
+  const label = spec.label === "Up to date" && rolloutRequested ? "Rollout pending" : spec.label;
+  const cls = spec.label === "Up to date" && rolloutRequested ? "yellow" : spec.cls;
+  const spinner = spec.busy ? `<span class="spinner"></span>` : "";
+  return `<span class="pill ${cls}">${spinner}${esc(label)}</span>`;
+}
+
+function rolloutRail(summary) {
+  const reason = summary.upToDate && summary.upToDate.reason;
+  const index = ROLLOUT_STAGES.indexOf(reason);
+  if (index < 0 || reason === "Applied") return "";
+  const active = summary.activeGeneration;
+  const steps = ROLLOUT_STAGES.map((stage, i) => {
+    const state = i < index ? "done" : i === index ? "active" : "todo";
+    const label = { ReadyToPromote: "Ready to promote", Applied: "Promoted" }[stage] || stage;
+    const connector = i === 0 ? "" :
+      `<span class="rail-connector ${i <= index ? "done" : ""}"></span>`;
+    return `${connector}<li class="rail-step ${state}">
+      <span class="marker"></span><span class="name">${esc(label)}</span></li>`;
+  }).join("");
+  return `<div class="rail">
+    <span class="rail-gen">g${esc(active)} serving</span>
+    <ol class="rail-steps">${steps}</ol>
+    <span class="rail-gen target">g${esc(active + 1)} incoming</span>
+  </div>`;
+}
+
+/* ---------- formatting ---------- */
+
+function imageTag(ref) {
+  const match = /:([^:/@]+)(?:@|$)/.exec(ref || "");
+  return match ? match[1] : (ref || "unknown");
+}
+
+function versionCell(running, desired) {
+  if (!running || running === desired) {
+    return `<span class="version" title="${esc(desired)}">` +
+      `<span class="tag to">${esc(imageTag(desired))}</span></span>`;
+  }
+  return `<span class="version" title="${esc(running)} → ${esc(desired)}">` +
+    `<span class="tag">${esc(imageTag(running))}</span><span class="arrow">→</span>` +
+    `<span class="tag to">${esc(imageTag(desired))}</span></span>`;
+}
+
+function age(timestamp) {
+  if (!timestamp) return "—";
+  const seconds = Math.max(0, (Date.now() - Date.parse(timestamp)) / 1000);
+  if (seconds < 120) return Math.floor(seconds) + "s";
+  if (seconds < 7200) return Math.floor(seconds / 60) + "m";
+  if (seconds < 172800) return Math.floor(seconds / 3600) + "h";
+  return Math.floor(seconds / 86400) + "d";
+}
+
+function readyPill(ready, total) {
+  const ok = total > 0 && ready >= total;
+  return `<span class="pill ${ok ? "green" : "yellow"}">${ready}/${total}</span>`;
+}
+
+function card(headers, rows, options) {
+  const rowAttrs = (options && options.rowAttrs) || null;
+  const emptyText = (options && options.empty) || "Nothing to show.";
+  if (!rows.length) return `<div class="card"><div class="empty">${esc(emptyText)}</div></div>`;
+  const cellClass = j => {
+    const header = headers[j] || {};
+    const classes = [header.num ? "num" : "", header.wrap ? "wrap" : ""].filter(Boolean);
+    return classes.length ? ` class="${classes.join(" ")}"` : "";
+  };
+  const head = headers.map((h, j) =>
+    `<th${cellClass(j)}>${esc(h.label !== undefined ? h.label : h)}</th>`).join("");
+  const body = rows.map((cells, i) =>
+    `<tr ${rowAttrs ? rowAttrs(i) : ""}>${
+      cells.map((c, j) => `<td${cellClass(j)}>${c}</td>`).join("")}</tr>`).join("");
+  return `<div class="card"><div class="table-scroll"><table>
+    <thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+}
+
+function flashBanner() {
+  if (!flash) return "";
+  const banner = `<div class="callout ${flash.kind}">${esc(flash.text)}</div>`;
+  flash = null;
+  return banner;
+}
+
+/* ---------- views ---------- */
+
+async function renderOverview() {
+  const mzs = await api("/api/materializes");
+  const rows = mzs.map(mz => [
+    `<a href="#/${encodeURIComponent(mz.namespace)}/${encodeURIComponent(mz.name)}">${esc(mz.name)}</a>`,
+    `<span class="muted">${esc(mz.namespace)}</span>`,
+    statePill(mz.upToDate, mz.rolloutRequested),
+    versionCell(mz.runningImageRef, mz.environmentdImageRef),
+    `g${esc(mz.activeGeneration)}`,
+    `<span class="muted">${age(mz.createdAt)}</span>`,
+  ]);
+  document.getElementById("main").innerHTML = flashBanner() +
+    `<h2>Environments</h2>` +
+    card(
+      ["Name", "Namespace", "State", "Version", { label: "Gen", num: true }, { label: "Age", num: true }],
+      rows,
+      {
+        empty: "No Materialize environments in this cluster yet.",
+        rowAttrs: i => `class="linkable" onclick="location.hash='#/${
+          encodeURIComponent(mzs[i].namespace)}/${encodeURIComponent(mzs[i].name)}'"`,
+      },
+    );
+}
+
+const ROLLOUT_STRATEGIES = [
+  ["WaitUntilReady", "Wait until ready (recommended)"],
+  ["ManuallyPromote", "Manually promote"],
+  ["ImmediatelyPromoteCausingDowntime", "Immediately promote (causes downtime)"],
+];
+
+const RESOURCE_COMPONENTS = [
+  { key: "environmentd", label: "environmentd", specKey: "environmentdResources", rolloutBound: true },
+  { key: "balancerd", label: "balancerd", specKey: "balancerdResources", rolloutBound: false },
+  { key: "console", label: "console", specKey: "consoleResources", rolloutBound: false },
+];
+
+// Which row, if any, is open for editing. Auto-refresh is held off while a row
+// is open so a background render cannot close it mid-edit.
+let editingRow = null;
+
+const PENCIL = `<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+  <path d="M11.5 2.5a1.6 1.6 0 0 1 2.3 2.3l-7.3 7.3-3 .7.7-3 7.3-7.3Z"
+    stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
+
+function field(id) {
+  return document.getElementById(id);
+}
+
+function resourceSummary(resources) {
+  if (!resources || (!resources.requests && !resources.limits)) {
+    return `<span class="muted">Operator default</span>`;
+  }
+  const part = (values, label) => {
+    if (!values || (!values.cpu && !values.memory)) return null;
+    return `${label} ${esc(values.cpu || "—")} CPU, ${esc(values.memory || "—")}`;
+  };
+  return [part(resources.requests, "requests"), part(resources.limits, "limits")]
+    .filter(Boolean).join(" · ") || `<span class="muted">Operator default</span>`;
+}
+
+function qtyGrid(resources) {
+  const requests = (resources && resources.requests) || {};
+  const limits = (resources && resources.limits) || {};
+  const cell = (id, label, value) => `<div>
+    <label for="${id}">${esc(label)}</label>
+    <input type="text" id="${id}" class="qty" spellcheck="false"
+      placeholder="default" value="${esc(value || "")}"></div>`;
+  return `<div class="qty-grid">
+    ${cell("cfg-req-cpu", "Requests CPU", requests.cpu)}
+    ${cell("cfg-req-mem", "Requests memory", requests.memory)}
+    ${cell("cfg-lim-cpu", "Limits CPU", limits.cpu)}
+    ${cell("cfg-lim-mem", "Limits memory", limits.memory)}
+  </div>`;
+}
+
+// Read the quantity grid back into a ResourceRequirements, or null when every
+// field is blank, which clears the override.
+function collectQtyGrid() {
+  const read = id => field(id).value.trim();
+  const group = (cpu, memory) => {
+    const out = {};
+    if (cpu) out.cpu = cpu;
+    if (memory) out.memory = memory;
+    return Object.keys(out).length ? out : null;
+  };
+  const requests = group(read("cfg-req-cpu"), read("cfg-req-mem"));
+  const limits = group(read("cfg-lim-cpu"), read("cfg-lim-mem"));
+  const value = {};
+  if (requests) value.requests = requests;
+  if (limits) value.limits = limits;
+  return Object.keys(value).length ? value : null;
+}
+
+// The rows of the configuration card. `editor` renders the inline form and
+// `collect` turns it back into a PUT /config body, so each row saves only its
+// own field.
+function configRows(detail, summary) {
+  const spec = detail.spec;
+  const rows = [
+    {
+      key: "environmentdImageRef",
+      label: "environmentd image",
+      rolloutBound: true,
+      display: () => `<span class="mono">${esc(summary.environmentdImageRef)}</span>`,
+      editor: () => `<input type="text" id="cfg-input" class="grow mono"
+          spellcheck="false" value="${esc(summary.environmentdImageRef)}">
+        <label class="check"><input type="checkbox" id="cfg-rollout"> Request rollout now</label>`,
+      collect: () => ({
+        environmentdImageRef: field("cfg-input").value,
+        requestRollout: field("cfg-rollout").checked,
+      }),
+    },
+    {
+      key: "rolloutStrategy",
+      label: "Rollout strategy",
+      display: () => esc(labelForStrategy(summary.rolloutStrategy)),
+      editor: () => `<select id="cfg-input" aria-label="Rollout strategy">${
+        ROLLOUT_STRATEGIES.map(([value, label]) =>
+          `<option value="${esc(value)}"${value === summary.rolloutStrategy ? " selected" : ""}>${
+            esc(label)}</option>`).join("")}</select>`,
+      collect: () => ({ rolloutStrategy: field("cfg-input").value }),
+    },
+    {
+      key: "rolloutRequestTimeout",
+      label: "Rollout timeout",
+      display: () => esc(spec.rolloutRequestTimeout),
+      editor: () => `<input type="text" id="cfg-input" spellcheck="false"
+        value="${esc(spec.rolloutRequestTimeout)}" placeholder="24h">`,
+      collect: () => ({ rolloutRequestTimeout: field("cfg-input").value }),
+    },
+    {
+      key: "balancerdReplicas",
+      label: "balancerd replicas",
+      display: () => esc(spec.balancerdReplicas),
+      editor: () => `<input type="text" id="cfg-input" value="${esc(spec.balancerdReplicas)}">`,
+      collect: () => ({ balancerdReplicas: Number(field("cfg-input").value) }),
+    },
+    {
+      key: "consoleReplicas",
+      label: "console replicas",
+      display: () => esc(spec.consoleReplicas),
+      editor: () => `<input type="text" id="cfg-input" value="${esc(spec.consoleReplicas)}">`,
+      collect: () => ({ consoleReplicas: Number(field("cfg-input").value) }),
+    },
+    {
+      key: "enableRbac",
+      label: "Role based access control",
+      rolloutBound: true,
+      display: () => spec.enableRbac ? "Enabled" : "Disabled",
+      editor: () => `<select id="cfg-input" aria-label="Role based access control">
+        <option value="true"${spec.enableRbac ? " selected" : ""}>Enabled</option>
+        <option value="false"${spec.enableRbac ? "" : " selected"}>Disabled</option></select>`,
+      collect: () => ({ enableRbac: field("cfg-input").value === "true" }),
+    },
+  ];
+
+  for (const component of RESOURCE_COMPONENTS) {
+    rows.push({
+      key: `resources.${component.key}`,
+      label: `${component.label} resources`,
+      rolloutBound: component.rolloutBound,
+      display: () => resourceSummary(spec[component.specKey]),
+      editor: () => qtyGrid(spec[component.specKey]),
+      collect: () => ({ resources: { [component.key]: collectQtyGrid() } }),
+    });
+  }
+
+  // Facts the operator owns or that must not change on a live environment.
+  rows.push(
+    { key: "resourceId", label: "Resource ID",
+      display: () => `<span class="mono">${esc(summary.resourceId)}</span>` },
+    { key: "environmentId", label: "Environment ID",
+      display: () => `<span class="mono">${esc(summary.environmentId)}</span>` },
+    { key: "activeGeneration", label: "Active generation",
+      display: () => `g${esc(summary.activeGeneration)}` },
+    { key: "authenticatorKind", label: "Authenticator",
+      display: () => esc(spec.authenticatorKind) },
+    { key: "backendSecretName", label: "Backend secret",
+      display: () => `<span class="mono">${esc(spec.backendSecretName)}</span>` },
+    { key: "systemParameterConfigmapName", label: "System parameter ConfigMap",
+      display: () => spec.systemParameterConfigmapName
+        ? `<span class="mono">${esc(spec.systemParameterConfigmapName)}</span>`
+        : `<span class="muted">Not set</span>` },
+    { key: "requestRollout", label: "Requested rollout",
+      display: () => `<span class="mono">${esc(spec.requestRollout)}</span>` },
+  );
+  return rows;
+}
+
+function labelForStrategy(value) {
+  const match = ROLLOUT_STRATEGIES.find(([key]) => key === value);
+  return match ? match[1] : value;
+}
+
+function configCard(detail, summary) {
+  const body = configRows(detail, summary).map(row => {
+    const editable = Boolean(row.editor);
+    if (editingRow === row.key) {
+      return `<tr class="editing">
+        <td class="cfg-label">${esc(row.label)}</td>
+        <td class="cfg-value" colspan="2"><div class="cfg-editor">
+          ${row.editor()}
+          <div class="actions">
+            <button class="primary" id="cfg-save">Save</button>
+            <button id="cfg-cancel">Cancel</button>
+          </div>
+          ${row.rolloutBound
+            ? `<div class="cfg-hint">Part of the environmentd StatefulSet. It reaches pods
+               through a rollout, not immediately.</div>`
+            : ""}
+          <div class="cfg-error" id="cfg-error"></div>
+        </div></td></tr>`;
+    }
+    return `<tr>
+      <td class="cfg-label">${esc(row.label)}</td>
+      <td class="cfg-value">${row.display()}</td>
+      <td class="cfg-edit">${editable
+        ? `<button class="pencil" data-edit="${esc(row.key)}"
+             title="Edit ${esc(row.label)}" aria-label="Edit ${esc(row.label)}">${PENCIL}</button>`
+        : ""}</td></tr>`;
+  }).join("");
+  return `<div class="card"><div class="table-scroll"><table class="config"><tbody>${
+    body}</tbody></table></div></div>`;
+}
+
+// environmentd polls the mounted ConfigMap and applies changes through ALTER
+// environmentd polls the mounted ConfigMap and applies changes through ALTER
+// SYSTEM, so saved edits reach a running environment on their own. Say so, and
+// name the two cases where they will not.
+function systemParamsNote(systemParams) {
+  if (!systemParams.syncSupported) {
+    return `<div class="callout warn">This environment runs a version of environmentd that
+      predates system parameter sync, so the operator does not mount the ConfigMap.
+      Values saved here will not take effect until you upgrade to v26.1 or later.</div>`;
+  }
+  if (!systemParams.configmapName) {
+    return `<div class="section-note">No system parameter ConfigMap is set. Saving creates one
+      and points this environment at it, which changes the StatefulSet, so that first save
+      needs a rollout. Edits after that apply on their own.</div>`;
+  }
+  return `<div class="section-note">Stored in ConfigMap
+    <span class="mono">${esc(systemParams.configmapName)}</span>. Saving applies to the running
+    environment in a few seconds. No rollout needed.</div>`;
+}
+
+function podRows(pods) {
+  return pods.map(pod => [
+    `<span class="mono">${esc(pod.name)}</span>`,
+    `<span class="muted">${esc(pod.app || "—")}</span>`,
+    pod.generation ? `g${esc(pod.generation)}` : `<span class="muted">—</span>`,
+    pod.ready
+      ? `<span class="pill green">${esc(pod.phase || "Running")}</span>`
+      : `<span class="pill ${pod.phase === "Failed" ? "red" : "yellow"}">${esc(pod.phase || "Unknown")}</span>`,
+    esc(pod.restarts),
+    `<span class="muted">${age(pod.startTime)}</span>`,
+  ]);
+}
+
+async function renderDetail(namespace, name) {
+  const base = `/api/materializes/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`;
+  const [detail, systemParams] = await Promise.all([api(base), api(base + "/system-params")]);
+  const summary = detail.summary;
+  const condition = summary.upToDate;
+  const reason = condition && condition.reason;
+  const offPath = ["WaitingForApproval", "FailedDeploy", "RolloutTimeout"].includes(reason);
+  const promotable = summary.rolloutRequested && (reason === "ReadyToPromote" || reason === "Applying");
+
+  document.getElementById("main").innerHTML = flashBanner() + `
+    <div class="crumbs"><a href="#/">Environments</a> / ${esc(namespace)}</div>
+    <div class="detail-head">
+      <h1>${esc(name)}</h1>
+      ${statePill(condition, summary.rolloutRequested)}
+      ${versionCell(summary.runningImageRef, summary.environmentdImageRef)}
+      <div class="actions">
+        <label class="check"><input type="checkbox" id="opt-force-rollout"> Force rollout</label>
+        <label class="check"><input type="checkbox" id="opt-force-promote"> Force promote</label>
+        <button class="primary" id="btn-rollout">Request rollout</button>
+        ${promotable ? `<button id="btn-promote">Promote generation</button>` : ""}
+      </div>
+    </div>
+
+    ${rolloutRail(summary)}
+
+    ${condition && (offPath || reason !== "Applied") ? `<div class="callout ${
+      offPath && reason !== "WaitingForApproval" ? "error" : offPath ? "warn" : "info"}">
+      ${esc(condition.message)}<span class="when" title="${esc(condition.lastTransitionTime)}">In this state for ${
+        age(condition.lastTransitionTime)}</span></div>` : ""}
+
+    <h2>Configuration</h2>
+    ${configCard(detail, summary)}
+
+    <h2>environmentd generations</h2>
+    ${card(["StatefulSet", "Generation", "Ready", { label: "Image", wrap: true }],
+      detail.statefulsets.map(s => [
+        `<span class="mono">${esc(s.name)}</span>`,
+        s.generation ? `g${esc(s.generation)}` : `<span class="muted">—</span>`,
+        readyPill(s.readyReplicas, s.replicas),
+        `<span class="mono muted">${esc(s.image || "—")}</span>`,
+      ]), { empty: "No environmentd StatefulSets found." })}
+
+    <h2>balancerd and console</h2>
+    ${card(["Deployment", "Ready", { label: "Image", wrap: true }],
+      detail.deployments.map(d => [
+        `<span class="mono">${esc(d.name)}</span>`,
+        readyPill(d.readyReplicas, d.replicas),
+        `<span class="mono muted">${esc(d.image || "—")}</span>`,
+      ]), { empty: "No balancerd or console Deployments. The operator creates these when enabled." })}
+
+    <h2>Pods</h2>
+    ${card(["Name", "Component", "Generation", "Status", { label: "Restarts", num: true }, { label: "Age", num: true }],
+      podRows(detail.pods), { empty: "No pods found for this environment." })}
+
+    <h2>Services</h2>
+    ${card(["Name", "Type", "Cluster IP", "Ports"],
+      detail.services.map(s => [
+        `<span class="mono">${esc(s.name)}</span>`,
+        `<span class="muted">${esc(s.type || "—")}</span>`,
+        `<span class="mono muted">${esc(s.clusterIp || "—")}</span>`,
+        `<span class="mono muted">${esc(s.ports.join(", "))}</span>`,
+      ]), { empty: "No services found." })}
+
+    <h2>System parameters</h2>
+    ${systemParamsNote(systemParams)}
+    <textarea id="params-editor" spellcheck="false" aria-label="System parameters as JSON"
+      data-initial="${esc(JSON.stringify(systemParams.params || {}, null, 2))}">${
+      esc(JSON.stringify(systemParams.params || {}, null, 2))}</textarea>
+    <div class="editor-actions">
+      <button class="primary" id="btn-save-params">Save parameters</button>
+      <span class="editor-status" id="params-status"></span>
+    </div>
+
+    <h2>Events</h2>
+    ${card([{ label: "Last seen", num: true }, "Type", "Reason", "Object", { label: "Count", num: true }, { label: "Message", wrap: true }],
+      detail.events.map(e => [
+        `<span class="muted">${age(e.lastTimestamp)}</span>`,
+        e.type === "Warning" ? `<span class="pill yellow">Warning</span>` : `<span class="muted">${esc(e.type || "—")}</span>`,
+        esc(e.reason || "—"),
+        `<span class="mono">${esc(e.object)}</span>`,
+        esc(e.count),
+        `<span class="muted">${esc(e.message || "")}</span>`,
+      ]), { empty: "No recent events for this environment." })}
+  `;
+
+  wireDetailActions(base, name, detail);
+}
+
+function wireDetailActions(base, name, detail) {
+  document.getElementById("btn-rollout").onclick = async () => {
+    const forceRollout = document.getElementById("opt-force-rollout").checked;
+    const forcePromote = document.getElementById("opt-force-promote").checked;
+    const confirmation = `Request a rollout for ${name}?` +
+      (forceRollout ? "\n\nForce rollout: proceeds even with no spec changes." : "") +
+      (forcePromote ? "\n\nForce promote: skips waiting for clusters to catch up." : "");
+    if (!confirm(confirmation)) return;
+    try {
+      const result = await api(base + "/rollout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ forceRollout, forcePromote }),
+      });
+      flash = { kind: "info", text: "Rollout requested: " + result.requestRollout };
+    } catch (e) {
+      flash = { kind: "error", text: "Rollout request failed: " + e.message };
+    }
+    render();
+  };
+
+  const promoteButton = document.getElementById("btn-promote");
+  if (promoteButton) {
+    promoteButton.onclick = async () => {
+      if (!confirm(`Promote the incoming generation for ${name} now?` +
+        "\n\nIt becomes the serving generation immediately.")) return;
+      try {
+        await api(base + "/promote", { method: "POST" });
+        flash = { kind: "info", text: "Promotion requested." };
+      } catch (e) {
+        flash = { kind: "error", text: "Promotion failed: " + e.message };
+      }
+      render();
+    };
+  }
+
+  document.querySelectorAll("button[data-edit]").forEach(button => {
+    button.onclick = () => {
+      editingRow = button.getAttribute("data-edit");
+      render(true);
+    };
+  });
+
+  const cancelButton = document.getElementById("cfg-cancel");
+  if (cancelButton) {
+    cancelButton.onclick = () => { editingRow = null; render(true); };
+  }
+
+  const saveButton = document.getElementById("cfg-save");
+  if (saveButton) {
+    const row = configRows(detail, detail.summary).find(row => row.key === editingRow);
+    saveButton.onclick = async () => {
+      const error = document.getElementById("cfg-error");
+      error.textContent = "";
+      try {
+        const result = await api(base + "/config", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(row.collect()),
+        });
+        editingRow = null;
+        if (!result.updated.length) {
+          flash = { kind: "info", text: "No change." };
+        } else if (result.requestRollout) {
+          flash = { kind: "info", text: `Saved ${result.updated.join(", ")} and requested a rollout.` };
+        } else if (result.rolloutRequired) {
+          flash = { kind: "warn", text:
+            `Saved ${result.updated.join(", ")}. Request a rollout to apply it.` };
+        } else {
+          flash = { kind: "info", text: `Saved ${result.updated.join(", ")}.` };
+        }
+        render(true);
+      } catch (e) {
+        // Keep the row open so the entered value is not lost on a rejection.
+        error.textContent = e.message;
+      }
+    };
+  }
+
+  const editor = document.getElementById("params-editor");
+  document.getElementById("btn-save-params").onclick = async () => {
+    const status = document.getElementById("params-status");
+    let parsed;
+    try {
+      parsed = JSON.parse(editor.value);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("the value must be a JSON object");
+      }
+    } catch (e) {
+      status.className = "editor-status err";
+      status.textContent = "Not saved: " + e.message;
+      return;
+    }
+    try {
+      const result = await api(base + "/system-params", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(parsed),
+      });
+      // Confirm in place rather than re-rendering the page, so saving does not
+      // scroll the view or replace the text under the cursor.
+      markSaved(editor);
+      status.className = "editor-status ok";
+      if (!result.syncSupported) {
+        status.textContent = "Saved, but this environmentd ignores system parameter sync. Needs v26.1 or later.";
+      } else if (result.rolloutRequired) {
+        status.textContent = "Saved. Request a rollout to start the sync loop.";
+      } else {
+        status.textContent = "Saved.";
+      }
+    } catch (e) {
+      status.className = "editor-status err";
+      status.textContent = "Not saved: " + e.message;
+    }
+  };
+}
+
+async function renderInfo() {
+  try {
+    const info = await api("/api/info");
+    document.getElementById("info-facts").textContent =
+      `${info.version} · ${info.cloudProvider}/${info.region}` +
+      (info.helmChartVersion ? ` · chart ${info.helmChartVersion}` : "");
+    document.getElementById("info-dot").hidden = false;
+  } catch (e) { /* header facts are best effort */ }
+}
+
+async function render(force) {
+  if (!force && hasUnsavedEdits()) return;
+  const hash = location.hash.replace(/^#\/?/, "");
+  try {
+    const parts = hash.split("/").filter(Boolean).map(decodeURIComponent);
+    if (parts.length >= 2) {
+      await renderDetail(parts[0], parts[1]);
+    } else {
+      await renderOverview();
+    }
+    document.getElementById("refreshed").textContent =
+      "Updated " + new Date().toLocaleTimeString();
+  } catch (e) {
+    document.getElementById("main").innerHTML =
+      `<div class="callout error">Could not load this view: ${esc(e.message)}</div>`;
+  }
+}
+
+document.getElementById("theme-toggle").onclick = () => {
+  const next = currentlyDark() ? "light" : "dark";
+  localStorage.setItem("mz-operator-theme", next);
+  applyTheme(next);
+};
+
+window.addEventListener("hashchange", () => { editingRow = null; render(true); });
+renderInfo();
+render();
+setInterval(render, REFRESH_MS);
+</script>
+</body>
+</html>
