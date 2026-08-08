@@ -6221,6 +6221,10 @@ WITH details_raw AS (
     SELECT
         '"' || op.database || '"."' || op.schema || '"."' || op.name || '"' AS object_name,
         COALESCE(c_idx.name, c_obj.name) AS cluster,
+        -- The object's own cluster, kept so hydration can follow the persist
+        -- fallback when `cluster` above is hidden (DEX-71). Not projected by
+        -- the view.
+        c_obj.name AS object_cluster,
         COALESCE(cts_idx.comment, cts_obj.comment) AS description,
         COALESCE(jsonb_build_object(
         'type', 'object',
@@ -6295,7 +6299,7 @@ WHERE op.privilege_type = 'SELECT'
   AND (o.type = 'materialized-view'
        OR (o.type = 'view' AND i.id IS NOT NULL AND cp.name IS NOT NULL))
   AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
-GROUP BY 1, 2, 3
+GROUP BY 1, 2, 3, 4
 ),
 -- Pick the right (object_id, cluster_id) for hydration: the index's id +
 -- cluster when an index exists (its arrangement is what the data product
@@ -6313,6 +6317,24 @@ hydration_meta AS (
     LEFT JOIN mz_clusters c_idx ON c_idx.id = i.cluster_id
     LEFT JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
     WHERE (o.type = 'materialized-view' OR (o.type = 'view' AND i.id IS NOT NULL))
+      AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
+    UNION
+    -- The persist fallback path for a materialized view: when the advertised
+    -- index cluster is hidden the read runs on the session's cluster and is
+    -- served from persist, so readiness is governed by the view's own cluster
+    -- rather than the index's (DEX-71). For an index on the view's own cluster
+    -- this row merges with the branch above, which is harmless: an index
+    -- cannot hydrate before the collection it arranges.
+    SELECT DISTINCT
+        '"' || db.name || '"."' || s.name || '"."' || o.name || '"' AS object_name,
+        c_obj.name AS cluster,
+        o.id AS hydration_object_id,
+        o.cluster_id AS cluster_id
+    FROM mz_objects o
+    JOIN mz_schemas s ON s.id = o.schema_id
+    JOIN mz_databases db ON db.id = s.database_id
+    JOIN mz_clusters c_obj ON c_obj.id = o.cluster_id
+    WHERE o.type = 'materialized-view'
       AND s.name NOT IN ('mz_catalog', 'mz_internal', 'pg_catalog', 'information_schema', 'mz_introspection')
 ),
 -- Dedupe by replica before counting: an MV with multiple indexes on the
@@ -6340,17 +6362,21 @@ hydration AS (
         COUNT(replica_id) FILTER (WHERE replica_hydrated)::int AS hydrated_replica_count
     FROM hydration_per_replica
     GROUP BY object_name, cluster
+),
+details AS (
+    SELECT
+        d.*,
+        EXISTS (
+            SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
+            WHERE cp.name = d.cluster AND cp.privilege_type = 'USAGE'
+        ) AS cluster_visible
+    FROM details_raw d
 )
 SELECT
     d.object_name,
     -- Null the advertised cluster unless the role has USAGE on it (DEX-66),
-    -- matching mz_mcp_data_products. Hydration below still joins on the real
-    -- d.cluster, so readiness is reported accurately even when the name is
-    -- hidden.
-    CASE WHEN EXISTS (
-        SELECT 1 FROM mz_internal.mz_show_my_cluster_privileges cp
-        WHERE cp.name = d.cluster AND cp.privilege_type = 'USAGE'
-    ) THEN d.cluster END AS cluster,
+    -- matching mz_mcp_data_products.
+    CASE WHEN d.cluster_visible THEN d.cluster END AS cluster,
     d.description,
     d.schema,
     jsonb_build_object(
@@ -6359,10 +6385,14 @@ SELECT
         'replica_count', COALESCE(h.replica_count, 0),
         'hydrated_replica_count', COALESCE(h.hydrated_replica_count, 0)
     ) AS hydration
-FROM details_raw d
+FROM details d
+-- Report readiness for the cluster the read will actually use: the advertised
+-- one when the role can use it, otherwise the view's own cluster, which governs
+-- the freshness of the persist shard the fallback read serves from (DEX-71).
 LEFT JOIN hydration h
     ON h.object_name = d.object_name
-   AND h.cluster IS NOT DISTINCT FROM d.cluster
+   AND h.cluster IS NOT DISTINCT FROM
+       CASE WHEN d.cluster_visible THEN d.cluster ELSE d.object_cluster END
 "#,
     access: vec![PUBLIC_SELECT],
     ontology: None,
