@@ -104,8 +104,8 @@ use mz_catalog::config::{AwsPrincipalContext, BuiltinItemMigrationConfig, Cluste
 use mz_catalog::durable::OpenableDurableCatalogState;
 use mz_catalog::expr_cache::{GlobalExpressions, LocalExpressions};
 use mz_catalog::memory::objects::{
-    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, ClusterVariantManaged, Connection,
-    DataSourceDesc, ReconfigurationTarget, Table, TableDataSource,
+    CatalogEntry, CatalogItem, ClusterReplicaProcessStatus, Connection, DataSourceDesc,
+    ReconfigurationTarget, Table, TableDataSource,
 };
 use mz_cloud_resources::{CloudResourceController, VpcEndpointConfig, VpcEndpointEvent};
 use mz_compute_client::as_of_selection;
@@ -153,7 +153,7 @@ use mz_sql::names::{QualifiedItemName, ResolvedIds, SchemaSpecifier};
 use mz_sql::optimizer_metrics::OptimizerMetrics;
 use mz_sql::plan::{
     self, AlterSinkPlan, ConnectionDetails, CreateConnectionPlan, HirRelationExpr,
-    NetworkPolicyRule, OnTimeoutAction, Params, QueryWhen,
+    NetworkPolicyRule, Params, QueryWhen,
 };
 use mz_sql::session::user::User;
 use mz_sql::session::vars::{MAX_CREDIT_CONSUMPTION_RATE, SystemVars, Var};
@@ -875,8 +875,6 @@ pub struct ExplainTimestampFinish {
 #[derive(Debug)]
 pub enum ClusterStage {
     Alter(AlterCluster),
-    WaitForHydrated(AlterClusterWaitForHydrated),
-    Finalize(AlterClusterFinalize),
     /// The foreground wait-shim over a controller-driven background
     /// reconfiguration: poll the durable `reconfiguration` record until it
     /// clears, then report success or timeout depending on whether the realized
@@ -888,24 +886,6 @@ pub enum ClusterStage {
 pub struct AlterCluster {
     validity: PlanValidity,
     plan: plan::AlterClusterPlan,
-}
-
-#[derive(Debug)]
-pub struct AlterClusterWaitForHydrated {
-    validity: PlanValidity,
-    plan: plan::AlterClusterPlan,
-    new_config: ClusterVariantManaged,
-    workload_class: Option<String>,
-    timeout_time: Instant,
-    on_timeout: OnTimeoutAction,
-}
-
-#[derive(Debug)]
-pub struct AlterClusterFinalize {
-    validity: PlanValidity,
-    plan: plan::AlterClusterPlan,
-    new_config: ClusterVariantManaged,
-    workload_class: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1311,10 +1291,6 @@ pub struct ConnMeta {
     /// Lock for the Coordinator's deferred statements that is dropped on transaction clear.
     #[serde(skip)]
     deferred_lock: Option<OwnedMutexGuard<()>>,
-
-    /// Cluster reconfigurations that will need to be
-    /// cleaned up when the current transaction is cleared
-    pending_cluster_alters: BTreeSet<ClusterId>,
 
     /// Channel on which to send notices to a session.
     #[serde(skip)]

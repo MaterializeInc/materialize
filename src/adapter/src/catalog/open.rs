@@ -1430,8 +1430,14 @@ fn remove_invalid_config_param_role_defaults_migration(
     Ok(())
 }
 
-/// Cluster Replicas may be created ephemerally during an alter statement, these replicas
-/// are marked as pending and should be cleaned up on catalog open.
+/// Drops replicas left durably marked `pending`.
+///
+/// No runtime path creates one anymore. An upgrade can still come from a version
+/// whose staged reconfiguration machine crashed between the pending-create commit
+/// and the finalize, and those replicas are excluded from the cluster
+/// controller's ownership test, so this catalog-open sweep is their only
+/// remaining cleaner. It goes away together with the durable `pending` field,
+/// once no supported upgrade source can still write one.
 fn remove_pending_cluster_replicas_migration(
     tx: &mut Transaction,
     boot_ts: mz_repr::Timestamp,
