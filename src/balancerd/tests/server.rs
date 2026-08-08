@@ -201,7 +201,13 @@ async fn test_balancer() {
             None,
             None,
             TracingHandle::disabled(),
-            vec![],
+            // Advertise HTTP/2 via ALPN. This defaults off in production so a
+            // balancerd that upgrades ahead of environmentd does not offer h2
+            // to clients before environmentd can parse it.
+            vec![(
+                "balancerd_https_enable_http2_alpn".to_string(),
+                "true".to_string(),
+            )],
         );
         let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
         let balancer_pgwire_listen = balancer_server.pgwire.0.local_addr();
