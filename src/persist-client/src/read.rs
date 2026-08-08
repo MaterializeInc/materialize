@@ -38,6 +38,7 @@ use timely::progress::{Antichain, Timestamp};
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::async_runtime::IsolatedRuntime;
 use crate::batch::BLOB_TARGET_SIZE;
 use crate::cfg::{COMPACTION_MEMORY_BOUND_BYTES, RetryParameters};
 use crate::fetch::FetchConfig;
@@ -1200,6 +1201,7 @@ where
             lease,
             should_fetch_part,
             COMPACTION_MEMORY_BOUND_BYTES.get(&self.cfg),
+            Arc::clone(&self.machine.isolated_runtime),
         )
     }
 
@@ -1216,6 +1218,7 @@ where
         lease: L,
         should_fetch_part: impl for<'a> Fn(Option<&'a LazyPartStats>) -> bool,
         memory_budget_bytes: usize,
+        isolated_runtime: Arc<IsolatedRuntime>,
     ) -> Result<Cursor<K, V, T, D, L>, Since<T>> {
         let context = format!("{}[as_of={:?}]", shard_id, as_of.elements());
         let filter = FetchBatchFilter::Snapshot {
@@ -1231,6 +1234,7 @@ where
             metrics,
             shard_metrics,
             read_metrics,
+            isolated_runtime,
             filter,
             None,
             memory_budget_bytes,
