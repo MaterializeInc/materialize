@@ -99,6 +99,13 @@ struct SharedTraceState<Tr: TraceReader> {
     /// zero readers compaction follows the writer. `None` until the first `AllowCompaction` arrives,
     /// where the publisher falls back to its own current hold (the dataflow `as_of` at startup).
     writer_logical: Option<Antichain<Tr::Time>>,
+    /// The physical compaction frontier the publisher last forwarded to the publishing trace.
+    ///
+    /// The publishing trace's own physical frontier is at or below this, because the trace takes the
+    /// meet over every agent's hold and the publisher is one of those agents. That bounds which
+    /// batches the trace may have merged, which is what makes [`SharedTraceHandle::batches_through`]
+    /// safe to cut at a caller-chosen frontier. See the precondition there.
+    forwarded_physical: Antichain<Tr::Time>,
     /// Importer queues, keyed by registration id. A handle may back several registrations, so this
     /// is keyed separately from any handle.
     queues: BTreeMap<usize, ImportQueue<Tr>>,
@@ -175,6 +182,7 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 logical_holds: BTreeMap::new(),
                 physical_holds: BTreeMap::new(),
                 writer_logical: None,
+                forwarded_physical: Antichain::from_elem(batch_min::<Tr>()),
                 queues: BTreeMap::new(),
                 next_id: 0,
                 closed: false,
@@ -419,6 +427,19 @@ where
 
     fn batches_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<Vec<Self::Batch>> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
+        // Precondition, mirroring `Spine::batches_through`, which asserts the same against the
+        // spine's own physical frontier: a cut below the publishing trace's physical frontier is
+        // illegal, because the trace is free to have merged across it.
+        //
+        // This is what keeps the straddle check below from firing on a merged batch. The publishing
+        // trace promotes a batch into its mergeable pile only once `batch.upper()` is at or below
+        // its physical frontier, which is at or below what the publisher last forwarded. So under
+        // this precondition every merged batch lies wholly at or below the cut, and only the
+        // unmerged tail can straddle it, which is the case the check is for.
+        assert!(
+            timely::PartialOrder::less_equal(&state.forwarded_physical.borrow(), &upper),
+            "batches_through: cut below the publisher's forwarded physical frontier"
+        );
         // A clean cut of the published chain: all non-empty batches whose upper is not beyond
         // `upper`, and none whose lower is beyond `upper`. Empty batches are dropped, as
         // `Spine::batches_through` does.
@@ -474,6 +495,26 @@ where
 /// Smallest time, used only to satisfy the borrow in the cut check for empty lower frontiers.
 fn batch_min<Tr: TraceReader>() -> Tr::Time {
     <Tr::Time as timely::progress::Timestamp>::minimum()
+}
+
+/// The frontier a chain seeded into a fresh importer covers.
+///
+/// That is the last batch's upper, because the published chain is contiguous and totally ordered by
+/// description. `upper` serves only the empty chain, which covers nothing.
+///
+/// Not `upper` itself: `upper` is the stream frontier and lags the chain by up to a scheduling round
+/// (the publisher refreshes the chain from the trace, which seals a batch a round before the
+/// frontier notification catches up). Seeding it would leave the importer's trace holding batches
+/// above its own stream frontier, and a join reads both and would count a record from the trace that
+/// the stream has not yet delivered. Mirrors `TraceAgent::new_listener`, which seeds the last
+/// batch's upper for the same reason.
+fn seed_frontier<Tr: TraceReader>(
+    chain: &[Tr::Batch],
+    upper: &Antichain<Tr::Time>,
+) -> Antichain<Tr::Time> {
+    chain
+        .last()
+        .map_or_else(|| upper.clone(), |batch| batch.upper().clone())
 }
 
 /// An owned, consistent snapshot of a published arrangement: an immutable chain plus its frontiers.
@@ -675,6 +716,9 @@ where
                     );
 
                     state.chain = chain;
+                    // Record the physical frontier before forwarding it below, so a reader that cuts
+                    // the chain can check the precondition `Spine::batches_through` relies on.
+                    state.forwarded_physical = physical.clone();
                     // Publish the trace's real logical compaction after we forward `logical` below.
                     // Agent compaction only advances (joins), so the publisher's hold becomes
                     // `join(publisher_logical, logical)`. The trace's real compaction is the meet of
@@ -804,9 +848,9 @@ where
 
             // Register under one lock acquisition: mint an id, seed the queue with the current
             // chain (hint `minimum`, as the local replay does for historical batches) followed by
-            // the current upper, and install the queue. Later batches append; earlier ones are
-            // seeded. Nothing is missed or duplicated.
-            let reg_id = {
+            // the frontier that chain covers, and install the queue. Later batches append; earlier
+            // ones are seeded. Nothing is missed or duplicated.
+            let (reg_id, seed) = {
                 let mut state = shared.state.lock().expect("shared trace poisoned");
                 let reg_id = state.next_id;
                 state.next_id += 1;
@@ -817,7 +861,8 @@ where
                         Some(batch_min::<Tr>()),
                     ));
                 }
-                instructions.push_back(TraceReplayInstruction::Frontier(state.upper.clone()));
+                let seed = seed_frontier::<Tr>(&state.chain, &state.upper);
+                instructions.push_back(TraceReplayInstruction::Frontier(seed.clone()));
                 // If the publisher already closed, its one-shot terminal frontier has been and gone,
                 // so seed our own. Otherwise a late importer would drain the chain and then wait
                 // forever for a frontier that never arrives, leaking its capability. Mirrors the
@@ -832,7 +877,7 @@ where
                         activator,
                     },
                 );
-                reg_id
+                (reg_id, seed)
             };
 
             // Deregisters the queue when the source operator (and thus this closure) drops.
@@ -843,6 +888,7 @@ where
 
             let mut capabilities = Some(CapabilitySet::new());
             capabilities.as_mut().unwrap().insert(capability);
+            let mut acknowledged = seed;
 
             move |output| {
                 let _guard = &_guard;
@@ -858,6 +904,15 @@ where
                     for instruction in drained {
                         match instruction {
                             TraceReplayInstruction::Frontier(frontier) => {
+                                // The publisher's instructions carry the stream frontier, which lags
+                                // the chain coverage seeded at registration by up to a scheduling
+                                // round. Skip the ones that do not advance what we already hold: a
+                                // capability set cannot be downgraded backwards, and the seeded
+                                // coverage is already correct.
+                                if !timely::PartialOrder::less_equal(&acknowledged, &frontier) {
+                                    continue;
+                                }
+                                acknowledged = frontier.clone();
                                 // Bound the read at `until`: once the trace's frontier reaches it, drop
                                 // the capability so a single-time read completes. Otherwise track the
                                 // trace's `upper`, keeping the stream frontier equal to the trace upper
@@ -1385,6 +1440,63 @@ mod tests {
             observed_lead,
             "trace map_batches upper never observed leading the stream frontier"
         );
+    }
+
+    /// A fresh importer is seeded with the frontier its seeded chain covers, not the stream frontier
+    /// that lags it.
+    ///
+    /// [`trace_upper_can_lead_stream_frontier`] establishes that the lag is real. Registration copies
+    /// the chain from the trace, so seeding the lagging stream frontier alongside it would hand the
+    /// importer a trace covering times its own stream had not reached.
+    #[mz_ore::test]
+    fn seed_frontier_covers_the_chain_not_the_stream_frontier() {
+        timely::execute_directly(move |worker| {
+            let (agent, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+                let arranged = collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("seed oks");
+                (arranged.trace.clone(), input)
+            });
+
+            for t in 0..3u64 {
+                input.advance_to(Timestamp::from(t));
+                input.update(
+                    (
+                        Row::pack_slice(&[Datum::Int64(i64::cast_from(u32::try_from(t).unwrap()))]),
+                        Row::pack_slice(&[Datum::String("v")]),
+                    ),
+                    Diff::ONE,
+                );
+                input.advance_to(Timestamp::from(t + 1));
+                input.flush();
+                worker.step();
+            }
+
+            let mut chain = Vec::new();
+            agent.map_batches(|batch| chain.push(batch.clone()));
+            let coverage = chain.last().expect("sealed batches").upper().to_owned();
+            // A stream frontier from before the last seal, the lagging value registration must not
+            // seed.
+            let lagging = Antichain::from_elem(Timestamp::from(0_u64));
+            assert!(
+                timely::PartialOrder::less_than(&lagging, &coverage),
+                "test needs a stream frontier strictly below the chain coverage"
+            );
+            assert_eq!(
+                seed_frontier::<RowRowSpine<Timestamp, Diff>>(&chain, &lagging),
+                coverage,
+                "seed must cover the seeded chain"
+            );
+            assert_eq!(
+                seed_frontier::<RowRowSpine<Timestamp, Diff>>(&[], &lagging),
+                lagging,
+                "an empty chain covers nothing, so the stream frontier stands"
+            );
+        });
     }
 
     /// The delayed-capability panic, reproduced against the real importer source operator.

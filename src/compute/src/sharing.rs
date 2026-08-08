@@ -468,7 +468,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use differential_dataflow::input::Input;
-    use differential_dataflow::trace::Cursor;
+    use differential_dataflow::trace::{BatchReader, Cursor, TraceReader};
     use mz_repr::{Datum, Row};
     use mz_row_spine::{RowRowBatcher, RowRowBuilder};
     use mz_timely_util::columnation::ColumnationChunker;
@@ -1616,6 +1616,202 @@ mod tests {
             consolidate_capture(reduce_rx),
             expected_reduce_rows,
             "as_collection over SharedTrace flavor diverged from the published rows"
+        );
+    }
+
+    /// A join and a reduce over an arrangement imported at an `as_of` the publisher's spine has
+    /// already merged across.
+    ///
+    /// This is the regime production reads in and no other test reaches. The other join and reduce
+    /// tests publish four updates and read at `as_of = 0`, so their chains are one batch per time
+    /// and no merge ever spans the read time. Here sixteen times are published with no importer
+    /// registered, so the publisher forwards the stream frontier as its physical compaction target
+    /// and the spine folds batches together freely, including across the `as_of` the import then
+    /// reads at. The test asserts that state was actually reached rather than assuming it.
+    ///
+    /// What that regime exercises: the importer seeds from the merged chain and cuts it at frontiers
+    /// a merged batch can straddle, which is the boundary
+    /// `SharedTraceHandle::batches_through` polices. A cut that returned a straddling batch would
+    /// hand the join updates at times not before the cut and double count them, so the join output
+    /// is the observable.
+    #[mz_ore::test]
+    fn stale_as_of_import_over_merged_chain_matches_direct() {
+        let id_a = GlobalId::User(1);
+        let id_b = GlobalId::User(2);
+
+        // Sixteen distinct times, four keys cycling, so every key accumulates several updates and
+        // the publisher seals sixteen batches for the spine to merge.
+        let times = 16u64;
+        let mut a: Vec<Update> = Vec::new();
+        let mut b: Vec<Update> = Vec::new();
+        for t in 0..times {
+            let key = i64::try_from(t % 4).expect("small") + 1;
+            a.push((key, "a", t, 1));
+            b.push((key, "x", t, 1));
+        }
+        // Retract key 1's first insert at a time still below `as_of`, so the stale read must
+        // coalesce the pair away rather than report both.
+        a.push((1, "a", 3, -1));
+        let seal = times;
+        // Read from the middle of the history, far enough below the seal that the batches around it
+        // have been merged over.
+        let as_of_ts = Timestamp::from(times / 2);
+
+        // The import advances times at or below `as_of` up to it and leaves later times alone, so
+        // the oracle is the direct computation over the same advanced updates.
+        let advance = |updates: &[Update]| -> Vec<Update> {
+            updates
+                .iter()
+                .map(|&(k, v, t, d)| (k, v, t.max(u64::from(as_of_ts)), d))
+                .collect()
+        };
+        let a_advanced = advance(&a);
+        let b_advanced = advance(&b);
+
+        let expected_join_rows = expected_join(&a_advanced, &b_advanced);
+
+        // Reduce-surface oracle: A's advanced updates as the two-column `(key, value)` rows that
+        // `as_collection` reconstructs, consolidated per `(row, time)`.
+        let expected_reduce_rows = {
+            let mut out: BTreeMap<(Row, Timestamp), Diff> = BTreeMap::new();
+            for &(k, v, t, d) in &a_advanced {
+                let row = Row::pack_slice(&[Datum::Int64(k), Datum::String(v)]);
+                *out.entry((row, Timestamp::from(t))).or_insert(Diff::ZERO) += Diff::from(d);
+            }
+            let mut v: Vec<_> = out
+                .into_iter()
+                .filter(|(_, d)| !d.is_zero())
+                .map(|((row, t), d)| (row, t, d))
+                .collect();
+            v.sort();
+            v
+        };
+
+        let (join_tx, join_rx) = mpsc::channel();
+        let (reduce_tx, reduce_rx) = mpsc::channel();
+
+        timely::execute_directly(move |worker| {
+            let registry = ArrangementSharingRegistry::new();
+
+            // Publish both indexes to completion BEFORE any importer registers. With no reader hold
+            // in `physical_holds` the publisher forwards the stream frontier as the physical
+            // compaction target, which is what lets the spine merge across the later `as_of`.
+            let mut keep_a = publish_join_input(&registry, worker, id_a, &a, seal);
+            let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
+            for _ in 0..64 {
+                keep_a(worker);
+                keep_b(worker);
+            }
+
+            let worker_index = worker.index();
+            let (oks_a, errs_a) = registry.handles(&id_a, worker_index).expect("A published");
+            let (oks_b, errs_b) = registry.handles(&id_b, worker_index).expect("B published");
+
+            // The premise: some published batch spans `as_of`, so the read below cuts a chain the
+            // spine has merged over. Without this the test degenerates into the batch-aligned case
+            // the other tests already cover.
+            // A batch that starts strictly before `as_of` and ends strictly after it covers the read
+            // time plus at least one earlier time. Each published time seals its own `[t, t+1)`
+            // batch, so only a merge can produce that shape.
+            let mut merged_across_as_of = false;
+            oks_a.map_batches(|batch| {
+                let lower = batch.lower().elements().first().copied();
+                let upper = batch.upper().elements().first().copied();
+                if let (Some(lower), Some(upper)) = (lower, upper) {
+                    if lower < as_of_ts && as_of_ts < upper {
+                        merged_across_as_of = true;
+                    }
+                }
+            });
+            assert!(
+                merged_across_as_of,
+                "no published batch spans as_of {as_of_ts:?}; the spine did not merge across it \
+                 and the test is not exercising the merged-chain cut"
+            );
+
+            let join_probe = ProbeHandle::new();
+            let reduce_probe = ProbeHandle::new();
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let as_of = Antichain::from_elem(as_of_ts);
+                let until = Antichain::new();
+                let arr_a = oks_a.import_snapshot_at(
+                    scope.clone(),
+                    "import A",
+                    as_of.clone(),
+                    until.clone(),
+                );
+                let err_a = errs_a.import_snapshot_at(
+                    scope.clone(),
+                    "import A errs",
+                    as_of.clone(),
+                    until.clone(),
+                );
+                let arr_b = oks_b.import_snapshot_at(
+                    scope.clone(),
+                    "import B",
+                    as_of.clone(),
+                    until.clone(),
+                );
+                let err_b = errs_b.import_snapshot_at(scope.clone(), "import B errs", as_of, until);
+
+                scope.region_named("SharedTraceFlavor", |inner| {
+                    let flavor_a = ArrangementFlavor::SharedTrace(
+                        id_a,
+                        arr_a.enter(inner),
+                        err_a.enter(inner),
+                    );
+                    let flavor_b = ArrangementFlavor::SharedTrace(
+                        id_b,
+                        arr_b.enter(inner),
+                        err_b.enter(inner),
+                    );
+
+                    #[allow(deprecated)]
+                    let (oks_coll, _errs_coll) = flavor_a.as_collection();
+                    oks_coll
+                        .inner
+                        .probe_with(&reduce_probe)
+                        .capture_into(reduce_tx.clone());
+
+                    let (join_a, join_b) = match (&flavor_a, &flavor_b) {
+                        (
+                            ArrangementFlavor::SharedTrace(_, a, _),
+                            ArrangementFlavor::SharedTrace(_, b, _),
+                        ) => (a.clone(), b.clone()),
+                        _ => unreachable!("both flavors constructed as SharedTrace above"),
+                    };
+                    let joined = join_a.join_core(join_b, |key, v1, v2| {
+                        let row =
+                            Row::pack(key.into_iter().chain(v1.into_iter()).chain(v2.into_iter()));
+                        Some(row)
+                    });
+                    joined
+                        .inner
+                        .probe_with(&join_probe)
+                        .capture_into(join_tx.clone());
+                });
+            });
+
+            let seal_ts = Timestamp::from(seal);
+            let mut steps = 0;
+            while join_probe.less_than(&seal_ts) || reduce_probe.less_than(&seal_ts) {
+                keep_a(worker);
+                keep_b(worker);
+                worker.step();
+                steps += 1;
+                assert!(steps < 10_000, "dataflow did not seal through {seal_ts:?}");
+            }
+        });
+
+        assert_eq!(
+            consolidate_capture(join_rx),
+            expected_join_rows,
+            "join over a merged chain read at a stale as_of diverged from the direct join"
+        );
+        assert_eq!(
+            consolidate_capture(reduce_rx),
+            expected_reduce_rows,
+            "as_collection over a merged chain read at a stale as_of diverged from the published rows"
         );
     }
 
