@@ -20,7 +20,9 @@ use futures::{Future, StreamExt, future};
 use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_PASSWORD_AUTH, READ_THEN_WRITE_MAX_DEPENDENCIES};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE, READ_THEN_WRITE_MAX_DEPENDENCIES,
+};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
@@ -75,7 +77,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
+    self, IsolationLevel, MAX_CONCURRENT_OCC_WRITES, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
     TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
@@ -4208,6 +4210,7 @@ impl Coordinator {
         };
         self.catalog_transact(Some(session), vec![op]).await?;
 
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4224,6 +4227,7 @@ impl Coordinator {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4238,13 +4242,77 @@ impl Coordinator {
         _: plan::AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, None)?;
+        // Which parameters `RESET ALL` changes has to be read before the
+        // transaction applies it, afterwards they all read as their default.
+        let startup_only_changed = self.startup_only_vars_changed_by_reset_all();
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
+        for name in startup_only_changed {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: None,
         });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
+    }
+
+    /// System parameters whose value `environmentd` samples once at startup.
+    ///
+    /// `enable_adapter_frontend_occ_read_then_write` selects between the
+    /// lock-based and the OCC read-then-write path. Both are never live in one
+    /// process, so the choice is fixed at boot and every session inherits it.
+    /// `max_concurrent_occ_writes` sizes the OCC semaphore at boot.
+    ///
+    /// `ALTER SYSTEM` on one of these is allowed to go through. The catalog
+    /// value is what the next process start reads, and the running process
+    /// cannot observe it, so there is no window where two code paths are live at
+    /// once.
+    fn startup_only_vars() -> [&'static str; 2] {
+        [
+            FRONTEND_READ_THEN_WRITE.name(),
+            MAX_CONCURRENT_OCC_WRITES.name(),
+        ]
+    }
+
+    /// Warns that `name` is only read at startup, so the running process keeps
+    /// the value it sampled at boot.
+    fn notice_if_startup_only(session: &Session, name: &str) {
+        if Self::startup_only_vars()
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(name))
+        {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
+    }
+
+    /// The startup-only parameters whose value `ALTER SYSTEM RESET ALL` would
+    /// change. Parameters already at their effective default are untouched, so
+    /// they are not reported.
+    fn startup_only_vars_changed_by_reset_all(&self) -> Vec<&'static str> {
+        // Value-based, unlike `notice_if_startup_only`, which warns whenever an
+        // operator names one of these parameters. `RESET ALL` names every
+        // parameter, so only a value that actually moves is worth a warning.
+        let config = self.catalog().system_config();
+        let defaults = config.defaults();
+        Self::startup_only_vars()
+            .into_iter()
+            .filter(|name| {
+                // Both names are registered system vars, a lookup failure
+                // would mean the definitions and this list have drifted apart.
+                let current = config
+                    .get(name)
+                    .expect("startup-only parameter is a registered system var")
+                    .value();
+                defaults
+                    .get(*name)
+                    .is_some_and(|default| default != &current)
+            })
+            .collect()
     }
 
     // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.

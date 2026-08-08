@@ -6675,3 +6675,94 @@ fn test_shutdown_with_inflight_writes() {
         tracing::info!("round {round} survived");
     }
 }
+
+/// Changing a startup-only parameter is allowed and warns that it only takes
+/// effect after a restart. The running process keeps its sampled value, so the
+/// routing decision cannot change underneath open sessions. A change that is
+/// rejected, or a `RESET ALL` that leaves the parameter where it was, must not
+/// warn.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_startup_only_system_var_warns() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config_internal()
+        .notice_callback(move |notice| tx.unbounded_send(notice).expect("send notice"))
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    const WARNING: &str = "only take effect when environmentd restarts";
+    let drain = |rx: &mut futures::channel::mpsc::UnboundedReceiver<_>| -> Vec<String> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|notice: postgres::error::DbError| notice.message().to_string())
+            .collect()
+    };
+
+    for stmt in [
+        "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true",
+        "ALTER SYSTEM RESET enable_adapter_frontend_occ_read_then_write",
+    ] {
+        client.batch_execute(stmt).unwrap();
+        let notices = drain(&mut rx);
+        assert!(
+            notices.iter().any(|message| message.contains(WARNING)),
+            "{stmt} did not warn, notices: {notices:?}"
+        );
+    }
+
+    // A rejected change must not warn: the catalog value does not move, so a
+    // restart would not pick anything new up.
+    let err = client
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 'not-a-number'")
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("requires a \"unsigned integer\" value"),
+        "unexpected error: {err:?}"
+    );
+    let notices = drain(&mut rx);
+    assert!(
+        !notices.iter().any(|message| message.contains(WARNING)),
+        "rejected change warned, notices: {notices:?}"
+    );
+
+    // Zero permits would block every read-then-write until its statement
+    // timeout, so the parameter is constrained to at least 1.
+    let err = client
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 0")
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("only supports values in range 1.."),
+        "unexpected error: {err:?}"
+    );
+
+    // `RESET ALL` also goes through, and warns for the parameter it changes.
+    client
+        .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true")
+        .unwrap();
+    let _ = drain(&mut rx);
+    client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
+    let notices = drain(&mut rx);
+    assert!(
+        notices.iter().any(|message| message.contains(WARNING)),
+        "RESET ALL did not warn, notices: {notices:?}"
+    );
+
+    // Everything is at its effective default now, so a second `RESET ALL`
+    // changes no startup-only parameter and must stay quiet about them.
+    client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
+    let notices = drain(&mut rx);
+    assert!(
+        !notices.iter().any(|message| message.contains(WARNING)),
+        "RESET ALL warned without changing anything, notices: {notices:?}"
+    );
+}
