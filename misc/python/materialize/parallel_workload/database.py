@@ -10,8 +10,10 @@
 import random
 import threading
 import uuid
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Callable, Iterator
 from enum import Enum
+from typing import Any
 
 from pg8000.native import identifier, literal
 
@@ -47,12 +49,15 @@ from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.parallel_workload.column import (
     Column,
     KafkaColumn,
+    KeyColumn,
     LoadGeneratorColumn,
     MySqlColumn,
     PostgresColumn,
     SqlServerColumn,
     WebhookColumn,
+    correctness,
     naughtify,
+    set_correctness,
     set_naughty_identifiers,
 )
 from materialize.parallel_workload.executor import Executor
@@ -89,6 +94,15 @@ MAX_KAFKA_SINKS = 50
 MAX_ICEBERG_SINKS = 50
 MAX_TYPES = 50
 MAX_NETWORK_POLICIES = 30
+
+# How many committed table states correctness mode keeps per table. A
+# concurrent read must match one of the states between the versions before
+# and after the read. If more commits than this land during a single read,
+# the window has been evicted and that comparison is skipped. Sized so that
+# a full verification transaction (base read, seven shadow reads, surface
+# oracles) rarely gets outrun: states are at most MAX_ROWS rows, so the
+# memory cost is negligible.
+MAX_TABLE_HISTORY = 150
 
 MAX_INITIAL_DBS = 1
 MAX_INITIAL_SCHEMAS = 1
@@ -212,6 +226,17 @@ class Table(DBObject):
     num_rows: int
     schema: Schema
     temp: bool
+    # Correctness tracking, all guarded by self.lock: `version` counts
+    # committed writes, `history` keeps the last MAX_TABLE_HISTORY entries of
+    # (version, candidate states). An entry usually has a single candidate
+    # state (a list of rows). After a write whose outcome is unknown (e.g. the
+    # connection died during the commit) an entry holds both the state with
+    # and without that write, until a quiesced verification resolves which one
+    # is real. States are never mutated once recorded, readers may hold
+    # references to them without the lock.
+    version: int
+    history: "deque[tuple[int, list[list[list[Any]]]]]"
+    next_key: int
 
     def __init__(
         self, rng: random.Random, table_id: int, schema: Schema, temp: bool = False
@@ -223,9 +248,53 @@ class Table(DBObject):
             Column(rng, i, rng.choice(DATA_TYPES_FOR_COLUMNS), self)
             for i in range(rng.randint(2, MAX_COLUMNS))
         ]
+        if correctness():
+            # Leading harness-managed key column, see KeyColumn. next_key is
+            # guarded by self.lock like the rest of the tracking state.
+            self.columns.insert(0, KeyColumn(Long, self))
+        self.next_key = 0
         self.num_rows = 0
         self.rename = 0
         self.temp = temp
+        self.version = 0
+        self.history = deque([(0, [[]])], maxlen=MAX_TABLE_HISTORY)
+
+    def current_states(self) -> list[list[list[Any]]]:
+        """The tracked candidate states after the last committed write. Caller
+        must hold self.lock."""
+        return self.history[-1][1]
+
+    def commit_write(
+        self,
+        transform: Callable[[list[list[Any]]], list[list[Any]]],
+        uncertain: bool,
+    ) -> None:
+        """Record a committed write as a new version. `transform` maps a state
+        to the state after the write and may mutate the passed copy. With
+        `uncertain` the write may or may not have been applied, so both
+        outcomes are kept as candidates. Caller must hold self.lock."""
+        old = self.current_states()
+        new = [transform([list(row) for row in state]) for state in old]
+        if uncertain:
+            new = [[list(row) for row in state] for state in old] + new
+        # Deduplicate candidates, e.g. a whole-table DELETE maps every
+        # candidate to the same empty state, resolving accumulated forks.
+        deduped: list[list[list[Any]]] = []
+        seen = set()
+        for state in new:
+            key = repr(state)
+            if key not in seen:
+                seen.add(key)
+                deduped.append(state)
+        self.version += 1
+        self.history.append((self.version, deduped))
+
+    def collapse_to(self, state: list[list[Any]]) -> None:
+        """Reset tracking to a single state that a quiesced read proved to be
+        the table's actual contents. Caller must hold self.lock."""
+        self.version += 1
+        self.history.clear()
+        self.history.append((self.version, [state]))
 
     def name(self) -> str:
         if self.rename:
@@ -235,14 +304,92 @@ class Table(DBObject):
     def __str__(self) -> str:
         return f"{self.schema}.{identifier(self.name())}"
 
-    def create(self, exe: Executor) -> None:
+    def shadow_mv(self) -> str:
+        """Correctness mode: materialized view mirroring this table's contents."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-{self.table_id}'))}"
+
+    def shadow_cnt_mv(self) -> str:
+        """Correctness mode: materialized view counting this table's rows."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-cnt-{self.table_id}'))}"
+
+    def shadow_nokey_mv(self) -> str:
+        """Correctness mode: materialized view projecting away the key column.
+        Rows that differ only in the key become true duplicates here, so
+        wrong-multiplicity bugs are observable."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-nokey-{self.table_id}'))}"
+
+    def shadow_agg_mv(self) -> str:
+        """Correctness mode: materialized view aggregating the key column
+        (count/min/max/sum), exercising the reduce operator. The key is a
+        unique bigint, so the aggregates are exact integers verifiable against
+        the table read at the same timestamp."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-agg-{self.table_id}'))}"
+
+    def shadow_view(self) -> str:
+        """Correctness mode: non-materialized view mirroring this table, with
+        a default index on it (arrangement-maintained read path, distinct from
+        both the table's own index and the materialized views)."""
+        return f"{self.schema}.{identifier(naughtify(f'vw-{self.table_id}'))}"
+
+    def shadow_refresh_mv(self) -> str:
+        """Correctness mode: REFRESH EVERY materialized view. Between
+        refreshes it serves the table as of the last refresh tick, which must
+        equal some committed (tracked) state."""
+        return f"{self.schema}.{identifier(naughtify(f'mv-refresh-{self.table_id}'))}"
+
+    def create_table_sql(self) -> str:
+        """The bare CREATE TABLE statement, without the shadow objects, for
+        callers that must run exactly one DDL statement (DDLTransactionAction).
+        Correctness mode needs create_shadow_objects afterwards."""
         query = "CREATE "
         if self.temp:
             query += "TEMP "
         query += f"TABLE {self}("
         query += ",\n    ".join(column.create() for column in self.columns)
         query += ")"
-        exe.execute(query)
+        return query
+
+    def create(self, exe: Executor) -> None:
+        exe.execute(self.create_table_sql())
+        if correctness() and not self.temp:
+            self.create_shadow_objects(exe)
+
+    def create_shadow_objects(self, exe: Executor) -> None:
+        # Shadow objects that must always contain the same data as the
+        # table, verified by SelectAction: an index (arrangement read
+        # path) and materialized views (dataflow producing a persist
+        # shard, must be rehydrated correctly after restarts). Pinned to
+        # the quickstart cluster because the workload never drops it, so
+        # the shadow objects live exactly as long as the table.
+        exe.execute(f"CREATE DEFAULT INDEX IN CLUSTER quickstart ON {self}")
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_mv()} IN CLUSTER quickstart"
+            f" AS SELECT * FROM {self}"
+        )
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_cnt_mv()} IN CLUSTER quickstart"
+            f" AS SELECT count(*) AS cnt FROM {self}"
+        )
+        nokey = ", ".join(column.name(True) for column in self.columns[1:])
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_nokey_mv()} IN CLUSTER"
+            f" quickstart AS SELECT {nokey} FROM {self}"
+        )
+        key = self.columns[0].name(True)
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_agg_mv()} IN CLUSTER"
+            f" quickstart AS SELECT count(*) AS cnt, min({key}) AS mn,"
+            f" max({key}) AS mx, sum({key}) AS sm FROM {self}"
+        )
+        exe.execute(f"CREATE VIEW {self.shadow_view()} AS SELECT * FROM {self}")
+        exe.execute(
+            f"CREATE DEFAULT INDEX IN CLUSTER quickstart ON {self.shadow_view()}"
+        )
+        exe.execute(
+            f"CREATE MATERIALIZED VIEW {self.shadow_refresh_mv()} IN CLUSTER"
+            f" quickstart WITH (REFRESH EVERY '5 seconds')"
+            f" AS SELECT * FROM {self}"
+        )
 
 
 class View(DBObject):
@@ -1493,6 +1640,7 @@ class Database:
         scenario: Scenario,
         naughty_identifiers: bool,
         num_threads: int,
+        correctness: bool,
     ):
         self.host = host
         self.ports = ports
@@ -1501,6 +1649,7 @@ class Database:
         self.seed = seed
         self.num_threads = num_threads
         set_naughty_identifiers(naughty_identifiers)
+        set_correctness(correctness)
 
         self.s3_path = 0
         self.dbs = [DB(seed, i) for i in range(rng.randint(1, MAX_INITIAL_DBS))]
@@ -1516,7 +1665,12 @@ class Database:
         ]
         self.table_id = len(self.tables)
         self.views = []
-        for i in range(rng.randint(2, MAX_INITIAL_VIEWS)):
+        # Correctness mode creates no views: their random expressions cannot be
+        # verified against the tracked rows, and a view depending on a table
+        # would be silently CASCADE-dropped with it, leaving a stale entry.
+        # NOTE: `correctness` here is the constructor argument, the module
+        # function of the same name is shadowed in this scope.
+        for i in range(0 if correctness else rng.randint(2, MAX_INITIAL_VIEWS)):
             # Only use tables for now since LIMIT 1 and statement_timeout are
             # not effective yet at preventing long-running queries and OoMs.
             base_object = rng.choice(self.tables)
@@ -1744,6 +1898,15 @@ class Database:
         # that back for good.
 
     def create(self, exe: Executor, composition: Composition) -> None:
+        # Drop leftover databases from previous runs first. A previous run may
+        # have used a different seed, so its databases are not in self.dbs and a
+        # per-seed drop would miss them. Their tables can hold privilege grants
+        # on the roles dropped below, and DROP ROLE fails while such a grant
+        # exists, so these must go before the role cleanup.
+        exe.execute("SELECT name FROM mz_databases WHERE name LIKE 'db-pw-%'")
+        for row in exe.cur.fetchall():
+            exe.execute(f"DROP DATABASE {identifier(row[0])} CASCADE")
+
         for db in self.dbs:
             db.drop(exe)
             db.create(exe)
@@ -1756,6 +1919,11 @@ class Database:
         exe.execute("DROP SECRET IF EXISTS mypass CASCADE")
         exe.execute("DROP SECRET IF EXISTS sql_server_pass CASCADE")
         exe.execute("DROP SECRET IF EXISTS minio CASCADE")
+        # Recreated below with fresh per-run credentials, so a leftover from a
+        # previous run must be replaced rather than kept. CASCADE on the secret
+        # also drops the dependent aws_conn.
+        exe.execute("DROP SECRET IF EXISTS iceberg_secret CASCADE")
+        exe.execute("DROP CONNECTION IF EXISTS polaris_conn CASCADE")
 
         exe.execute("SELECT name FROM mz_roles WHERE name LIKE 'r%'")
         for row in exe.cur.fetchall():
