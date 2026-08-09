@@ -644,12 +644,20 @@ fn import_shared_index<'outer>(
         &oks_hold.get_logical_compaction(),
         &errs_hold.get_logical_compaction(),
     );
+    // A violation here is a protocol-ordering failure, not a serving failure, so it must stay loud.
+    // See the protocol invariants in the design doc: the controller's read hold is realized on the
+    // replica only when this runtime renders, and maintenance may have applied an `AllowCompaction`
+    // for `idx_id` before that. `writer_logical` says which side moved: `Some(f)` with `f` beyond
+    // `as_of` means the controller released and maintenance applied it ahead of this render, `None`
+    // means the published `since` came from the publisher's own hold instead.
     assert!(
         PartialOrder::less_equal(&since, as_of),
         "Index {idx_id} has been allowed to compact beyond the dataflow as_of: \
-         since {:?}, as_of {:?}",
+         since {:?}, as_of {:?}, controller allow_compaction {:?}, published upper {:?}",
         since.elements(),
         as_of.elements(),
+        oks_hold.writer_logical().map(|f| f.elements().to_vec()),
+        oks_hold.frontiers().1.elements().to_vec(),
     );
 
     oks_hold.set_logical_compaction(as_of.borrow());

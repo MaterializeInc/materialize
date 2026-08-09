@@ -302,6 +302,17 @@ where
         }
     }
 
+    /// The controller's last `AllowCompaction` frontier for this arrangement, or `None` if none has
+    /// arrived.
+    ///
+    /// Diagnostic only. It distinguishes a published `since` that the controller drove from one the
+    /// publisher's own hold drove, which is what tells apart a protocol-ordering violation from a
+    /// local compaction bug when a reader finds `since` beyond its `as_of`.
+    pub fn writer_logical(&self) -> Option<Antichain<Tr::Time>> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.writer_logical.clone()
+    }
+
     /// The published arrangement's current `(since, upper)` frontiers, read under the state lock.
     ///
     /// A point-in-time observation for diagnostics. Either frontier may have advanced by the time

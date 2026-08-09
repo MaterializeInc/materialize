@@ -159,6 +159,77 @@ A fourth, structural fact underlies the whole design: **sharing is per-process.*
 The shared batches are `Arc`-backed in memory, so the interactive runtime reads
 only the maintenance arrangements published in that same process.
 
+## Protocol invariants
+
+The design principle above says compute builds on a correct protocol and panics outside it.
+That is only meaningful if the protocol's invariants are written down, because the runtime split
+silently invalidates one of the invariants the single-runtime protocol relied on.
+
+### The invariant compute relies on
+
+**I1.** For every dataflow `D` created at `as_of X` importing index `I`, the replica's trace for `I`
+has `since <= X` from the moment `D` is created until `D` is dropped.
+
+Single-runtime, I1 holds for two independent reasons.
+
+* **I1a, the controller.** The controller holds a read hold on `I` at `X` for `D`'s lifetime, so it
+  never sends an `AllowCompaction` for `I` past `X` while `D` lives.
+* **I1b, ordering.** `CreateDataflow(D, X)` and any later `AllowCompaction(I, F)` arrive on one
+  ordered command stream, so the replica renders `D` before it can compact `I`.
+
+### What the runtime split breaks
+
+I1a survives. I1b does not.
+
+A `CreateDataflow` for an interactive dataflow is routed only to the interactive runtime, while
+`AllowCompaction` is a lifecycle command routed to both. The two runtimes have independent command
+streams and no cross-runtime ordering, so maintenance can apply a compaction for `I` at a point in
+its stream that has no defined relationship to where interactive is in its stream. I1a does not
+rescue this: a read hold is a promise about what the controller *sends*, and the replica-side
+realization of that promise now happens on a different runtime, arbitrarily later.
+
+The failure is loud, and should stay loud. An interactive import asserts `since <= as_of` before
+building, mirroring the maintenance path. A violation is a protocol-ordering failure, not a read
+that cannot be served, so turning it into a user-visible error would hide a broken invariant behind
+a degraded query.
+
+### The general form
+
+**I2.** Any resource whose lifetime is governed by commands delivered to one runtime, but consumed
+by the other, needs its lifetime bound made visible on the *governing* runtime's stream, at a point
+ordered before the command that would violate it.
+
+Three known symptoms are the same missing invariant, not three separate problems.
+
+| Symptom | Resource | Lifetime governed by | Consumed by |
+|---|---|---|---|
+| An imported index compacts past a dataflow's `as_of` | the index's `since` | maintenance, through `AllowCompaction` | an interactive import |
+| Reconciliation drops and recreates an index under the same `GlobalId` | slot identity | maintenance, through drop and re-render | an interactive import |
+| A never-adopted placeholder is evicted | slot existence | whoever evicts | an interactive import |
+
+### The fix: make the requirement visible on the governing stream
+
+When the multiplexer routes `CreateDataflow(D, X, imports = [I])` to interactive, it first sends
+maintenance a `HoldFor(I, X, D)`. Maintenance registers that hold in the published slot, and because
+maintenance's own stream is ordered, it cannot process a later `AllowCompaction` for `I` before the
+hold exists. The hold releases on `DropDataflow(D)`, which the multiplexer already forwards to both
+runtimes.
+
+This restores I1b by construction, on the stream where the compaction is actually applied. It keeps
+maintenance decoupled from interactive: maintenance never waits for interactive to make progress, it
+only learns earlier what interactive will need. It generalizes to I2's other two rows, since a hold
+that pins `since` can pin slot identity as well.
+
+The alternative considered and rejected was an in-process sequence barrier, where interactive
+publishes the command sequence number it has processed and maintenance defers publishing a
+compaction until interactive passes it. It needs no protocol change, but it fails on two counts. It
+couples maintenance's compaction to interactive's progress, which the non-goals refuse. And a replica
+can span processes, so an in-process barrier cannot observe the runtimes in the other processes at
+all, which makes it not merely undesirable but insufficient.
+
+**Status: not yet implemented.** The invariant is currently enforced only by the assert that detects
+its violation.
+
 ## The bounded-read boundary
 
 The interactive runtime serves a read only when it is bounded, meaning its
