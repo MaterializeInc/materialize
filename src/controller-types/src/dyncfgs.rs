@@ -83,7 +83,6 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
 /// * Peeks and bounded transient dataflows route to the interactive runtime.
 ///
 /// Off in production. On by default in the CI system parameters.
-
 pub const ENABLE_TWO_RUNTIME_COMPUTE: Config<bool> = Config::new(
     "enable_two_runtime_compute",
     false,

@@ -29,9 +29,8 @@
 //!   filling a [`Published`] whose [`Published::handle`] hands out `Clone + Send`
 //!   [`SharedTraceHandle`]s.
 //! * [`SharedTraceHandle`] implements [`TraceReader`], so it drives compaction and cursors like any
-//!   trace handle. [`SharedTraceHandle::snapshot_at`] serves a point or full-scan read from any
-//!   thread. [`SharedTraceHandle::import_snapshot_at`] replays the shared arrangement into another
-//!   scope.
+//!   trace handle, from any thread. [`SharedTraceHandle::import_snapshot_at`] replays the shared
+//!   arrangement into another scope.
 //!
 //! ## Compaction
 //!
