@@ -56,6 +56,9 @@ pub struct ComputeMetrics {
     // doesn't do anything to let you pinpoint _which_ operator or worker isn't
     // yielding, but it should hopefully alert us when there is something to
     // look at.
+    // peek walk substrate
+    index_peek_walks_total: raw::IntCounterVec,
+
     timely_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
     stashed_peek_seconds: HistogramVec,
@@ -171,6 +174,11 @@ impl ComputeMetrics {
                 name: "mz_compute_reconciliation_replaced_dataflows_count_total",
                 help: "The total number of dataflows that were replaced during compute reconciliation.",
                 var_labels: ["worker_id", "reason"],
+            ), role)),
+            index_peek_walks_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_walks_total",
+                help: "The total number of fast-path index peek walks, by the substrate that ran them.",
+                var_labels: ["worker_id", "substrate"],
             ), role)),
             arrangement_maintenance_seconds_total: registry.register(with_role(metric!(
                 name: "mz_arrangement_maintenance_seconds_total",
@@ -310,6 +318,12 @@ impl ComputeMetrics {
             self.handle_command_duration_seconds
                 .with_label_values(&[worker.as_ref(), typ])
         });
+        let index_peek_walks_inline_total = self
+            .index_peek_walks_total
+            .with_label_values(&[&worker, "inline"]);
+        let index_peek_walks_offload_total = self
+            .index_peek_walks_total
+            .with_label_values(&[&worker, "offload"]);
         let index_peek_total_seconds = self.index_peek_total_seconds.clone();
         let index_peek_seek_fulfillment_seconds = self.index_peek_seek_fulfillment_seconds.clone();
         let index_peek_error_scan_seconds = self.index_peek_error_scan_seconds.clone();
@@ -339,6 +353,8 @@ impl ComputeMetrics {
             persist_peek_seconds,
             stashed_peek_seconds,
             handle_command_duration_seconds,
+            index_peek_walks_inline_total,
+            index_peek_walks_offload_total,
             index_peek_total_seconds,
             index_peek_seek_fulfillment_seconds,
             index_peek_error_scan_seconds,
@@ -378,6 +394,14 @@ pub struct WorkerMetrics {
     pub(crate) stashed_peek_seconds: Histogram,
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
+    /// Fast-path index peek walks run inline on this worker.
+    pub(crate) index_peek_walks_inline_total: IntCounter,
+    /// Fast-path index peek walks this worker dispatched to a blocking task.
+    ///
+    /// Zero while `enable_index_peek_offload` is off, and zero even with it on for any peek the
+    /// peek response stash could take, so a flat counter does not by itself mean the flag failed
+    /// to reach the worker.
+    pub(crate) index_peek_walks_offload_total: IntCounter,
     /// Histogram of total index peek durations.
     pub(crate) index_peek_total_seconds: Histogram,
     /// Histogram of index peek seek_fulfillment durations.

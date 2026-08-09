@@ -984,6 +984,10 @@ impl<'a> ActiveComputeState<'a> {
                         self.timely_worker.sync_activator_for([].into()),
                     );
                     self.compute_state.in_flight_offloaded_peeks += 1;
+                    self.compute_state
+                        .metrics
+                        .index_peek_walks_offload_total
+                        .inc();
                     // From here the peek retires through `pending_peeks`, which every runtime
                     // scans each step, not through the sharing registry's dirty set.
                     self.compute_state
@@ -994,6 +998,10 @@ impl<'a> ActiveComputeState<'a> {
             }
         }
 
+        self.compute_state
+            .metrics
+            .index_peek_walks_inline_total
+            .inc();
         match shared_index_peek_response(
             &peek.registry,
             peek.worker_index,
@@ -1447,12 +1455,20 @@ impl<'a> ActiveComputeState<'a> {
                             );
                             self.compute_state.in_flight_offloaded_peeks += 1;
                             self.compute_state
+                                .metrics
+                                .index_peek_walks_offload_total
+                                .inc();
+                            self.compute_state
                                 .pending_peeks
                                 .insert(offloaded.peek.uuid, PendingPeek::IndexOffload(offloaded));
                             return;
                         }
                     }
                 } else {
+                    self.compute_state
+                        .metrics
+                        .index_peek_walks_inline_total
+                        .inc();
                     let metrics = IndexPeekMetrics {
                         seek_fulfillment_seconds: &self
                             .compute_state

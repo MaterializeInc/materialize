@@ -305,10 +305,31 @@ Repeats are listed rather than averaged because p50 lands on a three-step ladder
 That ladder is queue position behind scans that each take about 770 ms, so p50 here is a coarse three-valued statistic and the spread across repeats is that quantisation, not a treatment effect.
 The two arms are indistinguishable at both p50 and p90, including on the `ORDER BY` load where the offload is reachable.
 
-The likely reason is that the replica has no spare CPU to offload onto.
-`interactive_compute_arg` gives the interactive runtime the same worker count as maintenance, so a two-runtime `100cc` replica runs four timely worker threads against one credit of CPU.
-A walk moved to a blocking task still needs a core, and on this replica there is none free, so the offload can only add scheduling overhead.
-E1 needs a replica with real headroom before it decides anything, and the worker-count doubling is a design question in its own right.
+`interactive_compute_arg` gives the interactive runtime the same worker count as maintenance, so a two-runtime replica runs twice the timely worker threads for the same cores.
+That ratio does not change with size.
+`100cc` is two cores and two workers per runtime, `400cc` is eight and eight, so both are oversubscribed two to one.
+Resizing therefore does not hand the offload a free core, it only stops one walk from monopolising a small box.
+
+Repeating the measurement on `400cc` confirms the null result rather than explaining it away.
+
+| Background scan | Arm | p50 | p90 | p99 |
+|---|---|---|---|---|
+| none | inline | 107.6 | 108.0 | 108.2 |
+| none | offload | 108.3 | 108.6 | 108.9 |
+| `ORDER BY` | inline | 104.9, 107.9 | 383.6, 393.9 | 409.3, 599.0 |
+| `ORDER BY` | offload | 106.5, 106.3 | 566.2, 387.7 | 639.0, 635.3 |
+
+Eight workers finish a scan shard fast enough that point lookups are no longer blocked at p50 on either arm, and the offload arm's tail is equal or slightly worse.
+The scans themselves are also indistinguishable, at 302 against 316 ms solo and 1197 against 1178 ms at six concurrent, so the treatment is not visible from either side.
+
+Six concurrent scans cost about four times a solo scan, which says the replica is CPU saturated.
+That is the regime where the offload cannot help by construction.
+A fast-path peek walk is already spread across every worker, so the blocking it removes is a worker declining to start the next peek, not idle cores.
+When the walks saturate the cores anyway, moving them to blocking tasks reorders work without creating capacity.
+
+One alternative remains open, and the code cannot currently distinguish it: the flag may not be reaching the walk at all.
+There is no counter for offloaded walks, and the only log on that path fires when a snapshot is unavailable, which never fired here.
+Until a metric exists, "the offload does nothing in this regime" and "the offload never ran" have the same signature.
 
 ## Decision table
 
