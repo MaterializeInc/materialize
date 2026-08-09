@@ -796,7 +796,11 @@ where
 
             let mut capabilities = Some(CapabilitySet::new());
             capabilities.as_mut().unwrap().insert(capability);
-            let mut acknowledged = seed;
+            let mut acknowledged = seed.clone();
+            // The seeded instructions come first and are emitted as-is. Everything after the seed's
+            // own `Frontier` is a live instruction from the publisher, and is filtered against
+            // `seed` below.
+            let mut draining_seed = true;
 
             move |output| {
                 let _guard = &_guard;
@@ -821,6 +825,7 @@ where
                                     continue;
                                 }
                                 acknowledged = frontier.clone();
+                                draining_seed = false;
                                 // Bound the read at `until`: once the trace's frontier reaches it, drop
                                 // the capability so a single-time read completes. Otherwise track the
                                 // trace's `upper`, keeping the stream frontier equal to the trace upper
@@ -835,6 +840,20 @@ where
                                 caps.downgrade(&frontier.borrow()[..]);
                             }
                             TraceReplayInstruction::Batch(batch, hint) => {
+                                // A batch the seed already covers. The chain is read from the
+                                // trace, which can hold a batch the arrangement stream has not
+                                // delivered yet, so the publisher will push that same batch as a
+                                // live instruction on a later activation. Emitting it twice would
+                                // double count it, and its hint sits below the frontier the seed
+                                // already claimed, which `delayed` panics on.
+                                if !draining_seed
+                                    && timely::PartialOrder::less_equal(
+                                        &batch.upper().borrow(),
+                                        &seed.borrow(),
+                                    )
+                                {
+                                    continue;
+                                }
                                 if let Some(time) = hint {
                                     if !batch.is_empty() {
                                         // Emit under a capability delayed to the batch's hint. The
@@ -1406,24 +1425,23 @@ mod tests {
         });
     }
 
-    /// The delayed-capability panic, reproduced against the real importer source operator.
+    /// A live batch the seed already covers is dropped, not replayed under a capability the seed
+    /// has already moved past.
     ///
-    /// The buggy two-source feed can enqueue a `Frontier` (sourced from the trace, which runs
-    /// ahead) before a `Batch` (sourced from the lagging stream) whose hint lies below that
-    /// frontier. The importer downgrades its `CapabilitySet` to the frontier, then `delayed(hint)`
-    /// with `hint` below it panics. Here we drive a real published arrangement's importer and inject
-    /// exactly that hazardous ordering into its replay queue, using a real non-empty `Arc` batch, so
-    /// the panic is raised by the production drain-and-emit loop rather than a reconstruction.
+    /// The importer seeds from the trace, which can hold a batch the arrangement stream has not
+    /// delivered yet. The publisher then pushes that same batch as a live instruction on a later
+    /// activation, with a hint below the frontier the seed already claimed. Replaying it would both
+    /// double count the batch and panic in `caps.delayed(hint)`, since the capability set no longer
+    /// has an element at or below the hint.
     ///
-    /// This drain-and-emit loop, including the `caps.delayed(hint)` call that panics, is shared code
-    /// between every mode of `import_snapshot_at`, not something specific to a since-removed live
-    /// import. An unbounded `until` (`Antichain::new()`) reproduces the exact same failure as the
-    /// pre-bound-checking import once did: with a finite `until` the frontier-reached check in
-    /// `import_snapshot_at` would drop the capability before the injected batch is ever replayed,
-    /// masking the hazard instead of exercising it.
+    /// Injects exactly that ordering into a real published arrangement's importer queue, using a
+    /// real non-empty `Arc` batch, so the drain-and-emit loop under test is the production one. An
+    /// unbounded `until` keeps the capability alive long enough for the injected batch to be
+    /// reached: with a finite `until` the frontier check would drop the capability first and mask
+    /// the case. The test passes by running to completion, since the failure mode is a panic on the
+    /// worker thread.
     #[mz_ore::test]
-    #[should_panic(expected = "failed to create a delayed capability")]
-    fn frontier_ahead_of_batch_trips_delayed_capability() {
+    fn live_batch_covered_by_the_seed_is_dropped() {
         timely::execute_directly(move |worker| {
             let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
@@ -1476,7 +1494,8 @@ mod tests {
 
             // Inject the hazardous ordering: a `Frontier` at 5 before a `Batch` whose hint is 1
             // (< 5). `Batch(5)` keeps caps at or below 5, `Frontier(5)` downgrades to 5, and
-            // `Batch(1)` then panics in `delayed`. Activate the importer so it drains this step.
+            // `Batch(1)` would then panic in `delayed` if the loop replayed it. Activate the
+            // importer so it drains this step.
             {
                 let mut state = handle.shared.state.lock().unwrap();
                 let queue = state
