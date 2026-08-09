@@ -54,6 +54,16 @@ That splits the matrix into two axes with different granularity.
 Making the runtime axis per-replica would mean plumbing the replica override map into the controller's provisioning path.
 That is worth doing only if running all four cells concurrently turns out to matter, and the phase structure below avoids needing it.
 
+### Peeks reach every replica, whatever the session targets
+
+`Instance::target_replica` returns `None` for `ComputeCommand::Peek`, so a peek is broadcast to every replica of the cluster.
+Targeting acts on the response rather than the request: `handle_peek_response` drops responses from replicas other than the targeted one and waits for the target.
+`CreateDataflow` is the opposite and does honour the target, so a `SELECT` that renders a dataflow runs on one replica while a fast-path peek runs on all of them.
+
+Two consequences for any peek experiment on this cluster.
+Measured latency is still the targeted replica's own latency, so an A/B across replicas is sound as long as both arms are read under the same offered load.
+An idle control arm is impossible, because load aimed at one replica lands on its neighbours too, and both arms can therefore be measured in one phase rather than two.
+
 ### Arms are replicas of one cluster
 
 Every arm is a replica of the *same* cluster, and a session pins to one with `SET cluster_replica = '<name>'`.
@@ -290,7 +300,8 @@ Importing a published trace costs approximately nothing, which is what an `Arc`-
 Staging runs the stash enabled with `compute_peek_response_stash_threshold_bytes = 1024`, so every peek with an empty `order_by` and an identity projection takes the stash path and can never offload.
 The reachable domain of the offload is therefore peeks with an `ORDER BY` or a non-identity projection, which is a much narrower claim than "removes head-of-line blocking between peeks".
 
-Point-lookup latency against `e6_li_idx`, measured with sixty samples per cell, under three concurrent full-scan peeks on the same replica:
+Point-lookup latency against `e6_li_idx`, measured with sixty samples per cell, under three concurrent full-scan peeks.
+Both replicas carried every scan and every point lookup, since peeks broadcast, so the arms differ only in which replica's response was read and in the flag that replica ran with.
 
 | Background scan | Arm | p50 | p90 |
 |---|---|---|---|
