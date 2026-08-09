@@ -67,6 +67,22 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     true,
     "Aggressively downgrade input read holds for indexes on zero-replica clusters.",
 );
+/// Whether to launch compute replicas with a second, interactive compute timely runtime.
+///
+/// This one flag has four consequences, all of which follow from launching the second runtime:
+///
+/// * The replica advertises an extra `compute-interactive` port and gets an
+///   `--interactive-compute-timely-config` argument. `ServiceConfig::ports` therefore changes, so
+///   flipping this flag **rolls every compute replica in the environment**. It is not a live
+///   toggle.
+/// * The runtimes take the `Maintenance` and `Interactive` roles rather than the single `Solo`
+///   role, which adds a `role` label to their metrics.
+/// * Maintenance publishes its index arrangements into the per-process sharing registry, which is
+///   what the interactive runtime reads. Publication is not separately switchable because it has
+///   no other consumer.
+/// * Peeks and bounded transient dataflows route to the interactive runtime.
+///
+/// Off in production. On by default in the CI system parameters.
 
 pub const ENABLE_TWO_RUNTIME_COMPUTE: Config<bool> = Config::new(
     "enable_two_runtime_compute",

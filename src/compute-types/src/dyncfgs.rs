@@ -526,9 +526,22 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
 /// Whether to walk a fast-path index peek's cursor on a blocking task instead of inline on the
 /// timely worker that received it.
 ///
-/// Applies to whichever runtime serves the peek. Offloading removes the walk from the serving
-/// worker's step loop, so a long scan no longer delays the peeks queued behind it. The worker
-/// still takes the snapshot, which is a mutex and a handful of `Arc` clones.
+/// Independent of `enable_two_runtime_compute`, and useful with or without it. It applies on
+/// whichever runtime serves the peek, taking the cursor from that runtime's own traces or from the
+/// sharing registry as appropriate. The serving worker still takes the snapshot, which costs a
+/// mutex and a handful of `Arc` clones, and then dispatches.
+///
+/// What it buys: a long scan no longer delays the peeks queued behind it on the serving worker.
+/// Without it, a runtime that serves peeks inline reintroduces head-of-line blocking between
+/// peeks, which is the pathology a second runtime removes between reads and maintenance.
+///
+/// What it costs: the walk now runs concurrently with the serving worker rather than instead of
+/// it, so on a CPU-saturated replica it competes for cores with the work that worker went on to
+/// do. Each in-flight walk also pins the batches its cursor covers, bounded by
+/// `index_peek_offload_max_inflight`.
+///
+/// Does not apply to peeks eligible for the peek response stash, whose size-based diversion is
+/// decided partway through a walk. Those keep the inline path, which knows how to divert.
 pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
     "enable_index_peek_offload",
     false,
