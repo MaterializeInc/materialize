@@ -101,13 +101,6 @@ struct SharedTraceState<Tr: TraceReader> {
     /// zero readers compaction follows the writer. `None` until the first `AllowCompaction` arrives,
     /// where the publisher falls back to its own current hold (the dataflow `as_of` at startup).
     writer_logical: Option<Antichain<Tr::Time>>,
-    /// The physical compaction frontier the publisher last forwarded to the publishing trace.
-    ///
-    /// The publishing trace's own physical frontier is at or below this, because the trace takes the
-    /// meet over every agent's hold and the publisher is one of those agents. That bounds which
-    /// batches the trace may have merged, which is what makes [`SharedTraceHandle::batches_through`]
-    /// safe to cut at a caller-chosen frontier. See the precondition there.
-    forwarded_physical: Antichain<Tr::Time>,
     /// Importer queues, keyed by registration id. A handle may back several registrations, so this
     /// is keyed separately from any handle.
     queues: BTreeMap<usize, ImportQueue<Tr>>,
@@ -175,7 +168,6 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 logical_holds: BTreeMap::new(),
                 physical_holds: BTreeMap::new(),
                 writer_logical: None,
-                forwarded_physical: Antichain::from_elem(batch_min::<Tr>()),
                 queues: BTreeMap::new(),
                 next_id: 0,
                 closed: false,
@@ -374,19 +366,17 @@ where
 
     fn batches_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<Vec<Self::Batch>> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
-        // Precondition, mirroring `Spine::batches_through`, which asserts the same against the
-        // spine's own physical frontier: a cut below the publishing trace's physical frontier is
-        // illegal, because the trace is free to have merged across it.
+        // NOTE: `Spine::batches_through` asserts that the cut is at or beyond the spine's physical
+        // frontier, and that precondition does NOT transfer to a shared handle. A local reader is
+        // one of the trace's own agents, so the trace's physical frontier is held down by that
+        // reader's hold and the reader can never cut below it. A shared reader is not an agent.
+        // The publisher forwards the meet of the registered reader holds, falling back to the
+        // stream upper when there are none, and a reader that registers after that forward can
+        // legitimately cut below it: an importer's consumer begins at the minimum frontier and
+        // advances as the replayed `Frontier` instructions arrive. Asserting the spine's
+        // precondition here therefore panics on a correct read, which is what it did.
         //
-        // This is what keeps the straddle check below from firing on a merged batch. The publishing
-        // trace promotes a batch into its mergeable pile only once `batch.upper()` is at or below
-        // its physical frontier, which is at or below what the publisher last forwarded. So under
-        // this precondition every merged batch lies wholly at or below the cut, and only the
-        // unmerged tail can straddle it, which is the case the check is for.
-        assert!(
-            timely::PartialOrder::less_equal(&state.forwarded_physical.borrow(), &upper),
-            "batches_through: cut below the publisher's forwarded physical frontier"
-        );
+        // The straddle check below is the real guard, and it does not depend on the precondition.
         // A clean cut of the published chain: all non-empty batches whose upper is not beyond
         // `upper`, and none whose lower is beyond `upper`. Empty batches are dropped, as
         // `Spine::batches_through` does.
@@ -641,9 +631,6 @@ where
                     );
 
                     state.chain = chain;
-                    // Record the physical frontier before forwarding it below, so a reader that cuts
-                    // the chain can check the precondition `Spine::batches_through` relies on.
-                    state.forwarded_physical = physical.clone();
                     // Publish the trace's real logical compaction after we forward `logical` below.
                     // Agent compaction only advances (joins), so the publisher's hold becomes
                     // `join(publisher_logical, logical)`. The trace's real compaction is the meet of
