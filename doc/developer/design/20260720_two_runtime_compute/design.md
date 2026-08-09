@@ -209,11 +209,24 @@ Three known symptoms are the same missing invariant, not three separate problems
 
 ### The fix: make the requirement visible on the governing stream
 
-When the multiplexer routes `CreateDataflow(D, X, imports = [I])` to interactive, it first sends
-maintenance a `HoldFor(I, X, D)`. Maintenance registers that hold in the published slot, and because
-maintenance's own stream is ordered, it cannot process a later `AllowCompaction` for `I` before the
-hold exists. The hold releases on `DropDataflow(D)`, which the multiplexer already forwards to both
-runtimes.
+The multiplexer is the one place that observes both runtimes' command streams, and its send path is
+sequential. So it can restore the ordering without a new command at all.
+
+When it routes `CreateDataflow(D, X, imports = [I])` to interactive, it first records a hold on each
+import at `X`. Any later `AllowCompaction(I, F)` it sends to maintenance is capped at the lowest
+`as_of` any in-flight interactive dataflow still reads `I` at, and the uncapped frontier is
+remembered. When `D` is dropped, which the controller signals by allowing `D`'s export to compact to
+the empty frontier, its holds release and the deferred compaction is forwarded so `I` is not pinned.
+
+Under-compacting is always safe, so the capped value needs no agreement from the controller: the
+controller's frontier accounting is unchanged, and the replica simply keeps more history than it was
+told it could discard.
+
+Capping rather than a new `HoldFor` command matters for a multi-process replica. Only `Hello` and
+`UpdateConfiguration` are broadcast to every process; every other command, including both
+`CreateDataflow` and `AllowCompaction`, goes to process 0 and reaches the other processes through the
+intra-runtime channel. So process 0's multiplexer sees the whole ordering problem and can fix it
+alone, and a hold command would have had to travel the same path to no additional effect.
 
 This restores I1b by construction, on the stream where the compaction is actually applied. It keeps
 maintenance decoupled from interactive: maintenance never waits for interactive to make progress, it
@@ -227,8 +240,18 @@ couples maintenance's compaction to interactive's progress, which the non-goals 
 can span processes, so an in-process barrier cannot observe the runtimes in the other processes at
 all, which makes it not merely undesirable but insufficient.
 
-**Status: not yet implemented.** The invariant is currently enforced only by the assert that detects
-its violation.
+### A model to check it against
+
+`protocol.tla` in this directory models the protocol: one index, one interactive dataflow, the
+controller's read hold, two independent command streams, and the point at which each runtime realizes
+a command. I1 is stated as an invariant and the capping is a constant, so TLC refutes I1 with capping
+off and sustains it with capping on. It also carries a liveness property, that capping cannot pin an
+index forever.
+
+The model is worth keeping because the failure it describes is an interleaving, and interleavings are
+exactly what review misses and what a model checker does not. This one was written after the bug. The
+remaining rows of I2, index replacement under reconciliation and placeholder eviction, should be
+added to it before they are fixed rather than after.
 
 ## The bounded-read boundary
 
