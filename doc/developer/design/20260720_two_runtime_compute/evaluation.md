@@ -60,9 +60,12 @@ That is worth doing only if running all four cells concurrently turns out to mat
 Targeting acts on the response rather than the request: `handle_peek_response` drops responses from replicas other than the targeted one and waits for the target.
 `CreateDataflow` is the opposite and does honour the target, so a `SELECT` that renders a dataflow runs on one replica while a fast-path peek runs on all of them.
 
-Two consequences for any peek experiment on this cluster.
-Measured latency is still the targeted replica's own latency, so an A/B across replicas is sound as long as both arms are read under the same offered load.
-An idle control arm is impossible, because load aimed at one replica lands on its neighbours too, and both arms can therefore be measured in one phase rather than two.
+Measured latency is still the targeted replica's own latency, so an A/B across replicas of one cluster is sound, but only for arms that share a single offered load.
+Every replica of a cluster sees every peek, so the load level is a property of the cluster rather than of the arm.
+An idle control arm is impossible, and so is any arm that wants a different scan rate or scan cost from its neighbour.
+
+Arms that need independent load therefore need a cluster each, not a replica each.
+That is what a scan-cost sweep needs, since each point of the sweep is a different offered load, and running it across replicas of one cluster applies every point to every arm at once.
 
 ### Arms are replicas of one cluster
 
@@ -71,9 +74,12 @@ Every arm is a replica of the *same* cluster, and a session pins to one with `SE
 Replicas of a cluster maintain identical collections from identical inputs, so the arms differ in exactly the flag under test and in nothing else.
 This is the strongest form of the matched-control requirement in `benchmark-plan.md`: same data, same dataflows, same hydration work, same wall-clock, and no cross-session hardware drift to argue about.
 
-Two consequences to design around.
+This holds only for arms that share one offered load, for the reason above: a peek reaches every replica, so load is a property of the cluster.
+An arm that needs its own load level needs its own cluster, at the cost of a second copy of every collection and the matched-control property that made replicas attractive.
+
+Two further consequences to design around.
 Total maintenance work scales with the number of replicas, since each one maintains everything, so each replica needs its own resources or the arms contend.
-And the load generator must set `cluster_replica` per connection, since an unpinned session may be served by any replica and would blend the arms.
+And `SET cluster_replica` decides which response is read rather than which replica does the work, so pinning a load generator does not keep its load off the other arms.
 
 ## Experiment arms
 
