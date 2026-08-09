@@ -300,54 +300,72 @@ The import half is cleaner, because it is a within-phase measurement.
 Driving 48 full-scan aggregate dataflows through the interactive runtime, eight concurrent for a minute, moved the resident set by 4.5 MiB on one replica and 1.4 MiB on the other, against a published index of 95 MiB.
 Importing a published trace costs approximately nothing, which is what an `Arc`-backed share predicts and what the merge blocker was asking about.
 
-### E1: undecided, and the arm was largely unreachable
+### E1: the offload removes head-of-line blocking, once it can run
 
-`should_offload_peek` declines whenever the peek response stash is usable, and stash usability is a property of the finishing rather than of the result size.
-Staging runs the stash enabled with `compute_peek_response_stash_threshold_bytes = 1024`, so every peek with an empty `order_by` and an identity projection takes the stash path and can never offload.
-The reachable domain of the offload is therefore peeks with an `ORDER BY` or a non-identity projection, which is a much narrower claim than "removes head-of-line blocking between peeks".
+Two artefacts had to be removed before the experiment measured anything.
 
-Point-lookup latency against `e6_li_idx`, measured with sixty samples per cell, under three concurrent full-scan peeks.
-Both replicas carried every scan and every point lookup, since peeks broadcast, so the arms differ only in which replica's response was read and in the flag that replica ran with.
+The first is the stash gate.
+`should_offload_peek` declines whenever the peek response stash is usable, and usability is a property of the finishing rather than of the result size, so with the stash on every peek with an empty `order_by` and an identity projection declines.
+Running the experiment at all required `enable_compute_peek_response_stash = false` for the environment.
 
-| Background scan | Arm | p50 | p90 |
-|---|---|---|---|
-| none | inline | 105.7 | 106.1 |
-| none | offload | 105.8 | 106.1 |
-| streamable, cannot offload | inline | 874, 1521, 1528 | 2300 to 2307 |
-| streamable, cannot offload | offload | 1532, 1534, 828 | 2300 to 2304 |
-| `ORDER BY`, can offload | inline | 1528, 776 | 2291, 1550 |
-| `ORDER BY`, can offload | offload | 1529, 1526 | 2300, 2305 |
+The second is peek broadcast.
+Arms that were replicas of one cluster shared every scan, so the treatment was applied to both arms at once.
+The arms here are a cluster each, `eval_inline` and `eval_offload`, one `400cc` replica apiece, with identical indexes: 6,003,750 rows for the point-lookup target and 750,224 and 60,000,098 rows for the two extra scan targets.
 
-Repeats are listed rather than averaged because p50 lands on a three-step ladder at roughly 800, 1520 and 2300 ms.
-That ladder is queue position behind scans that each take about 770 ms, so p50 here is a coarse three-valued statistic and the spread across repeats is that quantisation, not a treatment effect.
-The two arms are indistinguishable at both p50 and p90, including on the `ORDER BY` load where the offload is reachable.
+Scan cost is set by index size, not by the predicate, since the filter is evaluated per row and the walk is the whole arrangement either way.
+Solo scan latency is 128 ms, 297 ms and 2274 ms against a round-trip floor of about 105 ms, so the walks are roughly 23 ms, 190 ms and 2170 ms.
 
-`interactive_compute_arg` gives the interactive runtime the same worker count as maintenance, so a two-runtime replica runs twice the timely worker threads for the same cores.
-That ratio does not change with size.
-`100cc` is two cores and two workers per runtime, `400cc` is eight and eight, so both are oversubscribed two to one.
-Resizing therefore does not hand the offload a free core, it only stops one walk from monopolising a small box.
+Point-lookup latency, sixty samples per cell, three concurrent scanners.
 
-Repeating the measurement on `400cc` confirms the null result rather than explaining it away.
-
-| Background scan | Arm | p50 | p90 | p99 |
+| Scan walk | Arm | p50 | p90 | max |
 |---|---|---|---|---|
-| none | inline | 107.6 | 108.0 | 108.2 |
-| none | offload | 108.3 | 108.6 | 108.9 |
-| `ORDER BY` | inline | 104.9, 107.9 | 383.6, 393.9 | 409.3, 599.0 |
-| `ORDER BY` | offload | 106.5, 106.3 | 566.2, 387.7 | 639.0, 635.3 |
+| none | V2 inline | 105.6 | 105.8 | 106.0 |
+| none | V3 offload | 106.1 | 106.5 | 106.7 |
+| 23 ms | V2 inline | 107.6 | 113.2 | 133.7 |
+| 23 ms | V3 offload | 105.1 | 105.6 | 105.9 |
+| 190 ms | V2 inline | 105.7 | 382.3 | 586.1 |
+| 190 ms | V3 offload | 105.3 | 131.9 | 146.1 |
+| 2170 ms | V2 inline | 107.8 | 3896.8 | 5783.7 |
+| 2170 ms | V3 offload | 105.8 | 177.0 | 180.4 |
 
-Eight workers finish a scan shard fast enough that point lookups are no longer blocked at p50 on either arm, and the offload arm's tail is equal or slightly worse.
-The scans themselves are also indistinguishable, at 302 against 316 ms solo and 1197 against 1178 ms at six concurrent, so the treatment is not visible from either side.
+This is the pre-registered prediction, confirmed.
+V2's tail tracks the walk it is queued behind, rising from 134 ms to 586 ms to 5784 ms as the walk grows.
+V3's tail is flat, 106 ms to 146 ms to 180 ms, a 32-fold reduction at the largest walk.
+p50 is round-trip bound in every cell and carries no signal, which is expected when the offered point rate is low.
 
-Six concurrent scans cost about four times a solo scan, which says the replica is CPU saturated.
-That is the regime where the offload cannot help by construction.
-A fast-path peek walk is already spread across every worker, so the blocking it removes is a worker declining to start the next peek, not idle cores.
-When the walks saturate the cores anyway, moving them to blocking tasks reorders work without creating capacity.
+### E2: the offload alone captures the win
 
-One alternative remains open, and the code cannot currently distinguish it: the flag may not be reaching the walk at all.
-There is no counter for offloaded walks, and the only log on that path fires when a snapshot is unavailable, which never fired here.
-Until a metric exists, "the offload does nothing in this regime" and "the offload never ran" have the same signature.
+Same fixture and same sweep with `enable_two_runtime_compute = false`, so both arms are single-runtime.
+The replicas carry no `role` metric label, which is the `Solo` signature and confirms the flip reached them.
 
+| Scan walk | Arm | p50 | p90 | max |
+|---|---|---|---|---|
+| none | V0 inline | 105.8 | 106.1 | 106.4 |
+| none | V1 offload | 105.5 | 106.1 | 107.5 |
+| 23 ms | V0 inline | 107.4 | 108.1 | 129.6 |
+| 23 ms | V1 offload | 105.6 | 106.1 | 109.2 |
+| 190 ms | V0 inline | 105.6 | 377.8 | 415.6 |
+| 190 ms | V1 offload | 107.8 | 113.8 | 180.4 |
+| 2170 ms | V0 inline | 105.8 | 3785.0 | 5669.1 |
+| 2170 ms | V1 offload | 126.7 | 164.4 | 167.6 |
+
+V1 and V3 are the same within noise at every scan cost, 167.6 against 180.4 ms at the largest walk, and V0 and V2 are likewise the same.
+The second runtime contributes nothing to peek tail latency.
+What removes the blocking is the substrate the walk runs on, and that is settled by a dyncfg that needs no restart, no new port and no fleet roll.
+
+### What the two results decide, and what still blocks them
+
+The decision table's V1 row applies: default to V1, and justify the second runtime on temporary dataflows alone rather than on peek latency.
+Everything the second runtime costs, the port, the fleet roll, the command-ordering invariant and the capping that enforces it, buys nothing that the offload does not already buy on its own.
+
+Neither arm delivers this in a production configuration today.
+Production runs the peek response stash on, and the stash gate disables the offload for exactly the streamable peeks that make up ordinary traffic.
+The measured win is real and large, and it is currently unreachable outside an environment with the stash turned off.
+Resolving that gate is the blocking design question, and it is worth more than any further latency measurement.
+
+Two limits on these numbers.
+Sixty samples per cell supports p90 and makes p99 indistinguishable from the observed max, so the tail is reported as p90 and max rather than as p99.
+Both sweeps ran on a build without the walk counter, so engagement is established behaviourally, by the size of the difference between arms, rather than by instrumentation.
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
