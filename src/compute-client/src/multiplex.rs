@@ -69,6 +69,14 @@ pub struct Multiplexer {
     /// The last `AllowCompaction` frontier the controller asked for on a held collection, so the
     /// deferred part can be released once the holds are gone.
     deferred_compaction: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    /// The lowest frontier each collection may still be told to compact to.
+    ///
+    /// Seeded from a collection's own dataflow `as_of` and raised by every `AllowCompaction` we
+    /// forward. Compaction frontiers may not regress: the command history derives a dataflow's
+    /// effective `as_of` from the last frontier seen per export, so a lower one later reads as the
+    /// dataflow's `as_of` moving backwards. Capping must respect this even when it means declining
+    /// to cap.
+    compaction_floor: BTreeMap<GlobalId, Antichain<Timestamp>>,
 }
 
 /// The imports an in-flight interactive dataflow reads, and the frontier it reads them at.
@@ -96,6 +104,7 @@ impl Multiplexer {
             transient_owner: BTreeSet::new(),
             interactive_holds: BTreeMap::new(),
             deferred_compaction: BTreeMap::new(),
+            compaction_floor: BTreeMap::new(),
         }
     }
 
@@ -221,6 +230,12 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 self.interactive.send(cmd).await?;
             }
             CreateDataflow(desc) => {
+                // A collection can never be told to compact below its own dataflow's `as_of`.
+                if let Some(as_of) = desc.as_of.clone() {
+                    for id in desc.export_ids() {
+                        self.compaction_floor.insert(id, as_of.clone());
+                    }
+                }
                 // Interactive serves a dataflow only when it is wholly transient, has a bounded
                 // (non-empty) `until`, and carries no subscribe or copy-to sink. Transience is
                 // required, not just a finite `until`: a durable dataflow can also get a finite
@@ -282,13 +297,28 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 // controller is telling us its own readers are done, but an interactive dataflow it
                 // created may not have rendered yet, and maintenance would otherwise compact the
                 // published arrangement out from under it. Under-compacting is always safe.
+                let below_floor = |f: &Antichain<Timestamp>| {
+                    self.compaction_floor
+                        .get(&id)
+                        .is_some_and(|floor| !timely::PartialOrder::less_equal(floor, f))
+                };
                 let capped = match self.hold_floor(id) {
-                    Some(floor) if !timely::PartialOrder::less_equal(&frontier, &floor) => {
-                        self.deferred_compaction.insert(id, frontier);
-                        floor
+                    // Declining to cap when the hold sits below the collection's floor is not a
+                    // choice, it is the only legal move: the frontier has already been released past
+                    // what this reader needs, so capping now would regress the collection's `as_of`
+                    // without restoring anything. The interactive import's own `as_of` check is what
+                    // catches the read that can no longer be served.
+                    Some(hold) if !timely::PartialOrder::less_equal(&frontier, &hold) => {
+                        if below_floor(&hold) {
+                            frontier
+                        } else {
+                            self.deferred_compaction.insert(id, frontier);
+                            hold
+                        }
                     }
                     _ => frontier,
                 };
+                self.compaction_floor.insert(id, capped.clone());
                 self.client_mut(runtime)
                     .send(AllowCompaction {
                         id,
@@ -304,6 +334,7 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 // deferred behind them, otherwise the imported collections never compact again.
                 for (import, frontier) in self.release_holds(id) {
                     let runtime = self.owner_of(import);
+                    self.compaction_floor.insert(import, frontier.clone());
                     self.client_mut(runtime)
                         .send(AllowCompaction {
                             id: import,
@@ -718,6 +749,73 @@ mod tests {
             forwarded.last(),
             Some(&beyond),
             "the deferred compaction must be forwarded once the hold is released"
+        );
+    }
+
+    /// Capping never sends a collection a frontier below one already sent for it.
+    ///
+    /// Compaction frontiers may not regress. The command history derives a dataflow's effective
+    /// `as_of` from the last frontier seen per export, so a lower one later reads as that dataflow's
+    /// `as_of` moving backwards and trips the history's own check. A hold below what has already
+    /// been released cannot restore anything, so the only legal move is to decline to cap.
+    #[mz_ore::test(tokio::test)]
+    async fn capping_never_regresses_a_compaction_frontier() {
+        let mut h = harness();
+        let source = GlobalId::User(1);
+        let stale = Antichain::from_elem(Timestamp::from(50u64));
+        let released = Antichain::from_elem(Timestamp::from(100u64));
+
+        // The imported collection's own dataflow starts at 100, so it may never be told to compact
+        // below that.
+        let mut maintained = create_dataflow_with(&[source], &[], &[], Antichain::new());
+        if let ComputeCommand::CreateDataflow(desc) = &mut maintained {
+            desc.as_of = Some(released.clone());
+        }
+        h.mux.send(maintained).await.expect("send maintained");
+
+        // An interactive dataflow claiming to read it at 50, below that floor.
+        let mut cmd = create_dataflow_with(
+            &[GlobalId::Transient(7)],
+            &[],
+            &[],
+            Antichain::from_elem(Timestamp::from(300u64)),
+        );
+        if let ComputeCommand::CreateDataflow(desc) = &mut cmd {
+            desc.as_of = Some(stale);
+            desc.index_imports.insert(
+                source,
+                mz_compute_types::dataflows::IndexImport {
+                    desc: mz_compute_types::dataflows::IndexDesc {
+                        on_id: source,
+                        key: Vec::new(),
+                    },
+                    typ: mz_repr::ReprRelationType::empty(),
+                    monotonic: false,
+                    with_snapshot: true,
+                },
+            );
+        }
+        h.mux.send(cmd).await.expect("send create");
+
+        h.mux
+            .send(ComputeCommand::AllowCompaction {
+                id: source,
+                frontier: Antichain::from_elem(Timestamp::from(200u64)),
+            })
+            .await
+            .expect("send compaction");
+
+        let forwarded = maint_commands(&h)
+            .into_iter()
+            .find_map(|cmd| match cmd {
+                ComputeCommand::AllowCompaction { id, frontier } if id == source => Some(frontier),
+                _ => None,
+            })
+            .expect("maintenance sees a compaction");
+        assert_eq!(
+            forwarded,
+            Antichain::from_elem(Timestamp::from(200u64)),
+            "must not cap below the collection's own dataflow as_of"
         );
     }
 

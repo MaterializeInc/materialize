@@ -30,6 +30,7 @@ CONSTANTS
 
 VARIABLES
     ctlHold,        \* the controller's read hold on the index: a time, or NoHold
+    floor,          \* the lowest frontier the index may still be told to compact to
     maintQueue,     \* commands the maintenance runtime has not processed
     interQueue,     \* commands the interactive runtime has not processed
     since,          \* the maintenance replica's compaction frontier for the index
@@ -37,7 +38,7 @@ VARIABLES
     dfAsOf,         \* the as_of of the interactive dataflow, or NoDataflow
     muxHold         \* the multiplexer's recorded hold floor, or NoHold
 
-vars == <<ctlHold, maintQueue, interQueue, since, rendered, dfAsOf, muxHold>>
+vars == <<ctlHold, floor, maintQueue, interQueue, since, rendered, dfAsOf, muxHold>>
 
 NoHold == -1
 NoDataflow == -1
@@ -49,6 +50,7 @@ Compact(t) == [kind |-> "compact", time |-> t]
 
 Init ==
     /\ ctlHold = NoHold
+    /\ floor = 0
     /\ maintQueue = <<>>
     /\ interQueue = <<>>
     /\ since = 0
@@ -67,7 +69,7 @@ CtlCreate(t) ==
     /\ dfAsOf' = t
     /\ muxHold' = IF Capping THEN t ELSE NoHold
     /\ interQueue' = Append(interQueue, Create(t))
-    /\ UNCHANGED <<maintQueue, since, rendered>>
+    /\ UNCHANGED <<floor, maintQueue, since, rendered>>
 
 \* The controller releases its hold and allows compaction to t. It only does this
 \* once its own view of the dataflow is finished, which is the point: the
@@ -75,10 +77,13 @@ CtlCreate(t) ==
 CtlCompact(t) ==
     /\ t > since
     /\ ctlHold = NoHold \/ t <= ctlHold
-    /\ LET capped == IF Capping /\ muxHold # NoHold /\ t > muxHold
+    \* Capping may not send a frontier below one already sent: compaction frontiers
+    \* do not regress, and a hold below the floor cannot restore anything anyway.
+    /\ LET capped == IF Capping /\ muxHold # NoHold /\ t > muxHold /\ muxHold >= floor
                      THEN muxHold
                      ELSE t
-       IN maintQueue' = Append(maintQueue, Compact(capped))
+       IN /\ maintQueue' = Append(maintQueue, Compact(capped))
+          /\ floor' = capped
     /\ UNCHANGED <<ctlHold, interQueue, since, rendered, dfAsOf, muxHold>>
 
 \* The controller decides the dataflow is done. In the real system this is an
@@ -87,7 +92,7 @@ CtlDrop ==
     /\ dfAsOf # NoDataflow
     /\ ctlHold' = NoHold
     /\ muxHold' = NoHold
-    /\ UNCHANGED <<maintQueue, interQueue, since, rendered, dfAsOf>>
+    /\ UNCHANGED <<floor, maintQueue, interQueue, since, rendered, dfAsOf>>
 
 \* Maintenance processes its next command. This is where compaction is realized.
 MaintStep ==
@@ -95,7 +100,7 @@ MaintStep ==
     /\ LET cmd == Head(maintQueue) IN
        /\ since' = IF cmd.time > since THEN cmd.time ELSE since
        /\ maintQueue' = Tail(maintQueue)
-    /\ UNCHANGED <<ctlHold, interQueue, rendered, dfAsOf, muxHold>>
+    /\ UNCHANGED <<ctlHold, floor, interQueue, rendered, dfAsOf, muxHold>>
 
 \* Interactive processes its next command. Rendering is where the reader's hold
 \* becomes real on the replica, and it can be arbitrarily later than the create.
@@ -104,7 +109,7 @@ InterStep ==
     /\ LET cmd == Head(interQueue) IN
        /\ rendered' = IF cmd.kind = "create" THEN TRUE ELSE rendered
        /\ interQueue' = Tail(interQueue)
-    /\ UNCHANGED <<ctlHold, maintQueue, since, dfAsOf, muxHold>>
+    /\ UNCHANGED <<ctlHold, floor, maintQueue, since, dfAsOf, muxHold>>
 
 Next ==
     \/ \E t \in Times : CtlCreate(t)
@@ -122,6 +127,11 @@ Spec == Init /\ [][Next]_vars /\ WF_vars(MaintStep) /\ WF_vars(InterStep)
 \* yet rendered", the window the real bug lives in.
 I1 ==
     (dfAsOf # NoDataflow /\ ~rendered) => since <= dfAsOf
+
+\* Compaction frontiers never regress. This is what the command history checks,
+\* and violating it is how the first capping attempt failed.
+NoRegression ==
+    \A i \in 1..Len(maintQueue) : maintQueue[i].time >= since
 
 \* Liveness: capping must not pin the index forever. Once the dataflow is done,
 \* compaction can still make progress.
