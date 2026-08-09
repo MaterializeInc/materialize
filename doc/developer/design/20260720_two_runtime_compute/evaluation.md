@@ -33,6 +33,88 @@ Plan the arms so that the expensive transition happens once, not per arm.
 
 `index_peek_offload_max_inflight` (default 16) is a third knob, swept only in E4.
 
+## Scoping, and what it means for the arms
+
+The two peek flags are declared `ParameterScope::Replica`, so a targeting rule can give a single replica a different value without touching the rest of the environment.
+The override is resolved against a replica evaluation context and pushed to that replica as a `ConfigUpdates`, which lands in the `worker_config` both flags are read from inside `clusterd`.
+Scoped overrides require `enable_scoped_system_parameters` to be on in the environment.
+
+`enable_two_runtime_compute` is **not** replica-scopable, and marking it so would be inert.
+It is consumed in `environmentd`, in the controller's replica provisioning path, against the controller's environment-wide config, to decide `ServiceConfig::ports` and the `--interactive-compute-timely-config` argument.
+Replica-scoped overrides are delivered to replicas, not consulted by the controller when it builds them, so declaring a scope on this flag would advertise a capability that does not exist.
+Nothing else consumed at replica-launch time is replica-scoped either, including `enable_timely_zero_copy`, so this is a property of the mechanism rather than an oversight in this flag.
+
+That splits the matrix into two axes with different granularity.
+
+* The runtime axis (V0/V1 against V2/V3) is **environment-wide and is a phase**, not an arm.
+  Moving between phases rolls every replica.
+* The walk-substrate axis and the in-flight cap are **per replica and are arms**.
+  They can vary between replicas of the same cluster with no restart.
+
+Making the runtime axis per-replica would mean plumbing the replica override map into the controller's provisioning path.
+That is worth doing only if running all four cells concurrently turns out to matter, and the phase structure below avoids needing it.
+
+### Arms are replicas of one cluster
+
+Every arm is a replica of the *same* cluster, and a session pins to one with `SET cluster_replica = '<name>'`.
+
+Replicas of a cluster maintain identical collections from identical inputs, so the arms differ in exactly the flag under test and in nothing else.
+This is the strongest form of the matched-control requirement in `benchmark-plan.md`: same data, same dataflows, same hydration work, same wall-clock, and no cross-session hardware drift to argue about.
+
+Two consequences to design around.
+Total maintenance work scales with the number of replicas, since each one maintains everything, so each replica needs its own resources or the arms contend.
+And the load generator must set `cluster_replica` per connection, since an unpinned session may be served by any replica and would blend the arms.
+
+## Experiment arms
+
+Phase A and phase B are separated in time by one flag flip that rolls the fleet.
+Within a phase, all listed replicas run concurrently in one cluster.
+
+### Phase A: `enable_two_runtime_compute = false` (environment-wide)
+
+| Variation | Replica name | Replica-scoped overrides | Serves |
+|---|---|---|---|
+| V0 | `eval-v0-inline` | none, all defaults | E1, E2 baseline |
+| V1 | `eval-v1-offload` | `enable_index_peek_offload=true` | E1, E2 |
+
+### Phase B: `enable_two_runtime_compute = true` (environment-wide)
+
+| Variation | Replica name | Replica-scoped overrides | Serves |
+|---|---|---|---|
+| V2 | `eval-v2-inline` | `enable_index_peek_offload=false` | E1, E2, E5 |
+| V3 | `eval-v3-offload` | `enable_index_peek_offload=true` | E1, E2, E5 |
+
+Phase B needs `enable_index_peek_offload=false` stated explicitly on `eval-v2-inline` rather than left to the default, because the CI and evaluation environments set the environment-wide value to true.
+An arm must never depend on the environment default being what it was when the plan was written.
+
+### E4 cap sweep, phase B
+
+| Variation | Replica name | Replica-scoped overrides |
+|---|---|---|
+| V3, cap 1 | `eval-cap-1` | `enable_index_peek_offload=true`, `index_peek_offload_max_inflight=1` |
+| V3, cap 4 | `eval-cap-4` | `enable_index_peek_offload=true`, `index_peek_offload_max_inflight=4` |
+| V3, cap 16 | `eval-cap-16` | `enable_index_peek_offload=true`, `index_peek_offload_max_inflight=16` |
+| V3, cap 64 | `eval-cap-64` | `enable_index_peek_offload=true`, `index_peek_offload_max_inflight=64` |
+| V3, uncapped | `eval-cap-max` | `enable_index_peek_offload=true`, `index_peek_offload_max_inflight=4096` |
+
+`eval-cap-16` restates the default deliberately, so the sweep contains its own control and does not depend on the default staying at 16.
+
+### E3, oversubscription
+
+E3 varies machine resources rather than flags, so its arms are replica *sizes* rather than overrides.
+Run the phase A pair and the phase B pair at each of 1x, 2x and 4x oversubscription, keeping the flag overrides above unchanged.
+
+### E6, memory attribution
+
+Needs one published and one unpublished arrangement observed in the same process, so it runs on a phase B replica (`eval-v3-offload` will do) and compares an index against a materialized view's internal arrangements.
+No flag overrides beyond the phase.
+
+## Verifying the overrides landed
+
+Do not assume a targeting rule applied.
+Before every run, confirm from inside the environment that each replica sees the value the table claims, and record it with the results.
+An arm that silently ran with the environment default is worse than a missing arm, because it looks like a null result.
+
 ## What these experiments have to decide
 
 1. Whether the offload removes head-of-line blocking between peeks, which is its entire justification.

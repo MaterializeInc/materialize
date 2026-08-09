@@ -546,7 +546,8 @@ pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
     "enable_index_peek_offload",
     false,
     "Walk fast-path index peeks on a blocking task rather than on the serving timely worker.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// How many offloaded index-peek walks one worker may have in flight before it falls back to
 /// walking inline.
@@ -558,7 +559,8 @@ pub const INDEX_PEEK_OFFLOAD_MAX_INFLIGHT: Config<usize> = Config::new(
     "index_peek_offload_max_inflight",
     16,
     "Maximum offloaded index-peek walks in flight per worker before falling back to an inline walk.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// The number of batches to pump from the peek result iterator when stashing peek responses.
 pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
