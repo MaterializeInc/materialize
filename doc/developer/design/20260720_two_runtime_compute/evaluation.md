@@ -255,6 +255,61 @@ If it does not, it is a reporting bug in the size logger, the `ii_t4` threshold 
 
 Staging is the right venue for the second half, because the question is whether a per-arrangement tax matters at real arrangement counts.
 
+## Measured results on staging
+
+Venue: a personal staging region in `aws/us-east-1`, build `140494e39a`.
+Cluster `eval` carries two `100cc` replicas named `eval-v0-inline` and `eval-v1-offload`.
+The fixture is view `e6_li`, three columns of `sf1.lineitem` at 6,003,692 rows, indexed by `e6_li_idx`, plus materialized view `e6_agg`.
+`enable_two_runtime_compute` was on environment-wide for phase B, so both replicas ran two runtimes and differed only in `enable_index_peek_offload`.
+
+`enable_two_runtime_compute` is environment-scoped, not replica-scoped, so no two replicas of one environment can disagree on it.
+Every comparison across that flag is therefore sequential, and picks up whatever else changed between the two deployments.
+
+### E6: neither the reported size nor resident memory follows publication
+
+| Measurement | Phase A, flag off | Phase B, flag on |
+|---|---|---|
+| `e6_li_idx` records | 6,003,750 | 6,003,706 |
+| `e6_li_idx` size | 112,441,810 | 100,102,051 |
+| `e6_li_idx` allocations | 30 | 29 |
+| `e6_agg` records | 3,000,015 | 3,000,000 |
+| `e6_agg` size | 226,654,658 | 218,527,492 |
+| `e6_agg` allocations | 165 | 161 |
+| Resident set, two replicas | 583.7 and 597.3 MiB | 491.9 and 503.1 MiB |
+
+The reported doubling did not reproduce.
+Both figures came down rather than up, which is within the noise of a rebuild and a fresh hydration, and phase A ran on a different build, so the comparison cannot carry more weight than "no doubling appeared".
+
+The import half is cleaner, because it is a within-phase measurement.
+Driving 48 full-scan aggregate dataflows through the interactive runtime, eight concurrent for a minute, moved the resident set by 4.5 MiB on one replica and 1.4 MiB on the other, against a published index of 95 MiB.
+Importing a published trace costs approximately nothing, which is what an `Arc`-backed share predicts and what the merge blocker was asking about.
+
+### E1: undecided, and the arm was largely unreachable
+
+`should_offload_peek` declines whenever the peek response stash is usable, and stash usability is a property of the finishing rather than of the result size.
+Staging runs the stash enabled with `compute_peek_response_stash_threshold_bytes = 1024`, so every peek with an empty `order_by` and an identity projection takes the stash path and can never offload.
+The reachable domain of the offload is therefore peeks with an `ORDER BY` or a non-identity projection, which is a much narrower claim than "removes head-of-line blocking between peeks".
+
+Point-lookup latency against `e6_li_idx`, measured with sixty samples per cell, under three concurrent full-scan peeks on the same replica:
+
+| Background scan | Arm | p50 | p90 |
+|---|---|---|---|
+| none | inline | 105.7 | 106.1 |
+| none | offload | 105.8 | 106.1 |
+| streamable, cannot offload | inline | 874, 1521, 1528 | 2300 to 2307 |
+| streamable, cannot offload | offload | 1532, 1534, 828 | 2300 to 2304 |
+| `ORDER BY`, can offload | inline | 1528, 776 | 2291, 1550 |
+| `ORDER BY`, can offload | offload | 1529, 1526 | 2300, 2305 |
+
+Repeats are listed rather than averaged because p50 lands on a three-step ladder at roughly 800, 1520 and 2300 ms.
+That ladder is queue position behind scans that each take about 770 ms, so p50 here is a coarse three-valued statistic and the spread across repeats is that quantisation, not a treatment effect.
+The two arms are indistinguishable at both p50 and p90, including on the `ORDER BY` load where the offload is reachable.
+
+The likely reason is that the replica has no spare CPU to offload onto.
+`interactive_compute_arg` gives the interactive runtime the same worker count as maintenance, so a two-runtime `100cc` replica runs four timely worker threads against one credit of CPU.
+A walk moved to a blocking task still needs a core, and on this replica there is none free, so the offload can only add scheduling overhead.
+E1 needs a replica with real headroom before it decides anything, and the worker-count doubling is a design question in its own right.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
