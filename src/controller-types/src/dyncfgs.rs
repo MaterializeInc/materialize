@@ -71,7 +71,7 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
 ///
 /// This one flag has four consequences, all of which follow from launching the second runtime:
 ///
-/// * The replica advertises an extra `compute-interactive` port and gets an
+/// * The replica advertises an extra `interactive` port and gets an
 ///   `--interactive-compute-timely-config` argument. `ServiceConfig::ports` therefore changes, so
 ///   flipping this flag **rolls every compute replica in the environment**. It is not a live
 ///   toggle.

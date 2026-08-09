@@ -1059,21 +1059,41 @@ impl FromStr for ReplicaServiceName {
     }
 }
 
+/// The longest container port name Kubernetes accepts.
+///
+/// The process orchestrator has no such limit, so an over-long name is only rejected when a replica
+/// is provisioned in a real cluster, long after every local test has passed. Keep every
+/// `ServicePort` name at or under this.
+const MAX_PORT_NAME_LEN: usize = 15;
+
+/// The port name the interactive compute runtime listens on.
+///
+/// Shared by the `ServicePort` and the `peer_addresses` lookup, which must agree: the lookup panics
+/// on a name that is not present in `ServiceConfig::ports`.
+const INTERACTIVE_PORT_NAME: &str = "interactive";
+
+// Checked at compile time, since the only other thing that checks it is a Kubernetes API server
+// rejecting a replica that a local test would have provisioned happily.
+const _: () = assert!(INTERACTIVE_PORT_NAME.len() <= MAX_PORT_NAME_LEN);
+
 /// The `ServicePort` clusterd needs to advertise the second, interactive compute timely
 /// runtime, if [`ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added to `ServiceConfig::ports`
 /// together with the `--interactive-compute-timely-config` argument produced by
 /// [`interactive_compute_arg`]: `ServiceAssignments::peer_addresses` panics if asked for a port
 /// name that isn't present in `ServiceConfig::ports`.
+///
+/// NOTE: the name is `interactive`, not `compute-interactive`, because Kubernetes rejects a
+/// container port name longer than 15 characters. See [`MAX_PORT_NAME_LEN`].
 fn interactive_compute_port(two_runtime: bool) -> Option<ServicePort> {
     two_runtime.then(|| ServicePort {
-        name: "compute-interactive".into(),
+        name: INTERACTIVE_PORT_NAME.into(),
         port_hint: 2104,
     })
 }
 
 /// The `--interactive-compute-timely-config` clusterd argument for the second, interactive
 /// compute timely runtime, if [`ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added together with
-/// the `compute-interactive` port from [`interactive_compute_port`]: this reads the peer
+/// the `interactive` port from [`interactive_compute_port`]: this reads the peer
 /// addresses for that port name, which panics if the port wasn't advertised.
 fn interactive_compute_arg(
     two_runtime: bool,
@@ -1084,7 +1104,7 @@ fn interactive_compute_arg(
     two_runtime.then(|| {
         let interactive_compute_timely_config = TimelyConfig {
             workers,
-            addresses: assigned.peer_addresses("compute-interactive"),
+            addresses: assigned.peer_addresses(INTERACTIVE_PORT_NAME),
             ..compute_proto_timely_config.clone()
         };
         format!(
@@ -1113,12 +1133,42 @@ mod tests {
         }
     }
 
+    use super::{INTERACTIVE_PORT_NAME, MAX_PORT_NAME_LEN};
+
+    /// Every `ServicePort` name fits Kubernetes' 15-character limit.
+    ///
+    /// Nothing else checks this before a replica is provisioned in a real cluster: the process
+    /// orchestrator that mzcompose and local runs use accepts any name, so an over-long one passes
+    /// every test and then fails to schedule in cloud with `StatefulSet ... is invalid`.
+    #[mz_ore::test]
+    fn service_port_names_fit_kubernetes() {
+        let names: Vec<String> = [
+            "storagectl",
+            "storage",
+            "computectl",
+            "compute",
+            "internal-http",
+        ]
+        .into_iter()
+        .map(String::from)
+        .chain(interactive_compute_port(true).map(|port| port.name))
+        .collect();
+
+        for name in names {
+            assert!(
+                name.len() <= MAX_PORT_NAME_LEN,
+                "service port name {name:?} is {} characters, Kubernetes allows {MAX_PORT_NAME_LEN}",
+                name.len(),
+            );
+        }
+    }
+
     #[mz_ore::test]
     fn interactive_compute_port_only_when_two_runtime_enabled() {
         assert_eq!(
             interactive_compute_port(true),
             Some(ServicePort {
-                name: "compute-interactive".into(),
+                name: INTERACTIVE_PORT_NAME.into(),
                 port_hint: 2104,
             }),
         );
@@ -1129,7 +1179,7 @@ mod tests {
     fn interactive_compute_arg_only_when_two_runtime_enabled() {
         let listen_addrs = BTreeMap::new();
         let peer_addrs = vec![BTreeMap::from([(
-            "compute-interactive".to_string(),
+            INTERACTIVE_PORT_NAME.to_string(),
             "127.0.0.1:2104".to_string(),
         )])];
         let assigned = assignments_with_compute_interactive(&listen_addrs, &peer_addrs);

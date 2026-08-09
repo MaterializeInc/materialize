@@ -488,9 +488,14 @@ mechanism.
   runtime configured by the `--interactive-compute-timely-config` CLI argument
   (its own worker ports). The dyncfg controls whether the controller passes that
   argument.
-* Flipping the dyncfg changes `ServiceConfig::ports`, so it is not a live toggle:
-  enabling or disabling it rolls every compute replica in the environment. Plan the
-  flip as a fleet restart, not as a configuration nudge.
+* Flipping the dyncfg changes `ServiceConfig::ports`, but it is read when a replica is
+  PROVISIONED, not applied to running ones. An existing replica keeps its old configuration
+  until it is recreated, so the flip is not a live toggle and is not a rolling restart either.
+  Plan it as a flip followed by an explicit recreation of every replica that should pick it up.
+* The interactive port is named `interactive`, not something more descriptive, because
+  Kubernetes rejects a container port name longer than 15 characters. The process orchestrator
+  that local runs and mzcompose use has no such limit, so an over-long name passes every test
+  and then fails to schedule in cloud.
 
 ## Non-goals
 
