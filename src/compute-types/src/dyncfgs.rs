@@ -523,6 +523,30 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
     "The memory budget for consolidating stashed peek responses in environmentd.",
 );
 
+/// Whether to walk a fast-path index peek's cursor on a blocking task instead of inline on the
+/// timely worker that received it.
+///
+/// Applies to whichever runtime serves the peek. Offloading removes the walk from the serving
+/// worker's step loop, so a long scan no longer delays the peeks queued behind it. The worker
+/// still takes the snapshot, which is a mutex and a handful of `Arc` clones.
+pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
+    "enable_index_peek_offload",
+    false,
+    "Walk fast-path index peeks on a blocking task rather than on the serving timely worker.",
+);
+
+/// How many offloaded index-peek walks one worker may have in flight before it falls back to
+/// walking inline.
+///
+/// Each in-flight walk pins the batches its snapshot covers and holds the trace back from
+/// compacting past the read, so unbounded concurrency trades memory for latency. Serving inline
+/// bounds that implicitly at one walk per worker; this is the explicit form of the same bound.
+pub const INDEX_PEEK_OFFLOAD_MAX_INFLIGHT: Config<usize> = Config::new(
+    "index_peek_offload_max_inflight",
+    16,
+    "Maximum offloaded index-peek walks in flight per worker before falling back to an inline walk.",
+);
+
 /// The number of batches to pump from the peek result iterator when stashing peek responses.
 pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
     "compute_peek_stash_num_batches",
@@ -608,6 +632,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
         .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
+        .add(&ENABLE_INDEX_PEEK_OFFLOAD)
+        .add(&INDEX_PEEK_OFFLOAD_MAX_INFLIGHT)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)

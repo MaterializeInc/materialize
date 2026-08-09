@@ -298,6 +298,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_index_peek_offload",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_two_runtime_compute",
             "true",
             ["true", "false"],

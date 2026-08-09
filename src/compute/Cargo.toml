@@ -62,6 +62,7 @@ mz-secrets = { path = "../secrets" }
 mz-storage-types = { path = "../storage-types", features = ["proptest"] }
 proptest.workspace = true
 rand.workspace = true
+static_assertions.workspace = true
 
 [features]
 default = []
