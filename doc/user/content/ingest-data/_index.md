@@ -41,9 +41,7 @@ If possible, dedicate a cluster just for sources.
 
 ### Duration
 
-The duration of the snapshotting operation depends on the volume of data in the
-initial snapshot and the size of the cluster where the source is hosted. Large
-upsert sources, in particular, can take hours to snapshot.
+{{% include-headless "/headless/ingestion/snapshotting-duration" %}}
 
 To reduce the operational burden of snapshotting on the upstream system and
 ensure you are only bringing in the volume of data that you need in Materialize,

@@ -16,10 +16,7 @@ menu:
 
 ## Snapshot duration
 
-Snapshotting reads from the upstream system, so its duration depends on the
-volume of upstream data and the size of the source's cluster. For **upsert**
-sources, snapshotting can be especially resource-intensive (compared to
-append-only), and large upsert sources can take hours to snapshot.
+{{% include-headless "/headless/ingestion/snapshotting-duration" %}}
 
 ## Queries during snapshotting
 
