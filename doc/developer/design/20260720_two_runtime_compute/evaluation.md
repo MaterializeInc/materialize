@@ -407,6 +407,71 @@ Resolving that gate is the blocking design question, and it is worth more than a
 Two limits on these numbers.
 Sixty samples per cell supports p90 and makes p99 indistinguishable from the observed max, so the tail is reported as p90 and max rather than as p99.
 Both sweeps ran on a build without the walk counter, so engagement is established behaviourally, by the size of the difference between arms, rather than by instrumentation.
+## Reruns with the stash on, and disk contention
+
+All of the above ran with `enable_compute_peek_response_stash = false`, because the offload declined any peek the stash could take.
+That gate is gone, and `mz_index_peek_walks_total{substrate}` now makes engagement observable rather than inferred.
+
+Build `5708416d62`. With the stash left **on**, the counter reads `offload=568, inline=0` on the offload arm and `inline=2067, offload=0` on the inline arm, and every system replica is inline only.
+The offload runs in a production configuration, which is what the change was for.
+
+### E1 with the stash on
+
+Same fixture and sweep as before, one `400cc` cluster per arm.
+
+| Scan walk | Arm | p50 | p90 | max |
+|---|---|---|---|---|
+| none | inline | 105.0 | 105.3 | 105.5 |
+| none | offload | 107.4 | 107.7 | 107.8 |
+| 23 ms | inline | 104.4 | 121.7 | 142.2 |
+| 23 ms | offload | 104.7 | 105.2 | 105.9 |
+| 190 ms | inline | 106.9 | 311.5 | 473.8 |
+| 190 ms | offload | 105.7 | 106.1 | 159.8 |
+| 2170 ms | inline | 105.3 | 4025.9 | 6162.8 |
+| 2170 ms | offload | 108.2 | 182.6 | 184.5 |
+
+The result holds with the stash on: the inline tail tracks the walk it queues behind, the offloaded tail is flat, and the gap at the largest walk is 33-fold.
+
+### E7 as a single-phase A/B
+
+The runtime axis is replica-scoped now, so both arms are replicas of one cluster and share one maintenance load rather than reproducing it across two phases.
+`r-two` carries the `role` labels and `r-solo` carries none, which is the `Solo` signature, so the per-replica split reached the replicas.
+
+| Probe | Metric | `r-solo` | `r-two` |
+|---|---|---|---|
+| Late materialization, quiet | max | 1616.4 | 1333.7 |
+| Late materialization, one shared hydration | p90 | 2135.5 | 1346.3 |
+| Late materialization, one shared hydration | max | 2835.1 | 1455.9 |
+| Introspection, one shared hydration | p90 | 776.6 | 114.9 |
+| Introspection, one shared hydration | max | 778.4 | 115.3 |
+
+Same conclusion as the two-phase version, now without the phase confound.
+The second runtime halves the temporary-dataflow tail and keeps introspection flat while an index hydrates.
+
+### E8, disk contention: one measurement and two failed fixtures
+
+The question is how a walk behaves when the arrangement it reads is on disk rather than in memory.
+Venue: `M.1-nano`, one worker, half a core, 4.07 GB of memory and 24.4 GB of disk, one cluster per arm.
+
+**First fixture, too slow to measure.** All sixteen columns of `sf10.lineitem`, 60M rows, about 13.5 GB against 4.07 GB of memory, reaching 10.4 GB of swap.
+That is the depth wanted, and a single walk did not finish in eight minutes, because walk cost scales with rows and 60M rows on half a core is the wrong end of the trade.
+Depth needs bytes, speed needs few rows, so the fixture has to be few rows and very wide.
+
+**Second fixture, not a disk test at all.** Three million rows of `repeat(l_comment, 28)`, about 2.4 GB, which fits in memory.
+Swap had drained to 0.17 GB by the time the measurement ran, so its result, a p50 of 1580.6 ms inline against 107.4 ms offloaded, is E1's effect on a one-worker replica rather than anything about disk.
+Recorded because the numbers are otherwise easy to mistake for a disk result.
+
+**Third fixture, swap-resident and survivable.** Six million rows of `repeat(l_comment, 30)`, about 4.6 GB, leaving 3.2 GB of swap on one arm and 6.4 GB on the other on top of roughly 3.8 GB resident.
+
+The offloaded arm walked it in 49.1 and 51.1 seconds with no restarts.
+The inline arm produced no sample in 400 seconds, and its replica restarted during the attempt, its third restart of the session.
+Every termination reported `Error` rather than `OOMKilled`, and the dying container's logs were not retained, so the cause is not established.
+
+What this does and does not support.
+It does not support a claim about arms, because the two arms sat at different swap depths, 3.2 against 6.4 GB, which is not a matched control.
+The plausible mechanism, that a fifty-second inline walk starves the single timely worker until the replica is declared unhealthy while an offloaded walk leaves it free to keep stepping, is consistent with everything observed and is not demonstrated by it.
+A follow-up needs equal swap depth on both arms and the pre-restart container logs captured, and until then the honest statement is that an inline walk over a swap-resident arrangement did not complete on a one-worker replica while the offloaded walk of the same data did.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
