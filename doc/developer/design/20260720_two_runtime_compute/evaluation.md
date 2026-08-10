@@ -560,6 +560,38 @@ It also explains why building several smaller indexes is the right way to reach 
 
 So the second runtime does not only serve a console. It makes the replica introspectable precisely when something is wrong with it, which is when introspection is worth having and exactly when the single-runtime replica stops answering. Explaining the sawtooth is separate work. Being able to see it is the capability this feature buys, and it is a better argument for the second runtime than any of the latency numbers, because the alternative is not a slower answer but a wrong one.
 
+### E11, the skewed point lookup: one bad key stops stalling everyone
+
+A real customer pattern, and the sharpest case for the offload because it needs none of the machinery above to be reachable. The shape is `SELECT ... WHERE key = <literal> ORDER BY ... LIMIT 1`. Most keys hold one value, a few hold millions. An `ORDER BY` makes the finishing non-streamable, so the peek response stash never applied to it and the offload was always eligible.
+
+Fixture: a view whose hot key `0` holds 6,003,692 distinct values and whose other 1,500,000 keys hold exactly one each, indexed on the key, 7,503,698 records total on `400cc`. Both query shapes plan as fast-path index lookups with literal constraints, which is the customer's plan. Keys for the normal lookups are drawn from the table rather than generated, because TPC-H order keys are sparse and a generated key mostly misses and measures an empty seek.
+
+Isolated, a normal lookup costs 105 ms, essentially the round trip. The hot key costs **2020 ms**, because finding the minimum of six million values for one key is one worker's walk.
+
+Load is open loop: arrivals fire on a fixed wall-clock schedule regardless of how many requests are outstanding, from a pre-opened connection pool. A closed loop would throttle itself and hide precisely the queueing being measured. Client-side queue delay stayed at 1.2 ms and nothing was dropped in any run, so the pile-up below is entirely server side.
+
+Three skewed lookups injected into a steady 10 per second stream of normal lookups:
+
+| Arm | normal p50 | p90 | p99 | max | normals over 200 ms |
+|---|---|---|---|---|---|
+| inline | 107.7 | 1223.0 | 2019.9 | 2024.2 | **58 of 261** |
+| offload | 107.8 | 108.7 | 109.0 | 109.2 | **0 of 261** |
+
+The same at 25 per second, two injections:
+
+| Arm | normal p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| inline | 107.0 | 1027.1 | 1940.1 | 2024.2 |
+| offload | 105.5 | 106.0 | 106.3 | 118.2 |
+
+The inline timeline shows the mechanism rather than just its size. After a skewed lookup arrives at t=5.0, the normals arriving behind it complete at a fixed time rather than after a fixed delay: 2019.9 ms for the one arriving at 5.0, then 1921, 1821, 1721, 1622, 1522 and so on down to 235.8 ms for the one arriving at 6.8. Latency is the remaining walk, so every arrival waits for the same completion instant. The pattern repeats identically at 12.0 and 19.0.
+
+That is the customer's complaint exactly: one lookup on a bad key stalls every lookup behind it, and the number of victims is the arrival rate times the walk, which is why it looks like a latency spike across the board rather than one slow query.
+
+The offloaded arm has no such window. The skewed lookups still take about two seconds, 1971, 2021 and 2003 ms, because the work is unchanged. They simply stop being in anyone else's way, and no normal lookup exceeds 200 ms in any run.
+
+`ORDER BY` peeks are the one shape the offload could always serve, so this improvement was available before the stash work and is not contingent on it. It is also the strongest argument in this document for turning the offload on by default: the cost is a thread, and the benefit is that a single skewed key stops being a cluster-wide latency event.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
