@@ -960,12 +960,14 @@ impl<'a> ActiveComputeState<'a> {
         let mut upper = Antichain::new();
         let (peek_stash_usable, peek_stash_threshold_bytes) = self.peek_stash_config(&peek.peek);
 
-        if self.should_offload_peek(peek_stash_usable) {
+        if self.should_offload_peek() {
+            let stash = self.offload_stash(peek_stash_usable, peek_stash_threshold_bytes);
             match shared_snapshot_for_offload(
                 &peek.registry,
                 peek.worker_index,
                 &peek.peek,
                 &mut upper,
+                stash.is_some(),
             ) {
                 OffloadSnapshot::NotReady => return Some(peek),
                 OffloadSnapshot::Response(response) => {
@@ -974,12 +976,18 @@ impl<'a> ActiveComputeState<'a> {
                     self.send_peek_response(PendingPeek::IndexShared(peek), response);
                     return None;
                 }
-                OffloadSnapshot::Ready { oks, errs } => {
+                OffloadSnapshot::Ready {
+                    oks,
+                    errs,
+                    oks_stash,
+                } => {
                     let offloaded = spawn_offloaded_walk::<SharedOksHandle, SharedErrsHandle>(
                         peek.peek.clone(),
                         peek.max_result_size,
                         oks,
                         errs,
+                        oks_stash,
+                        stash,
                         peek.span.clone(),
                         self.timely_worker.sync_activator_for([].into()),
                     );
@@ -1394,14 +1402,10 @@ impl<'a> ActiveComputeState<'a> {
 
     /// Whether this worker should walk `peek`'s cursor on a blocking task rather than inline.
     ///
-    /// Declines when the peek could divert to the stash, because that decision is made partway
-    /// through the walk and the offloaded walk does not carry the machinery to make it. Declines
-    /// when too many walks are already in flight, since each pins its batches and holds back
-    /// compaction. Both fall back to the inline walk, which is always correct.
-    fn should_offload_peek(&self, peek_stash_usable: bool) -> bool {
-        if peek_stash_usable {
-            return false;
-        }
+    /// Declines when too many walks are already in flight, since each pins its batches and holds
+    /// back compaction, and a walk that diverts to the stash holds them for the upload as well.
+    /// Falls back to the inline walk, which is always correct.
+    fn should_offload_peek(&self) -> bool {
         if !ENABLE_INDEX_PEEK_OFFLOAD.get(&self.compute_state.worker_config) {
             return false;
         }
@@ -1428,6 +1432,30 @@ impl<'a> ActiveComputeState<'a> {
         (eligible && enabled && location_available, threshold)
     }
 
+    /// The stash configuration an offloaded walk needs, or `None` when the stash cannot take this
+    /// peek and the walk must resolve inline.
+    fn offload_stash(
+        &self,
+        peek_stash_usable: bool,
+        threshold_bytes: usize,
+    ) -> Option<OffloadStash> {
+        if !peek_stash_usable {
+            return None;
+        }
+        Some(OffloadStash {
+            persist_clients: Arc::clone(&self.compute_state.persist_clients),
+            persist_location: self
+                .compute_state
+                .peek_stash_persist_location
+                .clone()
+                .expect("peek stash usability implies a configured location"),
+            threshold_bytes,
+            batch_max_runs: PEEK_RESPONSE_STASH_BATCH_MAX_RUNS
+                .get(&self.compute_state.worker_config),
+            batch_size: PEEK_STASH_BATCH_SIZE.get(&self.compute_state.worker_config),
+        })
+    }
+
     /// Either complete the peek (and send the response) or put it in the pending set.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {
@@ -1437,11 +1465,16 @@ impl<'a> ActiveComputeState<'a> {
                 let (peek_stash_usable, peek_stash_threshold_bytes) =
                     self.peek_stash_config(&peek.peek);
 
-                if self.should_offload_peek(peek_stash_usable) {
-                    match peek.snapshot_for_offload(upper) {
+                if self.should_offload_peek() {
+                    let stash = self.offload_stash(peek_stash_usable, peek_stash_threshold_bytes);
+                    match peek.snapshot_for_offload(upper, stash.is_some()) {
                         OffloadSnapshot::NotReady => None,
                         OffloadSnapshot::Response(response) => Some(response),
-                        OffloadSnapshot::Ready { oks, errs } => {
+                        OffloadSnapshot::Ready {
+                            oks,
+                            errs,
+                            oks_stash,
+                        } => {
                             let offloaded = spawn_offloaded_walk::<
                                 PaddedTrace<RowRowAgent<Timestamp, Diff>>,
                                 ErrAgent<Timestamp, Diff>,
@@ -1450,6 +1483,8 @@ impl<'a> ActiveComputeState<'a> {
                                 self.compute_state.max_result_size,
                                 oks,
                                 errs,
+                                oks_stash,
+                                stash,
                                 peek.span.clone(),
                                 self.timely_worker.sync_activator_for([].into()),
                             );
@@ -2163,6 +2198,7 @@ impl IndexPeek {
     fn snapshot_for_offload(
         &mut self,
         upper: &mut Antichain<Timestamp>,
+        want_stash: bool,
     ) -> OffloadSnapshot<PaddedTrace<RowRowAgent<Timestamp, Diff>>, ErrAgent<Timestamp, Diff>> {
         self.trace_bundle.oks_mut().read_upper(upper);
         if upper.less_equal(&self.peek.timestamp) {
@@ -2193,10 +2229,14 @@ impl IndexPeek {
 
         let oks = local_snapshot::snapshot_local(self.trace_bundle.oks_mut(), &oks_upper);
         let errs = local_snapshot::snapshot_local(self.trace_bundle.errs_mut(), &errs_upper);
+        let oks_stash = want_stash
+            .then(|| local_snapshot::snapshot_local(self.trace_bundle.oks_mut(), &oks_upper).ok())
+            .flatten();
         match (oks, errs) {
             (Ok(oks), Ok(errs)) => OffloadSnapshot::Ready {
                 oks: oks.into_cursor(),
                 errs: errs.into_cursor(),
+                oks_stash: oks_stash.map(|snapshot| snapshot.into_cursor()),
             },
             // The gates above already established that the traces cover this read, so a snapshot
             // failure here would mean the trace moved between the two checks. Nothing runs on this
@@ -2585,6 +2625,8 @@ fn spawn_offloaded_walk<OksTr, ErrsTr>(
     max_result_size: u64,
     oks: (TraceCursor<OksTr>, TraceStorage<OksTr>),
     errs: (TraceCursor<ErrsTr>, TraceStorage<ErrsTr>),
+    oks_stash: Option<(TraceCursor<OksTr>, TraceStorage<OksTr>)>,
+    stash: Option<OffloadStash>,
     span: tracing::Span,
     activator: timely::scheduling::activate::SyncActivator,
 ) -> IndexOffloadPeek
@@ -2616,8 +2658,14 @@ where
         || "index_peek::offload",
         move || {
             let start = Instant::now();
-            let response =
-                offloaded_response::<OksTr, ErrsTr>(&task_peek, max_result_size, oks, errs);
+            let response = offloaded_response::<OksTr, ErrsTr>(
+                &task_peek,
+                max_result_size,
+                oks,
+                errs,
+                oks_stash,
+                stash,
+            );
             match result_tx.send((response, start.elapsed())) {
                 Ok(()) => {}
                 Err((_response, elapsed)) => {
@@ -2640,15 +2688,27 @@ where
     }
 }
 
+/// What an offloaded walk needs to divert to the peek response stash partway through.
+struct OffloadStash {
+    persist_clients: Arc<PersistClientCache>,
+    persist_location: PersistLocation,
+    threshold_bytes: usize,
+    batch_max_runs: usize,
+    batch_size: usize,
+}
+
 /// Builds a peek response from owned cursors, off the serving worker's thread.
 ///
 /// Mirrors the inline walk: scan the errors first and report one if present, then drain the ok
-/// rows. Stash diversion is not reachable here, see the call sites.
+/// rows. A result that grows past the stash threshold diverts to persist from this thread, so the
+/// serving worker is not involved in either outcome.
 fn offloaded_response<OksTr, ErrsTr>(
     peek: &Peek,
     max_result_size: u64,
     oks: (TraceCursor<OksTr>, TraceStorage<OksTr>),
     errs: (TraceCursor<ErrsTr>, TraceStorage<ErrsTr>),
+    oks_stash: Option<(TraceCursor<OksTr>, TraceStorage<OksTr>)>,
+    stash: Option<OffloadStash>,
 ) -> PeekResponse
 where
     OksTr: TraceReader<Batch: Navigable>,
@@ -2687,12 +2747,44 @@ where
         oks_storage,
     );
 
-    // Offload is skipped for peeks the stash could apply to, so `drain_ok_iterator` cannot divert
-    // here. It also cannot report `NotReady`: that comes from the frontier checks the caller
-    // already passed, not from draining an owned cursor.
-    match IndexPeek::drain_ok_iterator(peek_iterator, peek, max_result_size, false, 0, None) {
+    let (stash_eligible, threshold_bytes) = match &stash {
+        Some(stash) => (true, stash.threshold_bytes),
+        None => (false, 0),
+    };
+
+    // `NotReady` is unreachable: it comes from the frontier checks the caller already passed, not
+    // from draining an owned cursor.
+    match IndexPeek::drain_ok_iterator(
+        peek_iterator,
+        peek,
+        max_result_size,
+        stash_eligible,
+        threshold_bytes,
+        None,
+    ) {
         PeekStatus::Ready(response) => response,
-        PeekStatus::UsePeekStash | PeekStatus::NotReady => {
+        PeekStatus::UsePeekStash => {
+            let stash = stash.expect("diversion only reported when the stash is configured");
+            let (oks_cursor, oks_storage) =
+                oks_stash.expect("spare cursor taken whenever the stash is configured");
+            let peek_iterator = peek_result_iterator::PeekResultIterator::<OksTr>::new_over_cursor(
+                target_id,
+                peek.map_filter_project.clone(),
+                peek.timestamp,
+                peek.literal_constraints.clone().as_deref_mut(),
+                oks_cursor,
+                oks_storage,
+            );
+            peek_stash::StashingPeek::upload_blocking(
+                stash.persist_clients,
+                &stash.persist_location,
+                peek,
+                peek_iterator,
+                stash.batch_max_runs,
+                stash.batch_size,
+            )
+        }
+        PeekStatus::NotReady => {
             unreachable!("an offloaded index peek always resolves to a response")
         }
     }
@@ -2708,6 +2800,7 @@ fn shared_snapshot_for_offload(
     worker_index: usize,
     peek: &Peek,
     upper: &mut Antichain<Timestamp>,
+    want_stash: bool,
 ) -> OffloadSnapshot<SharedOksHandle, SharedErrsHandle> {
     let id = peek.target.id();
     let Some((mut oks, mut errs)) = registry.handles(&id, worker_index) else {
@@ -2736,6 +2829,7 @@ fn shared_snapshot_for_offload(
     }
 
     OffloadSnapshot::Ready {
+        oks_stash: want_stash.then(|| oks.cursor()),
         oks: oks.cursor(),
         errs: errs.cursor(),
     }
@@ -3173,13 +3267,15 @@ mod index_peek_tests {
             span: tracing::Span::none(),
         };
         let mut upper = Antichain::new();
-        let offloaded_local = match offload_peek.snapshot_for_offload(&mut upper) {
-            OffloadSnapshot::Ready { oks, errs } => {
-                offloaded_response::<
-                    PaddedTrace<RowRowAgent<Timestamp, Diff>>,
-                    ErrAgent<Timestamp, Diff>,
-                >(&make_peek(peek_ts), u64::MAX, oks, errs)
-            }
+        let offloaded_local = match offload_peek.snapshot_for_offload(&mut upper, false) {
+            OffloadSnapshot::Ready {
+                oks,
+                errs,
+                oks_stash,
+            } => offloaded_response::<
+                PaddedTrace<RowRowAgent<Timestamp, Diff>>,
+                ErrAgent<Timestamp, Diff>,
+            >(&make_peek(peek_ts), u64::MAX, oks, errs, oks_stash, None),
             _ => panic!("local snapshot must be ready"),
         };
         assert_eq!(
@@ -3204,17 +3300,27 @@ mod index_peek_tests {
         };
 
         let mut upper = Antichain::new();
-        let offloaded_shared =
-            match shared_snapshot_for_offload(&shared_registry, 0, &make_peek(peek_ts), &mut upper)
-            {
-                OffloadSnapshot::Ready { oks, errs } => offloaded_response::<
-                    SharedOksHandle,
-                    SharedErrsHandle,
-                >(
-                    &make_peek(peek_ts), u64::MAX, oks, errs
-                ),
-                _ => panic!("shared snapshot must be ready"),
-            };
+        let offloaded_shared = match shared_snapshot_for_offload(
+            &shared_registry,
+            0,
+            &make_peek(peek_ts),
+            &mut upper,
+            false,
+        ) {
+            OffloadSnapshot::Ready {
+                oks,
+                errs,
+                oks_stash,
+            } => offloaded_response::<SharedOksHandle, SharedErrsHandle>(
+                &make_peek(peek_ts),
+                u64::MAX,
+                oks,
+                errs,
+                oks_stash,
+                None,
+            ),
+            _ => panic!("shared snapshot must be ready"),
+        };
         assert_eq!(
             inline_shared, offloaded_shared,
             "offloaded walk over a published arrangement diverged from the inline walk"
@@ -3979,6 +4085,12 @@ enum OffloadSnapshot<OksTr: TraceReader<Batch: Navigable>, ErrsTr: TraceReader<B
     Ready {
         oks: (TraceCursor<OksTr>, TraceStorage<OksTr>),
         errs: (TraceCursor<ErrsTr>, TraceStorage<ErrsTr>),
+        /// A second cursor over the same read, present only when the stash could take this peek.
+        ///
+        /// Diversion to the stash is decided partway through a walk, and the walk consumes its
+        /// cursor. The inline path re-walks from a fresh iterator for the same reason. Taking the
+        /// spare up front keeps that possible without holding the trace handle across threads.
+        oks_stash: Option<(TraceCursor<OksTr>, TraceStorage<OksTr>)>,
     },
 }
 

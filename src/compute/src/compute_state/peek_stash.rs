@@ -116,6 +116,74 @@ impl StashingPeek {
         }
     }
 
+    /// Stashes `peek_iterator`'s rows and blocks until the upload finishes, returning the response.
+    ///
+    /// For a walk that already runs off the serving worker. The worker-pumped path exists because a
+    /// trace cursor is not `Send` and so cannot be given to the upload task. A caller that owns a
+    /// `Send` snapshot has no such problem: it drives the same upload directly and never involves
+    /// the worker.
+    ///
+    /// Must not be called from an async context. It blocks the calling thread for the length of the
+    /// upload, which is why it belongs on a blocking task and why the offload's in-flight cap also
+    /// bounds how many blocking threads this can occupy.
+    pub fn upload_blocking(
+        persist_clients: Arc<PersistClientCache>,
+        persist_location: &PersistLocation,
+        peek: &Peek,
+        peek_iterator: impl Iterator<Item = Result<(Row, NonZeroI64), String>>,
+        batch_max_runs: usize,
+        batch_size: usize,
+    ) -> PeekResponse {
+        let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(10);
+        let persist_location = persist_location.clone();
+        let peek_uuid = peek.uuid;
+        let relation_desc = peek.result_desc.clone();
+        let rows_needed_by_finishing = peek.finishing.num_rows_needed();
+
+        let upload = mz_ore::task::spawn(
+            || format!("peek_stash::stash_peek_response({peek_uuid})"),
+            async move {
+                Self::do_upload(
+                    &persist_clients,
+                    persist_location,
+                    batch_max_runs,
+                    peek_uuid,
+                    relation_desc,
+                    rows_needed_by_finishing,
+                    rows_rx,
+                )
+                .await
+            },
+        );
+
+        let mut peek_iterator = peek_iterator.peekable();
+        loop {
+            let rows: Result<Vec<_>, _> = peek_iterator.by_ref().take(batch_size).collect();
+            let (rows, done) = match rows {
+                Ok(rows) if rows.is_empty() => break,
+                Ok(rows) => {
+                    let done = peek_iterator.peek().is_none();
+                    (Ok(rows), done)
+                }
+                Err(e) => (Err(e), true),
+            };
+            // A send error means the upload stopped reading, which it does once the finishing's
+            // row bound is met. That is a normal early exit, not a failure.
+            if rows_tx.blocking_send(rows).is_err() {
+                break;
+            }
+            if done {
+                break;
+            }
+        }
+        drop(rows_tx);
+
+        match tokio::runtime::Handle::current().block_on(upload) {
+            Ok(response) => response,
+            Err(e) => PeekResponse::Error(e),
+        }
+    }
+
     async fn do_upload(
         persist_clients: &PersistClientCache,
         persist_location: PersistLocation,

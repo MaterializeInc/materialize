@@ -540,8 +540,9 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
 /// do. Each in-flight walk also pins the batches its cursor covers, bounded by
 /// `index_peek_offload_max_inflight`.
 ///
-/// Does not apply to peeks eligible for the peek response stash, whose size-based diversion is
-/// decided partway through a walk. Those keep the inline path, which knows how to divert.
+/// Applies to peeks the peek response stash could take as well. The offloaded walk makes the same
+/// size-based diversion partway through, and drives the upload from its own thread rather than
+/// handing rows back to the worker to pump.
 pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
     "enable_index_peek_offload",
     false,
