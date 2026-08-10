@@ -353,10 +353,50 @@ V1 and V3 are the same within noise at every scan cost, 167.6 against 180.4 ms a
 The second runtime contributes nothing to peek tail latency.
 What removes the blocking is the substrate the walk runs on, and that is settled by a dyncfg that needs no restart, no new port and no fleet roll.
 
+### E7: temporary dataflows, the second runtime's remaining justification
+
+E1 and E2 settle peeks and leave the second runtime unjustified by them.
+Temporary dataflows are the other thing it moves, and they cannot use the offload at all, since the offload is a peek walk substrate and these render dataflows.
+
+Fixture: one `400cc` cluster, a `6,003,750` row index as the lookup target, and two temporary-dataflow probes.
+Late materialization is a differential join of about 120 keys against that index, confirmed by `EXPLAIN` to render rather than take a fast path.
+The introspection probe is a count over `mz_introspection.mz_scheduling_elapsed`.
+`enable_two_runtime_compute` is environment-scoped, so the two arms are sequential phases with a replica recycle between them.
+
+The first maintenance load, repeatedly creating and dropping an index over six million rows, moved almost nothing in either phase.
+It never saturated eight workers, and a load that does not saturate cannot demonstrate isolation.
+The load that does is a single hydration of a sixty million row index, sampled while it runs.
+
+| Probe | Metric | Single runtime | Two runtime |
+|---|---|---|---|
+| Late materialization | p50 | 1274.1 | 1236.7 |
+| Late materialization | p90 | 2942.2 | 1672.4 |
+| Late materialization | max | 3893.8 | 1812.3 |
+| Introspection | p90 | 116.4 | 114.4 |
+| Introspection | max | 427.9 | 114.6 |
+
+Under maintenance saturation the second runtime halves the temporary-dataflow tail, 2942 to 1672 ms at p90 and 3894 to 1812 ms at the maximum.
+The introspection probe is flat on two runtimes, 114.6 ms at the maximum against 427.9 ms on one, so introspection stops being collateral damage of hydration.
+p50 barely moves in either probe, which is consistent with the isolation claim: what maintenance work does to a temporary dataflow is a tail effect, not a median one.
+
+This is the justification the second runtime has left.
+It is real, and it is a different claim from the one the design doc leads with.
+The feature is worth having for temporary dataflows under maintenance load, and it is worth nothing for peek latency, which E2 settled.
+
+A caveat that matters more than the ratio.
+Late materialization has a floor of roughly 850 to 950 ms in every cell, quiet or loaded, on either runtime.
+The query returns about 120 rows, so that floor is dataflow creation and teardown, not data work.
+Runtime placement cannot touch it, and it is larger than the tail the placement recovers.
+The bigger prize for interactive latency is the cost of creating a temporary dataflow at all.
+
 ### What the two results decide, and what still blocks them
 
-The decision table's V1 row applies: default to V1, and justify the second runtime on temporary dataflows alone rather than on peek latency.
-Everything the second runtime costs, the port, the fleet roll, the command-ordering invariant and the capping that enforces it, buys nothing that the offload does not already buy on its own.
+The decision table's V1 row applies for peeks: default to V1, since everything the second runtime costs, the port, the fleet roll, the command-ordering invariant and the capping that enforces it, buys nothing for peek latency that the offload does not buy on its own.
+
+E7 supplies the justification the peek results withdraw.
+Temporary dataflows are insulated from maintenance hydration only by the second runtime, and the effect is a halving of their tail.
+So the two mechanisms are not competing, they serve different work: the offload for peeks, the second runtime for rendered temporary dataflows.
+The routing policy should follow that split rather than sending everything to one place.
 
 Neither arm delivers this in a production configuration today.
 Production runs the peek response stash on, and the stash gate disables the offload for exactly the streamable peeks that make up ordinary traffic.
