@@ -535,6 +535,27 @@ Values straddling zero are clock skew between the probe host and the environment
 
 `EXPLAIN TIMESTAMP` is the right instrument for this and should be how the staleness claim in `design.md` is stated, rather than leaving "read isolation" to imply freshness.
 
+### E10, the shape of memory during hydration: a sawtooth that overshoots about fourfold
+
+Prompted by the replica that died building one large index. The question is whether hydration memory grows smoothly or in jumps, because a replica sized for the steady state is only safe if the path there is monotone.
+
+It is not. Polling `mz_dataflow_arrangement_sizes` at 1 Hz on a `400cc` replica while a 600M-row index hydrates, 289 samples over 258 seconds:
+
+* **82 increases above 200 MiB**, the largest a single-second jump of **9.1 GiB**.
+* **17 decreases above 50 MiB**, the largest **36.6 GiB**.
+* Arrangement bytes peak at **35.7 GiB** and settle at **13.2 GiB**, so the transient is 2.7 times the final size.
+* Allocations peak near 2.9 million and settle at 136, so the settled trace is a few large regions while the build is millions of small ones.
+
+The container tells the same story with a larger factor, since it also carries the batcher, input buffers and persist fetch. Working set goes 19.9 GiB, then **55.4 GiB** at peak, then 47.1, 18.3 and finally **14.3 GiB**. That is a **3.9-fold overshoot** over the settled footprint, reaching 85 percent of a `400cc` replica's 65 GiB limit to build something that ends up needing 14 GiB.
+
+The sawtooth is merge behaviour: batches accumulate, a merge consolidates them and frees the inputs, and the cycle repeats. The final cliff, where the series drops to zero and allocations fall from 2.9 million to about a hundred, is the build's temporary arrangements being released as the consolidated trace takes over.
+
+Two consequences.
+
+The memory freed by each merge does come back, 55.4 GiB down to 14.3 GiB, so this is a transient rather than a leak. What it is not is safe to ignore when sizing: **a replica provisioned for the steady state can die during hydration**, which is what happened on `M.1-nano` and what the earlier disk fixture blamed on the walk substrate before the matched control showed otherwise.
+
+It also explains why building several smaller indexes is the right way to reach a large footprint. With `compute_hydration_concurrency = 1` the peak is one index's transient rather than the whole set's, which is what made the swap fixture reachable at all.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
