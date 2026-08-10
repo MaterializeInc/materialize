@@ -15,6 +15,7 @@ import {
   Tooltip,
   VStack,
 } from "@chakra-ui/react";
+import { useFlags } from "~/hooks/useFlags";
 import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
 import { Link as RouterLink } from "react-router-dom";
@@ -355,6 +356,8 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
     useLatestOfflineReplica();
 
   const meta: ClusterTableMeta = { offlineReplicaMap };
+  const flags = useFlags();
+  
   const table = useUniversalTable({
     data: clusters,
     columns,
@@ -364,9 +367,10 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
     // already what the cluster row shows, so nesting it adds a caret and a
     // click for no new information.
     getSubRows: (row) =>
-      row.rowType === "cluster" && row.replicas.length > 1
-        ? row.replicas.map((r) => ({ rowType: "replica" as const, ...r }))
-        : undefined,
+      flags["usage-metrics-in-cluster-list-CNS121"] &&
+        row.rowType === "cluster" && row.replicas.length > 1
+          ? row.replicas.map((r) => ({ rowType: "replica" as const, ...r }))
+          : undefined,
     state: {
       columnVisibility: {
         lastStatusChange: !offlineReplicaError,
