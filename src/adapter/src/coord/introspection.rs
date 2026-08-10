@@ -98,18 +98,27 @@ impl IntrospectionSubscribe {
 }
 
 impl Coordinator {
+    /// Every `(cluster, replica)` pair currently in the catalog.
+    ///
+    /// The set a per-replica feature (introspection subscribes, curated metric sinks) must install
+    /// onto the replicas that already exist when the coordinator starts. Shared so those callers
+    /// cannot drift on what "all replicas" means.
+    pub(super) fn all_cluster_replicas(&self) -> Vec<(ClusterId, ReplicaId)> {
+        self.catalog
+            .clusters()
+            .flat_map(|cluster| {
+                cluster
+                    .replicas()
+                    .map(move |replica| (cluster.id, replica.replica_id))
+            })
+            .collect()
+    }
+
     /// Installs introspection subscribes on all existing replicas.
     ///
     /// Meant to be invoked during coordinator bootstrapping.
     pub(super) async fn bootstrap_introspection_subscribes(&mut self) {
-        let mut cluster_replicas = Vec::new();
-        for cluster in self.catalog.clusters() {
-            for replica in cluster.replicas() {
-                cluster_replicas.push((cluster.id, replica.replica_id));
-            }
-        }
-
-        for (cluster_id, replica_id) in cluster_replicas {
+        for (cluster_id, replica_id) in self.all_cluster_replicas() {
             self.install_introspection_subscribes(cluster_id, replica_id)
                 .await;
         }

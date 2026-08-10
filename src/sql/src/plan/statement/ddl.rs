@@ -4259,12 +4259,16 @@ generate_extracted_config!(CreateMetricSinkOption, (Prefix, String));
 const METRIC_SINK_PREFIX_MARKER: &str = "mz_metric_sink_";
 
 /// Rejects a prefix that could not start a Prometheus metric name, or that escapes the reserved
-/// `mz_metric_sink_` lane (see [`METRIC_SINK_PREFIX_MARKER`]).
+/// `mz_metric_sink_` lane (see `METRIC_SINK_PREFIX_MARKER`).
 ///
 /// The sink prepends this to every name it publishes, so `prefix + name` must stay a legal
 /// family name (`[a-zA-Z_:][a-zA-Z0-9_:]*`, the same grammar the runtime checks each row's
 /// `metric_name` against). The prefix must therefore be at least one character long.
-fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
+///
+/// Enforced for a user's `CREATE METRIC SINK` at plan time, and for a coordinator-installed curated
+/// sink at install time. Both paths depend on the guarantees this gives the row shaping: the
+/// reserved leading character is what lets a bare `metric_name` start with a digit or be empty.
+pub fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
     if prefix.is_empty() {
         return Err(sql_err!("metric sink prefix must not be empty"));
     }
@@ -4291,7 +4295,12 @@ fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
     Ok(())
 }
 
-fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
+/// Checks that `desc` exposes the canonical metric-sink columns, the contract
+/// `mz_adapter::optimize::metric_sink`'s row shaping and the compute-side operator both rely on.
+///
+/// Every metric-sink source has to pass this, whether it is the `FROM` relation of a
+/// `CREATE METRIC SINK` or the query behind a coordinator-installed curated sink.
+pub fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
     for (name, type_ok) in METRIC_SINK_SOURCE_COLUMNS {
         let col = ColumnName::from(*name);
         let (_, column_type) = desc

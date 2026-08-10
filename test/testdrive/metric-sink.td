@@ -224,3 +224,56 @@ contains:still depended upon by metric sink "s"
 0
 
 > DROP TABLE lt CASCADE
+
+# Replica churn drives the coordinator's curated metric-sink install and
+# teardown (`install_metric_sinks` / `drop_metric_sinks`). The curated list is
+# empty, so there is no curated series to assert on: what is under test is that
+# both hooks run over an empty list without erroring, and that a replica added
+# and removed under a live sink leaves that sink publishing on the replica that
+# remains.
+#
+# On its own cluster, so the churn does not disturb the replica serving the rest
+# of this file. `quickstart` is a managed cluster anyway, which rejects
+# `CREATE CLUSTER REPLICA`, so replication factor is the way to add and remove a
+# replica.
+> CREATE CLUSTER churn_c (SIZE 'scale=1,workers=1')
+
+> CREATE TABLE churn_t (k text NOT NULL, val double)
+
+> INSERT INTO churn_t VALUES ('a', 1)
+
+> CREATE VIEW churn_v AS
+  SELECT 'value'::text AS metric_name,
+         'gauge'::text AS metric_type,
+         map_build(LIST[ROW('k', k)])::map[text=>text] AS labels,
+         val AS value,
+         'a metric emitted across replica churn'::text AS help
+  FROM churn_t
+
+> CREATE METRIC SINK s_churn IN CLUSTER churn_c FROM churn_v WITH (PREFIX = 'mz_metric_sink_churn_')
+
+# Read `churn_c`'s registry, not `quickstart`'s: the relation is per-replica
+# introspection, served by the session's active cluster.
+> SET cluster = churn_c
+
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_churn_value'
+1
+
+> ALTER CLUSTER churn_c SET (REPLICATION FACTOR 2)
+
+> ALTER CLUSTER churn_c SET (REPLICATION FACTOR 1)
+
+# Nothing is asserted while both replicas are up: reading a log relation on a
+# cluster with more than one replica errors as `UntargetedLogRead` unless the
+# session picks one. So this reads the surviving replica's registry, after the
+# churn.
+> SELECT count(*) FROM mz_introspection.mz_cluster_prometheus_metrics
+  WHERE metric_name = 'mz_metric_sink_churn_value'
+1
+
+> RESET cluster
+
+> DROP CLUSTER churn_c CASCADE
+
+> DROP TABLE churn_t CASCADE

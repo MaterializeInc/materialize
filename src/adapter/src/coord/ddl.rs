@@ -719,6 +719,7 @@ impl Coordinator {
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         self.drop_introspection_subscribes(replica_id);
+        self.drop_metric_sinks(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)

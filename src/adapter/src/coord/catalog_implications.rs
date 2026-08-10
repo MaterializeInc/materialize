@@ -1688,6 +1688,7 @@ impl Coordinator {
 
         self.install_introspection_subscribes(cluster_id, replica_id)
             .await;
+        self.install_metric_sinks(cluster_id, replica_id).await;
     }
 }
 

@@ -2541,10 +2541,15 @@ pub struct FeatureFlag {
 }
 
 impl FeatureFlag {
+    /// Returns whether the feature flag is enabled in the provided `system_vars`.
+    pub fn enabled(&'static self, system_vars: &SystemVars) -> bool {
+        *system_vars.expect_value::<bool>(self.flag)
+    }
+
     /// Returns an error unless the feature flag is enabled in the provided
     /// `system_vars`.
     pub fn require(&'static self, system_vars: &SystemVars) -> Result<(), VarError> {
-        match *system_vars.expect_value::<bool>(self.flag) {
+        match self.enabled(system_vars) {
             true => Ok(()),
             false => Err(VarError::RequiresFeatureFlag { feature_flag: self }),
         }
