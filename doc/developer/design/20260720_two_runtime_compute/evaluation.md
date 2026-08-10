@@ -472,6 +472,38 @@ It does not support a claim about arms, because the two arms sat at different sw
 The plausible mechanism, that a fifty-second inline walk starves the single timely worker until the replica is declared unhealthy while an offloaded walk leaves it free to keep stepping, is consistent with everything observed and is not demonstrated by it.
 A follow-up needs equal swap depth on both arms and the pre-restart container logs captured, and until then the honest statement is that an inline walk over a swap-resident arrangement did not complete on a one-worker replica while the offloaded walk of the same data did.
 
+### E8b, swap with a matched control: no regression, and a large win
+
+The first attempt failed on the fixture, not the question.
+Building one huge index spikes the working set during hydration, which is what killed a replica and left the two arms at unequal swap depth.
+With `compute_hydration_concurrency = 1` in this environment, several smaller indexes hydrate in sequence instead, so the peak is one index rather than the whole set.
+
+Fixture: six indexes of `repeat(l_comment, 8)` over `sf1.lineitem`, about 1.3 GB each, plus a small resident index for the point probe, on `M.1-nano` with 4.07 GB of memory.
+That settles at roughly 3.8 GB resident and **5.05 GB of swap on one arm against 5.08 GB on the other**, about 2.2 times memory, and **neither replica restarted**.
+Equal depth is what the earlier attempt lacked.
+
+Point-lookup latency on the resident index, two concurrent walks of a swap-resident index, two repeats.
+
+| Cell | Arm | p50 | p90 | max |
+|---|---|---|---|---|
+| quiet | inline | 105.9 | 138.1 | 149.9 |
+| quiet | offload | 106.4 | 106.7 | 107.0 |
+| 2 swapped walks | inline | 107.8 | 185.8 | 29151.7 |
+| 2 swapped walks | offload | 105.5 | 141.6 | 152.4 |
+| 2 swapped walks, repeat | inline | 2216.6 | 4429.1 | 4501.3 |
+| 2 swapped walks, repeat | offload | 105.4 | 105.9 | 106.5 |
+
+The offload does not regress under swap, which was the question, and the margin is larger here than anywhere else measured.
+Inline shows a 29 second worst case in one repeat and a 2.2 second median in the other, while the offloaded arm stays at its quiet latency in both, 105 to 152 ms throughout.
+
+The walks themselves tell the same story.
+A single swapped walk takes 3.6, 4.7 and 56.4 seconds inline against 2.3 seconds three times over offloaded, so the offloaded walk is both faster and far more predictable on the same data at the same depth.
+
+Why the margin is largest here is the interesting part.
+A walk that faults on swapped pages spends its time blocked rather than computing, so the thread it blocks is not doing useful work either way.
+Moving it off the serving worker therefore costs nothing and recovers everything, which is not true in the CPU-bound case where the offloaded walk still competes for a core.
+Disk pressure is the regime where this feature has the least to lose and the most to gain.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
