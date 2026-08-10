@@ -97,14 +97,9 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
-        # The cluster controller and background ALTER CLUSTER dyncfgs default on
-        # in current versions. Pin them explicitly so runs against older versions
-        # (which predate the flags or defaulted them off) exercise the legacy
-        # paths while current versions exercise the controller owning the
-        # managed-cluster replica set.
-        "enable_cluster_controller": (
-            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
-        ),
+        # Pinned explicitly so runs against older versions (which predate the
+        # flag or defaulted it off) behave like current ones, where it defaults
+        # on.
         "enable_background_alter_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
@@ -126,6 +121,15 @@ def get_minimal_system_parameters(
 
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
+
+    # The cluster controller's break-glass gate. Removed in v26.38, where the
+    # controller runs unconditionally. Older binaries still read it, and
+    # defaulted it off before v26.29, so pin it on for them to keep mixed-version
+    # runs exercising the same path as current versions.
+    if version < MzVersion.parse_mz("v26.38.0-dev"):
+        config["enable_cluster_controller"] = (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        )
 
     return config
 

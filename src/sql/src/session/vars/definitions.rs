@@ -1681,17 +1681,6 @@ pub mod cluster_scheduling {
         false,
     );
 
-    const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
-
-    pub static CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL: VarDefinition = VarDefinition::new(
-        "cluster_check_scheduling_policies_interval",
-        value!(Duration; DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL),
-        "How often policies are invoked to automatically start/stop clusters, e.g., \
-            for REFRESH EVERY materialized views.",
-        false,
-    )
-    .with_constraint(&NON_ZERO_DURATION);
-
     pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
         "cluster_security_context_enabled",
         value!(bool; DEFAULT_SECURITY_CONTEXT_ENABLED),

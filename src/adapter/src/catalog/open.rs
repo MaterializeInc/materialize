@@ -1231,9 +1231,9 @@ fn reconcile_builtin_cluster_replicas(
         }
 
         // Reading the cluster's factor is what makes this compose with the other
-        // writers of a replica set. The refresh scheduler parks a scheduled cluster
-        // by writing its factor to 0, so converging on the factor honors that
-        // instead of resurrecting a replica the scheduler just dropped.
+        // writers of a replica set. The controller's on-refresh strategy parks a
+        // scheduled cluster by writing its factor to 0, so converging on the
+        // factor honors that instead of resurrecting a replica it just dropped.
         let mut surplus = replicas_by_cluster.remove(&cluster.id).unwrap_or_default();
         for index in 0..managed.replication_factor {
             let replica_name = managed_cluster_replica_name(index);

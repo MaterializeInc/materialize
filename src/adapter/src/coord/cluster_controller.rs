@@ -18,19 +18,16 @@
 //! signals are pulled on demand, so a tick's round-trips scale with the number of
 //! managed clusters that need a live signal, not with a constant.
 //!
-//! Everything here is gated by [`ENABLE_CLUSTER_CONTROLLER`] (default on). With
-//! the gate off the task does not tick, so the legacy scheduling and graceful
-//! paths remain the sole writers of the replica set. With the gate on the
-//! controller owns the *user* managed-cluster replica set; the legacy entry
-//! points no-op. (System/builtin clusters are excluded here. Their config-implied
-//! replicas are materialized by `reconcile_builtin_cluster_replicas` at catalog
-//! open, which derives the same target from the same config.)
+//! The controller owns the *user* managed-cluster replica set. (System/builtin
+//! clusters are excluded here. Their config-implied replicas are materialized
+//! by `reconcile_builtin_cluster_replicas` at catalog open, which derives the
+//! same target from the same config.)
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER_CONTROLLER};
+use mz_adapter_types::dyncfgs::CLUSTER_CONTROLLER_TICK_INTERVAL;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
@@ -203,13 +200,10 @@ impl ClusterControllerCtx for CoordCtx {
 impl Coordinator {
     /// Spawn the cluster controller task.
     ///
-    /// The task ticks at [`CLUSTER_CONTROLLER_TICK_INTERVAL`] and reconciles when
-    /// [`ENABLE_CLUSTER_CONTROLLER`] is on; while the gate is off it ticks but
-    /// each tick is an early no-op. Both the gate and the interval are re-read
-    /// each tick (the interval via a [`ClusterControllerRequest::TickInterval`]
-    /// round-trip), so a runtime change to either takes effect without a restart.
-    /// It owns the controller and a [`CoordCtx`] that marshals back to this
-    /// Coordinator.
+    /// The task ticks at [`CLUSTER_CONTROLLER_TICK_INTERVAL`], re-read each tick
+    /// via a [`ClusterControllerRequest::TickInterval`] round-trip so a runtime
+    /// change takes effect without a restart. It owns the controller and a
+    /// [`CoordCtx`] that marshals back to this Coordinator.
     ///
     /// The interval is the fallback cadence: `reconcile_now` cuts the
     /// sleep short after a catalog transaction changes durable cluster state.
@@ -255,22 +249,20 @@ impl Coordinator {
 
     /// Handle one [`ClusterControllerRequest`] on the coordinator loop.
     ///
-    /// The controller is inactive when the gate is off, or while the deployment
-    /// is in read-only mode (a 0dt upgrade, where it must not write the catalog).
-    /// When inactive, reads report no managed clusters (so the controller finds
-    /// nothing to reconcile) and applies are rejected: the task still wakes each
-    /// tick and sends one `ManagedClusterIds` request, but that request
-    /// early-returns here and no catalog state is read or written, so the legacy
-    /// paths remain the sole writers of the replica set. The task keeps ticking,
-    /// so the controller reactivates on its own once the deployment promotes out
-    /// of read-only mode.
+    /// The controller is inactive while the deployment is in read-only mode (a
+    /// 0dt upgrade, where it must not write the catalog). When inactive, reads
+    /// report no managed clusters (so the controller finds nothing to
+    /// reconcile) and applies are rejected: the task still wakes each tick and
+    /// sends one `ManagedClusterIds` request, but that request early-returns
+    /// here and no catalog state is read or written. The task keeps ticking, so
+    /// the controller reactivates on its own once the deployment promotes out of
+    /// read-only mode.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_cluster_controller_request(
         &mut self,
         request: ClusterControllerRequest,
     ) {
-        let active = ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs())
-            && !self.controller.read_only();
+        let active = !self.controller.read_only();
 
         match request {
             ClusterControllerRequest::ManagedClusterIds { tx } => {
@@ -331,8 +323,7 @@ impl Coordinator {
                 // then complete the reply from a spawned task: the oracle
                 // read is a network round-trip (to the Postgres/CRDB-backed
                 // timestamp oracle) and must never run on the serial
-                // coordinator loop. The legacy `check_refresh_policy` makes
-                // the same split.
+                // coordinator loop.
                 match self.refresh_window_catalog_inputs(cluster_id) {
                     None => {
                         let _ = tx.send(None);
@@ -511,8 +502,7 @@ impl Coordinator {
     /// cluster (the system compaction estimate and each bound REFRESH
     /// materialized view's storage write frontier and refresh schedule), or
     /// `None` if the cluster is missing, unmanaged, or not scheduled `ON
-    /// REFRESH`. These are the same signals the legacy `check_refresh_policy`
-    /// reads.
+    /// REFRESH`.
     ///
     /// The oracle read timestamp completing [`RefreshWindowInputs`] is
     /// deliberately not fetched here: this runs on the coordinator loop, and
@@ -520,8 +510,8 @@ impl Coordinator {
     /// a spawned task instead.
     ///
     /// The MV write frontier is carried through with full fidelity as the
-    /// `Antichain` the storage controller reports, matching the legacy refresh
-    /// policy; the on-refresh strategy compares against it directly.
+    /// `Antichain` the storage controller reports. The on-refresh strategy
+    /// compares against it directly.
     fn refresh_window_catalog_inputs(
         &self,
         cluster_id: ClusterId,

@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use chrono::Utc;
 use clap::ArgAction;
-use mz_adapter_types::dyncfgs::{ENABLE_BACKGROUND_ALTER_CLUSTER, ENABLE_CLUSTER_CONTROLLER};
+use mz_adapter_types::dyncfgs::ENABLE_BACKGROUND_ALTER_CLUSTER;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -176,19 +176,13 @@ async fn main() -> ExitCode {
         }
     }
 
-    // The cluster controller and background ALTER CLUSTER land dark in
-    // production (the dyncfg defaults stay false); force them on for
-    // sqllogictest so the suite exercises the controller owning the
-    // managed-cluster replica set. These are dyncfgs (set by name), and a
-    // caller-provided value wins.
-    for name in [
-        ENABLE_CLUSTER_CONTROLLER.name(),
-        ENABLE_BACKGROUND_ALTER_CLUSTER.name(),
-    ] {
-        system_parameter_defaults
-            .entry(name.to_string())
-            .or_insert_with(|| "true".to_string());
-    }
+    // Pin background ALTER CLUSTER on for the suite so a config-shape
+    // `ALTER CLUSTER` returns immediately rather than blocking on the
+    // wait-shim. This is a dyncfg (set by name), and a caller-provided value
+    // wins.
+    system_parameter_defaults
+        .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
+        .or_insert_with(|| "true".to_string());
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
