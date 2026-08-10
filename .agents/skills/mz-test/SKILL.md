@@ -13,6 +13,16 @@ description: >
 
 # Testing Materialize
 
+## Cluster sizes
+
+mzcompose-based tests and `bin/environmentd` take their cluster replica sizes
+from `cluster_replica_size_map()` in
+`misc/python/materialize/mzcompose/__init__.py`, named
+`scale=<n>,workers=<w>[,mem=<n>GiB]`, e.g.
+`CREATE CLUSTER c SIZE 'scale=1,workers=1'`. Plain sizes like `'1'` fail there
+with "unknown cluster replica size". The emulator image run directly knows only
+cloud-style sizes (`25cc`, `50cc`, ...).
+
 ## Unit tests
 
 Run unit tests with `cargo test`.
@@ -156,6 +166,11 @@ Other useful commands:
 
 Many tests expect to start with fresh state.
 Run `bin/mzcompose --find NAME down` between test runs, not just at the end of a session.
+
+Instead of manually building with `cargo build`, use `bin/mzcompose` directly.
+It implicitly builds in the `target-xcompile` directory when no prebuilt image
+is available from Docker Hub/GHCR, so a manual build beforehand is wasted work
+that mzcompose never uses.
 
 mzcompose builds optimized binaries by default, which are nearly as fast to run as release and much faster to link than debug builds.
 
