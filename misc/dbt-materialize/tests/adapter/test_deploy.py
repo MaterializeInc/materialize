@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+import re
 import threading
 import time
 
@@ -540,9 +541,12 @@ class TestTargetDeploy:
             assert (
                 "Deployment by" in tagged_schema_comment[0]
             ), f"Missing deployment info in {schema_name} comment"
-            assert (
-                "on" in tagged_schema_comment[0]
-            ), f"Missing timestamp in {schema_name} comment"
+            # The user and timestamp are read out of a single-row result, so
+            # match on their values rather than on the surrounding words.
+            assert re.search(
+                r"Deployment by \S+ on \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+                tagged_schema_comment[0],
+            ), f"Missing user or timestamp in {schema_name} comment: {tagged_schema_comment[0]}"
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
