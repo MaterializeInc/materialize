@@ -88,9 +88,8 @@ impl ObservedReplica {
 /// compares it against the read timestamp (`less_than`) to decide whether the MV
 /// still needs a refresh. For the compaction window it reads the frontier's lone
 /// element via `as_option` to find the previous refresh time, falling back to the
-/// schedule's last refresh on the empty/sealed frontier `[]`, mirroring the
-/// legacy refresh policy. The frontier of a single-input total-order MV holds at
-/// most one element.
+/// schedule's last refresh on the empty/sealed frontier `[]`. The frontier of a
+/// single-input total-order MV holds at most one element.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefreshMvInfo {
     /// The MV's writes-`GlobalId`: the identity the window decision records in

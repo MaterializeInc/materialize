@@ -1309,7 +1309,6 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
-            &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
             &cluster_scheduling::CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -2272,10 +2271,6 @@ impl SystemVars {
 
     pub fn cluster_alter_check_ready_interval(&self) -> Duration {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
-    }
-
-    pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
-        *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
     }
 
     pub fn cluster_security_context_enabled(&self) -> bool {

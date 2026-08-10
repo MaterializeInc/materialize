@@ -126,7 +126,6 @@ use crate::{PeekResponseUnary, ReadHolds};
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
 mod cluster;
-pub(crate) use cluster::cancel_carried_reconfiguration;
 mod copy_from;
 mod create_index;
 mod create_materialized_view;

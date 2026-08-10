@@ -44,9 +44,9 @@ mz_system
 r1 (scale=1,workers=2)
 
 # `SHOW CLUSTERS` surfaces any in-flight reconfiguration or autoscaling action in a
-# single `activity` column. With the cluster controller at its default (off), no
-# reconfiguration or burst record is ever written, so `activity` is NULL for every
-# cluster, managed (baz) or unmanaged (foo).
+# single `activity` column. Neither cluster below is ever reconfigured or bursts,
+# so no record is written and `activity` is NULL for both, managed (baz) and
+# unmanaged (foo).
 statement ok
 CREATE CLUSTER baz (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
 

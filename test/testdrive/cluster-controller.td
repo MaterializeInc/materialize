@@ -7,27 +7,26 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-# Boundary test for the cluster controller. With the master gate forced on and
-# the tick interval driven down, the controller reconciles managed clusters many
-# times within the test window. Convergence is asynchronous (a config-shape ALTER
-# returns before the realized config settles), so every readback below is a
-# retrying testdrive query (`>` re-runs until it matches or the SQL timeout
-# elapses), never a fixed-duration sleep. Where a transient in-flight state must
-# be observed, the controller is frozen first so the state cannot move; where the
-# assertion is a negative ("the controller does nothing"), a sibling
-# reconfiguration is used as a liveness synchronizer, proving the reconcile loop
-# ran many ticks without acting on the cluster under test.
+# Boundary test for the cluster controller. With the tick interval driven down,
+# the controller reconciles managed clusters many times within the test window.
+# Convergence is asynchronous (a config-shape ALTER returns before the realized
+# config settles), so every readback below is a retrying testdrive query (`>`
+# re-runs until it matches or the SQL timeout elapses), never a fixed-duration
+# sleep. Where a transient in-flight state must be observed, the controller is
+# held off first (by cranking the tick interval back up) so the state cannot
+# move; where the assertion is a negative ("the controller does nothing"), a
+# sibling reconfiguration is used as a liveness synchronizer, proving the
+# reconcile loop ran many ticks without acting on the cluster under test.
 
 # Give convergence (provision + hydrate + cut-over) ample room on a loaded CI host
 # without ever sleeping the full budget. `>` returns as soon as it matches.
 $ set-sql-timeout duration=120s
 
-# Force the gate on and drive the tick interval down so the controller ticks
-# ~hundreds of times across the waits below. Both are re-read each tick, so the
-# flips take effect without a restart. The graceful cases use the WITH (WAIT ...)
-# surface, whose planner acceptance is gated on enable_zero_downtime.
+# Drive the tick interval down so the controller ticks ~hundreds of times across
+# the waits below. It is re-read each tick, so the flip takes effect without a
+# restart. The graceful cases use the WITH (WAIT ...) surface, whose planner
+# acceptance is gated on enable_zero_downtime.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = true
 ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
 
@@ -600,23 +599,27 @@ ALTER SYSTEM RESET max_credit_consumption_rate
 # The unmanaged variant has no reconfiguration field, so the conversion would
 # silently drop an in-progress record with no terminal status and no audit
 # event, and strand any overlap replicas. The conversion is refused instead.
-# The controller is frozen (master gate off) right after the record is written
-# so the in-flight state holds still while the rejection is asserted.
+#
+# The controller is held off across the assertion by cranking the tick interval
+# up before the reconfiguring ALTER. It still reconciles once right after that
+# ALTER (a cluster write wakes it), which is what brings the overlap replica up,
+# but from then on nothing wakes it: the refused conversion below writes no
+# catalog state, so it cannot race a cut-over.
+
+$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
+ALTER SYSTEM SET cluster_controller_tick_interval = '10s'
 
 > CREATE CLUSTER cc_unmanaged (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
 > ALTER CLUSTER cc_unmanaged SET (SIZE 'scale=1,workers=2')
 
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = false
-
 ! ALTER CLUSTER cc_unmanaged SET (MANAGED = false)
 contains:cannot convert cluster to unmanaged while a reconfiguration is in progress
 
-# Unfreeze and cancel by ALTERing back to the realized size. Once the record
-# settles (the retrying `>` rides out the interim), the conversion goes
+# Restore the cadence and cancel by ALTERing back to the realized size. Once the
+# record settles (the retrying `>` rides out the interim), the conversion goes
 # through.
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = true
+ALTER SYSTEM SET cluster_controller_tick_interval = '5ms'
 
 > ALTER CLUSTER cc_unmanaged SET (SIZE 'scale=1,workers=1')
 > ALTER CLUSTER cc_unmanaged SET (MANAGED = false)
@@ -1343,211 +1346,8 @@ manual
 scale=1,workers=2 0
 > DROP CLUSTER cc_wait_manual
 
-# ----- Break-glass handoff to the legacy scheduler -----
-#
-# Disabling the controller hands scheduled clusters back to the legacy
-# scheduler. The controller runs a scheduled cluster's replica while holding
-# the durable replication factor at 0, so the legacy scheduler must decide
-# on/off from the physical replica set, not the factor. Otherwise a
-# controller-created replica would leak across the handoff.
-
-# Gate-off with the window still open: the legacy scheduler adopts the running
-# replica by aligning the replication factor with it, and retires it once the
-# window closes.
-> CREATE CLUSTER cc_handoff (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
-> CREATE TABLE cc_handoff_t (x int)
-> CREATE MATERIALIZED VIEW cc_handoff_mv IN CLUSTER cc_handoff WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM cc_handoff_t
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff'
-1
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff'
-0
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = false
-
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff'
-1
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff'
-1
-
-> DROP MATERIALIZED VIEW cc_handoff_mv
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff'
-0
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff'
-0
-> DROP CLUSTER cc_handoff
-> DROP TABLE cc_handoff_t
-
-# Gate-off and MV-drop together: the legacy scheduler sees a closed window and
-# a replica the factor does not reflect, and still retires it.
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = true
-
-> CREATE CLUSTER cc_handoff2 (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
-> CREATE TABLE cc_handoff2_t (x int)
-> CREATE MATERIALIZED VIEW cc_handoff2_mv IN CLUSTER cc_handoff2 WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM cc_handoff2_t
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff2'
-1
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = false
-DROP MATERIALIZED VIEW materialize.public.cc_handoff2_mv
-
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff2'
-0
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff2'
-0
-> DROP CLUSTER cc_handoff2
-> DROP TABLE cc_handoff2_t
-
-# Regression: a mid-window shape bounce lands the surviving replica on a
-# non-canonical name (r1 -> r2), and the break-glass adopt aligns only the
-# replication factor. A legacy config-shape ALTER must still replace that
-# replica: it drops the cluster's observed replica set by id, not the
-# factor-derived canonical names, so the resize cannot miss the survivor and
-# leave a duplicate behind.
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = true
-
-> CREATE CLUSTER cc_handoff3 (SIZE 'scale=1,workers=1', SCHEDULE = ON REFRESH (HYDRATION TIME ESTIMATE = '60 seconds'))
-> CREATE TABLE cc_handoff3_t (x int)
-> CREATE MATERIALIZED VIEW cc_handoff3_mv IN CLUSTER cc_handoff3 WITH (REFRESH = EVERY '1 second') AS SELECT count(*) FROM cc_handoff3_t
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
-1
-
-# The direct-path resize makes the controller bounce the in-window replica,
-# which comes back under a fresh, non-canonical name.
-> ALTER CLUSTER cc_handoff3 SET (SIZE 'scale=1,workers=2')
-> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
-scale=1,workers=2
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
-1
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = false
-
-# The legacy scheduler adopts the surviving replica.
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff3'
-1
-
-# A legacy resize replaces the adopted replica: still exactly one, at the new
-# size.
-> ALTER CLUSTER cc_handoff3 SET (SIZE 'scale=1,workers=1')
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
-1
-> SELECT r.size FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
-scale=1,workers=1
-
-# Once the window closes the legacy scheduler retires the replica and the
-# factor follows.
-> DROP MATERIALIZED VIEW cc_handoff3_mv
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_handoff3'
-0
-> SELECT replication_factor FROM mz_catalog.mz_clusters WHERE name = 'cc_handoff3'
-0
-> DROP CLUSTER cc_handoff3
-> DROP TABLE cc_handoff3_t
-
-# ----- Break-glass cleanup of a stranded graceful reconfiguration -----
-#
-# Disabling the controller mid-flight strands a graceful reconfiguration: the
-# controller is the only component that drives a reconfiguration record to a
-# terminal status, so once it is off the in-progress record and the overlap
-# replica it provisioned are left in place with nothing to retire them. The
-# cleanup lever is a config-shape ALTER to a new size. With the controller off
-# it takes the legacy path, which drops the entire observed owned replica set by
-# id (baseline plus stranded overlap), recreates a dense r1..rN at the new size,
-# and cancels the carried record in the same transaction. An ALTER back to the
-# realized shape is not a lever here: it is byte-identical to the realized
-# config, so the sequencer short-circuits it as a no-op and the record survives.
-#
-# A sleeping materialized view pins hydration on every replica of the cluster,
-# baseline and overlap alike (the same mz_sleep pattern used above), so the
-# target set never hydrates and the reconfiguration cannot cut over. The
-# in-flight state then holds still while we disable the controller and observe
-# the stranding, no matter the tick cadence.
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = true
-ALTER SYSTEM SET unsafe_enable_unstable_dependencies = true
-
-> CREATE CLUSTER cc_strand (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
-
-> CREATE TABLE cc_strand_t (id int)
-> INSERT INTO cc_strand_t VALUES (1)
-
-> CREATE MATERIALIZED VIEW cc_strand_slow IN CLUSTER cc_strand AS
-  SELECT mz_unsafe.mz_sleep(id * 3600) AS s FROM cc_strand_t
-
-# Start a graceful reconfiguration to a new size. The controller writes the
-# in-progress record and brings up an overlap replica at the target shape
-# alongside the baseline replica, but the sleeping view keeps it from hydrating,
-# so no cut-over can happen. Wait until both shapes are up: baseline (workers=1)
-# and the target-shape overlap (workers=2) run at once while the realized size
-# stays at workers=1.
-> ALTER CLUSTER cc_strand SET (SIZE 'scale=1,workers=2')
-
-> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_strand' GROUP BY r.size
-scale=1,workers=1 1
-scale=1,workers=2 1
-
-> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
-in-progress
-
-# Break-glass: disable the controller mid-flight. Nothing now drives the record.
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET enable_cluster_controller = false
-
-# The stranding holds (the controller is frozen): still two replicas across the
-# two shapes, the realized size still at workers=1, and the record still
-# in-progress with nothing on its way to retire either.
-> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_strand' GROUP BY r.size
-scale=1,workers=1 1
-scale=1,workers=2 1
-> SELECT size FROM mz_clusters WHERE name = 'cc_strand'
-scale=1,workers=1
-> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
-in-progress
-
-# Not the lever: an ALTER back to the realized shape is byte-identical, so with
-# the controller off the sequencer short-circuits it as a no-op. The record
-# stays in-progress and the overlap replica is not retired.
-> ALTER CLUSTER cc_strand SET (SIZE 'scale=1,workers=1')
-> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
-in-progress
-> SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_strand'
-2
-
-# The lever: a config-shape ALTER to a genuinely new size. The legacy path drops
-# the whole owned replica set (baseline plus stranded overlap) and recreates a
-# dense r1..rN at the new size, cancelling the carried record in the same
-# transaction.
-> ALTER CLUSTER cc_strand SET (SIZE 'scale=1,workers=4')
-
-# Desired end state: realized size is the new one, exactly one replica named r1
-# at that size (no orphan left behind), and the stranded record is terminal.
-> SELECT size FROM mz_clusters WHERE name = 'cc_strand'
-scale=1,workers=4
-> SELECT cluster, replica, size FROM (SHOW CLUSTER REPLICAS) WHERE cluster = 'cc_strand'
-cc_strand r1 scale=1,workers=4
-> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_strand'
-cancelled
-
-# The lifecycle is audited: the record was started, then cancelled by the
-# break-glass resize. No finalize or timeout ever ran.
-> SELECT row_number() OVER (ORDER BY id), details->>'transition' FROM mz_catalog.mz_audit_events WHERE event_type = 'alter' AND object_type = 'cluster' AND details->>'cluster_name' = 'cc_strand' AND details->>'transition' IS NOT NULL
-1 started
-2 cancelled
-
-> DROP CLUSTER cc_strand CASCADE
-> DROP TABLE cc_strand_t
-
-$ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
-
 # Restore pristine server state (including the tick-interval override).
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}/materialize
-ALTER SYSTEM RESET enable_cluster_controller
 ALTER SYSTEM RESET cluster_controller_tick_interval
 ALTER SYSTEM RESET enable_zero_downtime_cluster_reconfiguration
 ALTER SYSTEM RESET enable_background_alter_cluster
