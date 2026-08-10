@@ -225,6 +225,9 @@ impl Coordinator {
             Message::IntrospectionSubscribeStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
             }
+            Message::MetricSinkStageReady { span, stage } => {
+                self.sequence_staged((), span, stage).boxed_local().await;
+            }
             Message::ExplainTimestampStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }

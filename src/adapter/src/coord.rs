@@ -197,6 +197,7 @@ use crate::coord::appends::{
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
+use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink};
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -239,6 +240,7 @@ mod indexes;
 mod info_metrics;
 mod introspection;
 mod message_handler;
+mod metric_sink;
 mod privatelink_status;
 mod sql;
 mod validity;
@@ -432,6 +434,10 @@ pub enum Message {
         span: Span,
         stage: IntrospectionSubscribeStage,
     },
+    MetricSinkStageReady {
+        span: Span,
+        stage: MetricSinkStage,
+    },
     SecretStageReady {
         ctx: ExecuteContext,
         span: Span,
@@ -552,6 +558,7 @@ impl Message {
             Message::IntrospectionSubscribeStageReady { .. } => {
                 "introspection_subscribe_stage_ready"
             }
+            Message::MetricSinkStageReady { .. } => "metric_sink_stage_ready",
             Message::SecretStageReady { .. } => "secret_stage_ready",
             Message::ClusterStageReady { .. } => "cluster_stage_ready",
             Message::DrainStatementLog => "drain_statement_log",
@@ -1154,6 +1161,36 @@ pub struct IntrospectionSubscribeFinish {
     validity: PlanValidity,
     global_lir_plan: optimize::subscribe::GlobalLirPlan,
     read_holds: ReadHolds,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+}
+
+#[derive(Debug)]
+pub enum MetricSinkStage {
+    Optimize(MetricSinkOptimize),
+    Finish(MetricSinkFinish),
+}
+
+#[derive(Debug)]
+pub struct MetricSinkOptimize {
+    validity: PlanValidity,
+    definition: &'static CuratedMetricSink,
+    /// The transient id of the sink's compute export. Recorded in
+    /// [`Coordinator::metric_sinks`] once the finish stage ships the dataflow.
+    sink_id: GlobalId,
+    /// The planned `source_sql`, and the shape it produces.
+    expr: HirRelationExpr,
+    desc: RelationDesc,
+    cluster_id: ComputeInstanceId,
+    replica_id: ReplicaId,
+}
+
+#[derive(Debug)]
+pub struct MetricSinkFinish {
+    validity: PlanValidity,
+    definition: &'static CuratedMetricSink,
+    sink_id: GlobalId,
+    global_lir_plan: optimize::metric_sink::GlobalLirPlan,
     cluster_id: ComputeInstanceId,
     replica_id: ReplicaId,
 }
@@ -2087,6 +2124,11 @@ pub struct Coordinator {
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// The curated metric sinks installed on each replica.
+    ///
+    /// Keyed replica-first so a replica's installs form one contiguous range: teardown on replica
+    /// drop is the only lookup that is not by exact key.
+    metric_sinks: BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -3025,6 +3067,9 @@ impl Coordinator {
         // Initialize unified introspection.
         self.bootstrap_introspection_subscribes().await;
 
+        // Install the curated metric sinks on every replica.
+        self.bootstrap_metric_sinks().await;
+
         info!(
             "startup: coordinator init: bootstrap: migrate builtin tables in read-only mode complete in {:?}",
             final_steps_start.elapsed()
@@ -3832,8 +3877,11 @@ impl Coordinator {
 
                                 // MIR ⇒ MIR optimization (global)
                                 let metric_sink_plan = optimize::metric_sink::MetricSink::new(
-                                    entry.name().clone(),
-                                    metric_sink.from,
+                                    self.catalog()
+                                        .resolve_full_name(entry.name(), None)
+                                        .to_string(),
+                                    optimize::metric_sink::MetricSinkFrom::Id(metric_sink.from),
+                                    None,
                                 );
                                 let global_mir_plan = optimizer.optimize(metric_sink_plan)?;
                                 let optimized_plan = global_mir_plan.df_desc().clone();
@@ -5225,6 +5273,7 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    metric_sinks: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

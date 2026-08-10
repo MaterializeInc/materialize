@@ -118,7 +118,7 @@ pub use side_effecting_func::SideEffectingFunc;
 pub use statement::ddl::{
     AlterSourceAddSubsourceOptionExtracted, MySqlConfigOptionExtracted, PgConfigOptionExtracted,
     PlannedAlterRoleOption, PlannedRoleAttributes, PlannedRoleVariable,
-    SqlServerConfigOptionExtracted,
+    SqlServerConfigOptionExtracted, validate_metric_sink_desc,
 };
 pub use statement::{
     StatementClassification, StatementContext, StatementDesc, describe, plan, plan_copy_from,

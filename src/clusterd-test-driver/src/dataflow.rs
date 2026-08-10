@@ -400,7 +400,9 @@ impl DataflowBuilder {
         let desc = ComputeSinkDesc {
             from: from_id,
             from_desc,
-            connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {}),
+            connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {
+                label: sink_id.to_string(),
+            }),
             with_snapshot: true,
             up_to: Antichain::new(),
             non_null_assertions: vec![],
@@ -951,7 +953,7 @@ mod tests {
         // The metric sink carries a payload-free connection and no storage metadata.
         assert!(matches!(
             sink.connection,
-            ComputeSinkConnection::MetricSink(MetricSinkConnection {})
+            ComputeSinkConnection::MetricSink(MetricSinkConnection { .. })
         ));
     }
 

@@ -4247,7 +4247,12 @@ const METRIC_SINK_SOURCE_COLUMNS: &[(&str, fn(&SqlScalarType) -> bool)] = &[
     ("help", |t| matches!(t, SqlScalarType::String)),
 ];
 
-fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
+/// Checks that `desc` exposes the canonical metric-sink columns, the contract
+/// `mz_adapter::optimize::metric_sink`'s row shaping and the compute-side operator both rely on.
+///
+/// Every metric-sink source has to pass this, whether it is the `FROM` relation of a
+/// `CREATE METRIC SINK` or the query behind a coordinator-installed curated sink.
+pub fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
     for (name, type_ok) in METRIC_SINK_SOURCE_COLUMNS {
         let col = ColumnName::from(*name);
         let (_, column_type) = desc
