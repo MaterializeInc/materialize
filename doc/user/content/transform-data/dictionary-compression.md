@@ -9,9 +9,9 @@ menu:
     weight: 35
 ---
 
-{{< private-preview enabled-by-default="true" >}}
+{{< public-preview >}}
 Arrangement dictionary compression
-{{< /private-preview >}}
+{{< /public-preview >}}
 
 Dictionary compression reduces the memory that
 [arrangements](/get-started/arrangements/#arrangements) use when a column holds
@@ -22,8 +22,8 @@ everything else is stored as-is, exactly as it would be without compression.
 Compression is applied per column, so a wide row can have one column compressed
 and the rest untouched.
 
-Dictionary compression is **alpha** and is off by default. You opt in per
-cluster with the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option.
+Dictionary compression is in **public preview** and is off by default. You opt
+in per cluster with the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option.
 
 ## Enable dictionary compression
 
