@@ -39,20 +39,18 @@ The two peek flags are declared `ParameterScope::Replica`, so a targeting rule c
 The override is resolved against a replica evaluation context and pushed to that replica as a `ConfigUpdates`, which lands in the `worker_config` both flags are read from inside `clusterd`.
 Scoped overrides require `enable_scoped_system_parameters` to be on in the environment.
 
-`enable_two_runtime_compute` is **not** replica-scopable, and marking it so would be inert.
-It is consumed in `environmentd`, in the controller's replica provisioning path, against the controller's environment-wide config, to decide `ServiceConfig::ports` and the `--interactive-compute-timely-config` argument.
-Replica-scoped overrides are delivered to replicas, not consulted by the controller when it builds them, so declaring a scope on this flag would advertise a capability that does not exist.
-Nothing else consumed at replica-launch time is replica-scoped either, including `enable_timely_zero_copy`, so this is a property of the mechanism rather than an oversight in this flag.
+`enable_two_runtime_compute` is replica-scoped too, but it reaches the replica by a different route.
+It is consumed in `environmentd`, in the controller's provisioning path, to decide `ServiceConfig::ports` and the `--interactive-compute-timely-config` argument, and that decision is made before the replica exists.
+A scoped override delivered to a running replica would arrive too late to change either.
+So the coordinator resolves the per-replica value from the scoped working copy and passes it into `create_replica`, exactly as it already does for `enable_worker_core_affinity` and `enable_storage_introspection_logs`.
 
-That splits the matrix into two axes with different granularity.
+That keeps both axes at replica granularity, with one asymmetry.
 
-* The runtime axis (V0/V1 against V2/V3) is **environment-wide and is a phase**, not an arm.
-  Moving between phases rolls every replica.
-* The walk-substrate axis and the in-flight cap are **per replica and are arms**.
-  They can vary between replicas of the same cluster with no restart.
+* The walk-substrate axis and the in-flight cap are read from a replica's `worker_config` and take effect with no restart.
+* The runtime axis is read at provisioning time, so changing it re-provisions the replicas whose value changed, and only those.
 
-Making the runtime axis per-replica would mean plumbing the replica override map into the controller's provisioning path.
-That is worth doing only if running all four cells concurrently turns out to matter, and the phase structure below avoids needing it.
+The experiments in this document predate that scoping and ran the runtime axis as a sequential phase over the whole environment.
+E7 in particular would have been a single-phase A/B with a shared maintenance load rather than two phases separated by a replica recycle, which is strictly the better design: the same hydration hits both arms at once instead of being reproduced across phases.
 
 ### Peeks reach every replica, whatever the session targets
 
@@ -85,6 +83,9 @@ And `SET cluster_replica` decides which response is read rather than which repli
 
 Phase A and phase B are separated in time by one flag flip that rolls the fleet.
 Within a phase, all listed replicas run concurrently in one cluster.
+
+This phase split is no longer forced, now that the runtime axis is replica-scoped.
+It is kept here as the record of how the measurements below were actually taken.
 
 ### Phase A: `enable_two_runtime_compute = false` (environment-wide)
 

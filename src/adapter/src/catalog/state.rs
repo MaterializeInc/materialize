@@ -2527,6 +2527,21 @@ impl CatalogState {
         &self.scoped_system_parameters
     }
 
+    /// Resolves a boolean replica-local override for `replica_id`, falling back to `default` when
+    /// the replica has no override for `name` or the override does not parse.
+    ///
+    /// For configs consumed when a replica is provisioned rather than on the replica itself. Those
+    /// cannot read the value from their own `worker_config`, because the decision is made in
+    /// `environmentd` before the replica exists.
+    pub fn replica_scoped_bool(&self, replica_id: ReplicaId, name: &str, default: bool) -> bool {
+        self.scoped_system_parameters
+            .replica
+            .get(&replica_id)
+            .and_then(|overrides| overrides.get(name))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    }
+
     /// Return a mutable reference to the current system configuration.
     pub fn system_config_mut(&mut self) -> &mut SystemVars {
         Arc::make_mut(&mut self.system_configuration)

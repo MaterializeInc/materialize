@@ -11,7 +11,7 @@
 
 use std::time::Duration;
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
 /// The interval at which to retry cleaning replicas from past generatinos.
 pub const CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL: Config<Duration> = Config::new(
@@ -73,8 +73,8 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
 ///
 /// * The replica advertises an extra `interactive` port and gets an
 ///   `--interactive-compute-timely-config` argument. `ServiceConfig::ports` therefore changes, so
-///   flipping this flag **rolls every compute replica in the environment**. It is not a live
-///   toggle.
+///   flipping this flag re-provisions the replicas it changes for. It is not a live toggle: an
+///   already-running replica keeps the runtime layout it was launched with.
 /// * The runtimes take the `Maintenance` and `Interactive` roles rather than the single `Solo`
 ///   role, which adds a `role` label to their metrics.
 /// * Maintenance publishes its index arrangements into the per-process sharing registry, which is
@@ -82,12 +82,17 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
 ///   no other consumer.
 /// * Peeks and bounded transient dataflows route to the interactive runtime.
 ///
+/// Replica-scoped, but consumed in `environmentd` rather than on the replica. The controller
+/// decides `ServiceConfig::ports` before the replica exists, so the value is resolved per replica
+/// by the caller and passed into provisioning rather than read from a replica's `worker_config`.
+///
 /// Off in production. On by default in the CI system parameters.
 pub const ENABLE_TWO_RUNTIME_COMPUTE: Config<bool> = Config::new(
     "enable_two_runtime_compute",
     false,
     "Whether to launch compute replicas with a second, interactive compute timely runtime.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {

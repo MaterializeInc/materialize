@@ -26,8 +26,7 @@ use mz_compute_client::logging::LogVariant;
 use mz_compute_types::config::{ComputeReplicaConfig, ComputeReplicaLogging};
 use mz_controller_types::dyncfgs::{
     ARRANGEMENT_EXERT_PROPORTIONALITY, CONTROLLER_PAST_GENERATION_REPLICA_CLEANUP_RETRY_INTERVAL,
-    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, ENABLE_TWO_RUNTIME_COMPUTE,
-    TIMELY_ZERO_COPY_LIMIT,
+    ENABLE_TIMELY_ZERO_COPY, ENABLE_TIMELY_ZERO_COPY_LGALLOC, TIMELY_ZERO_COPY_LIMIT,
 };
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_orchestrator::NamespacedOrchestrator;
@@ -458,6 +457,7 @@ impl Controller {
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
         enable_storage_introspection_logs: bool,
+        two_runtime_compute: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -486,6 +486,7 @@ impl Controller {
                     m,
                     enable_worker_core_affinity,
                     enable_storage_introspection_logs,
+                    two_runtime_compute,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
@@ -681,6 +682,7 @@ impl Controller {
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
         enable_storage_introspection_logs: bool,
+        two_runtime_compute: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -714,7 +716,11 @@ impl Controller {
         // Whether to launch a second, interactive compute timely runtime alongside the primary
         // one. `interactive_compute_arg` and `interactive_compute_port` must be gated on the same
         // flag: `peer_addresses` panics if asked for a port that isn't in `ServiceConfig::ports`.
-        let two_runtime = ENABLE_TWO_RUNTIME_COMPUTE.get(&self.dyncfg);
+        //
+        // Resolved per replica by the caller rather than read here. The flag is replica-scoped, and
+        // scoped overrides are delivered to replicas, so a value needed before the replica exists
+        // has to arrive as an argument.
+        let two_runtime = two_runtime_compute;
 
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
@@ -1077,7 +1083,7 @@ const INTERACTIVE_PORT_NAME: &str = "interactive";
 const _: () = assert!(INTERACTIVE_PORT_NAME.len() <= MAX_PORT_NAME_LEN);
 
 /// The `ServicePort` clusterd needs to advertise the second, interactive compute timely
-/// runtime, if [`ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added to `ServiceConfig::ports`
+/// runtime, if [`mz_controller_types::dyncfgs::ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added to `ServiceConfig::ports`
 /// together with the `--interactive-compute-timely-config` argument produced by
 /// [`interactive_compute_arg`]: `ServiceAssignments::peer_addresses` panics if asked for a port
 /// name that isn't present in `ServiceConfig::ports`.
@@ -1092,7 +1098,7 @@ fn interactive_compute_port(two_runtime: bool) -> Option<ServicePort> {
 }
 
 /// The `--interactive-compute-timely-config` clusterd argument for the second, interactive
-/// compute timely runtime, if [`ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added together with
+/// compute timely runtime, if [`mz_controller_types::dyncfgs::ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added together with
 /// the `interactive` port from [`interactive_compute_port`]: this reads the peer
 /// addresses for that port name, which panics if the port wasn't advertised.
 fn interactive_compute_arg(

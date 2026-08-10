@@ -41,6 +41,7 @@ use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
 use mz_compute_client::protocol::response::PeekResponse;
 use mz_controller::clusters::{ClusterRole, ReplicaConfig};
+use mz_controller_types::dyncfgs::ENABLE_TWO_RUNTIME_COMPUTE;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::CollectionExt;
 use mz_ore::error::ErrorExt;
@@ -1671,6 +1672,12 @@ impl Coordinator {
         // configuration replays with them. Render-frozen flags make a later push
         // too late, which is why the push precedes `create_replica`.
 
+        let two_runtime_compute = self.catalog().state().replica_scoped_bool(
+            replica_id,
+            ENABLE_TWO_RUNTIME_COMPUTE.name(),
+            ENABLE_TWO_RUNTIME_COMPUTE.get(self.catalog().system_config().dyncfgs()),
+        );
+
         self.controller
             .create_replica(
                 cluster_id,
@@ -1681,6 +1688,7 @@ impl Coordinator {
                 replica_config,
                 enable_worker_core_affinity,
                 enable_storage_introspection_logs,
+                two_runtime_compute,
             )
             .expect("creating replicas must not fail");
 
