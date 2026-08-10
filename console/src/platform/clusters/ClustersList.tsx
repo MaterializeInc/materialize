@@ -15,7 +15,6 @@ import {
   Tooltip,
   VStack,
 } from "@chakra-ui/react";
-import { useFlags } from "~/hooks/useFlags";
 import { createColumnHelper } from "@tanstack/react-table";
 import React from "react";
 import { Link as RouterLink } from "react-router-dom";
@@ -40,6 +39,7 @@ import { TableSearch } from "~/components/Table/TableSearch";
 import { UniversalTable } from "~/components/Table/UniversalTable";
 import { useUniversalTable } from "~/components/Table/useUniversalTable";
 import TextLink from "~/components/TextLink";
+import { useFlags } from "~/hooks/useFlags";
 import { ClustersIcon, InfoIcon } from "~/icons";
 import {
   MainContentContainer,
@@ -357,7 +357,7 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
 
   const meta: ClusterTableMeta = { offlineReplicaMap };
   const flags = useFlags();
-  
+
   const table = useUniversalTable({
     data: clusters,
     columns,
@@ -368,9 +368,10 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
     // click for no new information.
     getSubRows: (row) =>
       flags["usage-metrics-in-cluster-list-CNS121"] &&
-        row.rowType === "cluster" && row.replicas.length > 1
-          ? row.replicas.map((r) => ({ rowType: "replica" as const, ...r }))
-          : undefined,
+      row.rowType === "cluster" &&
+      row.replicas.length > 1
+        ? row.replicas.map((r) => ({ rowType: "replica" as const, ...r }))
+        : undefined,
     state: {
       columnVisibility: {
         lastStatusChange: !offlineReplicaError,
