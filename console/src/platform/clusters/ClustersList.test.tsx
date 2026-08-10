@@ -23,6 +23,13 @@ import {
 
 import ClustersListPage from "./ClustersList";
 
+// Replica sub-rows are gated on this flag. The global useFlags mock in
+// vitest.setup.ts returns no flags at all, so without this override getSubRows
+// never produces a replica row and none of these tests reach the code.
+vi.mock("~/hooks/useFlags", () => ({
+  useFlags: () => ({ "usage-metrics-in-cluster-list-CNS121": true }),
+}));
+
 // The list opens a websocket subscribe to surface out-of-memory warnings.
 // Stubbing it keeps these tests off the socket and, because it reports no
 // error, leaves the `lastStatusChange` column visible.
