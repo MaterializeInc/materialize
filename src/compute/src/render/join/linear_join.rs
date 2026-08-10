@@ -11,7 +11,7 @@
 //!
 //! Consult [LinearJoinPlan] documentation for details.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use differential_dataflow::consolidation::ConsolidatingContainerBuilder;
 use differential_dataflow::lattice::Lattice;
@@ -42,6 +42,7 @@ use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::join::mz_join_core::mz_join_core;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
+use crate::yielding::YieldSpec;
 use mz_row_spine::{RowRowBuilder, RowRowColPagedBuilder, RowRowSpine};
 
 /// Available linear join implementations.
@@ -137,53 +138,6 @@ impl LinearJoinSpec {
                 mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
             }
         }
-    }
-}
-
-/// Specification of a dataflow operator's yielding behavior.
-#[derive(Clone, Copy)]
-struct YieldSpec {
-    /// Yield after the given amount of work was performed.
-    after_work: Option<usize>,
-    /// Yield after the given amount of time has elapsed.
-    after_time: Option<Duration>,
-}
-
-impl Default for YieldSpec {
-    fn default() -> Self {
-        Self {
-            after_work: Some(1_000_000),
-            after_time: Some(Duration::from_millis(100)),
-        }
-    }
-}
-
-impl YieldSpec {
-    fn try_from_str(s: &str) -> Option<Self> {
-        let mut after_work = None;
-        let mut after_time = None;
-
-        let options = s.split(',').map(|o| o.trim());
-        for option in options {
-            let mut iter = option.split(':').map(|p| p.trim());
-            match std::array::from_fn(|_| iter.next()) {
-                [Some("work"), Some(amount), None] => {
-                    let amount = amount.parse().ok()?;
-                    after_work = Some(amount);
-                }
-                [Some("time"), Some(millis), None] => {
-                    let millis = millis.parse().ok()?;
-                    let duration = Duration::from_millis(millis);
-                    after_time = Some(duration);
-                }
-                _ => return None,
-            }
-        }
-
-        Some(Self {
-            after_work,
-            after_time,
-        })
     }
 }
 

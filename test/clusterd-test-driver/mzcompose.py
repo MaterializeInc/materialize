@@ -96,6 +96,7 @@ SCRIPTS = [
     "join.spec",
     "index_and_mv.spec",
     "create_time_config.spec",
+    "peek_yielding.spec",
 ]
 
 

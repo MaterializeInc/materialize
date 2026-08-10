@@ -27,3 +27,4 @@ pub mod sink;
 #[cfg(not(feature = "bench"))]
 mod sink;
 mod typedefs;
+mod yielding;
