@@ -129,64 +129,13 @@ impl ClusterSpec for Config {
             mpsc::UnboundedSender<StorageResponse>,
         )>,
     ) {
-        // Register a timely logger that forwards events to the compute logging dataflow.
-        // Assign by local worker index so storage worker x matches compute worker x.
+        // Take this worker's log-forwarding writer, if storage introspection
+        // logging is enabled for the process. Assign by local worker index so
+        // storage worker x matches compute worker x. Registering the timely
+        // logger is deferred until a `CreateInstance` command delivers the
+        // per-replica logging config, see `Worker::maybe_initialize_logging`.
         let local_index = timely_worker.index() % self.workers_per_process;
-        let writer = self.timely_log_writers.lock().unwrap()[local_index].take();
-        if let Some(writer) = writer {
-            use timely::dataflow::operators::capture::{Event, EventPusher};
-            use timely::logging::TimelyEventBuilder;
-
-            // We use an approach similar to compute's logging: wrap the writer in
-            // a BatchLogger that translates Logger callbacks into Event pushes,
-            // then register the Logger with timely's log_register.
-            let interval_ms = 1000u128; // 1 second batching interval
-            let mut time_ms = mz_repr::Timestamp::from(0u64);
-            let mut event_pusher = writer;
-            let now = std::time::Instant::now();
-            let start_offset = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Failed to get duration since Unix epoch");
-
-            let logger = timely::logging_core::Logger::<TimelyEventBuilder>::new(
-                now,
-                start_offset,
-                move |time: &std::time::Duration,
-                      data: &mut Option<Vec<(std::time::Duration, TimelyEvent)>>| {
-                    if let Some(mut data) = data.take() {
-                        // Filter park/unpark events and remap IDs before handing events
-                        // off to compute. Compute's park tracking assumes a single
-                        // timely runtime; mixing in storage's park events would break
-                        // it. Remapping ensures storage operator/channel IDs don't
-                        // collide with compute's.
-                        data.retain_mut(|(_, event)| {
-                            if matches!(event, TimelyEvent::Park(_)) {
-                                return false;
-                            }
-                            remap_timely_event_ids(event);
-                            true
-                        });
-                        event_pusher.push(Event::Messages(time_ms, data));
-                    } else {
-                        // Advance progress.
-                        let new_time_ms: u64 = (((time.as_millis() / interval_ms) + 1)
-                            * interval_ms)
-                            .try_into()
-                            .expect("must fit");
-                        let new_time_ms = mz_repr::Timestamp::from(new_time_ms);
-                        if time_ms < new_time_ms {
-                            event_pusher
-                                .push(Event::Progress(vec![(new_time_ms, 1), (time_ms, -1)]));
-                            time_ms = new_time_ms;
-                        }
-                    }
-                },
-            );
-
-            if let Some(mut register) = timely_worker.log_register() {
-                register.insert_logger("timely", logger);
-            }
-        }
+        let timely_log_writer = self.timely_log_writers.lock().unwrap()[local_index].take();
 
         Worker::new(
             timely_worker,
@@ -199,8 +148,77 @@ impl ClusterSpec for Config {
             self.txns_ctx.clone(),
             Arc::clone(&self.tracing_handle),
             self.shared_rocksdb_write_buffer_manager.clone(),
+            timely_log_writer,
         )
         .run();
+    }
+}
+
+/// Registers a timely logger that batches [`TimelyEvent`]s at `interval` and
+/// forwards them to compute's logging dataflow via `writer`.
+///
+/// Storage worker x's events must line up with compute worker x, so the caller
+/// selects `writer` by local worker index. Park events are dropped and
+/// operator/channel IDs are remapped (see [`remap_timely_event_ids`]) so storage
+/// events don't collide with compute's in the shared logging dataflow.
+///
+/// NOTE: Registration happens only after a `CreateInstance` command delivers the
+/// replica's logging config, so timely events emitted during worker startup, up
+/// to that point, are not forwarded.
+pub(crate) fn register_timely_logger(
+    timely_worker: &TimelyWorker,
+    writer: TimelyLogWriter,
+    interval: Duration,
+) {
+    use timely::dataflow::operators::capture::{Event, EventPusher};
+    use timely::logging::TimelyEventBuilder;
+
+    // We use an approach similar to compute's logging: wrap the writer in
+    // a BatchLogger that translates Logger callbacks into Event pushes,
+    // then register the Logger with timely's log_register.
+    let interval_ms = interval.as_millis();
+    let mut time_ms = mz_repr::Timestamp::from(0u64);
+    let mut event_pusher = writer;
+    let now = std::time::Instant::now();
+    let start_offset = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .expect("Failed to get duration since Unix epoch");
+
+    let logger = timely::logging_core::Logger::<TimelyEventBuilder>::new(
+        now,
+        start_offset,
+        move |time: &std::time::Duration,
+              data: &mut Option<Vec<(std::time::Duration, TimelyEvent)>>| {
+            if let Some(mut data) = data.take() {
+                // Filter park/unpark events and remap IDs before handing events
+                // off to compute. Compute's park tracking assumes a single
+                // timely runtime; mixing in storage's park events would break
+                // it. Remapping ensures storage operator/channel IDs don't
+                // collide with compute's.
+                data.retain_mut(|(_, event)| {
+                    if matches!(event, TimelyEvent::Park(_)) {
+                        return false;
+                    }
+                    remap_timely_event_ids(event);
+                    true
+                });
+                event_pusher.push(Event::Messages(time_ms, data));
+            } else {
+                // Advance progress.
+                let new_time_ms: u64 = (((time.as_millis() / interval_ms) + 1) * interval_ms)
+                    .try_into()
+                    .expect("must fit");
+                let new_time_ms = mz_repr::Timestamp::from(new_time_ms);
+                if time_ms < new_time_ms {
+                    event_pusher.push(Event::Progress(vec![(new_time_ms, 1), (time_ms, -1)]));
+                    time_ms = new_time_ms;
+                }
+            }
+        },
+    );
+
+    if let Some(mut register) = timely_worker.log_register() {
+        register.insert_logger("timely", logger);
     }
 }
 

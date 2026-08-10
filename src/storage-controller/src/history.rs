@@ -69,6 +69,7 @@ impl CommandHistory {
         use StorageCommand::*;
 
         let mut hello_command = None;
+        let mut create_instance_command = None;
         let mut initialization_complete = false;
         let mut allow_writes = false;
         let mut final_compactions = BTreeMap::new();
@@ -91,6 +92,7 @@ impl CommandHistory {
         for command in self.commands.drain(..) {
             match command {
                 cmd @ Hello { .. } => hello_command = Some(cmd),
+                cmd @ CreateInstance(_) => create_instance_command = Some(cmd),
                 InitializationComplete => initialization_complete = true,
                 AllowWrites => allow_writes = true,
                 UpdateConfiguration(params) => final_configuration.update(*params),
@@ -158,6 +160,12 @@ impl CommandHistory {
             self.commands.push(hello);
         }
 
+        let count = u64::from(create_instance_command.is_some());
+        command_counts.create_instance.set(count);
+        if let Some(create_instance) = create_instance_command {
+            self.commands.push(create_instance);
+        }
+
         let count = u64::from(!final_configuration.all_unset());
         command_counts.update_configuration.set(count);
         if !final_configuration.all_unset() {
@@ -223,6 +231,7 @@ mod tests {
     use mz_repr::{CatalogItemId, GlobalId, RelationDesc, SqlRelationType};
     use mz_storage_client::client::{RunIngestionCommand, RunSinkCommand};
     use mz_storage_client::metrics::StorageControllerMetrics;
+    use mz_storage_types::configuration::{StorageReplicaConfig, StorageReplicaLogging};
     use mz_storage_types::connections::inline::InlinedConnection;
     use mz_storage_types::connections::{KafkaConnection, Tunnel};
     use mz_storage_types::controller::CollectionMetadata;
@@ -543,5 +552,29 @@ mod tests {
 
         let commands_after: Vec<_> = history.iter().collect();
         assert!(commands_after.is_empty(), "{:?}", commands_after);
+    }
+
+    #[mz_ore::test]
+    fn reduce_keeps_create_instance() {
+        let mut history = history();
+
+        let config = StorageReplicaConfig {
+            logging: StorageReplicaLogging {
+                log_logging: false,
+                interval: Some(std::time::Duration::from_secs(1)),
+            },
+        };
+
+        // Two `CreateInstance`s (as if a replica reconnected): reduction keeps a
+        // single, most-recent one, mirroring how `Hello` is reduced.
+        history.push(StorageCommand::CreateInstance(StorageReplicaConfig {
+            logging: StorageReplicaLogging::default(),
+        }));
+        history.push(StorageCommand::CreateInstance(config.clone()));
+
+        history.reduce();
+
+        let commands_after: Vec<_> = history.iter().cloned().collect();
+        assert_eq!(commands_after, [StorageCommand::CreateInstance(config)]);
     }
 }
