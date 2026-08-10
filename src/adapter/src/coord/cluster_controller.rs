@@ -43,6 +43,7 @@ use mz_controller::clusters::ClusterStatus;
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::task::spawn;
 use mz_repr::Timestamp;
+use mz_storage_types::configuration::{StorageReplicaConfig, StorageReplicaLogging};
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, warn};
 
@@ -915,6 +916,12 @@ impl Coordinator {
             compute: ComputeReplicaConfig {
                 logging: shape.logging.clone(),
                 arrangement_compression: shape.arrangement_compression,
+            },
+            storage: StorageReplicaConfig {
+                logging: StorageReplicaLogging {
+                    log_logging: shape.logging.log_logging,
+                    interval: shape.logging.interval,
+                },
             },
         };
 

@@ -39,6 +39,7 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
 use mz_repr::adt::numeric::Numeric;
+use mz_storage_types::configuration::StorageReplicaConfig;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;
@@ -68,6 +69,8 @@ pub struct ReplicaConfig {
     pub location: ReplicaLocation,
     /// Configuration for the compute half of the replica.
     pub compute: ComputeReplicaConfig,
+    /// Configuration for the storage half of the replica.
+    pub storage: StorageReplicaConfig,
 }
 
 /// Configures the resource allocation for a cluster replica.
@@ -502,7 +505,7 @@ impl Controller {
         }
 
         self.storage
-            .connect_replica(cluster_id, replica_id, storage_location);
+            .connect_replica(cluster_id, replica_id, storage_location, config.storage);
         self.compute.add_replica_to_instance(
             cluster_id,
             replica_id,
