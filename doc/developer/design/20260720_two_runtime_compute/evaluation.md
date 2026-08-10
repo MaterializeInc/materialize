@@ -504,6 +504,37 @@ A walk that faults on swapped pages spends its time blocked rather than computin
 Moving it off the serving worker therefore costs nothing and recovers everything, which is not true in the CPU-bound case where the offloaded walk still competes for a core.
 Disk pressure is the regime where this feature has the least to lose and the most to gain.
 
+### E9, the console under load: answers stay fast, and stay about a second stale
+
+The console polls introspection, `EXPLAIN ANALYZE`, and dataflow sizes.
+The question is whether those answers keep arriving while a replica hydrates, and if they do, how stale they are.
+Everything here runs in `serializable`, which is what lets a read pick a timestamp that is already available instead of waiting for the latest one.
+
+Arms are replicas of one cluster, `r-solo` single-runtime and `r-two` two-runtime, so one 600M-row index hydration loads both at once.
+Staleness is the wall clock at the moment of the probe minus the `query timestamp` that `EXPLAIN TIMESTAMP` reports for the same query, with the `EXPLAIN TIMESTAMP` issued last so the two readings are adjacent.
+
+| Probe | Idle | Hydrating, `r-solo` | Hydrating, `r-two` |
+|---|---|---|---|
+| Introspection query | 161 to 167 ms | 4445, 4824, 4959, 5262, 6695, 6945, 7518 ms | 158 to 162 ms, one 1547 |
+| `EXPLAIN ANALYZE CLUSTER MEMORY` | 297 to 356 ms | 4935, 5224, 5991, 6107, 8692, **13301** ms | 295 to 773 ms |
+| `EXPLAIN ANALYZE CLUSTER CPU` | 219 to 511 ms | 4238, 5723, 6467, 7538, **10510** ms | 174 to 525 ms |
+| Staleness | -120 to 427 ms | 170 to 1589 ms | -141 to 1456 ms |
+
+Two separate findings, and they answer different questions.
+
+**Latency.** On the single-runtime replica a console poll takes seconds while an index hydrates, up to 13.3 seconds for `EXPLAIN ANALYZE CLUSTER MEMORY`, which is well past the point where a UI has given up.
+On the two-runtime replica the same polls stay at their idle cost, around 160 ms for introspection and around 300 ms for `EXPLAIN ANALYZE`.
+That is a thirty-fold difference on introspection and it is the concrete reason to want the second runtime for a console.
+
+**Staleness.** Both arms answer from a timestamp about one second behind real time while hydrating, against roughly zero when idle, and the two arms are indistinguishable on this axis, 170 to 1589 ms against -141 to 1456 ms.
+So the second runtime does not buy fresher answers, it buys prompt answers at the same freshness.
+A console showing data about a second old during hydration is a different and much weaker claim than a console showing live data, and it is the accurate one.
+
+Values straddling zero are clock skew between the probe host and the environment plus the round trip, so idle staleness should be read as "no measurable lag" rather than as a negative number.
+`can respond immediately` was `false` on two of the `r-two` probes during the heaviest part of the hydration while the introspection query itself still returned in 161 ms, which is not a contradiction: the two statements are issued a moment apart and the flag describes the timestamp available at plan time.
+
+`EXPLAIN TIMESTAMP` is the right instrument for this and should be how the staleness claim in `design.md` is stated, rather than leaving "read isolation" to imply freshness.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
