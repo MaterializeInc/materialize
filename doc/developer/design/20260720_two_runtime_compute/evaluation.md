@@ -556,6 +556,10 @@ The memory freed by each merge does come back, 55.4 GiB down to 14.3 GiB, so thi
 
 It also explains why building several smaller indexes is the right way to reach a large footprint. With `compute_hydration_concurrency = 1` the peak is one index's transient rather than the whole set's, which is what made the swap fixture reachable at all.
 
+**The result worth keeping is that this was observable at all.** The shape above was measured by polling introspection once a second on the replica that was doing the hydrating, and the polls came back in about 160 ms throughout, so 289 of an intended 258 samples landed. E9 measured what the same poll costs without the second runtime: 4.4 to 7.5 seconds during hydration. A sampler running at that period cannot resolve a one-second 9.1 GiB jump, and would have reported a smooth ramp between widely spaced points.
+
+So the second runtime does not only serve a console. It makes the replica introspectable precisely when something is wrong with it, which is when introspection is worth having and exactly when the single-runtime replica stops answering. Explaining the sawtooth is separate work. Being able to see it is the capability this feature buys, and it is a better argument for the second runtime than any of the latency numbers, because the alternative is not a slower answer but a wrong one.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.
