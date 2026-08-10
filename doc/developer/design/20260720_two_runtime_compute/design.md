@@ -2,13 +2,23 @@
 
 ## Summary
 
-A compute replica can run a second, in-process "interactive" timely runtime that
-serves latency-sensitive reads directly off the arrangements the "maintenance"
-runtime builds. A read no longer waits behind a long, run-to-completion
-maintenance operator step, and introspection stays answerable while the
-maintenance runtime is hydrating. The two runtimes share the process and its
-memory. The interactive runtime reads the maintained arrangements zero-copy
-through a per-process sharing registry, so nothing is re-materialized.
+This document describes **two independent mechanisms** that were originally
+conceived as one, and that measurement has since separated. Keeping them
+distinct is the most important thing a reader can take from it.
+
+* **Peek offloading** moves a fast-path index peek's *walk* off the serving
+  timely worker onto a blocking task. It is a substrate choice for one kind of
+  work, needs no second runtime, and is gated by `ENABLE_INDEX_PEEK_OFFLOAD`.
+* **Dataflow offloading** runs a second, in-process "interactive" timely runtime
+  that renders temporary dataflows and serves reads directly off the
+  arrangements the "maintenance" runtime builds, zero-copy through a per-process
+  sharing registry. It is a placement choice for rendered dataflows, and is
+  gated by `ENABLE_TWO_RUNTIME_COMPUTE`.
+
+They fix different problems, they are distinguished by different workloads, and
+they should be adopted, flagged and rolled separately. See [Two mechanisms, not
+one](#two-mechanisms-not-one) for what each one buys and the scenarios that tell
+them apart.
 
 The feature is gated by the `ENABLE_TWO_RUNTIME_COMPUTE` dyncfg, off in
 production and on by default in CI. With the dyncfg off, a replica runs a single
@@ -62,6 +72,73 @@ The right frame is separation of concerns:
 A single runtime cannot be both without compromising one of them. Two runtimes
 let each be pure.
 
+### Two mechanisms, not one
+
+The original thesis was that a second runtime delivers read isolation, and that
+peeks were one of the reads it would isolate. Measurement did not support the
+second half. The two mechanisms turn out to be independent, and only one of them
+is needed for peeks.
+
+| | Peek offloading | Dataflow offloading |
+|---|---|---|
+| What it changes | which thread walks a fast-path index peek | which runtime renders a dataflow |
+| Unit of work | one peek's cursor walk | a whole temporary dataflow |
+| Fixes | head-of-line blocking between peeks on one worker | interference between maintenance work and interactive rendering |
+| Needs the second runtime | no | yes, it *is* the second runtime |
+| Deployment cost | a dyncfg, no restart | a port, a fleet roll, doubled timely worker threads, the sharing registry, and the command-ordering invariant and capping that go with it |
+| Flag | `ENABLE_INDEX_PEEK_OFFLOAD` | `ENABLE_TWO_RUNTIME_COMPUTE` |
+
+Peek offloading applies on either runtime, so the two compose. The single place
+they meet is serving a peek from the sharing registry, where an interactive peek
+takes an owned cursor over a published arrangement and may then be walked on a
+blocking task like any other.
+
+#### The scenarios that tell them apart
+
+Each row is a measured experiment; the numbers and method are in
+`evaluation.md`. What matters here is which mechanism moves the result.
+
+| Scenario | Peek offloading | Dataflow offloading |
+|---|---|---|
+| Point lookups behind concurrent full scans, walk cost swept 23 ms to 2170 ms | fixes it: tail flat at 185 ms against 6163 ms | no effect |
+| `WHERE key = <lit> ORDER BY .. LIMIT 1` where one key holds millions of values | fixes it: 58 of 261 lookups over 200 ms become 0 of 261 | no effect |
+| A walk over an arrangement resident in swap | fixes it, by the largest margin measured: 29.2 s worst case becomes 152 ms | no effect |
+| Late-materialization join while a 60M-row index hydrates | cannot apply, this is a dataflow and not a peek | fixes it: tail halves, 2835 ms to 1456 ms |
+| Introspection and `EXPLAIN ANALYZE` while a replica hydrates | cannot apply | fixes it: 4.4 to 7.5 s polls become about 160 ms |
+| Observing the shape of hydration memory at all | cannot apply | enables it: at 5 s per poll the sawtooth is invisible and reads as a smooth ramp |
+
+The first three rows are peeks, the last three are rendered dataflows, and no row
+is moved by both. That is the fork.
+
+#### Implications
+
+**If only one of these ships, it should be peek offloading.** It carries the
+whole measured peek benefit, it costs a thread and a dyncfg, and it needs no
+fleet roll. A direct A/B confirmed the second runtime adds nothing on top of it
+for peek latency: single-runtime-with-offload and two-runtime-with-offload are
+indistinguishable at every scan cost tested.
+
+**The second runtime's justification is temporary dataflows and observability,
+not peek latency.** Any review that judges the sharing registry, the protocol
+invariant and the capping against a peek-latency claim is judging them against
+the wrong benefit. The claim to defend is that a replica stays useful, and stays
+*introspectable*, while it is busy maintaining collections. The observability
+case is the strongest form of it: a replica that cannot answer introspection
+while something is wrong with it cannot be diagnosed while something is wrong
+with it, and the alternative to an answer is not a slower answer but a
+misleading one.
+
+**Neither mechanism adds CPU**, but they degrade differently under saturation.
+Peek offloading moves a walk to a thread that still needs a core, so on a
+CPU-bound box it only reorders work. Its best case is therefore a walk that is
+*blocked* rather than computing, which is why the swap result is its largest
+margin. The second runtime doubles timely worker threads at every replica size,
+so it is not free even when idle.
+
+**The routing policy should follow the fork.** Sending everything to one place
+throws away the distinction: peeks want a substrate, rendered dataflows want a
+runtime.
+
 ### Why not a read replica
 
 Introspection cannot be offloaded. A replica's introspection describes that
@@ -91,6 +168,10 @@ core either, and reads back up just as they would in a single runtime. The
 benefit is real but conditional on CPU headroom. A benchmark that pins every
 core with synthetic churn models a CPU-bound box and understates the feature,
 because the fleet is memory-bound with spare CPU.
+
+**It does not improve peek latency.** This was the original expectation and it did
+not survive measurement: the walk substrate does that, and does all of it. See
+[Two mechanisms, not one](#two-mechanisms-not-one).
 
 It also does not touch the control plane. Peeks still serialize behind DDL on the
 single coordinator thread. For non-introspection reads under load that control
@@ -122,6 +203,10 @@ Two properties make this close to irreversible.
 * The off switch is not a clean exit. `Solo` keeps single-runtime deployments on
   the same code paths, but once users depend on the isolated low-latency reads,
   turning the feature off is a visible query-latency regression, not a no-op.
+  NOTE: this argument is weaker than it was written to be. For *peeks* the off
+  switch is now clean, because peek offloading carries that benefit and survives
+  independently. What does not survive is temporary-dataflow isolation and
+  introspection under load.
 * The capability we lean on will atrophy. Once reads live in the interactive
   runtime, the maintenance runtime no longer needs to accommodate interactivity
   at all, and it will be built to be maximally batchy because it was freed to be.
@@ -530,6 +615,53 @@ mechanism.
   compaction.
 
 ## Known limitations and follow-ups
+
+### Open findings from adversarial review
+
+Five independent reviewers went at the branch. The defects that could be verified
+against the code are fixed. These are the ones that remain, kept here because each
+is a real hazard with a known mechanism rather than a speculation, and each needs a
+decision rather than a patch.
+
+* **A reader's physical hold on a published trace is inert, so the publisher's
+  spine can merge across a reader's cut.** `TraceAgent::set_physical_compaction`
+  joins monotonically, and with no readers the publisher forwards the stream upper
+  as its physical fallback, so a reader registering a hold below that has no
+  effect. A merge completing inside one join invocation can then make
+  `batches_through` observe a batch whose bounds straddle the reader's cut, which
+  is a hard assert and, under shared fate, aborts the process. The logical
+  dimension is correct for the mirror-image reason. This is the most serious open
+  item and it is in the sharing primitive.
+* **Releasing an interactive hold is ordered against command enqueue, not against
+  the interactive runtime having rendered.** `send` is an unbounded push with no
+  ack, so maintenance can be told to compact before interactive dequeues the
+  create it is holding for. Capping is safe without an ack because the frontier is
+  withheld entirely; releasing is not. The correct release point is a signal from
+  the interactive runtime, which the current protocol does not have. This is the
+  same class of bug as the one the capping was introduced to fix, one level up.
+* **`compaction_floor` is never evicted**, so the multiplexer retains one entry per
+  collection id ever seen, including every transient peek dataflow, for the life of
+  the connection. The neighbouring `transient_owner` is evicted precisely to avoid
+  this.
+* **A peek against a dropped or never-published shared id hangs silently.** The
+  registry returns no handle, the peek reports not-ready and is re-enqueued, and
+  nothing will mark it again. The local path fails loudly on the same condition.
+  Never-adopted placeholders are also never evicted.
+* **`reexport`'s failure is discarded at both call sites**, so an alias that was
+  never established becomes a permanently unresolvable peek rather than an error.
+* **The in-flight offload cap is invisible.** A walk declined because the cap is
+  reached increments the same counter as one declined because the flag is off, so
+  saturation cannot be distinguished from the feature being disabled. It wants a
+  gauge.
+* **`protocol.tla` does not model the implemented algorithm.** It has no
+  `deferred_compaction`, its `CtlDrop` leaves the dataflow live, and in that state
+  it refutes I1 *with capping on* by exactly the release-ordering trace above. Its
+  liveness property is vacuous because the model admits only one dataflow. It needs
+  correcting and actually running, with a committed TLC configuration, before
+  anything rests on it.
+* **The stash diversion has no test.** The equivalence test that compares an
+  offloaded walk against an inline one passes `want_stash: false` in every arm, so
+  the diverting path and `upload_blocking` are unexercised.
 
 * **The coordinator control plane is a parallel, unsolved bottleneck.** Peeks
   serialize behind DDL on the single coordinator thread, upstream of compute.
