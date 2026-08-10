@@ -139,7 +139,7 @@ describe("ClustersList replica rows", () => {
       "-",
       "50cc",
       formatted(STATUS_UPDATED_AT),
-      "-",
+      "",
     ]);
   });
 
@@ -230,17 +230,16 @@ describe("ClustersList replica rows", () => {
     expect(cellsForRow("compute")[1]).toBe("0");
   });
 
-  it("does not make a cluster with a single replica expandable", async () => {
+  it("makes a cluster with a single replica expandable", async () => {
     const user = userEvent.setup();
     await renderClustersList([buildCluster({ replicas: [buildReplica()] })]);
 
     const row = screen.getByText("compute").closest("tr");
-    expect(row).not.toHaveAttribute("aria-expanded");
+    expect(row).toHaveAttribute("aria-expanded", "false");
     expect(cellsForRow("compute")[1]).toBe("1");
 
-    // Attempting to expand it does not reveal the replica.
     await expandCluster(user, "compute");
-    expect(screen.queryByText("r1")).not.toBeInTheDocument();
+    expect(cellsForRow("r1")[2]).toBe("50cc");
   });
 
   it("leaves cluster rows showing their own aggregates", async () => {

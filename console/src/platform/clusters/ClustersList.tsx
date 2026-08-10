@@ -269,7 +269,7 @@ const columns = [
       return row.rowType === "cluster" ? (
         <ClusterActionsCell cluster={row} />
       ) : (
-        "-"
+        ""
       );
     },
     enableSorting: false,
@@ -363,13 +363,10 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
     columns,
     initialSorting: [{ id: "name", desc: false }],
     pageSize: 20,
-    // Only multi-replica clusters expand. A lone replica's size and status are
-    // already what the cluster row shows, so nesting it adds a caret and a
-    // click for no new information.
     getSubRows: (row) =>
       flags["usage-metrics-in-cluster-list-CNS121"] &&
       row.rowType === "cluster" &&
-      row.replicas.length > 1
+      row.replicas.length > 0
         ? row.replicas.map((r) => ({ rowType: "replica" as const, ...r }))
         : undefined,
     state: {
@@ -390,6 +387,10 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
         table={table}
         variant="linkable"
         data-testid="cluster-table"
+        // UniversalTable styles expandable rows as group headings. Cluster rows
+        // are ordinary rows that happen to expand, so keep them at the default
+        // cell text style, matching their replica rows.
+        rowSx={{ td: { textStyle: "text-ui-reg" } }}
       />
       <TablePagination table={table} itemLabel="clusters" />
     </VStack>
