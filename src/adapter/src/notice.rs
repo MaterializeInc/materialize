@@ -136,6 +136,12 @@ pub enum AdapterNotice {
     PlanInsights(String),
     IntrospectionClusterUsage,
     AutoRouteIntrospectionQueriesUsage,
+    /// A cluster contains sources that run on only one replica, yet the
+    /// cluster has (or is about to have) more than one replica.
+    SingleReplicaSourcesOnMultiReplicaCluster {
+        cluster: String,
+        sources: Vec<String>,
+    },
     /// An OIDC group has no matching Materialize role.
     OidcGroupSyncUnmatchedGroup {
         group: String,
@@ -215,6 +221,7 @@ impl AdapterNotice {
             AdapterNotice::PlanInsights(_) => Severity::Notice,
             AdapterNotice::IntrospectionClusterUsage => Severity::Warning,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Severity::Warning,
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Severity::Warning,
             AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => Severity::Notice,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => Severity::Warning,
             AdapterNotice::OidcGroupSyncError { .. } => Severity::Warning,
@@ -225,6 +232,11 @@ impl AdapterNotice {
     pub fn detail(&self) -> Option<String> {
         match self {
             AdapterNotice::PlanNotice(notice) => notice.detail(),
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
+                "Adding replicas to the cluster does not make these sources more fault tolerant \
+                 and does not increase their ingestion throughput."
+                    .into(),
+            ),
             AdapterNotice::QueryTimestamp { explanation } => Some(format!("\n{explanation}")),
             AdapterNotice::CascadeDroppedObject { objects } => Some(
                 objects
@@ -269,6 +281,11 @@ impl AdapterNotice {
             AdapterNotice::DroppedInUseIndex(..) => Some("To free up the resources used by the index, recreate all the above-mentioned objects.".into()),
             AdapterNotice::IntrospectionClusterUsage => Some("Use the new name instead.".into()),
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => Some("Use the new name instead.".into()),
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => Some(
+                "To achieve fault tolerance for other objects in the cluster, consider moving \
+                 these sources to a separate cluster with a single replica."
+                    .into(),
+            ),
             _ => None
         }
     }
@@ -327,6 +344,7 @@ impl AdapterNotice {
             AdapterNotice::PlanInsights(_) => SqlState::from_code("MZ001"),
             AdapterNotice::IntrospectionClusterUsage => SqlState::WARNING,
             AdapterNotice::AutoRouteIntrospectionQueriesUsage => SqlState::WARNING,
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { .. } => SqlState::WARNING,
             AdapterNotice::OidcGroupSyncUnmatchedGroup { .. } => SqlState::SUCCESSFUL_COMPLETION,
             AdapterNotice::OidcGroupSyncReservedRole { .. } => SqlState::WARNING,
             AdapterNotice::OidcGroupSyncError { .. } => SqlState::WARNING,
@@ -518,6 +536,15 @@ impl fmt::Display for AdapterNotice {
                 f,
                 "The auto_route_introspection_queries variable has been renamed to auto_route_catalog_queries."
             ),
+            AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { cluster, sources } => {
+                write!(
+                    f,
+                    "cluster {} has more than one replica, but the following sources in it always \
+                     run on only the first replica: {}",
+                    cluster.quoted(),
+                    separated(", ", sources.iter().map(|name| name.quoted())),
+                )
+            }
             AdapterNotice::OidcGroupSyncUnmatchedGroup { group } => {
                 write!(
                     f,

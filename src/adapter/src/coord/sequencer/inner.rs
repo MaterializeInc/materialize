@@ -90,6 +90,7 @@ use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::SourceConnection;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNotice, RawOptimizerNotice};
 use smallvec::SmallVec;
@@ -634,7 +635,22 @@ impl Coordinator {
         }
 
         match transact_result {
-            Ok(()) => Ok(ExecuteResponse::CreatedSource),
+            Ok(()) => {
+                // Warn about any new source that runs on only one replica but
+                // landed on a cluster that has more than one.
+                for (_item_id, source) in &sources {
+                    let cluster_id = match &source.data_source {
+                        DataSourceDesc::Ingestion { desc, cluster_id }
+                        | DataSourceDesc::OldSyntaxIngestion {
+                            desc, cluster_id, ..
+                        } if desc.connection.prefers_single_replica() => cluster_id,
+                        _ => continue,
+                    };
+                    let cluster = self.catalog().get_cluster(*cluster_id);
+                    self.notify_single_replica_sources(ctx.session(), cluster);
+                }
+                Ok(ExecuteResponse::CreatedSource)
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
