@@ -643,6 +643,18 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
+To work with Materialize from a coding agent like [Claude
+Code](https://docs.anthropic.com/en/docs/claude-code),
+[Codex](https://openai.com/index/codex/), or [Cursor](https://www.cursor.com/):
+
+- Install the [Materialize agent skills](/integrations/coding-agent-skills/)
+  with `npx skills add MaterializeInc/agent-skills` to give your agent access to
+  Materialize documentation and reference material.
+
+- Connect your agent to a built-in [MCP server](/integrations/mcp-server/) to
+  query your data products (`materialize-agent`) or to troubleshoot your
+  deployment (`materialize-developer`).
+
 To get started ingesting your own data from an external system like Kafka, MySQL
 or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
 navigate to **Data** > **Sources** > **New source** in the [Materialize Console](/console/)
