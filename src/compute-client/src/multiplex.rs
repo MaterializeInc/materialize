@@ -291,7 +291,8 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 let runtime = self.owner_of(id);
                 // The empty frontier drops the collection. Evict its ownership after forwarding so
                 // `transient_owner` does not grow without bound.
-                let evict = frontier.is_empty() && self.transient_owner.contains(&id);
+                let frontier_was_empty = frontier.is_empty();
+                let evict = frontier_was_empty && self.transient_owner.contains(&id);
 
                 // Cap the frontier at what in-flight interactive dataflows still read. The
                 // controller is telling us its own readers are done, but an interactive dataflow it
@@ -332,7 +333,17 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 // An interactive dataflow's collection reaching the empty frontier is the drop
                 // signal for that dataflow, so its holds go with it. Forward whatever compaction was
                 // deferred behind them, otherwise the imported collections never compact again.
-                for (import, frontier) in self.release_holds(id) {
+                //
+                // Only the empty frontier releases. A non-empty `AllowCompaction` on an export is
+                // routine, the controller sends one whenever the collection's read frontier moves,
+                // and releasing on those would drop the hold while the interactive runtime still has
+                // the create queued. That is the exact regression this capping exists to prevent.
+                let released = if frontier_was_empty {
+                    self.release_holds(id)
+                } else {
+                    Vec::new()
+                };
+                for (import, frontier) in released {
                     let runtime = self.owner_of(import);
                     self.compaction_floor.insert(import, frontier.clone());
                     self.client_mut(runtime)

@@ -2528,18 +2528,42 @@ impl CatalogState {
     }
 
     /// Resolves a boolean replica-local override for `replica_id`, falling back to `default` when
-    /// the replica has no override for `name` or the override does not parse.
+    /// the replica has no override for `name`.
     ///
     /// For configs consumed when a replica is provisioned rather than on the replica itself. Those
     /// cannot read the value from their own `worker_config`, because the decision is made in
     /// `environmentd` before the replica exists.
+    ///
+    /// Parses through the dyncfg rather than `str::parse`, because a stored override is a var-format
+    /// string: `bool` values format as `on`/`off`, which `str::parse::<bool>()` rejects. Parsing it
+    /// the wrong way silently resolved `false` for an override every other surface reported as on.
     pub fn replica_scoped_bool(&self, replica_id: ReplicaId, name: &str, default: bool) -> bool {
-        self.scoped_system_parameters
+        let Some(value) = self
+            .scoped_system_parameters
             .replica
             .get(&replica_id)
             .and_then(|overrides| overrides.get(name))
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(default)
+        else {
+            return default;
+        };
+        let dyncfgs = self.system_configuration.dyncfgs();
+        let parsed = dyncfgs
+            .entry(name)
+            .and_then(|entry| entry.parse_val(value).ok())
+            .and_then(|val| match val {
+                mz_dyncfg::ConfigVal::Bool(parsed) => Some(parsed),
+                _ => None,
+            });
+        match parsed {
+            Some(parsed) => parsed,
+            None => {
+                tracing::warn!(
+                    %name, %value, %replica_id,
+                    "cannot parse replica-scoped override, falling back to the environment value",
+                );
+                default
+            }
+        }
     }
 
     /// Return a mutable reference to the current system configuration.

@@ -73,8 +73,11 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
 ///
 /// * The replica advertises an extra `interactive` port and gets an
 ///   `--interactive-compute-timely-config` argument. `ServiceConfig::ports` therefore changes, so
-///   flipping this flag re-provisions the replicas it changes for. It is not a live toggle: an
-///   already-running replica keeps the runtime layout it was launched with.
+///   flipping this flag changes how a replica is provisioned. It is not a live toggle and nothing
+///   watches it: an already-running replica keeps the layout it was launched with, and the change
+///   takes effect the next time that replica is created, which for an untouched cluster means the
+///   next `environmentd` restart or upgrade. NOTE: that defers an arrangement-dropping reprovision
+///   to a moment disconnected from the config change.
 /// * The runtimes take the `Maintenance` and `Interactive` roles rather than the single `Solo`
 ///   role, which adds a `role` label to their metrics.
 /// * Maintenance publishes its index arrangements into the per-process sharing registry, which is

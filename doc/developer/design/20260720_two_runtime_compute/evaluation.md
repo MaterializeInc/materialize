@@ -279,8 +279,8 @@ Cluster `eval` carries two `100cc` replicas named `eval-v0-inline` and `eval-v1-
 The fixture is view `e6_li`, three columns of `sf1.lineitem` at 6,003,692 rows, indexed by `e6_li_idx`, plus materialized view `e6_agg`.
 `enable_two_runtime_compute` was on environment-wide for phase B, so both replicas ran two runtimes and differed only in `enable_index_peek_offload`.
 
-`enable_two_runtime_compute` is environment-scoped, not replica-scoped, so no two replicas of one environment can disagree on it.
-Every comparison across that flag is therefore sequential, and picks up whatever else changed between the two deployments.
+`enable_two_runtime_compute` was environment-scoped when these runs were taken, so no two replicas of one environment could disagree on it, and every comparison across that flag was sequential and picked up whatever else changed between the two deployments.
+It is replica-scoped now, so a rerun would not have that limitation.
 
 ### E6: neither the reported size nor resident memory follows publication
 
@@ -362,7 +362,7 @@ Temporary dataflows are the other thing it moves, and they cannot use the offloa
 Fixture: one `400cc` cluster, a `6,003,750` row index as the lookup target, and two temporary-dataflow probes.
 Late materialization is a differential join of about 120 keys against that index, confirmed by `EXPLAIN` to render rather than take a fast path.
 The introspection probe is a count over `mz_introspection.mz_scheduling_elapsed`.
-`enable_two_runtime_compute` is environment-scoped, so the two arms are sequential phases with a replica recycle between them.
+`enable_two_runtime_compute` was environment-scoped at the time of this run, so the two arms are sequential phases with a replica recycle between them.
 
 The first maintenance load, repeatedly creating and dropping an index over six million rows, moved almost nothing in either phase.
 It never saturated eight workers, and a load that does not saturate cannot demonstrate isolation.

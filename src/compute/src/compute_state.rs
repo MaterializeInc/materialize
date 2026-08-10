@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicUsize};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
@@ -119,10 +120,17 @@ pub struct ComputeState {
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
     /// How many offloaded index-peek walks this worker has in flight.
     ///
-    /// Each one pins the batches its cursor covers and holds the trace back from compacting past
-    /// its read time, so the count is capped by `INDEX_PEEK_OFFLOAD_MAX_INFLIGHT` and peeks over
-    /// the cap walk inline instead.
-    pub in_flight_offloaded_peeks: usize,
+    /// Each one retains the `Arc` batches its cursor covers for the length of the walk, and for the
+    /// upload too if it diverts to the stash, and occupies a blocking-pool thread throughout. It
+    /// does *not* hold the trace back from compacting: both dispatch paths drop their trace handles
+    /// before the walk starts, so the cost is retained memory and a thread, not a compaction hold.
+    /// `INDEX_PEEK_OFFLOAD_MAX_INFLIGHT` caps it and peeks over the cap walk inline instead.
+    ///
+    /// Owned by an `InFlightOffload` guard rather than adjusted by hand, so that every way a peek can
+    /// leave `pending_peeks` (retired, cancelled, dropped by reconciliation) decrements it. Hand
+    /// accounting leaked on the cancel and reconciliation paths and silently disabled the offload
+    /// once the cap was reached.
+    pub in_flight_offloaded_peeks: Arc<AtomicUsize>,
     /// Interactive-runtime deferred fast-path peeks, keyed by a fresh `WorkId`, owning each item
     /// until it resolves.
     ///
@@ -240,7 +248,7 @@ impl ComputeState {
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             pending_peeks: Default::default(),
-            in_flight_offloaded_peeks: 0,
+            in_flight_offloaded_peeks: Arc::new(AtomicUsize::new(0)),
             pending_work: Default::default(),
             dep_index: Default::default(),
             next_work_id: 0,
@@ -960,7 +968,7 @@ impl<'a> ActiveComputeState<'a> {
         let mut upper = Antichain::new();
         let (peek_stash_usable, peek_stash_threshold_bytes) = self.peek_stash_config(&peek.peek);
 
-        if self.should_offload_peek() {
+        if let Some(in_flight) = self.acquire_offload_slot() {
             let stash = self.offload_stash(peek_stash_usable, peek_stash_threshold_bytes);
             match shared_snapshot_for_offload(
                 &peek.registry,
@@ -988,10 +996,10 @@ impl<'a> ActiveComputeState<'a> {
                         errs,
                         oks_stash,
                         stash,
+                        in_flight,
                         peek.span.clone(),
                         self.timely_worker.sync_activator_for([].into()),
                     );
-                    self.compute_state.in_flight_offloaded_peeks += 1;
                     self.compute_state
                         .metrics
                         .index_peek_walks_offload_total
@@ -1410,7 +1418,22 @@ impl<'a> ActiveComputeState<'a> {
             return false;
         }
         let max_inflight = INDEX_PEEK_OFFLOAD_MAX_INFLIGHT.get(&self.compute_state.worker_config);
-        self.compute_state.in_flight_offloaded_peeks < max_inflight
+        self.compute_state
+            .in_flight_offloaded_peeks
+            .load(atomic::Ordering::SeqCst)
+            < max_inflight
+    }
+
+    /// Claims a slot of the offload's in-flight budget, or `None` at the cap.
+    ///
+    /// Checking and claiming are one step so the count cannot drift from the number of live guards.
+    fn acquire_offload_slot(&self) -> Option<InFlightOffload> {
+        if !self.should_offload_peek() {
+            return None;
+        }
+        let counter = Arc::clone(&self.compute_state.in_flight_offloaded_peeks);
+        counter.fetch_add(1, atomic::Ordering::SeqCst);
+        Some(InFlightOffload(counter))
     }
 
     /// Whether `peek`'s result may be stashed in persist rather than returned inline, and the size
@@ -1465,7 +1488,7 @@ impl<'a> ActiveComputeState<'a> {
                 let (peek_stash_usable, peek_stash_threshold_bytes) =
                     self.peek_stash_config(&peek.peek);
 
-                if self.should_offload_peek() {
+                if let Some(in_flight) = self.acquire_offload_slot() {
                     let stash = self.offload_stash(peek_stash_usable, peek_stash_threshold_bytes);
                     match peek.snapshot_for_offload(upper, stash.is_some()) {
                         OffloadSnapshot::NotReady => None,
@@ -1485,10 +1508,10 @@ impl<'a> ActiveComputeState<'a> {
                                 errs,
                                 oks_stash,
                                 stash,
+                                in_flight,
                                 peek.span.clone(),
                                 self.timely_worker.sync_activator_for([].into()),
                             );
-                            self.compute_state.in_flight_offloaded_peeks += 1;
                             self.compute_state
                                 .metrics
                                 .index_peek_walks_offload_total
@@ -1607,17 +1630,33 @@ impl<'a> ActiveComputeState<'a> {
                 result
             }),
             PendingPeek::IndexOffload(peek) => {
-                peek.result.try_recv().ok().map(|(result, duration)| {
-                    // The walk's own duration, which is the whole peek's cost for an offloaded
-                    // peek. The dispatching path deliberately does not observe this histogram, so
-                    // there is one observation per peek either way.
-                    self.compute_state.in_flight_offloaded_peeks -= 1;
-                    self.compute_state
-                        .metrics
-                        .index_peek_total_seconds
-                        .observe(duration.as_secs_f64());
-                    result
-                })
+                match peek.result.try_recv() {
+                    Ok((result, duration)) => {
+                        // The walk's own duration, which is the whole peek's cost for an offloaded
+                        // peek. The dispatching path deliberately does not observe this histogram,
+                        // so there is one observation per peek either way. The in-flight slot is
+                        // returned by the guard when this `PendingPeek` drops.
+                        self.compute_state
+                            .metrics
+                            .index_peek_total_seconds
+                            .observe(duration.as_secs_f64());
+                        Some(result)
+                    }
+                    Err(oneshot::error::TryRecvError::Empty) => None,
+                    // The sender is gone without a result, which means the walk's thread panicked:
+                    // tokio catches a panic in a blocking closure and drops the closure's state. The
+                    // peek must be answered, otherwise it sits in `pending_peeks` forever and the
+                    // client waits indefinitely.
+                    Err(oneshot::error::TryRecvError::Closed) => {
+                        soft_panic_or_log!(
+                            "offloaded index peek {} lost its walk without a result",
+                            peek.peek.uuid,
+                        );
+                        Some(PeekResponse::Error(
+                            "offloaded index peek walk failed".to_string(),
+                        ))
+                    }
+                }
             }
             PendingPeek::IndexShared(_) => {
                 // Interactive shared-index peeks never reach `process_peek`. `handle_peek` routes
@@ -1984,9 +2023,25 @@ impl PendingPeek {
 ///
 /// Note that this intentionally does not implement or derive `Clone`, as each pending peek is
 /// meant to be dropped after it's responded to.
+/// Holds one slot of the offload's in-flight budget for as long as the peek exists.
+///
+/// A started `spawn_blocking` closure cannot be aborted, so dropping this does not stop the walk. It
+/// only returns the slot, which is what keeps the budget honest across cancellation and
+/// reconciliation.
+pub struct InFlightOffload(Arc<AtomicUsize>);
+
+impl Drop for InFlightOffload {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, atomic::Ordering::SeqCst);
+    }
+}
+
 pub struct IndexOffloadPeek {
     pub(crate) peek: Peek,
-    /// The walk, aborted if we stop caring about the result (a cancelled peek drops this).
+    /// Returns this walk's slot in the in-flight budget when the peek goes away, by any route.
+    _in_flight: InFlightOffload,
+    /// The walk. Dropping this cannot abort a `spawn_blocking` closure that already started, so the
+    /// walk runs to completion and discards its result.
     _abort_handle: AbortOnDropHandle<()>,
     /// The result of the walk, eventually.
     result: oneshot::Receiver<(PeekResponse, Duration)>,
@@ -2627,6 +2682,7 @@ fn spawn_offloaded_walk<OksTr, ErrsTr>(
     errs: (TraceCursor<ErrsTr>, TraceStorage<ErrsTr>),
     oks_stash: Option<(TraceCursor<OksTr>, TraceStorage<OksTr>)>,
     stash: Option<OffloadStash>,
+    in_flight: InFlightOffload,
     span: tracing::Span,
     activator: timely::scheduling::activate::SyncActivator,
 ) -> IndexOffloadPeek
@@ -2682,6 +2738,7 @@ where
 
     IndexOffloadPeek {
         peek,
+        _in_flight: in_flight,
         _abort_handle: task_handle.abort_on_drop(),
         result: result_rx,
         span,

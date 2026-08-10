@@ -242,16 +242,29 @@ all, which makes it not merely undesirable but insufficient.
 
 ### A model to check it against
 
-`protocol.tla` in this directory models the protocol: one index, one interactive dataflow, the
+`protocol.tla` in this directory sketches the protocol: one index, one interactive dataflow, the
 controller's read hold, two independent command streams, and the point at which each runtime realizes
-a command. I1 is stated as an invariant and the capping is a constant, so TLC refutes I1 with capping
-off and sustains it with capping on. It also carries a liveness property, that capping cannot pin an
-index forever.
+a command. I1 is stated as an invariant and the capping is a constant.
 
-The model is worth keeping because the failure it describes is an interleaving, and interleavings are
-exactly what review misses and what a model checker does not. This one was written after the bug. The
-remaining rows of I2, index replacement under reconciliation and placeholder eviction, should be
-added to it before they are fixed rather than after.
+**It has not been run.** No TLC configuration is committed and no model-checking run has been
+performed, so the file is a specification sketch rather than a verification result. Do not cite it as
+evidence that I1 holds.
+
+Review of the sketch against the implementation found it unfaithful in ways that matter, and the
+discrepancies point at real gaps rather than at modelling detail:
+
+* There is no `deferred_compaction` variable, so the model cannot express the implementation's release
+  path at all. `CtlDrop` clears the hold while leaving `dfAsOf` and `rendered` untouched, which admits
+  the trace `CtlCreate(1)`, `CtlDrop`, `CtlCompact(2)`, `MaintStep`. That ends with an unrendered
+  dataflow at `as_of` 1 and `since` 2, so **the committed model refutes I1 with capping on**. That
+  counterexample is not a modelling artefact, it is the release-ordering hole described below.
+* `NoPermanentPin` is vacuous. `dfAsOf` is never reset, and `CtlCreate` requires it unset, so only one
+  dataflow ever exists and the property's antecedent is false forever.
+
+The model is still worth keeping, because the failure it is about is an interleaving and interleavings
+are what review misses. But it needs to be corrected and actually checked, with a committed TLC
+configuration, before any claim rests on it. The remaining rows of I2, index replacement under
+reconciliation and placeholder eviction, should be added once it models the implemented algorithm.
 
 ## The bounded-read boundary
 

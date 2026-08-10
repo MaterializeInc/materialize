@@ -56,13 +56,13 @@ pub struct ComputeMetrics {
     // doesn't do anything to let you pinpoint _which_ operator or worker isn't
     // yielding, but it should hopefully alert us when there is something to
     // look at.
-    // peek walk substrate
-    index_peek_walks_total: raw::IntCounterVec,
-
     timely_step_duration_seconds: HistogramVec,
     persist_peek_seconds: HistogramVec,
     stashed_peek_seconds: HistogramVec,
     handle_command_duration_seconds: HistogramVec,
+
+    // peek walk substrate
+    index_peek_walks_total: raw::IntCounterVec,
 
     // Index peek timing phases (per-cluster, no worker label)
     index_peek_total_seconds: Histogram,
@@ -398,9 +398,10 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_walks_inline_total: IntCounter,
     /// Fast-path index peek walks this worker dispatched to a blocking task.
     ///
-    /// Zero while `enable_index_peek_offload` is off, and zero even with it on for any peek the
-    /// peek response stash could take, so a flat counter does not by itself mean the flag failed
-    /// to reach the worker.
+    /// Zero while `enable_index_peek_offload` is off. With it on, a peek the stash could take is
+    /// offloaded too and diverts from the walking thread, so a flat counter does mean the flag did
+    /// not reach this worker. NOTE: a walk declined because the in-flight cap is reached counts as
+    /// `inline`, so cap saturation is not distinguishable from the flag being off.
     pub(crate) index_peek_walks_offload_total: IntCounter,
     /// Histogram of total index peek durations.
     pub(crate) index_peek_total_seconds: Histogram,
