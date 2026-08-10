@@ -14,9 +14,10 @@
 //! the controller as a **separate task** and implements the ctx by marshaling
 //! each pull/apply to the Coordinator over the internal command channel, because
 //! the catalog and the live compute/storage signals are reachable only from the
-//! coordinator loop. The two whole-tick reads are batched; the per-cluster live
-//! signals are pulled on demand, so a tick's round-trips scale with the number of
-//! managed clusters that need a live signal, not with a constant.
+//! coordinator loop. Whole-tick reads are batched. Refresh-window catalog inputs
+//! are pulled one cluster at a time and completed with one shared oracle read.
+//! The remaining per-cluster live signals are pulled on demand, so steady
+//! clusters do not pay for signals they do not use.
 //!
 //! The controller owns the replica set of every managed cluster, user and
 //! system alike. A builtin cluster's config-implied replicas are additionally
@@ -24,7 +25,7 @@
 //! derives the same target from the same config, so the two converge rather
 //! than compete.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,7 +35,8 @@ use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
     ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, CreateReason, Decision,
     ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
-    ReconfigurationTarget, RefreshMvInfo, RefreshWindowInputs, ReplicaShape, StateWrite,
+    ReconfigurationTarget, RefreshMvInfo, RefreshWindowClusterInputs, RefreshWindowInputsBatch,
+    ReplicaShape, StateWrite,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::ClusterStatus;
@@ -52,8 +54,9 @@ use crate::error::AdapterError;
 /// [`ClusterControllerCtx`] call. Each variant carries a oneshot for the reply.
 ///
 /// `ManagedClusterIds` and `ClusterStates` are the per-tick batched reads. The
-/// `ClusterStates` reply also carries `now`. `HydratedReplicas` is a
-/// per-cluster live signal a strategy pulls on demand.
+/// `ClusterStates` reply also carries `now`. Refresh-window catalog inputs are
+/// pulled one cluster at a time, followed by one shared oracle read.
+/// `HydratedReplicas` is a per-cluster live signal a strategy pulls on demand.
 #[derive(Debug)]
 pub enum ClusterControllerRequest {
     /// The ids of all managed clusters the controller owns this tick.
@@ -77,13 +80,14 @@ pub enum ClusterControllerRequest {
         cluster_id: ClusterId,
         tx: oneshot::Sender<bool>,
     },
-    /// The refresh-window live signals for one scheduled cluster (read ts,
-    /// compaction estimate, bound REFRESH MVs). `None` for a cluster that is not
-    /// scheduled `ON REFRESH`.
-    RefreshWindowInputs {
+    /// The catalog and storage refresh-window inputs for one scheduled cluster.
+    /// `None` if the cluster no longer qualifies at pull time.
+    RefreshWindowClusterInputs {
         cluster_id: ClusterId,
-        tx: oneshot::Sender<Option<RefreshWindowInputs>>,
+        tx: oneshot::Sender<Option<RefreshWindowClusterInputs>>,
     },
+    /// One timestamp-oracle read for a completed refresh-window input batch.
+    RefreshWindowReadTs { tx: oneshot::Sender<Timestamp> },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
         decisions: Vec<Decision>,
@@ -180,11 +184,38 @@ impl ClusterControllerCtx for CoordCtx {
 
     async fn refresh_window_inputs(
         &mut self,
-        cluster_id: ClusterId,
-    ) -> Option<RefreshWindowInputs> {
-        self.request(|tx| ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx })
-            .await
-            .flatten()
+        cluster_ids: &[ClusterId],
+    ) -> Option<RefreshWindowInputsBatch> {
+        let mut cluster_inputs = BTreeMap::new();
+        for (index, &cluster_id) in cluster_ids.iter().enumerate() {
+            if index > 0 {
+                // The coordinator prioritizes its internal command channel. Give
+                // it a chance to service already-queued user commands instead of
+                // keeping that channel continuously ready for the whole batch.
+                tokio::task::yield_now().await;
+            }
+            let inputs = self
+                .request(|tx| ClusterControllerRequest::RefreshWindowClusterInputs {
+                    cluster_id,
+                    tx,
+                })
+                .await
+                .flatten();
+            if let Some(inputs) = inputs {
+                cluster_inputs.insert(cluster_id, inputs);
+            }
+        }
+        if cluster_inputs.is_empty() {
+            return None;
+        }
+
+        let read_ts = self
+            .request(|tx| ClusterControllerRequest::RefreshWindowReadTs { tx })
+            .await?;
+        Some(RefreshWindowInputsBatch {
+            read_ts,
+            cluster_inputs,
+        })
     }
 
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
@@ -309,35 +340,18 @@ impl Coordinator {
             ClusterControllerRequest::HasHydratableObjects { cluster_id, tx } => {
                 let _ = tx.send(self.cluster_has_hydratable_objects(cluster_id));
             }
-            ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx } => {
-                // Gather the catalog- and storage-derived inputs on the loop,
-                // then complete the reply from a spawned task: the oracle
-                // read is a network round-trip (to the Postgres/CRDB-backed
-                // timestamp oracle) and must never run on the serial
+            ClusterControllerRequest::RefreshWindowClusterInputs { cluster_id, tx } => {
+                let _ = tx.send(self.refresh_window_catalog_inputs(cluster_id));
+            }
+            ClusterControllerRequest::RefreshWindowReadTs { tx } => {
+                // The oracle read is a network round trip to the Postgres or
+                // CRDB-backed timestamp oracle. It must not run on the serial
                 // coordinator loop.
-                match self.refresh_window_catalog_inputs(cluster_id) {
-                    None => {
-                        let _ = tx.send(None);
-                    }
-                    Some((compaction_estimate, refresh_mvs)) => {
-                        let oracle = self.get_local_timestamp_oracle();
-                        // NOTE: this is one oracle read per scheduled cluster
-                        // per tick, and the controller awaits each pull before
-                        // the next, so the reads are sequential and the
-                        // batching oracle cannot coalesce them. Fine at the
-                        // tick cadence for realistic scheduled-cluster counts.
-                        // TODO: hoist to one read per tick if that stops
-                        // holding.
-                        spawn(|| "cluster_controller_refresh_window_read_ts", async move {
-                            let read_ts = oracle.read_ts().await;
-                            let _ = tx.send(Some(RefreshWindowInputs {
-                                read_ts,
-                                compaction_estimate,
-                                refresh_mvs,
-                            }));
-                        });
-                    }
-                }
+                let oracle = self.get_local_timestamp_oracle();
+                spawn(|| "cluster_controller_refresh_window_read_ts", async move {
+                    let read_ts = oracle.read_ts().await;
+                    let _ = tx.send(read_ts);
+                });
             }
             ClusterControllerRequest::Apply { decisions, tx } => {
                 let outcome = if active {
@@ -495,7 +509,7 @@ impl Coordinator {
     /// `None` if the cluster is missing, unmanaged, or not scheduled `ON
     /// REFRESH`.
     ///
-    /// The oracle read timestamp completing [`RefreshWindowInputs`] is
+    /// The oracle read timestamp completing [`RefreshWindowInputsBatch`] is
     /// deliberately not fetched here: this runs on the coordinator loop, and
     /// the oracle read is a network round-trip the request handler performs on
     /// a spawned task instead.
@@ -506,7 +520,7 @@ impl Coordinator {
     fn refresh_window_catalog_inputs(
         &self,
         cluster_id: ClusterId,
-    ) -> Option<(Duration, Vec<RefreshMvInfo>)> {
+    ) -> Option<RefreshWindowClusterInputs> {
         use mz_catalog::memory::objects::CatalogItem;
 
         let cluster = self.catalog().try_get_cluster(cluster_id)?;
@@ -549,7 +563,10 @@ impl Coordinator {
             .system_config()
             .cluster_refresh_mv_compaction_estimate();
 
-        Some((compaction_estimate, refresh_mvs))
+        Some(RefreshWindowClusterInputs {
+            compaction_estimate,
+            refresh_mvs,
+        })
     }
 
     /// Apply one batch of decisions under their compare-and-append guards.

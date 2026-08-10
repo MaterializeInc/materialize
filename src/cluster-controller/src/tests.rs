@@ -29,7 +29,8 @@ use crate::ClusterController;
 use crate::ctx::{
     ApplyOutcome, AutoScalingPolicy, AvailabilityZones, BurstAudit, ClusterControllerCtx,
     ClusterSchedule, ClusterState, CreateReason, Decision, ObservedReplica, ReconfigurationAudit,
-    ReconfigurationStatus, RefreshWindowInputs, ReplicaShape, StateWrite,
+    ReconfigurationStatus, RefreshWindowClusterInputs, RefreshWindowInputs,
+    RefreshWindowInputsBatch, ReplicaShape, StateWrite,
 };
 use crate::strategy::{ConfigSignals, DesiredReplica, LiveSignals, Strategy};
 
@@ -161,10 +162,10 @@ struct FakeCtx {
     /// `has_hydratable_objects` pull, keeping that pull load-bearing for
     /// the seam tests.
     has_hydratable_objects: BTreeMap<ClusterId, bool>,
-    /// Refresh-window inputs the fake returns per cluster when the controller
-    /// probes a scheduled cluster. An on-refresh test sets this to drive the
-    /// window decision.
-    refresh_window: BTreeMap<ClusterId, RefreshWindowInputs>,
+    /// Refresh-window inputs the fake returns for a controller probe.
+    refresh_window: Option<RefreshWindowInputsBatch>,
+    /// The cluster ids in each batched refresh-window probe.
+    refresh_window_probes: Vec<Vec<ClusterId>>,
 }
 
 impl FakeCtx {
@@ -181,8 +182,34 @@ impl FakeCtx {
             hydrated: BTreeSet::new(),
             hydration_probes: 0,
             has_hydratable_objects: BTreeMap::new(),
-            refresh_window: BTreeMap::new(),
+            refresh_window: None,
+            refresh_window_probes: Vec::new(),
         }
+    }
+
+    fn set_refresh_window(&mut self, cluster_id: ClusterId, inputs: RefreshWindowInputs) {
+        let RefreshWindowInputs {
+            read_ts,
+            compaction_estimate,
+            refresh_mvs,
+        } = inputs;
+        let batch = self
+            .refresh_window
+            .get_or_insert_with(|| RefreshWindowInputsBatch {
+                read_ts,
+                cluster_inputs: BTreeMap::new(),
+            });
+        assert_eq!(
+            batch.read_ts, read_ts,
+            "one batch must use one shared read timestamp"
+        );
+        batch.cluster_inputs.insert(
+            cluster_id,
+            RefreshWindowClusterInputs {
+                compaction_estimate,
+                refresh_mvs,
+            },
+        );
     }
 
     /// All create decisions across every applied batch.
@@ -243,9 +270,28 @@ impl ClusterControllerCtx for FakeCtx {
 
     async fn refresh_window_inputs(
         &mut self,
-        cluster_id: ClusterId,
-    ) -> Option<RefreshWindowInputs> {
-        self.refresh_window.get(&cluster_id).cloned()
+        cluster_ids: &[ClusterId],
+    ) -> Option<RefreshWindowInputsBatch> {
+        self.refresh_window_probes.push(cluster_ids.to_vec());
+        let batch = self.refresh_window.as_ref()?;
+        let cluster_inputs: BTreeMap<_, _> = cluster_ids
+            .iter()
+            .filter_map(|cluster_id| {
+                batch
+                    .cluster_inputs
+                    .get(cluster_id)
+                    .cloned()
+                    .map(|inputs| (*cluster_id, inputs))
+            })
+            .collect();
+        if cluster_inputs.is_empty() {
+            None
+        } else {
+            Some(RefreshWindowInputsBatch {
+                read_ts: batch.read_ts,
+                cluster_inputs,
+            })
+        }
     }
 
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
@@ -2391,6 +2437,114 @@ fn on_refresh_compaction_window_keeps_cluster_on() {
 }
 
 #[mz_ore::test(tokio::test)]
+async fn on_refresh_batches_window_inputs_once_per_phase() {
+    let c1 = cluster(1);
+    let c2 = cluster(2);
+    let manual = cluster(3);
+    let (scheduled1, _) = scheduled_state(c1, "100cc", 1, 0, Vec::new(), None);
+    let (scheduled2, _) = scheduled_state(c2, "100cc", 1, 0, Vec::new(), None);
+    let mut ctx = FakeCtx::new(vec![
+        scheduled1,
+        scheduled2,
+        state(manual, "100cc", 0, Vec::new()),
+    ]);
+    let closed_window = window_inputs(100, 0, Some(200), refresh_at(50));
+    ctx.set_refresh_window(c1, closed_window.clone());
+    ctx.set_refresh_window(c2, closed_window);
+
+    controller().reconcile(&mut ctx).await;
+
+    assert_eq!(
+        ctx.refresh_window_probes,
+        vec![vec![c1, c2], vec![c1, c2]],
+        "one batch per phase, excluding the MANUAL cluster",
+    );
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_unavailable_window_inputs_skip_only_affected_cluster() {
+    let scheduled = cluster(1);
+    let manual = cluster(2);
+    let available = cluster(3);
+    let (unavailable_state, _) = scheduled_state(
+        scheduled,
+        "100cc",
+        1,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let (available_state, _) = scheduled_state(available, "100cc", 0, 0, Vec::new(), None);
+    let mut ctx = FakeCtx::new(vec![
+        unavailable_state,
+        state(manual, "100cc", 1, Vec::new()),
+        available_state,
+    ]);
+    ctx.set_refresh_window(available, window_inputs(100, 0, Some(50), refresh_at(1000)));
+
+    controller().reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.refresh_window_probes, vec![vec![scheduled, available]]);
+    assert_eq!(ctx.states[&scheduled].replication_factor, 1);
+    assert_eq!(ctx.states[&scheduled].replicas.len(), 1);
+    assert!(ctx.applied.iter().flatten().all(|decision| {
+        let cluster_id = match decision {
+            Decision::CreateReplica { cluster_id, .. }
+            | Decision::DropReplica { cluster_id, .. }
+            | Decision::UpdateClusterState { cluster_id, .. } => cluster_id,
+        };
+        *cluster_id != scheduled
+    }));
+    let created_clusters: BTreeSet<_> = ctx
+        .creates()
+        .into_iter()
+        .map(|decision| match decision {
+            Decision::CreateReplica { cluster_id, .. } => *cluster_id,
+            _ => unreachable!("creates returns only create decisions"),
+        })
+        .collect();
+    assert_eq!(created_clusters, BTreeSet::from([manual, available]));
+    assert_eq!(ctx.states[&manual].replicas.len(), 1);
+    assert_eq!(ctx.states[&available].replicas.len(), 1);
+    assert!(ctx.drops().is_empty());
+}
+
+#[mz_ore::test(tokio::test)]
+async fn on_refresh_unavailable_window_input_batch_skips_scheduled_clusters() {
+    let stale_rf = cluster(1);
+    let running = cluster(2);
+    let manual = cluster(3);
+    let (stale_rf_state, _) = scheduled_state(stale_rf, "100cc", 1, 0, Vec::new(), None);
+    let (running_state, _) = scheduled_state(
+        running,
+        "100cc",
+        0,
+        0,
+        vec![observed(replica(1), "r0", "100cc")],
+        None,
+    );
+    let mut ctx = FakeCtx::new(vec![
+        stale_rf_state,
+        running_state,
+        state(manual, "100cc", 1, Vec::new()),
+    ]);
+
+    controller().reconcile(&mut ctx).await;
+
+    assert_eq!(ctx.refresh_window_probes, vec![vec![stale_rf, running]]);
+    assert_eq!(ctx.states[&stale_rf].replication_factor, 1);
+    assert_eq!(ctx.states[&running].replicas.len(), 1);
+    let creates = ctx.creates();
+    assert_eq!(creates.len(), 1, "the MANUAL cluster still reconciles");
+    assert!(matches!(
+        creates[0],
+        Decision::CreateReplica { cluster_id, .. } if *cluster_id == manual
+    ));
+    assert_eq!(ctx.states[&manual].replicas.len(), 1);
+    assert!(ctx.drops().is_empty());
+}
+
+#[mz_ore::test(tokio::test)]
 async fn on_refresh_creates_in_window_through_seam() {
     // End-to-end through the ctx seam: a scheduled cluster with a stale rf=1 and
     // no replicas, inside its refresh window. Phase 1 normalizes rf to 0; phase 2
@@ -2398,8 +2552,7 @@ async fn on_refresh_creates_in_window_through_seam() {
     let c = cluster(1);
     let (state, _signals) = scheduled_state(c, "100cc", 1, 0, Vec::new(), None);
     let mut ctx = FakeCtx::new(vec![state]);
-    ctx.refresh_window
-        .insert(c, window_inputs(100, 0, Some(50), refresh_at(1000)));
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(50), refresh_at(1000)));
 
     let controller = controller();
     controller.reconcile(&mut ctx).await;
@@ -2451,8 +2604,7 @@ async fn on_refresh_schedule_alter_rejects_in_flight_decision() {
         None,
     );
     let mut ctx = FakeCtx::new(vec![state]);
-    ctx.refresh_window
-        .insert(c, window_inputs(100, 0, Some(200), refresh_at(50)));
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(200), refresh_at(50)));
     ctx.witness_check = true;
     // The `ALTER` flips only the schedule (rf, size, azs, logging unchanged), so
     // the rejection is attributable solely to the witness `schedule` field.
@@ -2499,8 +2651,7 @@ async fn on_refresh_unchanged_schedule_passes_witness() {
         None,
     );
     let mut ctx = FakeCtx::new(vec![state]);
-    ctx.refresh_window
-        .insert(c, window_inputs(100, 0, Some(200), refresh_at(50)));
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(200), refresh_at(50)));
     ctx.witness_check = true;
 
     let controller = controller();
@@ -2619,6 +2770,7 @@ async fn on_refresh_graceful_record_settles_then_normalizes() {
     // so the first tick cuts over without waiting for hydration.
     state.reconfiguration = Some(record_on_timeout("200cc", 2, 500, OnTimeout::Commit));
     let mut ctx = FakeCtx::new(vec![state]);
+    ctx.set_refresh_window(c, window_inputs(100, 0, Some(200), refresh_at(50)));
 
     let controller = controller();
     controller.reconcile(&mut ctx).await;
