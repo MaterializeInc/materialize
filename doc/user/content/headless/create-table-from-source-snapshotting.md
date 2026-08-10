@@ -1,10 +1,12 @@
 ---
 headless: true
 ---
-Creating the tables from sources starts the [snapshotting](/ingest-data/#snapshotting) process. Snapshotting syncs the
-currently available data into Materialize. Because the initial snapshot is
-persisted in the storage layer atomically (i.e., at the same ingestion
-timestamp), you are not able to query the table until snapshotting is complete.
+Creating a table from a source starts the
+[snapshotting](/ingest-data/#snapshotting) process.
+
+{{% include-headless "/headless/ingestion/snapshotting-definition" %}}
+
+You cannot query the table until its snapshot completes.
 
 {{< note >}}
 
