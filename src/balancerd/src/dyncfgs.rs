@@ -43,6 +43,26 @@ pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
     "Whether to inject tcp proxy protocol headers to downstream http servers.",
 );
 
+/// Whether to advertise HTTP/2 via ALPN on the HTTPS listener.
+///
+/// balancerd is a byte proxy: it terminates TLS and forwards the decrypted
+/// stream to environmentd. ALPN is answered during the client handshake,
+/// before balancerd has connected upstream, so it cannot discover whether
+/// environmentd speaks HTTP/2 in time. Enabling this while environmentd is
+/// still HTTP/1.1-only makes clients negotiate h2 and send frames environmentd
+/// rejects with "invalid HTTP version parsed (found HTTP2 preface)". Enable
+/// only after every environmentd instance supports HTTP/2.
+///
+/// NOTE: read once when the TLS context is built at startup, so a change only
+/// takes effect after balancerd restarts.
+pub const HTTPS_ENABLE_HTTP2_ALPN: Config<bool> = Config::new(
+    "balancerd_https_enable_http2_alpn",
+    false,
+    "Whether to advertise HTTP/2 via ALPN on the HTTPS listener. \
+    Enable only after all environmentd instances support HTTP/2. \
+    Takes effect on balancerd restart.",
+);
+
 /// Sets the filter to apply to stderr logging.
 pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
@@ -98,6 +118,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SIGTERM_CONNECTION_WAIT)
         .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
+        .add(&HTTPS_ENABLE_HTTP2_ALPN)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)
@@ -122,6 +143,11 @@ pub(crate) fn set_defaults(
         if k.as_str() == INJECT_PROXY_PROTOCOL_HEADER_HTTP.name() {
             config_updates.add_dynamic(
                 INJECT_PROXY_PROTOCOL_HEADER_HTTP.name(),
+                mz_dyncfg::ConfigVal::Bool(bool::from_str(v)?),
+            )
+        } else if k.as_str() == HTTPS_ENABLE_HTTP2_ALPN.name() {
+            config_updates.add_dynamic(
+                HTTPS_ENABLE_HTTP2_ALPN.name(),
                 mz_dyncfg::ConfigVal::Bool(bool::from_str(v)?),
             )
         } else {
