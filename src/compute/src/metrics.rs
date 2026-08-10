@@ -65,7 +65,9 @@ pub struct ComputeMetrics {
     index_peek_error_scan_seconds: Histogram,
     index_peek_cursor_setup_seconds: Histogram,
     index_peek_row_iteration_seconds: Histogram,
+    index_peek_row_iteration_rows: Histogram,
     index_peek_result_sort_seconds: Histogram,
+    index_peek_result_sort_rows: Histogram,
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
 
@@ -86,6 +88,9 @@ pub struct ComputeMetrics {
 impl ComputeMetrics {
     pub fn register_with(registry: &MetricsRegistry) -> Self {
         let workload_class = Arc::new(Mutex::new(None));
+        let mut index_peek_row_buckets =
+            prometheus::exponential_buckets(1.0, 2.0, 25).expect("valid parameters");
+        index_peek_row_buckets.insert(0, 0.0);
 
         // Apply a `workload_class` label to all metrics in the registry when we
         // have a known workload class.
@@ -203,10 +208,20 @@ impl ComputeMetrics {
                 help: "Time iterating rows and evaluating MFP.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             )),
+            index_peek_row_iteration_rows: registry.register(metric!(
+                name: "mz_index_peek_row_iteration_rows",
+                help: "Number of arrangement rows evaluated by the index peek result iterator.",
+                buckets: index_peek_row_buckets.clone(),
+            )),
             index_peek_result_sort_seconds: registry.register(metric!(
                 name: "mz_index_peek_result_sort_seconds",
                 help: "Time sorting intermediate results during peek collection.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            )),
+            index_peek_result_sort_rows: registry.register(metric!(
+                name: "mz_index_peek_result_sort_rows",
+                help: "Number of intermediate result rows sorted during peek collection, summed across sort operations.",
+                buckets: index_peek_row_buckets,
             )),
             index_peek_frontier_check_seconds: registry.register(metric!(
                 name: "mz_index_peek_frontier_check_seconds",
@@ -268,7 +283,9 @@ impl ComputeMetrics {
         let index_peek_error_scan_seconds = self.index_peek_error_scan_seconds.clone();
         let index_peek_cursor_setup_seconds = self.index_peek_cursor_setup_seconds.clone();
         let index_peek_row_iteration_seconds = self.index_peek_row_iteration_seconds.clone();
+        let index_peek_row_iteration_rows = self.index_peek_row_iteration_rows.clone();
         let index_peek_result_sort_seconds = self.index_peek_result_sort_seconds.clone();
+        let index_peek_result_sort_rows = self.index_peek_result_sort_rows.clone();
         let index_peek_frontier_check_seconds = self.index_peek_frontier_check_seconds.clone();
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
         let replica_expiration_timestamp_seconds = self
@@ -295,7 +312,9 @@ impl ComputeMetrics {
             index_peek_error_scan_seconds,
             index_peek_cursor_setup_seconds,
             index_peek_row_iteration_seconds,
+            index_peek_row_iteration_rows,
             index_peek_result_sort_seconds,
+            index_peek_result_sort_rows,
             index_peek_frontier_check_seconds,
             index_peek_row_collection_seconds,
             replica_expiration_timestamp_seconds,
@@ -337,8 +356,12 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_cursor_setup_seconds: Histogram,
     /// Histogram of index peek row iteration durations.
     pub(crate) index_peek_row_iteration_seconds: Histogram,
+    /// Histogram of index peek rows processed by the result iterator.
+    pub(crate) index_peek_row_iteration_rows: Histogram,
     /// Histogram of index peek result sort durations.
     pub(crate) index_peek_result_sort_seconds: Histogram,
+    /// Histogram of index peek rows sorted across all result sort operations.
+    pub(crate) index_peek_result_sort_rows: Histogram,
     /// Histogram of index peek frontier check durations.
     pub(crate) index_peek_frontier_check_seconds: Histogram,
     /// Histogram of index peek row collection construction durations.

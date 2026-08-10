@@ -1598,6 +1598,11 @@ impl CatalogState {
         //    should be `enable_for_item_parsing` set to `true`.
         // 2. After this step, feature flag configuration must not be
         //    overridden.
+        // 3. We don't notify `SystemVars` callbacks here, neither for the
+        //    flags this enables nor for the `Arc` restore that undoes them
+        //    afterwards. A callback on a `feature_flags!` var therefore won't
+        //    observe this transient flip, only committed changes to it. See
+        //    `SystemVars::register_callback`.
         let restore = Arc::clone(&self.system_configuration);
         Arc::make_mut(&mut self.system_configuration).enable_for_item_parsing();
         let res = f(self);
