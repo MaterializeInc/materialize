@@ -663,8 +663,9 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
   - [MCP Server for agents](/integrations/mcp-server/mcp-agent/) to discover and
     query your data products.
 
-  - [MCP Server for developers](/integrations/mcp-server/mcp-developer/) to read
-    the `mz_*` system catalog tables for troubleshooting and observability.
+  - [MCP Server for developers](/integrations/mcp-server/mcp-developer/) to
+    troubleshoot and observe your deployment through the `mz_*` system catalog
+    tables, and to run queries on your objects.
 
 - For help getting started with your data or other questions about Materialize,
   you can schedule a [free guided
