@@ -643,11 +643,29 @@ creating indexes, see [Index Best Practices](/concepts/indexes/#best-practices).
 
 [//]: # "TODO(morsapaes) Extend to suggest third party tools. dbt, Census and Metabase could all fit here to do interesting things as a follow-up."
 
-To get started ingesting your own data from an external system like Kafka, MySQL
-or PostgreSQL, check the documentation for [sources](/sql/create-source/), and
-navigate to **Data** > **Sources** > **New source** in the [Materialize Console](/console/)
-to create your first source.
+- To get started ingesting your own data from an external system like Kafka,
+  MySQL or PostgreSQL, check the documentation for
+  [sources](/sql/create-source/), and navigate to **Data** > **Sources** > **New
+  source** in the [Materialize Console](/console/) to create your first source.
 
-For help getting started with your data or other questions about Materialize,
-you can schedule a [free guided
-trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
+- To have your coding agent (such as Claude Code, Codex, or Cursor) write more
+  accurate Materialize SQL, install the [Materialize agent
+  skills](/integrations/coding-agent-skills/). The skills give your agent access
+  to Materialize documentation and reference material:
+
+  ```bash
+  npx skills add MaterializeInc/agent-skills
+  ```
+
+- To let your agent query your data and inspect your deployment, connect it to
+  Materialize's built-in [MCP servers](/integrations/mcp-server/):
+
+  - [MCP Server for agents](/integrations/mcp-server/mcp-agent/) to discover and
+    query your data products.
+
+  - [MCP Server for developers](/integrations/mcp-server/mcp-developer/) to read
+    the `mz_*` system catalog tables for troubleshooting and observability.
+
+- For help getting started with your data or other questions about Materialize,
+  you can schedule a [free guided
+  trial](https://materialize.com/demo/?utm_campaign=General&utm_source=documentation).
