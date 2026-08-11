@@ -267,6 +267,81 @@ already costs. The only version of the idea that is more than a routing policy i
 one that holds the data in a cheaper form than an arrangement. See
 [What a serving layer would need](#what-a-serving-layer-would-need).
 
+### What the platform actually isolates
+
+Replicas run BestEffort in Kubernetes, with no CPU or memory requests and no
+limits, because that is what makes swap available to them. Many pods share a node.
+Every isolation property below follows from that choice, and the choice is
+deliberate. It is recorded here because the queue this work fixes is the innermost
+of three, and the outer two are not ours.
+
+Kubernetes isolates two resources, and only when asked for them. Memory capacity,
+through `memory.max`, enforced by the kernel killing the container. And CPU share,
+through a `cpu.weight` derived from the CPU request, together with the scheduler
+refusing to overcommit requests. Exclusive cores are a third, available only to
+Guaranteed pods with integer CPU requests under the static CPU manager policy.
+Declaring no requests and no limits opts out of all three.
+
+What that leaves:
+
+* **CPU: a proportional share with a floor of approximately zero.** A BestEffort
+  cgroup gets the minimum `cpu.weight`, so under contention its claim is its weight
+  over the sum of all weights, which against neighbors that do declare requests is
+  a small fraction. Nothing is throttled and idle CPU is free, so the common case
+  is generous and only the tail is unbounded. Avoiding `cpu.max` also avoids the
+  quota-throttling tail latency that comes with declaring a CPU limit, which is a
+  real benefit of this configuration and not only a cost. One property is worth
+  stating because it is counterintuitive: CPU accounting is hierarchical, so adding
+  threads inside the pod does not increase the pod's share. More threads buy
+  parallelism within our slice and queue depth for I/O, never more CPU. That is
+  precisely why more threads can help a swap-bound walk, whose threads are blocked
+  rather than computing, and cannot help a CPU-bound one.
+* **Memory: nothing.** No reservation and no reclaim protection. Global reclaim is
+  node-wide LRU rather than per-cgroup fair, so a neighbor's allocation can swap out
+  our arrangement, which means our swap depth is not a function of our own behavior.
+  BestEffort is also first in line three separate ways: first reclaimed, first
+  evicted by the kubelet because all usage is above a request of zero, and first
+  killed by the kernel, whose `oom_score_adj` for BestEffort containers is the
+  maximum.
+* **Swap device bandwidth: nothing, and this is the weakest link.** There is no
+  per-pod disk throughput API. `ephemeral-storage` bounds capacity rather than
+  IOPS, and the cgroup `io` controller that could throttle a pod is not configured
+  by the kubelet. Even configured it would be unreliable here, because swap-out is
+  driven by kswapd or by direct reclaim rather than by the pod whose growth caused
+  it. So the swap device is shared, unmanaged and unbounded. A neighbor thrashing it
+  adds queueing delay to every one of our swap-in faults, and that delay is
+  invisible in our own counters: the fault count is unchanged and only the service
+  time per fault grows.
+* **Network: nothing.** There is no in-tree bandwidth request or limit. The
+  annotations that exist are implemented by some network plugins and are part of
+  neither the resource model nor scheduling. Persist fetch throughput during
+  hydration is therefore not isolated either, which matters wherever hydration is
+  fetch-clocked rather than CPU-clocked.
+
+Two consequences for this work.
+
+The absent CPU quota means `num_cpus::get()` finds no quota to read and falls back
+to the node's CPU count, so `clusterd` sizes its tokio worker pool to the *node*
+rather than to the replica. On a large node that is dozens of worker threads for a
+small replica, on top of two runtimes' timely workers and tokio's 512-thread
+blocking pool default. Nothing accounts for this, and it argues for the dedicated
+pool in the follow-ups rather than against it.
+
+It also sharpens the section above. Under BestEffort, CPU is not reliably shareable
+either, because our share of it is a function of the neighbors. Peek offloading
+removes the queue inside the process completely and the two queues above it not at
+all. A serving tier carrying a latency or availability target therefore needs a
+different QoS class, which means a different pod, which means it cannot be a
+colocated thread however well it is scheduled.
+
+One thing to establish rather than assume: which mechanism grants these pods swap,
+and whether it bounds swap per pod. Under the kubelet's limited swap behavior the
+per-pod limit is proportional to the memory *request*, which is zero here, so the
+grant comes from elsewhere and `memory.swap.max` is likely unbounded. If it is,
+one replica can consume the node's whole swap device and starve every other pod's
+swap, and the userspace limiter in `src/compute/src/memory_limiter.rs`, which
+counts physical memory plus swap, is the only thing bounding it.
+
 ### The commitment
 
 Two properties make this close to irreversible.
@@ -838,6 +913,20 @@ Ordered by expected value per line of change.
    sensible default at all, since a swap-bound walk is blocked rather than
    computing and wants a limit far above the core count that a resident walk
    wants.
+
+   The counter is unambiguous here in a way it would not be elsewhere.
+   `ru_majflt` counts any read from backing store, but `clusterd` uses no
+   file-backed mappings for arrangement data, so every major fault it takes is
+   anonymous swap-in and no disentangling is required.
+
+   The same measurement points at a remedy that neither a pool nor a thread count
+   can reach. A swap-in is synchronous *because* it is a fault, so the queue depth
+   a walk achieves is bounded by how many threads are faulting. Prefetching the
+   next batch's region with `madvise(MADV_WILLNEED)` while consuming the current
+   one converts those faults into asynchronous readahead, which raises queue depth
+   from one thread and needs no sizing decision at all. That attacks the mechanism
+   rather than buying depth with threads, and it is testable against the E8b
+   fixture directly.
 3. **Scheduler priority instead of a reservation.** Nice values under CFS express
    only weight ratios and are too weak to be useful here, but the fleet's kernels
    run EEVDF, where `sched_setattr` with a short request and a low latency-nice
@@ -846,10 +935,28 @@ Ordered by expected value per line of change.
    per-thread so it applies to exactly the interactive pool, and the usual caveat
    that priority only orders within a cgroup's share does not bite because both
    runtimes sit in one pod. This is the cheapest lever not yet pulled.
-4. **A core reservation, if it is taken, sizes both runtimes down rather than
-   making them unequal.** Timely is barrier-synchronous, so removing a fraction of
-   one core does not cost that fraction of throughput. It desynchronizes the
-   workers and the penalty amplifies at the barrier. This is the long-standing
+4. **A core reservation and pinning, both conditional on leaving BestEffort.**
+   Neither is available today and the reason is the QoS class, not the code. Swap
+   requires declaring no memory limit. Exclusive cores require Guaranteed QoS with
+   integer CPU requests under the static CPU manager policy. A pod cannot be both,
+   so **swap and pinning are mutually exclusive**, and choosing swap chose against
+   pinning. The code already encodes this correctly: pinning is gated on
+   `location.allocation.cpu_exclusive && enable_worker_core_affinity` in
+   `src/controller/src/clusters.rs`, and `cpu_exclusive` is false throughout the
+   size configuration, so the flag is inert for the right reason.
+
+   Worth stating that enabling it anyway under BestEffort would be actively
+   harmful rather than merely useless. `core_affinity::get_core_ids()` returns the
+   whole affinity mask, so a worker would be pinned into the node's shared pool
+   alongside every other pod at the minimum `cpu.weight`. Pinning does not grant
+   the core. It only removes the scheduler's ability to migrate the thread off a
+   busy one, and migration is the only defense available to a cgroup that does not
+   own its cores.
+
+   In a world where the QoS trade is revisited, the reservation comes first.
+   Timely is barrier-synchronous, so removing a fraction of one core does not cost
+   that fraction of throughput. It desynchronizes the workers and the penalty
+   amplifies at the barrier. This is the long-standing
    operating-system noise result from high-performance computing, where daemons
    occupying one core cost far more than their CPU share, and the remedy there was
    to reserve one core out of many. At 32 workers that is 3% and worth it. At 2
@@ -875,6 +982,40 @@ Ordered by expected value per line of change.
    CPU cost, since an idle worker parks in `step_or_park` between maintenance
    ticks. What doubles is thread stacks, per-worker progress tracking, and the
    frontier-following work that gives an idle replica its resting utilization.
+
+   If pinning is ever available, the asymmetric form is the wrong one. Pinning
+   maintenance and floating interactive sounds right because throughput work wants
+   locality and latency work wants placement freedom, but that reasoning applies to
+   a thread pool and the interactive runtime is not one. It is a second
+   barrier-synchronous engine with the same peer count, so floating its workers
+   moves the jitter into its own barrier rather than removing it. Pinning
+   maintenance to every core is also not a reservation. It only fixes where
+   maintenance runs, so interactive lands on a core holding a pinned runnable
+   worker the scheduler can no longer balance away, which is worse than pinning
+   nothing.
+
+   The form that follows from the design is to co-pin worker `i` of both runtimes
+   to the same core. The equal-peer requirement is not only a soundness pairing, it
+   is a locality pairing: interactive worker `i` reads publisher worker `i`'s
+   batches, and under first-touch those pages live wherever the publisher
+   allocated them. Co-pinning keeps a bandwidth-bound cursor walk on the same
+   core's cache hierarchy and the same NUMA node as the data, where pinning the two
+   apart guarantees remote traffic for every cursor step. This also needs no new
+   plumbing, because `set_core_affinity` maps the global peer index modulo the core
+   count and both runtimes agree on that index, so enabling the existing flag on
+   both runtimes already co-pins. The asymmetric variant is the one that would need
+   new code. Contention on the shared core is tolerable because interactive worker
+   `i` is mostly parked, and where it is not, items 3 and the reservation above are
+   what govern the steal.
+
+   Two things to measure rather than assume. Placing maintenance `i` and
+   interactive `i` on sibling hyperthreads of one physical core would give the
+   pairwise read a shared L1 and L2, but siblings share execution resources and a
+   bandwidth-heavy maintenance worker degrades its sibling, which is one of the
+   interference channels the colocation literature says must be controlled
+   explicitly. And `core_affinity::get_core_ids()` enumerates logical CPUs with no
+   guaranteed order, which is why the existing code sorts them, so whether the
+   first N ids are N distinct physical cores is platform-dependent.
 5. **Shared-cache and memory-bandwidth interference during hydration.** Core
    partitioning is not sufficient on its own. A batch task streaming through the
    last-level cache degrades a colocated latency-sensitive task's tail even when
