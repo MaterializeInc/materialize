@@ -75,6 +75,7 @@ causes we have answers for is not a decomposition.
 | A read cannot be answered until the frontier passes its timestamp | measured, E12: with the peek moved off the busy worker, strict serializable still reaches p99 185.8 ms against 5.8 ms at serializable. Also bounded by E9's staleness column, 170 to 1589 ms while hydrating | M5 |
 | Peeks serialize behind DDL on one coordinator thread | asserted elsewhere in this document, not measured here | M6 |
 | A default-isolation read pays a timestamp-oracle round trip | not measured here | M7 |
+| One expensive query makes every object on the replica look stale | **not measured**, E13 running with predictions registered | M8 |
 
 ### The mechanisms
 
@@ -118,23 +119,44 @@ causes we have answers for is not a decomposition.
   coordinator additionally fetches a linearized read timestamp from the oracle, a
   round trip that is distinct from M5 and is known to be slow enough to warn about
   in the code.
+* **M8, serving a peek costs freshness.** The dual of M1 and M2, and the one
+  mechanism here whose cost is *reported to customers*. A maintained collection's
+  write frontier advances only when the worker steps and processes input, so
+  anything occupying the worker holds the frontier still and inflates the reported
+  lag for every object on that replica. One expensive query is therefore a
+  replica-wide freshness event, and the same occupancy that makes a peek slow makes
+  everything else stale. M5 is the return path of the same loop: a stalled frontier
+  then delays the next strict serializable read.
 
 ### What each solution reaches
 
 `argued` means derived from the mechanism and not measured. Note how many cells
 that is.
 
-| | M1 | M2 | M3 | M4 | M5 | M6 | M7 |
-|---|---|---|---|---|---|---|---|
-| S0, another replica | yes, statistically | yes, statistically | yes | no | **yes** | no | no |
-| S1, cooperative peek slicing | yes, `argued` | **no** | no | no | no | no | no |
-| S2, cancellable peeks | the cancellation symptom only | no | no | no | no | no | no |
-| S3, interactive dataflows on a second runtime | no | no | **yes**, measured E7/E9 | no | no | no | no |
-| S4, peeks routed to the interactive runtime | no, it relocates the queue | **yes**, measured E12: p90 129.5 to 4.5 ms | no | no | no | no | no |
-| S5, peeks on another thread | **yes**, measured E1/E11/E8b | **no, measured worse**, E12: p90 148.2 against 129.5 | no | no | no | no | no |
-| S6, budgeting long operator activations | no | yes, `argued` | partial, `argued` | no | no | no | no |
-| S7, a bounded-seek plan for the skewed case | removes the work, `argued` | no | no | no | no | no | no |
-| S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | no | no | no | no | no |
+| | M1 | M2 | M3 | M4 | M5 | M6 | M7 | M8 |
+|---|---|---|---|---|---|---|---|---|
+| S0, another replica | yes, statistically | yes, statistically | yes | no | **yes** | no | no | masks it, `predicted` |
+| S1, cooperative peek slicing | yes, `argued` | **no** | no | no | no | no | no | **little or none, `predicted`** |
+| S2, cancellable peeks | the cancellation symptom only | no | no | no | no | no | no | for cancelled peeks, `argued` |
+| S3, interactive dataflows on a second runtime | no | no | **yes**, measured E7/E9 | no | no | no | no | for dataflow-caused occupancy, `argued` |
+| S4, peeks routed to the interactive runtime | no, it relocates the queue | **yes**, measured E12: p90 129.5 to 4.5 ms | no | no | no | no | no | **yes, `predicted`** |
+| S5, peeks on another thread | **yes**, measured E1/E11/E8b | **no, measured worse**, E12: p90 148.2 against 129.5 | no | no | no | no | no | **yes, `predicted`** |
+| S6, budgeting long operator activations | no | yes, `argued` | partial, `argued` | no | no | no | no | no |
+| S7, a bounded-seek plan for the skewed case | removes the work, `argued` | no | no | no | no | no | no | removes the work, `argued` |
+| S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | no | no | no | no | no | yes, `argued` |
+
+**M8 is predicted to invert the M1 ordering, and that is the point of measuring it.**
+On M1, cooperative slicing wins because it costs no core and bounds the victim's
+wait. On M8 it is predicted to buy little or nothing, because the total worker time
+the walk consumes is unchanged and a frontier cannot advance past data that has not
+been processed. With `peek_yielding_total` at `work:1000000,time:100` against roughly
+one step per pass, peeks take on the order of 99% of the worker while a scan runs, so
+the expected shape is a ramp to a similar peak rather than a step to it. Removing the
+work from the worker, whether by another thread or another runtime, is the only thing
+predicted to hold the frontier moving. If that holds, **neither mechanism dominates
+across both dimensions, which is the strongest argument available for landing both**,
+and it restores a justification the offload lost on the peek-latency side. E13 is
+running against exactly these predictions.
 
 Six entries carry the weight, and two of them correct earlier claims in this
 document.
