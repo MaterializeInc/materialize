@@ -16,6 +16,7 @@ import urllib.request
 
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.helpers.iceberg import (
+    get_polaris_access_token,
     setup_polaris_for_iceberg,
 )
 from materialize.mzcompose.services.materialized import Materialized
@@ -65,6 +66,42 @@ def workflow_default(c: Composition) -> None:
             c.workflow(name)
 
     c.test_parts(list(c.workflows.keys()), process)
+
+
+def workflow_check_vending(c: Composition) -> None:
+    """THROWAWAY probe: does the existing Polaris catalog vend credentials when a
+    client sends `X-Iceberg-Access-Delegation: vended-credentials`?"""
+    c.down(destroy_volumes=True)
+    setup_polaris_for_iceberg(c)  # brings up minio/postgres/polaris, creates catalog+namespace
+    token = get_polaris_access_token(c)
+
+    catalog = "default_catalog"
+    ns = "default_namespace"
+    create_payload = {
+        "name": "vend_probe",
+        "schema": {
+            "type": "struct",
+            "schema-id": 0,
+            "fields": [{"id": 1, "name": "x", "required": False, "type": "long"}],
+        },
+    }
+    print("=== createTable ===")
+    c.exec(
+        "polaris", "curl", "-sS", "-i", "-X", "POST",
+        "-H", f"Authorization: Bearer {token}",
+        "-H", "Content-Type: application/json",
+        f"http://localhost:8181/api/catalog/v1/{catalog}/namespaces/{ns}/tables",
+        "--data-binary", json.dumps(create_payload),
+    )
+    print("\n=== loadTable WITH X-Iceberg-Access-Delegation: vended-credentials ===")
+    resp = c.exec(
+        "polaris", "curl", "-sS", "-X", "GET",
+        "-H", f"Authorization: Bearer {token}",
+        "-H", "X-Iceberg-Access-Delegation: vended-credentials",
+        f"http://localhost:8181/api/catalog/v1/{catalog}/namespaces/{ns}/tables/vend_probe",
+        capture=True,
+    )
+    print(resp.stdout)
 
 
 def workflow_smoke(c: Composition) -> None:
