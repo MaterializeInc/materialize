@@ -648,6 +648,57 @@ Artifacts, including the fixture, the load driver, the open-loop client, the raw
 
 Two consequences for the rest of this document. E2 and E12 are not in tension: E2's fixture is a point lookup behind concurrent *peeks* and E12's is a point lookup behind an *operator activation*, so together they are the cleanest available demonstration that these are distinct mechanisms with disjoint remedies. And the claim elsewhere that the second runtime does not improve peek latency is refuted for this mechanism, so it now holds only for peek-versus-peek queueing.
 
+### E13, the freshness dual: what serving a peek costs everything else on the replica
+
+The dual of E12, and the only cost in this document that is reported to customers. Predictions were registered before the run and two of the four were refuted.
+
+The question. A maintained collection's write frontier advances only when the worker steps and processes input, so anything occupying the worker holds the frontier still and inflates the reported lag for every object on that replica. One expensive query is therefore a replica-wide freshness event. The question is how much, and how it depends on where the walk runs.
+
+Fixture. Cluster `frz` at `scale=1,workers=1`, so the serving thread and the maintaining dataflows are the same thread by construction. A table receiving one row every 100 ms, with freshness measured on a materialized view and an index over it. The peek walks a *different* index, twelve million rows, about 2.25 seconds per walk, returning no rows. One scan every ten seconds, thirteen scans per arm, two independent rounds. The write generator, the subscribe and the pollers all run elsewhere, never on `frz`, and every arm recreates the replica and waits for hydration.
+
+| Arm | Baseline | Peak lag | Debt per scan | Amplification | Max progress gap |
+|---|---|---|---|---|---|
+| Quiet, no peeks | 54 / 57 ms | | | | 109 / 116 ms |
+| Trivial peek, same cadence | 57 / 56 ms | 106 / 118 ms | 146 / 122 ms·s | 1.9 / 2.1 | 987 / 115 ms |
+| **Inline** | 55 / 55 ms | **2340 / 2324 ms** | **2739 / 2762 ms·s** | **42.7 / 42.6** | **2435 / 2352 ms** |
+| Offload | 56 / 57 ms | 120 / 101 ms | 132 / 124 ms·s | 2.1 / 1.8 | 131 / 112 ms |
+| Two-runtime | 57 / 57 ms | 102 / 119 ms | 131 / 120 ms·s | 1.8 / 2.1 | 114 / 114 ms |
+| Two-runtime plus offload | 57 / 56 ms | 100 / 103 ms | 124 / 143 ms·s | 1.8 / 1.8 | 128 / 114 ms |
+| Cooperative slicing, yielding off | 55 ms | 2274 ms | 2572 ms·s | 41.5 | 2286 ms |
+| **Cooperative slicing, yielding on** | 56 ms | **365 ms** | **656 ms·s** | **6.5** | **361 ms** |
+
+Debt is the integral of lag above baseline per scan, which is the quantity that maps to a freshness target. The two rounds agree within a few percent on every arm. The trivial-peek control's one 987 ms sample is one of thirteen and does not recur in the second round.
+
+**Inline serving costs 43x freshness, and the shape is a ramp rather than a step.** Scan-relative lag runs 341, 591, 841, 1091, 1341, 1591, 1841, 2091, 2341 ms and then collapses to 101 ms in a single tick. That is a slope of exactly one: the frontier is frozen, so lag is simply elapsed time since the walk began. A frozen frontier cannot produce a step, which is where the registered prediction was wrong about shape while right about magnitude, 2340 ms against a 2237 ms walk plus one tick.
+
+**The offload and the second runtime remove it completely.** Both land at 100 to 120 ms peak and about 130 ms·s of debt, statistically identical to serving a trivial point lookup and to the quiet baseline. The second runtime's case is structural rather than statistical: the maintenance runtime's walk counter stayed at zero, so that worker provably never saw the walk.
+
+**Cooperative slicing removes most of it, and the registered prediction that it would not was wrong.** Peak falls from 2274 to 365 ms and debt from 2572 to 656 ms·s, and the progress stream never freezes, with a maximum gap of 361 ms against 2286 ms. The reasoning behind the prediction was that preserving total worker time preserves the lag. That is false, because the worker processes input *between* slices, so the lag is bounded by the yielding quantum rather than by the walk duration. What the prediction was reaching for is still latent but untested: this fixture writes one row per 100 ms, so a small share of the worker is ample to keep up, and the ramp reasoning would only apply under a write load heavy enough to need most of the worker. That case is not measured.
+
+Slicing is not a complete fix. It is 3.6x the offload's peak and 5x its debt, and the walk itself costs 7% more, 2311 against 2156 ms. Engagement confirmed the mechanism directly: the same total peek time, 28.0 against 28.3 seconds, split into 13 turns with yielding off and 2809 with it on, which is 216 turns per walk.
+
+**The instrument finding matters more than that gap.** `mz_wallclock_lag_history` is what surfaces freshness, and its `lag` is rounded up to whole seconds and taken as the maximum over the recording interval (`src/cluster-client/src/lib.rs:41-43`). So even at `wallclock_lag_recording_interval = '1s'` the value granularity is 1000 ms. A 55 ms baseline and a 365 ms excursion both report as one second, so **slicing's residual excursion is entirely invisible in the metric we report, and the whole 3.6x gap between slicing and the offload is below the instrument's resolution.** Only the multi-second inline stall shows, as thirteen samples of exactly `2.00s`, one per scan.
+
+Engagement was verified per arm rather than assumed. Thirteen to fifteen walks on the claimed substrate and zero on every other, including zero under `role="maintenance"` in both two-runtime arms.
+
+Instrument resolution, since three were used and they disagree by design.
+
+* `SUBSCRIBE ... WITH (PROGRESS)` was the primary instrument, at millisecond values and about ten samples per second. Its spacing is set by the batch cadence, so `default_timestamp_interval` was lowered from 1000 ms to 100 ms, which requires moving the `min` and `max` bounds too because they clamp it. Effective resolution 100 ms.
+* A `mz_frontiers` poller confirmed the index behaves like the materialized view, an inline excursion of +2242 ms, so the effect is not specific to the materialized-view sink. But the compute controller republishes only on its one second maintenance tick, so its effective resolution is about 1000 ms and its baselines read 750 to 1500 ms where the truth is 55 ms.
+* `mz_wallclock_lag_history` confirmed magnitude only, for the rounding reason above.
+
+Two methodology traps worth recording.
+
+During an inline walk **no progress rows arrive at all**, and the row that ends the gap reports a *small* lag because the frontier jumps in one step. Reading per-row lag would have reported a 45 ms stall where the truth is 2340 ms. The analysis reconstructs the staircase as `lag(W) = W - max{frontier_i : wall_i <= W}` instead.
+
+`mz_timely_step_duration_seconds` cannot see peek occupancy at all. Even in the inline arm no step exceeded 128 ms, because peeks are served *after* `step_or_park` returns rather than inside it. That is the same asymmetry that makes M1 and M2 separable: operator work is inside the step and peek work is outside it, so E12's use of the histogram to attribute long *operator* activations was sound and the same use here would have been wrong.
+
+What is not established. The box had 32 cores, so the offloaded walking thread never competed for a core with the worker, and the CPU contention the offload's own configuration documentation warns about is not exercised. On a core-saturated replica the offload's freshness result would be worse than measured, and this is the main caveat on it. There is also no sub-second instrument for the index, since one would require a dataflow on the measured worker.
+
+**Headline, and it is a partial confirmation rather than a clean inversion.** The offload's rank does flip: E12 found it 17% worse than inline on peek latency under operator contention, and here it is about 20x better on freshness. But the ordering as a whole does not reverse, because the second runtime is best or tied-best on **both** axes. And once the reported metric's one second granularity is taken into account, slicing and the offload are practically equivalent on freshness, which leaves the offload without a measured axis on which it is uniquely best.
+
+Artifacts, including a two-mode reproduce script, the fixtures, the harness, the staircase analysis and 75 raw CSVs, are under the session scratchpad at `freshness/`, listed in its `results_table.txt`.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.

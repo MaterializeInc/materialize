@@ -75,7 +75,7 @@ causes we have answers for is not a decomposition.
 | A read cannot be answered until the frontier passes its timestamp | measured, E12: with the peek moved off the busy worker, strict serializable still reaches p99 185.8 ms against 5.8 ms at serializable. Also bounded by E9's staleness column, 170 to 1589 ms while hydrating | M5 |
 | Peeks serialize behind DDL on one coordinator thread | asserted elsewhere in this document, not measured here | M6 |
 | A default-isolation read pays a timestamp-oracle round trip | not measured here | M7 |
-| One expensive query makes every object on the replica look stale | **not measured**, E13 running with predictions registered | M8 |
+| One expensive query makes every object on the replica look stale | measured, E13: a 2.24 s walk drives reported lag from 55 ms to 2340 ms, a 43x amplification, as a ramp of slope one | M8 |
 
 ### The mechanisms
 
@@ -126,7 +126,9 @@ causes we have answers for is not a decomposition.
   lag for every object on that replica. One expensive query is therefore a
   replica-wide freshness event, and the same occupancy that makes a peek slow makes
   everything else stale. M5 is the return path of the same loop: a stalled frontier
-  then delays the next strict serializable read.
+  then delays the next strict serializable read. A freshness stall is always a ramp
+  of slope one rather than a step, because a frozen frontier means the lag is
+  elapsed time since it froze, and it recovers in a single tick when the walk ends.
 
 ### What each solution reaches
 
@@ -135,28 +137,41 @@ that is.
 
 | | M1 | M2 | M3 | M4 | M5 | M6 | M7 | M8 |
 |---|---|---|---|---|---|---|---|---|
-| S0, another replica | yes, statistically | yes, statistically | yes | no | **yes** | no | no | masks it, `predicted` |
-| S1, cooperative peek slicing | yes, `argued` | **no** | no | no | no | no | no | **little or none, `predicted`** |
+| S0, another replica | yes, statistically | yes, statistically | yes | no | **yes** | no | no | masks it, `argued` |
+| S1, cooperative peek slicing | yes, `argued` | **no** | no | no | no | no | no | **mostly**, measured E13: 2274 to 365 ms peak |
 | S2, cancellable peeks | the cancellation symptom only | no | no | no | no | no | no | for cancelled peeks, `argued` |
 | S3, interactive dataflows on a second runtime | no | no | **yes**, measured E7/E9 | no | no | no | no | for dataflow-caused occupancy, `argued` |
-| S4, peeks routed to the interactive runtime | no, it relocates the queue | **yes**, measured E12: p90 129.5 to 4.5 ms | no | no | no | no | no | **yes, `predicted`** |
-| S5, peeks on another thread | **yes**, measured E1/E11/E8b | **no, measured worse**, E12: p90 148.2 against 129.5 | no | no | no | no | no | **yes, `predicted`** |
+| S4, peeks routed to the interactive runtime | no, it relocates the queue | **yes**, measured E12: p90 129.5 to 4.5 ms | no | no | no | no | no | **yes**, measured E13: 102 ms peak, maintenance never sees the walk |
+| S5, peeks on another thread | **yes**, measured E1/E11/E8b | **no, measured worse**, E12: p90 148.2 against 129.5 | no | no | no | no | no | **yes**, measured E13: 101 ms peak, on a box with core headroom |
 | S6, budgeting long operator activations | no | yes, `argued` | partial, `argued` | no | no | no | no | no |
 | S7, a bounded-seek plan for the skewed case | removes the work, `argued` | no | no | no | no | no | no | removes the work, `argued` |
 | S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | no | no | no | no | no | yes, `argued` |
 
-**M8 is predicted to invert the M1 ordering, and that is the point of measuring it.**
-On M1, cooperative slicing wins because it costs no core and bounds the victim's
-wait. On M8 it is predicted to buy little or nothing, because the total worker time
-the walk consumes is unchanged and a frontier cannot advance past data that has not
-been processed. With `peek_yielding_total` at `work:1000000,time:100` against roughly
-one step per pass, peeks take on the order of 99% of the worker while a scan runs, so
-the expected shape is a ramp to a similar peak rather than a step to it. Removing the
-work from the worker, whether by another thread or another runtime, is the only thing
-predicted to hold the frontier moving. If that holds, **neither mechanism dominates
-across both dimensions, which is the strongest argument available for landing both**,
-and it restores a justification the offload lost on the peek-latency side. E13 is
-running against exactly these predictions.
+**M8 was predicted to invert the M1 ordering. It inverts one row, not the ordering,
+and the prediction about slicing was wrong.** Registered before E13 ran: cooperative
+slicing would buy little or nothing on freshness, because the total worker time the
+walk consumes is unchanged and a frontier cannot advance past unprocessed data. E13
+refuted that. Slicing cuts the peak from 2274 to 365 ms and the debt from 2572 to
+656 ms·s, because the worker processes input *between* slices, so the lag is bounded
+by the yielding quantum rather than by the walk duration. The reasoning confused
+throughput with recency. What it was reaching for is still latent and untested: E13
+writes one row per 100 ms, so a small share of the worker is ample, and the ramp
+argument would only apply under a write load heavy enough to need most of it.
+
+What did invert is **the offload's rank**. E12 measured it 17% worse than inline on
+peek latency under operator contention; E13 measures it about 20x better than inline
+on freshness. So it is not dominated on every axis at once, which is more than the
+peek results alone left it with.
+
+But the ordering as a whole does not reverse, because **S4 is best or tied-best on
+both axes**, and two further findings close the gap that would have justified S5 on
+freshness alone. Slicing's residual excursion is 3.6x the offload's peak, and
+`mz_wallclock_lag_history` rounds lag up to whole seconds and reports the maximum over
+its interval (`src/cluster-client/src/lib.rs:41-43`), so **a 55 ms baseline and a
+365 ms excursion both surface as one second and the entire gap is below the resolution
+of the metric we report.** Only the multi-second inline stall is visible at all. And
+E13 ran on a 32-core box, so the offloaded thread never competed for a core, which is
+the condition its own configuration documentation warns about.
 
 Six entries carry the weight, and two of them correct earlier claims in this
 document.
@@ -267,13 +282,16 @@ corrections above.
 * **S1 is the right default.** It costs no core and no thread, it reaches M1, it is
   predicted to match or beat S5 on both fixtures this document leans on, and it
   removes S5's cliff for free by making the fallback path preemptible.
-* **S5's unique justification is now narrow, and narrower than earlier drafts of
-  this document claimed.** It does not reach M2, and E12 measured it 17% worse there
-  than doing nothing. On M1 it competes with S1 and is predicted to lose on E1 and
-  E11. What is left is the swapped walk's own duration, which is unattributed, and
-  the possibility that S1's quantum floor is too high on a busy replica, which is
-  unmeasured. It should not be described as the peek fix until one of those two is
-  established, and if it ships it wants a routing rule that keeps it away from M2.
+* **S5 is dominated by the pair S1 plus S4 on every measured axis.** On M1 it
+  competes with S1 and is predicted to lose on E1 and E11. On M2 E12 measured it 17%
+  worse than doing nothing. On M8 it ties S4, and its advantage over S1 there sits
+  below the resolution of the reported metric. What is left is the swapped walk's own
+  duration, which this document records as unattributed, and the possibility that
+  S1's quantum floor is too high on a busy replica, which is unmeasured. So the
+  decision rule is narrow but real: **if S4 ships, S5 adds nothing measured. If S4
+  does not ship, S5 is the cheap way to get the freshness result that S1 only mostly
+  gets, without a port or a fleet roll.** Either way it wants a routing rule that
+  keeps it away from M2, where it is a regression.
 * **S2 is real under S1 and cosmetic under S5**, the reverse of what an earlier
   draft said. A started `spawn_blocking` closure cannot be aborted, as this
   document's own follow-up list records, so on the offload path a cancel flag ends
