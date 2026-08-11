@@ -48,7 +48,7 @@ explain with=keys
 Filter #4 = #3 AND #1 = #0
   Get t1
 ----
-Filter (#4 = #3) AND (#1 = #0) // { keys: "([0, 2, 3], [0, 2, 4], [1, 2, 3], [1, 2, 4])" }
+Filter (#4 = #3) AND (#1 = #0) // { keys: "([0, 2, 3])" }
   Get t1 // { keys: "([0, 1, 2, 3, 4])" }
 
 # Project with equalities between key components and
@@ -57,7 +57,23 @@ explain with=keys
 Filter #0 = #1 AND #3 = 5
   Get t1
 ----
-Filter (#0 = #1) AND (#3 = 5) // { keys: "([0, 2, 4], [1, 2, 4])" }
+Filter (#0 = #1) AND (#3 = 5) // { keys: "([0, 2, 4])" }
+  Get t1 // { keys: "([0, 1, 2, 3, 4])" }
+
+# A column equated to a literal is constant, and its entire equivalence class
+# drops out of every key, regardless of predicate order.
+explain with=keys
+Filter #3 = 5 AND #3 = #4
+  Get t1
+----
+Filter (#3 = 5) AND (#3 = #4) // { keys: "([0, 1, 2])" }
+  Get t1 // { keys: "([0, 1, 2, 3, 4])" }
+
+explain with=keys
+Filter #3 = #4 AND #3 = 5
+  Get t1
+----
+Filter (#3 = #4) AND (#3 = 5) // { keys: "([0, 1, 2])" }
   Get t1 // { keys: "([0, 1, 2, 3, 4])" }
 
 

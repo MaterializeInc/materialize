@@ -676,21 +676,19 @@ mod unique_keys {
 
     use super::arity::Arity;
     use super::{Analysis, Derived, DerivedBuilder, Lattice};
-    use mz_expr::MirRelationExpr;
+    use mz_expr::{MirRelationExpr, UniqueKeySets};
 
     /// Analysis that determines the unique keys of relation expressions.
     ///
-    /// The analysis value is a `Vec<Vec<usize>>`, which should be interpreted as a list
-    /// of sets of column identifiers, each set of which has the property that there is at
-    /// most one instance of each assignment of values to those columns.
-    ///
-    /// The sets are minimal, in that any superset of another set is removed from the list.
-    /// Any superset of unique key columns are also unique key columns.
+    /// The analysis value is a [`UniqueKeySets`]: a minimal antichain of
+    /// canonical unique keys together with the column equivalences under which
+    /// any key column can substitute for an equivalent one. Any superset of a
+    /// described key is also a unique key.
     #[derive(Debug)]
     pub struct UniqueKeys;
 
     impl Analysis for UniqueKeys {
-        type Value = Vec<Vec<usize>>;
+        type Value = UniqueKeySets;
 
         fn announce_dependencies(builder: &mut DerivedBuilder) {
             builder.require(Arity);
@@ -715,23 +713,19 @@ mod unique_keys {
                     ..
                 } => {
                     // We have information from `typ` and from the analysis.
-                    // We should "join" them, unioning and reducing the keys.
-                    let mut keys = typ.keys.clone();
+                    // Both describe the same collection, so we may take the
+                    // union of their knowledge.
+                    let mut keys = UniqueKeySets::from_keys(typ.keys.clone());
                     if let Some(o) = depends.bindings().get(i) {
                         if let Some(ks) = results.get(*o) {
-                            for k in ks.iter() {
-                                antichain_insert(&mut keys, k.clone());
-                            }
-                            keys.extend(ks.iter().cloned());
-                            keys.sort();
-                            keys.dedup();
+                            keys.merge(ks);
                         }
                     }
                     keys
                 }
                 _ => {
                     let arity = depends.results::<Arity>();
-                    expr.keys_with_input_keys(
+                    expr.unique_keys_with_input_keys(
                         offsets.iter().map(|o| arity[*o]),
                         offsets.iter().map(|o| &results[*o]),
                     )
@@ -744,42 +738,19 @@ mod unique_keys {
         }
     }
 
-    fn antichain_insert(into: &mut Vec<Vec<usize>>, item: Vec<usize>) {
-        // Insert only if there is not a dominating element of `into`.
-        if into.iter().all(|key| !key.iter().all(|k| item.contains(k))) {
-            into.retain(|key| !key.iter().all(|k| item.contains(k)));
-            into.push(item);
-        }
-    }
-
-    /// Lattice for sets of columns that define a unique key.
-    ///
-    /// An element `Vec<Vec<usize>>` describes all sets of columns `Vec<usize>` that are a
-    /// superset of some set of columns in the lattice element.
+    /// Lattice for unique keys, ordered by the family of column sets each
+    /// value describes.
     struct UKLattice;
 
-    impl Lattice<Vec<Vec<usize>>> for UKLattice {
-        fn top(&self) -> Vec<Vec<usize>> {
-            vec![vec![]]
+    impl Lattice<UniqueKeySets> for UKLattice {
+        fn top(&self) -> UniqueKeySets {
+            UniqueKeySets::at_most_one_row()
         }
-        fn meet_assign(&self, a: &mut Vec<Vec<usize>>, b: Vec<Vec<usize>>) -> bool {
-            a.sort();
-            a.dedup();
-            let mut c = Vec::new();
-            for cols_a in a.iter_mut() {
-                cols_a.sort();
-                cols_a.dedup();
-                for cols_b in b.iter() {
-                    let mut cols_c = cols_a.iter().chain(cols_b).cloned().collect::<Vec<_>>();
-                    cols_c.sort();
-                    cols_c.dedup();
-                    antichain_insert(&mut c, cols_c);
-                }
-            }
-            c.sort();
-            c.dedup();
-            std::mem::swap(a, &mut c);
-            a != &mut c
+        fn meet_assign(&self, a: &mut UniqueKeySets, b: UniqueKeySets) -> bool {
+            let met = a.meet(&b);
+            let changed = met != *a;
+            *a = met;
+            changed
         }
     }
 }
@@ -1349,7 +1320,7 @@ mod explain {
                     &*derived.results::<super::UniqueKeys>(),
                 ) {
                     let analyses = annotations.entry(expr).or_default();
-                    analyses.keys = Some(keys.clone());
+                    analyses.keys = Some(keys.keys().to_vec());
                 }
             }
 
@@ -1405,7 +1376,7 @@ mod cardinality {
 
     use mz_expr::{
         BinaryFunc, Id, JoinImplementation, MirRelationExpr, MirScalarExpr, TableFunc, UnaryFunc,
-        VariadicFunc,
+        UniqueKeySets, VariadicFunc,
     };
     use mz_ore::cast::{CastFrom, CastLossy, TryCastFrom};
     use mz_repr::GlobalId;
@@ -1710,14 +1681,14 @@ mod cardinality {
         fn filter(
             &self,
             predicates: &Vec<MirScalarExpr>,
-            keys: &Vec<Vec<usize>>,
+            keys: &UniqueKeySets,
             input: CardinalityEstimate,
         ) -> CardinalityEstimate {
             // TODO(mgree): should we try to do something for indices built on multiple columns?
             let mut unique_columns = BTreeSet::new();
-            for key in keys {
+            for key in keys.keys() {
                 if key.len() == 1 {
-                    unique_columns.insert(key[0]);
+                    unique_columns.extend(keys.equivalent_columns(key[0]));
                 }
             }
 
@@ -1933,9 +1904,11 @@ mod cardinality {
 
                         let arity = arity[index - offset];
                         let keys = &keys[index - offset];
-                        for key in keys {
+                        for key in keys.keys() {
                             if key.len() == 1 {
-                                unique_columns.insert(key_offset + key[0], idx);
+                                for col in keys.equivalent_columns(key[0]) {
+                                    unique_columns.insert(key_offset + col, idx);
+                                }
                             }
                         }
                         key_offset += arity;
