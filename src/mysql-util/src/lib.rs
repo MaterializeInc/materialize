@@ -43,7 +43,7 @@ pub mod decoding;
 pub use decoding::pack_mysql_row;
 
 pub mod probe;
-pub use probe::KeyProber;
+pub use probe::{KeyProber, MAX_KEY_LENGTH};
 
 mod aws_rds;
 
