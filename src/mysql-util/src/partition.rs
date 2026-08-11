@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mz_ore::cast::CastLossy;
+use mz_ore::cast::CastFrom;
 use mz_ore::str::redact;
 
 use crate::{KeyProber, MySqlError, QualifiedTableRef};
@@ -22,7 +22,7 @@ pub async fn partition_table(
     pk_col: &str,
     num_workers: usize,
     estimated_row_count: u64,
-    min_rows_per_worker: u64,
+    min_split_threshold: u64,
 ) -> Result<Vec<String>, MySqlError> {
     let (schema_name, table_name) = (table.schema_name, table.table_name);
     let mut db = KeyProber::new(conn, table, pk_col);
@@ -30,7 +30,7 @@ pub async fn partition_table(
         &mut db,
         num_workers,
         estimated_row_count,
-        min_rows_per_worker,
+        min_split_threshold,
     )
     .await?;
     tracing::trace!(
@@ -59,7 +59,7 @@ async fn partition(
     db: &mut KeyProber<'_>,
     workers: usize,
     estimated_row_count: u64,
-    min_rows_per_worker: u64,
+    min_split_threshold: u64,
 ) -> Result<Vec<String>, MySqlError> {
     if workers <= 1 {
         return Ok(Vec::new());
@@ -70,10 +70,9 @@ async fn partition(
     // Estimates tend to get more useful as smaller chunks, so break up the table into at least 1/8ths (2 workers * 4)
     // before selecting partitions. Breaking down to smaller partitions results in more accurate splits, so we keep the
     // 4x multiple of the worker count for > 2 workers.
-    let target_max_rows_per_prefix = (f64::cast_lossy(estimated_row_count)
-        / f64::cast_lossy(workers * 4))
-    .max(f64::cast_lossy(min_rows_per_worker))
-    .max(1.0);
+    let target_max_rows_per_prefix = (estimated_row_count / u64::cast_from(workers * 4))
+        .max(min_split_threshold)
+        .max(1);
 
     compute_boundaries(db, workers, estimated_row_count, target_max_rows_per_prefix).await
 }
@@ -82,7 +81,7 @@ async fn compute_boundaries(
     db: &mut KeyProber<'_>,
     workers: usize,
     estimated_row_count: u64,
-    target_rows_per_prefix: f64,
+    target_rows_per_prefix: u64,
 ) -> Result<Vec<String>, MySqlError> {
     // BFS of prefixes, splitting until estimates fall under the target.
     let mut ordered_prefixes = vec![Prefix {
@@ -96,7 +95,7 @@ async fn compute_boundaries(
         let mut next_ordered_prefixes: Vec<Prefix> = vec![];
         let mut split_any = false;
         for prefix in ordered_prefixes {
-            if f64::cast_lossy(prefix.estimated_rows) > target_rows_per_prefix {
+            if prefix.estimated_rows > target_rows_per_prefix {
                 split_any = true;
                 // Partitioning children can drop some rows from the parent prefix range. This
                 // is acceptable given the approximate nature of the algorithm.
@@ -114,11 +113,8 @@ async fn compute_boundaries(
 
     // Recompute the total after partitioning the table to get more even splits because the actual row count and the
     // granularly estimated row count can diverge from the original top level estimate.
-    let total: f64 = ordered_prefixes
-        .iter()
-        .map(|r| f64::cast_lossy(r.estimated_rows))
-        .sum();
-    let per_worker = total / f64::cast_lossy(workers);
+    let total: u64 = ordered_prefixes.iter().map(|r| r.estimated_rows).sum();
+    let per_worker = total / u64::cast_from(workers);
     tracing::debug!(
         prefixes = ordered_prefixes.len(),
         total_estimated_rows = total,
@@ -126,13 +122,13 @@ async fn compute_boundaries(
         "assigning prefixes to workers"
     );
     let mut boundaries: Vec<String> = Vec::with_capacity(workers - 1);
-    let mut rows_seen = 0.0;
+    let mut rows_seen = 0;
     for prefix in &ordered_prefixes {
         if boundaries.len() == workers - 1 {
             break;
         }
-        rows_seen += f64::cast_lossy(prefix.estimated_rows);
-        if rows_seen >= f64::cast_lossy(boundaries.len() + 1) * per_worker {
+        rows_seen += prefix.estimated_rows;
+        if rows_seen >= u64::cast_from(boundaries.len() + 1) * per_worker {
             // The final prefix's end is None (open), it can never be a boundary.
             if let Some(end) = &prefix.end {
                 boundaries.push(end.clone());
