@@ -110,6 +110,47 @@ Each row is a measured experiment; the numbers and method are in
 The first three rows are peeks, the last three are rendered dataflows, and no row
 is moved by both. That is the fork.
 
+#### Why the fork exists: preemption, not capacity
+
+The fork is not an artifact of which experiments happened to be run. It follows
+from there being two independent properties, and each mechanism supplying exactly
+one of them.
+
+*Preemptibility* is whether a short request can displace a long one that is
+already running. In a non-preemptive work-conserving server, what a short request
+waits for is the residual of the job in progress, and that residual scales with
+the second moment of the service-time distribution rather than with utilization. A
+timely worker's per-activation service time spans six orders of magnitude, from a
+point lookup to a full arrangement scan, so the second moment is enormous and the
+tail diverges even at very low load. E11's timeline is the signature. Lookups
+arriving behind the skewed one complete at a fixed instant rather than after a
+fixed delay, 2019.9 ms then 1921, 1821, 1721 and downward to 235.8 ms. Every
+arrival is waiting for the same completion, which is residual service time and not
+contention. Preemption is the only remedy for a heavy-tailed service-time
+distribution, which is a known result and not specific to this system.
+
+*Capacity* is whether a core is free to run on. It is a separate question and
+neither mechanism supplies it.
+
+Peek offloading makes a walk preemptible and adds no capacity, which is why it
+returns a 33x tail reduction on an otherwise unchanged replica. A second timely
+runtime adds another non-preemptive server, so for peeks it adds a queue without
+making anything preemptible, which is why the direct A/B found it inert. Where the
+second runtime does win, the unit of work is a rendered dataflow, and there the
+problem was never queueing behind one long activation. It was that the only
+dataflow scheduler available was saturated.
+
+Read that way, an OS thread is a forced choice rather than a preferred one. Three
+schedulers exist in the process. Timely yields at operator boundaries, tokio
+yields at await points, and a cursor walk offers neither. Only the kernel preempts
+code that does not cooperate. The one alternative is to make the walk cooperative
+by chunking it and checking for other pending work every so many rows, which needs
+no thread but does need a re-entrant cursor position and a quantum to tune. That
+is not the same move as
+[yielding in maintenance](#why-not-yield-for-interactivity-in-one-runtime), which
+is ruled out on different grounds. A peek walk consumes no input and consolidates
+nothing, so run-to-completion is not part of its contract.
+
 #### Implications
 
 **If only one of these ships, it should be peek offloading.** It carries the
@@ -195,6 +236,35 @@ logging dataflows sit on the same stalled maintenance workers, so their frontier
 stall too, and "introspection stays answerable" means answerable with stale data.
 That is the useful property during an incident, but it is a staleness claim, not a
 freshness one.
+
+### CPU is shareable, memory is not
+
+Colocation can only ever be a CPU story, and that bounds what this architecture
+can be asked to deliver.
+
+CPU is preemptible, so a latency-sensitive thread can be made to win against a
+batch thread by scheduling alone, at no cost when nothing contends. An allocation
+cannot be preempted, there is no fair share for resident memory, and the kernel's
+remedy is to kill the process. E10 measured hydration memory as a sawtooth
+overshooting its steady state by about 3.9x at container level, and the first swap
+fixture lost a replica to exactly that transient. A colocated interactive path
+dies with it, and the shared-fate panic makes that structural rather than
+incidental.
+
+So the useful split is by resource rather than by workload.
+
+* Colocate for CPU. Latency isolation inside one replica is a preemption problem,
+  it is solvable in process, and it duplicates no state.
+* Separate processes for memory and availability. Anything carrying an
+  availability target needs its own memory limit, because no amount of scheduling
+  work substitutes for one.
+
+This also sharpens what a serving replica would have to be. Routing peeks to a
+second ordinary replica does isolate memory, and it pays a full second copy of the
+state and of the maintenance CPU to do it, which is what an ordinary replica
+already costs. The only version of the idea that is more than a routing policy is
+one that holds the data in a cheaper form than an arrangement. See
+[What a serving layer would need](#what-a-serving-layer-would-need).
 
 ### The commitment
 
@@ -721,6 +791,157 @@ decision rather than a patch.
   clean fix is to keep the maintenance runtime label-free, matching the
   pre-existing series, and label only the interactive runtime, so enabling the
   feature adds new series rather than relabeling existing ones.
+
+### The incremental path from here
+
+What is on the branch is deliberately the least opinionated version of the idea.
+It moves a walk to another thread and it counts which substrate ran it. It picks
+no pool sizing policy, asserts no scheduling priority, measures no shared-cache
+interference, and encodes no routing policy beyond a flag. That is the right first
+step rather than a shortcut, because each item below is a separate decision with
+its own evidence requirement, and none of them has to land with the first one.
+Recorded here so the sequence is a plan rather than a rediscovery.
+
+Ordered by expected value per line of change.
+
+1. **A dedicated bounded pool for interactive work, with a chunked and cancellable
+   walk.** The walk runs on tokio's blocking pool, which is built for IO-blocking
+   work and is documented as unsuitable for CPU-bound work. Three consequences.
+   The pool is effectively unbounded at its 512-thread default, so the in-flight
+   limit has to be a hand-maintained counter rather than queue depth, which is
+   where a leak already occurred and was fixed. The pool is shared with persist's
+   blocking IO, so a burst of walks and a burst of blob operations contend with no
+   discipline and no way to express a preference. And a started blocking closure
+   cannot be aborted, so a cancelled peek still spends its full walk and still
+   holds its compaction hold for the duration. That last one matters most:
+   cancellability is the one structural advantage interactive work has over
+   maintenance work, and the current substrate discards it. A fixed pool behind a
+   bounded queue makes the limit structural, unshares from persist, and gives the
+   walk somewhere to poll a cancel flag.
+2. **Per-walk fault and context-switch accounting.** `getrusage(RUSAGE_THREAD)`
+   bracketed around the walk in both arms, reported under the `substrate` label
+   the walk counter already carries. `src/metrics/src/rusage.rs` already does the
+   same call with `RUSAGE_SELF`, so the dependency and the pattern exist. This is
+   worth doing early because E8b is the largest margin on the branch and its
+   mechanism is unattributed. The offloaded walk was not merely more predictable
+   but faster on the same data at the same swap depth, 2.3 s against 3.6, 4.7 and
+   56.4 s, and preemption cannot explain that, because preemption governs the
+   other peeks' latency rather than this walk's own duration. Equal major-fault
+   counts with different durations would mean fault queue depth, since swap-in is
+   a synchronous per-thread major fault and concurrency comes only from the number
+   of threads faulting at once. Inline taking *more* faults for the same walk
+   would mean the interleaved timely working set is re-evicting the walk's pages,
+   and the lesson would be locality rather than parallelism. The two point at
+   opposite pool sizings, so this measurement has to precede item 1's sizing
+   decision. It also settles whether `index_peek_offload_max_inflight` has one
+   sensible default at all, since a swap-bound walk is blocked rather than
+   computing and wants a limit far above the core count that a resident walk
+   wants.
+3. **Scheduler priority instead of a reservation.** Nice values under CFS express
+   only weight ratios and are too weak to be useful here, but the fleet's kernels
+   run EEVDF, where `sched_setattr` with a short request and a low latency-nice
+   gives a thread an earlier deadline and lets it preempt a batch thread promptly
+   rather than at a slice boundary. It costs nothing when nothing contends, it is
+   per-thread so it applies to exactly the interactive pool, and the usual caveat
+   that priority only orders within a cgroup's share does not bite because both
+   runtimes sit in one pod. This is the cheapest lever not yet pulled.
+4. **A size-dependent core reservation rather than doubled workers.** Timely is
+   barrier-synchronous, so removing a fraction of one core does not cost that
+   fraction of throughput. It desynchronizes the workers and the penalty
+   amplifies at the barrier. This is the long-standing operating-system noise
+   result from high-performance computing, where daemons occupying one core cost
+   far more than their CPU share, and the remedy there was to reserve one core out
+   of many. At 32 workers that is 3% and worth it. At 2 workers it is 50% and
+   absurd. So the policy should be conditional on replica size: reserve one
+   non-pinned core at large worker counts and colocate with priority at small
+   ones. Note that the current design does neither, because
+   `interactive_compute_arg` passes the same worker count and therefore doubles
+   timely threads at every size. That is the mechanism behind the measured
+   observation that the two-runtime ratio does not improve with replica size. A
+   fixed reservation would improve with size, and doubling cannot.
+5. **Shared-cache and memory-bandwidth interference during hydration.** Core
+   partitioning is not sufficient on its own. A batch task streaming through the
+   last-level cache degrades a colocated latency-sensitive task's tail even when
+   the two never share a core, and the published remedy is to throttle the batch
+   task rather than to fence it harder. Hydration is the batch task here, it is
+   pure throughput work with no deadline, and the knobs already exist in
+   `compute_hydration_concurrency` and `dataflow_max_inflight_bytes`. The
+   measurement is peek p99 against cache-miss rate during a hydration, and if the
+   effect is material the answer is a feedback loop from interactive queueing to
+   hydration concurrency. Deliberately last of the mechanisms, because it is the
+   only one that needs a controller.
+6. **Routing and admission that follow the fork.** Peeks want a substrate and
+   rendered dataflows want a runtime, so one routing decision for both throws the
+   distinction away. Beyond that, offloading unconditionally pays a handoff for
+   peeks that would have finished immediately, which is visible as the flat 105 ms
+   floor where the offload buys nothing. Response time is minimized by serving
+   short requests first, which requires a size estimate, and the estimate already
+   exists: the arrangement key bounds behind `EXPLAIN MEMORY BOUND` and
+   `mz_arrangement_distinct_keys` classify a peek as cheap or expensive before
+   dispatch. Short peeks stay inline, long peeks offload. That reuses shipped
+   machinery rather than adding a heuristic.
+
+### What a serving layer would need
+
+A serving layer is latency-sensitive and cannot be cleanly separated from index
+maintenance, because the thing it serves is the maintained index. The preceding
+sections cover the scheduling half of that problem. This section records the
+other half, which is that a serving structure is a different data structure and
+not a different scheduler, and what our consistency model demands of it.
+
+The constraint that shapes everything is multi-versioning, and it is stronger than
+it first appears. It is tempting to assume a serving structure can hold one
+consolidated snapshot at the latest timestamp, on the grounds that a point lookup
+names a single time. It cannot. Timestamp selection picks a timestamp valid across
+every object the query reads, and inside a transaction across the entire
+timedomain the transaction may go on to touch, which is fixed before those objects
+are known. A read that cannot be satisfied in that domain gets
+`RelationOutsideTimeDomain` rather than a slower answer. A single-version store
+collapses `[since, upper]` to a point, and a point almost never intersects the
+range a multi-object query needs. This applies to serializable reads and not only
+to strict serializable ones, so it is not avoidable by scoping the feature to a
+weaker isolation level.
+
+That removes most of the naive cost advantage, and it is worth being precise about
+which part survives.
+
+* Versions must stay. Retaining history back to `since` is the expensive part of
+  an arrangement and it is not optional for a structure that answers reads.
+* Diffs need not. A serving structure can hold consolidated values per version
+  rather than a stream of updates to be consolidated at read time.
+* The spine need not. An arrangement is a log-structured merge of updates, so a
+  point lookup consults every batch and the write side pays merge amortization. A
+  serving structure can be hash-keyed per version and immutable between refreshes.
+
+So the shape is multi-version concurrency control over a hash index, not a
+snapshot map. That is meaningfully cheaper on point-lookup cost and on read-side
+constant factors, and only modestly cheaper on memory.
+
+This is also where the closest precedent stops applying. Noria's reader nodes are
+the same idea, read-optimized state derived from the dataflow and read without
+entering the dataflow scheduler at all, but they hold the latest version only.
+The point where that design diverges from what we need is exactly our consistency
+model, so it should be read for the structure and not for the storage.
+
+Two candidate substrates, with what each is actually good for.
+
+* RocksDB, already in the tree for upsert state. It turns index memory into disk
+  plus a bounded block cache, which changes the cost curve rather than the
+  latency, and its reads are re-entrant from any thread, so the timely worker
+  leaves the read path entirely instead of being scheduled around. Versioning has
+  to be built on top and keyed by our timestamps, at which point retention becomes
+  the cost driver just as it is for an arrangement.
+* Persist directly. Parts are key-sorted and carry column statistics, and filter
+  pushdown already prunes on them, so a lookup on the shard's sort key is feasible
+  with no index at all. It is bounded by object-store latency, so it sits in the
+  tens to hundreds of milliseconds. That is a cost play for workloads that cannot
+  justify an index, in a different latency class from an arrangement, and it should
+  not be presented as a serving tier.
+
+An external key-value cache is not on that list. It adds a second consistency
+domain and a cache-invalidation story in order to keep the guarantee that is the
+only reason to own the store. Sinking into whatever store a user already runs is
+the existing answer and a better one.
 
 ## Testing strategy
 
