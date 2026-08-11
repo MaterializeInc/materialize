@@ -85,13 +85,9 @@ pub(crate) struct PendingPeek {
 #[derive(Debug)]
 pub enum PeekResponseUnary {
     Rows(Box<dyn RowIterator + Send + Sync>),
-    Error(String),
+    Error(AdapterError),
     Canceled,
     /// A dependency was dropped during execution.
-    ///
-    /// N.B. This is a bit of a workaround for the fact that our Error variant
-    /// is unstructured and right now we specifically care about this error and
-    /// need to render differently based on context.
     DependencyDropped(DroppedDependency),
 }
 
@@ -1049,7 +1045,7 @@ impl crate::coord::Coordinator {
             let rows = match result {
                 Ok(rows) => rows,
                 Err(e) => {
-                    yield PeekResponseUnary::Error(e.to_string());
+                    yield PeekResponseUnary::Error(AdapterError::Unstructured(anyhow::anyhow!(e)));
                     return;
                 }
             };
@@ -1064,7 +1060,11 @@ impl crate::coord::Coordinator {
                         &duration_histogram,
                     ) {
                         Ok((rows, _size_bytes)) => yield PeekResponseUnary::Rows(Box::new(rows)),
-                        Err(e) => yield PeekResponseUnary::Error(e),
+                        Err(e) => {
+                            yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                                anyhow::Error::msg(e),
+                            ))
+                        }
                     }
                 }
                 PeekResponse::Stashed(response) => {
@@ -1221,7 +1221,11 @@ impl crate::coord::Coordinator {
 
                         match result_rows {
                             Ok(result_rows) => yield PeekResponseUnary::Rows(Box::new(result_rows)),
-                            Err(e) => yield PeekResponseUnary::Error(e),
+                            Err(e) => {
+                                yield PeekResponseUnary::Error(AdapterError::Unstructured(
+                                    anyhow::Error::msg(e),
+                                ))
+                            }
                         }
                     }
 
@@ -1236,7 +1240,7 @@ impl crate::coord::Coordinator {
                     yield PeekResponseUnary::Canceled;
                 }
                 PeekResponse::Error(e) => {
-                    yield PeekResponseUnary::Error(e);
+                    yield PeekResponseUnary::Error(e.into());
                 }
             }
         })

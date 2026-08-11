@@ -2568,6 +2568,51 @@ fn test_parse_error_codes() {
 }
 
 #[mz_ore::test]
+fn test_dataflow_error_codes() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .batch_execute("CREATE TABLE t (a int4, b int4)")
+        .unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1, 0)").unwrap();
+
+    let cases: &[(&str, &SqlState)] = &[
+        ("SELECT a / b FROM t", &SqlState::DIVISION_BY_ZERO),
+        (
+            "SELECT 2147483647 + a FROM t",
+            &SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        ),
+    ];
+
+    for (query, expected) in cases {
+        let err = client.query_one(*query, &[]).unwrap_err().unwrap_db_error();
+        assert_eq!(
+            err.code(),
+            *expected,
+            "unexpected SQLSTATE {} for query `{query}`: {}",
+            err.code().code(),
+            err.message(),
+        );
+    }
+
+    client
+        .batch_execute("CREATE MATERIALIZED VIEW mv AS SELECT a / b AS x FROM t;")
+        .unwrap();
+    let err = client
+        .query_one("SELECT * FROM mv", &[])
+        .unwrap_err()
+        .unwrap_db_error();
+    assert_eq!(
+        err.code(),
+        &SqlState::DIVISION_BY_ZERO,
+        "unexpected SQLSTATE {} reading from materialized view: {}",
+        err.code().code(),
+        err.message(),
+    );
+}
+
+#[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_emit_timestamp_notice() {
     let server = test_util::TestHarness::default().start_blocking();

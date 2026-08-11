@@ -12,18 +12,20 @@ use std::ops::Range;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchKey, CursorList};
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
+use mz_compute_client::protocol::response::PeekError;
 
 /// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
 /// [`CursorList`] over the per-batch cursors.
 type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
 type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
-use mz_ore::result::ResultExt;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;
 
-pub struct PeekResultIterator<Tr>
+use super::PeekRowIterationTracker;
+
+pub(super) struct PeekResultIterator<Tr>
 where
     Tr: TraceReader<Batch: Navigable>,
 {
@@ -37,6 +39,8 @@ where
     datum_vec: DatumVec,
     literals: Option<Literals<Tr>>,
     rows_processed: usize,
+    row_iteration_tracker: PeekRowIterationTracker,
+    exhausted: bool,
 }
 
 /// Helper to handle literals in peeks
@@ -121,12 +125,14 @@ where
             DiffGat<'a> = &'a Diff,
         >,
 {
-    pub fn new(
+    pub(super) fn new(
         target_id: GlobalId,
         map_filter_project: mz_expr::SafeMfpPlan,
         peek_timestamp: mz_repr::Timestamp,
         literal_constraints: Option<&mut [Row]>,
         trace_reader: &mut Tr,
+        row_iteration_limit: Option<usize>,
+        rows_iterated: usize,
     ) -> Self {
         let (mut cursor, storage) = trace_reader.cursor();
         let literals = literal_constraints
@@ -142,6 +148,8 @@ where
             datum_vec: DatumVec::new(),
             literals,
             rows_processed: 0,
+            row_iteration_tracker: PeekRowIterationTracker::new(row_iteration_limit, rows_iterated),
+            exhausted: false,
         }
     }
 
@@ -180,9 +188,13 @@ where
             DiffGat<'a> = &'a Diff,
         >,
 {
-    type Item = Result<(Row, NonZeroI64), String>;
+    type Item = Result<(Row, NonZeroI64), PeekError>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if self.exhausted {
+            return None;
+        }
+
         let result = loop {
             if self.literals_exhausted() {
                 return None;
@@ -197,6 +209,17 @@ where
                 if exhausted {
                     return None;
                 }
+            }
+
+            // Filtered and zero-multiplicity rows still consume worker time, so
+            // they count against the budget before evaluation.
+            //
+            // Failing here leaves the cursor where it is, so latch the iterator
+            // shut. Otherwise a caller that polls again would get the same error
+            // forever rather than an end.
+            if let Err(error) = self.row_iteration_tracker.track_next() {
+                self.exhausted = true;
+                return Some(Err(error));
             }
 
             self.rows_processed = self.rows_processed.saturating_add(1);
@@ -230,7 +253,7 @@ where
     /// Extracts and returns the row currently pointed at by our cursor. Returns
     /// `Ok(None)` if our MapFilterProject evaluates to `None`. Also returns any
     /// errors that arise from evaluating the MapFilterProject.
-    fn extract_current_row(&mut self) -> Result<Option<(Row, NonZeroI64)>, String> {
+    fn extract_current_row(&mut self) -> Result<Option<(Row, NonZeroI64)>, PeekError> {
         // TODO: This arena could be maintained and reused for longer,
         // but it wasn't clear at what interval we should flush
         // it to ensure we don't accidentally spike our memory use.
@@ -260,7 +283,7 @@ where
             .map_filter_project
             .evaluate_into(&mut borrow, &arena, &mut self.row_builder)
             .map(|row| row.cloned())
-            .map_err_to_string_with_causes()?
+            .map_err(PeekError::from)?
         {
             let mut copies = Diff::ZERO;
             self.cursor.map_times(&self.storage, |time, diff| {
@@ -274,11 +297,11 @@ where
                     target = %self.target_id, diff = %copies, ?row,
                     "index peek encountered negative multiplicities in ok trace",
                 );
-                return Err(format!(
+                return Err(PeekError::unstructured(format!(
                     "Invalid data in source, \
                              saw retractions ({}) for row that does not exist: {:?}",
                     -copies, row,
-                ));
+                )));
             } else {
                 copies.into_inner()
             };

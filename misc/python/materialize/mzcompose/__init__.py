@@ -131,6 +131,11 @@ def get_minimal_system_parameters(
         # End of list (ordered by name)
     }
 
+    if version >= MzVersion.parse_mz("v26.38.0-dev"):
+        # Exercise the row-limit check without constraining normal test queries.
+        config["compute_peek_row_iteration_limit"] = "1000000000"
+        config["enable_compute_peek_row_iteration_limit"] = "true"
+
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
 
