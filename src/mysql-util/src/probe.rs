@@ -15,9 +15,8 @@ use crate::{MySqlError, QualifiedTableRef, quote_identifier};
 /// The escape character for `LIKE` patterns built by [`like_prefix_pattern`].
 const LIKE_ESCAPE: char = '|';
 
-/// Probes a string primary key column. Confirmed to support `utf8mb4_bin`,
-/// but should support `*_general_ci` and `*_bin` without changes in the
-/// future.
+/// Probes a string primary key column. Supports `utf8mb4_bin`. There may be
+/// other collations we can support, but we should do more validation.
 pub struct KeyProber<'a> {
     conn: &'a mut mysql_async::Conn,
     /// Quoted `` `schema`.`table` `` for SQL interpolation.
