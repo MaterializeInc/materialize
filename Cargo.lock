@@ -6790,6 +6790,7 @@ dependencies = [
  "derivative",
  "differential-dataflow",
  "futures",
+ "itertools 0.14.0",
  "mz-build-info",
  "mz-cluster-client",
  "mz-compute-types",
