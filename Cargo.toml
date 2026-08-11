@@ -93,7 +93,6 @@ members = [
     "src/rocksdb",
     "src/rocksdb-types",
     "src/row-spine",
-    "src/s3-datagen",
     "src/secrets",
     "src/segment",
     "src/server-core",
@@ -220,7 +219,6 @@ default-members = [
     "src/rocksdb",
     "src/rocksdb-types",
     "src/row-spine",
-    "src/s3-datagen",
     "src/secrets",
     "src/segment",
     "src/server-core",
@@ -312,7 +310,6 @@ base64 = "0.22.1"
 bincode = "1.3.3"
 bitflags = "1.3.2"
 buildid = "1.0.4"
-bytefmt = "0.1.7"
 bytemuck = { version = "1.23.1", features = ["extern_crate_alloc", "latest_stable_rust"] }
 byteorder = "1.5"
 bytes = "1.11.1"
