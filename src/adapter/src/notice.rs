@@ -537,13 +537,22 @@ impl fmt::Display for AdapterNotice {
                 "The auto_route_introspection_queries variable has been renamed to auto_route_catalog_queries."
             ),
             AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster { cluster, sources } => {
+                // Keep the notice readable on clusters with many sources.
+                const MAX_LISTED_SOURCES: usize = 3;
                 write!(
                     f,
                     "cluster {} has more than one replica, but the following sources in it always \
                      run on only the first replica: {}",
                     cluster.quoted(),
-                    separated(", ", sources.iter().map(|name| name.quoted())),
-                )
+                    separated(
+                        ", ",
+                        sources.iter().take(MAX_LISTED_SOURCES).map(|n| n.quoted())
+                    ),
+                )?;
+                if sources.len() > MAX_LISTED_SOURCES {
+                    write!(f, ", and {} more", sources.len() - MAX_LISTED_SOURCES)?;
+                }
+                Ok(())
             }
             AdapterNotice::OidcGroupSyncUnmatchedGroup { group } => {
                 write!(

@@ -33,6 +33,7 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
 use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
+use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan,
@@ -1695,32 +1696,86 @@ impl Coordinator {
         cluster
             .bound_objects
             .iter()
-            .filter(|id| {
-                self.catalog().get_entry(id).source().is_some_and(|source| {
-                    match &source.data_source {
-                        DataSourceDesc::Ingestion { desc, .. }
-                        | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
-                            desc.connection.prefers_single_replica()
-                        }
-                        _ => false,
-                    }
+            .filter_map(|id| {
+                let entry = self.catalog().get_entry(id);
+                let single_replica =
+                    entry
+                        .source()
+                        .is_some_and(|source| match &source.data_source {
+                            DataSourceDesc::Ingestion { desc, .. }
+                            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                                desc.connection.prefers_single_replica()
+                            }
+                            _ => false,
+                        });
+                single_replica.then(|| {
+                    self.catalog()
+                        .resolve_full_name(entry.name(), None)
+                        .to_string()
                 })
-            })
-            .map(|id| {
-                let name = self.catalog().get_entry(id).name();
-                self.catalog().resolve_full_name(name, None).to_string()
             })
             .collect()
     }
 
-    /// Emits a notice if `cluster` has more than one replica while containing
-    /// sources that run on only one replica. Call after a command that added a
-    /// replica or such a source.
-    pub(crate) fn notify_single_replica_sources(&self, session: &Session, cluster: &Cluster) {
-        if cluster.replicas().count() <= 1 {
+    /// The number of replicas `cluster` aims to run, for deciding whether to
+    /// emit the single-replica-sources notice.
+    ///
+    /// For a managed cluster this is the replication factor, taking the target
+    /// of an in-progress reconfiguration over the realized one, plus any
+    /// INTERNAL or BILLED AS replicas, which are manually managed outside the
+    /// replication-factor domain. Replicas belonging to a reconfiguration's
+    /// hydrate-overlap are deliberately not counted: they replace the serving
+    /// set at cut-over rather than adding to it. Counting the replication
+    /// factor instead of replicas excludes them under both reconfiguration
+    /// mechanisms, the legacy graceful alter (which marks them pending) and
+    /// the cluster controller (which creates them as ordinary replicas of the
+    /// target shape).
+    fn notice_relevant_replica_count(&self, cluster: &Cluster) -> usize {
+        match &cluster.config.variant {
+            ClusterVariant::Managed(managed) => {
+                let replication_factor = managed
+                    .reconfiguration
+                    .as_ref()
+                    .filter(|record| record.is_in_progress())
+                    .map_or(managed.replication_factor, |record| {
+                        record.target.replication_factor
+                    });
+                let manual_replicas = cluster
+                    .replicas()
+                    .filter(|r| {
+                        r.config.location.internal() || r.config.location.billed_as().is_some()
+                    })
+                    .count();
+                usize::cast_from(replication_factor) + manual_replicas
+            }
+            ClusterVariant::Unmanaged => cluster.replicas().count(),
+        }
+    }
+
+    /// Emits a notice if `cluster` aims to run more than one replica while
+    /// containing sources that run on only one replica. Call after a command
+    /// that added a replica or such a source.
+    ///
+    /// `creating_source` names a source the current command is creating in
+    /// `cluster`. It is included in the notice even when it is not yet visible
+    /// in the catalog, which happens when the creation is staged in a DDL
+    /// transaction that commits later.
+    pub(crate) fn notify_single_replica_sources(
+        &self,
+        session: &Session,
+        cluster: &Cluster,
+        creating_source: Option<&QualifiedItemName>,
+    ) {
+        if self.notice_relevant_replica_count(cluster) <= 1 {
             return;
         }
-        let sources = self.single_replica_source_names(cluster);
+        let mut sources = self.single_replica_source_names(cluster);
+        if let Some(name) = creating_source {
+            let full_name = self.catalog().resolve_full_name(name, None).to_string();
+            if !sources.contains(&full_name) {
+                sources.push(full_name);
+            }
+        }
         if !sources.is_empty() {
             session.add_notice(AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster {
                 cluster: cluster.name.clone(),
@@ -1899,7 +1954,11 @@ impl Coordinator {
             Ok(()) => {
                 // The commit made the new replica visible in the catalog, so
                 // the check sees the updated replica count.
-                self.notify_single_replica_sources(session, self.catalog().get_cluster(cluster_id));
+                self.notify_single_replica_sources(
+                    session,
+                    self.catalog().get_cluster(cluster_id),
+                    None,
+                );
                 Ok(ExecuteResponse::CreatedClusterReplica)
             }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {

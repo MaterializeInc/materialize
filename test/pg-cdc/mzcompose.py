@@ -364,6 +364,7 @@ def workflow_single_replica_source_notice(
             cur.execute("DROP CLUSTER IF EXISTS c1 CASCADE")
             cur.execute("DROP CLUSTER IF EXISTS c2 CASCADE")
             cur.execute("DROP CLUSTER IF EXISTS c3 CASCADE")
+            cur.execute("DROP CLUSTER IF EXISTS c4 CASCADE")
             notices.clear()
 
             cur.execute("CREATE SECRET pgpass AS 'postgres'")
@@ -415,6 +416,21 @@ def workflow_single_replica_source_notice(
                 "FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')"
             )
             expect_notice(notices, "c2", '"materialize.public.src2"')
+
+            # Creating such a source in a DDL transaction includes the source
+            # in the notice even though its creation is only staged when the
+            # notice is emitted.
+            cur.execute(
+                f"CREATE CLUSTER c4 (SIZE '{size}', REPLICATION FACTOR 2)".encode()
+            )
+            expect_no_notice(notices)
+            cur.execute("BEGIN")
+            cur.execute(
+                "CREATE SOURCE src4 IN CLUSTER c4 "
+                "FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')"
+            )
+            cur.execute("COMMIT")
+            expect_notice(notices, "c4", '"materialize.public.src4"')
 
             # Adding a replica to an unmanaged cluster with such a source emits
             # the notice.

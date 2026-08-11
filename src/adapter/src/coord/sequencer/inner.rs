@@ -183,7 +183,7 @@ struct DropOps {
 // A bundle of values returned from create_source_inner
 struct CreateSourceInner {
     ops: Vec<catalog::Op>,
-    sources: Vec<(CatalogItemId, Source)>,
+    sources: Vec<(CatalogItemId, QualifiedItemName, Source)>,
     if_not_exists_ids: BTreeMap<CatalogItemId, QualifiedItemName>,
 }
 
@@ -362,11 +362,11 @@ impl Coordinator {
             let source = Source::new(plan, global_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: item_id,
-                name,
+                name: name.clone(),
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
             });
-            sources.push((item_id, source));
+            sources.push((item_id, name, source));
             // These operations must be executed after the source is added to the catalog.
             ops.extend(reference_ops);
         }
@@ -625,7 +625,7 @@ impl Coordinator {
             .await;
 
         // Check if any sources are webhook sources and report them as created.
-        for (item_id, source) in &sources {
+        for (item_id, _name, source) in &sources {
             if matches!(source.data_source, DataSourceDesc::Webhook { .. }) {
                 if let Some(url) = self.catalog().state().try_get_webhook_url(item_id) {
                     ctx.session()
@@ -637,8 +637,11 @@ impl Coordinator {
         match transact_result {
             Ok(()) => {
                 // Warn about any new source that runs on only one replica but
-                // landed on a cluster that has more than one.
-                for (_item_id, source) in &sources {
+                // landed on a cluster that has more than one. The source's
+                // name is passed along explicitly: in a DDL transaction the
+                // creation is only staged at this point, so the source is not
+                // yet visible in the catalog.
+                for (_item_id, name, source) in &sources {
                     let cluster_id = match &source.data_source {
                         DataSourceDesc::Ingestion { desc, cluster_id }
                         | DataSourceDesc::OldSyntaxIngestion {
@@ -647,7 +650,7 @@ impl Coordinator {
                         _ => continue,
                     };
                     let cluster = self.catalog().get_cluster(*cluster_id);
-                    self.notify_single_replica_sources(ctx.session(), cluster);
+                    self.notify_single_replica_sources(ctx.session(), cluster, Some(name));
                 }
                 Ok(ExecuteResponse::CreatedSource)
             }
