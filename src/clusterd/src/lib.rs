@@ -190,6 +190,38 @@ fn process_ordinal_from_hostname(hostname: &str) -> Option<&str> {
 pub fn main() {
     mz_ore::panic::install_enhanced_handler();
 
+    // Exit normally on SIGTERM so that a PGO-instrumented build flushes its
+    // profile. The profile runtime writes counters from an exit handler, and
+    // the process orchestrator terminates replicas by signal, whose default
+    // action skips those handlers. Without this a profiled replica
+    // contributes no profile at all, which matters because the replicas, not
+    // the parent process, run the large majority of the CPU work.
+    //
+    // Compiled only into instrumented builds, so production shutdown
+    // behavior is unchanged. This is one half of the requirement. The other
+    // is that the orchestrator has to send SIGTERM at all, which it only does
+    // when a command wrapper is configured (`send_sigterm` in
+    // `mz_orchestrator_process` is `!command_wrapper.is_empty()`). With no
+    // wrapper it goes straight to SIGKILL, which cannot be caught.
+    #[cfg(pgo_instrument)]
+    {
+        extern "C" fn exit_for_profile(_: std::ffi::c_int) {
+            // Not async-signal-safe, since it runs the exit handlers that
+            // write the profile. That is the entire point, and this build
+            // exists only to collect profiles.
+            std::process::exit(0);
+        }
+        // SAFETY: called before any threads are spawned. The panic hook
+        // installed above only spawns a thread on panic, which cannot have
+        // happened yet.
+        unsafe {
+            libc::signal(
+                libc::SIGTERM,
+                exit_for_profile as *const () as libc::sighandler_t,
+            );
+        }
+    }
+
     // Pin the rustls crypto provider to aws-lc-rs. The LaunchDarkly SDK uses
     // hyper-rustls, so building its client resolves the process-default rustls
     // provider. The workspace also links rustls' `ring` feature (pulled by

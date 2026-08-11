@@ -173,6 +173,7 @@ RUN gpg --dearmor < apt-llvm.asc > /etc/apt/keyrings/apt-llvm.gpg \
     && apt-get update \
     && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     clang-22 \
+    libclang-rt-22-dev \
     lld-22 \
     llvm-22 \
     && apt-get clean \

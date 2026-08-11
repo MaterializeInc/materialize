@@ -1256,6 +1256,12 @@ def move_build_to_lto(pipeline: Any, lto: bool) -> None:
             step["agents"]["queue"] = "builder-linux-x86_64"
         elif step.get("id") == "build-aarch64":
             step["agents"]["queue"] = "builder-linux-aarch64-mem"
+        else:
+            continue
+
+        # PGO takes a while
+        if "timeout_in_minutes" in step:
+            step["timeout_in_minutes"] *= 3
 
 
 def trim_builds(

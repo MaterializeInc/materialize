@@ -48,7 +48,7 @@ from requests.auth import HTTPBasicAuth
 
 from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.docker import image_registry
-from materialize.rustc_flags import Sanitizer
+from materialize.rustc_flags import Pgo, Sanitizer
 from materialize.xcompile import Arch, target
 
 GHCR_PREFIX = "ghcr.io/materializeinc/"
@@ -185,6 +185,12 @@ class RepositoryDetails:
         coverage: Whether the repository has code coverage instrumentation
             enabled.
         sanitizer: Whether to use a sanitizer (address, hwaddress, cfi, thread, leak, memory, none)
+        pgo: What role this build plays in the profile-guided-optimization
+            cycle. Derived from the other settings when not given.
+        pgo_profile: The profile a `Pgo.optimize` build compiles against, set
+            once the training run that produces it has finished. The one
+            mutable field: it cannot be known at construction time, since
+            training needs a `Pgo.instrument` repository of its own.
         cargo_workspace: The `cargo.Workspace` associated with the repository.
         image_registry: The Docker image registry to pull images from and push
             images to.
@@ -200,12 +206,24 @@ class RepositoryDetails:
         sanitizer: Sanitizer,
         image_registry: str,
         image_prefix: str,
+        pgo: Pgo | None = None,
+        pgo_profile: Path | None = None,
     ):
         self.root = root
         self.arch = arch
         self.profile = profile
         self.coverage = coverage
         self.sanitizer = sanitizer
+        if pgo is None:
+            pgo = (
+                Pgo.optimize
+                if profile == Profile.RELEASE
+                and not coverage
+                and sanitizer == Sanitizer.none
+                else Pgo.none
+            )
+        self.pgo = pgo
+        self.pgo_profile = pgo_profile
         self.cargo_workspace = cargo.Workspace(root)
         self.image_registry = image_registry
         self.image_prefix = image_prefix
@@ -630,6 +648,13 @@ class CargoPreImage(PreImage):
             flags += "coverage"
         if self.rd.sanitizer != Sanitizer.none:
             flags += self.rd.sanitizer.value
+        # The PGO mode, and not the profile it was built against: the
+        # fingerprint has to be known before the build that produces the
+        # profile has run. Two training runs of one commit therefore produce
+        # different binaries under the same tag, as any other nondeterminism
+        # in the build would.
+        if self.rd.pgo != Pgo.none:
+            flags += [str(self.rd.pgo)]
         flags.sort()
         return ",".join(flags)
 
@@ -723,6 +748,14 @@ class CargoBuild(CargoPreImage):
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "/usr/local/bin/clang-lld-22",
             }
+
+        # PGO rides on the LTO configuration above rather than replacing any of
+        # it, so that the binaries a profile is collected from are compiled the
+        # same way as the binaries it is applied to.
+        if rd.pgo == Pgo.instrument:
+            rustflags += rustc_flags.pgo_generate()
+        elif rd.pgo == Pgo.optimize and rd.pgo_profile is not None:
+            rustflags += rustc_flags.pgo_use(rd.pgo_profile)
 
         cargo_build = rd.build(
             "build", channel=None, rustflags=rustflags, extra_env=extra_env
@@ -1440,7 +1473,11 @@ class DependencySet:
         for dep in deps_to_build:
             dep.build(prep)
 
-    def ensure(self, pre_build: Callable[[list[ResolvedImage]], None] | None = None):
+    def ensure(
+        self,
+        pre_build: Callable[[list[ResolvedImage]], None] | None = None,
+        push: bool = True,
+    ):
         """Ensure all publishable images in this dependency set exist on Docker
         Hub.
 
@@ -1451,6 +1488,9 @@ class DependencySet:
                        to be built locally, invoked after their cargo build is
                        done, but before the Docker images are build and
                        uploaded to DockerHub.
+            push: Whether to publish what was built. Pass `False` for images
+                  that exist only to serve this build, such as the
+                  instrumented images a PGO training run is collected from.
         """
         num_deps = len(list(self))
         if not num_deps:
@@ -1486,7 +1526,7 @@ class DependencySet:
                 time.sleep(0.01)
             for attempts_remaining in reversed(range(3)):
                 try:
-                    dep.build(prep, push=dep.publish)
+                    dep.build(prep, push=dep.publish and push)
                     with lock:
                         built_deps.add(dep.name)
                     break
@@ -1537,6 +1577,8 @@ class Repository:
         image_registry: The Docker image registry to pull images from and push
             images to.
         image_prefix: A prefix to apply to all Docker image names.
+        pgo: What role this build plays in the profile-guided-optimization
+            cycle. Derived from the other settings when not given.
 
     Attributes:
         images: A mapping from image name to `Image` for all contained images.
@@ -1554,6 +1596,7 @@ class Repository:
         sanitizer: Sanitizer = Sanitizer.none,
         image_registry: str = image_registry(),
         image_prefix: str = "",
+        pgo: Pgo | None = None,
     ):
         self.rd = RepositoryDetails(
             root,
@@ -1563,6 +1606,7 @@ class Repository:
             sanitizer,
             image_registry,
             image_prefix,
+            pgo,
         )
         self.images: dict[str, Image] = {}
         self.compositions: dict[str, Path] = {}

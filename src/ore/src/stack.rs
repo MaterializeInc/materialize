@@ -63,7 +63,7 @@ pub const STACK_RED_ZONE: usize = {
     }
     #[cfg(not(debug_assertions))]
     {
-        64 << 10 // 64KiB
+        128 << 10 // 128KiB
     }
 };
 

@@ -49,7 +49,7 @@ import yaml
 from psycopg import Connection, Cursor
 from psycopg.sql import Composed
 
-from materialize import MZ_ROOT, buildkite, mzbuild, spawn, ui
+from materialize import MZ_ROOT, buildkite, mzbuild, rustc_flags, spawn, ui
 from materialize.docker import image_registry
 from materialize.mzcompose import cluster_replica_size_map, loader
 from materialize.mzcompose.service import Service as MzComposeService
@@ -65,6 +65,7 @@ from materialize.mzcompose.test_result import (
     try_determine_errors_from_cmd_execution,
 )
 from materialize.parallel_workload.worker_exception import WorkerFailedException
+from materialize.rustc_flags import Pgo
 from materialize.ui import (
     CommandFailureCausedUIError,
     UIError,
@@ -341,6 +342,29 @@ class Composition:
                         break
                 else:
                     config.setdefault("environment", []).append(llvm_profile_file)
+
+            if self.repo.rd.pgo == Pgo.instrument:
+                # Keep the profiles that instrumented binaries write to the
+                # compiled-in `PGO_PROFILE_DIR`.
+                pgo_volume = (
+                    f"./{rustc_flags.PGO_HOST_DIR}:{rustc_flags.PGO_PROFILE_DIR}"
+                )
+                if pgo_volume not in config.get("volumes", []):
+                    config.setdefault("volumes", []).append(pgo_volume)
+
+                # `%m` is one merge pool per binary, which is what lets a
+                # service's many clusterd replicas accumulate into a single
+                # profile. Naming the service as well keeps concurrent
+                # services out of each other's pool: they share the bind
+                # mount, and a merge that loses the race is dropped with
+                # "Invalid profile data to merge", not retried.
+                config["environment"] = [
+                    env
+                    for env in config.get("environment", [])
+                    if not env.startswith("LLVM_PROFILE_FILE=")
+                ] + [
+                    f"LLVM_PROFILE_FILE={rustc_flags.PGO_PROFILE_DIR}/{name}-%m.profraw"
+                ]
 
         if self.resolve_image_specs:
             deps = self.repo.resolve_dependencies(images)

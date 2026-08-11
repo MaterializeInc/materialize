@@ -15,6 +15,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from ci.test import pgo
 from materialize import mzbuild, spawn, ui
 from materialize.ci_util.upload_debug_symbols_to_s3 import (
     DEBUGINFO_BINS,
@@ -27,7 +28,7 @@ from materialize.mzbuild import (
     ResolvedImage,
     RustIncrementalBuildFailure,
 )
-from materialize.rustc_flags import Sanitizer
+from materialize.rustc_flags import Pgo, Sanitizer
 from materialize.xcompile import Arch
 
 
@@ -46,6 +47,11 @@ def main() -> None:
             sanitizer=sanitizer,
             image_registry="materialize",
         )
+
+        # An LTO build is profile-guided, so it collects a profile of this
+        # exact source before building anything shippable.
+        if repo.rd.pgo == Pgo.optimize:
+            repo.rd.pgo_profile = pgo.train(repo.rd.profile)
 
         # Build and push any images that are not already available on Docker Hub,
         # so they are accessible to other build agents.

@@ -8,8 +8,41 @@
 # by the Apache License, Version 2.0.
 
 from enum import Enum
+from pathlib import Path
 
 """rustc flags."""
+
+
+class Pgo(Enum):
+    """What role a build plays in the profile-guided-optimization cycle."""
+
+    instrument = "instrument"
+    optimize = "optimize"
+    none = "none"
+
+    def __str__(self) -> str:
+        return self.value
+
+
+# Host directory the profiles land in, relative to the composition running the
+# training workload, and the path it is bind-mounted to. `-Cprofile-generate`
+# bakes the latter into the binary, so it is a path inside whatever container
+# the binary later runs in, not one on the build host.
+PGO_HOST_DIR = "pgo"
+PGO_PROFILE_DIR = f"/{PGO_HOST_DIR}"
+
+
+def pgo_generate(profile_dir: str = PGO_PROFILE_DIR) -> list[str]:
+    # `--cfg=pgo_instrument` compiles the shutdown hook that lets a
+    # signal-terminated clusterd flush its profile. Cluster replicas run the
+    # large majority of the CPU work, so without the hook the profile covers
+    # only a small share of it.
+    return [f"-Cprofile-generate={profile_dir}", "--cfg=pgo_instrument"]
+
+
+def pgo_use(profdata: Path) -> list[str]:
+    return [f"-Cprofile-use={profdata}"]
+
 
 # Flags to enable code coverage.
 #
