@@ -592,6 +592,62 @@ The offloaded arm has no such window. The skewed lookups still take about two se
 
 `ORDER BY` peeks are the one shape the offload could always serve, so this improvement was available before the stash work and is not contingent on it. It is also the strongest argument in this document for turning the offload on by default: the cost is a thread, and the benefit is that a single skewed key stops being a cluster-wide latency event.
 
+### E12, a peek behind a long operator activation: placement fixes it, substrate does not
+
+The one mechanism nothing here had measured, run locally rather than on staging, with the prediction registered before the run.
+
+The question. A peek that arrives while a long operator activation is in progress cannot be served until that activation returns, because the worker loop reaches `process_peeks` only after `step_or_park`. This is a different mechanism from a peek queueing behind another peek, and the two have different remedies. The registered prediction was that the offload does **not** help, because an offloaded walk is dispatched from `process_peeks` and its result is sent by the worker polling the oneshot, so the peek pays the blocking window twice over, and that the second runtime does help, because the interactive worker's step loop is not the one running the activation.
+
+Fixture. A single-worker replica so the serving thread and the maintaining arrangement are the same thread by construction. A point lookup against a small index, isolated cost 3.9 ms. Merge load from repeated 500,000-row insert and retract cycles against a three-million-row indexed table on the same cluster, sized so a step reaches about one second. Open loop at 40 lookups per second for 120 seconds, 4801 samples per arm, pool of 96, zero dropped and zero errors in every arm, client queue delay never above 6 ms.
+
+| Arm | Isolation | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| Idle | serializable | 3.9 | 4.9 | 5.5 | 8.8 |
+| Inline, under load | serializable | 3.8 | **129.5** | **278.4** | 330.4 |
+| Inline, repeat | serializable | 3.8 | 125.2 | 286.8 | 382.4 |
+| Offload, under load | serializable | 3.8 | **148.2** | **334.8** | 429.6 |
+| Offload, repeat | serializable | 4.0 | 149.3 | 332.3 | 393.9 |
+| Two-runtime, under load | serializable | 3.4 | **4.5** | **5.8** | 34.8 |
+| Coordinator control | serializable | 3.5 | 4.6 | 6.0 | 31.2 |
+| Inline, under load | strict serializable | 4.7 | 132.4 | 283.5 | 446.4 |
+| Two-runtime, under load | strict serializable | 4.2 | 6.1 | **185.8** | 315.7 |
+
+Fraction of requests above a multiple of the idle p50:
+
+| Arm | above 2x | above 5x | above 10x |
+|---|---|---|---|
+| Idle | 0.02% | 0 | 0 |
+| Coordinator control | 0.65% | 0.17% | 0 |
+| Inline, under load | **21.5%** | **19.4%** | **17.1%** |
+| Offload, under load | 21.1% | 19.3% | 16.9% |
+| Two-runtime, under load | 0.60% | 0.19% | 0 |
+| Two-runtime, strict serializable | 6.1% | 5.1% | 4.5% |
+
+**The jitter is real and large.** A lookup costing 3.9 ms alone spends 17.1% of its requests above 39 ms and reaches a p99 of 278 ms. The distribution is bimodal rather than stretched: p50 is untouched in every arm, so a request either misses the activation entirely or lands inside one.
+
+**The offload does not help, and is reproducibly worse.** Within-arm variance across repeats is about 3% at p90, while the inline to offload gap is 17% at p90 and 18% at p99, well outside it. That is the predicted extra round trip, since the response is still sent by the worker on a later step.
+
+**The second runtime removes it, and reaches the floor set by writes alone.** The coordinator control runs byte-identical write traffic through the coordinator and persist against a table whose indexes live on the *other* cluster, leaving the measured arrangement resident but idle. It lands at p90 4.6 ms with nothing above 39 ms, and the two-runtime arm matches it. So the 26x p90 blowup requires the merging arrangement to be on the measured worker. It is not the client, the coordinator, the write path, or the machine.
+
+Mechanism evidence, from the step-duration histogram deltas under two-runtime load. The maintenance runtime recorded 206 steps above 128 ms, 91 above 256 ms and 25 above 512 ms. The interactive runtime recorded 9 above 128 ms, a profile indistinguishable from idle. **The long non-preemptible work is still there and just as long. It moved off the serving thread.**
+
+Engagement was confirmed per arm from `mz_index_peek_walks_total` rather than inferred: inline arms 4801 inline and 0 offload, offload arms 4801 offload and 0 inline, two-runtime arms 4801 under `role="interactive"` and 0 under `role="maintenance"`.
+
+**Strict serializable is a second, independent mechanism.** Two-runtime's tail returns at p99 185.8 ms and 4.5% above 10x, against 17.1% for inline. A strict serializable read waits for the index's write frontier, and that frontier is produced by the maintenance worker, which is the one inside the activation. Moving the peek off that thread does not move the frontier off it. For single-runtime inline the isolation level makes no difference at all, 129.5 against 132.4 at p90, because head-of-line blocking already dominates.
+
+Caveats, recorded because they bound what the numbers support.
+
+* At 4801 samples, p99.9 is the fifth-largest sample and the maximum is one sample. The p99 and the CCDF fractions carry the verdict.
+* The strict serializable pair ran against a 3.5-million-row baseline rather than 3.0 million, because a cleanup statement was rejected. Both arms of that pair share the baseline, so the within-pair comparison holds, but it is not exactly comparable to the serializable arms.
+* `mz_timely_step_duration_seconds` includes park time, so it cannot serve as an absolute blocking budget. It is used here only to compare roles and arms.
+* Two of 4803 walks in the two-runtime idle arm took the offload path, from a configuration push that had not yet reached the freshly created replica.
+* Not measured: an offload arm under two-runtime, and a load driven by an unbudgeted `reduce` or `top_k` rather than by merges. The latter was the planned escalation and proved unnecessary, since 500,000-row batches already produced steps approaching one second.
+* The box had 32 cores and 124 GB against single-worker replicas, so the doubled thread count cannot explain the two-runtime result.
+
+Artifacts, including the fixture, the load driver, the open-loop client, the raw per-request latencies and the metric deltas, are under the session scratchpad at `jitter/`, listed in its `results.txt`.
+
+Two consequences for the rest of this document. E2 and E12 are not in tension: E2's fixture is a point lookup behind concurrent *peeks* and E12's is a point lookup behind an *operator activation*, so together they are the cleanest available demonstration that these are distinct mechanisms with disjoint remedies. And the claim elsewhere that the second runtime does not improve peek latency is refuted for this mechanism, so it now holds only for peek-versus-peek queueing.
+
 ## Decision table
 
 Extends the one in `benchmark-plan.md`.

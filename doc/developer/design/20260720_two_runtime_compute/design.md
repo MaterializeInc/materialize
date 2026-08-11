@@ -69,10 +69,10 @@ causes we have answers for is not a decomposition.
 | A point lookup on a resident index stalls behind walks of a swap-resident one | measured, E8b: 29.2 s worst case becomes 152 ms | M1 |
 | A peek runs to completion once started and cannot be cancelled | confirmed in the code | M1 |
 | A swap-resident walk is slower and far less predictable inline than offloaded | measured, E8b: 2.3 s against 3.6, 4.7 and 56.4 s, **mechanism unattributed** | unattributed |
-| Peeks show jitter on a replica managing large state | **not measured**, mechanism hypothesized | M2 |
+| Peeks show jitter on a replica managing large state | measured, E12: a 3.9 ms lookup reaches p90 129.5 ms and p99 278.4 ms, with 17.1% of requests above ten times the idle median | M2 |
 | Interactive dataflows are slow, and introspection is unavailable, while a replica is busy | measured, E7 and E9: 2835 to 1456 ms, and 4.4 to 7.5 s polls to about 160 ms | M3 |
 | A temporary dataflow costs about 900 ms to create and tear down | measured, E7: a floor of 850 to 950 ms in every cell, quiet or loaded, either runtime, for about 120 rows | M4 |
-| A read cannot be answered until the frontier passes its timestamp | partly quantified, E9's staleness column: 170 to 1589 ms while hydrating | M5 |
+| A read cannot be answered until the frontier passes its timestamp | measured, E12: with the peek moved off the busy worker, strict serializable still reaches p99 185.8 ms against 5.8 ms at serializable. Also bounded by E9's staleness column, 170 to 1589 ms while hydrating | M5 |
 | Peeks serialize behind DDL on one coordinator thread | asserted elsewhere in this document, not measured here | M6 |
 | A default-isolation read pays a timestamp-oracle round trip | not measured here | M7 |
 
@@ -84,15 +84,17 @@ causes we have answers for is not a decomposition.
   with a service time dominated by blocking rather than computing, which matters
   because it is a *victim* latency: E8b's 29.2 s is a point lookup on a **resident**
   index queued behind two swap-resident walks, not a swapped walk itself.
-* **M2, a peek queues behind a long unbudgeted *operator* activation.** Not M1,
-  because the work ahead of the peek is a dataflow rather than another peek, and
-  that difference decides which solutions reach it. The right examples are `reduce`,
-  `top_k` and `threshold`, which carry no fuel or yield at all. **Not** a spine
-  merge: differential's spine amortizes merge work against the size of the arriving
-  batch, so a merge is long only when the batch is large, which is hydration rather
-  than steady state. This is the hypothesized mechanism behind jitter on
-  large-state replicas, and it is hypothesized about *which operator* as much as
-  about the mechanism class.
+* **M2, a peek queues behind a long operator activation.** Not M1, because the work
+  ahead of the peek is a dataflow rather than another peek, and that difference
+  decides which solutions reach it. Two sources of long activations. Operators with
+  no fuel or yield at all, which is `reduce`, `top_k` and `threshold`. And spine
+  merges, which amortize against the size of the arriving batch and are therefore
+  long exactly when the batch is large, whether that is hydration or a bulk insert.
+  E12 measured the second source: 500,000-row insert cycles produced steps
+  approaching one second, 206 of them above 128 ms and 25 above 512 ms in a two
+  minute window, and a peek arriving inside one waits for it. A trickle of small
+  writes would produce neither, which is why the mechanism is about batch size
+  rather than about state size as such.
 * **M3, one dataflow scheduler, saturated.** Interactive rendering and introspection
   have nowhere to run while maintenance occupies the worker.
 * **M4, temporary-dataflow creation and teardown.** Measured as a floor of 850 to
@@ -128,8 +130,8 @@ that is.
 | S1, cooperative peek slicing | yes, `argued` | **no** | no | no | no | no | no |
 | S2, cancellable peeks | the cancellation symptom only | no | no | no | no | no | no |
 | S3, interactive dataflows on a second runtime | no | no | **yes**, measured E7/E9 | no | no | no | no |
-| S4, peeks routed to the interactive runtime | no, it relocates the queue | **yes**, `argued` | no | no | no | no | no |
-| S5, peeks on another thread | **yes**, measured E1/E11/E8b | **no** | no | no | no | no | no |
+| S4, peeks routed to the interactive runtime | no, it relocates the queue | **yes**, measured E12: p90 129.5 to 4.5 ms | no | no | no | no | no |
+| S5, peeks on another thread | **yes**, measured E1/E11/E8b | **no, measured worse**, E12: p90 148.2 against 129.5 | no | no | no | no | no |
 | S6, budgeting long operator activations | no | yes, `argued` | partial, `argued` | no | no | no | no |
 | S7, a bounded-seek plan for the skewed case | removes the work, `argued` | no | no | no | no | no | no |
 | S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | no | no | no | no | no |
@@ -137,8 +139,8 @@ that is.
 Six entries carry the weight, and two of them correct earlier claims in this
 document.
 
-**S5 does not reach M2.** This is the most important correction here. The worker
-loop is `step_or_park`, then `handle_pending_commands`, then `process_peeks`
+**S5 does not reach M2, and measurably makes it worse.** The worker loop is
+`step_or_park`, then `handle_pending_commands`, then `process_peeks`
 (`src/compute/src/server.rs:513-543`). An offloaded walk is *dispatched* inside
 `process_peek` (`src/compute/src/compute_state.rs:1467`), reachable only from
 `process_peeks`, and its result is *sent* by the worker when it polls the oneshot
@@ -146,17 +148,29 @@ loop is `step_or_park`, then `handle_pending_commands`, then `process_peeks`
 while a long operator activation is in progress inside `step_or_park` cannot even
 begin its offloaded walk until that activation finishes. Offloaded latency under M2
 is the residual activation plus the walk plus one step, against inline's residual
-plus walk. No substrate choice gets a peek past a long operator activation, and the
-argument this document makes against S1 on M2 applies verbatim to S5.
+plus walk. E12 registered that as a prediction before measuring and confirmed it:
+p90 148.2 ms against inline's 129.5 ms, a 17% regression against 3% within-arm
+variance across repeats. No substrate choice gets a peek past a long operator
+activation, and the argument this document makes against S1 on M2 applies verbatim
+to S5.
 
-**S4 is not optional, and it is the only shipped thing that reaches M2.** With two
+**S4 is not optional, and it is the only mechanism here that reaches M2.** With two
 runtimes, `src/compute-client/src/multiplex.rs:357-359` routes *every* peek to the
 interactive runtime unconditionally. So S4 is not a component that can be cut, it is
 how the design already works, and it reaches M2 for the reason S5 does not: the
-interactive worker's `step_or_park` is not running the maintenance operator. An
-earlier draft of this section proposed cutting it on the strength of E2. That was
+interactive worker's `step_or_park` is not running the maintenance operator. E12
+measured it at p90 4.5 ms against inline's 129.5 ms, matching a control that runs
+identical write traffic with the merging index on another cluster, which is the
+floor achievable while writes happen at all. The step histogram shows why: the
+maintenance runtime still recorded 206 steps above 128 ms and 25 above 512 ms while
+the interactive runtime looked idle. The long work did not get cheaper, it moved off
+the serving thread.
+
+An earlier draft of this section proposed cutting S4 on the strength of E2. That was
 wrong twice over, because E2's fixture is a point lookup behind concurrent scans,
-which is M1, and no experiment in `evaluation.md` addresses M2 at all.
+which is M1, and at the time no experiment addressed M2 at all. E2 and E12 are not
+in tension. Together they are the cleanest demonstration available that M1 and M2 are
+distinct mechanisms with disjoint remedies.
 
 **S1 reaches M1, and its quantum should be stated rather than characterized.** PR
 #38040 ships `peek_yielding = work:100000,time:10` per peek per activation and
@@ -191,14 +205,19 @@ and the only one that reaches M5. This document argues against a read replica on
 memory cost and on introspection being replica-local, both of which hold, but that
 is an argument about price rather than about reach.
 
-Every peek measurement recorded here was taken at `serializable`. The
-parallel-benchmark scenario passes `strict_serializable=False` and E9 states its
-isolation level in prose, but **E1, E2, E8b and E11 do not record theirs**, and a
-strict serializable arm pre-registered for E2 does not appear in E2's results. So
-the honest statement is not that the default isolation level was measured and found
-different, nor that it is unmeasurable, but that **the arm was pre-registered and is
-missing from the write-up.** E9's staleness column puts a bound on what it would
-cost: 170 to 1589 ms of seal lag while hydrating.
+**M5 is now measured, on one fixture.** E12 ran its inline and two-runtime arms at
+both isolation levels. For single-runtime inline the level makes no difference at
+all, 129.5 against 132.4 ms at p90, because M2 already dominates. With the peek moved
+off the busy worker, strict serializable's tail returns: p99 185.8 ms against 5.8 ms,
+and 4.5% of requests above ten times the idle median against 0%. So M5 costs real
+latency, and it is only visible once M2 is removed. This is the mechanism that bounds
+how much any peek-placement work can deliver at the default isolation level.
+
+The other peek experiments still do not record their isolation level. The
+parallel-benchmark scenario passes `strict_serializable=False` and E9 states its level
+in prose, but **E1, E2, E8b and E11 do not**, and a strict serializable arm
+pre-registered for E2 does not appear in E2's results. E9's staleness column puts a
+second bound on the cost, 170 to 1589 ms of seal lag while hydrating.
 
 ### What each solution costs
 
@@ -227,11 +246,12 @@ corrections above.
   predicted to match or beat S5 on both fixtures this document leans on, and it
   removes S5's cliff for free by making the fallback path preemptible.
 * **S5's unique justification is now narrow, and narrower than earlier drafts of
-  this document claimed.** It does not reach M2. On M1 it competes with S1 and is
-  predicted to lose on E1 and E11. What is left is the swapped walk's own duration,
-  which is unattributed, and the possibility that S1's quantum floor is too high on
-  a busy replica, which is unmeasured. It should not be described as the peek fix
-  until one of those two is established.
+  this document claimed.** It does not reach M2, and E12 measured it 17% worse there
+  than doing nothing. On M1 it competes with S1 and is predicted to lose on E1 and
+  E11. What is left is the swapped walk's own duration, which is unattributed, and
+  the possibility that S1's quantum floor is too high on a busy replica, which is
+  unmeasured. It should not be described as the peek fix until one of those two is
+  established, and if it ships it wants a routing rule that keeps it away from M2.
 * **S2 is real under S1 and cosmetic under S5**, the reverse of what an earlier
   draft said. A started `spawn_blocking` closure cannot be aborted, as this
   document's own follow-up list records, so on the offload path a cancel flag ends
@@ -254,20 +274,22 @@ corrections above.
   calls that fixture the strongest argument for enabling the offload by default
   without asking whether the query has an index problem.
 
-Four things would change this table, in order of how much they would change it.
+Three things would still change this table, in order of how much.
 
-1. **A latency distribution for point lookups on a replica running long unbudgeted
-   operator activations**, with arms for inline, offloaded, and two-runtime. This is
-   the only test that separates M1 from M2, M2 has no experiment at all, and the
-   pre-registered prediction is now that the offload does *not* help and the second
-   runtime does.
-2. **The pre-registered strict serializable arm**, which exists in the plan for E2
-   and is missing from its results. E9 bounds the cost at 170 to 1589 ms of seal lag
-   while hydrating.
-3. **A single-phase rerun of E2.** Its null is the basis for calling the second
+1. **S1 measured rather than argued**, on E1, E11 and E12, against the predictions
+   above. It is the only unmeasured row that could displace a shipped mechanism, and
+   on E12 it is the one open question: slicing lets the *peek* yield, which does
+   nothing for a peek stuck behind an operator, so S1 should look like the inline arm
+   there. If it does, M2 belongs to placement alone.
+2. **A single-phase rerun of E2.** Its null is the basis for calling the second
    runtime inert for peek latency, and it was measured across two deployments with
    the stash off. E7 had the same confound and was rerun; E2 was not.
-4. **S1 measured rather than argued**, on E1 and E11, against the predictions above.
+3. **The strict serializable arms for E1, E11 and E8b.** E12 supplies the level for
+   one fixture and shows M5 is only visible once M2 is removed, so the others are
+   worth the repeat rather than urgent.
+
+E12 settled what was item one on this list. Its result inverted two cells and cost
+S5 its remaining claim on M2.
 
 ## Why this architecture
 
@@ -333,9 +355,12 @@ Each row is a measured experiment; the numbers and method are in
 | Late-materialization join while a 60M-row index hydrates | cannot apply, this is a dataflow and not a peek | fixes it: tail halves, 2835 ms to 1456 ms |
 | Introspection and `EXPLAIN ANALYZE` while a replica hydrates | cannot apply | fixes it: 4.4 to 7.5 s polls become about 160 ms |
 | Observing the shape of hydration memory at all | cannot apply | enables it: at 5 s per poll the sawtooth is invisible and reads as a smooth ramp |
+| A point lookup on a replica taking 500k-row insert batches | **makes it worse**: p90 148.2 against 129.5 ms | fixes it: p90 4.5 ms, matching a write-traffic-only control |
 
-The first three rows are peeks, the last three are rendered dataflows, and no row
-is moved by both. That is the fork.
+No row is moved by both, and the last row is moved in *opposite directions*. That is
+the fork. Note that the last row is a peek fixed by the runtime and made worse by the
+substrate, so the fork is not "peeks against dataflows". It is which queue the work is
+stuck in.
 
 #### Why the fork exists: preemption, not capacity
 
@@ -464,8 +489,11 @@ benefit is real but conditional on CPU headroom. A benchmark that pins every
 core with synthetic churn models a CPU-bound box and understates the feature,
 because the fleet is memory-bound with spare CPU.
 
-**It does not improve peek latency.** This was the original expectation and it did
-not survive measurement: the walk substrate does that, and does all of it. See
+**It does not improve peek latency when the peek is queued behind another peek.**
+That was the original expectation and it did not survive measurement: the walk
+substrate does that. It *does* improve peek latency when the peek is queued behind a
+long operator activation, where the substrate cannot help and makes matters slightly
+worse, measured in E12 as p90 129.5 to 4.5 ms. See
 [Two mechanisms, not one](#two-mechanisms-not-one).
 
 It also does not touch the control plane. Peeks still serialize behind DDL on the
