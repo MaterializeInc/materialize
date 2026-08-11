@@ -16,6 +16,10 @@ use crate::{KeyProber, MySqlError, QualifiedTableRef};
 /// into `num_workers` roughly even partitions.
 /// This should be run in a repeatable read transaction against a primary key varchar/char column
 /// with the `utf8mb4_bin` collation.
+/// `min_split_threshold` is the smallest estimated row count granularity partitioning will
+/// target, which means if the algorithm processes a prefix estimated to cover less
+/// than min_split_threshold rows it won't bother splitting it up further. This is useful to
+/// avoid unnecessary work for smaller tables limiting the overhead of partitioning.
 pub async fn partition_table(
     conn: &mut mysql_async::Conn,
     table: QualifiedTableRef<'_>,
@@ -68,8 +72,17 @@ async fn partition(
 
     // Estimates vary wildly especially near the full table size (see `KeyProber::estimate_range_rows` for more details).
     // Estimates tend to get more useful as smaller chunks, so break up the table into at least 1/8ths (2 workers * 4)
-    // before selecting partitions. Breaking down to smaller partitions results in more accurate splits, so we keep the
-    // 4x multiple of the worker count for > 2 workers.
+    // before selecting partitions. 1/8th was selected by feel due to a couple of observed inaccuracies:
+    // 1. Large estimates were observed as capped at 1/2 the estimated table size when the estimates were big.
+    // 2. Medium or approaching 1/2 estimated table size estimates were observed as large overestimates (~2x)
+    // So, that's a potential 4x swing and then a 2x safety factor to not push too close to the edge.
+    //
+    // Breaking down to smaller partitions results in more accurate splits, so we keep the
+    // 4x multiple of the worker count for > 2 workers. Initial testing was with an 8x multiplier, selected
+    // arbitrarily. From first principles, you can expect that if a prefix containing ~target_max_rows_per_prefix rows
+    // lands right on a boundary (i.e. the worker was 99% full for its range) the worker will get a slot worth
+    // 99% + 1/multiplier (in this case 25%) of the normal worker share resulting in skew with ~124% of the rows it
+    // should own.
     let target_max_rows_per_prefix = (estimated_row_count / u64::cast_from(workers * 4))
         .max(min_split_threshold)
         .max(1);
@@ -165,7 +178,7 @@ async fn children_prefixes(
         let estimated_rows = db.estimate_range_rows(&cur, end.as_deref()).await?;
         children.push(Prefix {
             prefix: cur,
-            end: end.clone(),
+            end,
             estimated_rows: estimated_rows.max(1),
             depth,
         });
