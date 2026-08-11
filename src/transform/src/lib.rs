@@ -86,7 +86,6 @@ pub mod non_null_requirements;
 pub mod normalize_lets;
 pub mod normalize_ops;
 pub mod notice;
-pub mod ordering;
 pub mod predicate_pushdown;
 pub mod reduce_elision;
 pub mod reduce_reduction;
