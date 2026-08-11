@@ -355,19 +355,19 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
         // resolves. Nothing is lost: anything that needed the old step upgrades
         // from further back than this one, so this one covers it too.
         MigrationStep::replacement(
-            "26.37.0-dev.0",
+            "26.38.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_sinks",
         ),
         MigrationStep::replacement(
-            "26.37.0-dev.0",
+            "26.38.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_kafka_sinks",
         ),
         MigrationStep::replacement(
-            "26.37.0-dev.0",
+            "26.38.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_iceberg_sinks",
