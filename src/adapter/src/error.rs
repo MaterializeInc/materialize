@@ -37,7 +37,7 @@ use mz_sql::rbac;
 use mz_sql::session::vars::VarError;
 use mz_storage_types::connections::ConnectionValidationError;
 use mz_storage_types::controller::StorageError;
-use mz_storage_types::errors::CollectionMissing;
+use mz_storage_types::errors::{CollectionMissing, DataflowError};
 use smallvec::SmallVec;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
@@ -70,6 +70,8 @@ pub enum AdapterError {
     DuplicateCursor(String),
     /// An error while evaluating an expression.
     Eval(EvalError),
+    /// An error produced while executing a dataflow.
+    Dataflow(Box<DataflowError>),
     /// An error occurred while planning the statement.
     Explain(ExplainError),
     /// The ID allocator exhausted all valid IDs.
@@ -201,6 +203,11 @@ pub enum AdapterError {
         buffered_bytes: usize,
         /// The `subscribe_max_buffered_bytes` budget that was exceeded.
         max_buffered_bytes: usize,
+    },
+    /// A query exceeded the configured compute peek row iteration limit.
+    PeekRowIterationLimitExceeded {
+        /// The configured per-worker limit.
+        limit: usize,
     },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
@@ -525,6 +532,15 @@ fn eval_error_code(err: &EvalError) -> SqlState {
     }
 }
 
+fn dataflow_error_code(error: &DataflowError) -> SqlState {
+    match error {
+        DataflowError::EvalError(error) => eval_error_code(error),
+        DataflowError::DecodeError(_)
+        | DataflowError::SourceError(_)
+        | DataflowError::EnvelopeError(_) => SqlState::INTERNAL_ERROR,
+    }
+}
+
 impl AdapterError {
     pub fn into_response(self, severity: Severity) -> ErrorResponse {
         ErrorResponse {
@@ -552,6 +568,10 @@ impl AdapterError {
             }
             AdapterError::Catalog(c) => c.detail(),
             AdapterError::Eval(e) => e.detail(),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.detail(),
+                _ => None,
+            },
             AdapterError::RelationOutsideTimeDomain { relations, names } => Some(format!(
                 "The following relations in the query are outside the transaction's time domain:\n{}\n{}",
                 relations
@@ -591,6 +611,11 @@ impl AdapterError {
                 "The read set transitively depends on more than {max_rw_dependencies} \
                      objects. Reduce the number of dependencies, or raise the \
                      read_then_write_max_dependencies system parameter."
+            )),
+            AdapterError::PeekRowIterationLimitExceeded { limit } => Some(format!(
+                "The query attempted to examine more than {limit} rows on a single compute \
+                 worker. This limit prevents long-running SELECT queries from delaying other \
+                 work on the cluster."
             )),
             AdapterError::SafeModeViolation(_) => Some(
                 "The Materialize server you are connected to is running in \
@@ -770,6 +795,10 @@ impl AdapterError {
                 without buffering, or raise the subscribe_max_buffered_bytes system variable."
                     .to_string(),
             ),
+            AdapterError::Dataflow(e) => match &**e {
+                DataflowError::EvalError(e) => e.hint(),
+                _ => None,
+            },
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => Some(
                 "Cancel the reconfiguration by altering the cluster back to its current \
                 configuration, or wait for it to settle, then convert."
@@ -831,6 +860,13 @@ impl AdapterError {
                 "Consider increasing the maximum allowed statement duration for this session by \
                  setting the statement_timeout session variable. For example, `SET \
                  statement_timeout = '120s'`."
+                    .into(),
+            ),
+            AdapterError::PeekRowIterationLimitExceeded { .. } => Some(
+                "Reduce the number of rows the query must examine, for example by querying an \
+                 indexed, more selective result. Queries with `LIMIT` and no `ORDER BY` can also \
+                 stop early. To permit this query, increase \
+                 `compute_peek_row_iteration_limit`."
                     .into(),
             ),
             AdapterError::PlanError(e) => e.hint(),
@@ -908,6 +944,7 @@ impl AdapterError {
             // exhaustively so the catch-all `INTERNAL_ERROR` no longer applies
             // to errors that are really the user's fault. See SQL-326.
             AdapterError::Eval(e) => eval_error_code(e),
+            AdapterError::Dataflow(e) => dataflow_error_code(e),
             AdapterError::Explain(_) => SqlState::INTERNAL_ERROR,
             AdapterError::IdExhaustionError => SqlState::INTERNAL_ERROR,
             AdapterError::Internal(_) => SqlState::INTERNAL_ERROR,
@@ -975,6 +1012,7 @@ impl AdapterError {
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
             AdapterError::SubscribeFellBehind { .. } => SqlState::OUT_OF_MEMORY,
+            AdapterError::PeekRowIterationLimitExceeded { .. } => SqlState::PROGRAM_LIMIT_EXCEEDED,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Optimizer(e) => match e {
@@ -1249,6 +1287,7 @@ impl fmt::Display for AdapterError {
                 write!(f, "cursor {} already exists", name.quoted())
             }
             AdapterError::Eval(e) => e.fmt(f),
+            AdapterError::Dataflow(e) => e.fmt(f),
             AdapterError::Explain(e) => e.fmt(f),
             AdapterError::IdExhaustionError => f.write_str("ID allocator exhausted all valid IDs"),
             AdapterError::Internal(e) => write!(f, "internal error: {}", e),
@@ -1287,6 +1326,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "selection has too many transitive dependencies to validate (limit {max_rw_dependencies})"
+                )
+            }
+            AdapterError::PeekRowIterationLimitExceeded { limit } => {
+                write!(
+                    f,
+                    "query exceeded the configured row iteration limit of {limit} rows"
                 )
             }
             AdapterError::ReplaceMaterializedViewSealed { name } => {
@@ -1636,6 +1681,20 @@ impl From<EvalError> for AdapterError {
     }
 }
 
+impl From<mz_compute_client::protocol::response::PeekError> for AdapterError {
+    fn from(error: mz_compute_client::protocol::response::PeekError) -> Self {
+        use mz_compute_client::protocol::response::PeekError;
+
+        match error {
+            PeekError::Dataflow(error) => AdapterError::Dataflow(error),
+            PeekError::Unstructured(error) => AdapterError::Unstructured(anyhow::Error::msg(error)),
+            PeekError::RowIterationLimitExceeded { limit } => {
+                AdapterError::PeekRowIterationLimitExceeded { limit }
+            }
+        }
+    }
+}
+
 impl From<ExplainError> for AdapterError {
     fn from(e: ExplainError) -> AdapterError {
         match e {
@@ -1770,3 +1829,47 @@ impl From<ConnectionValidationError> for AdapterError {
 }
 
 impl Error for AdapterError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn peek_row_iteration_limit_error_is_user_facing() {
+        let response = AdapterError::PeekRowIterationLimitExceeded { limit: 1000 }
+            .into_response(Severity::Error);
+
+        assert_eq!(response.code, SqlState::PROGRAM_LIMIT_EXCEEDED);
+        assert_eq!(
+            response.message,
+            "query exceeded the configured row iteration limit of 1000 rows"
+        );
+        assert_eq!(
+            response.detail.as_deref(),
+            Some(
+                "The query attempted to examine more than 1000 rows on a single compute worker. \
+                 This limit prevents long-running SELECT queries from delaying other work on the \
+                 cluster."
+            )
+        );
+        assert!(
+            response
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("compute_peek_row_iteration_limit"))
+        );
+    }
+
+    #[mz_ore::test]
+    fn structured_dataflow_error_preserves_message_and_code() {
+        use mz_compute_client::protocol::response::PeekError;
+
+        let dataflow_error = DataflowError::from(EvalError::DivisionByZero);
+        let expected_message = dataflow_error.to_string();
+        let response =
+            AdapterError::from(PeekError::from(dataflow_error)).into_response(Severity::Error);
+
+        assert_eq!(response.code, SqlState::DIVISION_BY_ZERO);
+        assert_eq!(response.message, expected_message);
+    }
+}
