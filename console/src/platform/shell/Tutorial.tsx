@@ -831,8 +831,9 @@ CREATE INDEX wins_by_item_buyer ON winning_bids (item, buyer);"
             </RunnableContainer>
             <TextContainer>
               <Text textStyle="text-base">
-                Rerun the previous query on `flip_activities`. The query should
-                return faster.
+                Rerun the previous query on{" "}
+                <Code variant="inline-syntax">flip_activities</Code>. The query
+                should return faster.
               </Text>
             </TextContainer>
           </ListItem>
