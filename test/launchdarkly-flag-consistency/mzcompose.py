@@ -210,6 +210,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_flat_map_fuel
     compute_logical_backpressure_max_retained_capabilities
     compute_mv_sink_advance_persist_frontiers
+    compute_peek_row_iteration_limit
     compute_peek_response_stash_batch_max_runs
     compute_peek_response_stash_read_batch_size_bytes
     compute_peek_response_stash_read_memory_budget_bytes
@@ -243,6 +244,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_coalesce_case_transform
     enable_columnar_merge_batcher
     enable_compute_half_join2
+    enable_compute_peek_row_iteration_limit
     enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
     enable_default_connection_validation
