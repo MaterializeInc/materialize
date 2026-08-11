@@ -244,7 +244,38 @@ ALTER SYSTEM RESET enable_compute_peek_response_stash
 ----
 COMPLETE 0
 
-# Does not apply when an index exists.
+# Persist-backed peeks enforce the same row iteration limit.
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_row_iteration_limit TO true;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_row_iteration_limit TO 2;
+----
+COMPLETE 0
+
+query error query exceeded the configured row iteration limit of 2 rows
+SELECT a FROM large_rows LIMIT 3;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_row_iteration_limit TO 3;
+----
+COMPLETE 0
+
+query I rowsort
+SELECT a FROM large_rows LIMIT 3;
+----
+1
+2
+3
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_peek_row_iteration_limit;
+----
+COMPLETE 0
+
+# The Persist fast path does not apply when an index exists.
 
 statement ok
 CREATE DEFAULT INDEX ON numbers;

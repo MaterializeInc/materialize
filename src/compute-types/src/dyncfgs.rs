@@ -519,6 +519,20 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
 );
 
+/// Whether compute should stop peeks that iterate over too many rows.
+pub const ENABLE_PEEK_ROW_ITERATION_LIMIT: Config<bool> = Config::new(
+    "enable_compute_peek_row_iteration_limit",
+    false,
+    "Whether compute should stop peeks that exceed compute_peek_row_iteration_limit.",
+);
+
+/// The maximum number of rows a peek may iterate over on each worker.
+pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
+    "compute_peek_row_iteration_limit",
+    1000,
+    "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. Does not apply once a peek's results move to the peek stash.",
+);
+
 /// The collection interval for the Prometheus metrics introspection source.
 ///
 /// Set to zero to disable scraping and retract any existing data.
@@ -590,6 +604,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
+        .add(&ENABLE_PEEK_ROW_ITERATION_LIMIT)
+        .add(&PEEK_ROW_ITERATION_LIMIT)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
@@ -601,4 +617,15 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn peek_row_iteration_limit_defaults() {
+        assert!(!*ENABLE_PEEK_ROW_ITERATION_LIMIT.default());
+        assert_eq!(*PEEK_ROW_ITERATION_LIMIT.default(), 1000);
+    }
 }

@@ -41,5 +41,8 @@ tokio.workspace = true
 tracing.workspace = true
 uuid = { workspace = true, features = ["serde", "v4"] }
 
+[dev-dependencies]
+bincode.workspace = true
+
 [features]
 default = []

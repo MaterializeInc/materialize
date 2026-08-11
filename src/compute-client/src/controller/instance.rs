@@ -64,8 +64,8 @@ use crate::protocol::command::{
 };
 use crate::protocol::history::ComputeCommandHistory;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StatusResponse,
-    SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError as ProtocolPeekError,
+    PeekResponse, StatusResponse, SubscribeBatch, SubscribeResponse,
 };
 
 #[derive(Error, Debug)]
@@ -1346,7 +1346,8 @@ impl Instance {
             self.deliver_response(response);
         }
         for uuid in to_drop {
-            let response = PeekResponse::Error(ERROR_TARGET_REPLICA_FAILED.into());
+            let response =
+                PeekResponse::Error(ProtocolPeekError::unstructured(ERROR_TARGET_REPLICA_FAILED));
             self.finish_peek(uuid, response);
         }
 

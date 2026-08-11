@@ -27,8 +27,8 @@ use uuid::Uuid;
 
 use crate::protocol::command::ComputeCommand;
 use crate::protocol::response::{
-    ComputeResponse, CopyToResponse, FrontiersResponse, PeekResponse, StashedPeekResponse,
-    SubscribeBatch, SubscribeResponse,
+    ComputeResponse, CopyToResponse, FrontiersResponse, PeekError, PeekResponse,
+    StashedPeekResponse, SubscribeBatch, SubscribeResponse,
 };
 
 /// A client to a compute server.
@@ -106,7 +106,7 @@ pub struct PartitionedComputeState {
     /// The compute protocol requires that exactly one response is emitted for each peek. This
     /// property ensures that a) we can eventually drop the tracking state maintained for a peek
     /// and b) we won't re-initialize tracking for a peek we have already served.
-    peek_responses: BTreeMap<Uuid, (PeekResponse, BTreeSet<usize>)>,
+    peek_responses: BTreeMap<Uuid, PendingPeek>,
     /// For each in-progress copy-to the response data received so far, and the set of shards that
     /// provided responses already.
     ///
@@ -223,19 +223,14 @@ impl PartitionedComputeState {
         response: PeekResponse,
         otel_ctx: OpenTelemetryContext,
     ) -> Option<ComputeResponse> {
-        let (merged, ready_shards) = self.peek_responses.entry(uuid).or_insert((
-            PeekResponse::Rows(vec![RowCollection::default()]),
-            BTreeSet::new(),
-        ));
+        let pending = self
+            .peek_responses
+            .entry(uuid)
+            .or_insert_with(PendingPeek::new);
+        pending.absorb(shard_id, response, self.max_result_size);
 
-        let first = ready_shards.insert(shard_id);
-        assert!(first, "duplicate peek response");
-
-        let resp1 = mem::replace(merged, PeekResponse::Canceled);
-        *merged = merge_peek_responses(resp1, response, self.max_result_size);
-
-        if ready_shards.len() == self.parts {
-            let (response, _) = self.peek_responses.remove(&uuid).unwrap();
+        if pending.ready_shards.len() == self.parts {
+            let response = self.peek_responses.remove(&uuid).unwrap().response;
             Some(ComputeResponse::PeekResponse(uuid, response, otel_ctx))
         } else {
             None
@@ -565,31 +560,66 @@ impl PendingSubscribe {
     }
 }
 
+/// Accumulates the per-worker responses to one peek into the single response the controller
+/// hands upwards.
+#[derive(Debug)]
+struct PendingPeek {
+    /// The responses merged so far.
+    response: PeekResponse,
+    /// Inline result bytes seen so far, across all shards.
+    ///
+    /// Tracked separately from `response` because a worker's rows are dropped as soon as any
+    /// worker reports an error. Without this the aggregate size check would depend on the order
+    /// the responses happen to arrive in.
+    inline_byte_len: usize,
+    /// The shards that have provided responses.
+    ready_shards: BTreeSet<usize>,
+}
+
+impl PendingPeek {
+    fn new() -> Self {
+        Self {
+            response: PeekResponse::Rows(vec![RowCollection::default()]),
+            inline_byte_len: 0,
+            ready_shards: BTreeSet::new(),
+        }
+    }
+
+    fn absorb(&mut self, shard_id: usize, response: PeekResponse, max_result_size: u64) {
+        let first = self.ready_shards.insert(shard_id);
+        assert!(first, "duplicate peek response");
+
+        self.inline_byte_len = self
+            .inline_byte_len
+            .saturating_add(response.inline_byte_len());
+        let current = mem::replace(&mut self.response, PeekResponse::Canceled);
+        self.response = merge_peek_responses(current, response);
+
+        // Merging eagerly is what keeps the controller's memory bounded, so the size check has to
+        // happen on every response rather than once at the end.
+        if self.inline_byte_len > max_result_size.cast_into() {
+            // NOTE: Tests match on this exact message, so nothing else may produce it.
+            let error = PeekError::unstructured(format!(
+                "total result exceeds max size of {}",
+                ByteSize::b(max_result_size)
+            ));
+            let current = mem::replace(&mut self.response, PeekResponse::Canceled);
+            self.response = merge_peek_responses(current, PeekResponse::Error(error));
+        }
+    }
+}
+
 /// Merge two [`PeekResponse`]s.
-fn merge_peek_responses(
-    resp1: PeekResponse,
-    resp2: PeekResponse,
-    max_result_size: u64,
-) -> PeekResponse {
+fn merge_peek_responses(resp1: PeekResponse, resp2: PeekResponse) -> PeekResponse {
     use PeekResponse::*;
 
     // Cancelations and errors short-circuit. Cancelations take precedence over errors.
     let (resp1, resp2) = match (resp1, resp2) {
         (Canceled, _) | (_, Canceled) => return Canceled,
+        (Error(e1), Error(e2)) => return Error(merge_peek_errors(e1, e2)),
         (Error(e), _) | (_, Error(e)) => return Error(e),
         resps => resps,
     };
-
-    let total_byte_len = resp1.inline_byte_len() + resp2.inline_byte_len();
-    if total_byte_len > max_result_size.cast_into() {
-        // Note: We match on this specific error message in tests so it's important that
-        // nothing else returns the same string.
-        let err = format!(
-            "total result exceeds max size of {}",
-            ByteSize::b(max_result_size)
-        );
-        return Error(err);
-    }
 
     match (resp1, resp2) {
         (Rows(mut rows1), Rows(rows2)) => {
@@ -625,14 +655,14 @@ fn merge_peek_responses(
                     "shard IDs of stashed responses do not match: \
                              {shard_id1} != {shard_id2}"
                 );
-                return Error("internal error".into());
+                return Error(PeekError::unstructured("internal error"));
             }
             if relation_desc1 != relation_desc2 {
                 soft_panic_or_log!(
                     "relation descs of stashed responses do not match: \
                              {relation_desc1:?} != {relation_desc2:?}"
                 );
-                return Error("internal error".into());
+                return Error(PeekError::unstructured("internal error"));
             }
 
             batches1.append(&mut batches2);
@@ -648,5 +678,93 @@ fn merge_peek_responses(
             }))
         }
         _ => unreachable!("handled above"),
+    }
+}
+
+/// Merge two [`PeekError`]s into the one we report.
+///
+/// A row-iteration-limit error only wins against another one, and then the smaller limit wins so
+/// the choice does not depend on which worker answered first. Any other error outranks it: a
+/// query that both overran the limit and failed for a real reason should report the real reason.
+fn merge_peek_errors(error1: PeekError, error2: PeekError) -> PeekError {
+    match (error1, error2) {
+        (
+            PeekError::RowIterationLimitExceeded { limit: limit1 },
+            PeekError::RowIterationLimitExceeded { limit: limit2 },
+        ) => PeekError::RowIterationLimitExceeded {
+            limit: limit1.min(limit2),
+        },
+        (PeekError::RowIterationLimitExceeded { .. }, error)
+        | (error, PeekError::RowIterationLimitExceeded { .. }) => error,
+        (error, _) => error,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::num::NonZeroUsize;
+
+    use mz_repr::Row;
+
+    #[mz_ore::test]
+    fn pending_peek_response_precedence() {
+        let rows = PeekResponse::Rows(vec![RowCollection::default()]);
+        let error = PeekResponse::Error(PeekError::unstructured("dataflow error"));
+        let row_limit = |limit| PeekResponse::Error(PeekError::RowIterationLimitExceeded { limit });
+
+        let mut pending = PendingPeek::new();
+        pending.absorb(0, rows.clone(), u64::MAX);
+        pending.absorb(1, row_limit(1000), u64::MAX);
+        pending.absorb(2, row_limit(500), u64::MAX);
+        assert_eq!(pending.response, row_limit(500));
+
+        let mut pending = PendingPeek::new();
+        pending.absorb(0, rows, u64::MAX);
+        pending.absorb(1, row_limit(1000), u64::MAX);
+        pending.absorb(2, error.clone(), u64::MAX);
+        assert_eq!(pending.response, error);
+
+        let mut pending = PendingPeek::new();
+        pending.absorb(
+            0,
+            PeekResponse::Error(PeekError::unstructured("dataflow error")),
+            u64::MAX,
+        );
+        pending.absorb(3, PeekResponse::Canceled, u64::MAX);
+        assert_eq!(pending.response, PeekResponse::Canceled);
+    }
+
+    #[mz_ore::test]
+    fn peek_max_size_wins_over_row_iteration_limit_in_every_order() {
+        let row = RowCollection::new(vec![(Row::default(), NonZeroUsize::new(1).unwrap())], &[]);
+        let rows = PeekResponse::Rows(vec![row]);
+        let max_result_size = u64::try_from(rows.inline_byte_len()).unwrap();
+        let responses = [
+            rows.clone(),
+            PeekResponse::Error(PeekError::RowIterationLimitExceeded { limit: 1000 }),
+            rows,
+        ];
+        let permutations = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        let expected = PeekResponse::Error(PeekError::unstructured(format!(
+            "total result exceeds max size of {}",
+            ByteSize::b(max_result_size)
+        )));
+
+        for permutation in permutations {
+            let mut pending = PendingPeek::new();
+            for (shard_id, response_index) in permutation.into_iter().enumerate() {
+                pending.absorb(shard_id, responses[response_index].clone(), max_result_size);
+            }
+
+            assert_eq!(pending.response, expected, "{permutation:?}");
+        }
     }
 }
