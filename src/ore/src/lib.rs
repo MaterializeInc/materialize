@@ -25,7 +25,6 @@
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "assert-no-tracing")))]
 #[cfg(feature = "assert-no-tracing")]
 pub mod assert;
-pub mod bits;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "bytes")))]
 #[cfg(feature = "bytes")]
 pub mod bytes;
@@ -43,8 +42,6 @@ pub mod fmt;
 #[cfg_attr(nightly_doc_features, doc(cfg(feature = "async")))]
 #[cfg(feature = "async")]
 pub mod future;
-pub mod graph;
-pub mod hash;
 pub mod hint;
 #[cfg(feature = "id_gen")]
 pub mod id_gen;
@@ -70,7 +67,6 @@ pub mod pager;
 #[cfg(feature = "panic")]
 pub mod panic;
 pub mod path;
-pub mod permutations;
 #[cfg_attr(nightly_doc_features, doc(cfg(all(feature = "pool", unix))))]
 #[cfg(all(feature = "pool", unix))]
 pub mod pool;
