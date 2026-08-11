@@ -50,7 +50,7 @@ use crate::adt::datetime::PackedNaiveTime;
 use crate::adt::interval::PackedInterval;
 use crate::adt::jsonb::{JsonbPacker, JsonbRef};
 use crate::adt::mz_acl_item::{PackedAclItem, PackedMzAclItem};
-use crate::adt::numeric::{Numeric, PackedNumeric};
+use crate::adt::numeric::{NUMERIC_DATUM_MAX_PRECISION, Numeric, PackedNumeric};
 use crate::adt::range::{Range, RangeInner, RangeLowerBound, RangeUpperBound};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::proto_datum::DatumType;
@@ -2150,11 +2150,21 @@ impl RowPacker<'_> {
                 // represented as variants of ProtoDatumOther.
                 //
                 // `decPackedToNumber` (called via `Decimal::from_packed_bcd`)
-                // doesn't bounds-check its input and segfaults on empty bcd.
-                // That is reachable from untrusted proto bytes, so we reject
-                // before descending into the FFI.
-                if x.bcd.is_empty() {
-                    return Err("ProtoNumeric.bcd is empty".to_string());
+                // doesn't bounds-check its input: it segfaults on an empty bcd,
+                // and it writes one BCD digit per input nibble into `Numeric`'s
+                // fixed-size coefficient, overrunning it for a longer bcd. Both
+                // are reachable from untrusted proto bytes, so bound the length
+                // before descending into the FFI. `to_packed_bcd` never emits
+                // more than MAX_BCD_LEN bytes: one nibble per digit plus a sign
+                // nibble, rounded up to whole bytes.
+                const MAX_BCD_LEN: usize =
+                    mz_ore::cast::u8_to_usize(NUMERIC_DATUM_MAX_PRECISION) / 2 + 1;
+                if x.bcd.is_empty() || x.bcd.len() > MAX_BCD_LEN {
+                    return Err(format!(
+                        "ProtoNumeric.bcd length {} not in 1..={}",
+                        x.bcd.len(),
+                        MAX_BCD_LEN,
+                    ));
                 }
                 let n = Decimal::from_packed_bcd(&x.bcd, x.scale).map_err(|err| err.to_string())?;
                 self.push(Datum::from(n))
@@ -2317,6 +2327,35 @@ mod tests {
         let proto = ProtoRow::decode(bytes).expect("crash input decodes as a proto");
         let result: Result<Row, _> = proto.into_rust();
         assert_err!(result);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn proto_row_oversized_numeric_bcd_is_error() {
+        // A `ProtoNumeric` whose `bcd` holds more digits than `Numeric`'s
+        // coefficient can hold must decode to an error. `decPackedToNumber`
+        // writes one BCD digit per input nibble into the fixed-size
+        // coefficient without bounds-checking it, so a long `bcd` writes past
+        // the end of the `Decimal` and eventually segfaults.
+        for len in [21, 64, 4096] {
+            let mut bcd = vec![0x99u8; len];
+            // DECPPLUS, so the sign nibble check passes and the digit copy runs.
+            *bcd.last_mut().unwrap() = 0x9c;
+            let proto = ProtoRow {
+                datums: vec![ProtoDatum {
+                    datum_type: Some(DatumType::Numeric(ProtoNumeric { bcd, scale: 0 })),
+                }],
+            };
+            assert_err!(Row::try_from(&proto));
+        }
+
+        // The bound must not reject anything we encode: a numeric at max
+        // precision packs into exactly MAX_BCD_LEN bytes.
+        let mut cx = crate::adt::numeric::cx_datum();
+        let digits = "9".repeat(usize::from(NUMERIC_DATUM_MAX_PRECISION));
+        let n: Numeric = cx.parse(digits.as_str()).unwrap();
+        let row = Row::pack_slice(&[Datum::Numeric(OrderedDecimal(n))]);
+        assert_eq!(Row::try_from(&row.into_proto()).unwrap(), row);
     }
 
     #[track_caller]
