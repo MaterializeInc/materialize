@@ -6959,23 +6959,13 @@ dependencies = [
 name = "mz-durable-cache"
 version = "0.0.0"
 dependencies = [
- "async-trait",
- "bytes",
  "differential-dataflow",
- "futures",
- "itertools 0.14.0",
- "mz-dyncfg",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
- "mz-timely-util",
- "prometheus",
- "prost",
- "serde",
  "timely",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
