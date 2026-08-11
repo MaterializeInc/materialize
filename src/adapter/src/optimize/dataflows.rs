@@ -72,13 +72,6 @@ impl ComputeInstanceSnapshot {
             })
     }
 
-    pub fn new_from_parts(instance_id: ComputeInstanceId, collections: BTreeSet<GlobalId>) -> Self {
-        Self {
-            instance_id,
-            collections: Some(collections),
-        }
-    }
-
     pub fn new_without_collections(instance_id: ComputeInstanceId) -> Self {
         Self {
             instance_id,

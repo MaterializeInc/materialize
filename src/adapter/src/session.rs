@@ -571,14 +571,6 @@ impl Session {
         Some(notice)
     }
 
-    /// Sets the transaction ops to `TransactionOps::None`. Must only be used after
-    /// verifying that no transaction anomalies will occur if cleared.
-    pub fn clear_transaction_ops(&mut self) {
-        if let Some(txn) = self.transaction.inner_mut() {
-            txn.ops = TransactionOps::None;
-        }
-    }
-
     /// If the current transaction ops belong to a read, then sets the
     /// ops to `None`, returning the old read timestamp context if
     /// any existed. Must only be used after verifying that no transaction

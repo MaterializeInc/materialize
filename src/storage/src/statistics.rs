@@ -691,19 +691,6 @@ impl SourceStatistics {
         }
     }
 
-    /// Set the `bytes_indexed` to the given value
-    pub fn set_bytes_indexed(&self, value: i64) {
-        let mut cur = self.stats.borrow_mut();
-        let value = if value < 0 {
-            tracing::warn!("Unexpected negative value for bytes_indexed {}", value);
-            0
-        } else {
-            value.unsigned_abs()
-        };
-        cur.stats.bytes_indexed = Some(value);
-        cur.prom.bytes_indexed.set(value);
-    }
-
     /// Update the `records_indexed` stat.
     /// A positive value will add and a negative value will subtract.
     pub fn update_records_indexed_by(&self, value: i64) {
@@ -726,19 +713,6 @@ impl SourceStatistics {
             cur.stats.records_indexed = Some(0);
             cur.prom.records_indexed.set(0);
         }
-    }
-
-    /// Set the `records_indexed` to the given value
-    pub fn set_records_indexed(&self, value: i64) {
-        let mut cur = self.stats.borrow_mut();
-        let value = if value < 0 {
-            tracing::warn!("Unexpected negative value for records_indexed {}", value);
-            0
-        } else {
-            value.unsigned_abs()
-        };
-        cur.stats.records_indexed = Some(value);
-        cur.prom.records_indexed.set(value);
     }
 
     /// Initialize the `rehydration_latency_ms` stat as `NULL`.

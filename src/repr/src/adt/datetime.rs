@@ -269,21 +269,6 @@ impl DateTimeField {
 
         Interval::convert_date_time_unit(self, Self::Microseconds, 1i64).unwrap()
     }
-
-    /// Returns the number of months in a single unit of `field`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called on a duration field.
-    pub fn month_multiplier(self) -> i64 {
-        use DateTimeField::*;
-        match self {
-            Millennium | Century | Decade | Year => {}
-            _other => unreachable!("Do not call with a duration field"),
-        }
-
-        Interval::convert_date_time_unit(self, Self::Microseconds, 1i64).unwrap()
-    }
 }
 
 /// An iterator over DateTimeFields

@@ -10,7 +10,7 @@
 #![warn(missing_docs)]
 
 use std::cell::RefCell;
-use std::cmp::{Ordering, max};
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fmt::{Display, Formatter};
@@ -1563,19 +1563,6 @@ impl MirRelationExpr {
         std::mem::replace(self, empty)
     }
 
-    /// Replaces `self` with some logic applied to `self`.
-    pub fn replace_using<F>(&mut self, logic: F)
-    where
-        F: FnOnce(MirRelationExpr) -> MirRelationExpr,
-    {
-        let empty = MirRelationExpr::Constant {
-            rows: Ok(vec![]),
-            typ: ReprRelationType::new(Vec::new()),
-        };
-        let expr = std::mem::replace(self, empty);
-        *self = logic(expr);
-    }
-
     /// Store `self` in a `Let` and pass the corresponding `Get` to `body`.
     pub fn let_in<Body, E>(self, id_gen: &mut IdGen, body: Body) -> Result<MirRelationExpr, E>
     where
@@ -1947,20 +1934,6 @@ impl MirRelationExpr {
         }
     }
 
-    /// Computes the size (total number of nodes) and maximum depth of a MirRelationExpr for
-    /// debug printing purposes.
-    pub fn debug_size_and_depth(&self) -> (usize, usize) {
-        let mut size = 0;
-        let mut max_depth = 0;
-        let mut todo = vec![(self, 1)];
-        while let Some((expr, depth)) = todo.pop() {
-            size += 1;
-            max_depth = max(max_depth, depth);
-            todo.extend(expr.children().map(|c| (c, depth + 1)));
-        }
-        (size, max_depth)
-    }
-
     /// The MirRelationExpr is considered potentially expensive if and only if
     /// at least one of the following conditions is true:
     ///
@@ -2061,59 +2034,6 @@ impl MirRelationExpr {
             defined.insert(*binding_id);
         }
         used_across_iterations
-    }
-
-    /// Replaces `LetRec` nodes with a stack of `Let` nodes.
-    ///
-    /// In each `Let` binding, uses of `Get` in `value` that are not at strictly greater
-    /// identifiers are rewritten to be the constant collection.
-    /// This makes the computation perform exactly "one" iteration.
-    ///
-    /// This was used only temporarily while developing `LetRec`.
-    pub fn make_nonrecursive(self: &mut MirRelationExpr) {
-        let mut deadlist = BTreeSet::new();
-        let mut worklist = vec![self];
-        while let Some(expr) = worklist.pop() {
-            if let MirRelationExpr::LetRec {
-                ids,
-                values,
-                limits: _,
-                body,
-            } = expr
-            {
-                let ids_values = values
-                    .drain(..)
-                    .zip_eq(ids)
-                    .map(|(value, id)| (*id, value))
-                    .collect::<Vec<_>>();
-                *expr = body.take_dangerous();
-                for (id, mut value) in ids_values.into_iter().rev() {
-                    // Remove references to potentially recursive identifiers.
-                    deadlist.insert(id);
-                    value.visit_pre_mut(|e| {
-                        if let MirRelationExpr::Get {
-                            id: crate::Id::Local(id),
-                            typ,
-                            ..
-                        } = e
-                        {
-                            let typ = typ.clone();
-                            if deadlist.contains(id) {
-                                e.take_safely(Some(typ));
-                            }
-                        }
-                    });
-                    *expr = MirRelationExpr::Let {
-                        id,
-                        value: Box::new(value),
-                        body: Box::new(expr.take_dangerous()),
-                    };
-                }
-                worklist.push(expr);
-            } else {
-                worklist.extend(expr.children_mut().rev());
-            }
-        }
     }
 
     /// For each Id `id'` referenced in `expr`, if it is larger or equal than `id`, then record in

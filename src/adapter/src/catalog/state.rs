@@ -81,7 +81,7 @@ use mz_sql::plan::{
 use mz_sql::rbac;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
-use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, SystemVars, Var, VarInput};
+use mz_sql::session::vars::{DEFAULT_DATABASE_NAME, SystemVars, VarInput};
 use mz_sql_parser::ast::QualifiedReplica;
 use mz_storage_client::controller::StorageMetadata;
 use mz_storage_types::connections::ConnectionContext;
@@ -1673,11 +1673,6 @@ impl CatalogState {
             .get(replica_name)
             .ok_or_else(|| SqlCatalogError::UnknownClusterReplica(replica_name.to_string()))?;
         Ok(&cluster.replicas_by_id_[replica_id])
-    }
-
-    /// Get system configuration `name`.
-    pub fn get_system_configuration(&self, name: &str) -> Result<&dyn Var, Error> {
-        Ok(self.system_configuration.get(name)?)
     }
 
     /// Parse system configuration `name` with `value` int.

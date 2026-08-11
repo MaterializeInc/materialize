@@ -109,24 +109,6 @@ impl<T: Columnation> ColumnationStack<T> {
         }
     }
 
-    /// Retain elements that pass a predicate, from a specified offset.
-    ///
-    /// This method may or may not reclaim memory in the inner region.
-    pub fn retain_from<P: FnMut(&T) -> bool>(&mut self, index: usize, mut predicate: P) {
-        let mut write_position = index;
-        for position in index..self.local.len() {
-            if predicate(&self[position]) {
-                self.local.swap(position, write_position);
-                write_position += 1;
-            }
-        }
-        unsafe {
-            // Unsafety justified in that `write_position` is no greater than
-            // `self.local.len()` and so this exposes no invalid data.
-            self.local.set_len(write_position);
-        }
-    }
-
     /// Unsafe access to `local` data. The slices store data that is backed by a region
     /// allocation. Therefore, it is undefined behavior to mutate elements of the `local` slice.
     ///
@@ -142,17 +124,6 @@ impl<T: Columnation> ColumnationStack<T> {
         let size_of = std::mem::size_of::<T>();
         callback(self.local.len() * size_of, self.local.capacity() * size_of);
         self.inner.heap_size(callback);
-    }
-
-    /// Estimate the consumed memory capacity in bytes, summing both used and total capacity.
-    #[inline]
-    pub fn summed_heap_size(&self) -> (usize, usize) {
-        let (mut length, mut capacity) = (0, 0);
-        self.heap_size(|len, cap| {
-            length += len;
-            capacity += cap
-        });
-        (length, capacity)
     }
 
     /// The length in items.

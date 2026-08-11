@@ -420,43 +420,6 @@ impl Catalog {
         f(catalog).await
     }
 
-    /// Like [`Catalog::with_debug`], but the catalog created believes that bootstrap is still
-    /// in progress.
-    pub async fn with_debug_in_bootstrap<F, Fut, T>(f: F) -> T
-    where
-        F: FnOnce(Catalog) -> Fut,
-        Fut: Future<Output = T>,
-    {
-        let persist_client = PersistClient::new_for_tests().await;
-        let organization_id = Uuid::new_v4();
-        let bootstrap_args = test_bootstrap_args();
-        let mut catalog =
-            Self::open_debug_catalog(persist_client.clone(), organization_id, &bootstrap_args)
-                .await
-                .expect("can open debug catalog");
-
-        // Replace `storage` in `catalog` with one that doesn't think bootstrap is over.
-        let now = SYSTEM_TIME.clone();
-        let openable_storage = TestCatalogStateBuilder::new(persist_client)
-            .with_organization_id(organization_id)
-            .with_default_deploy_generation()
-            .build()
-            .await
-            .expect("can create durable catalog");
-        let mut storage = openable_storage
-            .open(now().into(), &bootstrap_args)
-            .await
-            .expect("can open durable catalog");
-        // Drain updates.
-        let _ = storage
-            .sync_to_current_updates()
-            .await
-            .expect("can sync to current updates");
-        catalog.storage = Arc::new(tokio::sync::Mutex::new(storage));
-
-        f(catalog).await
-    }
-
     /// Opens a debug catalog.
     ///
     /// See [`Catalog::with_debug`].
@@ -797,25 +760,6 @@ impl Catalog {
             .err_into()
     }
 
-    #[cfg(test)]
-    pub async fn allocate_system_id(
-        &self,
-        commit_ts: mz_repr::Timestamp,
-    ) -> Result<(CatalogItemId, GlobalId), Error> {
-        use mz_ore::collections::CollectionExt;
-
-        let mut storage = self.storage().await;
-        let mut txn = storage.transaction().await?;
-        let id = txn
-            .allocate_system_item_ids(1)
-            .maybe_terminate("allocating system ids")?
-            .into_element();
-        // Drain transaction.
-        let _ = txn.get_and_commit_op_updates();
-        txn.commit(commit_ts).await?;
-        Ok(id)
-    }
-
     /// Get the next system item ID without allocating it.
     pub async fn get_next_system_item_id(&self) -> Result<u64, Error> {
         self.storage()
@@ -1014,10 +958,6 @@ impl Catalog {
         self.state.resolve_builtin_cluster(cluster)
     }
 
-    pub fn get_mz_catalog_server_cluster_id(&self) -> &ClusterId {
-        &self.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER).id
-    }
-
     /// Resolves a [`Cluster`] for a TargetCluster.
     pub fn resolve_target_cluster(
         &self,
@@ -1209,16 +1149,6 @@ impl Catalog {
             schema: name.schema.clone(),
             item: name.item.clone(),
         }
-    }
-
-    pub fn find_available_cluster_name(&self, name: &str) -> String {
-        let mut i = 0;
-        let mut candidate = name.to_string();
-        while self.state.clusters_by_name.contains_key(&candidate) {
-            i += 1;
-            candidate = format!("{}{}", name, i);
-        }
-        candidate
     }
 
     pub fn get_role_allowed_cluster_sizes(&self, role_id: &Option<RoleId>) -> Vec<String> {

@@ -110,21 +110,6 @@ where
 }
 
 impl ArrowBuilder {
-    /// Helper to validate that a RelationDesc can be encoded into Arrow.
-    pub fn validate_desc(desc: &RelationDesc) -> Result<(), anyhow::Error> {
-        let mut errs = vec![];
-        for (col_name, col_type) in desc.iter() {
-            match scalar_to_arrow_datatype(&col_type.scalar_type) {
-                Ok(_) => {}
-                Err(_) => errs.push(format!("{}: {:?}", col_name, col_type.scalar_type)),
-            }
-        }
-        if !errs.is_empty() {
-            anyhow::bail!("Cannot encode the following columns/types: {:?}", errs);
-        }
-        Ok(())
-    }
-
     /// Helper to validate that a RelationDesc, after applying `overrides`, can
     /// be encoded into Arrow AND converted from Arrow into parquet by
     /// arrow-rs's `ArrowWriter`.
@@ -269,15 +254,6 @@ impl ArrowBuilder {
     pub fn row_size_bytes(&self) -> usize {
         self.row_size_bytes
     }
-}
-
-/// Return the appropriate Arrow DataType for the given SqlScalarType, plus a string
-/// that should be used as part of the Arrow 'Extension Type' name for fields using
-/// this type: <https://arrow.apache.org/docs/format/Columnar.html#extension-types>
-fn scalar_to_arrow_datatype(
-    scalar_type: &SqlScalarType,
-) -> Result<(DataType, String), anyhow::Error> {
-    scalar_to_arrow_datatype_impl(scalar_type, &|_| None)
 }
 
 /// Returns a description of why this Arrow [`DataType`] cannot be written to

@@ -1578,18 +1578,6 @@ impl RelationDescBuilder {
         self
     }
 
-    /// Appends the provided columns to the builder.
-    pub fn with_columns<I, T, N>(mut self, iter: I) -> Self
-    where
-        I: IntoIterator<Item = (N, T)>,
-        T: Into<SqlColumnType>,
-        N: Into<ColumnName>,
-    {
-        self.columns
-            .extend(iter.into_iter().map(|(name, ty)| (name.into(), ty.into())));
-        self
-    }
-
     /// Adds a new key for the relation.
     pub fn with_key(mut self, mut indices: Vec<usize>) -> RelationDescBuilder {
         indices.sort_unstable();
