@@ -904,7 +904,7 @@ mod tests {
 
     /// `utf8mb4_bin` has no contractions or expansions: Czech `ch` stays an
     /// ordinary `c` extension and `ß` an ordinary character, so the walk
-    /// visits every prefix.
+    /// visits every prefix. This would not work with the standard default collation.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn test_live_mysql_bin_no_contraction_or_expansion() -> Result<(), anyhow::Error> {
@@ -929,113 +929,6 @@ mod tests {
         Ok(())
     }
 
-    /// Czech `ch` collates as one letter between `h` and `i` while LIKE
-    /// stays character-based, so the walk drops the prefixes LIKE 'c%'
-    /// spans past.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_ch_contraction() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        const DB: &str = "mz_probe_ch_contraction";
-        let keys = ["cesta", "duha", "hora", "chleba", "ibis"];
-        let table = setup_table(&mut conn, DB, "utf8mb4_cs_0900_ai_ci", &keys).await?;
-
-        let p = &mut KeyProber::new(&mut conn, table, "id");
-        assert_eq!(
-            prefix_of_first_key_in_range(p, "", None, 1).await,
-            some("c")
-        );
-        // The max key LIKE 'c%' is chleba, which collates past duha and
-        // hora, so the walk steps straight to "i" and drops "d" and "h".
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "c", None, 1).await,
-            some("i")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "i", None, 1).await,
-            None
-        );
-
-        drop_db(&mut conn, DB).await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
-    /// U+0000 carries no collation weight under the default collation, so a
-    /// leading-NUL key sorts by its suffix while truncating to the bare NUL,
-    /// which sorts below everything. This blocks the usage of the KeyProber
-    /// with `utf8mb4_0900_ai_ci`.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_nul_ordering() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        const DB: &str = "mz_probe_nul_ordering";
-        let keys = ["aa", "mm", "\0zz"];
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
-
-        let p = &mut KeyProber::new(&mut conn, table, "id");
-        assert_eq!(
-            prefix_of_first_key_in_range(p, "", None, 1).await,
-            some("a")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "a", None, 1).await,
-            some("m")
-        );
-        // "\0zz" sorts above "mm" but truncates to the zero-weight NUL,
-        // which sorts below everything.
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "m", None, 1).await,
-            some("\0")
-        );
-        // The inverted range has no optimizer estimate.
-        assert_eq!(p.estimate_range_rows("m", Some("\0")).await?, None);
-
-        drop_db(&mut conn, DB).await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
-    /// `ß` expands to two collation elements (`ß` = `ss`) under the default
-    /// collation `utf8mb4_0900_ai_ci`, so truncations of `aß...` and `asz...`
-    /// keys sort opposite to the keys themselves. This issue blocks the usage
-    /// of the KeyProber with utf8mb4_0900_ai_ci.
-    #[mz_ore::test(tokio::test)]
-    #[cfg_attr(miri, ignore)]
-    async fn test_live_mysql_eszett_expansion() -> Result<(), anyhow::Error> {
-        let Some(mut conn) = connect().await? else {
-            return Ok(());
-        };
-        const DB: &str = "mz_probe_eszett";
-        let keys = ["aaa", "aßx", "asz"];
-        let table = setup_table(&mut conn, DB, "utf8mb4_0900_ai_ci", &keys).await?;
-
-        let p = &mut KeyProber::new(&mut conn, table, "id");
-        assert_eq!(
-            prefix_of_first_key_in_range(p, "", None, 2).await,
-            some("aa")
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "aa", None, 2).await,
-            some("aß")
-        );
-        // "asz" sorts above "aßx" but its truncation "as" sorts below "aß".
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "aß", None, 2).await,
-            some("as")
-        );
-        // The inverted range has no optimizer estimate.
-        assert_eq!(p.estimate_range_rows("aß", Some("as")).await?, None);
-
-        drop_db(&mut conn, DB).await?;
-        conn.disconnect().await?;
-        Ok(())
-    }
-
     /// `utf8mb4_bin` compares character by character but is PAD SPACE, so
     /// keys starting below space sort below the empty string. A walk seeded
     /// with the empty string drops them, they land in the snapshot range
@@ -1049,7 +942,7 @@ mod tests {
             return Ok(());
         };
         const DB: &str = "mz_probe_below_empty_test";
-        let keys = ["\u{1}a", "\u{9}b", "a1", "a1\u{1}x", "b1"];
+        let keys = ["\0a", "\u{1}a", "\u{9}b", "a1", "a1\u{1}x", "b1"];
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
