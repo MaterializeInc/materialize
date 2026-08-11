@@ -276,6 +276,23 @@ pub const WEBHOOK_MAX_REQUEST_SIZE_BYTES: Config<usize> = Config::new(
     "The maximum size in bytes of a webhook request body, measured after decompression.",
 );
 
+/// Maximum temporary storage a webhook `CHECK` expression may allocate while
+/// validating one request. A `CHECK` that exceeds it fails the request with HTTP
+/// 400 rather than holding the memory.
+///
+/// This exists because a `CHECK` can allocate a multiple of the request body,
+/// and `environmentd` evaluates one per in-flight request: without a bound
+/// proportionate to the request, a bounded amount of network input becomes an
+/// unbounded amount of heap on a process shared by every connection. The default
+/// is 4x `WEBHOOK_MAX_REQUEST_SIZE_BYTES`, far above what a realistic `CHECK`
+/// (an HMAC, a `decode`, a `concat` with a secret) needs, and well below the
+/// 100 MiB per-call ceiling that applies in a cluster.
+pub const WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
+    "webhook_validation_memory_budget_bytes",
+    20 * 1024 * 1024,
+    "The maximum bytes of temporary storage a webhook CHECK expression may allocate while validating one request.",
+);
+
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
 /// a persist write + oracle call per DDL statement.
 pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
@@ -445,6 +462,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
+        .add(&WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
         .add(&CONSOLE_OIDC_CLIENT_ID)

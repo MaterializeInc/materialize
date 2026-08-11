@@ -40,7 +40,7 @@ use mz_repr::{
 use serde::{Deserialize, Serialize};
 
 use crate::func::{
-    CaseLiteral, MAX_STRING_FUNC_RESULT_BYTES, array_create_scalar, build_regex, date_bin,
+    CaseLiteral, array_create_scalar, build_regex, date_bin, max_string_func_result_bytes,
     parse_timezone, regexp_match_static, regexp_replace_parse_flags, regexp_split_to_array_re,
     stringify_datum, timezone_time,
 };
@@ -321,6 +321,19 @@ fn array_fill<'a>(
         None | Some(MAX_SIZE..)
     ) {
         return Err(EvalError::MaxArraySizeExceeded(MAX_SIZE));
+    }
+
+    // The packed array lands in `temp_storage`, and building it first allocates a transient
+    // `Vec<Datum>` of `fill_count` elements. Unlike the string amplifiers, `array_fill` sizes its
+    // result from a parameter rather than its input, so without this check a single call could
+    // spike far past a budgeted arena before the evaluator's post-call check ever runs. Refuse both
+    // allocations up front instead. Without a budget `budget_remaining` is `usize::MAX` and both
+    // comparisons fold away, so this is free in a dataflow.
+    let budget_remaining = temp_storage.budget_remaining();
+    let packed_size = mz_repr::datum_size(&fill).saturating_mul(fill_count);
+    let build_size = fill_count.saturating_mul(std::mem::size_of::<Datum<'a>>());
+    if packed_size > budget_remaining || build_size > budget_remaining {
+        return Err(EvalError::TempStorageBudgetExceeded);
     }
 
     let array_dimensions = if fill_count == 0 {
@@ -1196,7 +1209,12 @@ impl LazyVariadicFunc for Or {
 }
 
 #[sqlfunc(sqlname = "lpad")]
-fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<String, EvalError> {
+fn pad_leading(
+    string: &str,
+    raw_len: i32,
+    pad: OptionalArg<&str>,
+    temp_storage: &RowArena,
+) -> Result<String, EvalError> {
     let len = match usize::try_from(raw_len) {
         Ok(len) => len,
         Err(_) => {
@@ -1205,7 +1223,7 @@ fn pad_leading(string: &str, raw_len: i32, pad: OptionalArg<&str>) -> Result<Str
             ));
         }
     };
-    if len > MAX_STRING_FUNC_RESULT_BYTES {
+    if len > max_string_func_result_bytes(temp_storage) {
         return Err(EvalError::LengthTooLarge);
     }
 
@@ -1271,18 +1289,19 @@ fn regexp_replace<'a>(
 }
 
 #[sqlfunc]
-fn replace(text: &str, from: &str, to: &str) -> Result<String, EvalError> {
+fn replace(text: &str, from: &str, to: &str, temp_storage: &RowArena) -> Result<String, EvalError> {
     // As a compromise to avoid always nearly duplicating the work of replace by doing size estimation,
     // we first check if it's possible for the fully replaced string to exceed the limit by assuming that
     // every possible substring is replaced.
     //
     // If that estimate exceeds the limit, we then do a more precise (and expensive) estimate by counting
     // the actual number of replacements that would occur, and using that to calculate the final size.
+    let max_result_bytes = max_string_func_result_bytes(temp_storage);
     let possible_size = text.len() * to.len();
-    if possible_size > MAX_STRING_FUNC_RESULT_BYTES {
+    if possible_size > max_result_bytes {
         let replacement_count = text.matches(from).count();
         let estimated_size = text.len() + replacement_count * (to.len().saturating_sub(from.len()));
-        if estimated_size > MAX_STRING_FUNC_RESULT_BYTES {
+        if estimated_size > max_result_bytes {
             return Err(EvalError::LengthTooLarge);
         }
     }
@@ -1456,12 +1475,13 @@ fn split_part<'a>(string: &'a str, delimiter: &str, field: i32) -> Result<&'a st
 }
 
 #[sqlfunc(is_associative = true)]
-fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
+fn concat(strs: Variadic<Option<&str>>, temp_storage: &RowArena) -> Result<String, EvalError> {
+    let max_result_bytes = max_string_func_result_bytes(temp_storage);
     let mut total_size = 0;
     for s in &strs {
         if let Some(s) = s {
             total_size += s.len();
-            if total_size > MAX_STRING_FUNC_RESULT_BYTES {
+            if total_size > max_result_bytes {
                 return Err(EvalError::LengthTooLarge);
             }
         }
@@ -1476,13 +1496,18 @@ fn concat(strs: Variadic<Option<&str>>) -> Result<String, EvalError> {
 }
 
 #[sqlfunc]
-fn concat_ws(ws: &str, rest: Variadic<Option<&str>>) -> Result<String, EvalError> {
+fn concat_ws(
+    ws: &str,
+    rest: Variadic<Option<&str>>,
+    temp_storage: &RowArena,
+) -> Result<String, EvalError> {
+    let max_result_bytes = max_string_func_result_bytes(temp_storage);
     let mut total_size = 0;
     for s in &rest {
         if let Some(s) = s {
             total_size += s.len();
             total_size += ws.len();
-            if total_size > MAX_STRING_FUNC_RESULT_BYTES {
+            if total_size > max_result_bytes {
                 return Err(EvalError::LengthTooLarge);
             }
         }

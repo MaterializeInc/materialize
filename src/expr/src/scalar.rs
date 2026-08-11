@@ -1157,6 +1157,22 @@ impl MirScalarExpr {
     }
 }
 
+/// Fails once `temp_storage` holds more than the budget it was built with.
+///
+/// Checked after each function call rather than inside the arena, because `RowArena`'s pushes are
+/// infallible: refusing one would hand back a truncated value. Between calls is the innermost point
+/// that can return an error, so a budgeted arena reaches at most its budget plus whatever the call
+/// that crossed it allocated. Functions that can predict their own size cut that overshoot by
+/// consulting [`crate::func::max_string_func_result_bytes`] first.
+///
+/// An unbudgeted arena, which is every arena in a dataflow, costs one branch on a `None`.
+fn check_temp_storage_budget(temp_storage: &RowArena) -> Result<(), EvalError> {
+    if temp_storage.over_budget() {
+        return Err(EvalError::TempStorageBudgetExceeded);
+    }
+    Ok(())
+}
+
 impl Eval for MirScalarExpr {
     fn eval<'a>(
         &'a self,
@@ -1176,13 +1192,19 @@ impl Eval for MirScalarExpr {
                 format!("cannot evaluate unmaterializable function: {:?}", x).into(),
             )),
             MirScalarExpr::CallUnary { func, expr } => {
-                func.eval(datums, temp_storage, expr.as_ref())
+                let datum = func.eval(datums, temp_storage, expr.as_ref())?;
+                check_temp_storage_budget(temp_storage)?;
+                Ok(datum)
             }
             MirScalarExpr::CallBinary { func, expr1, expr2 } => {
-                func.eval(datums, temp_storage, &[expr1.as_ref(), expr2.as_ref()])
+                let datum = func.eval(datums, temp_storage, &[expr1.as_ref(), expr2.as_ref()])?;
+                check_temp_storage_budget(temp_storage)?;
+                Ok(datum)
             }
             MirScalarExpr::CallVariadic { func, exprs } => {
-                func.eval(datums, temp_storage, exprs.as_slice())
+                let datum = func.eval(datums, temp_storage, exprs.as_slice())?;
+                check_temp_storage_budget(temp_storage)?;
+                Ok(datum)
             }
             MirScalarExpr::If { cond, then, els } => match cond.eval(datums, temp_storage)? {
                 Datum::True => then.eval(datums, temp_storage),
@@ -1827,6 +1849,10 @@ pub enum EvalError {
     // printer.
     IfNullError(Box<str>),
     LengthTooLarge,
+    // A budgeted `RowArena` (`mz_repr::RowArena::with_budget`) exceeded its budget while an
+    // expression was being evaluated. Only a budgeted arena raises this, so it never arises in a
+    // dataflow, only on the webhook `CHECK` path that runs user expressions in `environmentd`.
+    TempStorageBudgetExceeded,
     AclArrayNullElement,
     MzAclArrayNullElement,
     PrettyError(Box<str>),
@@ -2048,6 +2074,9 @@ impl fmt::Display for EvalError {
             }
             EvalError::IfNullError(s) => f.write_str(s),
             EvalError::LengthTooLarge => write!(f, "requested length too large"),
+            EvalError::TempStorageBudgetExceeded => {
+                write!(f, "expression exceeded its temporary storage limit")
+            }
             EvalError::AclArrayNullElement => write!(f, "ACL arrays must not contain null values"),
             EvalError::MzAclArrayNullElement => {
                 write!(f, "MZ_ACL arrays must not contain null values")
@@ -2310,6 +2339,7 @@ impl RustType<ProtoEvalError> for EvalError {
             }),
             EvalError::IfNullError(s) => IfNullError(s.into_proto()),
             EvalError::LengthTooLarge => LengthTooLarge(()),
+            EvalError::TempStorageBudgetExceeded => TempStorageBudgetExceeded(()),
             EvalError::AclArrayNullElement => AclArrayNullElement(()),
             EvalError::MzAclArrayNullElement => MzAclArrayNullElement(()),
             EvalError::InvalidIanaTimezoneId(s) => InvalidIanaTimezoneId(s.into_proto()),
@@ -2438,6 +2468,7 @@ impl RustType<ProtoEvalError> for EvalError {
                 }),
                 IfNullError(v) => Ok(EvalError::IfNullError(v.into())),
                 LengthTooLarge(()) => Ok(EvalError::LengthTooLarge),
+                TempStorageBudgetExceeded(()) => Ok(EvalError::TempStorageBudgetExceeded),
                 AclArrayNullElement(()) => Ok(EvalError::AclArrayNullElement),
                 MzAclArrayNullElement(()) => Ok(EvalError::MzAclArrayNullElement),
                 InvalidIanaTimezoneId(s) => Ok(EvalError::InvalidIanaTimezoneId(s.into())),
@@ -2478,6 +2509,129 @@ mod tests {
             err.to_string(),
             "function f is defined for numbers in an unspecified range"
         );
+    }
+
+    /// A budgeted arena must stop an amplifying expression that the per-call constant allows
+    /// (SQL-431). `repeat(body, 20)` on a 1 MiB body is 20 MiB: far under
+    /// `MAX_STRING_FUNC_RESULT_BYTES`, so nothing rejects it without a budget, and it is exactly
+    /// the shape that made a webhook `CHECK` turn a bounded request into unbounded heap.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // multi-MB allocations; the small-size UB coverage is in `row.rs`
+    fn test_repeat_respects_arena_budget() {
+        use crate::scalar::func::RepeatString;
+
+        let body = "a".repeat(1024 * 1024);
+        let expr = MirScalarExpr::column(0).call_binary(
+            MirScalarExpr::literal_ok(Datum::Int32(20), ReprScalarType::Int32),
+            RepeatString,
+        );
+        let datums = [Datum::String(&body)];
+
+        // Unbudgeted: allowed, and the arena really does hold the 20 MiB.
+        let arena = RowArena::new();
+        let datum = expr
+            .eval(&datums, &arena)
+            .expect("under the 100 MiB ceiling");
+        assert_eq!(datum.unwrap_str().len(), 20 * 1024 * 1024);
+        assert!(arena.allocated_bytes() >= 20 * 1024 * 1024);
+
+        // Budgeted below the result: rejected, and the pre-check means the arena never grew, i.e.
+        // the bytes were never allocated rather than allocated and then complained about.
+        let arena = RowArena::with_budget(4 * 1024 * 1024);
+        assert_eq!(
+            expr.eval(&datums, &arena),
+            Err(EvalError::LengthTooLarge),
+            "an over-budget result must be refused"
+        );
+        assert_eq!(arena.allocated_bytes(), 0);
+
+        // Budgeted above the result: unaffected.
+        let arena = RowArena::with_budget(64 * 1024 * 1024);
+        let datum = expr.eval(&datums, &arena).expect("within budget");
+        assert_eq!(datum.unwrap_str().len(), 20 * 1024 * 1024);
+    }
+
+    /// The budget also has to catch a function with no size pre-check of its own, which allocates
+    /// straight into the arena. Enforcement for those is the evaluator's post-call check.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // multi-MB allocations; the small-size UB coverage is in `row.rs`
+    fn test_arena_built_result_respects_budget() {
+        use crate::scalar::func::variadic::StringToArray;
+
+        let body = "a".repeat(256 * 1024);
+        let expr = MirScalarExpr::call_variadic(
+            StringToArray,
+            vec![
+                MirScalarExpr::column(0),
+                MirScalarExpr::literal_ok(Datum::String("a"), ReprScalarType::String),
+            ],
+        );
+        let datums = [Datum::String(&body)];
+
+        let arena = RowArena::new();
+        expr.eval(&datums, &arena).expect("no ceiling applies");
+        let unbudgeted = arena.allocated_bytes();
+        assert!(unbudgeted > 0);
+
+        let arena = RowArena::with_budget(unbudgeted / 2);
+        assert_eq!(
+            expr.eval(&datums, &arena),
+            Err(EvalError::TempStorageBudgetExceeded),
+            "an over-budget arena-built result must be refused"
+        );
+    }
+
+    /// `array_fill` sizes its result from a parameter rather than its input, so a budgeted arena
+    /// has to refuse it in its own pre-check the way the string amplifiers do (SQL-431). Its result
+    /// stays under the `array_fill` size ceiling, so without the budget-aware pre-check the only
+    /// thing that would catch it is the evaluator's post-call check, after the spike has happened.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // multi-MB allocations; the small-size UB coverage is in `row.rs`
+    fn test_array_fill_respects_arena_budget() {
+        use crate::scalar::func::variadic::ArrayFill;
+        use mz_repr::adt::array::ArrayDimension;
+
+        // array_fill(1, ARRAY[fill_count]) builds a one-dimensional int array of `fill_count` ones.
+        let fill_count: usize = 512 * 1024;
+        let dims_storage = RowArena::new();
+        let dims = dims_storage
+            .try_make_datum(|packer| {
+                packer.try_push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: 1,
+                    }],
+                    [Datum::Int32(i32::try_from(fill_count).unwrap())],
+                )
+            })
+            .unwrap();
+        let expr = MirScalarExpr::call_variadic(
+            ArrayFill {
+                elem_type: mz_repr::SqlScalarType::Int32,
+            },
+            vec![MirScalarExpr::column(0), MirScalarExpr::column(1)],
+        );
+        let datums = [Datum::Int32(1), dims];
+
+        // Unbudgeted: allowed, and the arena really holds the packed array.
+        let arena = RowArena::new();
+        expr.eval(&datums, &arena)
+            .expect("under the array-size ceiling");
+        assert!(arena.allocated_bytes() > 0);
+
+        // Budgeted below what the call needs: refused by the pre-check, so nothing was allocated.
+        // The intermediate `Vec<Datum>` alone is 512 Ki elements, well over this 1 MiB budget.
+        let arena = RowArena::with_budget(1024 * 1024);
+        assert_eq!(
+            expr.eval(&datums, &arena),
+            Err(EvalError::TempStorageBudgetExceeded),
+            "an over-budget array_fill must be refused before it allocates"
+        );
+        assert_eq!(arena.allocated_bytes(), 0);
+
+        // Budgeted well above both the packed result and the intermediate: unaffected.
+        let arena = RowArena::with_budget(256 * 1024 * 1024);
+        expr.eval(&datums, &arena).expect("within budget");
     }
 
     #[mz_ore::test]

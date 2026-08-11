@@ -171,6 +171,22 @@ func_name! {
 /// function where it applies.
 pub const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
 
+/// The largest result a string function may build into `temp_storage`.
+///
+/// [`MAX_STRING_FUNC_RESULT_BYTES`] unless the arena carries a tighter budget, which is how an
+/// expression evaluated in `environmentd` on behalf of a request (a webhook `CHECK`) is held to a
+/// size proportionate to that request rather than to the constant, which is sized for a cluster.
+///
+/// A function that can predict its result size must consult this *before* building the result: the
+/// arena's own budget is only observable after the bytes exist, which for an amplifying function is
+/// exactly too late.
+pub fn max_string_func_result_bytes(temp_storage: &RowArena) -> usize {
+    std::cmp::min(
+        MAX_STRING_FUNC_RESULT_BYTES,
+        temp_storage.budget_remaining(),
+    )
+}
+
 pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&'a str> {
     match a {
         Datum::JsonNull => None,
@@ -469,10 +485,10 @@ fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
 }
 
 #[sqlfunc]
-fn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {
+fn decode(string: &str, format: &str, temp_storage: &RowArena) -> Result<Vec<u8>, EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
-    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
+    if out.len() > max_string_func_result_bytes(temp_storage) {
         Err(EvalError::LengthTooLarge)
     } else {
         Ok(out)
@@ -2521,8 +2537,8 @@ fn starts_with(a: &str, b: &str) -> bool {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {
-    if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
+fn text_concat_binary(a: &str, b: &str, temp_storage: &RowArena) -> Result<String, EvalError> {
+    if a.len() + b.len() > max_string_func_result_bytes(temp_storage) {
         return Err(EvalError::LengthTooLarge);
     }
     let mut buf = String::with_capacity(a.len() + b.len());
@@ -2639,9 +2655,9 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
 }
 
 #[sqlfunc(sqlname = "repeat")]
-fn repeat_string(string: &str, count: i32) -> Result<String, EvalError> {
+fn repeat_string(string: &str, count: i32, temp_storage: &RowArena) -> Result<String, EvalError> {
     let len = usize::try_from(count).unwrap_or(0);
-    if (len * string.len()) > MAX_STRING_FUNC_RESULT_BYTES {
+    if len.saturating_mul(string.len()) > max_string_func_result_bytes(temp_storage) {
         return Err(EvalError::LengthTooLarge);
     }
     Ok(string.repeat(len))
