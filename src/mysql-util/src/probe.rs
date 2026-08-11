@@ -21,7 +21,8 @@ const LIKE_ESCAPE: char = '|';
 /// through prefix indexes or narrower charsets) are not supported.
 pub const MAX_KEY_LENGTH: u32 = 768;
 
-/// Probes a string primary key column. Supports `utf8mb4_bin`. There may be
+/// Probes a string primary key column. Only supports `utf8mb4_bin` against CHAR/VARCHAR
+/// columns up to 768 characters. Enforcement is deferred to the caller. There may be
 /// other collations we can support, but we should do more validation.
 pub struct KeyProber<'a> {
     conn: &'a mut mysql_async::Conn,
@@ -163,9 +164,11 @@ impl<'a> KeyProber<'a> {
     ///
     /// The upper bound is padded with NUL characters so that no key it
     /// prefixes falls inside the range. Under PAD SPACE collations like
-    /// `utf8mb4_bin` "ab\0" sorts before "ab", which is treated as "ab ".
-    /// Padding to [`MAX_KEY_LENGTH`] bounds every key an utf8mb4 primary key
-    /// column can hold.
+    /// `utf8mb4_bin` "ab" is ordered as equivalent to "ab        " (however
+    /// many spaces are needed to fill remaining char/varchar length), so "ab\0"
+    /// sorts before either of those (because NUL is below all other characters
+    /// in `utf8mb4_bin`). Padding to [`MAX_KEY_LENGTH`] bounds every key an
+    /// utf8mb4 primary key column can hold.
     fn range_filter(
         &self,
         lower_bound_exclusive: Option<&str>,
@@ -518,7 +521,7 @@ mod tests {
         const DB: &str = "mz_probe_multibyte_test";
         // utf8mb4_general_ci gives every supplementary character one shared
         // weight, so emoji sort last: a < a😀 < 日本 < 日本語 < 😀 < 😀a < 😀😀.
-        let keys = ["a", "a😀", "😀", "😀a", "😀😀", "日本", "日本語"];
+        let keys = ["a", "a😀", "日本", "日本語", "😀", "😀a", "😀😀"];
         let table = setup_table(&mut conn, DB, "utf8mb4_general_ci", &keys).await?;
 
         let p = &mut KeyProber::new(&mut conn, table, "id");
@@ -541,20 +544,34 @@ mod tests {
             None
         );
 
-        // Prefix matching works mid-multibyte: every key sharing 😀 is
-        // covered (including its extensions), and 日本 advances into the
-        // emoji block.
+        // Depth 2 walk for each prefix from depth 1.
         assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "😀", None, 2).await,
+            prefix_of_first_key_in_range(p, "a", Some("日"), 2).await,
+            some("a😀")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "a😀", Some("日"), 2).await,
             None
+        );
+        assert_eq!(
+            prefix_of_first_key_in_range(p, "日", Some("😀"), 2).await,
+            some("日本")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "日本", Some("😀"), 2).await,
+            None
+        );
+        assert_eq!(
+            prefix_of_first_key_in_range(p, "😀", None, 2).await,
+            some("😀a")
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "😀a", None, 2).await,
+            some("😀😀")
         );
         assert_eq!(
             prefix_of_first_row_not_matching_prefix(p, "😀😀", None, 2).await,
             None
-        );
-        assert_eq!(
-            prefix_of_first_row_not_matching_prefix(p, "日本", None, 3).await,
-            some("😀")
         );
 
         drop_db(&mut conn, DB).await?;
@@ -885,6 +902,33 @@ mod tests {
         Ok(())
     }
 
+    /// `utf8mb4_bin` has no contractions or expansions: Czech `ch` stays an
+    /// ordinary `c` extension and `ß` an ordinary character, so the walk
+    /// visits every prefix.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn test_live_mysql_bin_no_contraction_or_expansion() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+        const DB: &str = "mz_probe_bin_no_hazards";
+        let keys = [
+            "aaa", "asz", "aßx", "cesta", "chleba", "duha", "hora", "ibis",
+        ];
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
+
+        let p = &mut KeyProber::new(&mut conn, table, "id");
+        assert_eq!(walk_prefixes(p, 1).await?, ["a", "c", "d", "h", "i"]);
+        assert_eq!(
+            walk_prefixes(p, 2).await?,
+            ["aa", "as", "aß", "ce", "ch", "du", "ho", "ib"]
+        );
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
     /// Czech `ch` collates as one letter between `h` and `i` while LIKE
     /// stays character-based, so the walk drops the prefixes LIKE 'c%'
     /// spans past.
@@ -921,7 +965,8 @@ mod tests {
 
     /// U+0000 carries no collation weight under the default collation, so a
     /// leading-NUL key sorts by its suffix while truncating to the bare NUL,
-    /// which sorts below everything.
+    /// which sorts below everything. This blocks the usage of the KeyProber
+    /// with `utf8mb4_0900_ai_ci`.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn test_live_mysql_nul_ordering() -> Result<(), anyhow::Error> {
@@ -957,7 +1002,8 @@ mod tests {
 
     /// `ß` expands to two collation elements (`ß` = `ss`) under the default
     /// collation `utf8mb4_0900_ai_ci`, so truncations of `aß...` and `asz...`
-    /// keys sort opposite to the keys themselves.
+    /// keys sort opposite to the keys themselves. This issue blocks the usage
+    /// of the KeyProber with utf8mb4_0900_ai_ci.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn test_live_mysql_eszett_expansion() -> Result<(), anyhow::Error> {
@@ -993,7 +1039,9 @@ mod tests {
     /// `utf8mb4_bin` compares character by character but is PAD SPACE, so
     /// keys starting below space sort below the empty string. A walk seeded
     /// with the empty string drops them, they land in the snapshot range
-    /// left of the first boundary.
+    /// left of the first boundary. This means keys starting below space
+    /// will just be included in the first open range, which will be fine
+    /// for our partitioning, just a little unbalanced.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
     async fn test_live_mysql_keys_below_empty_string() -> Result<(), anyhow::Error> {
