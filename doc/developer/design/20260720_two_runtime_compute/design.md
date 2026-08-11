@@ -269,40 +269,50 @@ one that holds the data in a cheaper form than an arrangement. See
 
 ### What the platform actually isolates
 
-Replicas run BestEffort in Kubernetes, with no CPU or memory requests and no
-limits, because that is what makes swap available to them. Many pods share a node.
-Every isolation property below follows from that choice, and the choice is
-deliberate. It is recorded here because the queue this work fixes is the innermost
-of three, and the outer two are not ours.
+Replicas declare CPU requests and no CPU limit, and the scheduler admits pods to a
+node only while the sum of their requests fits allocatable CPU. Memory limits are
+omitted, which is what makes swap available. Many pods share a node. Every
+isolation property below follows from that shape, and the shape is deliberate. It
+is recorded here because the queue this work fixes is the innermost of three, and
+the outer two are not ours.
+
+Declaring a request without a limit is Burstable rather than BestEffort in
+Kubernetes' own terms, and the distinction matters because the two classes differ
+on exactly the properties at issue. It also explains the swap grant independently:
+the kubelet's limited swap behavior gives swap only to Burstable pods, sized in
+proportion to the memory request, and gives Guaranteed and BestEffort pods none.
 
 Kubernetes isolates two resources, and only when asked for them. Memory capacity,
 through `memory.max`, enforced by the kernel killing the container. And CPU share,
-through a `cpu.weight` derived from the CPU request, together with the scheduler
-refusing to overcommit requests. Exclusive cores are a third, available only to
-Guaranteed pods with integer CPU requests under the static CPU manager policy.
-Declaring no requests and no limits opts out of all three.
+through a `cpu.weight` derived from the CPU request. Exclusive cores are a third,
+available only to Guaranteed pods with integer CPU requests under the static CPU
+manager policy.
 
 What that leaves:
 
-* **CPU: a proportional share with a floor of approximately zero.** A BestEffort
-  cgroup gets the minimum `cpu.weight`, so under contention its claim is its weight
-  over the sum of all weights, which against neighbors that do declare requests is
-  a small fraction. Nothing is throttled and idle CPU is free, so the common case
-  is generous and only the tail is unbounded. Avoiding `cpu.max` also avoids the
-  quota-throttling tail latency that comes with declaring a CPU limit, which is a
-  real benefit of this configuration and not only a cost. One property is worth
-  stating because it is counterintuitive: CPU accounting is hierarchical, so adding
-  threads inside the pod does not increase the pod's share. More threads buy
+* **CPU: a real floor at the request, and nothing above it.** The request sets
+  `cpu.weight`, and because admission keeps the sum of requests inside allocatable
+  CPU, every pod on the node can hold its request simultaneously even under full
+  contention. The floor is therefore the replica's nominal size rather than a
+  fraction of it. What is opportunistic is everything *above* the request, which is
+  the headroom both mechanisms here spend. Omitting the limit also means no
+  `cpu.max` quota, so the pod escapes the quota-throttling tail latency a CPU limit
+  imposes, which is a benefit of this shape and not only a cost. One property is
+  worth stating because it is counterintuitive: CPU accounting is hierarchical, so
+  adding threads inside the pod does not increase the pod's share. More threads buy
   parallelism within our slice and queue depth for I/O, never more CPU. That is
-  precisely why more threads can help a swap-bound walk, whose threads are blocked
+  precisely why threads can help a swap-bound walk, whose threads are blocked
   rather than computing, and cannot help a CPU-bound one.
-* **Memory: nothing.** No reservation and no reclaim protection. Global reclaim is
-  node-wide LRU rather than per-cgroup fair, so a neighbor's allocation can swap out
-  our arrangement, which means our swap depth is not a function of our own behavior.
-  BestEffort is also first in line three separate ways: first reclaimed, first
-  evicted by the kubelet because all usage is above a request of zero, and first
-  killed by the kernel, whose `oom_score_adj` for BestEffort containers is the
-  maximum.
+* **Memory: no reservation.** Global reclaim is node-wide LRU rather than
+  per-cgroup fair, so a neighbor's allocation can swap out our arrangement, which
+  means our swap depth is not purely a function of our own behavior. Reclaim
+  protection would come from `memory.min`, which the kubelet derives from the
+  memory request only under the memory QoS feature gate, so whether we have any is
+  a cluster configuration question rather than a property of the class. Eviction
+  and out-of-memory ranking are better than BestEffort without being good. The
+  kubelet ranks Burstable pods by usage above their request, and a heavily swapping
+  replica is above it, while the kernel's `oom_score_adj` is computed from the
+  memory request rather than pinned at the maximum.
 * **Swap device bandwidth: nothing, and this is the weakest link.** There is no
   per-pod disk throughput API. `ephemeral-storage` bounds capacity rather than
   IOPS, and the cgroup `io` controller that could throttle a pod is not configured
@@ -327,20 +337,27 @@ small replica, on top of two runtimes' timely workers and tokio's 512-thread
 blocking pool default. Nothing accounts for this, and it argues for the dedicated
 pool in the follow-ups rather than against it.
 
-It also sharpens the section above. Under BestEffort, CPU is not reliably shareable
-either, because our share of it is a function of the neighbors. Peek offloading
-removes the queue inside the process completely and the two queues above it not at
-all. A serving tier carrying a latency or availability target therefore needs a
-different QoS class, which means a different pod, which means it cannot be a
-colocated thread however well it is scheduled.
+It also refines the section above rather than contradicting it. CPU is shareable
+and the request makes that floor real, so colocating for CPU is sound. What is not
+guaranteed is the headroom above the request, and both mechanisms spend headroom:
+an offloaded walk still needs a core, and a second runtime needs cores for a second
+set of workers. So the benefit is largest when the node is quiet and smallest when
+it is not, which is the conditionality already recorded in
+[What it does not buy](#what-it-does-not-buy). The resources with no bound at all
+are swap bandwidth and network, and those are the ones the swap strategy makes
+critical. A serving tier carrying a latency or availability target still needs its
+own pod, and the reason is memory, swap I/O and shared fate rather than CPU share.
 
-One thing to establish rather than assume: which mechanism grants these pods swap,
-and whether it bounds swap per pod. Under the kubelet's limited swap behavior the
-per-pod limit is proportional to the memory *request*, which is zero here, so the
-grant comes from elsewhere and `memory.swap.max` is likely unbounded. If it is,
-one replica can consume the node's whole swap device and starve every other pod's
-swap, and the userspace limiter in `src/compute/src/memory_limiter.rs`, which
-counts physical memory plus swap, is the only thing bounding it.
+One thing to establish rather than assume: whether a memory request is declared
+alongside the CPU request. If it is, swap is bounded per pod at roughly the memory
+request over node capacity times the size of the swap device, and the class is
+Burstable on both axes. If it is not, the kubelet's limited swap behavior would
+grant this pod no swap at all, so the grant would be coming from elsewhere and
+`memory.swap.max` would be unbounded, in which case one replica can consume the
+node's whole swap device and starve every other pod's swap. Either way the
+userspace limiter in `src/compute/src/memory_limiter.rs` bounds our own
+consumption, because it counts physical memory plus swap rather than physical
+memory alone.
 
 ### The commitment
 
@@ -935,23 +952,25 @@ Ordered by expected value per line of change.
    per-thread so it applies to exactly the interactive pool, and the usual caveat
    that priority only orders within a cgroup's share does not bite because both
    runtimes sit in one pod. This is the cheapest lever not yet pulled.
-4. **A core reservation and pinning, both conditional on leaving BestEffort.**
-   Neither is available today and the reason is the QoS class, not the code. Swap
-   requires declaring no memory limit. Exclusive cores require Guaranteed QoS with
-   integer CPU requests under the static CPU manager policy. A pod cannot be both,
-   so **swap and pinning are mutually exclusive**, and choosing swap chose against
-   pinning. The code already encodes this correctly: pinning is gated on
+4. **A core reservation and pinning, both conditional on a change of QoS class.**
+   Neither is available today and the reason is the class, not the code. Swap is
+   granted only to Burstable pods, sized from the memory request. Exclusive cores
+   are granted only to Guaranteed pods with integer CPU requests under the static
+   CPU manager policy. Those classes are disjoint, so **swap and pinning are
+   mutually exclusive**, and choosing swap chose against pinning. The code already
+   encodes this correctly: pinning is gated on
    `location.allocation.cpu_exclusive && enable_worker_core_affinity` in
    `src/controller/src/clusters.rs`, and `cpu_exclusive` is false throughout the
    size configuration, so the flag is inert for the right reason.
 
-   Worth stating that enabling it anyway under BestEffort would be actively
-   harmful rather than merely useless. `core_affinity::get_core_ids()` returns the
-   whole affinity mask, so a worker would be pinned into the node's shared pool
-   alongside every other pod at the minimum `cpu.weight`. Pinning does not grant
-   the core. It only removes the scheduler's ability to migrate the thread off a
-   busy one, and migration is the only defense available to a cgroup that does not
-   own its cores.
+   Worth stating that enabling it anyway would be actively harmful rather than
+   merely useless. A Burstable pod is never assigned exclusive CPUs and runs in the
+   node's shared pool, and `core_affinity::get_core_ids()` returns the whole
+   affinity mask, so a worker would be pinned to a shared CPU that neighbors use
+   too. Pinning does not grant the core. It only removes the scheduler's ability to
+   migrate the thread off a busy one, and migration is the only defense available to
+   a cgroup that does not own its cores. The CPU request buys a share of the node,
+   not a particular CPU on it.
 
    In a world where the QoS trade is revisited, the reservation comes first.
    Timely is barrier-synchronous, so removing a fraction of one core does not cost
