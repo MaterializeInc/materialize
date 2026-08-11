@@ -53,9 +53,6 @@ struct Prefix {
     estimated_rows: u64,
     /// Length this prefix was split at.
     depth: usize,
-    /// Use the position within each parent as a surrogate sort key to maintain the sort ordering
-    /// specified by MySQL.
-    surrogate_sort_key: Vec<usize>,
 }
 
 async fn partition(
@@ -70,11 +67,11 @@ async fn partition(
     let estimated_row_count = estimated_row_count.max(1);
 
     // Estimates vary wildly especially near the full table size (see `KeyProber::estimate_range_rows` for more details).
-    // Estimates tend to get more useful as smaller chunks, so break up the table into at least 1/8ths before selecting partitions.
-    // Prefixes estimate at least one row, so a target below one never
-    // converges.
+    // Estimates tend to get more useful as smaller chunks, so break up the table into at least 1/8ths (2 workers * 4)
+    // before selecting partitions. Breaking down to smaller partitions results in more accurate splits, so we keep the
+    // 4x multiple of the worker count for > 2 workers.
     let target_max_rows_per_prefix = (f64::cast_lossy(estimated_row_count)
-        / f64::cast_lossy(workers.max(8)))
+        / f64::cast_lossy(workers * 4))
     .max(f64::cast_lossy(min_rows_per_worker))
     .max(1.0);
 
@@ -88,54 +85,49 @@ async fn compute_boundaries(
     target_rows_per_prefix: f64,
 ) -> Result<Vec<String>, MySqlError> {
     // BFS of prefixes, splitting until estimates fall under the target.
-    let mut final_prefixes: Vec<Prefix> = vec![];
-    let mut pending_prefixes = vec![Prefix {
+    let mut ordered_prefixes = vec![Prefix {
         prefix: String::new(),
         end: None,
         estimated_rows: estimated_row_count,
         depth: 0,
-        surrogate_sort_key: Vec::new(),
     }];
 
-    while !pending_prefixes.is_empty() {
-        let mut next: Vec<Prefix> = Vec::with_capacity(pending_prefixes.len());
-        for prefix in pending_prefixes {
-            let children = children_prefixes(db, &prefix).await?;
-            // No child is visible under this prefix, its keys are the bare
-            // prefix itself or sort below their own deeper prefixes. Keep the
-            // parent as a leaf so its key space stays accounted for.
-            if children.is_empty() {
-                final_prefixes.push(prefix);
-                continue;
-            }
-            for child in children {
-                if f64::cast_lossy(child.estimated_rows) > target_rows_per_prefix {
-                    next.push(child);
-                } else {
-                    final_prefixes.push(child);
-                }
+    loop {
+        let mut next_ordered_prefixes: Vec<Prefix> = vec![];
+        let mut split_any = false;
+        for prefix in ordered_prefixes {
+            if f64::cast_lossy(prefix.estimated_rows) > target_rows_per_prefix {
+                split_any = true;
+                // Partitioning children can drop some rows from the parent prefix range. This
+                // is acceptable given the approximate nature of the algorithm.
+                let children = children_prefixes(db, &prefix).await?;
+                next_ordered_prefixes.extend(children);
+            } else {
+                next_ordered_prefixes.push(prefix);
             }
         }
-        pending_prefixes = next;
+        ordered_prefixes = next_ordered_prefixes;
+        if !split_any {
+            break;
+        }
     }
-    final_prefixes.sort_unstable_by(|a, b| a.surrogate_sort_key.cmp(&b.surrogate_sort_key));
 
     // Recompute the total after partitioning the table to get more even splits because the actual row count and the
     // granularly estimated row count can diverge from the original top level estimate.
-    let total: f64 = final_prefixes
+    let total: f64 = ordered_prefixes
         .iter()
         .map(|r| f64::cast_lossy(r.estimated_rows))
         .sum();
     let per_worker = total / f64::cast_lossy(workers);
     tracing::debug!(
-        prefixes = final_prefixes.len(),
+        prefixes = ordered_prefixes.len(),
         total_estimated_rows = total,
         per_worker,
         "assigning prefixes to workers"
     );
     let mut boundaries: Vec<String> = Vec::with_capacity(workers - 1);
     let mut rows_seen = 0.0;
-    for prefix in &final_prefixes {
+    for prefix in &ordered_prefixes {
         if boundaries.len() == workers - 1 {
             break;
         }
@@ -155,8 +147,6 @@ async fn compute_boundaries(
 ///
 /// Note: This will drop the key "a" on the floor, along with any keys
 /// sorting below their own prefix (below-space characters at this depth).
-/// They are only invisible to probing, the snapshot ranges built from the
-/// boundaries still cover them.
 async fn children_prefixes(
     db: &mut KeyProber<'_>,
     parent: &Prefix,
@@ -164,10 +154,6 @@ async fn children_prefixes(
     let depth = parent.depth + 1;
     let mut children = Vec::new();
 
-    // Guaranteed to return None or a key longer than the current prefix assuming the upper
-    // bound correctly caps keys to the current prefix and we're in a transaction where
-    // new keys with a shorter length can't be inserted. Note that this only holds for
-    // collations that sort character-by-character.
     let Some(mut cur) = db
         .prefix_of_first_key_in_range(&parent.prefix, parent.end.as_deref(), depth)
         .await?
@@ -181,14 +167,11 @@ async fn children_prefixes(
             .await?;
         let end = next.clone().or_else(|| parent.end.clone());
         let estimated_rows = db.estimate_range_rows(&cur, end.as_deref()).await?;
-        let mut surrogate_sort_key = parent.surrogate_sort_key.clone();
-        surrogate_sort_key.push(children.len());
         children.push(Prefix {
             prefix: cur,
             end: end.clone(),
             estimated_rows: estimated_rows.max(1),
             depth,
-            surrogate_sort_key,
         });
         match next {
             Some(next) => cur = next,
