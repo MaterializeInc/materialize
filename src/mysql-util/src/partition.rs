@@ -180,7 +180,7 @@ async fn children_prefixes<D: PrimaryKeyProber>(
     }
 }
 
-/// Wrapper around KeyProber for testing purposes.
+/// Wrapper around [KeyProber] for testing purposes. See [KeyProber] for more details.
 trait PrimaryKeyProber {
     async fn estimate_range_rows(
         &mut self,
@@ -397,7 +397,7 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     async fn fractional_target_still_terminates() -> Result<(), MySqlError> {
-        // count / max(workers, 8) is fractional and the minimum is zero, so
+        // count / (workers * 4) is fractional and the minimum is zero, so
         // the target floors at one row instead of splitting forever.
         let mut db = MockDb { keys: keys(3) };
         let boundaries = partition(&mut db, 4, 3, 0).await?;
@@ -431,9 +431,9 @@ mod tests {
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &all_keys).await?;
         let total = u64::cast_from(all_keys.len());
 
-        // A minimum above the table size keeps boundaries coarse.
+        // A minimum above the table size yields no boundaries at all.
         let bounds = partition_table(&mut conn, table.clone(), "id", 4, total, 50_000).await?;
-        assert!(bounds.len() <= 3, "{bounds:?}");
+        assert!(bounds.is_empty(), "{bounds:?}");
 
         // A low minimum splits inside the 'a' extensions rather than stopping
         // at the exact key.
@@ -458,7 +458,8 @@ mod tests {
 
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)]
-    async fn skew_empty_string_and_below_tab_characters_inaccuracy() -> Result<(), anyhow::Error> {
+    async fn skew_empty_string_and_below_space_characters_inaccuracy() -> Result<(), anyhow::Error>
+    {
         let Some(mut conn) = connect().await? else {
             return Ok(());
         };
@@ -487,8 +488,8 @@ mod tests {
         let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
         // ~8k are visible, so each count should have at least 2k for perfect partitioning and the ranges are
         // cleanly partitionable except for the hidden tab prefixes, so we should be reliably able to assert
-        // that each count is greater than 1600 -- this makes room for single partitions being misalocated (~250)
-        // and some innacuracy on top of that (~150).
+        // that each count is greater than 1600 -- this makes room for single partitions being misallocated (~250)
+        // and some inaccuracy on top of that (~150).
         assert!(counts.iter().all(|&c| c > 1600), "{counts:?}");
 
         // Each hidden group piles into the partition left of the next visible
