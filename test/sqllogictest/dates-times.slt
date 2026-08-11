@@ -1367,6 +1367,18 @@ select '9::60.1'::time
 statement error invalid input syntax for type time: HOUR must be \[0, 23\], got 24: "24:00:00"
 select '24:00:00'::time
 
+# A TIME string that names no field at all is rejected rather than read as
+# midnight, matching PostgreSQL. The storage source cast `CastStringToTime` is
+# frozen on the older lenient reading, see `mz_storage_types::sources::casts`.
+statement error invalid input syntax for type time: no time fields found: ""
+select ''::time
+
+statement error invalid input syntax for type time: no time fields found: " "
+select ' '::time
+
+statement error invalid input syntax for type time: no time fields found: ":"
+select ':'::time
+
 # BC years are properly formatted
 # Using INTERVAL to work around the parser not supporting BC identifiers yet
 query T
@@ -1383,6 +1395,47 @@ query T
 select ('0001-01-01'::date - interval '1 DAY')::date
 ----
 0001-12-31 BC
+
+# The ` BC` suffix carries whitespace, so a BC date nested in a container has to
+# be quoted, the same as the timestamp renderings above. `format_date` reported
+# `Nestable::Yes` unconditionally, which skips the escaping step entirely, so
+# these came out unquoted and diverged from PostgreSQL's `array_out`.
+query T
+select ARRAY[('0001-02-24'::date - interval '1 YEAR')::date]::text
+----
+{"0001-02-24 BC"}
+
+query T
+select ARRAY[('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date]::text
+----
+{"0001-02-24 BC",2020-01-01}
+
+query T
+select LIST[('0001-02-24'::date - interval '1 YEAR')::date]::text
+----
+{"0001-02-24 BC"}
+
+query T
+select daterange(('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date)::text
+----
+["0001-02-24 BC",2020-01-01)
+
+# Both renderings must survive being read back.
+query T
+select ARRAY[('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date]::text::date[]::text
+----
+{"0001-02-24 BC",2020-01-01}
+
+query T
+select daterange(('0001-02-24'::date - interval '1 YEAR')::date, '2020-01-01'::date)::text::daterange::text
+----
+["0001-02-24 BC",2020-01-01)
+
+# A Common Era date needs no quoting and must not acquire any.
+query T
+select ARRAY['2020-01-01'::date, '2020-06-01'::date]::text
+----
+{2020-01-01,2020-06-01}
 
 query error "-2147483648" interval out of range
 select '0001-02-24'::date - interval '-2147483648 MONTHS'
@@ -1863,3 +1916,48 @@ query T
 SELECT TIMESTAMP WITH TIME ZONE '01/02/03 04:05:06+00'
 ----
 2003-01-02 04:05:06+00
+
+# The text renderer writes microseconds. A sub-second fraction of `.9999995` or
+# more rounds up to a full second, which has to reach the seconds field: written
+# into the fraction it becomes `1000000` microseconds, and stripping trailing
+# zeros turns that into `.1`, about a second early.
+#
+# `simple` is required. These assert on the *text* encoding, and the extended
+# protocol that plain `query` uses returns TIME and TIMESTAMP in binary.
+#
+# The TIMESTAMP cast rounds to microseconds on the way in, so it hides this. The
+# TIME cast does not round, and neither does DATE + TIME, so both carry the full
+# parsed nanoseconds to the renderer, as does COPY ... FROM in TEXT/CSV format.
+simple
+SELECT TIME '12:34:56.9999999';
+----
+12:34:57
+COMPLETE 1
+
+simple
+SELECT DATE '2020-01-01' + TIME '00:00:00.9999999';
+----
+2020-01-01 00:00:01
+COMPLETE 1
+
+# Just below the rounding threshold, so the fraction stays where it is.
+simple
+SELECT TIME '12:34:56.9999994';
+----
+12:34:56.999999
+COMPLETE 1
+
+# The carry crosses the minute and the day.
+simple
+SELECT DATE '2020-01-31' + TIME '23:59:59.9999999';
+----
+2020-02-01 00:00:00
+COMPLETE 1
+
+# A leap second is already in the seconds field, so only the part below one
+# second is a fraction. It used to render as `23:59:60.1`.
+simple
+SELECT TIME '23:59:60';
+----
+23:59:60
+COMPLETE 1
