@@ -355,6 +355,17 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_aws_privatelink_connections",
         ),
+        // `mz_audit_events` learned the `metric-sink` object type. Its `object_type`
+        // column carries `ASSERT NOT NULL`, so without the new CASE arm a single
+        // metric-sink audit event errors the whole collection. See the NOTE above:
+        // this version must stay at the workspace's current dev version until the
+        // change ships.
+        MigrationStep::replacement(
+            "26.38.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
     ]
 });
 

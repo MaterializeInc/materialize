@@ -577,6 +577,16 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 "subsource"
             }
             CreateSink(_) => "sink",
+            CreateMetricSink(stmt) => {
+                let Some(in_cluster) = stmt.in_cluster else {
+                    return Err("missing IN CLUSTER".into());
+                };
+                let cluster_id = get_cluster_id(in_cluster)?;
+                info.insert("cluster_id", json!(cluster_id));
+                let from_id = get_item_id(stmt.from)?;
+                info.insert("from_id", json!(from_id));
+                "metric-sink"
+            }
             CreateIndex(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
@@ -588,6 +598,11 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 "index"
             }
             CreateType(_) => "type",
+            // NOTE: erroring here is a trap for whoever adds the next item type. The catalog
+            // views that call this run it over every item row before their type filter can
+            // drop the rows they don't want, so one unclassified `create_sql` takes out
+            // `mz_objects`, `mz_indexes`, and every sibling view at once. Returning null for
+            // an unrecognized item statement would localize the damage.
             _ => return Err("not a CREATE item statement".into()),
         };
         info.insert("type", json!(item_type));

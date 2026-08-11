@@ -778,7 +778,10 @@ impl ComputeController {
 
     /// Creates the described dataflow and initializes state for its output.
     ///
-    /// Only materialized views and subscribes are allowed to have a `target_replica`.
+    /// Only sink exports are allowed to have a `target_replica`: materialized views, subscribes,
+    /// and metric sinks. A user's `CREATE METRIC SINK` runs untargeted, so every replica renders it
+    /// into its own registry. The coordinator's curated metric sinks are installed per replica and
+    /// do target one, so each replica's series are attributable to it.
     ///
     /// Panics if called with a dataflow description that has index exports
     /// when `target_replica` is set.

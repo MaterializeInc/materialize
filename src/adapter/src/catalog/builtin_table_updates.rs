@@ -201,7 +201,9 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            CatalogItem::Log(_) | CatalogItem::Secret(_) => vec![],
+            // `mz_metric_sinks` is a materialized view derived from
+            // `mz_catalog_raw`, so metric sinks emit no builtin-table row here.
+            CatalogItem::Log(_) | CatalogItem::Secret(_) | CatalogItem::MetricSink(_) => vec![],
             // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
             // mz_aws_connections, mz_aws_privatelink_connections) are now derived
             // from the persisted create_sql by materialized views over

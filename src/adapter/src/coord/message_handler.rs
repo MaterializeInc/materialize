@@ -210,6 +210,9 @@ impl Coordinator {
             Message::CreateIndexStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
+            Message::CreateMetricSinkStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
             Message::CreateViewStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
@@ -220,6 +223,9 @@ impl Coordinator {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
             Message::IntrospectionSubscribeStageReady { span, stage } => {
+                self.sequence_staged((), span, stage).boxed_local().await;
+            }
+            Message::MetricSinkStageReady { span, stage } => {
                 self.sequence_staged((), span, stage).boxed_local().await;
             }
             Message::ExplainTimestampStageReady { ctx, span, stage } => {

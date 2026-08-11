@@ -79,10 +79,14 @@ pub struct SubscribeSinkConnection {
 
 /// Connection for a sink that publishes rows into the in-process Prometheus metrics registry.
 ///
-/// Carries no payload: the identity of the metric to update is the sink's `GlobalId`, and the
-/// sink does not write to persist, so there is no storage metadata to parameterize over.
+/// The sink does not write to persist, so there is no storage metadata to parameterize over.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
-pub struct MetricSinkConnection {}
+pub struct MetricSinkConnection {
+    /// Value of the `sink` label on the sink's health gauges. A user sink passes its `GlobalId`,
+    /// which is durable. A coordinator-installed curated sink passes its definition name, because
+    /// its `GlobalId` is transient and would churn the label on every boot.
+    pub label: String,
+}
 
 /// Connection attributes required to do a oneshot copy to s3.
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]

@@ -1,0 +1,447 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+mode cockroach
+
+reset-server
+
+# `CREATE METRIC SINK` only writes a catalog item. No dataflow is installed, so
+# nothing here actually publishes metrics.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = true
+----
+COMPLETE 0
+
+statement ok
+CREATE TABLE raw (metric_name text, metric_type text, labels map[text=>text], value double, help text)
+
+statement ok
+CREATE VIEW shaped AS SELECT * FROM raw
+
+# All five columns present with the right types, so this plans.
+
+statement ok
+CREATE METRIC SINK ms FROM shaped
+
+statement ok
+DROP METRIC SINK ms
+
+# Order doesn't matter.
+
+statement ok
+CREATE VIEW reordered AS SELECT help, value, labels, metric_type, metric_name FROM raw
+
+statement ok
+CREATE METRIC SINK ms_reordered FROM reordered
+
+statement ok
+DROP METRIC SINK ms_reordered
+
+# Extra columns are ignored rather than rejected.
+
+statement ok
+CREATE VIEW extra AS SELECT *, 1 AS unrelated FROM raw
+
+statement ok
+CREATE METRIC SINK ms_extra FROM extra
+
+statement ok
+DROP METRIC SINK ms_extra
+
+# A missing column is not.
+
+statement ok
+CREATE VIEW missing_help AS SELECT metric_name, metric_type, labels, value FROM raw
+
+statement error metric sink source must expose column "help"
+CREATE METRIC SINK bad FROM missing_help
+
+# Neither is one of the wrong type.
+
+statement ok
+CREATE VIEW wrong_value_type AS
+SELECT metric_name, metric_type, labels, value::text AS value, help FROM raw
+
+statement error metric sink source column "value" is not of the required type
+CREATE METRIC SINK bad FROM wrong_value_type
+
+# `labels` has to be a text=>text map, not just any map.
+
+statement ok
+CREATE VIEW wrong_labels_type AS
+SELECT metric_name, metric_type, '{a=>1}'::map[text=>int] AS labels, value, help FROM raw
+
+statement error metric sink source column "labels" is not of the required type
+CREATE METRIC SINK bad FROM wrong_labels_type
+
+# You can't read from something that has no rows to read.
+
+statement ok
+CREATE SECRET s AS 'x'
+
+statement error cannot create metric sink from s because it is a secret
+CREATE METRIC SINK bad FROM s
+
+# An index is in the same boat, and the error should say so instead of being
+# vague about it.
+
+statement ok
+CREATE INDEX raw_idx ON raw (metric_name)
+
+statement error cannot create metric sink from raw_idx because it is a index
+CREATE METRIC SINK bad FROM raw_idx
+
+# IF NOT EXISTS on a taken name is a no-op.
+
+statement ok
+CREATE METRIC SINK ms FROM shaped
+
+statement ok
+CREATE METRIC SINK IF NOT EXISTS ms FROM shaped
+
+statement error metric sink "materialize.public.ms" already exists
+CREATE METRIC SINK ms FROM shaped
+
+# A metric sink can't be indexed.
+
+statement error index cannot be created on materialize.public.ms because it is a metric sink
+CREATE INDEX ms_idx ON ms (metric_name)
+
+# ...or read from.
+
+statement error metric sink
+CREATE VIEW from_ms AS SELECT * FROM ms
+
+# Regression guard. These views run `parse_catalog_create_sql` over every item
+# row before the type filter gets a chance to drop the ones they don't want, so
+# an item type it can't classify takes all of them out at once. With a metric
+# sink sitting in the catalog, they all still need to answer.
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_indexes
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_objects
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_internal.mz_show_all_objects
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_sources
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_materialized_views
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_connections
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_secrets
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_catalog.mz_kafka_sources
+----
+1
+
+query I
+SELECT count(*) >= 0::int FROM mz_internal.mz_postgres_sources
+----
+1
+
+# And it classifies as `metric-sink`, which is what boot relies on.
+
+simple conn=mz_system,user=mz_system
+SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')->>'type'
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 'ms';
+----
+metric-sink
+COMPLETE 1
+
+# It is discoverable: one `mz_metric_sinks` row resolving to its `FROM` relation,
+# cluster, schema, and owner.
+
+query TTTTT
+SELECT sinks.name, objs.name, clusters.name, schemas.name, roles.name
+FROM mz_internal.mz_metric_sinks AS sinks
+JOIN mz_catalog.mz_objects AS objs ON objs.id = sinks.from_id
+JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id
+JOIN mz_catalog.mz_schemas AS schemas ON schemas.id = sinks.schema_id
+JOIN mz_catalog.mz_roles AS roles ON roles.id = sinks.owner_id
+----
+ms  shaped  quickstart  public  materialize
+
+# It joins `mz_objects` under its own type, with the same identity.
+
+query TT
+SELECT sinks.oid = objs.oid, sinks.id = objs.id
+FROM mz_internal.mz_metric_sinks AS sinks
+JOIN mz_catalog.mz_objects AS objs ON objs.name = 'ms' AND objs.type = 'metric-sink'
+----
+true  true
+
+# `mz_show_all_objects` LEFT JOINs comments on the type, so a metric sink has to
+# survive a join it can never match.
+
+query TT
+SELECT name, type FROM mz_internal.mz_show_all_objects WHERE name = 'ms'
+----
+ms  metric-sink
+
+query TTT
+SHOW METRIC SINKS
+----
+ms  shaped  quickstart
+
+query TTT
+SHOW METRIC SINKS IN CLUSTER quickstart LIKE 'm%'
+----
+ms  shaped  quickstart
+
+query TTT
+SHOW METRIC SINKS IN CLUSTER mz_catalog_server
+----
+
+# A metric sink is not a sink, and neither `SHOW` mixes the two up.
+
+query T
+SELECT count(*) FROM (SHOW SINKS)
+----
+0
+
+# `SHOW CREATE` round-trips through `create_sql`.
+
+query T
+SELECT create_sql FROM (SHOW CREATE METRIC SINK ms)
+----
+CREATE METRIC SINK materialize.public.ms IN CLUSTER quickstart FROM materialize.public.shaped;
+
+statement error materialize.public.ms is not a sink
+SHOW CREATE SINK ms
+
+statement error materialize.public.raw is not a metric sink
+SHOW CREATE METRIC SINK raw
+
+# Creating one is audited. `mz_audit_events.object_type` asserts NOT NULL, so an
+# object type the CASE cannot name errors the whole collection, not just its own
+# row.
+
+simple conn=mz_system,user=mz_system
+SELECT event_type, object_type FROM mz_catalog.mz_audit_events WHERE details->>'item' = 'ms' ORDER BY id
+----
+create,metric-sink
+drop,metric-sink
+create,metric-sink
+COMPLETE 3
+
+# And `metric-sink` is in the object-id namespace, so those events reach
+# `mz_object_history` rather than being filtered out of it.
+
+query TT
+SELECT o.object_type, o.dropped_at IS NULL
+FROM mz_internal.mz_object_history AS o
+JOIN mz_catalog.mz_objects AS objs ON objs.id = o.id
+WHERE objs.name = 'ms'
+----
+metric-sink  true
+
+# Things that deliberately don't work. `COMMENT ON` has no metric-sink variant
+# in the grammar at all.
+
+statement error Expected one of TABLE or VIEW or COLUMN or MATERIALIZED or SOURCE or SINK or INDEX or FUNCTION or CONNECTION or TYPE or SECRET or ROLE or DATABASE or SCHEMA or CLUSTER or NETWORK, found METRIC
+COMMENT ON METRIC SINK ms IS 'nope'
+
+# Default privileges never reach the planner: the grammar has no METRIC SINKS
+# here, so `plan_alter_default_privileges` rejecting them is belt-and-braces.
+# That is also why no durably stored default-privilege key can name one.
+
+simple conn=mz_system,user=mz_system
+ALTER DEFAULT PRIVILEGES FOR ALL ROLES GRANT ALL ON METRIC SINKS TO PUBLIC
+----
+db error: ERROR: Expected one of TABLES or TYPES or SECRETS or CONNECTIONS or SCHEMAS or DATABASES or CLUSTERS, found METRIC
+
+# The FROM relation is a tracked dependency, so it can't be pulled out from
+# under a live sink without CASCADE.
+
+statement error cannot drop view "shaped": still depended upon by metric sink "ms"
+DROP VIEW shaped
+
+statement ok
+DROP VIEW shaped CASCADE
+
+query I
+SELECT count(*) FROM mz_internal.mz_show_all_objects WHERE name = 'ms'
+----
+0
+
+# Dropping the sink retracts its catalog row too.
+
+query I
+SELECT count(*) FROM mz_internal.mz_metric_sinks
+----
+0
+
+# Access control. A role needs `CREATE` on the schema, `CREATE` on the cluster,
+# and read on the `FROM` relation. It does not need to own that relation.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks = true
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE op
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE bystander
+----
+COMPLETE 0
+
+statement ok
+CREATE VIEW shaped AS SELECT * FROM raw
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON SCHEMA materialize.public FROM PUBLIC
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE ALL ON CLUSTER quickstart FROM PUBLIC
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON DATABASE materialize TO op, bystander
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO op, bystander
+----
+COMPLETE 0
+
+# Nothing granted yet, so the schema is the first thing in the way.
+
+simple conn=op,user=op
+CREATE METRIC SINK denied FROM shaped
+----
+db error: ERROR: permission denied for SCHEMA "materialize.public"
+DETAIL: The 'op' role needs CREATE privileges on SCHEMA "materialize.public"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE ON SCHEMA materialize.public TO op
+----
+COMPLETE 0
+
+# Then the relation being read. You cannot sink what you cannot select.
+
+simple conn=op,user=op
+CREATE METRIC SINK denied FROM shaped
+----
+db error: ERROR: permission denied for VIEW "materialize.public.shaped"
+DETAIL: The 'op' role needs SELECT privileges on VIEW "materialize.public.shaped"
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON materialize.public.shaped TO op
+----
+COMPLETE 0
+
+# Then the cluster.
+
+simple conn=op,user=op
+CREATE METRIC SINK denied FROM shaped
+----
+db error: ERROR: permission denied for CLUSTER "quickstart"
+DETAIL: The 'op' role needs CREATE privileges on CLUSTER "quickstart"
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON CLUSTER quickstart TO op
+----
+COMPLETE 0
+
+# With all three, create succeeds, and `op` owns the result without owning
+# `shaped`.
+
+simple conn=op,user=op
+CREATE METRIC SINK owned FROM shaped
+----
+COMPLETE 0
+
+query TT
+SELECT sinks.name, roles.name
+FROM mz_internal.mz_metric_sinks AS sinks
+JOIN mz_catalog.mz_roles AS roles ON roles.id = sinks.owner_id
+----
+owned  op
+
+# A non-owner cannot drop it, the owner can, and so can a superuser.
+
+simple conn=bystander,user=bystander
+DROP METRIC SINK owned
+----
+db error: ERROR: must be owner of METRIC SINK materialize.public.owned
+
+simple conn=op,user=op
+DROP METRIC SINK owned
+----
+COMPLETE 0
+
+simple conn=op,user=op
+CREATE METRIC SINK owned FROM shaped
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP METRIC SINK owned
+----
+COMPLETE 0
+
+statement ok
+DROP VIEW shaped CASCADE
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_rbac_checks = false
+----
+COMPLETE 0
+
+# With the flag off the statement is refused, and the error says which flag.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_metric_sink = false
+----
+COMPLETE 0
+
+statement error CREATE METRIC SINK is not available
+CREATE METRIC SINK gated FROM raw
+
+# The flag names the feature after its DDL, so the SHOW paths report the same
+# message the CREATE path does.
+
+statement error CREATE METRIC SINK is not available
+SHOW METRIC SINKS
+
+statement error CREATE METRIC SINK is not available
+SHOW CREATE METRIC SINK raw

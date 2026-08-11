@@ -18,24 +18,290 @@
 //! family-conflict counting) stays in the operator, because it needs the frontier-gated fold that
 //! a per-row `Map` in MIR can't express.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use mz_compute_types::plan::LirRelationExpr;
+use mz_compute_types::sinks::{ComputeSinkConnection, ComputeSinkDesc, MetricSinkConnection};
 use mz_expr::func::variadic::Coalesce;
 use mz_expr::{MirRelationExpr, MirScalarExpr, func};
+use mz_repr::explain::trace_plan;
 use mz_repr::{
     ColumnName, Datum, GlobalId, RelationDesc, ReprRelationType, ReprScalarType, Row, SqlScalarType,
+};
+use mz_sql::optimizer_metrics::OptimizerMetrics;
+use mz_sql::plan::{HirRelationExpr, HirToMirConfig};
+use mz_transform::TransformCtx;
+use mz_transform::dataflow::DataflowMetainfo;
+use mz_transform::normalize_lets::normalize_lets;
+use mz_transform::typecheck::{SharedTypecheckingContext, empty_typechecking_context};
+use timely::progress::Antichain;
+
+use crate::optimize::dataflows::{
+    ComputeInstanceSnapshot, DataflowBuilder, ExprPrep, ExprPrepMaintained,
+};
+use crate::optimize::{
+    LirDataflowDescription, MirDataflowDescription, Optimize, OptimizerCatalog, OptimizerConfig,
+    OptimizerError, optimize_mir_local,
 };
 
 /// Matches Prometheus's metric name grammar: `[a-zA-Z_:][a-zA-Z0-9_:]*`.
 ///
 /// Expressed in MIR (see `shape_metric_sink_source`) rather than parsed from a `&str` on the
 /// operator's hot path.
-// NOTE: `shape_metric_sink_source` (and this pattern) have no caller yet, hence the
-// `#[allow(dead_code)]`, but adding them alongside the compute operator
-// (`mz_compute::sink::metric_sink`) that reads the `metric_kind`/`name_valid`
-// column contract, so they live together.
-#[allow(dead_code)]
 const METRIC_NAME_PATTERN: &str = "^[a-zA-Z_:][a-zA-Z0-9_:]*$";
 
-/// Extends the metric sink's imported relation with the row-wise shaping the operator otherwise
+/// Optimizer for metric sinks, both `CREATE METRIC SINK` and the coordinator-installed curated
+/// sinks.
+///
+/// The source is either an existing collection (like `CREATE INDEX`, no HIR to lower) or a planned
+/// query (like a materialized view), see [`MetricSinkFrom`]. Either way the row-wise shaping is
+/// appended in MIR and the dataflow exports a single `MetricSink`. Unlike a materialized view sink
+/// there is no persist shard, so there is no storage-metadata stage.
+pub struct Optimizer {
+    /// A representation typechecking context to use throughout the optimizer pipeline.
+    typecheck_ctx: SharedTypecheckingContext,
+    /// A snapshot of the catalog state.
+    catalog: Arc<dyn OptimizerCatalog>,
+    /// A snapshot of the cluster that will run the dataflow.
+    compute_instance: ComputeInstanceSnapshot,
+    /// A transient GlobalId for the shaped view built over the sink's source relation (see
+    /// `shape_metric_sink_source`).
+    view_id: GlobalId,
+    /// A durable GlobalId to be used with the exported metric sink.
+    sink_id: GlobalId,
+    /// Optimizer config.
+    config: OptimizerConfig,
+    /// Optimizer metrics.
+    metrics: OptimizerMetrics,
+    /// The time spent performing optimization so far.
+    duration: Duration,
+}
+
+impl Optimizer {
+    pub fn new(
+        catalog: Arc<dyn OptimizerCatalog>,
+        compute_instance: ComputeInstanceSnapshot,
+        view_id: GlobalId,
+        sink_id: GlobalId,
+        config: OptimizerConfig,
+        metrics: OptimizerMetrics,
+    ) -> Self {
+        Self {
+            typecheck_ctx: empty_typechecking_context(),
+            catalog,
+            compute_instance,
+            view_id,
+            sink_id,
+            config,
+            metrics,
+            duration: Default::default(),
+        }
+    }
+}
+
+/// A wrapper of metric sink parts needed to start the optimization process.
+pub struct MetricSink {
+    /// Names the assembled dataflow, for debugging.
+    debug_name: String,
+    /// The collection whose rows the sink exports.
+    from: MetricSinkFrom,
+    /// Value for the `sink` label on the sink's health gauges. `None` defaults to the sink's
+    /// `GlobalId`, which is what a user sink wants. A curated sink passes its stable name.
+    metric_label: Option<String>,
+}
+
+impl MetricSink {
+    /// Construct a new [`MetricSink`]. Arguments are recorded as-is.
+    pub fn new(debug_name: String, from: MetricSinkFrom, metric_label: Option<String>) -> Self {
+        Self {
+            debug_name,
+            from,
+            metric_label,
+        }
+    }
+}
+
+/// Where a metric sink's rows come from.
+///
+/// Either way the source must expose the canonical metric-sink columns (see
+/// [`shape_metric_sink_source`]).
+pub enum MetricSinkFrom {
+    /// An existing catalog collection, as `CREATE METRIC SINK ... FROM <relation>` resolves to.
+    Id(GlobalId),
+    /// A planned query, as a coordinator-installed sink built from curated SQL uses. The query is
+    /// not a catalog item, so it is lowered and locally optimized here rather than imported.
+    Query {
+        expr: HirRelationExpr,
+        desc: RelationDesc,
+    },
+}
+
+/// The (sealed intermediate) result after embedding a [`MetricSink`] into a
+/// [`MirDataflowDescription`], inlining referenced views, and jointly optimizing the `MIR` plans.
+#[derive(Clone, Debug)]
+pub struct GlobalMirPlan {
+    df_desc: MirDataflowDescription,
+    df_meta: DataflowMetainfo,
+}
+
+impl GlobalMirPlan {
+    pub fn df_desc(&self) -> &MirDataflowDescription {
+        &self.df_desc
+    }
+}
+
+/// The (final) result after MIR ⇒ LIR lowering and optimizing the resulting
+/// `DataflowDescription` with `LIR` plans.
+#[derive(Clone, Debug)]
+pub struct GlobalLirPlan {
+    df_desc: LirDataflowDescription,
+    df_meta: DataflowMetainfo,
+}
+
+impl GlobalLirPlan {
+    pub fn df_desc(&self) -> &LirDataflowDescription {
+        &self.df_desc
+    }
+}
+
+impl Optimize<MetricSink> for Optimizer {
+    type To = GlobalMirPlan;
+
+    fn optimize(&mut self, metric_sink: MetricSink) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
+        let mut df_builder = {
+            let compute = self.compute_instance.clone();
+            DataflowBuilder::new(&*self.catalog, compute).with_config(&self.config)
+        };
+        let mut df_desc = MirDataflowDescription::new(metric_sink.debug_name);
+        let mut df_meta = DataflowMetainfo::default();
+
+        let (source_expr, source_desc) = match metric_sink.from {
+            MetricSinkFrom::Id(from) => {
+                let from_desc = self
+                    .catalog
+                    .get_entry(&from)
+                    .relation_desc()
+                    .expect("can only create a metric sink on items with a valid description")
+                    .into_owned();
+                let repr_typ = ReprRelationType::from(from_desc.typ());
+                (MirRelationExpr::global_get(from, repr_typ), from_desc)
+            }
+            MetricSinkFrom::Query { expr, desc } => {
+                // HIR ⇒ MIR lowering and decorrelation. The result is inlined under the shaping
+                // below rather than becoming its own build, so the whole source is one view.
+                let expr = expr.lower(HirToMirConfig::from(&self.config), Some(&self.metrics))?;
+                (expr, desc)
+            }
+        };
+
+        // Push the pure row-wise shaping (coalesce identity elements, classify the metric kind,
+        // validate the metric name) into MIR, so the operator only does the cross-row logic
+        // (dedup/collision/family-conflict) that needs the fold. See `shape_metric_sink_source`.
+        let (shaped_expr, shaped_desc) = shape_metric_sink_source(source_expr, &source_desc);
+        let mut local_ctx = TransformCtx::local(
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&mut self.metrics),
+            Some(self.view_id),
+        );
+        let shaped_expr = optimize_mir_local(shaped_expr, &mut local_ctx)?;
+
+        // Imports the source's dependencies (the `Id` variant's collection, or the query's leaf
+        // collections) before inserting the shaped view that reads them.
+        df_builder.import_view_into_dataflow(
+            &self.view_id,
+            &shaped_expr,
+            &mut df_desc,
+            &self.config.features,
+        )?;
+        df_builder.maybe_reoptimize_imported_views(&mut df_desc, &self.config)?;
+
+        let sink_description = ComputeSinkDesc {
+            from: self.view_id,
+            from_desc: shaped_desc,
+            connection: ComputeSinkConnection::MetricSink(MetricSinkConnection {
+                label: metric_sink
+                    .metric_label
+                    .unwrap_or_else(|| self.sink_id.to_string()),
+            }),
+            with_snapshot: true,
+            up_to: Antichain::new(),
+            non_null_assertions: Vec::new(),
+            refresh_schedule: None,
+        };
+        df_desc.export_sink(self.sink_id, sink_description);
+
+        // Prepare expressions in the assembled dataflow.
+        let style = ExprPrepMaintained;
+        df_desc.visit_children(
+            |r| style.prep_relation_expr(r),
+            |s| style.prep_scalar_expr(s),
+        )?;
+
+        // Construct TransformCtx for global optimization.
+        let mut transform_ctx = TransformCtx::global(
+            &df_builder,
+            &mz_transform::EmptyStatisticsOracle,
+            &self.config.features,
+            &self.typecheck_ctx,
+            &mut df_meta,
+            Some(&mut self.metrics),
+        );
+        // Run global optimization.
+        mz_transform::optimize_dataflow(&mut df_desc, &mut transform_ctx, false)?;
+
+        self.duration += time.elapsed();
+
+        Ok(GlobalMirPlan { df_desc, df_meta })
+    }
+}
+
+impl Optimize<GlobalMirPlan> for Optimizer {
+    type To = GlobalLirPlan;
+
+    fn optimize(&mut self, plan: GlobalMirPlan) -> Result<Self::To, OptimizerError> {
+        let time = Instant::now();
+
+        let GlobalMirPlan {
+            mut df_desc,
+            df_meta,
+        } = plan;
+
+        // Ensure all expressions are normalized before finalizing.
+        for build in df_desc.objects_to_build.iter_mut() {
+            normalize_lets(&mut build.plan.0, &self.config.features)?
+        }
+
+        // Finalize the dataflow: MIR ⇒ LIR lowering and LIR ⇒ LIR transforms.
+        let df_desc = LirRelationExpr::finalize_dataflow(
+            df_desc,
+            &self.config.features,
+            Some(self.metrics.lowering()),
+        )?;
+
+        // Trace the pipeline output under `optimize`.
+        trace_plan(&df_desc);
+
+        self.duration += time.elapsed();
+        self.metrics
+            .observe_e2e_optimization_time("metric_sink", self.duration);
+
+        Ok(GlobalLirPlan { df_desc, df_meta })
+    }
+}
+
+impl GlobalLirPlan {
+    /// Unwraps the parts of the final result of the optimization pipeline.
+    pub fn unapply(self) -> (LirDataflowDescription, DataflowMetainfo) {
+        (self.df_desc, self.df_meta)
+    }
+}
+
+/// Extends the metric sink's source expression with the row-wise shaping the operator otherwise
 /// has to do in Rust: coalesces `labels`/`help` to their identity element, and adds two columns
 /// the operator reads instead of parsing strings on its hot path:
 ///
@@ -53,17 +319,16 @@ const METRIC_NAME_PATTERN: &str = "^[a-zA-Z_:][a-zA-Z0-9_:]*$";
 /// via `Reduce` + `FirstValue`), collapsing the operator to a plain fold over the live set. That
 /// full move is deferred: the tiebreak fidelity that logic needs is easier to keep correct
 /// hand-written and unit-tested for now.
-#[allow(dead_code)]
 fn shape_metric_sink_source(
-    from_id: GlobalId,
-    from_desc: &RelationDesc,
+    source: MirRelationExpr,
+    source_desc: &RelationDesc,
 ) -> (MirRelationExpr, RelationDesc) {
-    // Precondition: the source relation exposes the canonical metric-sink columns (`metric_name`,
-    // `metric_type`, `labels`, `value`, `help`). No in-tree caller enforces this yet (see the NOTE
-    // on `METRIC_NAME_PATTERN`); the SQL planner will, once the CREATE METRIC SINK planning path
-    // lands.
+    // Precondition: `source_desc` describes `source` and exposes the canonical metric-sink columns
+    // (`metric_name`, `metric_type`, `labels`, `value`, `help`).
+    // `mz_sql::plan::validate_metric_sink_desc` enforces this for both `CREATE METRIC SINK` and
+    // the coordinator-installed curated sinks, so a missing column here is a caller bug.
     let get_idx = |name: &str| {
-        from_desc
+        source_desc
             .get_by_name(&ColumnName::from(name))
             .expect("metric-sink source relation must expose the canonical columns")
     };
@@ -73,8 +338,7 @@ fn shape_metric_sink_source(
     let (value_idx, value_ct) = get_idx("value");
     let (help_idx, help_ct) = get_idx("help");
 
-    let repr_typ = ReprRelationType::from(from_desc.typ());
-    let arity = repr_typ.column_types.len();
+    let arity = source_desc.typ().columns().len();
     let labels_repr_type = ReprScalarType::from(&labels_ct.scalar_type);
 
     let empty_map_row = {
@@ -121,7 +385,7 @@ fn shape_metric_sink_source(
             func::IsRegexpMatchCaseSensitive,
         ));
 
-    let shaped_expr = MirRelationExpr::global_get(from_id, repr_typ)
+    let shaped_expr = source
         .map(vec![
             labels_coalesced,
             help_coalesced,
@@ -157,8 +421,23 @@ fn shape_metric_sink_source(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
+    use mz_catalog::memory::objects::{CatalogEntry, CatalogItem, Table, TableDataSource};
+    use mz_controller_types::ClusterId;
     use mz_expr::Eval;
-    use mz_repr::{RowArena, SqlColumnType};
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::adt::mz_acl_item::PrivilegeMap;
+    use mz_repr::role_id::RoleId;
+    use mz_repr::{
+        CatalogItemId, RelationVersion, RelationVersionSelector, RowArena, SqlColumnType,
+        VersionedRelationDesc,
+    };
+    use mz_sql::names::{
+        FullItemName, ItemQualifiers, QualifiedItemName, RawDatabaseSpecifier,
+        ResolvedDatabaseSpecifier, ResolvedIds, SchemaId, SchemaSpecifier,
+    };
+    use mz_sql::session::vars::SystemVars;
 
     use super::*;
 
@@ -183,9 +462,14 @@ mod tests {
             .finish()
     }
 
+    /// A bare `Get` of `TABLE_GID`, the source expression the `MetricSinkFrom::Id` path shapes.
+    fn source_get(desc: &RelationDesc) -> MirRelationExpr {
+        MirRelationExpr::global_get(TABLE_GID, ReprRelationType::from(desc.typ()))
+    }
+
     #[mz_ore::test]
     fn shaped_desc_column_contract() {
-        let (_expr, desc) = shape_metric_sink_source(GlobalId::Transient(0), &source_desc());
+        let (_expr, desc) = shape_metric_sink_source(source_get(&source_desc()), &source_desc());
 
         let cols: Vec<(String, SqlColumnType)> = desc
             .iter()
@@ -231,7 +515,7 @@ mod tests {
 
     #[mz_ore::test]
     fn shaped_expr_projects_seven_columns() {
-        let (expr, _desc) = shape_metric_sink_source(GlobalId::Transient(0), &source_desc());
+        let (expr, _desc) = shape_metric_sink_source(source_get(&source_desc()), &source_desc());
 
         // The shaping is a `Map` of four new columns followed by a `Project` down to the seven
         // canonical columns.
@@ -247,7 +531,7 @@ mod tests {
     /// `[labels_coalesced, help_coalesced, metric_kind, name_valid]`. Lets the two classification
     /// scalars be evaluated directly against an input row.
     fn shaped_map_scalars(desc: &RelationDesc) -> Vec<MirScalarExpr> {
-        let (expr, _desc) = shape_metric_sink_source(GlobalId::Transient(0), desc);
+        let (expr, _desc) = shape_metric_sink_source(source_get(desc), desc);
         match expr {
             MirRelationExpr::Project { input, .. } => match *input {
                 MirRelationExpr::Map { scalars, .. } => scalars,
@@ -316,5 +600,206 @@ mod tests {
                 "metric_name = {metric_name:?}",
             );
         }
+    }
+
+    /// The smallest catalog the optimizer needs: one table, at `TABLE_GID`, exposing the canonical
+    /// metric-sink columns.
+    #[derive(Debug)]
+    struct SingleTableCatalog {
+        entry: CatalogEntry,
+    }
+
+    const TABLE_ITEM_ID: CatalogItemId = CatalogItemId::User(1);
+    const TABLE_GID: GlobalId = GlobalId::User(1);
+    const SINK_GID: GlobalId = GlobalId::User(2);
+
+    impl SingleTableCatalog {
+        fn new() -> Self {
+            let table = Table {
+                create_sql: None,
+                desc: VersionedRelationDesc::new(source_desc()),
+                collections: BTreeMap::from([(RelationVersion::root(), TABLE_GID)]),
+                conn_id: None,
+                resolved_ids: ResolvedIds::empty(),
+                custom_logical_compaction_window: None,
+                is_retained_metrics_object: false,
+                data_source: TableDataSource::TableWrites {
+                    defaults: Vec::new(),
+                },
+            };
+            let entry = CatalogEntry {
+                item: CatalogItem::Table(table),
+                referenced_by: Vec::new(),
+                used_by: Vec::new(),
+                id: TABLE_ITEM_ID,
+                oid: 20_000,
+                name: QualifiedItemName {
+                    qualifiers: ItemQualifiers {
+                        database_spec: ResolvedDatabaseSpecifier::Ambient,
+                        schema_spec: SchemaSpecifier::Id(SchemaId::User(1)),
+                    },
+                    item: "t".to_string(),
+                },
+                owner_id: RoleId::User(1),
+                privileges: PrivilegeMap::default(),
+            };
+            Self { entry }
+        }
+    }
+
+    impl OptimizerCatalog for SingleTableCatalog {
+        fn get_entry(&self, _id: &GlobalId) -> mz_catalog::memory::objects::CatalogCollectionEntry {
+            mz_catalog::memory::objects::CatalogCollectionEntry {
+                entry: self.entry.clone(),
+                version: RelationVersionSelector::Latest,
+            }
+        }
+
+        fn get_entry_by_item_id(&self, _id: &CatalogItemId) -> &CatalogEntry {
+            &self.entry
+        }
+
+        fn resolve_full_name(
+            &self,
+            name: &QualifiedItemName,
+            _conn_id: Option<&mz_adapter_types::connection::ConnectionId>,
+        ) -> FullItemName {
+            FullItemName {
+                database: RawDatabaseSpecifier::Ambient,
+                schema: "public".to_string(),
+                item: name.item.clone(),
+            }
+        }
+
+        fn get_indexes_on(
+            &self,
+            _id: GlobalId,
+            _cluster: ClusterId,
+        ) -> Box<dyn Iterator<Item = (GlobalId, &mz_catalog::memory::objects::Index)> + '_>
+        {
+            Box::new(std::iter::empty())
+        }
+    }
+
+    const VIEW_GID: GlobalId = GlobalId::Transient(1);
+
+    /// Runs the whole pipeline over `from` and returns the assembled dataflow.
+    fn optimize_from(from: MetricSinkFrom, metric_label: Option<String>) -> LirDataflowDescription {
+        let catalog = Arc::new(SingleTableCatalog::new());
+        let cluster_id = ClusterId::user(1).expect("valid cluster id");
+        let compute_instance = ComputeInstanceSnapshot::new_without_collections(cluster_id);
+        let config = OptimizerConfig::from(&SystemVars::default());
+        let metrics = OptimizerMetrics::register_into(&MetricsRegistry::new(), Duration::MAX);
+
+        let mut optimizer = Optimizer::new(
+            catalog,
+            compute_instance,
+            VIEW_GID,
+            SINK_GID,
+            config,
+            metrics,
+        );
+
+        let global_mir_plan = optimizer
+            .optimize(MetricSink::new(
+                "metric-sink-test".to_string(),
+                from,
+                metric_label,
+            ))
+            .expect("MIR optimization succeeds");
+        let global_lir_plan = optimizer
+            .optimize(global_mir_plan)
+            .expect("LIR optimization succeeds");
+        let (df_desc, _df_meta) = global_lir_plan.unapply();
+        df_desc
+    }
+
+    /// Asserts the dataflow exports exactly one `MetricSink` over the shaped view, whose desc
+    /// carries the operator's column contract.
+    fn assert_one_shaped_metric_sink_export(df_desc: &LirDataflowDescription) {
+        assert!(df_desc.index_exports.is_empty());
+        let sink_exports: Vec<_> = df_desc.sink_exports.iter().collect();
+        assert_eq!(sink_exports.len(), 1);
+        let (sink_id, sink_desc) = sink_exports[0];
+        assert_eq!(*sink_id, SINK_GID);
+        assert!(matches!(
+            sink_desc.connection,
+            ComputeSinkConnection::MetricSink(_)
+        ));
+        assert_eq!(sink_desc.from, VIEW_GID);
+        let shaped_names: Vec<&str> = sink_desc
+            .from_desc
+            .iter_names()
+            .map(|n| n.as_str())
+            .collect();
+        assert_eq!(
+            shaped_names,
+            vec![
+                "metric_name",
+                "metric_type",
+                "labels",
+                "value",
+                "help",
+                "metric_kind",
+                "name_valid",
+            ]
+        );
+    }
+
+    /// The assembled dataflow exports exactly one `MetricSink`, reading the shaped view rather
+    /// than the source relation directly.
+    /// The `sink` label carried by the export's connection.
+    fn sink_label(df_desc: &LirDataflowDescription) -> &str {
+        match &df_desc.sink_exports.values().next().expect("one export").connection {
+            ComputeSinkConnection::MetricSink(conn) => &conn.label,
+            other => panic!("expected a metric sink connection, got {other:?}"),
+        }
+    }
+
+    #[mz_ore::test]
+    fn optimizer_exports_one_metric_sink() {
+        let df_desc = optimize_from(MetricSinkFrom::Id(TABLE_GID), None);
+        assert_one_shaped_metric_sink_export(&df_desc);
+        // The source collection is imported, not rebuilt: the only build is the shaped view.
+        assert!(df_desc.source_imports.contains_key(&TABLE_GID));
+        let build_ids: Vec<_> = df_desc.objects_to_build.iter().map(|b| b.id).collect();
+        assert_eq!(build_ids, vec![VIEW_GID]);
+    }
+
+    /// The `Query` source path (what a coordinator-installed curated sink takes) assembles the
+    /// same shape, with the query lowered under the shaping instead of a `Get` of a catalog item.
+    #[mz_ore::test]
+    fn optimizer_shapes_a_query_source() {
+        let desc = source_desc();
+        // The simplest query over the canonical columns. Building richer HIR by hand buys nothing:
+        // what is under test is that a query source is lowered and shaped, not the lowering itself.
+        let expr = HirRelationExpr::Get {
+            id: mz_expr::Id::Global(TABLE_GID),
+            typ: desc.typ().clone(),
+        };
+
+        let df_desc = optimize_from(
+            MetricSinkFrom::Query {
+                expr,
+                desc: desc.clone(),
+            },
+            None,
+        );
+        assert_one_shaped_metric_sink_export(&df_desc);
+        // The query's leaf collection is imported by the shaped view's dependency walk.
+        assert!(df_desc.source_imports.contains_key(&TABLE_GID));
+        let build_ids: Vec<_> = df_desc.objects_to_build.iter().map(|b| b.id).collect();
+        assert_eq!(build_ids, vec![VIEW_GID]);
+    }
+
+    /// With no explicit label a sink is tagged by its `GlobalId`, what a user's `CREATE METRIC
+    /// SINK` relies on. An explicit label (a curated sink's stable name) is used verbatim.
+    #[mz_ore::test]
+    fn metric_sink_label_defaults_to_sink_id_else_override() {
+        let df_desc = optimize_from(MetricSinkFrom::Id(TABLE_GID), None);
+        assert_eq!(sink_label(&df_desc), SINK_GID.to_string());
+
+        let df_desc = optimize_from(MetricSinkFrom::Id(TABLE_GID), Some("mz_curated".to_string()));
+        assert_eq!(sink_label(&df_desc), "mz_curated");
     }
 }

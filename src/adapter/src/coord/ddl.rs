@@ -708,6 +708,7 @@ impl Coordinator {
 
     pub(crate) fn drop_replica(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         self.drop_introspection_subscribes(replica_id);
+        self.drop_metric_sinks(replica_id);
 
         self.controller
             .drop_replica(cluster_id, replica_id)
@@ -1317,7 +1318,8 @@ impl Coordinator {
                         | CatalogItem::View(_)
                         | CatalogItem::Index(_)
                         | CatalogItem::Type(_)
-                        | CatalogItem::Func(_) => {}
+                        | CatalogItem::Func(_)
+                        | CatalogItem::MetricSink(_) => {}
                     }
                 }
                 Op::DropObjects(drop_object_infos) => {
@@ -1396,7 +1398,8 @@ impl Coordinator {
                                     | CatalogItem::View(_)
                                     | CatalogItem::Index(_)
                                     | CatalogItem::Type(_)
-                                    | CatalogItem::Func(_) => {}
+                                    | CatalogItem::Func(_)
+                                    | CatalogItem::MetricSink(_) => {}
                                 }
                             }
                         }
@@ -1426,7 +1429,8 @@ impl Coordinator {
                     | CatalogItem::View(_)
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
-                    | CatalogItem::Func(_) => {}
+                    | CatalogItem::Func(_)
+                    | CatalogItem::MetricSink(_) => {}
                 },
                 Op::AlterRole { .. }
                 | Op::AlterRetainHistory { .. }
