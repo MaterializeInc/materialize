@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/compute_state.rs
-revision: 68ce7b769e
+revision: 783a693265
 ---
 
 # mz-compute::compute_state
@@ -11,6 +11,7 @@ Contains the per-worker `ComputeState` and `ActiveComputeState` types that hold 
 When `handle_create_instance` is called, it first applies `InstanceConfig::initial_config` to the worker configuration so that create-time setup observes controller-synced dyncfg values rather than defaults, then calls `apply_worker_config` to ensure state consistency before initialization.
 When `initialize_logging` is called on `CreateInstance`, the `storage_log_reader` is taken from `ComputeState` and forwarded to the logging setup so the timely logging dataflow can replay storage worker events.
 In read-only mode, the output frontier for collections excludes the write frontier (which can't be advanced by the dataflow), preventing stalled progress reporting.
+Index peek processing is instrumented via `IndexPeekMetrics`, which carries references to per-phase histograms including `row_iteration_rows` (arrangement rows evaluated by the result iterator, including those filtered by MFP) and `result_sort_rows` (input rows across all thinning sort passes) alongside the existing duration histograms.
 
 ## Submodules
 

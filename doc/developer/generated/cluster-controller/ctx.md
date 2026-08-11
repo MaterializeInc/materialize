@@ -1,6 +1,6 @@
 ---
 source: src/cluster-controller/src/ctx.rs
-revision: 6eeaca032b
+revision: 38a95cefe2
 ---
 
 # cluster-controller::ctx
