@@ -825,7 +825,7 @@ WHERE w2.amount > w1.amount
               <Runnable
                 runCommand={runCommand}
                 value="CREATE INDEX wins_by_item_seller ON winning_bids (item, seller);
-  CREATE INDEX wins_by_item_buyer ON winning_bids (item, buyer);"
+CREATE INDEX wins_by_item_buyer ON winning_bids (item, buyer);"
                 title="View a sample row in flip_activities"
               />
             </RunnableContainer>
