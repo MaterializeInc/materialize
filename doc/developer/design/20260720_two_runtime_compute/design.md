@@ -47,11 +47,140 @@ during hydration or a burst of batchy work, which is precisely when the
 maintenance runtime is pinned and the introspection read blocks. Today we fly
 dark at the moment we most need to see.
 
+## Problems and mechanisms
+
+The symptoms people report are more numerous than their causes, and grouping the
+symptoms by cause changes which solution applies to each. This section is the
+spine: five mechanisms, what evidence there is for each, and which of the
+available mechanisms actually addresses it. The rest of the document argues for
+one of the solutions in this table, and the table is what bounds that argument.
+
+### The symptoms
+
+| Symptom | Evidence | Mechanism |
+|---|---|---|
+| Peeks queue behind other peeks on a busy replica | measured, E1: 6163 ms worst case at a 2170 ms walk | M1 |
+| A peek waits for maintenance to seal its read timestamp | argued from the isolation levels, not isolated by an experiment | M3 |
+| `WHERE key = <lit> ORDER BY .. LIMIT 1` on a skewed key stalls every lookup behind it | reported from the field, then measured, E11: 58 of 261 over 200 ms becomes 0 of 261 | M1 |
+| Interactive dataflows are slow, and introspection is unavailable, while a replica is busy | measured, E7 and E9: 2835 to 1456 ms, and 4.4 to 7.5 s polls to about 160 ms | M2 |
+| Peeks show jitter on a replica managing large state | **not measured.** Mechanism identified below | M1' |
+| A peek runs to completion once started and cannot be cancelled | confirmed in the code | M1 |
+| A walk over a swap-resident arrangement stalls for seconds | measured, E8b: 29.2 s worst case becomes 152 ms | M4 |
+
+### The mechanisms
+
+* **M1, non-preemptive queueing among peeks on one worker thread.** Three of the
+  symptoms are this one defect. The skewed lookup is not a separate problem, it is
+  M1 with an extreme service time, and the uncancellable peek is M1 seen from the
+  client's side. A non-preemptive server makes a short request wait for the
+  residual of the job in progress, which is why
+  [the fork](#why-the-fork-exists-preemption-not-capacity) is about preemption.
+* **M1', a peek queues behind a long unbudgeted *operator* activation.** A merge, a
+  reduce, or a top-k. This is not M1, because the work ahead of the peek is a
+  dataflow rather than another peek, and that difference decides which solutions
+  reach it. This is the suspected mechanism behind jitter on large-state replicas.
+* **M2, one dataflow scheduler, saturated.** Interactive rendering and introspection
+  have nowhere to run while maintenance occupies the worker.
+* **M3, the read timestamp is sealed by the maintenance frontier.** A strict
+  serializable read takes its timestamp at the write frontier, and that frontier
+  advances only when the maintenance worker steps. So a busy maintenance worker
+  delays the read whichever thread would serve it.
+* **M4, synchronous blocking inside a walk.** A major fault is involuntary and
+  cannot be yielded out of.
+
+### What each solution reaches
+
+| | M1 | M1' | M2 | M3 | M4 |
+|---|---|---|---|---|---|
+| S1, cooperative peek slicing | partial | **no** | no | no | **no** |
+| S2, cancellable peeks | the cancellation symptom only | no | no | no | no |
+| S3, interactive dataflows on a second runtime | no | no | **yes** | no | no |
+| S4, index peeks on the interactive runtime | **no, it relocates the queue** | yes | no | no | no |
+| S5, peeks on another thread | **yes** | **yes** | no | no | **yes** |
+
+Four of those entries carry the weight.
+
+**S1 is partial on M1, and weakest where M1 hurts most.** The added delay for a
+small peek is bounded by the quantum times the peeks ahead of it, so tens of
+milliseconds rather than seconds. The quantum cannot be lowered freely, because
+per-slice overhead is a timely step divided among the peeks that got a turn, and a
+step costs more as dataflow and worker counts grow. So the quantum floor is highest
+on a busy replica, which is where the symptom lives.
+
+**S1 cannot reach M1' or M4.** It slices peeks and not merges, so a peek that
+arrives during a long reduce still waits for it. And no cooperative scheme yields
+out of a page fault.
+
+**S4 relocates M1 rather than fixing it.** E2 measured single-runtime and
+two-runtime as equal at every scan cost with the walk substrate held constant.
+Peeks moved to a second runtime still share one worker thread there.
+
+**Nothing reaches M3**, and it governs the default isolation level. This is the
+largest unquantified risk in the whole area, because every peek measurement
+recorded here was taken at `serializable`. The open-loop client sets
+`transaction_isolation = serializable` and the parallel-benchmark scenario reads
+with `strict_serializable=False`, both deliberately, to measure the population the
+work helps. **There is no measurement at the default isolation level.** If the seal
+delay dominates on a loaded replica, E1's ratio is an upper bound that ordinary
+traffic rarely reaches.
+
+### What each solution costs
+
+| | Memory | CPU | Threads | Implementation | Non-isolation |
+|---|---|---|---|---|---|
+| S1 | k parked scans, each holding its batch set and up to the result size limit, with k unbounded | one timely step per pass, so peeks take `Q/(Q+step)` of the worker and the dataflow *share* barely moves | none | self-contained | the quantum floor rises with dataflow and worker count |
+| S2 | none | none | none | small, but an out-of-band flag is unsafe for dataflows because a `GlobalId` is reused, and safe for peeks because a uuid is not | none |
+| S3 | E6 measured publication as nearly free, 4.5 MiB for 48 interactive dataflows over a 95 MiB index. The doubled arrangement-size report is unresolved | 2N timely threads, fixed by the equal-peer requirement rather than tunable | 2N | the largest of these by an order of magnitude | shared fate, one memory limit for both runtimes, and M3 untouched |
+| S4 | the registry peek path | none | none | the only place the peek and sharing work meet | reaches nothing that S5 does not reach more cheaply |
+| S5 | bounded by the in-flight limit | needs a core, so on a saturated box it only reorders work | yes, and today they come from a pool shared with persist's blocking IO | needs `Send` batches, so it depends on the Arc-backed spines | past the in-flight limit it falls back to the non-preemptive walk |
+
+The two worst entries are mirror images. S1 has no admission control, so parked
+scans multiply peak result memory without bound. S5 has admission control and then
+falls off a cliff into the original behavior for whichever peek arrives past the
+limit. Each is the other's fix, which is the main reason they are complements
+rather than alternatives.
+
+### What follows
+
+* **S1 is the right default and belongs underneath everything else.** It costs no
+  core and no thread, it covers M1 well enough that nothing else needs to, and it
+  removes S5's cliff for free by making the fallback path preemptible.
+* **S5's justification narrows to M1' and M4**, the cases a cooperative scheme
+  structurally cannot slice. That makes the routing signal residency and operator
+  contention rather than result size.
+* **S2 is cheap and belongs with whichever of S1 or S5 lands first.** It is better
+  on the offload path, where the setter is unblocked by construction, so
+  cancellation latency decouples from the fairness quantum instead of being bounded
+  by it.
+* **S3 stands alone on M2, and its structural argument is stronger than its
+  measurements.** Cooperative yielding needs a yield point retrofitted per
+  operator. `linear_join_yielding` covers linear joins and
+  `storage_source_decode_fuel` covers the persist decode, while nothing covers
+  reduce, top-k, arrange, threshold, or delta joins. Coverage grows one operator at
+  a time and never completes. A second runtime covers every operator at once.
+* **S4 splits, and only one half is needed.** Serving peeks against dataflows
+  *exported by* the interactive runtime is required for S3 to be useful at all.
+  Routing *index* peeks to the interactive runtime is the part E2 found inert, and
+  S5 reaches M1' more cheaply, so it should be cut.
+
+Two measurements would change this table.
+
+1. **A latency distribution for point lookups on a replica performing large
+   merges**, with the walk inline, sliced, and offloaded. This is the only test that
+   separates M1 from M1'. If the jitter does not reproduce, S5's case rests on E8b
+   alone.
+2. **The same fixtures at strict serializable.** If M3 dominates on a loaded
+   replica, the priority moves to the seal, which is different work entirely.
+
 ## Why this architecture
 
 This is a deliberate architectural commitment, not an isolated feature. It is
 close to a one-way door (see [The commitment](#the-commitment)), so the rationale
 matters as much as the mechanism.
+
+The problem it addresses is M2 in
+[Problems and mechanisms](#problems-and-mechanisms). The peek mechanisms in this
+document address M1, M1' and M4, and neither addresses M3.
 
 ### The thesis is separation of concerns
 
