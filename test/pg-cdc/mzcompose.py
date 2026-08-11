@@ -302,7 +302,8 @@ def workflow_single_replica_source_notice(
     (OLTP) sources ends up with more than one replica: raising the replication
     factor of a cluster with such a source, adding a replica (billed or
     unbilled) to a cluster with such a source, and creating such a source on a
-    cluster that already has more than one replica.
+    cluster that already has more than one replica. Also checks that graceful
+    resizes and their overlap replicas emit no spurious notice.
     """
 
     pg_version = get_targeted_pg_version(parser)
@@ -404,6 +405,45 @@ def workflow_single_replica_source_notice(
             expect_no_notice(notices)
             with mz_system_conn.cursor() as system_cur:
                 system_cur.execute("DROP CLUSTER REPLICA c1.free")
+
+            # A graceful resize (a shape change writes a reconfiguration
+            # record and runs an overlap replica until cut-over) does not
+            # change how many replicas the cluster aims for, so it emits no
+            # notice.
+            other_size = f"scale={Materialized.Size.DEFAULT_SIZE},workers=1"
+            cur.execute(f"ALTER CLUSTER c1 SET (SIZE '{other_size}')".encode())
+            expect_no_notice(notices)
+
+            # Nor does creating such a source while the reconfiguration may
+            # still be in flight: the overlap replica is not counted.
+            cur.execute(
+                "CREATE SOURCE src5 IN CLUSTER c1 "
+                "FROM POSTGRES CONNECTION pg (PUBLICATION 'mz_source')"
+            )
+            expect_no_notice(notices)
+
+            # Raising the replication factor together with a shape change
+            # routes through the reconfiguration path and emits the notice.
+            # Changing the replication factor is refused while the previous
+            # reconfiguration is still in flight, so retry until it settles.
+            for _ in range(60):
+                try:
+                    cur.execute(
+                        f"ALTER CLUSTER c1 SET (SIZE '{size}', REPLICATION FACTOR 2)".encode()
+                    )
+                    break
+                except psycopg.Error as e:
+                    assert "reconfiguration is in progress" in str(
+                        e
+                    ), f"unexpected error: {e}"
+                    time.sleep(1)
+            else:
+                raise RuntimeError("reconfiguration did not settle")
+            expect_notice(
+                notices,
+                "c1",
+                '"materialize.public.src1", "materialize.public.src5"',
+            )
 
             # Creating such a source on a cluster that already has two replicas
             # emits the notice.
