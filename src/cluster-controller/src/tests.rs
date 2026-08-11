@@ -2278,7 +2278,7 @@ fn on_refresh_window_decision_lists_due_mvs() {
 fn on_refresh_caught_up_at_read_ts_is_off() {
     // Frontier exactly at the read ts (and no hydration lead, no compaction
     // window): the MV is caught up, so the cluster is Off. The needs-refresh check
-    // is strict (`frontier < read_ts + estimate`), matching the legacy scheduler.
+    // is strict (`frontier < read_ts + estimate`).
     let c = cluster(1);
     let inputs = window_inputs(100, 0, Some(100), refresh_at(50));
     let (state, signals) = scheduled_state(c, "100cc", 0, 0, Vec::new(), Some(inputs));
@@ -2294,8 +2294,7 @@ fn on_refresh_caught_up_at_read_ts_is_off() {
 fn on_refresh_empty_frontier_needs_no_refresh() {
     // An empty (sealed) write frontier `[]` is the "complete past every timestamp"
     // state: `Antichain::less_than` is `false` for every timestamp, so the MV never
-    // reads as needing a refresh on that count, exactly as the legacy refresh
-    // policy decides it with `Antichain::less_than`. The compaction window is also
+    // reads as needing a refresh on that count. The compaction window is also
     // closed here (read ts 1000 is well past the last `AT 200` plus the compaction
     // estimate), so the cluster is Off.
     //

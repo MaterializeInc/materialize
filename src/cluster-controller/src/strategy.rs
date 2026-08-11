@@ -384,8 +384,8 @@ impl Strategy for GracefulReconfigurationStrategy {
 /// replica at the cluster's realized shape while the cluster is inside a refresh
 /// window, and nothing otherwise. The window decision keys on the bound REFRESH
 /// materialized views' write frontiers, their refresh schedules, the configured
-/// hydration-time estimate, and the current read timestamp (the same signals the
-/// legacy scheduler reads), all carried in [`RefreshWindowInputs`].
+/// hydration-time estimate, and the current read timestamp, all carried in
+/// [`RefreshWindowInputs`].
 ///
 /// The controller (not the user's `replication_factor`) owns a scheduled
 /// cluster's replica set, so [`Strategy::update_state`] normalizes the realized
@@ -394,12 +394,10 @@ impl Strategy for GracefulReconfigurationStrategy {
 /// a scheduled cluster, with `mz_cluster_replicas` authoritative for what is
 /// actually running.
 ///
-/// NB: the decision is re-derived purely from the live signals each tick; there
-/// is no "all policies have decided" latch like `cluster_scheduling.rs` needs.
-/// That scheduler collects policy decisions asynchronously and across ticks, so
-/// turning a cluster off is only safe once every policy has reported. We pull a
-/// complete decision from durable + storage state on every tick, so the first
-/// tick after a restart already decides from the same inputs as a steady tick.
+/// NB: the decision is re-derived purely from the live signals each tick, with
+/// no cross-tick latch. We pull a complete decision from durable and storage
+/// state on every tick, so the first tick after a restart already decides from
+/// the same inputs as a steady tick.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OnRefreshStrategy;
 
@@ -485,9 +483,10 @@ impl Strategy for OnRefreshStrategy {
         _now: Timestamp,
     ) -> StateWrite {
         // The controller owns a scheduled cluster's replica set, so hold the
-        // realized `replication_factor` at `0`. A stale non-zero value (e.g. left
-        // by the legacy scheduler toggling 0↔1) would otherwise have the implicit
-        // baseline desire a replica the on-refresh strategy does not, a flap.
+        // realized `replication_factor` at `0`. A stale non-zero value (e.g.
+        // carried over from a cluster that was just given a schedule) would
+        // otherwise have the implicit baseline desire a replica the on-refresh
+        // strategy does not, a flap.
         // Only write when it is actually non-zero, to keep steady ticks no-ops.
         if matches!(state.schedule, ClusterSchedule::Manual) || state.replication_factor == 0 {
             return StateWrite::default();
@@ -540,9 +539,8 @@ impl Strategy for OnRefreshStrategy {
             return Vec::new();
         }
         // One replica at the realized shape (`cluster.size` plus the cluster's AZ
-        // pool and logging), matching what the legacy scheduler brings up. The
-        // window decision rides inside the reason so the create it may produce
-        // can carry the audit detail.
+        // pool and logging). The window decision rides inside the reason so the
+        // create it may produce can carry the audit detail.
         vec![DesiredReplica {
             shape: state.realized_shape(),
             reason: CreateReason::OnRefresh(decision),

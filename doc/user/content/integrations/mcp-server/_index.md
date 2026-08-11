@@ -15,11 +15,11 @@ aliases:
 
 ## Agent skills
 
-Materialize provides the following open-source [agent
-skills](https://github.com/MaterializeInc/agent-skills) to help developers build
-with Materialize.
-
-{{% include-headless "/headless/agent-skills-table" %}}
+Materialize provides open-source [agent
+skills](https://github.com/MaterializeInc/agent-skills) that give coding agents
+like Claude Code, Codex, and Cursor access to Materialize documentation and
+reference material. For the list of available skills and installation
+instructions, see [Agent Skills](/integrations/coding-agent-skills/).
 
 ## MCP servers
 

@@ -353,23 +353,7 @@ pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
     "Whether per-cluster and per-replica scoped system parameters are evaluated and applied.",
 );
 
-/// Top-level gate for the cluster controller. When on, the controller owns the
-/// managed-cluster replica set and the legacy paths (the graceful 3-stage
-/// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
-/// have two writers, so this is a clean switch, not a per-strategy toggle.
-///
-/// Defaults on. This is the break-glass switch to fall back to the legacy
-/// paths if the controller misbehaves.
-pub const ENABLE_CLUSTER_CONTROLLER: Config<bool> = Config::new(
-    "enable_cluster_controller",
-    true,
-    "Whether the cluster controller owns the managed-cluster replica set. When false, the legacy scheduling and graceful-reconfiguration paths run instead.",
-);
-
 /// Cadence of the cluster controller's reconcile tick.
-///
-/// Replaces `cluster_check_scheduling_policies_interval` once the controller is
-/// the sole owner; while the controller is dark both intervals exist.
 pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
     "cluster_controller_tick_interval",
     Duration::from_secs(5),
@@ -379,9 +363,6 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
 /// Whether a config-shape `ALTER CLUSTER` returns immediately, with the
 /// controller converging in the background, or blocks the session on a
 /// wait-shim until the reconfiguration completes or its deadline passes.
-///
-/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on, when the
-/// controller owns the reconfiguration.
 ///
 /// Defaults on. This is the break-glass switch back to the blocking wait-shim
 /// if returning immediately causes trouble.
@@ -404,9 +385,9 @@ pub const DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT: Config<Duration> = Config::ne
 /// runs a burst replica; graceful reconfiguration and `ON REFRESH` scheduling
 /// are unaffected.
 ///
-/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on. A cluster can only
-/// carry an `AUTO SCALING STRATEGY` while its SQL acceptance feature flag is
-/// on, so this is the second of the two gates burst sits behind.
+/// A cluster can only carry an `AUTO SCALING STRATEGY` while its SQL acceptance
+/// feature flag is on, so this is the second of the two gates burst sits
+/// behind.
 pub const ENABLE_HYDRATION_BURST: Config<bool> = Config::new(
     "enable_hydration_burst",
     true,
@@ -426,7 +407,6 @@ pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
-        .add(&ENABLE_CLUSTER_CONTROLLER)
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
         .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
         .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)

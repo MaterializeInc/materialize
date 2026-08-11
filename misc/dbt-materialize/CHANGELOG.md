@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* Fix the deployment timestamp in the schema comment `deploy_promote` leaves
+  behind. It read the second row of the first column instead of the second
+  column of the only row, so every tag said `Deployment by <user> on ` with
+  nothing after it.
+
 ## 1.9.11 - 2026-07-26
 
 * Add support for the [`AUTO SCALING STRATEGY`](https://materialize.com/docs/sql/create-cluster/#autoscaling)

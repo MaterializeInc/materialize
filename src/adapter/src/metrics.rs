@@ -44,8 +44,6 @@ pub struct Metrics {
     pub append_table_duration_seconds: Histogram,
     pub webhook_validation_reduce_failures: IntCounterVec,
     pub webhook_get_appender: IntCounter,
-    pub check_scheduling_policies_seconds: HistogramVec,
-    pub handle_scheduling_decisions_seconds: HistogramVec,
     pub row_set_finishing_seconds: Histogram,
     pub session_startup_table_writes_seconds: Histogram,
     pub parse_seconds: Histogram,
@@ -203,18 +201,6 @@ impl Metrics {
             webhook_get_appender: registry.register(metric!(
                 name: "mz_webhook_get_appender_count",
                 help: "Count of getting a webhook appender from the Coordinator.",
-            )),
-            check_scheduling_policies_seconds: registry.register(metric!(
-                name: "mz_check_scheduling_policies_seconds",
-                help: "The time each policy in `check_scheduling_policies` takes.",
-                var_labels: ["policy", "thread"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
-            )),
-            handle_scheduling_decisions_seconds: registry.register(metric!(
-                name: "mz_handle_scheduling_decisions_seconds",
-                help: "The time `handle_scheduling_decisions` takes.",
-                var_labels: ["altered_a_cluster"],
-                buckets: histogram_seconds_buckets(0.000_128, 8.0),
             )),
             row_set_finishing_seconds: registry.register(metric!(
                 name: "mz_row_set_finishing_seconds",

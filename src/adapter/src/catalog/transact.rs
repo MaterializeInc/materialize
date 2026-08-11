@@ -86,7 +86,6 @@ use crate::catalog::{
 use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
 
 /// A manually injected audit event.
@@ -360,9 +359,6 @@ pub enum ReplicaCreateDropReason {
     /// - ALTERing various options on a managed cluster,
     /// - CREATE/DROP CLUSTER REPLICA on an unmanaged cluster.
     Manual,
-    /// The automated cluster scheduling initiated the replica create or drop, e.g., a
-    /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
-    ClusterScheduling(Vec<SchedulingDecision>),
     /// The cluster controller's graceful-reconfiguration strategy created the replica while
     /// converging a cluster onto an in-flight `reconfiguration` target (a background
     /// `ALTER CLUSTER`).
@@ -373,11 +369,7 @@ pub enum ReplicaCreateDropReason {
     /// The cluster controller's on-refresh strategy created the replica for a refresh window on
     /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
     /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
-    /// estimate) as the `scheduling_policies` detail, the same detail the legacy scheduler's
-    /// [`ReplicaCreateDropReason::ClusterScheduling`] records. Deliberately not that variant
-    /// itself: its legacy shape carries a per-policy `Vec` and an on/off flag for auditing
-    /// off-decisions, neither of which the controller has (controller drops are uniformly
-    /// `Retired`), and it is removed together with the legacy scheduler.
+    /// estimate) as the `scheduling_policies` detail.
     OnRefresh(RefreshWindowDecision),
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
@@ -394,12 +386,6 @@ impl ReplicaCreateDropReason {
     ) {
         match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
-            ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
-                CreateOrDropClusterReplicaReasonV1::Schedule,
-                Some(SchedulingDecision::reasons_to_audit_log_reasons(
-                    &scheduling_decisions,
-                )),
-            ),
             ReplicaCreateDropReason::GracefulReconfiguration => {
                 (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
             }
@@ -416,8 +402,8 @@ impl ReplicaCreateDropReason {
 }
 
 /// Convert the controller's on-refresh window decision into the audit log's
-/// `scheduling_policies` detail, the same shape the legacy scheduler records:
-/// ids as strings and the hydration-time estimate as an interval string.
+/// `scheduling_policies` detail: ids as strings and the hydration-time estimate
+/// as an interval string.
 fn refresh_window_decision_to_audit_log(
     decision: RefreshWindowDecision,
 ) -> SchedulingDecisionsWithReasonsV2 {
@@ -514,8 +500,8 @@ impl Catalog {
     /// status change, a fresh record, or the drop of an in-progress record.
     ///
     /// Every such movement is an audit-log transition, so a write performing
-    /// one must declare the matching intent. Status-preserving copies (legacy
-    /// paths carrying a record forward, re-targets that stay in progress with a
+    /// one must declare the matching intent. Status-preserving copies (a write
+    /// carrying a record forward, re-targets that stay in progress with a
     /// declared `Started`) and drops of already-settled records move nothing.
     fn reconfiguration_lifecycle_moved(
         old_config: &ClusterConfig,
@@ -3637,6 +3623,8 @@ impl ObjectsToDrop {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
@@ -3648,6 +3636,7 @@ mod tests {
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql::session::vars::{MAX_CONNECTIONS, OwnedVarInput, SystemVars};
 
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
@@ -3827,8 +3816,8 @@ mod tests {
             &unmanaged,
         ));
 
-        // Not movements: no record at all, a status-preserving copy (legacy
-        // paths carry the record forward), and dropping a settled record.
+        // Not movements: no record at all, a status-preserving copy (a write
+        // that carries the record forward), and dropping a settled record.
         assert!(!Catalog::reconfiguration_lifecycle_moved(
             &managed(None),
             &managed(None),
@@ -3985,9 +3974,8 @@ mod tests {
 
         use crate::catalog::ReplicaCreateDropReason;
 
-        // `OnRefresh` shares the `schedule` audit word with the legacy
-        // `ClusterScheduling` variant and converts the controller's window
-        // decision into the same `scheduling_policies` detail blob: ids as
+        // `OnRefresh` audits the `schedule` word and converts the controller's
+        // window decision into the `scheduling_policies` detail blob: ids as
         // strings, the hydration-time estimate as an interval string, and the
         // decision hardcoded `on` (the controller produces a create, and so
         // this detail, only for an open window).
@@ -4562,6 +4550,112 @@ mod tests {
                     .iter()
                     .any(|(id, _, _)| *id == cluster_a),
                 "orphan row for a dropped cluster must be removed even when absent from prune_scope"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Registers a `MAX_CONNECTIONS` callback that records every value it sees.
+    /// The initial fire from `register_callback` is cleared out, so callers
+    /// only observe notifications that happen afterwards.
+    fn record_max_connections(catalog: &mut Catalog) -> Arc<Mutex<Vec<u32>>> {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        catalog.system_config_mut().register_callback(
+            &MAX_CONNECTIONS,
+            Arc::new(move |vars: &SystemVars| {
+                recorder
+                    .lock()
+                    .expect("recorder lock")
+                    .push(vars.max_connections())
+            }),
+        );
+        observed.lock().expect("recorder lock").clear();
+        observed
+    }
+
+    fn set_max_connections_op(value: u32) -> Op {
+        Op::UpdateSystemConfiguration {
+            name: MAX_CONNECTIONS.name.to_string(),
+            value: OwnedVarInput::Flat(value.to_string()),
+        }
+    }
+
+    // The commit-boundary firing now lives in
+    // `Coordinator::apply_catalog_implications`, so it is not observable from a
+    // bare `Catalog`. The tests below stay here to guard the speculative path:
+    // `Catalog::transact` itself must never notify.
+
+    /// A dry-run transaction is never committed, so it must not notify.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_dry_run() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            // The clone carries the registered callbacks, so the dry run
+            // genuinely *could* fire them. That's what makes this test worth
+            // anything.
+            let base_state = catalog.state().clone();
+            let oracle_write_ts = catalog.current_upper().await;
+            let (dry_run_state, _snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![set_max_connections_op(before + 1)],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("dry run");
+
+            assert_eq!(dry_run_state.system_config().max_connections(), before + 1);
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "a dry run must not notify callbacks"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// A transaction that fails after applying a system-config op to the
+    /// candidate state must not notify, since nothing ever gets committed.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_rollback() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            let oracle_write_ts = catalog.current_upper().await;
+            let result = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        set_max_connections_op(before + 1),
+                        // `transact_op` rejects this while parsing, after the
+                        // first op already applied to the candidate state.
+                        Op::UpdateSystemConfiguration {
+                            name: MAX_CONNECTIONS.name.to_string(),
+                            value: OwnedVarInput::Flat("not a number".to_string()),
+                        },
+                    ],
+                )
+                .await;
+
+            assert!(result.is_err(), "the second op must abort the transaction");
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "an aborted transaction must not notify callbacks"
             );
 
             catalog.expire().await;
