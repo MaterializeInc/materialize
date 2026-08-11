@@ -189,7 +189,9 @@ async fn children_prefixes<D: PrimaryKeyProber>(
     }
 }
 
-/// Wrapper around [KeyProber] for testing purposes. See [KeyProber] for more details.
+/// Probing operations of [`KeyProber`], as a trait so tests can substitute
+/// an in-memory implementation. See [`KeyProber`]'s methods for each
+/// operation's contract.
 trait PrimaryKeyProber {
     async fn estimate_range_rows(
         &mut self,
@@ -249,7 +251,9 @@ mod tests {
     use crate::probe::tests::{connect, drop_db, setup_table};
 
     /// In-memory [`PrimaryKeyProber`] over a sorted key list with exact
-    /// "estimates". Byte order stands in for the collation.
+    /// "estimates". Byte order stands in for the collation, so the PAD SPACE
+    /// below-space cases are deliberately out of scope here, the live tests
+    /// cover them.
     struct MockDb {
         keys: Vec<String>,
     }
@@ -365,7 +369,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
-    async fn low_min_bucket_rows_splits_small_tables() -> Result<(), MySqlError> {
+    async fn low_min_rows_per_worker_splits_small_tables() -> Result<(), MySqlError> {
         let mut db = MockDb { keys: keys(1000) };
         let count = u64::cast_from(db.keys.len());
         let boundaries = partition(&mut db, 4, count, 10).await?;
@@ -432,6 +436,7 @@ mod tests {
             "c_1".to_string(),
             "c%2".to_string(),
             "c\\3".to_string(),
+            "c|4".to_string(),
         ];
         all_keys.extend((0..900).map(|i| format!("a{i:05}")));
         all_keys.extend((0..100).map(|i| format!("b{i:05}")));
@@ -447,7 +452,7 @@ mod tests {
         // A low minimum splits inside the 'a' extensions rather than stopping
         // at the exact key.
         let bounds = partition_table(&mut conn, table, "id", 4, total, 10).await?;
-        assert!(bounds.len() == 3, "{bounds:?}");
+        assert_eq!(bounds.len(), 3, "{bounds:?}");
 
         // MySQL agrees the boundaries are strictly increasing.
         for pair in bounds.windows(2) {
@@ -495,14 +500,16 @@ mod tests {
         let bounds = partition_table(&mut conn, table, "id", 4, total, 250).await?;
         assert_eq!(bounds.len(), 3);
         let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
-        // ~8k are visible, so each count should have at least 2k for perfect partitioning and the ranges are
-        // cleanly partitionable except for the hidden tab prefixes, so we should be reliably able to assert
-        // that each count is greater than 1600 -- this makes room for single partitions being misallocated (~250)
-        // and some inaccuracy on top of that (~150).
+        // ~8k keys are visible, so each count gets at least 2k under perfect
+        // partitioning, and the ranges partition cleanly except for the
+        // hidden tab prefixes. Asserting each count above 1600 makes room
+        // for single partitions being misallocated (~250) and some
+        // inaccuracy on top of that (~150).
         assert!(counts.iter().all(|&c| c > 1600), "{counts:?}");
 
         // Each hidden group piles into the partition left of the next visible
-        // boundary, here all of them ('', tabs, b-tabs) land in the first.
+        // boundary, here all of them ('', tabs, b-tabs) land in the first. Keep
+        // the assertion low to ensure there's room for estimate variability.
         // This is a performance degradation edge case, not a correctness
         // issue.
         assert!(counts[0] > 2600, "{counts:?}");
