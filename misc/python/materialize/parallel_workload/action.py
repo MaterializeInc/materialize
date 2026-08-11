@@ -424,14 +424,30 @@ class Action:
         Oid,
     ) + tuple(RANGE_TYPES)
 
-    def aggregate_fns(self, column: Column) -> list[str]:
+    def aggregate_fns(self, column: Column, window: bool = False) -> list[str]:
         """Aggregate function templates valid for the column's type.
 
         Used both in window position (OVER ..) and in GROUP BY position. The
         collection aggregates (array_agg/list_agg/jsonb_agg/string_agg)
         exercise the "collection" reduce rendering, distinct from the
         accumulable sum/count path. Type exclusions are empirically derived,
-        e.g. array_agg rejects char and cannot nest map/list/array."""
+        e.g. array_agg rejects char and cannot nest map/list/array.
+
+        TODO: Reenable when CPU-200 is fixed.
+
+        `window` drops the collection aggregates. In GROUP BY position they
+        emit one collected value per group, which is linear in the input. In
+        window position every row of a partition receives an aggregate over
+        the whole partition, so the reduce's output arrangement holds N rows
+        of O(N) bytes each and a single partition of N rows costs O(N^2) on
+        the replica. Nothing bounds that. `LIMIT` lands in the peek's
+        `Finish`, above the dataflow that already built the whole collection,
+        and `max_result_size` only measures the final peek result. Views
+        whose partition-key column is a literal put every row in one
+        partition, and CDC source tables carry up to
+        `MySqlSource.prepopulate_rows` rows rather than `MAX_ROWS`, so N
+        reaches the tens of thousands. See the `window-collection-aggregate`
+        scenario in test/bounded-memory."""
         dt = column.data_type
         fns = ["COUNT({})"]
         if dt in NUMBER_TYPES:
@@ -450,6 +466,9 @@ class Action:
             fns.extend(["BOOL_AND({})", "BOOL_OR({})"])
         if dt not in self._MINMAX_EXCLUDED:
             fns.extend(["MAX({})", "MIN({})"])
+        if window:
+            # TODO: Reenable when CPU-200 is fixed.
+            return fns
         # Collection aggregates.
         fns.append("jsonb_agg({})")
         if dt != Char:
@@ -653,7 +672,7 @@ class Action:
                 column1 = self.rng.choice(all_columns)
                 column2 = self.rng.choice(all_columns)
                 column3 = self.rng.choice(all_columns)
-                window_fn = self.rng.choice(self.aggregate_fns(column1))
+                window_fn = self.rng.choice(self.aggregate_fns(column1, window=True))
                 select_list.append(
                     f"{window_fn.format(column1)} OVER (PARTITION BY {column2} ORDER BY {column3})"
                 )
@@ -3270,7 +3289,6 @@ class FlipFlagsAction(Action):
             "oidc_group_role_sync_strict",
             "console_oidc_client_id",
             "console_oidc_scopes",
-            "enable_cluster_controller",
             "cluster_controller_tick_interval",
             "enable_background_alter_cluster",
             "default_cluster_reconfiguration_timeout",

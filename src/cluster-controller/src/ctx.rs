@@ -24,7 +24,7 @@
 //! controller drives what is fetched. Read methods are batched so a separate-task
 //! deployment can bound its round-trips to the Coordinator.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -88,9 +88,8 @@ impl ObservedReplica {
 /// compares it against the read timestamp (`less_than`) to decide whether the MV
 /// still needs a refresh. For the compaction window it reads the frontier's lone
 /// element via `as_option` to find the previous refresh time, falling back to the
-/// schedule's last refresh on the empty/sealed frontier `[]`, mirroring the
-/// legacy refresh policy. The frontier of a single-input total-order MV holds at
-/// most one element.
+/// schedule's last refresh on the empty/sealed frontier `[]`. The frontier of a
+/// single-input total-order MV holds at most one element.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefreshMvInfo {
     /// The MV's writes-`GlobalId`: the identity the window decision records in
@@ -176,16 +175,36 @@ impl RefreshWindowDecision {
     }
 }
 
-/// The live signals the on-refresh strategy reads to decide whether a scheduled
-/// cluster is inside a refresh window: the current read timestamp, the
-/// Persist-compaction time estimate, and the bound REFRESH MVs' frontiers and
-/// schedules.
+/// The catalog and storage inputs for one scheduled cluster's refresh window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshWindowClusterInputs {
+    /// How long after a refresh an MV is estimated to still need Persist
+    /// compaction, which also keeps the cluster on.
+    pub compaction_estimate: Duration,
+    /// The REFRESH MVs bound to the cluster.
+    pub refresh_mvs: Vec<RefreshMvInfo>,
+}
+
+/// Refresh-window inputs gathered for one reconciliation phase.
 ///
-/// Pulled on demand only for scheduled clusters. A MANUAL cluster carries `None`
-/// and is never probed.
+/// The top-level timestamp makes sharing one oracle read across every included
+/// cluster structural. A cluster absent from `cluster_inputs` has unavailable
+/// inputs and must not be reconciled during the phase.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RefreshWindowInputsBatch {
+    /// The local oracle read timestamp for every cluster in the batch.
+    pub read_ts: Timestamp,
+    /// The available catalog and storage inputs, keyed by cluster.
+    pub cluster_inputs: BTreeMap<ClusterId, RefreshWindowClusterInputs>,
+}
+
+/// The fulfilled live signal the on-refresh strategy uses for one cluster.
+///
+/// Pulled on demand only for scheduled clusters. A MANUAL cluster carries
+/// `None` and is never probed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RefreshWindowInputs {
-    /// The local oracle read timestamp the window decision is taken against.
+    /// The shared local oracle read timestamp the window decision uses.
     pub read_ts: Timestamp,
     /// How long after a refresh an MV is estimated to still need Persist
     /// compaction, which also keeps the cluster on.
@@ -417,21 +436,24 @@ pub trait ClusterControllerCtx: Send {
     /// burst winds down via its linger.
     async fn has_hydratable_objects(&mut self, cluster_id: ClusterId) -> bool;
 
-    /// The refresh-window live signals for one scheduled cluster: the read
-    /// timestamp, the compaction estimate, and the bound REFRESH MVs' write
-    /// frontiers and schedules. Returns `None` when the cluster is missing,
-    /// unmanaged, or no longer scheduled `ON REFRESH` at pull time. The
-    /// controller only asks about clusters it observed as scheduled, so `None`
-    /// means a concurrent DDL moved the cluster mid-tick, and the schedule's
-    /// membership in the compare-and-append witness rejects any decision
-    /// derived from the stale observation.
+    /// The refresh-window live signals for the given scheduled clusters.
+    /// Returns one shared read timestamp plus the available per-cluster catalog
+    /// and storage inputs. Omits a cluster when its inputs are unavailable,
+    /// including when it is missing, unmanaged, or no longer scheduled `ON
+    /// REFRESH` at pull time. Returns `None` when the batch fails or no requested
+    /// cluster has valid inputs.
     ///
     /// Pulled on demand the same way as [`Self::hydrated_replicas`]: the
-    /// controller probes a cluster only when the on-refresh strategy needs the
+    /// controller includes a cluster only when the on-refresh strategy needs the
     /// signal (i.e. the cluster is scheduled), so a steady MANUAL cluster never
-    /// pays for it.
-    async fn refresh_window_inputs(&mut self, cluster_id: ClusterId)
-    -> Option<RefreshWindowInputs>;
+    /// pays for it. Implementations fetch the shared read timestamp once after
+    /// gathering the per-cluster inputs, so oracle latency does not scale with
+    /// the cluster count. The controller skips any omitted cluster for the
+    /// reconciliation phase.
+    async fn refresh_window_inputs(
+        &mut self,
+        cluster_ids: &[ClusterId],
+    ) -> Option<RefreshWindowInputsBatch>;
 
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     /// Each decision carries the [`ExpectedClusterState`] it was derived from;

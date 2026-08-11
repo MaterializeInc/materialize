@@ -232,7 +232,7 @@ on diagnosing a slow snapshot and sizing a cluster appropriately for
 snapshotting, follow the [`Ingest data`
 troubleshooting](/ingest-data/troubleshooting) guide.
 
-For upsert and Debezium sources, see also [Hydrating objects](#hydrating-objects).
+For upsert sources, see also [Hydrating objects](#hydrating-objects).
 
 ### Hydrating objects
 
@@ -245,10 +245,10 @@ to take longer to hydrate.
 
 When a materialized view or index is created, it undergoes hydration. Hydration
 also happens whenever a cluster is restarted or resized: the materialized views
-and indexes on that cluster rebuild their in-memory state, and upsert and
-Debezium sources rebuild their internal index. On Materialize Cloud, this
-includes restarts during the [routine
-maintenance window](/releases/schedule/#cloud-upgrade-schedule).
+and indexes on that cluster rebuild their in-memory state, and upsert sources
+rebuild their internal index. On Materialize Cloud, this includes restarts
+during the [routine maintenance
+window](/releases/schedule/#cloud-upgrade-schedule).
 
 To see whether an object is still hydrating, navigate to the
 [workflow graph](#detect) for the object in the Materialize console.

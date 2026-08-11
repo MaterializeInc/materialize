@@ -1155,9 +1155,14 @@ fn add_new_remove_old_builtin_roles_migration(
 /// recorded durably and runs before the cluster controller is spawned, and the
 /// controller does not run at all while a deployment is read-only.
 ///
-/// The controller derives its target from the same cluster config, so it converges
-/// on the same replica set rather than competing for it. It excludes system
-/// clusters today, but nothing here depends on that staying true.
+/// The cluster controller owns these replica sets at runtime and derives its
+/// target from the same cluster config, so the two converge on the same set
+/// rather than competing for it. The controller matches replicas by shape and
+/// count, never by name, so the `r1..rN` this creates satisfy it. This converges
+/// by name, so a boot after the controller reshaped a cluster renames or
+/// re-creates replicas it had materialized under generator names. That is
+/// harmless: every replica is a cold process at boot anyway, so the cost is
+/// replica-id and audit-log noise.
 fn reconcile_builtin_cluster_replicas(
     txn: &mut Transaction<'_>,
     builtin_cluster_config_map: &BuiltinBootstrapClusterConfigMap,
@@ -1231,9 +1236,9 @@ fn reconcile_builtin_cluster_replicas(
         }
 
         // Reading the cluster's factor is what makes this compose with the other
-        // writers of a replica set. The refresh scheduler parks a scheduled cluster
-        // by writing its factor to 0, so converging on the factor honors that
-        // instead of resurrecting a replica the scheduler just dropped.
+        // writers of a replica set. The controller's on-refresh strategy parks a
+        // scheduled cluster by writing its factor to 0, so converging on the
+        // factor honors that instead of resurrecting a replica it just dropped.
         let mut surplus = replicas_by_cluster.remove(&cluster.id).unwrap_or_default();
         for index in 0..managed.replication_factor {
             let replica_name = managed_cluster_replica_name(index);

@@ -299,6 +299,8 @@ ignore = [
     # untrusted XML.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # `bitmaps` is unmaintained
+    "RUSTSEC-2026-0247",
 ]
 
 # Must be manually kept in sync with about.toml.

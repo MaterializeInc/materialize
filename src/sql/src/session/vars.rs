@@ -1309,7 +1309,6 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
-            &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
             &cluster_scheduling::CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -1432,14 +1431,6 @@ impl SystemVars {
             .expect("provided var type should matched stored var")
     }
 
-    /// Reset all the values to their defaults (preserving
-    /// defaults from `VarMut::set_default).
-    pub fn reset_all(&mut self) {
-        for (_, var) in &mut self.vars {
-            var.reset();
-        }
-    }
-
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
@@ -1546,7 +1537,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1589,7 +1579,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
-        self.notify_callbacks(name);
         Ok(())
     }
 
@@ -1616,7 +1605,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1634,10 +1622,24 @@ impl SystemVars {
             .collect()
     }
 
-    /// Registers a closure that will get called when the value for the
-    /// specified [`VarDefinition`] changes.
+    /// Registers a closure that mirrors the value of the given
+    /// [`VarDefinition`] into out-of-band state.
     ///
-    /// The callback is guaranteed to be called at least once.
+    /// The callback has to be an idempotent read of the passed [`SystemVars`],
+    /// because we don't promise to only call it when its var actually changed.
+    /// It runs once right now against the current values, and then again at
+    /// every catalog commit boundary whose transaction touched a system var
+    /// (see `Coordinator::apply_catalog_implications` and
+    /// [`SystemVars::notify_all_callbacks`]). Speculative mutations never
+    /// trigger it, so an aborted or dry-run transaction leaves the mirror
+    /// untouched.
+    ///
+    /// NOTE: a callback on a `feature_flags!` var won't observe the transient
+    /// flip that `CatalogState::with_enable_for_item_parsing` performs during
+    /// item parsing. That flip mutates the value and then restores the prior
+    /// `Arc` wholesale without re-notifying, so the mirror keeps tracking
+    /// committed state throughout, which is the contract here. Committed changes
+    /// to a feature flag (via `ALTER SYSTEM`) still notify like any other var.
     pub fn register_callback(
         &mut self,
         var: &VarDefinition,
@@ -1648,6 +1650,19 @@ impl SystemVars {
             .or_default()
             .push(callback);
         self.notify_callbacks(var.name());
+    }
+
+    /// Re-runs every registered callback against the current values.
+    ///
+    /// This fires all of them, even ones whose var didn't change, which is why
+    /// callbacks have to be idempotent reads of the passed [`SystemVars`]. See
+    /// [`SystemVars::register_callback`].
+    pub fn notify_all_callbacks(&self) {
+        for callbacks in self.callbacks.values() {
+            for callback in callbacks {
+                (callback)(self);
+            }
+        }
     }
 
     /// Notify any external components interested in this variable.
@@ -2256,10 +2271,6 @@ impl SystemVars {
 
     pub fn cluster_alter_check_ready_interval(&self) -> Duration {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
-    }
-
-    pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
-        *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
     }
 
     pub fn cluster_security_context_enabled(&self) -> bool {

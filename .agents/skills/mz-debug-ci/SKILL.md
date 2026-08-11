@@ -107,6 +107,25 @@ bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2
 
 Fetch multiple job logs in parallel when they are independent (e.g., clippy + lint at the same time).
 
+### Artifacts
+
+Jobs upload artifacts (junit XML, service logs, coredumps, ...). Use the
+`bk artifacts` subcommands:
+
+```bash
+# All artifacts of a build (each entry has id, job_id, path)
+bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --no-pager 2>&1
+# Artifacts of a single job
+bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --job-uuid <JOB_ID> --no-pager 2>&1
+# Download one artifact into the current directory
+bk artifacts download <ARTIFACT_ID> --build <BUILD_NUMBER> -p <PIPELINE>
+```
+
+Do not use `bk api` for artifacts. The plural
+`/pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/artifacts` endpoint works but
+silently returns only the first 30 entries, and its `.../download` endpoint
+fails to parse.
+
 ### Shard contents
 
 Sharded jobs (SLT, testdrive, platform checks, feature benchmark, ...) record

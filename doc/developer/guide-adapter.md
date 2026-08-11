@@ -91,12 +91,17 @@ This means:
 
 #### Why the batching oracle is correct
 
-`BatchingTimestampOracle` collects multiple `read_ts` requests that arrive
-concurrently and serves them all with a single call to the backing oracle.
-Because the backing oracle is called *during* all of their real-time intervals
-(after all requests arrived, before any have returned), the returned timestamp
-is within bounds for every request. Batching can only push timestamps later,
-never earlier. See the comment on the `BatchingTimestampOracle` struct.
+`BatchingTimestampOracle` drains the queued `read_ts` requests and serves each
+collected batch with one call to the backing oracle. That call occurs during
+every collected request's real-time interval, after each request arrived and
+before any returns. Its timestamp is therefore within bounds for every request.
+Batching can only push timestamps later, never earlier.
+
+Coalescing is opportunistic. A request that overlaps a backing call but arrives
+after the queue is drained waits for a later call. A serial await loop
+guarantees that its calls cannot coalesce. When exactly one round trip is
+required, use one explicit shared call only if it occurs within every
+operation's real-time bounds and satisfies every caller's contract.
 
 #### Why caching an oracle result is not correct
 
