@@ -114,7 +114,7 @@ IGNORED_ERROR_PATTERNS = [
     r"must use value within",
     r"zero raised to a negative power is undefined",
     r"range type over",
-    r"at the beginning of a statement",
+    r"Evaluation error: Unexpected keyword .* at the beginning of a statement",
 ]
 
 
