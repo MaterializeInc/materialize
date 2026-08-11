@@ -760,6 +760,8 @@ WHERE w2.amount > w1.amount
 ;`}
                 title="Create a view flip_activities"
               />
+            </RunnableContainer>
+            <TextContainer>
               <Text textStyle="text-base">
                 To view a sample row in{" "}
                 <Code variant="inline-syntax">flip_activities</Code>, run the
@@ -771,6 +773,8 @@ WHERE w2.amount > w1.amount
                 </Code>{" "}
                 command:
               </Text>
+            </TextContainer>
+            <RunnableContainer mt={3} mb={3}>
               <Runnable
                 runCommand={runCommand}
                 value="SELECT * FROM flip_activities LIMIT 10;"
@@ -803,6 +807,36 @@ WHERE w2.amount > w1.amount
             </TextContainer>
           </ListItem>
           <ListItem>
+            <TextContainer>
+              <Text textStyle="text-base">
+                Create indexes on the{" "}
+                <Code variant="inline-syntax">winning_bids</Code> join keys used
+                by <Code variant="inline-syntax">flip_activities</Code>.
+              </Text>
+            </TextContainer>
+            <TextContainer>
+              <Text mt={3} textStyle="text-base">
+                To avoid the aforementioned quadratic work, index the complete
+                join keys so that the join considers only rows that can actually
+                match:
+              </Text>
+            </TextContainer>
+            <RunnableContainer mt={3} mb={3}>
+              <Runnable
+                runCommand={runCommand}
+                value="CREATE INDEX wins_by_item_seller ON winning_bids (item, seller);
+  CREATE INDEX wins_by_item_buyer ON winning_bids (item, buyer);"
+                title="View a sample row in flip_activities"
+              />
+            </RunnableContainer>
+            <TextContainer>
+              <Text textStyle="text-base">
+                Rerun the previous query on `flip_activities`. The query should
+                return faster.
+              </Text>
+            </TextContainer>
+          </ListItem>
+          <ListItem>
             Use{" "}
             <Code variant="inline-syntax">
               <TextLink
@@ -827,7 +861,7 @@ WHERE w2.amount > w1.amount
           <ListItem>
             Create a view <Code variant="inline-syntax">flippers</Code> to
             immediately see flippers if either:
-            <UnorderedList>
+            <UnorderedList mt={3}>
               <ListItem>A user has 2 or more flipping activities; or</ListItem>
               <ListItem>
                 A user is listed in the
