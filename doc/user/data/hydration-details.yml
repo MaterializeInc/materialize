@@ -1,0 +1,107 @@
+# Reusable hydration content, single-sourced for inclusion across pages with the
+# `include-from-yaml` shortcode.
+#
+# Usage:
+#   {{% include-from-yaml data="hydration-details" name="definition" %}}
+#   {{% include-from-yaml data="hydration-details" name="sink" %}}
+
+
+- name: definition
+  content: |
+    Hydration is the reconstruction of an object's in-memory state by reading
+    from Materialize's storage layer; hydration does not read from the upstream
+    system.
+
+- name: triggers
+  content: |
+    Depending on the object, hydration (or rehydration) occurs after:
+    - **An object is created or recreated**, triggering its hydration.
+      * This includes recreating objects to force re-planning. For example,
+        after dropping an index, you can drop and recreate its dependent objects
+        to force them to re-plan and rehydrate.
+    - **A cluster or replica restarts**, such as during Materialize Cloud's
+      routine maintenance or after an out-of-memory event. Hydration can be
+      memory-intensive and can itself trigger the out-of-memory event. The
+      replica then restarts and rehydrates again, potentially creating a
+      restart-and-rehydrate loop if the replica is undersized.
+    - **A cluster resize**, which provisions new replicas at the target size and
+      hydrates them before retiring the old ones. The cluster keeps serving
+      throughout.
+    - **Adding a replica to a cluster**, which hydrates the new replica only.
+      Existing replicas are unaffected and keep serving.
+
+- name: materialized-view
+  content: >-
+    - **When**: Hydrates on creation and on every cluster restart or resize.
+
+    - **What**: Rebuilds the dataflow's operator state: the arrangements that
+    joins, aggregations, and similar operators keep to update results
+    incrementally. Note: A materialized view's result lives in durable storage,
+    so it rebuilds only this maintenance state, not the result.
+
+    - **Memory Use**: Its memory scales with those arrangements, so joins and
+    aggregations are the memory-hungry cases while a pure map or filter view is
+    nearly stateless. It also holds an output-side buffer that scales with the
+    view's output volume and is largest during hydration.
+
+- name: index
+  content: >-
+    - **When**: Hydrates on creation and on every cluster restart or resize.
+
+    - **What**: Rebuilds the arranged (indexed) data it keeps in memory to serve
+    reads, plus any operator arrangements its dataflow maintains (for joins,
+    aggregations, and similar).
+
+    - **Memory Use**: Its memory is proportional to the indexed data plus those
+    arrangements, and is held for as long as the index exists.
+
+- name: kafka-upsert-sources
+  content: >-
+    - **When**: On restart or resize. These sources do not hydrate on creation;
+    instead, on creation, their indexes are built as part of
+    [snapshotting](/concepts/snapshotting/).
+
+    - **What**: Rebuilds the table's or subsource's internal upsert index from
+    storage.
+
+    - **Memory Use**: The index holds the latest value per key, so its memory
+    scales with the source's key space. On standard cluster sizes it can spill to
+    disk when the key space exceeds memory.
+
+- name: append-only-and-cdc-sources
+  content: >-
+    - **When**: On restart or resize, marked hydrated as soon as the dataflow
+    starts.
+
+    - **What**: Effectively nothing. These sources keep no internal index to
+    rebuild and resume from their persisted position, so hydration is a no-op.
+
+    - **Memory Use**: Negligible, since there is no index to hold.
+
+- name: webhook-sources
+  content: >-
+    Not applicable. A webhook source is not maintained by a dataflow. It
+    receives data pushed over HTTP and writes the data directly to storage, so
+    it does not hydrate.
+
+- name: sink
+  content: >-
+    - **When**: Hydrates on creation and on every cluster restart or resize.
+
+    - **What**: Loads a full copy of its input snapshot into the arrangement that
+    feeds the sink before it can emit.
+
+    - **Memory Use**: A transient cost that drains as the snapshot is written out,
+    so unlike an index or materialized view, a sink retains little in memory at
+    steady state.
+
+- name: subscription
+  content: >-
+    - **When**: On creation only. Because a subscription is transient and tied to
+    its session, it is not rehydrated on restart and is not reported in
+    `mz_hydration_statuses`.
+
+    - **What**: Rebuilds the dataflow's operator arrangements when it starts.
+
+    - **Memory Use**: Scales with those arrangements, held while the subscription
+    runs.

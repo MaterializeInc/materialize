@@ -62,7 +62,7 @@ See also [Cluster architecture](#three-tier-architecture).
 - For upsert sources, snapshotting is a resource-intensive operation that can
   require a significant amount of CPU and memory.
 
-- During hydration (both initial and subsequent rehydrations), materialized
+- During hydration (both initial hydration and subsequent rehydrations), materialized
   views require memory proportional to both the input and output. When
   estimating required resources, consider both the hydration cost and the
   steady-state cost.
