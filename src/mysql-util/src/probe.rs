@@ -15,6 +15,12 @@ use crate::{MySqlError, QualifiedTableRef, quote_identifier};
 /// The escape character for `LIKE` patterns built by [`like_prefix_pattern`].
 const LIKE_ESCAPE: char = '|';
 
+/// The longest key the probe bounds cover, in characters.
+/// <https://dev.mysql.com/doc/refman/8.4/en/innodb-limits.html> caps an index
+/// key at 3072 bytes, or 768 utf8mb4 characters. Longer keys (possible
+/// through prefix indexes or narrower charsets) are not supported.
+pub const MAX_KEY_LENGTH: u32 = 768;
+
 /// Probes a string primary key column. Supports `utf8mb4_bin`. There may be
 /// other collations we can support, but we should do more validation.
 pub struct KeyProber<'a> {
@@ -158,11 +164,8 @@ impl<'a> KeyProber<'a> {
     /// The upper bound is padded with NUL characters so that no key it
     /// prefixes falls inside the range. Under PAD SPACE collations like
     /// `utf8mb4_bin` "ab\0" sorts before "ab", which is treated as "ab ".
-    /// <https://dev.mysql.com/doc/refman/8.4/en/innodb-limits.html> caps an
-    /// index key at 3072 bytes, or 768 utf8mb4 characters, so padding to 768
-    /// bounds every key an utf8mb4 primary key column can hold. Longer keys
-    /// (possible through prefix indexes or narrower charsets) are not
-    /// supported.
+    /// Padding to [`MAX_KEY_LENGTH`] bounds every key an utf8mb4 primary key
+    /// column can hold.
     fn range_filter(
         &self,
         lower_bound_exclusive: Option<&str>,
@@ -176,7 +179,9 @@ impl<'a> KeyProber<'a> {
             params.push(lower.into());
         }
         if let Some(upper) = upper_bound_exclusive {
-            conditions.push(format!("{col} < RPAD(?, 768, CHAR(0 USING utf8mb4))"));
+            conditions.push(format!(
+                "{col} < RPAD(?, {MAX_KEY_LENGTH}, CHAR(0 USING utf8mb4))"
+            ));
             params.push(upper.into());
         }
         if conditions.is_empty() {
