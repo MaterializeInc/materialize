@@ -10,6 +10,12 @@ Use the `mz-test` skill before running ANY tests, even mid-task — the canonica
 commands aren't the obvious ones (e.g. `bin/sqllogictest --optimized`, not
 `cargo build --bin sqllogictest`).
 
+Use the `mz-run` skill before building, running, formatting, or linting. `bin/fmt` and `bin/lint` are the canonical entry points, NOT `cargo fmt`, `rustfmt`, or a bare `cargo clippy`. `bin/environmentd`, not `cargo build --bin environmentd`.
+
+Use the `mz-commit` skill before `git commit`, `git push`, or `gh pr create`.
+
+Use the `mz-debug-ci` skill before the first `bk` or `gh pr checks` command, or when handed a Buildkite URL.
+
 ## Code navigation
 
 For operation flow tracing, read first:
