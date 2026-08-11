@@ -62,20 +62,29 @@ causes we have answers for is not a decomposition.
 
 ### The symptoms
 
-| Symptom | Evidence | Mechanism |
-|---|---|---|
-| Peeks queue behind other peeks on a busy replica | measured, E1: 6163 ms worst case at a 2170 ms walk | M1 |
-| `WHERE key = <lit> ORDER BY .. LIMIT 1` on a skewed key stalls every lookup behind it | reported from the field, then measured, E11: 58 of 261 over 200 ms becomes 0 of 261 | M1 |
-| A point lookup on a resident index stalls behind walks of a swap-resident one | measured, E8b: 29.2 s worst case becomes 152 ms | M1 |
-| A peek runs to completion once started and cannot be cancelled | confirmed in the code | M1 |
-| A swap-resident walk is slower and far less predictable inline than offloaded | measured, E8b: 2.3 s against 3.6, 4.7 and 56.4 s, **mechanism unattributed** | unattributed |
-| Peeks show jitter on a replica managing large state | measured, E12: a 3.9 ms lookup reaches p90 129.5 ms and p99 278.4 ms, with 17.1% of requests above ten times the idle median | M2 |
-| Interactive dataflows are slow, and introspection is unavailable, while a replica is busy | measured, E7 and E9: 2835 to 1456 ms, and 4.4 to 7.5 s polls to about 160 ms | M3 |
-| A temporary dataflow costs about 900 ms to create and tear down | measured, E7: a floor of 850 to 950 ms in every cell, quiet or loaded, either runtime, for about 120 rows | M4 |
-| A read cannot be answered until the frontier passes its timestamp | measured, E12: with the peek moved off the busy worker, strict serializable still reaches p99 185.8 ms against 5.8 ms at serializable. Also bounded by E9's staleness column, 170 to 1589 ms while hydrating | M5 |
-| Peeks serialize behind DDL on one coordinator thread | asserted elsewhere in this document, not measured here | M6 |
-| A default-isolation read pays a timestamp-oracle round trip | not measured here | M7 |
-| One expensive query makes every object on the replica look stale | measured, E13: a 2.24 s walk drives reported lag from 55 ms to 2340 ms, a 43x amplification, as a ramp of slope one | M8 |
+The third column is the one to read first when prioritizing. The same worker
+occupancy produces several of these symptoms, but the blast radius differs by an
+order of magnitude between them, and only some of it lands in a number a customer
+sees.
+
+| Symptom | Evidence | Who pays | Mechanism |
+|---|---|---|---|
+| Peeks queue behind other peeks on a busy replica | measured, E1: 6163 ms worst case at a 2170 ms walk | the queued query | M1 |
+| `WHERE key = <lit> ORDER BY .. LIMIT 1` on a skewed key stalls every lookup behind it | reported from the field, then measured, E11: 58 of 261 over 200 ms becomes 0 of 261 | every concurrent lookup on the replica | M1 |
+| A point lookup on a resident index stalls behind walks of a swap-resident one | measured, E8b: 29.2 s worst case becomes 152 ms | every concurrent lookup on the replica | M1 |
+| A peek runs to completion once started and cannot be cancelled | confirmed in the code | the replica's CPU and its compaction holds, after the client has left | M1, M9 |
+| A swap-resident walk is slower and far less predictable inline than offloaded | measured, E8b: 2.3 s against 3.6, 4.7 and 56.4 s | the query itself | **M11, two candidates** |
+| Peeks show jitter on a replica managing large state | measured, E12: a 3.9 ms lookup reaches p90 129.5 ms and p99 278.4 ms, with 17.1% of requests above ten times the idle median | the queued query | M2 |
+| Interactive dataflows are slow, and introspection is unavailable, while a replica is busy | measured, E7 and E9: 2835 to 1456 ms, and 4.4 to 7.5 s polls to about 160 ms | whoever is diagnosing an incident, while it is happening | M3 |
+| A temporary dataflow costs about 900 ms to create and tear down | measured, E7: a floor of 850 to 950 ms in every cell, quiet or loaded, either runtime, for about 120 rows | every interactive query, unconditionally | M4 |
+| A read cannot be answered until the frontier passes its timestamp | measured, E12: with the peek moved off the busy worker, strict serializable still reaches p99 185.8 ms against 5.8 ms at serializable. Also bounded by E9's staleness column, 170 to 1589 ms while hydrating | every default-isolation reader | M5 |
+| Peeks serialize behind DDL on one coordinator thread | asserted elsewhere in this document, not measured here | **every query in the environment** | M6 |
+| A default-isolation read pays a timestamp-oracle round trip | not measured here | every default-isolation reader | M7 |
+| One expensive query makes every object on the replica look stale | measured, E13: a 2.24 s walk drives reported lag from 55 ms to 2340 ms, a 43x amplification, as a ramp of slope one | **every consumer of every object on the replica, and it is the number we report** | M8 |
+
+Two rows have the widest radius and they are the two least addressed here. M6 spans
+the environment and nothing in this document touches it. M8 spans the replica from a
+single query and is the only mechanism whose cost appears in a customer's dashboard.
 
 ### The mechanisms
 
@@ -129,23 +138,58 @@ causes we have answers for is not a decomposition.
   then delays the next strict serializable read. A freshness stall is always a ramp
   of slope one rather than a step, because a frozen frontier means the lag is
   elapsed time since it froze, and it recovers in a single tick when the walk ends.
+* **M9, held-back compaction lengthens later operator activations.** The only
+  mechanism here that the *solutions* cause rather than cure. An in-flight or parked
+  walk pins the batches it reads, so merges are deferred, so more batches accumulate,
+  so subsequent operator activations run longer, which feeds back into M2 and M8. It
+  applies to every solution that holds a cursor across time, which is the inline path,
+  the sliced path and the offloaded path alike, and it is unbounded in the sliced path
+  because parked scans are not admission-controlled. Unmeasured, and worth stating
+  because a table in which every row only ever helps is hiding something.
+* **M10, the replica has no CPU headroom.** Not a queueing mechanism but a validity
+  condition, and it belongs in the table because two of the measured results depend on
+  it. When the box is CPU-bound, moving work between threads reorders it rather than
+  removing it, so a solution that relies on somewhere else to run has nothing to rely
+  on. E12 and E13 both ran on a 32-core box where the offloaded thread never competed
+  for a core. The experiment for this was planned as E3 and never run. Nothing reaches
+  it, because no scheduling change manufactures CPU.
+* **M11, why an offloaded swap-resident walk is faster than an inline one.** A
+  measured effect with two candidate mechanisms and no verdict. Either the interleaved
+  timely working set re-evicts the walk's pages, which is a locality effect, or the
+  offload achieves more outstanding faults, which is a queue-depth effect. This
+  document states elsewhere that preemption cannot explain it. The discriminator is
+  the per-walk major-fault bracket in
+  [the incremental path](#the-incremental-path-from-here): equal fault counts with
+  different durations means queue depth, and more faults inline means locality. It has
+  a column because it is the last effect uniquely attributable to the offload, and
+  scoring the offload without one hides that.
 
 ### What each solution reaches
 
-`argued` means derived from the mechanism and not measured. Note how many cells
-that is.
+A blank cell means the solution does not reach that mechanism, so only the meaningful
+cells carry text. `argued` means derived from the mechanism and not measured, and
+`check` means it can be settled by reading code rather than by running anything. Note
+how many cells are not measured.
 
-| | M1 | M2 | M3 | M4 | M5 | M6 | M7 | M8 |
-|---|---|---|---|---|---|---|---|---|
-| S0, another replica | yes, statistically | yes, statistically | yes | no | **yes** | no | no | masks it, `argued` |
-| S1, cooperative peek slicing | yes, `argued` | **no** | no | no | no | no | no | **mostly**, measured E13: 2274 to 365 ms peak |
-| S2, cancellable peeks | the cancellation symptom only | no | no | no | no | no | no | for cancelled peeks, `argued` |
-| S3, interactive dataflows on a second runtime | no | no | **yes**, measured E7/E9 | no | no | no | no | for dataflow-caused occupancy, `argued` |
-| S4, peeks routed to the interactive runtime | no, it relocates the queue | **yes**, measured E12: p90 129.5 to 4.5 ms | no | no | no | no | no | **yes**, measured E13: 102 ms peak, maintenance never sees the walk |
-| S5, peeks on another thread | **yes**, measured E1/E11/E8b | **no, measured worse**, E12: p90 148.2 against 129.5 | no | no | no | no | no | **yes**, measured E13: 101 ms peak, on a box with core headroom |
-| S6, budgeting long operator activations | no | yes, `argued` | partial, `argued` | no | no | no | no | no |
-| S7, a bounded-seek plan for the skewed case | removes the work, `argued` | no | no | no | no | no | no | removes the work, `argued` |
-| S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | no | no | no | no | no | yes, `argued` |
+| | M1 | M2 | M3 | M4 | M5 | M6 | M7 | M8 | M9 | M10 | M11 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S0, another replica | statistically | statistically | yes | | **yes** | | | masks it? `check` | | | |
+| S1, cooperative peek slicing | yes, `argued` | | | | | | | **mostly**, E13: 2274 to 365 ms peak, at a light write load | **worsens it**, parked scans are not capped | | |
+| S2, cancellable peeks | cancellation only | | | | | | | for cancelled peeks, `argued` | helps, releases the hold early | | |
+| S3, interactive dataflows on a second runtime | | | **yes**, E7/E9 | | | | | dataflow-caused only, `argued` | | | |
+| S4, peeks routed to the interactive runtime | relocates the queue | **yes**, E12: p90 129.5 to 4.5 ms | | | | | | **yes**, E13: 102 ms peak, maintenance never sees the walk | | | |
+| S5, peeks on another thread | **yes**, E1/E11/E8b | **worse**, E12: p90 148.2 against 129.5 | | | | | | **yes**, E13: 101 ms peak, with core headroom | **worsens it**, holds for the whole walk | | **produces the effect** |
+| S6, budgeting long operator activations | | yes, `argued` | partial, `argued` | | | | | | | | |
+| S7, a bounded-seek plan for the skewed case | removes the work, `check` | | | | | | | removes the work, `argued` | | | |
+| S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | | | | | | yes, `argued` | | | |
+| S9, size- or residency-aware routing | | **removes S5's regression** | | | | | | | | | |
+| S10, fast-path or pooled temporary dataflows | | | | **the only candidate** | | | | | | | |
+| S11, coordinator sharding | | | | | | **the only candidate**, measured elsewhere at about +25% peek throughput | | | | | |
+| S12, oracle batching or avoidance | | | | | | | **the only candidate** | | | | |
+
+M10 has no row at all, deliberately: no scheduling change manufactures CPU. M9 has no
+row that cures it, one that partly helps, and two that cause it. M11 has one row that
+produces the effect and none that explains it.
 
 **M8 was predicted to invert the M1 ordering. It inverts one row, not the ordering,
 and the prediction about slicing was wrong.** Registered before E13 ran: cooperative
@@ -230,8 +274,11 @@ states elsewhere that this effect is unattributed and that preemption cannot exp
 it. **So S5's unique justification currently rests on one unattributed measurement
 and on an unmeasured claim about S1's quantum floor.**
 
-**Nothing here reaches M4, M6 or M7**, and M4 is measured and dominant for the
-workload S3 is justified by.
+**M4, M6 and M7 each have exactly one candidate row and no work behind it**, which is
+better than the blank they had but is not an answer. M4 is the worst of the three,
+because it is measured, it is unconditional, and it is the dominant term for the only
+workload S3 is now justified by: about 900 ms of creation and teardown against the
+roughly 1400 ms of tail that placement recovers.
 
 **M5 is reached only by S0.** An untargeted peek is broadcast to every replica and
 the first response wins, so peek latency is a minimum over replicas. Since the
@@ -314,22 +361,48 @@ corrections above.
   calls that fixture the strongest argument for enabling the offload by default
   without asking whether the query has an index problem.
 
-Three things would still change this table, in order of how much.
+### What is missing from the table
 
-1. **S1 measured rather than argued**, on E1, E11 and E12, against the predictions
-   above. It is the only unmeasured row that could displace a shipped mechanism, and
-   on E12 it is the one open question: slicing lets the *peek* yield, which does
-   nothing for a peek stuck behind an operator, so S1 should look like the inline arm
-   there. If it does, M2 belongs to placement alone.
-2. **A single-phase rerun of E2.** Its null is the basis for calling the second
-   runtime inert for peek latency, and it was measured across two deployments with
-   the stash off. E7 had the same confound and was rerun; E2 was not.
-3. **The strict serializable arms for E1, E11 and E8b.** E12 supplies the level for
-   one fixture and shows M5 is only visible once M2 is removed, so the others are
-   worth the repeat rather than urgent.
+Two are code checks, cheap and capable of changing a conclusion. Do these first.
 
-E12 settled what was item one on this list. Its result inverted two cells and cost
-S5 its remaining claim on M2.
+* **Does the reported freshness number aggregate across replicas as a minimum?**
+  `mz_wallclock_lag_history` carries a `replica_id`, so if the surfaced value is not a
+  minimum over replicas then S0 does not mask M8 and its cell is simply wrong. That
+  decides whether the incumbent reaches the mechanism with the widest blast radius.
+* **Does the fast path exploit an index on the key together with the ordering
+  column?** If it turns the skewed lookup into a bounded seek, the field case that
+  motivated much of this work is a plan defect, and S7 dominates the peek program for
+  that shape. A code read plus one `EXPLAIN`.
+
+Then the measurements, in order of how much they would change the table.
+
+1. **S1 measured rather than argued**, on E1, E11, E12 and E13's write-heavy variant.
+   It is the only unmeasured row that could displace a shipped mechanism. On E12 the
+   prediction is that it looks like the inline arm, because slicing lets the *peek*
+   yield and that does nothing for a peek stuck behind an operator. If that holds, M2
+   belongs to placement alone.
+2. **M8 under a write load heavy enough to need most of the worker.** E13 wrote one row
+   per 100 ms, so a small share of the worker was ample and slicing kept up. The
+   argument that slicing cannot preserve freshness was refuted at that load and is
+   untested at a load where maintenance actually needs the worker.
+3. **M11's discriminator**, the per-walk major-fault bracket. It is the last effect
+   uniquely attributable to S5, and until it resolves, S5 is scored on an unexplained
+   measurement.
+4. **A single-phase rerun of E2.** Its null is the basis for calling the second runtime
+   inert for peek latency, and it was measured across two deployments with the stash
+   off. E7 had the same confound and was rerun; E2 was not.
+5. **S2 against M8**, which E13's harness makes cheap: cancel a peek mid-walk and watch
+   the frontier. It is the difference between a cancelled query costing the replica
+   nothing and costing it the full walk.
+6. **M9 at all.** Nothing measures whether held-back compaction lengthens later
+   activations enough to matter, and it is the one mechanism the solutions cause.
+7. **The strict serializable arms for E1, E11 and E8b.** E12 supplies the level for one
+   fixture and shows M5 is only visible once M2 is removed, so these are worth the
+   repeat rather than urgent.
+
+E12 and E13 each settled what was item one on this list at the time. E12 inverted two
+cells and cost S5 its claim on M2. E13 refuted a prediction registered against it and
+cost S5 its claim to be uniquely best on freshness.
 
 ## Why this architecture
 
