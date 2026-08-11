@@ -174,7 +174,8 @@ Peek offloading moves a walk to a thread that still needs a core, so on a
 CPU-bound box it only reorders work. Its best case is therefore a walk that is
 *blocked* rather than computing, which is why the swap result is its largest
 margin. The second runtime doubles timely worker threads at every replica size,
-so it is not free even when idle.
+so it is not free even when idle, and that doubling is fixed by the equal-peer
+requirement rather than chosen, so it is not a knob to turn down.
 
 **The routing policy should follow the fork.** Sending everything to one place
 throws away the distinction: peeks want a substrate, rendered dataflows want a
@@ -845,20 +846,35 @@ Ordered by expected value per line of change.
    per-thread so it applies to exactly the interactive pool, and the usual caveat
    that priority only orders within a cgroup's share does not bite because both
    runtimes sit in one pod. This is the cheapest lever not yet pulled.
-4. **A size-dependent core reservation rather than doubled workers.** Timely is
-   barrier-synchronous, so removing a fraction of one core does not cost that
-   fraction of throughput. It desynchronizes the workers and the penalty
-   amplifies at the barrier. This is the long-standing operating-system noise
-   result from high-performance computing, where daemons occupying one core cost
-   far more than their CPU share, and the remedy there was to reserve one core out
-   of many. At 32 workers that is 3% and worth it. At 2 workers it is 50% and
-   absurd. So the policy should be conditional on replica size: reserve one
-   non-pinned core at large worker counts and colocate with priority at small
-   ones. Note that the current design does neither, because
-   `interactive_compute_arg` passes the same worker count and therefore doubles
-   timely threads at every size. That is the mechanism behind the measured
-   observation that the two-runtime ratio does not improve with replica size. A
-   fixed reservation would improve with size, and doubling cannot.
+4. **A core reservation, if it is taken, sizes both runtimes down rather than
+   making them unequal.** Timely is barrier-synchronous, so removing a fraction of
+   one core does not cost that fraction of throughput. It desynchronizes the
+   workers and the penalty amplifies at the barrier. This is the long-standing
+   operating-system noise result from high-performance computing, where daemons
+   occupying one core cost far more than their CPU share, and the remedy there was
+   to reserve one core out of many. At 32 workers that is 3% and worth it. At 2
+   workers it is 50% and absurd, so any reservation is conditional on replica
+   size.
+
+   What is not available is reserving that core by shrinking the interactive
+   runtime. Equal peer counts across the two runtimes are a soundness requirement
+   and not a sizing choice. Import is pairwise, importer worker `i` reads publisher
+   worker `i`, which is correct only when both sides shard keys identically over an
+   equal total peer count, and `import_snapshot_at` asserts it. Peek serving has
+   the same structure, because resolving a key to the worker that holds it uses the
+   same partitioning. Making the runtimes unequal would require that partitioning
+   to become a contract between them, visible to whatever re-routed across the
+   mismatch, and it has to stay an implementation detail of the compute layer
+   instead. See [Bounded import, not live replay](#bounded-import-not-live-replay).
+
+   So the reservation is expressed by sizing *both* runtimes one worker below the
+   core count and leaving a core for the interactive threads and for tokio.
+   Maintenance pays one worker of parallelism, which is the honest price and is
+   exactly the reserve-one-core prescription. The doubled thread count is therefore
+   a fixed cost of the architecture rather than a knob. It is also not a doubled
+   CPU cost, since an idle worker parks in `step_or_park` between maintenance
+   ticks. What doubles is thread stacks, per-worker progress tracking, and the
+   frontier-following work that gives an idle replica its resting utilization.
 5. **Shared-cache and memory-bandwidth interference during hydration.** Core
    partitioning is not sufficient on its own. A batch task streaming through the
    last-level cache degrades a colocated latency-sensitive task's tail even when
