@@ -1101,6 +1101,7 @@ class S3Object(DBObject):
 # drops that database or schema, so the name resolves for a whole run and the
 # end-of-run check is guaranteed to find the table.
 READ_THEN_WRITE_COUNTER_NAME = "materialize.public.pw_rtw_counter"
+BLIND_WRITE_TABLE_NAME = "materialize.public.pw_blind_write"
 
 # The frontend read-then-write path gives up after its OCC retry budget when a
 # statement keeps losing the race for the write timestamp. That is a
@@ -1248,6 +1249,26 @@ class ReadThenWriteCounter:
             f"read-then-write counter conservation invariant holds: "
             f"{lower} <= v={value} <= {upper}"
         )
+
+
+class BlindWriteTable:
+    """A stable target for nonconstant blind writes in transactions.
+
+    The table is not registered in the workload's object lists, so random DDL
+    cannot rename, alter, or drop it while a transaction is open. Its rows are
+    disposable and each action removes the value it inserted.
+    """
+
+    def __str__(self) -> str:
+        return BLIND_WRITE_TABLE_NAME
+
+    def create(self, exe: Executor) -> None:
+        """Creates the table once per run after PUBLIC table grants exist."""
+        exe.execute(f"DROP TABLE IF EXISTS {self} CASCADE")
+        exe.execute(f"CREATE TABLE {self} (id bigint)")
+
+    def drop(self, exe: Executor) -> None:
+        exe.execute(f"DROP TABLE IF EXISTS {self} CASCADE")
 
 
 class Index:
@@ -1491,6 +1512,7 @@ class Database:
     s3_path: int
     s3_objects: list[S3Object]
     read_then_write_counter: ReadThenWriteCounter
+    blind_write_table: BlindWriteTable
     lock: threading.Lock
     seed: str
     sqlsmith_state: str
@@ -1612,6 +1634,7 @@ class Database:
         self.iceberg_sink_id = len(self.iceberg_sinks)
         self.kafka_sink_id = len(self.kafka_sinks)
         self.read_then_write_counter = ReadThenWriteCounter()
+        self.blind_write_table = BlindWriteTable()
         self.types = []
         self.type_id = 0
         self.network_policies = []
@@ -1839,6 +1862,7 @@ class Database:
         # Created and seeded exactly once per run: re-seeding mid-run would reset
         # `v` while the workers' tallies keep growing.
         self.read_then_write_counter.create(exe)
+        self.blind_write_table.create(exe)
 
         print("Creating relations")
 
@@ -1860,8 +1884,9 @@ class Database:
         # self.sqlsmith_state = result.stdout
 
     def drop(self, exe: Executor) -> None:
-        # The counter table lives outside the workload's databases, so dropping
-        # them does not reclaim it.
+        # The helper tables live outside the workload's databases, so dropping
+        # them does not reclaim either table.
+        self.blind_write_table.drop(exe)
         self.read_then_write_counter.drop(exe)
 
         for db in self.dbs:

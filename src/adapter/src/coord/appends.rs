@@ -492,6 +492,13 @@ impl GroupCommitter {
             }
         }
 
+        // The write is durable and applied to the oracle, and the session task
+        // that submitted it has not been told yet. Only a timestamped write
+        // reaches here, so arming this holds one read-then-write's result
+        // without stalling the keepalives that advance table uppers. Used by
+        // workflow_test_occ_cancel_of_submitted_write.
+        fail::fail_point!("timestamped_write_before_result");
+
         if self
             .internal_cmd_tx
             .send(Message::GroupCommitApplied {
