@@ -1215,7 +1215,11 @@ impl Instance {
             | ComputeCommand::CreateInstance(_)
             | ComputeCommand::InitializationComplete
             | ComputeCommand::UpdateConfiguration(_)
-            | ComputeCommand::CancelPeek { .. } => None,
+            | ComputeCommand::CancelPeek { .. }
+            // Synthesized by the process-local multiplexer from the commands below, never issued
+            // here, so the controller has no replica-targeting opinion about them.
+            | ComputeCommand::AcquireHolds(_)
+            | ComputeCommand::ReleaseHolds { .. } => None,
         }
     }
 

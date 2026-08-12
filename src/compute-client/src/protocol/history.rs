@@ -131,6 +131,14 @@ where
                 ComputeCommand::Peek(peek) => {
                     live_peeks.insert(peek.uuid, peek);
                 }
+                // Synthesized by the process-local multiplexer, so it never enters a history the
+                // controller keeps. That is deliberate: on reconnection the controller replays the
+                // `CreateDataflow` and the multiplexer re-derives the hold, which puts it back
+                // ahead of the replayed compactions without any state having to survive the
+                // reconnection.
+                ComputeCommand::AcquireHolds(_) | ComputeCommand::ReleaseHolds { .. } => {
+                    unreachable!("hold commands are never issued by the controller")
+                }
                 ComputeCommand::CancelPeek { uuid } => {
                     live_peeks.remove(&uuid);
                 }

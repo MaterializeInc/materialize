@@ -643,6 +643,13 @@ impl<'a> ActiveComputeState<'a> {
             AllowWrites(id) => {
                 self.handle_allow_writes(id);
             }
+            // The semantics are not built yet, and no component emits these, so reaching here means
+            // something started emitting them before the handling landed. Failing is the point:
+            // silently ignoring an `AcquireHolds` would leave a dataflow on the other runtime
+            // reading a collection nothing holds.
+            cmd @ (AcquireHolds(_) | ReleaseHolds { .. }) => {
+                panic!("hold commands are not implemented yet: {cmd:?}")
+            }
         }
 
         timer.observe_duration();

@@ -427,6 +427,14 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 // Every peek is served by interactive.
                 self.interactive.send(Peek(peek)).await?;
             }
+            cmd @ (AcquireHolds(_) | ReleaseHolds { .. }) => {
+                // This multiplexer synthesizes these; the controller never issues them, so
+                // receiving one means something upstream is generating commands it should not.
+                // Forwarding it would install or drop a hold nobody accounted for.
+                anyhow::bail!(
+                    "multiplexer received a hold command it should have synthesized: {cmd:?}"
+                );
+            }
             CancelPeek { uuid } => {
                 // The peek lives on interactive, so its cancellation goes there too.
                 self.interactive.send(CancelPeek { uuid }).await?;
