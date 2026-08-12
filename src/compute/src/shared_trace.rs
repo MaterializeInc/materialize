@@ -34,13 +34,21 @@
 //!
 //! ## Compaction
 //!
-//! Every reader registers logical and physical holds. The publisher forwards their *meet* (the
-//! greatest lower bound, so the trace never compacts past the least reader's hold) to its own
-//! `TraceAgent`, which is the sole writer of the trace's compaction frontiers. Publishing itself
-//! carries no compaction floor: with no readers the publisher advances its hold to the
-//! writer-driven frontier (the meet of the other agents' holds), so the trace compacts and merges
-//! as the writer advances. The publisher never forwards the empty frontier, which would
-//! irreversibly release the trace.
+//! Every reader registers a logical hold. The publisher forwards their *meet* (the greatest lower
+//! bound, so the trace never compacts past the least reader's hold) to its own `TraceAgent`, which
+//! is the sole writer of the trace's compaction frontiers. Publishing itself carries no compaction
+//! floor: with no readers the publisher advances its hold to the writer-driven frontier (the meet of
+//! the other agents' holds), so the trace compacts as the writer advances. The publisher never
+//! forwards the empty frontier, which would irreversibly release the trace.
+//!
+//! The physical frontier is not held by readers at all. The publisher forwards the published `since`,
+//! which keeps the trace cuttable at every frontier a reader may ask for: `set_physical_compaction`
+//! promises readability at or beyond what it is given, and the controller promises every dataflow's
+//! `as_of` is at or beyond the index's `since`. A reader may therefore register at its `as_of`
+//! without synchronizing with the publishing worker, which it cannot do, since the setters on
+//! `TraceReader` take `&mut self` and a `TraceAgent` is neither `Send` nor reachable behind an `Arc`.
+//! Reader physical holds would not suffice in their place, because their meet covers only readers
+//! that already exist and the next one can arrive below all of them.
 //!
 //! The sharing machinery lives entirely in Materialize, so it builds against a released
 //! differential-dataflow rather than a fork. Publishing is exposed as the [`PublishArrangement`]
@@ -92,8 +100,6 @@ struct SharedTraceState<Tr: TraceReader> {
     /// Per-registration logical holds. The publisher forwards their meet, falling back to the
     /// writer-driven frontier when empty (never the destructive empty meet of zero holds).
     logical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
-    /// Per-registration physical holds, forwarded independently of the logical holds.
-    physical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
     /// The controller's last logical compaction frontier for this arrangement, forwarded from
     /// `handle_allow_compaction` via `crate::sharing::ArrangementSharingRegistry::note_allow_compaction`.
     /// The publisher uses it as the logical floor when no reader hold pins the arrangement, so with
@@ -165,7 +171,6 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 since: Antichain::from_elem(batch_min::<Tr>()),
                 upper: Antichain::from_elem(batch_min::<Tr>()),
                 logical_holds: BTreeMap::new(),
-                physical_holds: BTreeMap::new(),
                 writer_logical: None,
                 queues: BTreeMap::new(),
                 next_id: 0,
@@ -193,6 +198,26 @@ where
     /// will not compact past it until the handle (and all its clones) drop.
     pub fn handle(&self) -> SharedTraceHandle<Tr> {
         SharedTraceHandle::register(Arc::clone(&self.shared))
+    }
+
+    /// Hands out a handle whose hold is registered at `as_of`, failing when the published `since` is
+    /// already beyond it.
+    ///
+    /// This is the mint a reader that intends to read at `as_of` must use. Observing `since`,
+    /// deciding it permits `as_of`, and then advancing a hold are three separate acquisitions of the
+    /// state lock, and the publisher can advance `since` between any two of them. Checking and
+    /// registering under one acquisition means a returned handle's hold is one the trace can still
+    /// honour, so a caller never holds a frontier the arrangement has compacted past.
+    ///
+    /// `Err` carries the published `since` that ruled `as_of` out. That is a protocol-ordering
+    /// failure rather than a serving failure, since the controller promises an index's `since` never
+    /// passes the `as_of` of a dataflow importing it, so callers report it loudly rather than
+    /// degrading.
+    pub fn handle_at(
+        &self,
+        as_of: &Antichain<Tr::Time>,
+    ) -> Result<SharedTraceHandle<Tr>, Antichain<Tr::Time>> {
+        SharedTraceHandle::register_at(Arc::clone(&self.shared), as_of)
     }
 
     /// Creates an unbacked publication point: an empty chain with `since` and `upper` at the minimum
@@ -237,7 +262,10 @@ pub struct SharedTraceHandle<Tr: TraceReader> {
     /// This handle's own logical frontier, mirrored into `logical_holds[id]`. Kept locally so
     /// `get_logical_compaction` can return a borrow.
     logical: Antichain<Tr::Time>,
-    /// This handle's own physical frontier, mirrored into `physical_holds[id]`.
+    /// This handle's requested physical frontier. Recorded only so `get_physical_compaction` can
+    /// return a borrow, as [`TraceReader`] requires. It drives nothing: the publisher forwards the
+    /// published `since` as the physical target so that a cut stays available for every reader the
+    /// controller may admit, including ones that have not registered yet.
     physical: Antichain<Tr::Time>,
 }
 
@@ -253,7 +281,6 @@ where
             state.next_id += 1;
             let since = state.since.clone();
             state.logical_holds.insert(id, since.clone());
-            state.physical_holds.insert(id, since.clone());
             (id, since)
         };
         Self {
@@ -262,6 +289,30 @@ where
             logical: since.clone(),
             physical: since,
         }
+    }
+
+    /// Registers a hold at `as_of` under a single lock acquisition, failing with the published
+    /// `since` when it is already beyond `as_of`. See [`Published::handle_at`].
+    fn register_at(
+        shared: SharedTraceRef<Tr>,
+        as_of: &Antichain<Tr::Time>,
+    ) -> Result<Self, Antichain<Tr::Time>> {
+        let id = {
+            let mut state = shared.state.lock().expect("shared trace poisoned");
+            if !timely::PartialOrder::less_equal(&state.since, as_of) {
+                return Err(state.since.clone());
+            }
+            let id = state.next_id;
+            state.next_id += 1;
+            state.logical_holds.insert(id, as_of.clone());
+            id
+        };
+        Ok(Self {
+            shared,
+            id,
+            logical: as_of.clone(),
+            physical: as_of.clone(),
+        })
     }
 
     /// Takes a consistent snapshot of the published arrangement as of `time`, waiting until `upper`
@@ -321,14 +372,10 @@ where
         (state.since.clone(), state.upper.clone())
     }
 
-    /// Writes this handle's logical or physical hold into the shared registry.
-    fn update_hold(&self, logical: bool) {
+    /// Writes this handle's logical hold into the shared registry.
+    fn update_hold(&self) {
         let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        if logical {
-            state.logical_holds.insert(self.id, self.logical.clone());
-        } else {
-            state.physical_holds.insert(self.id, self.physical.clone());
-        }
+        state.logical_holds.insert(self.id, self.logical.clone());
     }
 }
 
@@ -346,7 +393,6 @@ where
             let id = state.next_id;
             state.next_id += 1;
             state.logical_holds.insert(id, self.logical.clone());
-            state.physical_holds.insert(id, self.physical.clone());
             id
         };
         Self {
@@ -362,7 +408,6 @@ impl<Tr: TraceReader> Drop for SharedTraceHandle<Tr> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.logical_holds.remove(&self.id);
-            state.physical_holds.remove(&self.id);
         }
     }
 }
@@ -377,14 +422,14 @@ where
     fn batches_through(&mut self, upper: AntichainRef<Tr::Time>) -> Option<Vec<Self::Batch>> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         // NOTE: `Spine::batches_through` asserts that the cut is at or beyond the spine's physical
-        // frontier, and that precondition does NOT transfer to a shared handle. A local reader is
-        // one of the trace's own agents, so the trace's physical frontier is held down by that
-        // reader's hold and the reader can never cut below it. A shared reader is not an agent.
-        // The publisher forwards the meet of the registered reader holds, falling back to the
-        // stream upper when there are none, and a reader that registers after that forward can
-        // legitimately cut below it: an importer's consumer begins at the minimum frontier and
-        // advances as the replayed `Frontier` instructions arrive. Asserting the spine's
-        // precondition here therefore panics on a correct read, which is what it did.
+        // frontier, and that precondition does NOT transfer to a shared handle. A local reader is one
+        // of the trace's own agents, so the trace's physical frontier is held down by that reader's
+        // own hold and the reader can never cut below it. A shared reader is not an agent, and holds
+        // no physical frontier of its own: the publisher forwards the published `since`, which is a
+        // floor for every reader collectively rather than one reader's position. An importer's
+        // consumer advances through the replayed `Frontier` instructions from the coverage it was
+        // seeded with, so it legitimately cuts below `since` while draining that seed. Asserting the
+        // spine's precondition here therefore panics on a correct read, which is what it did.
         //
         // The straddle check below is the real guard, and it does not depend on the precondition.
         // A clean cut of the published chain: all non-empty batches whose upper is not beyond
@@ -414,8 +459,12 @@ where
     }
 
     fn set_logical_compaction(&mut self, frontier: AntichainRef<Tr::Time>) {
-        self.logical = frontier.to_owned();
-        self.update_hold(true);
+        // Join rather than overwrite, and report the join, as `TraceAgent` does: a handle's hold is
+        // the joint consequence of every frontier it has been asked to hold. Overwriting would let a
+        // consumer lower its own hold below a frontier the trace was already told it could compact
+        // past, and then `get_logical_compaction` would report a frontier that is not held.
+        self.logical = self.logical.join(&frontier.to_owned());
+        self.update_hold();
     }
 
     fn get_logical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
@@ -423,8 +472,7 @@ where
     }
 
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) {
-        self.physical = frontier.to_owned();
-        self.update_hold(false);
+        self.physical = self.physical.join(&frontier.to_owned());
     }
 
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
@@ -590,16 +638,13 @@ where
                 // The publisher keeps a holding agent solely so importer holds have somewhere to
                 // forward to, so that hold must FOLLOW the writer rather than pin the trace.
                 //
-                // The writer-driven floor for each dimension is used only when no reader hold pins
-                // it:
-                //  - logical: the controller's last `AllowCompaction` frontier, forwarded into this
-                //    slot by `crate::sharing::ArrangementSharingRegistry::note_allow_compaction`.
-                //    Before the first command arrives the slot holds `None`, so we fall back to the
-                //    publisher's own current hold, which sits at the dataflow `as_of` at startup.
-                //  - physical: the stream frontier `upper`. This mirrors `TraceManager::maintenance`,
-                //    which sets physical compaction to the trace upper to enable batch merging. It
-                //    also sidesteps a circularity: the per-batch `since` from `map_batches` advances
-                //    only when the Spine compacts, which the publisher's own hold would prevent.
+                // The logical writer-driven floor is used only when no reader hold pins it: the
+                // controller's last `AllowCompaction` frontier, forwarded into this slot by
+                // `crate::sharing::ArrangementSharingRegistry::note_allow_compaction`. Before the
+                // first command arrives the slot holds `None`, so we fall back to the publisher's own
+                // current hold, which sits at the dataflow `as_of` at startup.
+                //
+                // The physical frontier is NOT derived from reader holds. See the forward below.
                 let publisher_logical = agent.get_logical_compaction().to_owned();
 
                 let (logical_target, physical_target, upper_advanced) = {
@@ -623,21 +668,16 @@ where
                         }
                     }
 
-                    // Writer-driven floors, used as the fallback when a dimension has no reader
-                    // hold, so with zero readers the target follows the writer rather than the
+                    // Writer-driven logical floor, used as the fallback when no reader hold pins the
+                    // arrangement, so with zero readers the target follows the writer rather than the
                     // publisher's frozen hold. See the contract note above the lock.
                     let writer_logical = state
                         .writer_logical
                         .clone()
                         .unwrap_or_else(|| publisher_logical.clone());
-                    let writer_physical = upper.clone();
                     let logical = SharedTraceState::<Tr>::compaction_target(
                         &state.logical_holds,
                         &writer_logical,
-                    );
-                    let physical = SharedTraceState::<Tr>::compaction_target(
-                        &state.physical_holds,
-                        &writer_physical,
                     );
 
                     state.chain = chain;
@@ -654,6 +694,27 @@ where
                     state.since =
                         antichain_meet(&publisher_after.borrow()[..], &writer_logical.borrow()[..]);
                     state.upper = upper;
+                    // The physical target is the published `since`, and it is deliberately not
+                    // derived from reader holds.
+                    //
+                    // `set_physical_compaction(F)` promises the trace stays cuttable at every
+                    // frontier at or beyond `F`, and the controller promises every dataflow's `as_of`
+                    // is at or beyond the index's `since`. Forwarding `since` therefore keeps a cut
+                    // available for every reader the controller may ever admit, including one that
+                    // has not registered yet. That is what makes registering a hold at `as_of` safe
+                    // without synchronizing with this worker.
+                    //
+                    // Reader physical holds cannot substitute for this. Their meet only covers
+                    // readers that exist now, and the next reader can legitimately arrive below all
+                    // of them, at any point at or beyond `since`. Forwarding the stream `upper`, as a
+                    // trace whose only readers are its own agents does, breaks the promise outright:
+                    // the Spine merges across cuts that a later `batches_through` still needs, and
+                    // the straddle check in `Self::batches_through` fails on a correct read.
+                    //
+                    // The cost is that a published arrangement keeps batch granularity above `since`
+                    // where an unshared one would merge freely. That is the price of being
+                    // importable, and it is bounded by how far the controller lets `since` lag.
+                    let physical = state.since.clone();
 
                     // Wake importers and any peek waiters.
                     for queue in state.queues.values() {
@@ -1186,9 +1247,9 @@ mod tests {
     #[mz_ore::test]
     fn publish_without_readers_does_not_pin_compaction() {
         timely::execute_directly(move |worker| {
-            // Keep a writer handle (a plain `TraceAgent` clone) alongside the publication, and mint
-            // no `SharedTraceHandle` until after compaction: that keeps `logical_holds`/
-            // `physical_holds` empty, so the publisher has zero registered reader holds throughout.
+            // Keep a writer handle (a plain `TraceAgent` clone) alongside the publication, and mint no
+            // `SharedTraceHandle` until after compaction: that keeps `logical_holds` empty, so the
+            // publisher has zero registered reader holds throughout.
             let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
                 let arranged = collection.mz_arrange::<
@@ -1238,6 +1299,93 @@ mod tests {
             assert!(
                 handle.snapshot_at(&Timestamp::from(10_u64)).is_some(),
                 "snapshot at the compaction frontier must succeed"
+            );
+        });
+    }
+
+    /// `Published::handle_at` mints a hold at the requested `as_of`, and refuses when the published
+    /// `since` has already passed it.
+    ///
+    /// Refusing is the whole point: a reader that observed `since`, decided it permitted its `as_of`,
+    /// and only then advanced a hold would be racing the publisher across three separate acquisitions
+    /// of the state lock. The mint collapses that to one, so a handle it returns holds a frontier the
+    /// trace can still serve. A refusal is reported, not degraded, because the controller promises an
+    /// index's `since` never passes the `as_of` of a dataflow importing it.
+    #[mz_ore::test]
+    fn handle_at_mints_at_as_of_or_refuses() {
+        timely::execute_directly(move |worker| {
+            let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+                let arranged = collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("handle-at oks");
+                let writer = arranged.trace.clone();
+                let published = adopt_fresh(&arranged);
+                (writer, published, input)
+            });
+
+            for t in 0..5 {
+                tick(
+                    worker,
+                    &mut input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+            }
+
+            // While `since` is still at the minimum, a mint at any time succeeds and the hold sits
+            // exactly where it was asked for, not at `since`.
+            let at_three = Antichain::from_elem(Timestamp::from(3_u64));
+            let mut hold = published
+                .handle_at(&at_three)
+                .expect("since is still at the minimum");
+            assert_eq!(
+                hold.get_logical_compaction().to_owned(),
+                at_three,
+                "the mint must register at the requested as_of"
+            );
+
+            // A setter joins rather than overwrites, so a consumer cannot lower its own hold below a
+            // frontier the trace was already told it could compact past, and the getter keeps
+            // reporting what is actually held.
+            hold.set_logical_compaction(Antichain::from_elem(Timestamp::from(1_u64)).borrow());
+            assert_eq!(
+                hold.get_logical_compaction().to_owned(),
+                at_three,
+                "a request below the current hold must not lower it"
+            );
+            hold.set_logical_compaction(Antichain::from_elem(Timestamp::from(4_u64)).borrow());
+            assert_eq!(
+                hold.get_logical_compaction().to_owned(),
+                Antichain::from_elem(Timestamp::from(4_u64)),
+                "a request beyond the current hold must advance it"
+            );
+            drop(hold);
+
+            // The controller allows compaction to 10 and the writer applies it, so the publisher
+            // forwards a `since` of 10 on its next activation.
+            let target = Antichain::from_elem(Timestamp::from(10_u64));
+            published.note_writer_logical(&target);
+            writer.set_logical_compaction(target.borrow());
+            writer.set_physical_compaction(target.borrow());
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(10_u64),
+                Timestamp::from(11_u64),
+            );
+
+            assert_eq!(
+                published.handle_at(&at_three).err(),
+                Some(target.clone()),
+                "a mint below the published since must be refused, and report it"
+            );
+            assert!(
+                published.handle_at(&target).is_ok(),
+                "a mint at the published since must succeed"
             );
         });
     }

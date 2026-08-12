@@ -947,8 +947,20 @@ mod tests {
         // Return a closure that keeps the input handles alive and continues stepping. Dropping the
         // handles would drop the inputs and let the publisher dataflow drain to the empty frontier,
         // closing the publication before the importer has read it.
+        //
+        // Each call also advances the inputs to a fresh filler time. Stepping alone is not enough to
+        // run the publisher: timely only schedules its sink when its input is active, so an
+        // out-of-band change such as a controller `AllowCompaction` landing in `writer_logical` is not
+        // picked up until something ticks the dataflow. A live index in production always has that
+        // tick. The filler times carry no updates, so they add empty seal-only batches and advance
+        // `upper` without changing any accumulation.
+        let mut filler = seal;
         move |worker: &mut timely::worker::Worker| {
-            let _keep = (&oks_input, &errs_input);
+            filler += 1;
+            oks_input.advance_to(Timestamp::from(filler));
+            oks_input.flush();
+            errs_input.advance_to(Timestamp::from(filler));
+            errs_input.flush();
             worker.step();
         }
     }
@@ -1445,21 +1457,22 @@ mod tests {
         );
     }
 
-    /// A join and a reduce over an arrangement imported at an `as_of` the publisher's spine has
-    /// already merged across.
+    /// A join and a reduce over an arrangement imported at a stale `as_of`, where the publisher's
+    /// spine has folded the history below it into fewer, larger batches.
     ///
     /// This is the regime production reads in and no other test reaches. The other join and reduce
-    /// tests publish four updates and read at `as_of = 0`, so their chains are one batch per time
-    /// and no merge ever spans the read time. Here sixteen times are published with no importer
-    /// registered, so the publisher forwards the stream frontier as its physical compaction target
-    /// and the spine folds batches together freely, including across the `as_of` the import then
-    /// reads at. The test asserts that state was actually reached rather than assuming it.
+    /// tests publish four updates and read at `as_of = 0`, so their chains are one batch per time and
+    /// no merge ever precedes the read time. Here sixteen times are published and the controller then
+    /// allows compaction to the read time, which is what raises the published `since` and lets the
+    /// spine fold the batches below it together.
     ///
-    /// What that regime exercises: the importer seeds from the merged chain and cuts it at frontiers
-    /// a merged batch can straddle, which is the boundary
-    /// `SharedTraceHandle::batches_through` polices. A cut that returned a straddling batch would
-    /// hand the join updates at times not before the cut and double count them, so the join output
-    /// is the observable.
+    /// The test asserts both halves of the shape rather than assuming them. A merge must have
+    /// happened, so the import really does seed from a folded chain. And no batch may straddle the
+    /// `as_of`, which is the invariant the publisher maintains by forwarding the published `since` as
+    /// its physical compaction target: `set_physical_compaction` promises readability at or beyond
+    /// what it is given, and every legal `as_of` is at or beyond `since`. A straddling batch would
+    /// make `SharedTraceHandle::batches_through` either fail its cut check or hand the join updates at
+    /// times not before the cut and double count them, so the join output is the observable.
     #[mz_ore::test]
     fn stale_as_of_import_over_merged_chain_matches_direct() {
         let id_a = GlobalId::User(1);
@@ -1519,11 +1532,21 @@ mod tests {
         timely::execute_directly(move |worker| {
             let registry = ArrangementSharingRegistry::new();
 
-            // Publish both indexes to completion BEFORE any importer registers. With no reader hold
-            // in `physical_holds` the publisher forwards the stream frontier as the physical
-            // compaction target, which is what lets the spine merge across the later `as_of`.
+            // Publish both indexes to completion BEFORE any importer registers.
             let mut keep_a = publish_join_input(&registry, worker, id_a, &a, seal);
             let mut keep_b = publish_join_input(&registry, worker, id_b, &b, seal);
+            for _ in 0..64 {
+                keep_a(worker);
+                keep_b(worker);
+            }
+
+            // The controller allows compaction up to the read time, exactly as
+            // `handle_allow_compaction` does in production. That raises the published `since`, which
+            // is what the publisher forwards as its physical compaction target, so the spine folds
+            // the history below the read time together. The extra ticks give it activations to do so.
+            let allow = Antichain::from_elem(as_of_ts);
+            registry.note_allow_compaction(id_a, 0, &allow);
+            registry.note_allow_compaction(id_b, 0, &allow);
             for _ in 0..64 {
                 keep_a(worker);
                 keep_b(worker);
@@ -1533,26 +1556,37 @@ mod tests {
             let (oks_a, errs_a) = registry.handles(&id_a, worker_index).expect("A published");
             let (oks_b, errs_b) = registry.handles(&id_b, worker_index).expect("B published");
 
-            // The premise: some published batch spans `as_of`, so the read below cuts a chain the
-            // spine has merged over. Without this the test degenerates into the batch-aligned case
-            // the other tests already cover.
-            // A batch that starts strictly before `as_of` and ends strictly after it covers the read
-            // time plus at least one earlier time. Each published time seals its own `[t, t+1)`
-            // batch, so only a merge can produce that shape.
-            let mut merged_across_as_of = false;
+            // First half of the premise: the spine folded batches, so the import seeds from a merged
+            // chain rather than from the one-batch-per-time shape the other tests cover. Each
+            // published time seals its own `[t, t+1)` batch, so a batch spanning more than one time
+            // can only come from a merge.
+            //
+            // Second half: no batch straddles `as_of`, so the read below has a clean cut. This is the
+            // publisher's invariant, not an accident of this fixture, and it is what makes registering
+            // a hold at `as_of` safe without synchronizing with the publishing worker.
+            let mut merged = false;
+            let mut straddles_as_of = false;
             oks_a.map_batches(|batch| {
                 let lower = batch.lower().elements().first().copied();
                 let upper = batch.upper().elements().first().copied();
                 if let (Some(lower), Some(upper)) = (lower, upper) {
+                    if upper.saturating_sub(lower) > Timestamp::from(1_u64) {
+                        merged = true;
+                    }
                     if lower < as_of_ts && as_of_ts < upper {
-                        merged_across_as_of = true;
+                        straddles_as_of = true;
                     }
                 }
             });
             assert!(
-                merged_across_as_of,
-                "no published batch spans as_of {as_of_ts:?}; the spine did not merge across it \
-                 and the test is not exercising the merged-chain cut"
+                merged,
+                "no published batch spans more than one time; the spine did not merge and the test \
+                 is not exercising the merged-chain cut"
+            );
+            assert!(
+                !straddles_as_of,
+                "a published batch straddles as_of {as_of_ts:?}; the publisher must keep the trace \
+                 cuttable at every frontier at or beyond the published `since`"
             );
 
             let join_probe = ProbeHandle::new();

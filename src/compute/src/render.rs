@@ -111,7 +111,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use differential_dataflow::dynamic::pointstamp::PointStamp;
-use differential_dataflow::lattice::{Lattice, antichain_join};
+use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
 use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
@@ -625,45 +625,40 @@ fn import_shared_index<'outer>(
     // comment): eviction counts live readers by this Arc's strong count, and the handles minted below
     // wrap only the inner `Arc<SharedTrace>`, which does not contribute to that count.
     let slot = registry.get_or_create_placeholder(idx_id, worker_index, peers);
+
+    // Mint the read-hold tokens directly at `as_of`. `handle_at` checks the published `since` and
+    // registers the hold under one acquisition of the trace's state lock, so the returned holds are
+    // ones the trace can still honour. Observing `since`, deciding it permits `as_of`, and then
+    // advancing a hold would be three acquisitions with the publisher free to advance `since`
+    // between any two. A fresh placeholder's `since` is `minimum`, so this succeeds for an unadopted
+    // slot. The holds release only when the caller drops them.
+    //
+    // A failure is a protocol-ordering failure, not a serving failure, so it must stay loud. See the
+    // protocol invariants in the design doc: the controller's read hold is realized on the replica
+    // only when this runtime renders, and maintenance may have applied an `AllowCompaction` for
+    // `idx_id` before that. `writer_logical` says which side moved: `Some(f)` with `f` beyond `as_of`
+    // means the controller released and maintenance applied it ahead of this render, `None` means the
+    // published `since` came from the publisher's own hold instead.
     let oks_handle = slot.oks.handle();
     let errs_handle = slot.errs.handle();
-
-    // Cloning a `SharedTraceHandle` registers an independent hold. Advance these holds to `as_of` so
-    // the shared trace does not compact past `as_of` before the snapshot is read, then keep them as
-    // the caller's read-hold tokens. The hold releases only when the caller drops them.
-    let mut oks_hold = oks_handle.clone();
-    let mut errs_hold = errs_handle.clone();
-
-    // A published slot's `since` may already sit above `as_of` if the controller offered an
-    // unreadable `as_of`, a protocol error. Check before advancing the holds below: doing so
-    // first would pull `since` up to `as_of` and make this assert trivially true. A fresh
-    // placeholder's `since` is `minimum`, so this holds vacuously for an unadopted slot. Mirrors
-    // the maintenance path's `TraceBundle::compaction_frontier` assert in `import_index`, joining
-    // the two handles' compaction frontiers the same way `shared_index_peek_response` does.
-    let since = antichain_join(
-        &oks_hold.get_logical_compaction(),
-        &errs_hold.get_logical_compaction(),
-    );
-    // A violation here is a protocol-ordering failure, not a serving failure, so it must stay loud.
-    // See the protocol invariants in the design doc: the controller's read hold is realized on the
-    // replica only when this runtime renders, and maintenance may have applied an `AllowCompaction`
-    // for `idx_id` before that. `writer_logical` says which side moved: `Some(f)` with `f` beyond
-    // `as_of` means the controller released and maintenance applied it ahead of this render, `None`
-    // means the published `since` came from the publisher's own hold instead.
-    assert!(
-        PartialOrder::less_equal(&since, as_of),
-        "Index {idx_id} has been allowed to compact beyond the dataflow as_of: \
-         since {:?}, as_of {:?}, controller allow_compaction {:?}, published upper {:?}",
-        since.elements(),
-        as_of.elements(),
-        oks_hold.writer_logical().map(|f| f.elements().to_vec()),
-        oks_hold.frontiers().1.elements().to_vec(),
-    );
-
-    oks_hold.set_logical_compaction(as_of.borrow());
-    oks_hold.set_physical_compaction(as_of.borrow());
-    errs_hold.set_logical_compaction(as_of.borrow());
-    errs_hold.set_physical_compaction(as_of.borrow());
+    let compact_beyond_as_of = |since: Antichain<mz_repr::Timestamp>| -> ! {
+        panic!(
+            "Index {idx_id} has been allowed to compact beyond the dataflow as_of: \
+             since {:?}, as_of {:?}, controller allow_compaction {:?}, published upper {:?}",
+            since.elements(),
+            as_of.elements(),
+            oks_handle.writer_logical().map(|f| f.elements().to_vec()),
+            oks_handle.frontiers().1.elements().to_vec(),
+        )
+    };
+    let oks_hold = match slot.oks.handle_at(as_of) {
+        Ok(hold) => hold,
+        Err(since) => compact_beyond_as_of(since),
+    };
+    let errs_hold = match slot.errs.handle_at(as_of) {
+        Ok(hold) => hold,
+        Err(since) => compact_beyond_as_of(since),
+    };
 
     // Import a static snapshot at `as_of`, bounded by `until`. Interactive work is single-time, so a
     // snapshot is exactly what is needed, and it avoids the live import's forward-batch replay
