@@ -81,14 +81,14 @@ use tracing::error;
 ///   and `mz_metrics`, all of which the per-replica dyncfg push reaches.
 ///   `environmentd` may read such a config too, for its own process. That read
 ///   legitimately sees the environment-wide value.
-/// - A config that `environmentd` reads to produce configuration *for one
-///   specific replica*, and ships there, is also [`Replica`]. The read site must
-///   resolve the replica's override with [`Config::get_with_overrides`],
-///   otherwise the override never reaches the replica and the declaration is a
-///   silent no-op.
-/// - A config realized in `environmentd` (or `balancerd`) is [`Environment`],
-///   even when its effect concerns a particular replica. Controller-side
-///   scheduling knobs are the common case.
+/// - A config that `environmentd` resolves for *one specific replica*, whether
+///   it ships the value there or acts on it itself, is also [`Replica`]. The
+///   read site has to resolve that replica's override, either with
+///   [`Config::get_with_overrides`] or from a per-replica config set. Without
+///   that, the override never takes effect and the declaration is a silent
+///   no-op.
+/// - A config realized in `environmentd` (or `balancerd`) with no single replica
+///   in scope is [`Environment`].
 /// - A config consumed at plan time, once per cluster, is [`Cluster`].
 ///
 /// NOTE: a config whose value must agree across the replicas of one cluster
