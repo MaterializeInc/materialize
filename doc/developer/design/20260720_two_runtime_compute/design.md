@@ -81,6 +81,8 @@ sees.
 | Peeks serialize behind DDL on one coordinator thread | asserted elsewhere in this document, not measured here | **every query in the environment** | M6 |
 | A default-isolation read pays a timestamp-oracle round trip | not measured here | every default-isolation reader | M7 |
 | One expensive query makes every object on the replica look stale | measured, E13: a 2.24 s walk drives reported lag from 55 ms to 2340 ms, a 43x amplification, as a ramp of slope one | **every consumer of every object on the replica, and it is the number we report** | M8 |
+| `SUBSCRIBE` delivers nothing usable until its initial snapshot completes | not measured | the subscriber, before it has received anything | M12, and M4 and M5 on top |
+| A `SUBSCRIBE` snapshot stalls the replica the way an expensive peek does, and cannot be moved off it | not measured, `check`ed in the code: subscribes are excluded from the interactive runtime by an explicit condition | every consumer of every object on the replica | M2, M8, M9 |
 
 Two rows have the widest radius and they are the two least addressed here. M6 spans
 the environment and nothing in this document touches it. M8 spans the replica from a
@@ -163,6 +165,34 @@ single query and is the only mechanism whose cost appears in a customer's dashbo
   different durations means queue depth, and more faults inline means locality. It has
   a column because it is the last effect uniquely attributable to the offload, and
   scoring the offload without one hides that.
+* **M12, time to first usable output is proportional to collection size rather than
+  result size, and no consistent prefix can be delivered early.** The `SUBSCRIBE`
+  case. A peek's cost is bounded by its result, since a `LIMIT` thins it and an
+  MFP filters it, but a subscribe's initial snapshot is the whole collection every
+  time. Worse, the wait is not merely long but *indivisible*: every update at the
+  chosen `as_of` must be complete before the frontier passes it, so while rows may
+  arrive, nothing is actionable until progress advances past the snapshot timestamp.
+  A consumer that needs a consistent starting state therefore waits for all of it.
+  This is a different shape from every other mechanism here, which are all about
+  *whose turn it is*. This one is about the size of an atomic unit of output.
+
+  Two things compound it and one already solves it. M4 applies first, since a
+  subscribe builds a temporary dataflow and pays the creation floor before anything
+  happens, and M5 applies next, since the snapshot cannot be emitted until the
+  frontier passes the `as_of`. Where the snapshot's data comes from changes the cost
+  profile rather than the mechanism: with an arrangement on the cluster it is a
+  cursor walk and worker-bound, without one it is a persist read and fetch-bound.
+
+  The dual matters more than the symptom. A subscribe snapshot is a large operator
+  activation, so it *causes* M2, M8 and M9 for everything else on the replica, on a
+  scale bounded by collection size rather than by result size. And unlike a peek it
+  cannot be moved: `Multiplexer` routes a dataflow to the interactive runtime only
+  when `desc.subscribe_ids().next().is_none()`, so **subscribes stay on maintenance
+  by construction and the second runtime cannot reach this at all.** That exclusion
+  is load-bearing and its rationale is not recorded. An unbounded `until` is already
+  excluded by the neighbouring condition, so the subscribe check only bites for
+  `SUBSCRIBE ... UP TO`, and why that case must stay on maintenance should be written
+  down or the condition removed.
 
 ### What each solution reaches
 
@@ -171,25 +201,35 @@ cells carry text. `argued` means derived from the mechanism and not measured, an
 `check` means it can be settled by reading code rather than by running anything. Note
 how many cells are not measured.
 
-| | M1 | M2 | M3 | M4 | M5 | M6 | M7 | M8 | M9 | M10 | M11 |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| S0, another replica | statistically | statistically | yes | | **yes** | | | masks it? `check` | | | |
-| S1, cooperative peek slicing | yes, `argued` | | | | | | | **mostly**, E13: 2274 to 365 ms peak, at a light write load | **worsens it**, parked scans are not capped | | |
-| S2, cancellable peeks | cancellation only | | | | | | | for cancelled peeks, `argued` | helps, releases the hold early | | |
-| S3, interactive dataflows on a second runtime | | | **yes**, E7/E9 | | | | | dataflow-caused only, `argued` | | | |
-| S4, peeks routed to the interactive runtime | relocates the queue | **yes**, E12: p90 129.5 to 4.5 ms | | | | | | **yes**, E13: 102 ms peak, maintenance never sees the walk | | | |
-| S5, peeks on another thread | **yes**, E1/E11/E8b | **worse**, E12: p90 148.2 against 129.5 | | | | | | **yes**, E13: 101 ms peak, with core headroom | **worsens it**, holds for the whole walk | | **produces the effect** |
-| S6, budgeting long operator activations | | yes, `argued` | partial, `argued` | | | | | | | | |
-| S7, a bounded-seek plan for the skewed case | removes the work, `check` | | | | | | | removes the work, `argued` | | | |
-| S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | | | | | | yes, `argued` | | | |
-| S9, size- or residency-aware routing | | **removes S5's regression** | | | | | | | | | |
-| S10, fast-path or pooled temporary dataflows | | | | **the only candidate** | | | | | | | |
-| S11, coordinator sharding | | | | | | **the only candidate**, measured elsewhere at about +25% peek throughput | | | | | |
-| S12, oracle batching or avoidance | | | | | | | **the only candidate** | | | | |
+| | M1 | M2 | M3 | M4 | M5 | M6 | M7 | M8 | M9 | M10 | M11 | M12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| S0, another replica | statistically | statistically | yes | | **yes** | | | masks it? `check` | | | | |
+| S1, cooperative peek slicing | yes, `argued` | | | | | | | **mostly**, E13: 2274 to 365 ms peak, at a light write load | **worsens it**, parked scans are not capped | | | |
+| S2, cancellable peeks | cancellation only | | | | | | | for cancelled peeks, `argued` | helps, releases the hold early | | | |
+| S3, interactive dataflows on a second runtime | | | **yes**, E7/E9 | | | | | dataflow-caused only, `argued` | | | | |
+| S4, peeks routed to the interactive runtime | relocates the queue | **yes**, E12: p90 129.5 to 4.5 ms | | | | | | **yes**, E13: 102 ms peak, maintenance never sees the walk | | | | |
+| S5, peeks on another thread | **yes**, E1/E11/E8b | **worse**, E12: p90 148.2 against 129.5 | | | | | | **yes**, E13: 101 ms peak, with core headroom | **worsens it**, holds for the whole walk | | **produces the effect** | |
+| S6, budgeting long operator activations | | yes, `argued` | partial, `argued` | | | | | | | | | |
+| S7, a bounded-seek plan for the skewed case | removes the work, `check` | | | | | | | removes the work, `argued` | | | | |
+| S8, a re-entrant point-lookup structure | yes, `argued` | **yes**, `argued` | | | | | | yes, `argued` | | | | |
+| S9, size- or residency-aware routing | | **removes S5's regression** | | | | | | | | | | |
+| S10, fast-path or pooled temporary dataflows | | | | **the only candidate** | | | | | | | | |
+| S11, coordinator sharding | | | | | | **the only candidate**, measured elsewhere at about +25% peek throughput | | | | | | |
+| S12, oracle batching or avoidance | | | | | | | **the only candidate** | | | | | |
+| S13, `SUBSCRIBE ... WITH (SNAPSHOT = false)` | | removes the snapshot's cost | | | | | | removes the snapshot's cost | | | | **removes the work, and already ships** |
+| S14, routing subscribes to the interactive runtime | | the snapshot's cost only | | | | | | the snapshot's cost only | | | | |
+| S15, a chunked snapshot with partial-progress semantics | | | | | | | | | | | | `argued`, and a contract change |
 
 M10 has no row at all, deliberately: no scheduling change manufactures CPU. M9 has no
 row that cures it, one that partly helps, and two that cause it. M11 has one row that
-produces the effect and none that explains it.
+produces the effect and none that explains it. M12 has an incumbent escape hatch that
+works only for consumers not needing initial state, and nothing that makes a consistent
+prefix available early without changing what `SUBSCRIBE` promises.
+
+S14 is currently impossible rather than merely unbuilt, because the routing condition
+excludes subscribes outright. It is listed because removing that exclusion is a smaller
+change than anything else that would reach the same cells, and because the exclusion's
+rationale is unrecorded.
 
 **M8 was predicted to invert the M1 ordering. It inverts one row, not the ordering,
 and the prediction about slicing was wrong.** Registered before E13 ran: cooperative
@@ -373,6 +413,12 @@ Two are code checks, cheap and capable of changing a conclusion. Do these first.
   column?** If it turns the skewed lookup into a bounded seek, the field case that
   motivated much of this work is a plan defect, and S7 dominates the peek program for
   that shape. A code read plus one `EXPLAIN`.
+* **Why are subscribes excluded from the interactive runtime?** The condition is
+  `desc.subscribe_ids().next().is_none()` and its rationale is not recorded, unlike the
+  neighbouring copy-to exclusion which cites reconciliation. An unbounded `until`
+  already excludes an ordinary subscribe, so this only bites for `SUBSCRIBE ... UP TO`.
+  If the reason turns out to be incidental, S14 becomes available and the largest
+  freshness event a single statement can cause becomes movable.
 
 Then the measurements, in order of how much they would change the table.
 
@@ -394,9 +440,16 @@ Then the measurements, in order of how much they would change the table.
 5. **S2 against M8**, which E13's harness makes cheap: cancel a peek mid-walk and watch
    the frontier. It is the difference between a cancelled query costing the replica
    nothing and costing it the full walk.
-6. **M9 at all.** Nothing measures whether held-back compaction lengthens later
+6. **A `SUBSCRIBE` snapshot's freshness cost.** E13's fixture applies almost unchanged:
+   substitute a subscribe over a large collection for the index walk. The predicted
+   result is the same 43x shape at a larger magnitude, since the work is bounded by
+   collection size rather than by result size, and with no arm that fixes it, because
+   subscribes cannot leave the maintenance runtime. If that holds, the largest
+   freshness event a single statement can cause is one that none of the shipped work
+   addresses.
+7. **M9 at all.** Nothing measures whether held-back compaction lengthens later
    activations enough to matter, and it is the one mechanism the solutions cause.
-7. **The strict serializable arms for E1, E11 and E8b.** E12 supplies the level for one
+8. **The strict serializable arms for E1, E11 and E8b.** E12 supplies the level for one
    fixture and shows M5 is only visible once M2 is removed, so these are worth the
    repeat rather than urgent.
 
