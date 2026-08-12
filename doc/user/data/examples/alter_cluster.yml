@@ -11,6 +11,7 @@
                 [, LINGER DURATION = <interval>]
             )
         )]
+        [, EXPERIMENTAL ARRANGEMENT COMPRESSION = <bool>]
     )
     [WITH ( <with_option>[,...])]
     ;
@@ -70,6 +71,24 @@
         Set an empty strategy (`AUTO SCALING STRATEGY = ()`) to disable
         autoscaling.
 
+    - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
+      description: |
+        {{< warn-if-unreleased-inline "v26.37" >}}
+
+        Optional. Whether to enable [dictionary
+        compression](#dictionary-compression) for the arrangements maintained by
+        the cluster's replicas. Compression reduces the memory those
+        arrangements use, at the cost of CPU, and does not benefit every
+        workload. Only available on managed clusters.
+
+        {{< warning >}}
+        Changing this option replaces the cluster's replicas, so the cluster
+        re-hydrates. For more information, see [Dictionary
+        compression](#dictionary-compression).
+        {{< /warning >}}
+
+        Default: `FALSE`
+
     - name: "`WITH (<with_option>[,...])`"
       description: |
 
@@ -83,7 +102,8 @@
   code: |
     ALTER CLUSTER <cluster_name>
     RESET (
-        REPLICATION FACTOR | MANAGED | AUTO SCALING STRATEGY,
+        REPLICATION FACTOR | MANAGED | AUTO SCALING STRATEGY
+        | EXPERIMENTAL ARRANGEMENT COMPRESSION,
         ...
     )
     ;
@@ -108,6 +128,15 @@
         Optional. Resetting removes any autoscaling strategy from the cluster.
 
         Default: no autoscaling strategy.
+    - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
+      description: |
+        {{< warn-if-unreleased-inline "v26.37" >}}
+
+        Optional. Resetting turns [dictionary
+        compression](#dictionary-compression) off for the cluster, which
+        replaces the cluster's replicas.
+
+        Default: `FALSE`
 
 - name: "syntax-rename"
   code: |

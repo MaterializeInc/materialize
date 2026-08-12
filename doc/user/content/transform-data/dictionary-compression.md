@@ -13,17 +13,14 @@ menu:
 Arrangement dictionary compression
 {{< /public-preview >}}
 
-Dictionary compression reduces the memory that
-[arrangements](/get-started/arrangements/#arrangements) use when a column holds
-the same values over and over. Instead of storing a repeated value in full
-once per row, Materialize stores that value once and has each row reference it.
+{{% include-headless "/headless/dictionary-compression/overview" %}}
+
 The values that repeat most often within a column are stored this way, and
 everything else is stored as-is, exactly as it would be without compression.
 Compression is applied per column, so a wide row can have one column compressed
 and the rest untouched.
 
-Dictionary compression is in **public preview** and is off by default. You opt
-in per cluster with the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option.
+{{% include-headless "/headless/dictionary-compression/availability" %}}
 
 ## Enable dictionary compression
 
@@ -55,15 +52,7 @@ ALTER CLUSTER my_cluster RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION);
 
 [`SHOW CREATE CLUSTER`] reports the configured value.
 
-{{< warning >}}
-Changing `EXPERIMENTAL ARRANGEMENT COMPRESSION` on a cluster, whether you turn
-it on or off, replaces the cluster's replicas, so the cluster re-hydrates. The
-new replicas have to rebuild their arrangements, and the existing replicas keep
-serving until the new ones are ready, so the cluster temporarily uses roughly
-twice its usual memory until the switch completes. Plan for this the same way
-you would plan for resizing a cluster. Hydration is slower with compression
-enabled, so turning the option on takes longer than turning it off.
-{{< /warning >}}
+{{% include-headless "/headless/dictionary-compression/replica-replacement" %}}
 
 The option is configured on the cluster, but the arrangements it applies to live
 in the cluster's replicas, in each replica's memory. A replica picks up the

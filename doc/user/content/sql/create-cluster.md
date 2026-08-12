@@ -178,6 +178,18 @@ on cluster resizing.
 
 {{% include-headless "/headless/cluster-hydration-burst" %}}
 
+### Dictionary compression
+
+{{< public-preview >}}
+Arrangement dictionary compression
+{{< /public-preview >}}
+
+{{% include-headless "/headless/dictionary-compression/overview" %}}
+
+{{% include-headless "/headless/dictionary-compression/availability" %}}
+
+{{% include-headless "/headless/dictionary-compression/tradeoff-summary" %}}
+
 ### Replication factor
 
 The `REPLICATION FACTOR` option determines the number of replicas provisioned
@@ -302,6 +314,7 @@ The privileges required to execute this statement are:
 
 - [`ALTER CLUSTER`]
 - [`DROP CLUSTER`]
+- [Dictionary compression](/transform-data/dictionary-compression/)
 
 [AWS availability zone IDs]: https://docs.aws.amazon.com/ram/latest/userguide/working-with-az-ids.html
 [`ALTER CLUSTER`]: /sql/alter-cluster/

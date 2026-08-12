@@ -258,6 +258,24 @@ autoscaling](#configure-autoscaling) for the `ALTER CLUSTER` form.
 
 {{% include-headless "/headless/cluster-hydration-burst" %}}
 
+### Dictionary compression
+
+{{< public-preview >}}
+Arrangement dictionary compression
+{{< /public-preview >}}
+
+{{% include-headless "/headless/dictionary-compression/overview" %}}
+
+{{% include-headless "/headless/dictionary-compression/availability" %}}
+
+Turn compression on for an existing cluster with `ALTER CLUSTER ... SET
+(EXPERIMENTAL ARRANGEMENT COMPRESSION = true)`, and go back to the default with
+`ALTER CLUSTER ... RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)`.
+
+{{% include-headless "/headless/dictionary-compression/replica-replacement" %}}
+
+{{% include-headless "/headless/dictionary-compression/tradeoff-summary" %}}
+
 ### Replication factor
 
 The `REPLICATION FACTOR` option determines the number of replicas provisioned
@@ -437,3 +455,4 @@ compute-specific settings. If needed, these can be set explicitly.
 - [`CREATE CLUSTER`](/sql/create-cluster/)
 - [`SHOW CLUSTERS`](/sql/show-clusters/)
 - [`DROP CLUSTER`](/sql/drop-cluster/)
+- [Dictionary compression](/transform-data/dictionary-compression/)
