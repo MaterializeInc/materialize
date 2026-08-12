@@ -259,7 +259,20 @@ step 1 without step 2 leaks a hold and step 4 is only safe after 1 to 3.
    gone. A release recorded before the matching acquisition is applied, which the two
    independent streams allow, is consumed by that acquisition, which then installs
    nothing.
-3. **Multiplexer synthesis**, over the alias closure of the imports (G3).
+3. **Multiplexer synthesis.** One `AcquireHolds` per export of an interactive
+   dataflow, naming its *index* imports, emitted to maintenance before the create is
+   forwarded to interactive. Per export rather than per dataflow because the drop that
+   releases a hold is per export, and a dataflow's exports may drop at different
+   times. Naming index imports rather than `import_ids()` because a source import has
+   no trace to pin.
+
+   **No alias closure is needed, and G3 dissolves.** That gap was an artifact of the
+   cap being keyed by collection id. A `Trace` re-export installs a *clone of the same
+   `TraceBundle`* under the second id (`render.rs`, `ArrangementFlavor::Trace`), so
+   both ids' handles are agents on one `TraceBox`, and `reexport` shares the one
+   publication point. A hold on either id therefore pins the arrangement both ids
+   name, and `AllowCompaction` on the other only advances that other agent, which the
+   box's meet absorbs. Holds are keyed by arrangement where the cap was keyed by id.
 4. **Delete the cap.** `hold_floor`, `deferred_compaction`, `compaction_floor`,
    `pending_compaction`, the retire-on-response trigger and `reset`. This is what
    pays down the debt: it removes the per-query `compaction_floor` leak, the
@@ -277,3 +290,13 @@ depends on a response any more; `hold_floor`'s incomparable-antichain comparator
 disappears with step 4; the publisher's single-agent ratchet (G5) is addressed by
 step 1 only for holds acquired through the command, not for registrations the
 interactive runtime makes on its own.
+
+The epoch boundary is handled conservatively rather than correctly, pending step 5.
+A replica drops its command holds and its release records at reconnection, since the
+streams that would release them are being reset and the controller replays the creates
+the multiplexer re-derives the holds from. Release records are cleared in that
+direction on purpose: a record outliving its connection would be consumed by the next
+connection's acquisition for the same holder, which would then install nothing and
+leave that reader unprotected, whereas a record lost the other way only leaks a hold
+until the following reconnection. This does not close G2, because reconciliation
+synthesizes compactions locally that never traverse the multiplexer.
