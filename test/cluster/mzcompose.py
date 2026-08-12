@@ -4733,6 +4733,416 @@ def workflow_test_drop_index_during_subscribe_sequencing(c: Composition) -> None
         ), "statement execution was ended twice; end-of-execution ownership handoff regressed"
 
 
+def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
+    """A read-then-write that reports zero rows must not retire before the write
+    that emptied its selection is readable through the timestamp oracle.
+
+    The OCC path linearizes only its initial `as_of`, and its internal subscribe
+    follows Persist visibility, which runs ahead of the oracle: the group
+    committer appends before it applies the write timestamp. A DELETE or UPDATE
+    can therefore consolidate its selection to empty against state no
+    oracle-timestamped read can reach yet, report zero rows through
+    `NoRowsMatched`, and return. A strict-serializable read issued after that
+    response then still sees the row the response said was not there, and no
+    serial order explains that history.
+
+    The `group_commit_before_apply_write` failpoint holds the winning writer
+    inside that window, the same one a second `environmentd` process opens on
+    its own with no ordering against local Persist visibility.
+    """
+
+    # Every txns-shard write parks here while armed, including the keepalives
+    # that advance table uppers, so this has to be a bounded `sleep` and not a
+    # `pause`: a keepalive would take the `pause` first and the winning DELETE
+    # would never get to append. The window only has to outlast a peek and one
+    # subscribe dataflow installation.
+    failpoint = "group_commit_before_apply_write"
+    arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
+    disarm = f"SET failpoints = '{failpoint}=off'"
+
+    def occ_writes() -> tuple[int, int]:
+        """Read-then-writes the OCC path sequenced, and how many of their write
+        attempts lost the race for their write timestamp."""
+        metric = "mz_occ_read_then_write_retry_count"
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        values = {
+            line.split()[0]: int(float(line.split()[1]))
+            for line in metrics.splitlines()
+            if line.startswith((f"{metric}_count ", f"{metric}_sum "))
+        }
+        return values[f"{metric}_count"], values[f"{metric}_sum"]
+
+    def count(cur: Cursor, key: int) -> int:
+        cur.execute(f"SELECT count(*) FROM t WHERE k = {key}".encode())
+        row = cur.fetchone()
+        assert row is not None
+        return int(row[0])
+
+    with c.override(
+        Materialized(
+            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
+            additional_system_parameter_defaults={
+                "enable_adapter_frontend_occ_read_then_write": "true"
+            },
+        )
+    ):
+        c.up("materialized")
+        c.sql("CREATE TABLE t (k int, v int)")
+
+        # Ask the process rather than the catalog which path it takes: the UPDATE
+        # only reaches the histogram if the frontend sequenced it.
+        sequenced = occ_writes()[0]
+        c.sql("UPDATE t SET v = v + 1 WHERE k = 0")
+        assert occ_writes()[0] > sequenced, (
+            "the UPDATE did not go through the OCC path, so this would exercise the "
+            "coordinator's lock-based path instead"
+        )
+
+        # Connections are opened before the failpoint is armed: starting a session
+        # appends to `mz_sessions`, which parks like any other write.
+        with (
+            c.sql_cursor() as control,
+            c.sql_cursor() as probe,
+            c.sql_cursor() as winner_cur,
+            c.sql_cursor() as session,
+        ):
+            # A serializable read may pick a timestamp past the oracle's read
+            # timestamp, so it sees the winner's append while a strict-serializable
+            # read cannot.
+            probe.execute("SET transaction_isolation = 'serializable'")
+
+            # The UPDATE's subscribe can instead report progress at the table's
+            # pre-append upper, with the row still there, then submit a write,
+            # queue behind the parked committer, and conclude zero rows only once
+            # the oracle has caught up. That proves nothing either way, so such an
+            # attempt is retried; the write conflict count tells the two apart.
+            for attempt in range(1, 4):
+                key = attempt
+                c.sql(f"INSERT INTO t VALUES ({key}, 1)")
+                armed = Event()
+
+                def delete_winner(key: int = key) -> None:
+                    armed.wait()
+                    # Lands its append and advances t's upper, then the committer
+                    # parks before applying that timestamp to the oracle.
+                    winner_cur.execute(f"DELETE FROM t WHERE k = {key}".encode())
+
+                winner = PropagatingThread(target=delete_winner, name="winner")
+                winner.start()
+                control.execute(arm)
+                armed.set()
+
+                # The winner's append is visible in Persist from here on ...
+                deadline = time.time() + 120
+                while count(probe, key) > 0:
+                    assert (
+                        time.time() < deadline
+                    ), "the winning DELETE never became visible in Persist"
+                    time.sleep(0.1)
+                # ... and the oracle cannot serve reads at it yet, which is what
+                # puts us inside the window. This witness says nothing about the
+                # UPDATE, so it stays valid once the zero-row path waits.
+                before = count(session, key)
+
+                conflicts = occ_writes()[1]
+                started = time.time()
+                session.execute(f"UPDATE t SET v = v + 1 WHERE k = {key}".encode())
+                matched = session.rowcount
+                elapsed = time.time() - started
+                after = count(session, key)
+                conflicts = occ_writes()[1] - conflicts
+
+                control.execute(disarm)
+                # `off` does not interrupt a `sleep` under way, so this waits out
+                # the rest of the window.
+                winner.join(timeout=120)
+                assert not winner.is_alive(), "the winning DELETE never finished"
+
+                print(
+                    f"attempt {attempt}: UPDATE matched {matched} row(s) in "
+                    f"{elapsed:.1f}s with {conflicts} write conflict(s); "
+                    f"strict-serializable reads saw {before} row(s) before it and "
+                    f"{after} row(s) after"
+                )
+                assert matched == 0, (
+                    f"the UPDATE matched {matched} row(s) with the winner's delete "
+                    "already visible, so it never took the zero-row path"
+                )
+                if before == 0 or conflicts > 0:
+                    continue
+
+                assert after == 0, (
+                    "the UPDATE reported zero rows matched from state the oracle had "
+                    f"not applied yet, and a strict-serializable read after it saw "
+                    f"{after} row(s): the zero-row response was not linearized against "
+                    "the write that emptied the selection"
+                )
+                break
+            else:
+                raise AssertionError(
+                    "no attempt got the UPDATE to report zero rows from the newer "
+                    "state without first submitting a write, so the window was never "
+                    "observed"
+                )
+
+
+def occ_sequenced_writes(c: Composition) -> int:
+    """How many read-then-writes the OCC path has sequenced.
+
+    Observed once per read-then-write the frontend sequenced, so this is what
+    tells the two sequencing paths apart from outside the process. The
+    histogram is registered unconditionally, so a missing line means the scrape
+    itself did not land."""
+    metric = "mz_occ_read_then_write_retry_count_count"
+    metrics = c.exec(
+        "materialized", "curl", "--silent", "localhost:6878/metrics", capture=True
+    ).stdout
+    for line in metrics.splitlines():
+        if line.startswith(f"{metric} "):
+            return int(float(line.split()[1]))
+    raise RuntimeError(f"{metric} not found in materialized metrics")
+
+
+def workflow_test_occ_read_then_write_dependency_dropped(c: Composition) -> None:
+    """A read-then-write whose selection reads a collection that is dropped
+    while the statement runs must report that, write nothing, and leave neither
+    its OCC permit nor its subscribe behind.
+
+    The OCC path does not peek its selection, it installs a subscribe and reads
+    that, so a dropped read dependency does not reach the statement as a
+    planning error. It arrives as the subscribe's own termination, which the
+    loop has to turn into the statement's error instead of waiting for a
+    frontier that will never advance again.
+
+    The sleep in the selection holds the loop in that wait. It blocks the worker
+    rendering the dataflow, so the dataflow only goes away once the sleep
+    returns, but retiring the subscribe is the coordinator's own bookkeeping and
+    does not wait for the cluster. That is what makes the deadline below a
+    statement about the adapter rather than about the sleep.
+    """
+
+    # The selection cannot finish on its own inside the deadline, so a DELETE
+    # that ends within it ended because of the DROP.
+    sleep_seconds = 30
+    deadline_seconds = 15
+
+    with c.override(
+        Materialized(
+            # Sampled once at startup, so these cannot be an `ALTER SYSTEM SET`.
+            # One permit makes the follow-up write below depend on the failed
+            # statement having released the one it held.
+            additional_system_parameter_defaults={
+                "enable_adapter_frontend_occ_read_then_write": "true",
+                "max_concurrent_occ_writes": "1",
+                "unsafe_enable_unsafe_functions": "true",
+            },
+        )
+    ):
+        c.up("materialized")
+        # `dependency` holds a single row, so the sleep in the selection below
+        # runs once rather than once per row, and it takes its duration from
+        # that row rather than from a literal, or the optimizer folds the
+        # predicate away before the dataflow ever sleeps.
+        c.sql(dedent(f"""
+                CREATE TABLE target (k int);
+                INSERT INTO target SELECT generate_series(1, 10);
+                CREATE TABLE dependency (k int, delay double precision);
+                INSERT INTO dependency VALUES (1, {sleep_seconds});
+                CREATE CLUSTER other SIZE 'scale=1,workers=1';
+                """))
+
+        # Ask the process rather than the catalog which path it takes: the
+        # DELETE only reaches the histogram if the frontend sequenced it.
+        sequenced = occ_sequenced_writes(c)
+        c.sql("DELETE FROM target WHERE k IN (SELECT k FROM dependency WHERE k < 0)")
+        assert occ_sequenced_writes(c) > sequenced, (
+            "the DELETE did not go through the OCC path, so this would exercise the "
+            "coordinator's lock-based path instead"
+        )
+
+        outcome: list[str] = []
+
+        def delete() -> None:
+            with c.sql_cursor() as cur:
+                try:
+                    cur.execute(
+                        b"DELETE FROM target WHERE k IN (SELECT k FROM dependency "
+                        b"WHERE mz_unsafe.mz_sleep(delay) IS NULL)"
+                    )
+                    outcome.append("committed")
+                except DatabaseError as e:
+                    outcome.append(str(e))
+
+        deleter = PropagatingThread(target=delete, name="deleter")
+        deleter.start()
+        # The statement has to be past planning and inside its subscribe before
+        # the dependency goes away, otherwise this tests planning instead.
+        time.sleep(5)
+        dropped_at = time.time()
+        c.sql("DROP TABLE dependency")
+
+        deleter.join(timeout=deadline_seconds)
+        assert not deleter.is_alive(), (
+            f"the DELETE was still running {time.time() - dropped_at:.0f}s after its read "
+            "dependency was dropped, so the subscribe's termination never reached the loop"
+        )
+        [result] = outcome
+        assert (
+            "was dropped" in result
+        ), f"the DELETE ended with {result!r} instead of reporting the dropped dependency"
+
+        # Both checks run on the other cluster: the sleep still holds the worker
+        # this statement's subscribe ran on, and waiting that out here would
+        # blur a leaked permit into a busy replica.
+        with c.sql_cursor() as cur:
+            cur.execute(b"SET cluster = other")
+            cur.execute(b"SELECT count(*) FROM target")
+            row = cur.fetchone()
+            assert (
+                row is not None and row[0] == 10
+            ), f"target holds {row}, expected the 10 rows a failed DELETE leaves behind"
+
+            started = time.time()
+            cur.execute(b"DELETE FROM target WHERE k = 1")
+            assert (
+                cur.rowcount == 1
+            ), f"the follow-up DELETE affected {cur.rowcount} rows, expected 1"
+            elapsed = time.time() - started
+            assert elapsed < deadline_seconds, (
+                f"the follow-up read-then-write took {elapsed:.0f}s, which is what the "
+                "single OCC permit looks like when the failed statement kept it"
+            )
+
+        # The subscribe's dataflow goes away once the sleep releases the worker,
+        # so this waits that out. A `SubscribeHandle` whose drop never sent the
+        # cleanup leaves it installed for good.
+        deadline = time.time() + 120
+        with c.sql_cursor() as cur:
+            while True:
+                cur.execute(
+                    b"SELECT count(*) FROM mz_introspection.mz_dataflows "
+                    b"WHERE name LIKE '%frontend-read-then-write%'"
+                )
+                row = cur.fetchone()
+                assert row is not None
+                if row[0] == 0:
+                    break
+                assert time.time() < deadline, (
+                    f"{row[0]} read-then-write subscribe dataflow(s) still installed after "
+                    "the statement that owned them failed"
+                )
+                time.sleep(1)
+
+
+def workflow_test_occ_cancel_of_submitted_write(c: Composition) -> None:
+    """A cancel that arrives once a read-then-write's write is durable must not
+    take the statement's answer away from it.
+
+    Having handed its diffs to the group committer, the OCC loop no longer knows
+    whether they landed, so the cancellation path has to wait for the
+    committer's answer rather than synthesize `canceling statement` on the spot.
+    Reporting a cancellation for a write the user can already read back is a
+    lost acknowledgement, not a cancelled statement.
+
+    The `timestamped_write_before_result` failpoint holds the answer inside that
+    window, which is otherwise microseconds wide. It sits past the append and
+    past the oracle advance, so the increment being readable is what says the
+    window is open.
+    """
+
+    failpoint = "timestamped_write_before_result"
+    arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
+    disarm = f"SET failpoints = '{failpoint}=off'"
+
+    with c.override(
+        Materialized(
+            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
+            additional_system_parameter_defaults={
+                "enable_adapter_frontend_occ_read_then_write": "true"
+            },
+        )
+    ):
+        c.up("materialized")
+        c.sql("CREATE TABLE t (v int)")
+        c.sql("INSERT INTO t VALUES (0)")
+
+        # Ask the process rather than the catalog which path it takes: only a
+        # frontend-sequenced write is a timestamped write, and only a
+        # timestamped write reaches the failpoint.
+        sequenced = occ_sequenced_writes(c)
+        c.sql("UPDATE t SET v = v WHERE v < 0")
+        assert occ_sequenced_writes(c) > sequenced, (
+            "the UPDATE did not go through the OCC path, so the failpoint below would "
+            "never be reached"
+        )
+
+        # Connections are opened before the failpoint is armed: starting a
+        # session appends to `mz_sessions`, which is a write of its own.
+        with (
+            c.sql_cursor() as control,
+            c.sql_cursor() as writer,
+            c.sql_cursor() as reader,
+        ):
+            writer.execute(b"SELECT pg_backend_pid()")
+            row = writer.fetchone()
+            assert row is not None
+            pid = int(row[0])
+
+            outcome: list[str] = []
+            done = Event()
+
+            def update() -> None:
+                try:
+                    writer.execute(b"UPDATE t SET v = v + 1")
+                    outcome.append("committed")
+                except DatabaseError as e:
+                    outcome.append(str(e))
+                finally:
+                    done.set()
+
+            control.execute(arm.encode())
+            updater = PropagatingThread(target=update, name="updater")
+            updater.start()
+
+            # The increment is readable, so the write is durable and the
+            # committer is holding its answer.
+            deadline = time.time() + 60
+            while True:
+                reader.execute(b"SELECT v FROM t")
+                row = reader.fetchone()
+                assert row is not None
+                if row[0] == 1:
+                    break
+                assert time.time() < deadline, (
+                    "the UPDATE's write never became durable, so the failpoint window "
+                    "was never entered"
+                )
+                time.sleep(0.1)
+            assert not done.is_set(), (
+                "the UPDATE returned before the failpoint held its result, so the cancel "
+                "below would not race a submitted write"
+            )
+
+            control.execute(f"SELECT pg_cancel_backend({pid})".encode())
+            updater.join(timeout=120)
+            assert not updater.is_alive(), "the UPDATE never finished"
+            control.execute(disarm.encode())
+
+            [result] = outcome
+            assert result == "committed", (
+                f"the UPDATE reported {result!r} for a write the table already held, so "
+                "the cancel was answered without waiting for the write's outcome"
+            )
+
+            reader.execute(b"SELECT v FROM t")
+            row = reader.fetchone()
+            assert (
+                row is not None and row[0] == 1
+            ), f"the table holds {row}, expected the single increment the UPDATE reported"
+
+
 def workflow_test_refresh_mv_warmup(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

@@ -356,6 +356,14 @@ def workflow_read_only(c: Composition) -> None:
             1
             ! INSERT INTO t VALUES (3, 4);
             contains: cannot write in read-only mode
+            # A read-then-write reaches the write through a different path than
+            # a constant INSERT, so each shape needs its own rejection here.
+            ! DELETE FROM t WHERE a = 1;
+            contains: cannot write in read-only mode
+            ! UPDATE t SET b = b + 1;
+            contains: cannot write in read-only mode
+            ! INSERT INTO t SELECT a, b FROM t;
+            contains: cannot write in read-only mode
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
             1
@@ -686,6 +694,14 @@ def workflow_basic(c: Composition) -> None:
             1
             ! INSERT INTO t VALUES (3, 4);
             contains: cannot write in read-only mode
+            # A read-then-write reaches the write through a different path than
+            # a constant INSERT, so each shape needs its own rejection here.
+            ! DELETE FROM t WHERE a = 1;
+            contains: cannot write in read-only mode
+            ! UPDATE t SET b = b + 1;
+            contains: cannot write in read-only mode
+            ! INSERT INTO t SELECT a, b FROM t;
+            contains: cannot write in read-only mode
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
             1
@@ -842,6 +858,14 @@ def workflow_basic(c: Composition) -> None:
             > SELECT 1
             1
             ! INSERT INTO t VALUES (3, 4);
+            contains: cannot write in read-only mode
+            # A read-then-write reaches the write through a different path than
+            # a constant INSERT, so each shape needs its own rejection here.
+            ! DELETE FROM t WHERE a = 1;
+            contains: cannot write in read-only mode
+            ! UPDATE t SET b = b + 1;
+            contains: cannot write in read-only mode
+            ! INSERT INTO t SELECT a, b FROM t;
             contains: cannot write in read-only mode
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
@@ -2494,6 +2518,14 @@ def workflow_ddl(c: Composition) -> None:
             1
             ! INSERT INTO t VALUES (3, 4);
             contains: cannot write in read-only mode
+            # A read-then-write reaches the write through a different path than
+            # a constant INSERT, so each shape needs its own rejection here.
+            ! DELETE FROM t WHERE a = 1;
+            contains: cannot write in read-only mode
+            ! UPDATE t SET b = b + 1;
+            contains: cannot write in read-only mode
+            ! INSERT INTO t SELECT a, b FROM t;
+            contains: cannot write in read-only mode
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;
             1
@@ -2658,6 +2690,14 @@ def workflow_ddl(c: Composition) -> None:
             > SELECT 1
             1
             ! INSERT INTO t VALUES (3, 4);
+            contains: cannot write in read-only mode
+            # A read-then-write reaches the write through a different path than
+            # a constant INSERT, so each shape needs its own rejection here.
+            ! DELETE FROM t WHERE a = 1;
+            contains: cannot write in read-only mode
+            ! UPDATE t SET b = b + 1;
+            contains: cannot write in read-only mode
+            ! INSERT INTO t SELECT a, b FROM t;
             contains: cannot write in read-only mode
             > SET TRANSACTION_ISOLATION TO 'SERIALIZABLE';
             > SELECT * FROM mv;

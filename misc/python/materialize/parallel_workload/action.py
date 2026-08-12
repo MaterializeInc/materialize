@@ -78,6 +78,7 @@ from materialize.parallel_workload.database import (
     MAX_TYPES,
     MAX_VIEWS,
     MAX_WEBHOOK_SOURCES,
+    OCC_CONTENTION_EXHAUSTED_ERROR,
     Cluster,
     ClusterReplica,
     Column,
@@ -1115,7 +1116,6 @@ class InsertAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"insert{self.stmt_id}", exe)
@@ -1124,6 +1124,70 @@ class InsertAction(Action):
         table.num_rows += num_rows
         exe.insert_table = table.table_id
         return True
+
+
+def readable_by_read_then_write(obj: DBObject) -> bool:
+    """Whether a read-then-write's selection may read `obj`.
+
+    Only user tables and the views over them qualify. A selection that reads a
+    source, or a view that transitively does, is refused with
+    `InvalidTableMutationSelection`, because such a collection's notion of time
+    moves differently than the table being written."""
+    if isinstance(obj, Table):
+        return True
+    if isinstance(obj, View):
+        return readable_by_read_then_write(obj.base_object) and (
+            obj.base_object2 is None or readable_by_read_then_write(obj.base_object2)
+        )
+    return False
+
+
+def foreign_read_objects(exe: Executor, target: DBObject) -> list[DBObject]:
+    """Objects a read-then-write against `target` may read besides `target`
+    itself.
+
+    A selection that only touches its own write target gives the mutation a
+    read dependency no other session can drop, and one that is always the table
+    it writes. Reading a foreign object instead is what puts a view or
+    materialized view under the mutation, what makes the dependency traversal
+    walk more than one object, and what lets a concurrent DROP land on a
+    collection the statement is reading.
+
+    Another session's temporary objects are excluded: they are invisible from
+    here, so naming one yields a catalog error instead of a read dependency."""
+    return [
+        obj
+        for obj in exe.db.db_objects()
+        if str(obj) != str(target)
+        and readable_by_read_then_write(obj)
+        and not (
+            isinstance(obj, Table | View) and obj.temp and obj not in exe.temp_objects
+        )
+    ]
+
+
+def foreign_read_predicate(
+    rng: random.Random, exe: Executor, table: Table
+) -> str | None:
+    """A `col IN (SELECT col FROM other)` predicate for an UPDATE or DELETE on
+    `table`, or None when no object offers a type-compatible column.
+
+    The subquery is what makes the statement read something other than its
+    write target, see `foreign_read_objects`."""
+    objects = foreign_read_objects(exe, table)
+    rng.shuffle(objects)
+    for obj in objects:
+        pairs = [
+            (column, foreign_column)
+            for column in table.columns
+            for foreign_column in obj.columns
+            if column.data_type == foreign_column.data_type
+            and column.data_type != TextTextMap
+        ]
+        if pairs:
+            column, foreign_column = rng.choice(pairs)
+            return f"{column.name(True)} IN (SELECT {foreign_column} FROM {obj})"
+    return None
 
 
 class InsertSelectAction(Action):
@@ -1138,6 +1202,7 @@ class InsertSelectAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                OCC_CONTENTION_EXHAUSTED_ERROR,
                 # A random expression can evaluate to NULL (e.g. a map-key
                 # miss) even for a NOT NULL column, which is a legitimate
                 # rejection. The base list only ignores it for DDL complexity.
@@ -1164,8 +1229,13 @@ class InsertSelectAction(Action):
             return False
         table = self.rng.choice(tables)
         # Reading the insert target itself makes the target a read dependency
-        # too, the most contended shape a read-then-write can have.
-        source = table if self.rng.choice([True, False]) else self.rng.choice(tables)
+        # too, the most contended shape a read-then-write can have. The other
+        # half of the time the source is any readable object, see
+        # `foreign_read_objects`.
+        source: DBObject = table
+        if self.rng.choice([True, False]):
+            objects = foreign_read_objects(exe, table)
+            source = self.rng.choice(objects) if objects else table
 
         column_names = ", ".join(column.name(True) for column in table.columns)
         # The cast is an identity cast: `expression` returns the requested type
@@ -1257,6 +1327,9 @@ class CopyFromStdinAction(Action):
 class InsertReturningAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
+        # A constant INSERT is a blind write, but RETURNING takes it off that
+        # fast path and makes it a read-then-write.
+        result.append(OCC_CONTENTION_EXHAUSTED_ERROR)
         # The RETURNING expressions re-render the fully-qualified table and
         # column names, so a concurrent schema or table rename landing between
         # the INSERT target and the RETURNING clause leaves the two referring to
@@ -1306,7 +1379,6 @@ class InsertReturningAction(Action):
             )
         all_column_values = ", ".join(f"({v})" for v in column_values)
         query = f"INSERT INTO {table} ({column_names}) VALUES {all_column_values}"
-        # TODO: Use INSERT INTO {} SELECT {} (only works for tables)
         returning_exprs = []
         if self.rng.random() < 0.5:
             returning_exprs += [
@@ -1410,6 +1482,7 @@ class UpdateAction(Action):
         result.extend(
             [
                 "canceling statement due to statement timeout",
+                OCC_CONTENTION_EXHAUSTED_ERROR,
                 # A random SET expression can evaluate to NULL (e.g. a map-key
                 # miss) even for a NOT NULL column. That is a legitimate
                 # rejection, not a bug, and the column type can't be coerced
@@ -1453,7 +1526,14 @@ class UpdateAction(Action):
             f"{c.name(True)} = {expression(c.data_type, table.columns, self.rng, kind=ExprKind.WRITE)}"
             for c in set_columns
         )
-        query = f"UPDATE {table} SET {set_clause} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+        predicate = None
+        if self.rng.random() < 0.3:
+            predicate = foreign_read_predicate(self.rng, exe, table)
+        if predicate is None:
+            predicate = expression(
+                Boolean, table.columns, self.rng, kind=ExprKind.WRITE
+            )
+        query = f"UPDATE {table} SET {set_clause} WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"update{self.stmt_id}", exe)
@@ -1474,6 +1554,9 @@ class ReadThenWriteCounterUpdateAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         return [
             "canceling statement due to statement timeout",
+            # Extreme contention on one row is what this action creates, so
+            # exhausting the retry budget is an expected outcome here.
+            OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -1496,12 +1579,113 @@ class ReadThenWriteCounterUpdateAction(Action):
         return True
 
 
+class ReadThenWriteNoRowsAction(Action):
+    """Run a deterministic read-then-write whose selection is empty."""
+
+    def errors_to_ignore(self, exe: Executor) -> list[str]:
+        return [
+            "canceling statement due to statement timeout",
+            OCC_CONTENTION_EXHAUSTED_ERROR,
+        ] + super().errors_to_ignore(exe)
+
+    def run(self, exe: Executor) -> bool:
+        counter = exe.db.read_then_write_counter
+        exe.execute(f"UPDATE {counter} SET v = v + 1 WHERE id = 0", http=Http.NO)
+        return True
+
+
+class BlindWriteTransactionAction(Action):
+    """Run nonconstant blind writes through transaction outcomes.
+
+    Transactional buffering is not available in every server version that the
+    workload can run against. A server may reject the first INSERT. When it is
+    supported, one action covers commit, rollback, an abort after the write was
+    buffered, mixing buffered and constant writes, and RETURNING rejection.
+    """
+
+    # The optimizer folds constant dataflows with at most 10,000 rows. Staying
+    # just above that bound makes the INSERT use the frontend read-then-write
+    # path without generating more data than the coverage shape needs.
+    ROWS = 10_001
+    UNSUPPORTED = "cannot be run inside a transaction block"
+
+    def _rollback_after_error(self, exe: Executor) -> None:
+        try:
+            exe.execute("ROLLBACK", http=Http.NO)
+        except QueryError:
+            exe.reconnect_next = True
+
+    def run(self, exe: Executor) -> bool:
+        table = exe.db.blind_write_table
+        value = self.rng.randint(-(2**63), 2**63 - 1)
+        insert = (
+            f"INSERT INTO {table} "
+            f"SELECT {value} FROM generate_series(1, {self.ROWS})"
+        )
+
+        # Two write shapes in one transaction exercise merging the deferred
+        # dataflow result with an ordinary constant write.
+        exe.execute("BEGIN", http=Http.NO)
+        try:
+            exe.execute(insert, http=Http.NO)
+            exe.execute(f"INSERT INTO {table} VALUES ({value})", http=Http.NO)
+            exe.execute("COMMIT", http=Http.NO)
+        except QueryError as e:
+            self._rollback_after_error(exe)
+            if self.UNSUPPORTED in e.msg:
+                return True
+            raise
+
+        # Remove the committed value before running variants that must leave no
+        # rows behind. The unique value keeps concurrent action instances from
+        # deleting each other's rows.
+        exe.execute(f"DELETE FROM {table} WHERE id = {value}", http=Http.NO)
+
+        exe.execute("BEGIN", http=Http.NO)
+        try:
+            exe.execute(insert, http=Http.NO)
+            exe.execute("ROLLBACK", http=Http.NO)
+        except QueryError:
+            self._rollback_after_error(exe)
+            raise
+
+        # In an implicit multi-statement transaction, a later error must abort
+        # the buffered write with the rest of the batch.
+        try:
+            exe.execute(f"{insert}; SELECT 1 / 0", http=Http.NO)
+        except QueryError as e:
+            self._rollback_after_error(exe)
+            if "division by zero" not in e.msg:
+                raise
+        else:
+            raise RuntimeError("blind write batch unexpectedly succeeded")
+
+        # RETURNING needs rows before COMMIT, so deferred writes cannot provide
+        # it and the statement must be rejected.
+        exe.execute("BEGIN", http=Http.NO)
+        try:
+            exe.execute(f"{insert} RETURNING id", http=Http.NO)
+        except QueryError as e:
+            self._rollback_after_error(exe)
+            if self.UNSUPPORTED not in e.msg:
+                raise
+        else:
+            self._rollback_after_error(exe)
+            raise RuntimeError("blind write with RETURNING unexpectedly succeeded")
+
+        return True
+
+
 class DeleteAction(Action):
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         errors = [
             "canceling statement due to statement timeout",
+            OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
-        if exe.db.scenario == Scenario.Rename:
+        # The selection can name a foreign object, which another session may
+        # drop between planning and execution. Same tolerance the other
+        # read-then-write actions carry for the same reason.
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
         return errors
 
@@ -1538,7 +1722,14 @@ class DeleteAction(Action):
             query += f" USING {using_table}"
             query += f" WHERE {expression(Boolean, all_columns, self.rng, kind=ExprKind.WRITE)}"
         elif self.rng.random() < 0.95:
-            query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            predicate = None
+            if self.rng.random() < 0.3:
+                predicate = foreign_read_predicate(self.rng, exe, table)
+            if predicate is None:
+                predicate = expression(
+                    Boolean, table.columns, self.rng, kind=ExprKind.WRITE
+                )
+            query += f" WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"delete{self.stmt_id}", exe)
@@ -3073,6 +3264,10 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            # Read once at environmentd startup, so an ALTER SYSTEM SET only
+            # takes effect after a restart. Flipping it here would be a no-op
+            # for the running process.
+            "enable_adapter_frontend_occ_read_then_write",
             "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
@@ -3411,6 +3606,46 @@ class FlipFlagsAction(Action):
             cur.execute(
                 f"ALTER SYSTEM RESET {flag_name};".encode(),
             )
+
+
+class StartupOnlySystemVarsAction(Action):
+    """Set and restore the system parameters sampled only at startup."""
+
+    PARAMS = (
+        ("enable_adapter_frontend_occ_read_then_write", "true"),
+        ("max_concurrent_occ_writes", "1"),
+    )
+
+    def applicable(self, exe: Executor) -> bool:
+        # A process restart between SET and RESET could boot with the temporary
+        # value. The regression scenario keeps the process alive throughout.
+        return exe.db.scenario == Scenario.Regression
+
+    def run(self, exe: Executor) -> bool:
+        conn = None
+        pending_reset = None
+        try:
+            conn = self.create_system_connection(exe)
+            with conn.cursor() as cur:
+                for name, value in self.PARAMS:
+                    cur.execute(f"ALTER SYSTEM SET {name} = {value};".encode())
+                    pending_reset = name
+                    cur.execute(f"ALTER SYSTEM RESET {name};".encode())
+                    pending_reset = None
+            return True
+        except OperationalError:
+            return False
+        except Exception as e:
+            raise QueryError(str(e), "StartupOnlySystemVars")
+        finally:
+            if conn is not None:
+                if pending_reset is not None:
+                    try:
+                        with conn.cursor() as cur:
+                            cur.execute(f"ALTER SYSTEM RESET {pending_reset};".encode())
+                    except Exception:
+                        pass
+                conn.close()
 
 
 class CreateViewAction(Action):
@@ -6315,6 +6550,8 @@ dml_nontrans_action_list = ActionList(
         # this list, often enough that every worker on it contends on the one
         # counter row, not often enough to starve the rest of the workload.
         (ReadThenWriteCounterUpdateAction, 10),
+        (ReadThenWriteNoRowsAction, 5),
+        (BlindWriteTransactionAction, 2),
         # COPY FROM is oneshot ingestion, it can't run inside a transaction
         (CopyFromS3Action, 10),
         (CommentAction, 5),
@@ -6427,6 +6664,7 @@ ddl_action_list = ActionList(
         (ExplainAnalyzeAction, 4),
         (ExplainFilterPushdownAction, 2),
         (FlipFlagsAction, 2),
+        (StartupOnlySystemVarsAction, 1),
         # TODO: Reenable when https://linear.app/materializeinc/issue/SQL-405 is fixed.
         # (AlterTableAddColumnAction, 10),
         (AlterIcebergSinkFromAction, 8),

@@ -1,0 +1,1587 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Frontend sequencing for read-then-write operations.
+//!
+//! This module implements INSERT [...] SELECT FROM [...], DELETE and UPDATE
+//! operations using a subscribe with optimistic concurrency control (OCC),
+//! sequenced from the session task rather than the Coordinator. This reduces
+//! coordinator bottlenecking.
+//!
+//! ## Whether the write reads persisted state
+//!
+//! Two predicates answer that one question, and they have to agree. Before
+//! anything runs, `SessionClient::try_frontend_read_then_write` decides it
+//! syntactically, from `depends_on()` on the planned selection, because inside
+//! a transaction a read-dependent write has to be refused while refusing is
+//! still possible. Once the dataflow runs, the subscribe answers it
+//! dynamically: a subscribe over a persisted collection never ends, so a
+//! channel that closes on its own means the selection read nothing.
+//!
+//! The answer decides where the diffs go. Diffs from a selection that reads
+//! persisted state are only correct at the frontier they were observed at, so
+//! they commit inside the OCC loop. Diffs from a selection that reads nothing
+//! are frontier-independent, so the caller of the loop either submits them
+//! right after it or, inside a multi-statement transaction, buffers them as
+//! session write ops that land at COMMIT.
+//!
+//! Disagreement is caught on both sides, and only one side can still refuse.
+//! `frontend_read_then_write` re-checks the syntactic predicate before running a
+//! dataflow, which catches a caller that skipped the gate. If the syntactic
+//! predicate were laxer than the dynamic one, that check would pass and the
+//! write would commit mid-transaction, so the loop's `Committed` arm soft-panics
+//! when it has a write timestamp to apply inside a transaction. By then the
+//! write is durable, so all that arm can do is make the disagreement loud.
+//!
+//! ## Rollout note
+//!
+//! The `FRONTEND_READ_THEN_WRITE` dyncfg is read once at process startup and
+//! fixed for the lifetime of the `environmentd` process. This avoids a
+//! mixed-mode window where both the lock-based coordinator path and this OCC
+//! path are active concurrently. The coordinator path acquires write locks to
+//! prevent concurrent writes between its read and write phases, but this OCC
+//! path does not use write locks, so concurrent operation of both paths could
+//! allow an OCC write to slip between a coordinator-path reader's read and
+//! write.
+
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
+use std::num::{NonZeroI64, NonZeroUsize};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use bytesize::ByteSize;
+use differential_dataflow::consolidation;
+use itertools::Itertools;
+use mz_catalog::memory::error::ErrorKind;
+use mz_cluster_client::ReplicaId;
+use mz_compute_types::ComputeInstanceId;
+use mz_expr::Eval;
+use mz_expr::row::RowCollection;
+use mz_expr::{CollectionPlan, Id, LocalId, MirRelationExpr, MirScalarExpr, RowSetFinishing};
+use mz_ore::cast::CastFrom;
+use mz_ore::soft_panic_or_log;
+use mz_repr::optimize::OverrideFrom;
+use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, RowArena, Timestamp};
+use mz_sql::catalog::CatalogError;
+use mz_sql::plan::{self, MutationKind, QueryWhen};
+use mz_sql::session::metadata::SessionMetadata;
+use prometheus::Histogram;
+use timely::progress::Antichain;
+use tokio::sync::mpsc;
+use uuid::Uuid;
+
+use crate::catalog::Catalog;
+use crate::command::{Command, ExecuteResponse};
+use crate::coord::appends::WriteResult;
+use crate::coord::read_then_write::validate_read_then_write_dependencies;
+use crate::coord::timestamp_selection::TimestampProvider;
+use crate::coord::{Coordinator, TargetCluster};
+use crate::error::AdapterError;
+use crate::optimize::Optimize;
+use crate::optimize::dataflows::{ComputeInstanceSnapshot, EvalTime, ExprPrep, ExprPrepOneShot};
+use crate::session::{Session, TransactionOps};
+use crate::statement_logging::{StatementLifecycleEvent, StatementLoggingId};
+use crate::{PeekClient, PeekResponseUnary, TimelineContext, optimize};
+
+/// Reason a frontend write attempt is being torn down early.
+#[derive(Clone, Copy)]
+pub(crate) enum FrontendWriteCancellation {
+    Canceled,
+    StatementTimeout,
+}
+
+impl From<FrontendWriteCancellation> for AdapterError {
+    fn from(cancellation: FrontendWriteCancellation) -> Self {
+        match cancellation {
+            FrontendWriteCancellation::Canceled => AdapterError::Canceled,
+            FrontendWriteCancellation::StatementTimeout => AdapterError::StatementTimeout,
+        }
+    }
+}
+
+/// State shared between an in-flight frontend write attempt and its
+/// cancellation wrapper,
+/// `SessionClient::try_frontend_read_then_write_with_cancel`.
+///
+/// The contract: `write_submitted` is true from just before the
+/// `AttemptWrite` command is sent until the attempt resolves as definitively
+/// not committed. While it is true, cancellation and statement timeout must
+/// not synthesize an error but await the definitive write result instead,
+/// because the write may already be durable.
+///
+/// The wrapper and the attempt it wraps are polled by the same task, so the
+/// mutex and the atomic are here to satisfy `Send`, not to arbitrate between
+/// concurrent writers. There is one writer for each field.
+pub(crate) struct FrontendWriteAttemptState {
+    write_submitted: AtomicBool,
+    /// Set at most once, by the cancellation wrapper.
+    cancellation: Mutex<Option<FrontendWriteCancellation>>,
+}
+
+impl FrontendWriteAttemptState {
+    pub(crate) fn new() -> Self {
+        Self {
+            write_submitted: AtomicBool::new(false),
+            cancellation: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn mark_write_submitted(&self) {
+        self.write_submitted.store(true, Ordering::Release);
+    }
+
+    /// Marks the submitted write as definitively not committed.
+    ///
+    /// NOTE: This must only be called for outcomes where the write is known
+    /// to not have landed (`TimestampPassed`). Terminal outcomes leave
+    /// `write_submitted` set so a concurrent cancellation path can never
+    /// fabricate an error for a write that may have committed.
+    fn mark_write_resolved(&self) {
+        self.write_submitted.store(false, Ordering::Release);
+    }
+
+    pub(crate) fn write_submitted(&self) -> bool {
+        self.write_submitted.load(Ordering::Acquire)
+    }
+
+    /// Records why the attempt is being torn down. The first reason recorded
+    /// is the one the attempt reports.
+    pub(crate) fn request(&self, cancellation: FrontendWriteCancellation) {
+        self.cancellation
+            .lock()
+            .expect("cancellation lock poisoned")
+            .get_or_insert(cancellation);
+    }
+
+    fn requested_error(&self) -> Option<AdapterError> {
+        self.cancellation
+            .lock()
+            .expect("cancellation lock poisoned")
+            .map(AdapterError::from)
+    }
+}
+
+/// What the OCC loop produced.
+enum OccOutcome {
+    /// The write is durable at `write_ts`.
+    Committed {
+        response: ExecuteResponse,
+        write_ts: Timestamp,
+    },
+    /// The selection was empty, so there was nothing to write.
+    ///
+    /// `observed_ts` is the timestamp emptiness was concluded at, and is
+    /// `None` only when the selection reads no persisted state. When it is
+    /// `Some`, the caller must linearize against it before responding: the
+    /// subscribe follows Persist, which runs ahead of the oracle, so the
+    /// emptiness can be concluded from state no oracle-timestamped read can
+    /// reach yet.
+    NoRowsMatched {
+        response: ExecuteResponse,
+        observed_ts: Option<Timestamp>,
+    },
+    /// Diffs from a selection that reads no persisted state. The subscribe ran
+    /// to completion, so they are frontier-independent and the caller chooses
+    /// whether to submit them now or buffer them into the transaction.
+    Blind {
+        response: ExecuteResponse,
+        diffs: Vec<(Row, Diff)>,
+    },
+}
+
+/// What the coordinator's answer to a submitted write means for the statement.
+enum WriteOutcome {
+    /// The write is durable at this timestamp.
+    Committed(Timestamp),
+    /// The write did not land, and resubmitting these diffs cannot change
+    /// that. This is the error to report.
+    Failed(AdapterError),
+    /// Another writer advanced the target's upper past the timestamp we asked
+    /// for. The diffs still describe the mutation, so the OCC loop can
+    /// resubmit them once the subscribe has caught up.
+    Conflict { next_eligible_timestamp: Timestamp },
+}
+
+/// Maps a [`WriteResult`] to the outcome the statement reports, or to the one
+/// conflict the OCC loop can retry.
+fn classify_write_result(
+    result: WriteResult,
+    target_id: CatalogItemId,
+    attempt_state: &FrontendWriteAttemptState,
+) -> WriteOutcome {
+    match result {
+        WriteResult::Success { timestamp } => WriteOutcome::Committed(timestamp),
+        WriteResult::TimestampPassed {
+            next_eligible_timestamp,
+            ..
+        } => WriteOutcome::Conflict {
+            next_eligible_timestamp,
+        },
+        WriteResult::Canceled => WriteOutcome::Failed(
+            attempt_state
+                .requested_error()
+                .unwrap_or(AdapterError::Canceled),
+        ),
+        WriteResult::ReadOnly => WriteOutcome::Failed(AdapterError::ReadOnly),
+        WriteResult::TargetChanged => {
+            // A concurrent DDL gave the table a new generation after we
+            // computed these diffs against the old one. The same error the
+            // coordinator raises when a dependency changes underneath a
+            // statement, so clients see one retryable outcome for both.
+            WriteOutcome::Failed(AdapterError::ConcurrentDependencyMutation {
+                dependency_id: target_id.to_string(),
+            })
+        }
+        WriteResult::Indeterminate => WriteOutcome::Failed(AdapterError::Internal(
+            "write outcome is indeterminate because the group committer shut down".into(),
+        )),
+    }
+}
+
+/// A handle to an internal subscribe (not visible in introspection collections
+/// like `mz_subscriptions`). A `Drop` impl ensures the subscribe's dataflow is
+/// cleaned up when dropped.
+pub(crate) struct SubscribeHandle {
+    rx: mpsc::UnboundedReceiver<PeekResponseUnary>,
+    sink_id: GlobalId,
+    /// Wrapped in `Option` so we can move it out in `Drop`.
+    client: Option<crate::Client>,
+}
+
+impl SubscribeHandle {
+    /// Receive the next message from the subscribe, waiting if necessary.
+    pub async fn recv(&mut self) -> Option<PeekResponseUnary> {
+        self.rx.recv().await
+    }
+
+    /// Try to receive a message without waiting.
+    pub fn try_recv(&mut self) -> Result<PeekResponseUnary, mpsc::error::TryRecvError> {
+        self.rx.try_recv()
+    }
+}
+
+impl Drop for SubscribeHandle {
+    fn drop(&mut self) {
+        if let Some(client) = self.client.take() {
+            // Fire-and-forget: if the coordinator is gone, the subscribe will
+            // be cleaned up when the process exits anyway.
+            client.try_send(Command::DropInternalSubscribe {
+                sink_id: self.sink_id,
+            });
+        }
+    }
+}
+
+impl PeekClient {
+    /// Execute a read-then-write operation using frontend sequencing.
+    ///
+    /// Called by session code when the frontend_read_then_write dyncfg is
+    /// enabled. The caller owns the end-of-execution logging for
+    /// `statement_logging_id` and verified and planned the portal against
+    /// `catalog`, which stays in force through optimization and write-target
+    /// generation capture.
+    pub(crate) async fn frontend_read_then_write(
+        &mut self,
+        session: &mut Session,
+        mut plan: plan::ReadThenWritePlan,
+        target_cluster: TargetCluster,
+        catalog: &Arc<Catalog>,
+        statement_logging_id: Option<StatementLoggingId>,
+        attempt_state: Arc<FrontendWriteAttemptState>,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        // A transaction that has taken a timestamped read, was opened READ
+        // ONLY, or is committed to some other kind of operation cannot take a
+        // write. Check up front, mirroring `sequence_insert`: the marker op
+        // below rejects only some of those states, and only with its own
+        // errors, so without this check the reported error and SQLSTATE would
+        // depend on which path sequenced the statement.
+        //
+        // Both this and the marker op require an open transaction. The
+        // frontends start one before they execute anything, and a `Failed`
+        // transaction only ever admits COMMIT/ROLLBACK, so DML never arrives
+        // in a state where these panic.
+        if !session.transaction().allows_writes() {
+            return Err(AdapterError::ReadOnlyTransaction);
+        }
+
+        let validation_result =
+            self.validate_read_then_write(catalog, session, &plan, target_cluster)?;
+
+        let ValidationResult {
+            cluster_id,
+            replica_id,
+            timeline,
+            depends_on,
+            table_desc,
+        } = validation_result;
+
+        // Mark this as a write transaction in the session state machine. For a
+        // single statement that lets auto-commit handle the write correctly.
+        // The rows are added later: either the coordinator's group commit
+        // applies them directly, or, in a transaction, they are buffered as
+        // write ops once we know them.
+        session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
+
+        // A write on this path commits immediately and cannot be rolled back at
+        // transaction end, so only a single-statement transaction may reach it.
+        // The check lives in `SessionClient::try_frontend_read_then_write`, and
+        // this is defense in depth for it: rejecting here, before we run a
+        // dataflow, is the last point where refusing is still possible.
+        if session.transaction().is_in_multi_statement_transaction() {
+            soft_panic_or_log!("read-then-write reached the OCC path inside a transaction");
+            return Err(AdapterError::Internal(
+                "read-then-write cannot be run inside a transaction block".into(),
+            ));
+        }
+
+        // Prepare expressions (resolve unmaterializable functions like
+        // current_user())
+        let style = ExprPrepOneShot {
+            logical_time: EvalTime::NotAvailable, // We already errored out on mz_now above.
+            session,
+            catalog_state: catalog.state(),
+        };
+        for expr in plan
+            .assignments
+            .values_mut()
+            .chain(plan.returning.iter_mut())
+        {
+            style.prep_scalar_expr(expr)?;
+        }
+
+        let (optimizer, global_mir_plan) =
+            self.optimize_mir_read_then_write(catalog, session, &plan, cluster_id)?;
+
+        // Acquire the OCC semaphore permit *before* acquiring read holds in
+        // `frontend_determine_timestamp`. Under contention, waiters will
+        // otherwise sit on read holds on the RTW's read dependencies for the
+        // entire time they are queued, pinning compaction on those
+        // collections. Waiting on the permit first keeps queued operations
+        // hold-free. Once we have a permit we proceed to acquire the read holds
+        // needed for the rest of the operation.
+        //
+        // The cost of this ordering is that a permit held by a long-running
+        // operation stalls every read-then-write in the process, including ones
+        // on unrelated tables, where the coordinator's write lock would only
+        // stall writes to the target table. We accept that because the
+        // statement timeout in
+        // `SessionClient::try_frontend_read_then_write_with_cancel` covers the
+        // permit wait, so the stall is bounded for everyone but a session that
+        // disabled its own timeout.
+        //
+        // The semaphore is owned by the coordinator and outlives every
+        // session task, so `acquire_owned` cannot return `Err` in practice.
+        let permit = Arc::clone(&self.occ_write_semaphore)
+            .acquire_owned()
+            .await
+            .expect("semaphore is never closed during coordinator lifetime");
+
+        // Determine timestamp and acquire read holds.
+        let oracle_read_ts = self.oracle_read_ts(&timeline).await?;
+        let bundle = global_mir_plan.id_bundle(cluster_id);
+        let (determination, read_holds) = self
+            .frontend_determine_timestamp(
+                session,
+                &bundle,
+                &QueryWhen::FreshestTableWrite,
+                cluster_id,
+                &timeline,
+                oracle_read_ts,
+                None,
+            )
+            .await?;
+
+        let as_of = determination.timestamp_context.timestamp_or_default();
+
+        let global_lir_plan =
+            self.optimize_lir_read_then_write(optimizer, global_mir_plan, as_of)?;
+
+        // Log optimization finished
+        if let Some(logging_id) = statement_logging_id {
+            self.log_lifecycle_event(logging_id, StatementLifecycleEvent::OptimizationFinished);
+        }
+
+        let sink_id = global_lir_plan.sink_id();
+        let target_id = plan.id;
+        let target_global_id = catalog.get_entry(&target_id).latest_global_id();
+        let kind = plan.kind.clone();
+        let returning = plan.returning.clone();
+
+        let (df_desc, df_meta) = global_lir_plan.unapply();
+
+        // The coordinator sequences this statement's read as a real peek, so the
+        // optimizer's notices and the timestamp notice reach the session there.
+        // Emit both here for the same statement to look the same on either path.
+        crate::coord::sequencer::emit_optimizer_notices(
+            &**catalog,
+            session,
+            &df_meta.optimizer_notices,
+        );
+        if session.vars().emit_timestamp_notice() {
+            let conn_id = session.conn_id().clone();
+            let session_wall_time = session.pcx().wall_time;
+            let explanation = self
+                .call_coordinator(|tx| Command::ExplainTimestamp {
+                    conn_id,
+                    session_wall_time,
+                    cluster_id,
+                    id_bundle: bundle,
+                    determination,
+                    tx,
+                })
+                .await;
+            session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
+        }
+
+        let arity = df_desc
+            .sink_exports
+            .values()
+            .next()
+            .expect("has sink")
+            .from_desc
+            .arity();
+
+        let conn_id = session.conn_id().clone();
+        let session_uuid = session.uuid();
+        let start_time = (self.statement_logging_frontend.now)();
+        let max_result_size = catalog.system_config().max_result_size();
+        let max_query_result_size = session.vars().max_query_result_size();
+        let row_set_finishing_seconds = session.metrics().row_set_finishing_seconds().clone();
+        let max_occ_retries = usize::cast_from(catalog.system_config().max_occ_retries());
+
+        // Linearize the read BEFORE subscribing or writing: block until
+        // the oracle for this query's timeline has advanced to `as_of`.
+        //
+        // The up-front ordering is load-bearing. If `as_of` is in the far
+        // future (e.g. reading from a `REFRESH AT` MV with a far-future
+        // since), submitting a write at `chosen_ts >= as_of` would have
+        // the group commit bump the oracle to that far-future value,
+        // stalling every subsequent write on the `EpochMilliseconds`
+        // timeline until then. So a pathological far-future RTW must park
+        // here without ever touching the oracle. This park is unbounded on
+        // its own, the caller bounds it by `statement_timeout`.
+        self.ensure_read_linearized(&timeline, as_of).await?;
+
+        let subscribe_handle = self
+            .create_internal_subscribe(
+                Box::new(df_desc),
+                cluster_id,
+                replica_id,
+                depends_on.clone(),
+                as_of,
+                arity,
+                sink_id,
+                conn_id.clone(),
+                session_uuid,
+                start_time,
+                read_holds,
+            )
+            .await?;
+
+        let (retry_count, result) = self
+            .run_occ_loop(
+                subscribe_handle,
+                target_id,
+                target_global_id,
+                kind,
+                returning,
+                max_result_size,
+                max_query_result_size,
+                row_set_finishing_seconds,
+                max_occ_retries,
+                table_desc,
+                conn_id.clone(),
+                statement_logging_id,
+                as_of,
+                &attempt_state,
+            )
+            .await;
+
+        self.coordinator_client()
+            .metrics()
+            .occ_retry_count
+            .observe(f64::from(u32::try_from(retry_count).unwrap_or(u32::MAX)));
+
+        // Finish the operation, including a blind write's submission, before
+        // releasing the OCC permit. Holding it for the entire operation is what
+        // bounds concurrency. An early drop would let a waiter start its
+        // subscribe while we are still consolidating diffs, retrying, or
+        // waiting for our write to commit.
+        let response = match result {
+            Ok(OccOutcome::Committed { response, write_ts }) => {
+                session.apply_write(write_ts);
+                Ok(response)
+            }
+            Ok(OccOutcome::NoRowsMatched {
+                response,
+                observed_ts,
+            }) => {
+                // A write would have linearized this for us, because group
+                // commit advances the oracle before it answers. With nothing
+                // to write we have to do it ourselves, or we report an empty
+                // selection from state a later strict-serializable read cannot
+                // see yet, and that read finds the rows we said were not
+                // there.
+                match observed_ts {
+                    Some(observed_ts) => self
+                        .ensure_read_linearized(&timeline, observed_ts)
+                        .await
+                        .map(|()| response),
+                    None => Ok(response),
+                }
+            }
+            Ok(OccOutcome::Blind { response, diffs }) => {
+                match self
+                    .submit_blind_write(
+                        conn_id,
+                        target_id,
+                        target_global_id,
+                        diffs,
+                        statement_logging_id,
+                        &attempt_state,
+                    )
+                    .await
+                {
+                    Ok(write_ts) => {
+                        session.apply_write(write_ts);
+                        Ok(response)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+            Err(err) => Err(err),
+        };
+
+        drop(permit);
+
+        response
+    }
+
+    /// Validate a read-then-write operation.
+    fn validate_read_then_write(
+        &self,
+        catalog: &Arc<Catalog>,
+        session: &Session,
+        plan: &plan::ReadThenWritePlan,
+        target_cluster: TargetCluster,
+    ) -> Result<ValidationResult, AdapterError> {
+        // Disallow mz_now in any position because read time and write time differ.
+        let contains_temporal = plan.selection.contains_temporal()
+            || plan.assignments.values().any(|e| e.contains_temporal())
+            || plan.returning.iter().any(|e| e.contains_temporal());
+        if contains_temporal {
+            return Err(AdapterError::Unsupported(
+                "calls to mz_now in write statements",
+            ));
+        }
+
+        // Validate read dependencies. The plan was built against an earlier
+        // catalog snapshot, so an item it depends on may have been dropped by
+        // concurrent DDL before we got here.
+        let dependency_ids = plan
+            .selection
+            .depends_on()
+            .into_iter()
+            .map(|gid| {
+                catalog.try_resolve_item_id(&gid).ok_or_else(|| {
+                    AdapterError::Catalog(mz_catalog::memory::error::Error {
+                        kind: ErrorKind::Sql(CatalogError::UnknownItem(gid.to_string())),
+                    })
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let max_rw_dependencies = mz_adapter_types::dyncfgs::READ_THEN_WRITE_MAX_DEPENDENCIES
+            .get(catalog.system_config().dyncfgs());
+        validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies)?;
+
+        let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
+        let cluster_id = cluster.id;
+
+        if cluster.replicas().next().is_none() {
+            return Err(AdapterError::NoClusterReplicasAvailable {
+                name: cluster.name.clone(),
+                is_managed: cluster.is_managed(),
+            });
+        }
+
+        let replica_id = session
+            .vars()
+            .cluster_replica()
+            .map(|name| {
+                cluster
+                    .replica_id(name)
+                    .ok_or(AdapterError::UnknownClusterReplica {
+                        cluster_name: cluster.name.clone(),
+                        replica_name: name.to_string(),
+                    })
+            })
+            .transpose()?;
+
+        let depends_on = plan.selection.depends_on();
+        let timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
+
+        // Get the table descriptor for constraint validation. The plan's
+        // target table may have been dropped by concurrent DDL between
+        // planning and here, so tolerate a missing entry.
+        let table_desc = match catalog.try_get_entry(&plan.id) {
+            Some(entry) => entry
+                .relation_desc_latest()
+                .expect("table has desc")
+                .into_owned(),
+            None => {
+                return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::UnknownItem(plan.id.to_string())),
+                }));
+            }
+        };
+
+        Ok(ValidationResult {
+            cluster_id,
+            replica_id,
+            timeline,
+            depends_on,
+            table_desc,
+        })
+    }
+
+    /// Optimize MIR for a read-then-write operation.
+    fn optimize_mir_read_then_write(
+        &self,
+        catalog: &Arc<Catalog>,
+        session: &dyn SessionMetadata,
+        plan: &plan::ReadThenWritePlan,
+        cluster_id: ComputeInstanceId,
+    ) -> Result<
+        (
+            optimize::subscribe::Optimizer,
+            optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+        ),
+        AdapterError,
+    > {
+        // `finishing` is unused: the OCC path emits raw diffs and
+        // `apply_mutation_to_mir` handles update projection.
+        let plan::ReadThenWritePlan {
+            id: _,
+            selection,
+            finishing: _,
+            assignments,
+            kind,
+            returning: _,
+        } = plan;
+
+        let expr = selection.clone().lower(catalog.system_config(), None)?;
+        let mut expr = apply_mutation_to_mir(expr, kind, assignments);
+
+        // Resolve unmaterializable functions (now(), current_user, ...) before
+        // the subscribe optimizer sees them: it uses `ExprPrepMaintained`,
+        // which rejects them, but our subscribe is a one-shot read so we can
+        // resolve them to constants. `mz_now()` is rejected upstream by
+        // `validate_read_then_write`.
+        let style = ExprPrepOneShot {
+            logical_time: EvalTime::NotAvailable,
+            session,
+            catalog_state: catalog.state(),
+        };
+        expr.try_visit_scalars_mut(&mut |s| style.prep_scalar_expr(s))?;
+
+        let compute_instance = ComputeInstanceSnapshot::new_without_collections(cluster_id);
+        let (_, view_id) = self.transient_id_gen.allocate_id();
+        let (_, sink_id) = self.transient_id_gen.allocate_id();
+        let debug_name = format!("frontend-read-then-write-subscribe-{}", sink_id);
+        let optimizer_config = optimize::OptimizerConfig::from(catalog.system_config())
+            .override_from(&catalog.get_cluster(cluster_id).config.features())
+            .override_from(
+                &catalog
+                    .state()
+                    .cluster_scoped_optimizer_overrides(cluster_id),
+            );
+
+        let mut optimizer = optimize::subscribe::Optimizer::new(
+            Arc::<Catalog>::clone(catalog),
+            compute_instance,
+            view_id,
+            sink_id,
+            true, // with_snapshot
+            None, // up_to
+            debug_name,
+            optimizer_config,
+            self.optimizer_metrics.clone(),
+        );
+
+        let expr_typ = expr.typ();
+        let sql_typ = mz_repr::SqlRelationType::from_repr(&expr_typ);
+        let column_names: Vec<String> = (0..sql_typ.column_types.len())
+            .map(|i| format!("column{}", i))
+            .collect();
+        let relation_desc = RelationDesc::new(sql_typ, column_names.iter().map(|s| s.as_str()));
+
+        // MIR ⇒ MIR optimization (global). The mutation is already applied in
+        // MIR, so we hand the expression to the subscribe optimizer directly
+        // instead of going through the `SubscribePlan` path, which expects HIR.
+        // An empty `output` makes the sink emit raw diffs.
+        let global_mir_plan = optimizer.optimize_query(expr, relation_desc, vec![])?;
+
+        Ok((optimizer, global_mir_plan))
+    }
+
+    /// Optimize LIR for a read-then-write operation.
+    fn optimize_lir_read_then_write(
+        &self,
+        mut optimizer: optimize::subscribe::Optimizer,
+        global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
+        as_of: Timestamp,
+    ) -> Result<optimize::subscribe::GlobalLirPlan, AdapterError> {
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
+        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
+        Ok(global_lir_plan)
+    }
+
+    /// Get the oracle read timestamp hint for the timeline of this query.
+    async fn oracle_read_ts(
+        &mut self,
+        timeline: &TimelineContext,
+    ) -> Result<Option<Timestamp>, AdapterError> {
+        // See `ensure_read_linearized` for why `get_timeline` is the right
+        // function here: the write target lives on `EpochMilliseconds`, so
+        // we want that oracle's read_ts as the hint for timestamp
+        // selection even when the read side is MV-only
+        // (`TimestampDependent`).
+        let timeline = <Coordinator as TimestampProvider>::get_timeline(timeline);
+
+        match timeline {
+            Some(timeline) => {
+                let oracle = self.ensure_oracle(timeline).await?;
+                Ok(Some(oracle.read_ts().await))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Block until the oracle for this query's timeline has advanced to
+    /// `as_of`. Returns immediately if it already has.
+    ///
+    /// This implements the strict-serializable read guarantee for RTW:
+    /// once this returns, any session observing the oracle sees a read
+    /// timestamp at least as large as `as_of`, so reads at `as_of` (and
+    /// writes derived from them) cannot appear to "go backwards" relative
+    /// to subsequent queries.
+    async fn ensure_read_linearized(
+        &mut self,
+        timeline: &TimelineContext,
+        as_of: Timestamp,
+    ) -> Result<(), AdapterError> {
+        // Pick the oracle this RTW operates against. `timeline` is derived from
+        // the read side (`plan.selection.depends_on()`), so an MV-only read
+        // produces `TimestampDependent`, an MV itself does not pin the query to
+        // any source timeline. The write target, however, is always a Table
+        // living on `EpochMilliseconds`, and future readers of that table will
+        // consult the `EpochMilliseconds` oracle, so linearization must target
+        // `EpochMilliseconds` regardless of the read side.
+        //
+        // `get_timeline` encodes that defaulting (`TimestampDependent` →
+        // `Some(EpochMilliseconds)`). `TimelineContext::timeline()` answers a
+        // different question ("is there a source-forced timeline?") and would
+        // return `None` for MV-only reads, silently skipping linearization.
+        let tl = match <Coordinator as TimestampProvider>::get_timeline(timeline) {
+            Some(tl) => tl,
+            None => return Ok(()),
+        };
+
+        let oracle = self.ensure_oracle(tl).await?;
+
+        loop {
+            let oracle_ts = oracle.read_ts().await;
+            if as_of <= oracle_ts {
+                return Ok(());
+            }
+
+            // Sleep for roughly the difference between as_of and the current
+            // oracle timestamp. Since timestamps are epoch milliseconds, the
+            // difference is the approximate wall-clock time we need to wait.
+            // Cap at 1s to avoid very long sleeps if clocks are skewed,
+            // matching the cap in `message_linearize_reads`.
+            let wait_ms = u64::from(as_of.saturating_sub(oracle_ts));
+            let wait = Duration::from_millis(wait_ms).min(Duration::from_secs(1));
+            tokio::time::sleep(wait).await;
+        }
+    }
+
+    /// Creates an internal subscribe that does not appear in introspection
+    /// tables. Returns a [`SubscribeHandle`] that ensures cleanup on drop.
+    async fn create_internal_subscribe(
+        &self,
+        df_desc: Box<optimize::LirDataflowDescription>,
+        cluster_id: ComputeInstanceId,
+        replica_id: Option<ReplicaId>,
+        depends_on: BTreeSet<GlobalId>,
+        as_of: Timestamp,
+        arity: usize,
+        sink_id: GlobalId,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        session_uuid: Uuid,
+        start_time: mz_ore::now::EpochMillis,
+        read_holds: crate::ReadHolds,
+    ) -> Result<SubscribeHandle, AdapterError> {
+        let rx: mpsc::UnboundedReceiver<PeekResponseUnary> = self
+            .call_coordinator(|tx| Command::CreateInternalSubscribe {
+                df_desc,
+                cluster_id,
+                replica_id,
+                depends_on,
+                as_of,
+                arity,
+                sink_id,
+                conn_id,
+                session_uuid,
+                start_time,
+                read_holds,
+                tx,
+            })
+            .await?;
+
+        Ok(SubscribeHandle {
+            rx,
+            sink_id,
+            client: Some(self.coordinator_client().clone()),
+        })
+    }
+
+    /// Run the OCC loop: drain the subscribe at `as_of`, apply the
+    /// mutation, and submit the resulting diffs as a write.
+    ///
+    /// Semantically this is a SELECT at `as_of` followed by an INSERT.
+    /// Because we hold no write lock, a concurrent writer may bump the
+    /// target table's upper past our chosen write timestamp, in which
+    /// case the coordinator returns `WriteResult::TimestampPassed`. We
+    /// then wait for the subscribe to advance and retry, up to
+    /// `max_occ_retries` times.
+    ///
+    /// A subscribe that ends on its own reads no persisted state, so its diffs
+    /// are frontier-independent. Those are returned as [`OccOutcome::Blind`]
+    /// for the caller to submit or buffer, and this never writes them.
+    ///
+    /// Read linearization is the caller's responsibility, on both ends.
+    /// `as_of` must already be linearized (oracle read_ts >= `as_of`) on
+    /// entry, and an [`OccOutcome::NoRowsMatched`] carrying an `observed_ts`
+    /// must be linearized against it before the response goes out. See
+    /// `ensure_read_linearized` at the call site.
+    ///
+    /// Returns `(retry_count, result)` so the caller can record OCC retry
+    /// metrics regardless of whether the operation succeeded or failed.
+    async fn run_occ_loop(
+        &self,
+        mut subscribe_handle: SubscribeHandle,
+        target_id: CatalogItemId,
+        target_global_id: GlobalId,
+        kind: MutationKind,
+        returning: Vec<MirScalarExpr>,
+        max_result_size: u64,
+        max_query_result_size: u64,
+        row_set_finishing_seconds: Histogram,
+        max_occ_retries: usize,
+        table_desc: RelationDesc,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        statement_logging_id: Option<StatementLoggingId>,
+        as_of: Timestamp,
+        attempt_state: &FrontendWriteAttemptState,
+    ) -> (usize, Result<OccOutcome, AdapterError>) {
+        let mut state = OccState::new();
+
+        // Correctness invariant for retries:
+        //
+        // `all_diffs` accumulates *all* rows ever received from the subscribe,
+        // across retries. The subscribe emits a snapshot (at the as_of
+        // timestamp) followed by incremental updates. We consolidate on every
+        // progress message (flattening timestamps to MIN first), so after
+        // consolidation `all_diffs` always represents "what the query returns
+        // as of the latest progress timestamp". Old snapshot rows that were
+        // retracted by newer updates cancel out, and new rows appear. This is
+        // exactly the set of diffs we want to write.
+        //
+        // Consolidating on every progress also means the NoRowsMatched check
+        // works correctly across retries: if the consolidated result becomes
+        // logically empty (all diffs cancel out), `all_diffs` will be empty
+        // and we early-return without attempting a write.
+        let result = loop {
+            if let Some(error) = attempt_state.requested_error() {
+                break Err(error);
+            }
+            let msg = match subscribe_handle.recv().await {
+                Some(msg) => msg,
+                None => {
+                    // Channel closed cleanly: the SELECT is constant (no
+                    // table dependency), so the diffs do not depend on any
+                    // read frontier. The caller decides where they go, so we
+                    // flatten to `Timestamp::MIN` for `consolidate_updates`.
+                    state.consolidate(Timestamp::MIN);
+                    if state.all_diffs.is_empty() {
+                        break Ok(OccOutcome::NoRowsMatched {
+                            response: build_no_rows_response(&kind),
+                            observed_ts: None,
+                        });
+                    }
+                    let success_response = match self.build_success_response(
+                        &kind,
+                        &returning,
+                        &state.all_diffs,
+                        max_result_size,
+                        max_query_result_size,
+                        &row_set_finishing_seconds,
+                    ) {
+                        Ok(response) => response,
+                        Err(e) => break Err(e),
+                    };
+                    let diffs = state
+                        .all_diffs
+                        .iter()
+                        .map(|(row, _ts, diff)| (row.clone(), *diff))
+                        .collect_vec();
+
+                    break Ok(OccOutcome::Blind {
+                        response: success_response,
+                        diffs,
+                    });
+                }
+            };
+
+            match process_message(msg, &mut state, as_of, max_result_size, &table_desc) {
+                ProcessResult::Continue { ready_to_write } => {
+                    if !ready_to_write {
+                        continue;
+                    }
+
+                    // Drain pending messages before attempting write
+                    let drain_err = loop {
+                        match subscribe_handle.try_recv() {
+                            Ok(msg) => {
+                                match process_message(
+                                    msg,
+                                    &mut state,
+                                    as_of,
+                                    max_result_size,
+                                    &table_desc,
+                                ) {
+                                    ProcessResult::Continue { .. } => {}
+                                    ProcessResult::NoRowsMatched { observed_ts } => {
+                                        break Some(Ok(OccOutcome::NoRowsMatched {
+                                            response: build_no_rows_response(&kind),
+                                            observed_ts: Some(observed_ts),
+                                        }));
+                                    }
+                                    ProcessResult::Error(e) => {
+                                        break Some(Err(e));
+                                    }
+                                }
+                            }
+                            Err(mpsc::error::TryRecvError::Empty) => break None,
+                            // The subscribe can finish (coordinator drops the
+                            // sender after `process_response` returns true)
+                            // between our last recv() and this drain. This is
+                            // benign, all buffered messages have already been
+                            // consumed via the Ok(msg) arm above.
+                            Err(mpsc::error::TryRecvError::Disconnected) => break None,
+                        }
+                    };
+                    if let Some(result) = drain_err {
+                        break result;
+                    }
+
+                    let write_ts = state
+                        .current_upper
+                        .expect("must have seen progress to be ready to write");
+
+                    // Invariant: every diff we are about to write comes from a
+                    // time strictly below `write_ts`. `consolidate` below
+                    // rewrites all diff timestamps to `write_ts`, so a diff from
+                    // at or after `write_ts` would durably record rows that
+                    // reflect state from after the timestamp they were written
+                    // at.
+                    //
+                    // The drain can get ahead of the frontier: a subscribe sends
+                    // a batch's data and the following progress as two separate
+                    // channel messages, so `try_recv` can pick up data from the
+                    // next batch and then see `Empty`, leaving `current_upper`
+                    // at the older progress. When that happens we do not write.
+                    // Waiting for the next progress message re-establishes the
+                    // invariant, and it is bounded by `statement_timeout` like
+                    // every other wait in this loop.
+                    if state
+                        .max_data_ts
+                        .is_some_and(|max_data_ts| max_data_ts >= write_ts)
+                    {
+                        continue;
+                    }
+
+                    // Consolidate any rows received during the drain
+                    // (the bulk was already consolidated on the last progress).
+                    state.consolidate(write_ts);
+
+                    let success_response = match self.build_success_response(
+                        &kind,
+                        &returning,
+                        &state.all_diffs,
+                        max_result_size,
+                        max_query_result_size,
+                        &row_set_finishing_seconds,
+                    ) {
+                        Ok(response) => response,
+                        Err(e) => break Err(e),
+                    };
+
+                    // Submit write.
+                    //
+                    // TODO(aljoscha): Store `Arc<Row>` in `all_diffs` if this
+                    // shows up in profiles. Every attempt clones every row, and
+                    // we retry up to `max_occ_retries` times (default 1000).
+                    attempt_state.mark_write_submitted();
+                    let result = self
+                        .call_coordinator(|tx| Command::AttemptWrite {
+                            conn_id: conn_id.clone(),
+                            target_id,
+                            target_global_id,
+                            diffs: state
+                                .all_diffs
+                                .iter()
+                                .map(|(row, _ts, diff)| (row.clone(), *diff))
+                                .collect_vec(),
+                            write_ts: Some(write_ts),
+                            tx,
+                        })
+                        .await;
+
+                    match classify_write_result(result, target_id, attempt_state) {
+                        WriteOutcome::Committed(timestamp) => {
+                            if let Some(id) = statement_logging_id {
+                                self.log_set_timestamp(id, timestamp);
+                            }
+                            // N.B. subscribe_handle is dropped here, which
+                            // fires off the cleanup message.
+                            break Ok(OccOutcome::Committed {
+                                response: success_response,
+                                write_ts: timestamp,
+                            });
+                        }
+                        WriteOutcome::Failed(err) => break Err(err),
+                        WriteOutcome::Conflict {
+                            next_eligible_timestamp,
+                        } => {
+                            // The write definitively did not land, so the
+                            // attempt is resolved. Clearing `write_submitted`
+                            // lets a cancel or statement timeout that fires
+                            // during the upcoming subscribe wait resolve
+                            // promptly instead of awaiting a write result.
+                            attempt_state.mark_write_resolved();
+                            // Do not advance `state.current_upper` (and
+                            // therefore `write_ts`) from `next_eligible_timestamp`.
+                            // The diffs in `all_diffs` are only known to be
+                            // correct as of subscribe progress we have actually
+                            // observed. Retrying at a newer oracle timestamp
+                            // before subscribe progress catches up would risk
+                            // applying stale diffs at the wrong timestamp. So
+                            // on a conflict we wait for the subscribe to
+                            // progress and retry using that observed frontier.
+                            state.retry_count += 1;
+                            // Cancellation wins over the retry budget: if both
+                            // apply, the user asked us to stop and that is the
+                            // more truthful answer.
+                            if let Some(error) = attempt_state.requested_error() {
+                                break Err(error);
+                            }
+                            if state.retry_count > max_occ_retries {
+                                // High contention is a user-visible
+                                // condition, not an internal invariant
+                                // violation. Surface it as
+                                // `Unstructured` so it doesn't trip
+                                // internal-error alerts.
+                                break Err(AdapterError::Unstructured(anyhow::anyhow!(
+                                    "read-then-write exceeded maximum retry attempts under contention",
+                                )));
+                            }
+                            tracing::debug!(
+                                retry_count = state.retry_count,
+                                write_ts = %write_ts,
+                                next_eligible_timestamp = %next_eligible_timestamp,
+                                "OCC write conflict, retrying"
+                            );
+                            continue;
+                        }
+                    }
+                }
+                ProcessResult::NoRowsMatched { observed_ts } => {
+                    break Ok(OccOutcome::NoRowsMatched {
+                        response: build_no_rows_response(&kind),
+                        observed_ts: Some(observed_ts),
+                    });
+                }
+                ProcessResult::Error(e) => {
+                    break Err(e);
+                }
+            }
+        };
+
+        (state.retry_count, result)
+    }
+
+    /// Submits frontier-independent diffs to group commit, which picks the
+    /// write timestamp, and returns the timestamp the write committed at.
+    ///
+    /// Only valid for diffs that do not depend on an observed read frontier:
+    /// the write lands at a timestamp this caller does not choose.
+    async fn submit_blind_write(
+        &self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        target_id: CatalogItemId,
+        target_global_id: GlobalId,
+        diffs: Vec<(Row, Diff)>,
+        statement_logging_id: Option<StatementLoggingId>,
+        attempt_state: &FrontendWriteAttemptState,
+    ) -> Result<Timestamp, AdapterError> {
+        attempt_state.mark_write_submitted();
+        let result = self
+            .call_coordinator(|tx| Command::AttemptWrite {
+                conn_id,
+                target_id,
+                target_global_id,
+                diffs,
+                write_ts: None,
+                tx,
+            })
+            .await;
+
+        // Every outcome here terminates the attempt, so `write_submitted`
+        // stays set per its contract.
+        match classify_write_result(result, target_id, attempt_state) {
+            WriteOutcome::Committed(timestamp) => {
+                if let Some(id) = statement_logging_id {
+                    self.log_set_timestamp(id, timestamp);
+                }
+                Ok(timestamp)
+            }
+            WriteOutcome::Failed(err) => Err(err),
+            WriteOutcome::Conflict { .. } => {
+                // Unreachable: a write that requests no timestamp cannot have
+                // one pass. Group commit resolves it through
+                // `UserWriteResponder::Internal`, which only reports a conflict
+                // to a write that asked for a specific timestamp.
+                soft_panic_or_log!("blind read-then-write unexpectedly got TimestampPassed");
+                Err(AdapterError::Internal(
+                    "blind write unexpectedly got TimestampPassed".into(),
+                ))
+            }
+        }
+    }
+
+    /// Builds the response for a write that is about to be submitted.
+    ///
+    /// This runs before the write, so the result-size checks in here reject the
+    /// statement without having written anything.
+    fn build_success_response(
+        &self,
+        kind: &MutationKind,
+        returning: &[MirScalarExpr],
+        all_diffs: &[(Row, Timestamp, Diff)],
+        max_result_size: u64,
+        max_query_result_size: u64,
+        row_set_finishing_seconds: &Histogram,
+    ) -> Result<ExecuteResponse, AdapterError> {
+        if returning.is_empty() {
+            // For UPDATE each changed row produces a retraction (-1) and an
+            // insertion (+1), so we divide by 2 below.
+            let row_count = all_diffs
+                .iter()
+                .map(|(_, _, diff)| diff.into_inner().unsigned_abs())
+                .sum::<u64>();
+            let row_count =
+                usize::try_from(row_count).expect("positive row count must fit in usize");
+
+            return Ok(match kind {
+                MutationKind::Delete => ExecuteResponse::Deleted(row_count),
+                MutationKind::Update => ExecuteResponse::Updated(row_count / 2),
+                MutationKind::Insert => ExecuteResponse::Inserted(row_count),
+            });
+        }
+
+        let mut returning_rows = Vec::new();
+        let arena = RowArena::new();
+        // RETURNING expressions are evaluated row-by-row in this loop, so an
+        // expression like `RETURNING repeat('x', 10_000_000)` will allocate
+        // unbounded data unless we bail mid-loop. The post-loop
+        // `RowSetFinishing::finish` below would also reject this, but only
+        // after we've materialized everything. The early-bail caps the
+        // temporary allocation. We pick the lower of the two configured caps,
+        // whichever fires first wins.
+        let mut projected_byte_size: u64 = 0;
+        let early_cap = std::cmp::min(max_result_size, max_query_result_size);
+
+        for (row, _ts, diff) in all_diffs {
+            let include = match kind {
+                MutationKind::Delete => diff.is_negative(),
+                MutationKind::Update | MutationKind::Insert => diff.is_positive(),
+            };
+
+            if !include {
+                continue;
+            }
+
+            let mut returning_row = Row::with_capacity(returning.len());
+            let mut packer = returning_row.packer();
+            let datums: Vec<_> = row.iter().collect();
+
+            for expr in returning {
+                match expr.eval(&datums, &arena) {
+                    Ok(datum) => packer.push(datum),
+                    Err(err) => return Err(err.into()),
+                }
+            }
+
+            let multiplicity = NonZeroUsize::try_from(
+                NonZeroI64::try_from(diff.into_inner().abs()).expect("diff is non-zero"),
+            )
+            .map_err(AdapterError::from)?;
+
+            let row_bytes = u64::cast_from(returning_row.byte_len())
+                .saturating_mul(u64::cast_from(multiplicity.get()));
+            projected_byte_size = projected_byte_size.saturating_add(row_bytes);
+            if projected_byte_size > early_cap {
+                return Err(AdapterError::ResultSize(format!(
+                    "result exceeds max size of {}",
+                    ByteSize::b(early_cap)
+                )));
+            }
+
+            returning_rows.push((returning_row, multiplicity));
+        }
+
+        // Run the canonical finish to enforce both caps with full precision
+        // (including the sorted-view memory overhead) and to register the
+        // row-set-finishing duration histogram, mirroring the legacy
+        // `send_diffs` path.
+        let finishing = RowSetFinishing {
+            order_by: Vec::new(),
+            limit: None,
+            offset: 0,
+            project: (0..returning.len()).collect(),
+        };
+        match finishing.finish(
+            RowCollection::new(returning_rows, &finishing.order_by),
+            max_result_size,
+            Some(max_query_result_size),
+            row_set_finishing_seconds,
+        ) {
+            Ok((rows, _size_bytes)) => Ok(ExecuteResponse::SendingRowsImmediate {
+                rows: Box::new(rows),
+            }),
+            Err(e) => Err(AdapterError::ResultSize(e)),
+        }
+    }
+}
+
+/// Result of validating a read-then-write operation.
+struct ValidationResult {
+    cluster_id: ComputeInstanceId,
+    replica_id: Option<ReplicaId>,
+    timeline: TimelineContext,
+    depends_on: BTreeSet<GlobalId>,
+    /// The table descriptor, used for constraint validation.
+    table_desc: RelationDesc,
+}
+
+/// Accumulated state for the OCC loop in `run_occ_loop`.
+struct OccState {
+    all_diffs: Vec<(Row, Timestamp, Diff)>,
+    current_upper: Option<Timestamp>,
+    /// The largest timestamp among the data rows accumulated since the last
+    /// [`Self::consolidate`], which is where the diffs' own timestamps are
+    /// erased. `None` means every accumulated diff is already known to be from
+    /// before `current_upper`.
+    max_data_ts: Option<Timestamp>,
+    retry_count: usize,
+    byte_size: u64,
+}
+
+impl OccState {
+    fn new() -> Self {
+        Self {
+            all_diffs: Vec::new(),
+            current_upper: None,
+            max_data_ts: None,
+            retry_count: 0,
+            byte_size: 0,
+        }
+    }
+
+    /// Forward all diff timestamps to `target_ts` and consolidate.
+    ///
+    /// After consolidation, `all_diffs` represents the net state of the
+    /// query as of `target_ts`. Rows that were retracted by newer updates
+    /// cancel out, and `byte_size` is recomputed to reflect the
+    /// consolidated data.
+    ///
+    /// The caller must have established that every diff comes from a time at or
+    /// before `target_ts`, otherwise the consolidated set claims to describe
+    /// `target_ts` while reflecting state from after it.
+    fn consolidate(&mut self, target_ts: Timestamp) {
+        for (_, ts, _) in self.all_diffs.iter_mut() {
+            *ts = target_ts;
+        }
+        consolidation::consolidate_updates(&mut self.all_diffs);
+        self.byte_size = self
+            .all_diffs
+            .iter()
+            .map(|(row, _, _)| u64::cast_from(row.byte_len()))
+            .sum();
+        self.max_data_ts = None;
+    }
+}
+
+/// Result of processing a single subscribe message in the OCC loop.
+enum ProcessResult {
+    Continue {
+        ready_to_write: bool,
+    },
+    /// The consolidated selection is empty as of `observed_ts`.
+    NoRowsMatched {
+        observed_ts: Timestamp,
+    },
+    Error(AdapterError),
+}
+
+/// Process one subscribe message, updating `state` in place.
+///
+/// Data rows are accumulated into `state.all_diffs` (with per-row constraint
+/// and max-result-size checks). Progress messages trigger consolidation and
+/// can promote the accumulated diffs to "ready to write".
+fn process_message(
+    response: PeekResponseUnary,
+    state: &mut OccState,
+    as_of: Timestamp,
+    max_result_size: u64,
+    table_desc: &RelationDesc,
+) -> ProcessResult {
+    match response {
+        PeekResponseUnary::Rows(mut rows) => {
+            let mut saw_progress = false;
+
+            while let Some(row) = rows.next() {
+                let mut datums = row.iter();
+
+                // Extract mz_timestamp (SubscribeOutput::Diffs format:
+                // mz_timestamp, mz_progressed, mz_diff, ...data columns...).
+                //
+                // Format drift would mean we'd silently commit an incorrect
+                // write, so surface every shape mismatch as an internal
+                // error rather than panicking the process.
+                let Some(ts_datum) = datums.next() else {
+                    return ProcessResult::Error(AdapterError::Internal(
+                        "missing mz_timestamp in subscribe output".into(),
+                    ));
+                };
+                let ts = match ts_datum {
+                    mz_repr::Datum::Numeric(n) => match n.0.try_into() {
+                        Ok(ts_u64) => Timestamp::new(ts_u64),
+                        Err(_) => {
+                            return ProcessResult::Error(AdapterError::Internal(format!(
+                                "mz_timestamp in subscribe output is not a valid u64: {n}"
+                            )));
+                        }
+                    },
+                    other => {
+                        return ProcessResult::Error(AdapterError::Internal(format!(
+                            "unexpected mz_timestamp datum: {other:?}"
+                        )));
+                    }
+                };
+
+                let Some(progressed_datum) = datums.next() else {
+                    return ProcessResult::Error(AdapterError::Internal(
+                        "missing mz_progressed in subscribe output".into(),
+                    ));
+                };
+                let is_progress = matches!(progressed_datum, mz_repr::Datum::True);
+
+                if is_progress {
+                    state.current_upper = Some(ts);
+                    saw_progress = true;
+
+                    // Consolidate incrementally on each progress
+                    // message. This keeps memory bounded by the
+                    // consolidated size and makes the byte_size check
+                    // below accurate (except for rows received between
+                    // two progress messages, which is a small window).
+                    state.consolidate(ts);
+
+                    // The very first progress message we receive is
+                    // always at `as_of`, emitted synchronously by
+                    // `ActiveSubscribe::initialize` *before* any data
+                    // batch is processed. At that point `all_diffs` is
+                    // empty by construction, regardless of whether the
+                    // snapshot is actually empty, so we must not
+                    // conclude `NoRowsMatched` from it. Progress
+                    // messages emitted later from `process_response`
+                    // are gated on `batch.upper > as_of`, so any
+                    // progress with `ts > as_of` is past the initial
+                    // one and an empty `all_diffs` then genuinely
+                    // means no rows matched. See
+                    // `src/adapter/src/active_compute_sink.rs` for
+                    // the emission order.
+                    if ts > as_of && state.all_diffs.is_empty() {
+                        return ProcessResult::NoRowsMatched { observed_ts: ts };
+                    }
+                } else {
+                    let Some(diff_datum) = datums.next() else {
+                        return ProcessResult::Error(AdapterError::Internal(
+                            "missing mz_diff in subscribe output".into(),
+                        ));
+                    };
+                    let diff = match diff_datum {
+                        mz_repr::Datum::Int64(d) => Diff::from(d),
+                        other => {
+                            return ProcessResult::Error(AdapterError::Internal(format!(
+                                "unexpected mz_diff datum while processing read-then-write: {other:?}"
+                            )));
+                        }
+                    };
+
+                    let data_row = Row::pack(datums);
+
+                    // Validate constraints for rows being added (positive diff)
+                    if diff.is_positive() {
+                        for (idx, datum) in data_row.iter().enumerate() {
+                            if let Err(e) = table_desc.constraints_met(idx, &datum) {
+                                return ProcessResult::Error(e.into());
+                            }
+                        }
+                    }
+
+                    state.byte_size = state
+                        .byte_size
+                        .saturating_add(u64::cast_from(data_row.byte_len()));
+                    if state.byte_size > max_result_size {
+                        return ProcessResult::Error(AdapterError::ResultSize(format!(
+                            "result exceeds max size of {}",
+                            max_result_size
+                        )));
+                    }
+                    state.max_data_ts = Some(match state.max_data_ts {
+                        Some(max_ts) => std::cmp::max(max_ts, ts),
+                        None => ts,
+                    });
+                    state.all_diffs.push((data_row, ts, diff));
+                }
+            }
+
+            // We're ready to write once we've seen a progress
+            // message and have accumulated any diffs. Data rows can
+            // only arrive *after* the initial progress at `as_of`
+            // (see the note in the progress branch), so a non-empty
+            // `all_diffs` here implies we're past the initial
+            // progress.
+            let ready_to_write = saw_progress && !state.all_diffs.is_empty();
+            ProcessResult::Continue { ready_to_write }
+        }
+        PeekResponseUnary::Error(e) => {
+            ProcessResult::Error(AdapterError::Unstructured(anyhow::anyhow!(e)))
+        }
+        PeekResponseUnary::DependencyDropped(dep) => ProcessResult::Error(
+            AdapterError::Unstructured(anyhow::anyhow!(dep.query_terminated_error())),
+        ),
+        PeekResponseUnary::Canceled => ProcessResult::Error(AdapterError::Canceled),
+    }
+}
+
+/// Build the response returned when no rows matched the selection.
+///
+/// Bug-compatible with the coordinator path, which evaluates RETURNING over the
+/// diffs and so reports a plain row count when there are none. Postgres returns
+/// an empty result set for a zero-row `INSERT ... RETURNING` instead, but
+/// changing that is a change to the path that ships today, not to this one.
+fn build_no_rows_response(kind: &MutationKind) -> ExecuteResponse {
+    match kind {
+        MutationKind::Delete => ExecuteResponse::Deleted(0),
+        MutationKind::Update => ExecuteResponse::Updated(0),
+        MutationKind::Insert => ExecuteResponse::Inserted(0),
+    }
+}
+
+/// Transform a MIR expression to produce the appropriate diffs for a mutation.
+///
+/// - DELETE: Negates the expression to produce `(row, -1)` diffs
+/// - UPDATE: Unions negated old rows with mapped new rows to produce both
+///   `(old_row, -1)` and `(new_row, +1)` diffs
+fn apply_mutation_to_mir(
+    expr: MirRelationExpr,
+    kind: &MutationKind,
+    assignments: &BTreeMap<usize, MirScalarExpr>,
+) -> MirRelationExpr {
+    match kind {
+        MutationKind::Delete => MirRelationExpr::Negate {
+            input: Box::new(expr),
+        },
+        MutationKind::Update => {
+            let arity = expr.arity();
+
+            // Find a fresh LocalId that won't conflict with any in the expression.
+            //
+            // Invariant: `Let` and `LetRec` are the only MIR nodes that *bind*
+            // LocalIds. `Get` references them but does not introduce new ones.
+            // So scanning just those two node kinds and picking `max + 1` is
+            // guaranteed to produce an id unused by the subtree.
+            let mut max_id = 0_u64;
+            expr.visit_pre(|e| match e {
+                MirRelationExpr::Let { id, .. } => {
+                    max_id = std::cmp::max(max_id, id.into());
+                }
+                MirRelationExpr::LetRec { ids, .. } => {
+                    for id in ids {
+                        max_id = std::cmp::max(max_id, id.into());
+                    }
+                }
+                _ => {}
+            });
+            let binding_id = LocalId::new(max_id + 1);
+
+            let get_binding = MirRelationExpr::Get {
+                id: Id::Local(binding_id),
+                typ: expr.typ(),
+                access_strategy: mz_expr::AccessStrategy::UnknownOrLocal,
+            };
+
+            let map_scalars: Vec<MirScalarExpr> = (0..arity)
+                .map(|i| {
+                    assignments
+                        .get(&i)
+                        .cloned()
+                        .unwrap_or_else(|| MirScalarExpr::column(i))
+                })
+                .collect();
+
+            let new_rows = get_binding
+                .clone()
+                .map(map_scalars)
+                .project((arity..2 * arity).collect());
+
+            let old_rows = MirRelationExpr::Negate {
+                input: Box::new(get_binding),
+            };
+
+            let body = new_rows.union(old_rows);
+
+            MirRelationExpr::Let {
+                id: binding_id,
+                value: Box::new(expr),
+                body: Box::new(body),
+            }
+        }
+        // INSERT: rows pass through unchanged, the subscribe emits them with
+        // diff +1.
+        MutationKind::Insert => expr,
+    }
+}
