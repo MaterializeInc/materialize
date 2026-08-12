@@ -11,17 +11,26 @@
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
+use azure_core::auth::{AccessToken, TokenCredential};
+use azure_core::error::ErrorKind;
 use azure_core::{ExponentialRetryOptions, RetryOptions, StatusCode, TransportOptions};
-use azure_identity::create_default_credential;
+use azure_identity::{
+    TokenCredentialOptions, create_default_credential, federated_credentials_flow,
+};
 use azure_storage::{CloudLocation, EMULATOR_ACCOUNT, prelude::*};
 use azure_storage_blobs::blob::operations::GetBlobResponse;
 use azure_storage_blobs::prelude::*;
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::future::BoxFuture;
 use futures_util::stream::FuturesOrdered;
+use futures_util::{FutureExt, StreamExt};
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use time::OffsetDateTime;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
@@ -34,6 +43,190 @@ use crate::cfg::BlobKnobs;
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
+
+/// Environment variables that configure AKS-style workload identity. The
+/// names match the ones `azure_identity`'s credential chain reads.
+const AZURE_TENANT_ID: &str = "AZURE_TENANT_ID";
+const AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
+const AZURE_FEDERATED_TOKEN_FILE: &str = "AZURE_FEDERATED_TOKEN_FILE";
+
+/// Slop subtracted from an access token's expiry when deciding whether to
+/// refresh it, so we never present a token that expires while a request is in
+/// flight. Matches the slop in `azure_identity`'s internal token cache.
+const TOKEN_EXPIRY_SLOP: Duration = Duration::from_secs(20);
+
+fn is_expired(token: &AccessToken) -> bool {
+    token.expires_on < OffsetDateTime::now_utc() + TOKEN_EXPIRY_SLOP
+}
+
+/// Exchanges a client assertion (the projected service account token) for an
+/// AAD access token with the given scopes.
+type ExchangeFn = Box<
+    dyn Fn(String, Vec<String>) -> BoxFuture<'static, azure_core::Result<AccessToken>>
+        + Send
+        + Sync,
+>;
+
+/// A [TokenCredential] for AKS-style workload identity that re-reads the
+/// projected service account token file on every AAD access token refresh.
+///
+/// `azure_identity`'s `WorkloadIdentityCredential` reads
+/// `AZURE_FEDERATED_TOKEN_FILE` once at construction and holds the contents
+/// for the life of the process. Kubernetes rotates the projected token, so
+/// once the last cached AAD access token expires, every refresh presents an
+/// expired client assertion and fails, permanently locking a long-running
+/// process out of blob storage. Deferring the file read to refresh time picks
+/// up rotations.
+struct RefreshingWorkloadIdentityCredential {
+    federated_token_file: PathBuf,
+    exchange: ExchangeFn,
+    /// AAD access tokens by requested scopes, refreshed when within
+    /// [TOKEN_EXPIRY_SLOP] of expiry. Mirrors the caching semantics of
+    /// `azure_identity`'s internal token cache.
+    cache: RwLock<BTreeMap<Vec<String>, AccessToken>>,
+}
+
+impl Debug for RefreshingWorkloadIdentityCredential {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RefreshingWorkloadIdentityCredential")
+            .field("federated_token_file", &self.federated_token_file)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RefreshingWorkloadIdentityCredential {
+    /// Returns a credential if the workload identity environment variables
+    /// are present, or `None` to indicate that a different credential type
+    /// must be used.
+    fn from_env() -> Option<azure_core::Result<Self>> {
+        let (Ok(tenant_id), Ok(client_id), Ok(token_file)) = (
+            std::env::var(AZURE_TENANT_ID),
+            std::env::var(AZURE_CLIENT_ID),
+            std::env::var(AZURE_FEDERATED_TOKEN_FILE),
+        ) else {
+            return None;
+        };
+        Some(Self::new(tenant_id, client_id, PathBuf::from(token_file)))
+    }
+
+    fn new(
+        tenant_id: String,
+        client_id: String,
+        federated_token_file: PathBuf,
+    ) -> azure_core::Result<Self> {
+        let options = TokenCredentialOptions::default();
+        let http_client = options.http_client();
+        let authority_host = options.authority_host()?;
+        let exchange: ExchangeFn = Box::new(move |assertion, scopes| {
+            let http_client = Arc::clone(&http_client);
+            let authority_host = authority_host.clone();
+            let tenant_id = tenant_id.clone();
+            let client_id = client_id.clone();
+            async move {
+                let scopes: Vec<&str> = scopes.iter().map(String::as_str).collect();
+                let res = federated_credentials_flow::perform(
+                    http_client,
+                    &client_id,
+                    &assertion,
+                    &scopes,
+                    &tenant_id,
+                    &authority_host,
+                )
+                .await
+                .map_err(|err| {
+                    azure_core::error::Error::full(
+                        ErrorKind::Credential,
+                        err,
+                        "request token error",
+                    )
+                })?;
+                Ok(AccessToken::new(
+                    res.access_token().clone(),
+                    OffsetDateTime::now_utc() + Duration::from_secs(res.expires_in),
+                ))
+            }
+            .boxed()
+        });
+        Ok(Self::with_exchange(federated_token_file, exchange))
+    }
+
+    fn with_exchange(federated_token_file: PathBuf, exchange: ExchangeFn) -> Self {
+        Self {
+            federated_token_file,
+            exchange,
+            cache: RwLock::new(BTreeMap::new()),
+        }
+    }
+}
+
+#[async_trait]
+impl TokenCredential for RefreshingWorkloadIdentityCredential {
+    async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
+        let scopes_key: Vec<String> = scopes.iter().map(ToString::to_string).collect();
+
+        {
+            let cache = self.cache.read().await;
+            if let Some(token) = cache.get(&scopes_key) {
+                if !is_expired(token) {
+                    return Ok(token.clone());
+                }
+            }
+        }
+
+        // Refresh under the write lock so concurrent callers don't stampede
+        // AAD with token requests.
+        let mut cache = self.cache.write().await;
+        if let Some(token) = cache.get(&scopes_key) {
+            if !is_expired(token) {
+                return Ok(token.clone());
+            }
+        }
+
+        let assertion = tokio::fs::read_to_string(&self.federated_token_file)
+            .await
+            .map_err(|err| {
+                azure_core::error::Error::full(
+                    ErrorKind::Credential,
+                    err,
+                    format!(
+                        "failed to read federated token from file {}",
+                        self.federated_token_file.display()
+                    ),
+                )
+            })?;
+        // Kubernetes writes the projected token without surrounding
+        // whitespace, but a hand-provisioned file may have a trailing
+        // newline, which would corrupt the client assertion.
+        let assertion = assertion.trim().to_string();
+
+        let token = (self.exchange)(assertion, scopes_key.clone()).await?;
+        cache.insert(scopes_key, token.clone());
+        Ok(token)
+    }
+
+    async fn clear_cache(&self) -> azure_core::Result<()> {
+        self.cache.write().await.clear();
+        Ok(())
+    }
+}
+
+/// Returns the token credential to use when the blob URL carries no SAS
+/// token.
+///
+/// Prefers [RefreshingWorkloadIdentityCredential] when its environment
+/// variables are present, because the workload identity credential in
+/// `azure_identity`'s default chain never re-reads the rotated token file.
+/// Otherwise falls back to the default chain, whose remaining credential
+/// types (e.g. managed identity via IMDS) refresh correctly.
+fn token_credential() -> Arc<dyn TokenCredential> {
+    match RefreshingWorkloadIdentityCredential::from_env() {
+        Some(credential) => {
+            info!("azure: using refreshing workload identity credentials");
+            Arc::new(credential.expect("Azure workload identity credentials"))
+        }
+        None => create_default_credential().expect("Azure default credentials"),
+    }
+}
 
 /// Configuration for opening an [AzureBlob].
 #[derive(Clone, Debug)]
@@ -92,13 +285,9 @@ impl AzureBlobConfig {
                     warn!("Failed to parse SAS token: {err}");
                     // TODO: should we fallback here? Or can we fully rely on query params
                     // to determine whether a SAS token was provided?
-                    StorageCredentials::token_credential(
-                        create_default_credential().expect("Azure default credentials"),
-                    )
+                    StorageCredentials::token_credential(token_credential())
                 }
-                None => StorageCredentials::token_credential(
-                    create_default_credential().expect("Azure default credentials"),
-                ),
+                None => StorageCredentials::token_credential(token_credential()),
             };
 
             ClientBuilder::new(account, credentials)
@@ -108,9 +297,10 @@ impl AzureBlobConfig {
         .blob_service_client()
         .container_client(container);
 
-        // TODO: some auth modes like user-delegated SAS tokens are time-limited
-        // and need to be refreshed. This can be done through `service_client.update_credentials`
-        // but there'll be a fair bit of plumbing needed to make each mode work
+        // NOTE: a SAS token provided via the URL query string is static and
+        // never refreshed, so callers must provision one that outlives the
+        // process. Token credentials (workload identity and managed identity)
+        // refresh themselves.
 
         Ok(AzureBlobConfig {
             metrics,
@@ -376,11 +566,79 @@ impl Blob for AzureBlob {
 
 #[cfg(test)]
 mod tests {
+    use azure_core::auth::Secret;
+    use std::sync::Mutex;
     use tracing::info;
 
     use crate::location::tests::blob_impl_test;
 
     use super::*;
+
+    /// Tests that the credential re-reads the token file on every refresh,
+    /// reuses cached tokens until they near expiry, and trims whitespace from
+    /// the file contents.
+    #[mz_ore::test(tokio::test)]
+    async fn refreshing_workload_identity_credential() {
+        struct MockExchange {
+            /// Client assertions passed to each exchange call.
+            assertions: Vec<String>,
+            /// Validity of the next issued token.
+            validity: Duration,
+        }
+
+        let token_file = tempfile::NamedTempFile::new().expect("create temp token file");
+        std::fs::write(token_file.path(), "token-a\n").expect("write token file");
+
+        let state = Arc::new(Mutex::new(MockExchange {
+            assertions: Vec::new(),
+            validity: Duration::ZERO,
+        }));
+        let exchange: ExchangeFn = Box::new({
+            let state = Arc::clone(&state);
+            move |assertion, _scopes| {
+                let state = Arc::clone(&state);
+                async move {
+                    let mut state = state.lock().unwrap();
+                    state.assertions.push(assertion);
+                    Ok(AccessToken::new(
+                        Secret::new(format!("aad-{}", state.assertions.len())),
+                        OffsetDateTime::now_utc() + state.validity,
+                    ))
+                }
+                .boxed()
+            }
+        });
+        let credential = RefreshingWorkloadIdentityCredential::with_exchange(
+            token_file.path().to_path_buf(),
+            exchange,
+        );
+        let scopes = &["https://storage.azure.com/"];
+
+        // Already-expired tokens are refreshed on every call, and the token
+        // file is re-read (and trimmed) each time.
+        let token = credential.get_token(scopes).await.expect("token");
+        assert_eq!(token.token.secret(), "aad-1");
+        std::fs::write(token_file.path(), "token-b").expect("write token file");
+        let token = credential.get_token(scopes).await.expect("token");
+        assert_eq!(token.token.secret(), "aad-2");
+        assert_eq!(
+            state.lock().unwrap().assertions,
+            vec!["token-a".to_string(), "token-b".to_string()]
+        );
+
+        // Unexpired tokens are served from the cache without an exchange.
+        state.lock().unwrap().validity = Duration::from_secs(3600);
+        let token = credential.get_token(scopes).await.expect("token");
+        assert_eq!(token.token.secret(), "aad-3");
+        let token = credential.get_token(scopes).await.expect("token");
+        assert_eq!(token.token.secret(), "aad-3");
+        assert_eq!(state.lock().unwrap().assertions.len(), 3);
+
+        // Clearing the cache forces a refresh.
+        credential.clear_cache().await.expect("clear cache");
+        let token = credential.get_token(scopes).await.expect("token");
+        assert_eq!(token.token.secret(), "aad-4");
+    }
 
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
