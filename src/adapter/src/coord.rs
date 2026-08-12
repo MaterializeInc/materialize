@@ -2349,20 +2349,15 @@ impl Coordinator {
         })
     }
 
-    /// Resolves the replica-local scoped overrides from the catalog working copy
-    /// into the compute controller's per-replica dyncfg layer, then re-pushes
-    /// the environment-wide compute configuration so replicas observe the new
-    /// values. Driven by the catalog implication for replica-scoped
-    /// configuration changes, and called once on bootstrap.
-    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
-        // Clone the (sparse) replica overrides so we don't hold a catalog borrow
-        // across the mutable controller calls below.
-        let replica_overrides = self
-            .catalog()
-            .state()
-            .scoped_system_parameters()
-            .replica
-            .clone();
+    /// Renders the replica-local scoped overrides in the catalog working copy as
+    /// per-replica [`ConfigUpdates`], grouped by cluster.
+    ///
+    /// Sparse: only replicas with an override are present. Parameters that are
+    /// not dyncfgs are skipped, as are values that fail to parse.
+    pub(crate) fn replica_dyncfg_overrides(
+        &self,
+    ) -> BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>> {
+        let replica_overrides = &self.catalog().state().scoped_system_parameters().replica;
 
         let dyncfgs = self.catalog().system_config().dyncfgs();
         let mut instance_overrides: BTreeMap<
@@ -2397,22 +2392,32 @@ impl Coordinator {
             }
         }
 
+        instance_overrides
+    }
+
+    /// Resolves the replica-local scoped overrides from the catalog working copy
+    /// into the controllers' per-replica dyncfg layers, then re-pushes the
+    /// environment-wide configuration so replicas observe the new values.
+    /// Driven by the catalog implication for replica-scoped configuration
+    /// changes, and called once on bootstrap.
+    pub(crate) fn push_replica_dyncfg_overrides(&mut self) {
+        let instance_overrides = self.replica_dyncfg_overrides();
+
         // Both controllers carry a per-replica dyncfg layer, because the two
         // protocols realize configs in different worker `ConfigSet`s on
         // `clusterd`. The compute worker's `handle_update_configuration`
         // applies the pushed dyncfg updates to compute's own worker
-        // `ConfigSet` and to the shared persist client `ConfigSet`
+        // `ConfigSet`, to the shared persist client `ConfigSet`
         // (`persist_clients.cfg()`) that the co-located storage server reads
-        // from the same `Arc`, which covers persist-backed and process-global
-        // configs such as persist client tuning and `lgalloc`. Configs
-        // realized from the storage worker's own `ConfigSet` (read in its
-        // `UpdateConfiguration` handler) are reached only by the storage
-        // controller's layer.
+        // from the same `Arc`, and to `mz_metrics`, which covers
+        // persist-backed and process-global configs such as persist client
+        // tuning and `lgalloc`. Configs realized from the storage worker's own
+        // `ConfigSet` (read in its `UpdateConfiguration` handler) are reached
+        // only by the storage controller's layer. A third class is not pushed
+        // to a running replica at all but baked into its process configuration
+        // when the controller provisions it, which is why the overrides also go
+        // to the outer controller.
         self.controller
-            .compute
-            .update_replica_dyncfg_overrides(instance_overrides.clone());
-        self.controller
-            .storage
             .update_replica_dyncfg_overrides(instance_overrides);
         // Re-push the env-wide configs so existing replicas pick up their
         // (possibly changed) overrides. This also reverts a removed override:
@@ -2501,6 +2506,16 @@ impl Coordinator {
             .update_orchestrator_scheduling_config(scheduling_config);
         self.controller.update_configuration(dyncfg_updates);
 
+        // Install the replica-local scoped overrides before creating any
+        // replica below. Parts of a replica's configuration (its `TimelyConfig`,
+        // its expiration offset) are resolved once, when the controller
+        // provisions the replica, and must see its overrides at that point. The
+        // push after the creation loop cannot serve this purpose, because those
+        // values are frozen by then.
+        let replica_dyncfg_overrides = self.replica_dyncfg_overrides();
+        self.controller
+            .update_replica_dyncfg_overrides(replica_dyncfg_overrides);
+
         // Skip the credit consumption check at bootstrap under DisableClusterCreation behavior:
         // this codepath validates existing replicas at startup, not cluster creation, so it
         // must not block startup. New cluster creation is still gated by the DDL-time check.
@@ -2556,7 +2571,7 @@ impl Coordinator {
         }
 
         // Now that the compute instances and their replicas exist, push the
-        // replica-local scoped overrides into the compute controller so existing
+        // replica-local scoped overrides into the controllers so existing
         // replicas observe them at startup. The scoped (per-cluster and
         // per-replica) working copy was restored from the durable cache into
         // `CatalogState` while opening the catalog, so the last-known values are

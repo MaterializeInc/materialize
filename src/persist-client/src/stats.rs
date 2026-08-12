@@ -12,7 +12,7 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
 use crate::batch::UntrimmableColumns;
 use crate::metrics::Metrics;
@@ -25,6 +25,7 @@ pub(crate) const STATS_AUDIT_PERCENT: Config<usize> = Config::new(
     "persist_stats_audit_percent",
     1,
     "Percent of filtered data to opt in to correctness auditing (Materialize).",
+    ParameterScope::Replica,
 );
 
 /// See description for usage.
@@ -34,6 +35,7 @@ pub const STATS_AUDIT_PANIC: Config<bool> = Config::new(
     "If set (as it is by default), panic on any auditing failure. If not, report an error but \
     pass along the data as normal. This should almost certainly be paired with an audit rate of 100%, \
     so all parts are audited, for consistency.",
+    ParameterScope::Replica,
 );
 
 /// Computes and stores statistics about each batch part.
@@ -47,6 +49,7 @@ pub(crate) const STATS_COLLECTION_ENABLED: Config<bool> = Config::new(
     Whether to calculate and record statistics about the data stored in \
     persist to be used at read time, see persist_stats_filter_enabled \
     (Materialize).",
+    ParameterScope::Replica,
 );
 
 /// Uses previously computed statistics about batch parts to entirely skip
@@ -59,6 +62,7 @@ pub const STATS_FILTER_ENABLED: Config<bool> = Config::new(
     "\
     Whether to use recorded statistics about the data stored in persist to \
     filter at read time, see persist_stats_collection_enabled (Materialize).",
+    ParameterScope::Replica,
 );
 
 /// The budget (in bytes) of how many stats to write down per batch part. When
@@ -68,6 +72,7 @@ pub(crate) const STATS_BUDGET_BYTES: Config<usize> = Config::new(
     "persist_stats_budget_bytes",
     1024,
     "The budget (in bytes) of how many stats to maintain per batch part.",
+    ParameterScope::Replica,
 );
 
 pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<fn() -> String> = Config::new(
@@ -91,6 +96,7 @@ pub(crate) const STATS_UNTRIMMABLE_COLUMNS_EQUALS: Config<fn() -> String> = Conf
     Which columns to always retain during persist stats trimming. Any column \
     with a name exactly equal (case-insensitive) to one of these will be kept. \
     Comma separated list.",
+    ParameterScope::Replica,
 );
 
 pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<fn() -> String> = Config::new(
@@ -100,6 +106,7 @@ pub(crate) const STATS_UNTRIMMABLE_COLUMNS_PREFIX: Config<fn() -> String> = Conf
     Which columns to always retain during persist stats trimming. Any column \
     with a name starting with (case-insensitive) one of these will be kept. \
     Comma separated list.",
+    ParameterScope::Replica,
 );
 
 pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<fn() -> String> = Config::new(
@@ -109,6 +116,7 @@ pub(crate) const STATS_UNTRIMMABLE_COLUMNS_SUFFIX: Config<fn() -> String> = Conf
     Which columns to always retain during persist stats trimming. Any column \
     with a name ending with (case-insensitive) one of these will be kept. \
     Comma separated list.",
+    ParameterScope::Replica,
 );
 
 pub(crate) fn untrimmable_columns(cfg: &ConfigSet) -> UntrimmableColumns {

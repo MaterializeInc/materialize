@@ -24,7 +24,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures_util::stream::StreamExt;
 use futures_util::{FutureExt, stream};
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::instrument;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
@@ -376,18 +376,21 @@ pub(crate) const BATCH_DELETE_ENABLED: Config<bool> = Config::new(
     "persist_batch_delete_enabled",
     true,
     "Whether to actually delete blobs when batch delete is called (Materialize).",
+    ParameterScope::Replica,
 );
 
 pub(crate) const ENCODING_ENABLE_DICTIONARY: Config<bool> = Config::new(
     "persist_encoding_enable_dictionary",
     true,
     "A feature flag to enable dictionary encoding for Parquet data (Materialize).",
+    ParameterScope::Replica,
 );
 
 pub(crate) const ENCODING_COMPRESSION_FORMAT: Config<&'static str> = Config::new(
     "persist_encoding_compression_format",
     "none",
     "A feature flag to enable compression of Parquet data (Materialize).",
+    ParameterScope::Replica,
 );
 
 pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
@@ -395,6 +398,7 @@ pub(crate) const STRUCTURED_KEY_LOWER_LEN: Config<usize> = Config::new(
     256,
     "The maximum size in proto bytes of any structured key-lower metadata to preserve. \
     (If we're unable to fit the lower in budget, or the budget is zero, no metadata is kept.)",
+    ParameterScope::Replica,
 );
 
 pub(crate) const MAX_RUN_LEN: Config<usize> = Config::new(
@@ -402,6 +406,7 @@ pub(crate) const MAX_RUN_LEN: Config<usize> = Config::new(
     usize::MAX,
     "The maximum length a run can have before it will be spilled as a hollow run \
     into the blob store.",
+    ParameterScope::Replica,
 );
 
 pub(crate) const MAX_RUNS: Config<usize> = Config::new(
@@ -410,6 +415,7 @@ pub(crate) const MAX_RUNS: Config<usize> = Config::new(
     "The maximum number of runs a batch builder should generate for user batches. \
     (Compaction outputs always generate a single run.) \
     The minimum value is 2; below this, compaction is disabled.",
+    ParameterScope::Replica,
 );
 
 /// A target maximum size of blob payloads in bytes. If a logical "batch" is
@@ -422,12 +428,14 @@ pub(crate) const BLOB_TARGET_SIZE: Config<usize> = Config::new(
     "persist_blob_target_size",
     128 * MiB,
     "A target maximum size of persist blob payloads in bytes (Materialize).",
+    ParameterScope::Replica,
 );
 
 pub(crate) const INLINE_WRITES_SINGLE_MAX_BYTES: Config<usize> = Config::new(
     "persist_inline_writes_single_max_bytes",
     4096,
     "The (exclusive) maximum size of a write that persist will inline in metadata.",
+    ParameterScope::Replica,
 );
 
 pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
@@ -436,6 +444,7 @@ pub(crate) const INLINE_WRITES_TOTAL_MAX_BYTES: Config<usize> = Config::new(
     "\
     The (exclusive) maximum total size of inline writes in metadata before \
     persist will backpressure them by flushing out to s3.",
+    ParameterScope::Replica,
 );
 
 impl BatchBuilderConfig {

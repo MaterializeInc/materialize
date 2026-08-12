@@ -212,6 +212,12 @@ pub struct ComputeController {
     /// Updated through `ComputeController::update_configuration` calls and shared with all
     /// subcomponents of the compute controller.
     dyncfg: Arc<ConfigSet>,
+    /// The replica-local scoped overrides of [`Self::dyncfg`], by replica.
+    ///
+    /// Sparse, and kept here in addition to on the `Instance`s because replica
+    /// configuration that the controller resolves once, at replica creation,
+    /// must be read through the new replica's overrides.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
 
     /// Receiver for responses produced by `Instance`s.
     response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
@@ -307,6 +313,7 @@ impl ComputeController {
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
+            replica_dyncfg_overrides: BTreeMap::new(),
             response_rx,
             response_tx,
             introspection_rx: Some(introspection_rx),
@@ -471,6 +478,7 @@ impl ComputeController {
             now: _,
             wallclock_lag: _,
             dyncfg: _,
+            replica_dyncfg_overrides: _,
             response_rx: _,
             response_tx: _,
             introspection_rx: _,
@@ -641,16 +649,22 @@ impl ComputeController {
 
     /// Replaces the per-replica dyncfg overrides for the given instances.
     ///
-    /// This only stores the overrides; callers should follow with a
-    /// configuration push (e.g. [`Self::update_configuration`]) so existing
-    /// replicas observe the new values. Instances absent from `overrides` have
-    /// their overrides cleared, so a replica that no longer has an override
-    /// reverts to the environment-wide configuration. Used by the scoped
-    /// feature flags (replica-local) layer.
+    /// This only stores the overrides, here and on the instances; callers
+    /// should follow with a configuration push (e.g.
+    /// [`Self::update_configuration`]) so existing replicas observe the new
+    /// values. Instances absent from `overrides` have their overrides cleared,
+    /// so a replica that no longer has an override reverts to the
+    /// environment-wide configuration. Used by the scoped feature flags
+    /// (replica-local) layer.
     pub fn update_replica_dyncfg_overrides(
         &mut self,
         mut overrides: BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
     ) {
+        self.replica_dyncfg_overrides = overrides
+            .values()
+            .flat_map(|replicas| replicas.iter())
+            .map(|(replica_id, updates)| (*replica_id, updates.clone()))
+            .collect();
         for (id, instance) in self.instances.iter_mut() {
             let instance_overrides = overrides.remove(id).unwrap_or_default();
             instance.call(move |i| i.update_replica_dyncfg_overrides(instance_overrides));
@@ -719,7 +733,17 @@ impl ComputeController {
             None => (false, Duration::from_secs(1)),
         };
 
-        let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.dyncfg);
+        // Both configs below are `ParameterScope::Replica` and are resolved
+        // here, once, for the replica being created. Reading them through the
+        // new replica's scoped overrides is what makes those declarations
+        // effective: the values are frozen into `ReplicaConfig` and never
+        // re-read from the environment-wide set. The overrides for a replica
+        // created by DDL are committed in the same transaction that creates it,
+        // so they are already installed by the time we get here.
+        let overrides = self.replica_dyncfg_overrides.get(&replica_id);
+
+        let expiration_offset =
+            COMPUTE_REPLICA_EXPIRATION_OFFSET.get_with_overrides(&self.dyncfg, overrides);
 
         // Capture dictionary compression once, at replica creation, and hold it fixed for the
         // replica's lifetime (see `InstanceConfig::arrangement_dictionary_compression`). This is
@@ -728,7 +752,7 @@ impl ComputeController {
         // while the flag is enabled, so turning the flag off disables compression on new or
         // restarted replicas regardless of their configuration.
         let arrangement_dictionary_compression = ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA
-            .get(&self.dyncfg)
+            .get_with_overrides(&self.dyncfg, overrides)
             && config.arrangement_compression;
 
         let replica_config = ReplicaConfig {

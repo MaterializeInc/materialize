@@ -84,7 +84,7 @@ pub mod metrics {
 pub mod operators {
     //! [timely] operators for reading and writing persist Shards.
 
-    use mz_dyncfg::Config;
+    use mz_dyncfg::{Config, ParameterScope};
 
     pub mod shard_source;
 
@@ -95,6 +95,7 @@ pub mod operators {
         "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
+        ParameterScope::Replica,
     );
 }
 pub mod read;
