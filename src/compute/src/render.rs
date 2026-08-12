@@ -172,7 +172,6 @@ use crate::server::ComputeRuntimeRole;
 use crate::shared_trace::PublishArrangement;
 use crate::sharing::{
     ArrangementSharingRegistry, SharedErrsFrontier, SharedIndexArrangement, SharedOksFrontier,
-    SharedOksHandle,
 };
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
@@ -605,6 +604,33 @@ pub fn build_compute_dataflow(
 /// `until`, so a single-time interactive read completes. The returned `stream` and `trace` stay
 /// consistent (the trace never runs ahead of the stream), which a differential join over the import
 /// requires. See [`crate::shared_trace::SharedTraceHandle::import_snapshot_at`].
+/// Reports a publication point refusing to serve `as_of`, and aborts.
+///
+/// A refusal is a protocol-ordering failure rather than an unservable read, so it must stay loud. The
+/// diagnostics say which side moved: a controller frontier beyond `as_of` means the controller
+/// released and maintenance applied it ahead of this render, while `None` means the published `since`
+/// came from the publisher's own floor instead. `part` names which of an index's two arrangements
+/// refused, since they are independent publication points with independent holds.
+fn report_compacted_past<T: std::fmt::Debug>(
+    idx_id: GlobalId,
+    part: &str,
+    as_of: &Antichain<mz_repr::Timestamp>,
+    since: &Antichain<mz_repr::Timestamp>,
+    diagnostics: (Option<Antichain<T>>, Antichain<T>, Antichain<T>),
+) -> ! {
+    let (writer_logical, published_since, published_upper) = diagnostics;
+    panic!(
+        "Index {idx_id} ({part}) has been allowed to compact beyond the dataflow as_of: \
+         since {:?}, as_of {:?}, controller allow_compaction {:?}, published since {:?}, \
+         published upper {:?}",
+        since.elements(),
+        as_of.elements(),
+        writer_logical.as_ref().map(|f| f.elements()),
+        published_since.elements(),
+        published_upper.elements(),
+    )
+}
+
 fn import_shared_index<'outer>(
     outer: Scope<'outer, mz_repr::Timestamp>,
     registry: &ArrangementSharingRegistry,
@@ -639,23 +665,13 @@ fn import_shared_index<'outer>(
     // `idx_id` before that. `writer_logical` says which side moved: `Some(f)` with `f` beyond `as_of`
     // means the controller released and maintenance applied it ahead of this render, `None` means the
     // published `since` came from the publisher's own hold instead.
-    let report_stale = |handle: &SharedOksHandle, since: Antichain<mz_repr::Timestamp>| -> ! {
-        panic!(
-            "Index {idx_id} has been allowed to compact beyond the dataflow as_of: \
-             since {:?}, as_of {:?}, controller allow_compaction {:?}, published upper {:?}",
-            since.elements(),
-            as_of.elements(),
-            handle.writer_logical().map(|f| f.elements().to_vec()),
-            handle.frontiers().1.elements().to_vec(),
-        )
-    };
     let oks_handle = match slot.oks.handle_at(as_of) {
         Ok(handle) => handle,
-        Err(since) => report_stale(&slot.oks.handle(), since),
+        Err(since) => report_compacted_past(idx_id, "oks", as_of, &since, slot.oks.diagnostics()),
     };
     let errs_handle = match slot.errs.handle_at(as_of) {
         Ok(handle) => handle,
-        Err(since) => report_stale(&slot.oks.handle(), since),
+        Err(since) => report_compacted_past(idx_id, "errs", as_of, &since, slot.errs.diagnostics()),
     };
 
     // These handles' own registrations end with this function. The hold that outlives it is the one
@@ -2803,6 +2819,118 @@ mod interactive_import_tests {
                     .iter()
                     .all(|hold| timely::PartialOrder::less_equal(hold, &as_of)),
                 "the import's hold must not have released past its own as_of: {holds:?}"
+            );
+        });
+    }
+
+    /// The published `since` must not chase the readers' own holds.
+    ///
+    /// Before the controller's first `AllowCompaction` there is no writer-driven floor, and if the
+    /// publisher falls back to its own agent hold it closes a feedback loop: it drives that hold up
+    /// from the meet of the reader holds every activation, so the published `since` climbs to wherever
+    /// the readers are. A later read at an earlier time is then refused, and it is a read the
+    /// controller has allowed nothing against.
+    #[mz_ore::test]
+    fn published_since_does_not_chase_reader_holds() {
+        let id = GlobalId::User(1);
+        let rows = test_rows();
+        let high = Antichain::from_elem(Timestamp::from(2_u64));
+        let low = Antichain::from_elem(Timestamp::from(1_u64));
+        let registry = ArrangementSharingRegistry::new();
+
+        timely::execute_directly(move |worker| {
+            let (mut oks_input, _errs_input, _w) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                publish_index_with_writer(scope, &registry, id, rows.clone())
+            });
+            // A reader at the higher as_of. Its handles go out of scope with the builder; the
+            // import operator's own hold remains.
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (_o, _e, _slot) = import_shared_index(
+                    scope.clone(),
+                    &registry,
+                    id,
+                    "Index",
+                    &high,
+                    &Antichain::new(),
+                );
+            });
+            for t in 1..4 {
+                tick(
+                    worker,
+                    &mut oks_input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+            }
+
+            // No `note_allow_compaction` has been called: the controller has allowed nothing, so a
+            // read at the lower time is still legal.
+            let (probe_oks, _) = registry.handles(&id, 0).expect("published");
+            let since = probe_oks.frontiers().0;
+            assert!(
+                timely::PartialOrder::less_equal(&since, &low),
+                "published since {:?} chased the reader's as_of; a legal read at {:?} would be \
+                 refused even though the controller allowed no compaction",
+                since.elements(),
+                low.elements()
+            );
+        });
+    }
+
+    /// An import's reported physical compaction must not lead the published chain's coverage.
+    ///
+    /// `mz_join_core` asserts exactly this at start-up, against the coverage it derives from
+    /// `map_batches`, and differential's own `join_core` carries the same assert. An `as_of` may
+    /// legitimately lead the coverage: an import over a placeholder whose publisher has not adopted it
+    /// yet sees an empty chain, and a read at a timestamp beyond the index's seal leads it too.
+    /// Reporting the `as_of` here therefore aborts the worker on a correct import, and under shared
+    /// fate that takes the process with it.
+    #[mz_ore::test]
+    fn import_reports_physical_within_chain_coverage() {
+        let id = GlobalId::User(1);
+        let rows = test_rows();
+        let as_of = Antichain::from_elem(Timestamp::from(5_u64));
+        let registry = ArrangementSharingRegistry::new();
+
+        timely::execute_directly(move |worker| {
+            let (mut oks_input, _errs_input, _w) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                publish_index_with_writer(scope, &registry, id, rows.clone())
+            });
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(1_u64),
+                Timestamp::from(2_u64),
+            );
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(2_u64),
+                Timestamp::from(3_u64),
+            );
+
+            let mut trace = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_arranged, _e, _slot) = import_shared_index(
+                    scope.clone(),
+                    &registry,
+                    id,
+                    "Index",
+                    &as_of,
+                    &Antichain::new(),
+                );
+                oks_arranged.trace
+            });
+
+            // Exactly `mz_join_core`'s start-up computation.
+            use differential_dataflow::trace::BatchReader;
+            let mut coverage = Antichain::from_elem(Timestamp::MIN);
+            trace.map_batches(|b| coverage.clone_from(b.upper()));
+            let physical = trace.get_physical_compaction().to_owned();
+            assert!(
+                timely::PartialOrder::less_equal(&physical, &coverage),
+                "mz_join_core would panic: physical {:?} leads coverage {:?}",
+                physical.elements(),
+                coverage.elements()
             );
         });
     }

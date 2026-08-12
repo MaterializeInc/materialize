@@ -128,7 +128,11 @@ where
         holds: &BTreeMap<usize, Antichain<Tr::Time>>,
         fallback: &Antichain<Tr::Time>,
     ) -> Antichain<Tr::Time> {
-        let mut iter = holds.values();
+        // An empty hold is a released one, and `SharedTraceHandle::update_hold` removes it rather
+        // than recording it. Skipping it here too means a single released reader cannot drive the
+        // target to the empty frontier, which the publisher would forward and thereby discard its
+        // capability for good.
+        let mut iter = holds.values().filter(|hold| !hold.is_empty());
         match iter.next() {
             None => fallback.clone(),
             Some(first) => {
@@ -249,6 +253,27 @@ where
         state.logical_holds.values().cloned().collect()
     }
 
+    /// The controller's last `AllowCompaction` frontier for this arrangement, or `None` if none has
+    /// arrived, and the published `(since, upper)`.
+    ///
+    /// Diagnostics for a caller whose `as_of` was refused. Reading them off the publication point
+    /// rather than off a handle keeps a failure path from registering a hold on its way to a panic,
+    /// and lets the caller report the point that actually refused rather than a sibling.
+    pub(crate) fn diagnostics(
+        &self,
+    ) -> (
+        Option<Antichain<Tr::Time>>,
+        Antichain<Tr::Time>,
+        Antichain<Tr::Time>,
+    ) {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        (
+            state.writer_logical.clone(),
+            state.since.clone(),
+            state.upper.clone(),
+        )
+    }
+
     /// Records the controller's logical compaction frontier for this arrangement.
     ///
     /// The publisher reads it as the logical floor when no reader hold pins the arrangement, so
@@ -309,7 +334,7 @@ where
         shared: SharedTraceRef<Tr>,
         as_of: &Antichain<Tr::Time>,
     ) -> Result<Self, Antichain<Tr::Time>> {
-        let id = {
+        let (id, since) = {
             let mut state = shared.state.lock().expect("shared trace poisoned");
             if !timely::PartialOrder::less_equal(&state.since, as_of) {
                 return Err(state.since.clone());
@@ -317,13 +342,25 @@ where
             let id = state.next_id;
             state.next_id += 1;
             state.logical_holds.insert(id, as_of.clone());
-            id
+            (id, state.since.clone())
         };
         Ok(Self {
             shared,
             id,
             logical: as_of.clone(),
-            physical: as_of.clone(),
+            // NOTE: `since`, NOT `as_of`. `get_physical_compaction` must never report a frontier
+            // that leads the published chain's coverage, because a consumer checks exactly that
+            // against the coverage it derives from `map_batches`: see the assertion in
+            // `crate::render::join::mz_join_core`, which differential's own `join_core` also carries.
+            // An `as_of` legitimately leads the coverage, for an import over a placeholder whose
+            // publisher has not adopted it yet, or for a read at a timestamp beyond the index's seal.
+            // Reporting it here aborts the worker on a correct import.
+            //
+            // `since` is right for the same reason it is right in `TraceAgent::clone`, which inherits
+            // the frontier of the agent it clones: it is what the trace actually guarantees. The
+            // publisher forwards the published `since` as its physical target, so this reports the
+            // grant.
+            physical: since,
         })
     }
 
@@ -384,10 +421,27 @@ where
         (state.since.clone(), state.upper.clone())
     }
 
-    /// Writes this handle's logical hold into the shared registry.
+    /// Writes this handle's logical hold into the shared registry, or removes it once the handle
+    /// holds nothing.
+    ///
+    /// The empty antichain means "compaction is permitted everywhere", so a handle that reaches it
+    /// has released. It must be removed rather than recorded, because `Antichain::join` is absorbing
+    /// for the empty antichain: a recorded empty hold would drive
+    /// [`SharedTraceState::compaction_target`] to the empty frontier, which the publisher would
+    /// forward to its `TraceAgent`, whose own setter joins and would therefore discard the
+    /// publication point's capability permanently. `antichain_meet` treats the empty antichain as its
+    /// identity, so the loss would be invisible in the published frontiers.
+    ///
+    /// The reduce operator reaches this on every dataflow whose input finishes: it forwards
+    /// `upper_limit` to its source trace, and `upper_limit` is the join of the input frontiers, which
+    /// empties when the input does.
     fn update_hold(&self) {
         let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        state.logical_holds.insert(self.id, self.logical.clone());
+        if self.logical.is_empty() {
+            state.logical_holds.remove(&self.id);
+        } else {
+            state.logical_holds.insert(self.id, self.logical.clone());
+        }
     }
 }
 
@@ -600,6 +654,16 @@ where
         // all readers, so the trace cannot compact or drop out from under them.
         let mut agent = self.trace.clone();
 
+        // The floor to publish as `since` until the controller's first `AllowCompaction` arrives,
+        // captured ONCE at adoption.
+        //
+        // It must not be re-read from the agent on each activation. The agent's own hold is driven up
+        // from the meet of the reader holds every activation, so using it as the fallback closes a
+        // feedback loop: the published `since` chases the readers' `as_of`s, and a later read at an
+        // earlier time (still legal, since the controller has allowed no compaction at all) is then
+        // refused against a `since` that no writer ever asked for.
+        let initial_logical = agent.get_logical_compaction().to_owned();
+
         let publisher = Publisher {
             shared: Arc::clone(&placeholder.shared),
         };
@@ -653,8 +717,8 @@ where
                 // The logical writer-driven floor is used only when no reader hold pins it: the
                 // controller's last `AllowCompaction` frontier, forwarded into this slot by
                 // `crate::sharing::ArrangementSharingRegistry::note_allow_compaction`. Before the
-                // first command arrives the slot holds `None`, so we fall back to the publisher's own
-                // current hold, which sits at the dataflow `as_of` at startup.
+                // first command arrives the slot holds `None` and `initial_logical` stands in, which
+                // is the trace's compaction frontier at adoption and does not move.
                 //
                 // The physical frontier is NOT derived from reader holds. See the forward below.
                 let publisher_logical = agent.get_logical_compaction().to_owned();
@@ -686,7 +750,7 @@ where
                     let writer_logical = state
                         .writer_logical
                         .clone()
-                        .unwrap_or_else(|| publisher_logical.clone());
+                        .unwrap_or_else(|| initial_logical.clone());
                     let logical = SharedTraceState::<Tr>::compaction_target(
                         &state.logical_holds,
                         &writer_logical,
@@ -1431,6 +1495,54 @@ mod tests {
             assert!(
                 published.handle_at(&target).is_ok(),
                 "a mint at the published since must succeed"
+            );
+        });
+    }
+
+    /// A consumer forwarding an empty input frontier releases its hold rather than recording an
+    /// empty one.
+    ///
+    /// `Antichain::join` is absorbing for the empty antichain, so a recorded empty hold would drive
+    /// the publisher's forwarded target to empty, and the agent's own joining setter would then
+    /// discard the publication point's capability for good. `antichain_meet` treats empty as its
+    /// identity, so the published frontiers would look healthy throughout. The reduce operator
+    /// forwards exactly this on every dataflow whose input finishes.
+    #[mz_ore::test]
+    fn empty_logical_request_releases_the_hold() {
+        timely::execute_directly(move |worker| {
+            let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+                let arranged = collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("f4 oks");
+                let writer = arranged.trace.clone();
+                let published = adopt_fresh(&arranged);
+                (writer, published, input)
+            });
+            for t in 0..3 {
+                tick(
+                    worker,
+                    &mut input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+            }
+            let target = Antichain::from_elem(Timestamp::from(2_u64));
+            published.note_writer_logical(&target);
+            writer.set_logical_compaction(target.borrow());
+
+            // A reduce over a finished input does exactly this: `upper_limit` becomes the empty
+            // antichain and it forwards that to its source trace.
+            let mut hold = published.handle();
+            hold.set_logical_compaction(Antichain::new().borrow());
+
+            let holds = published.logical_holds();
+            assert!(
+                !holds.iter().any(|h| h.is_empty()),
+                "an empty request must release the hold, not record an empty one: {holds:?}"
             );
         });
     }
