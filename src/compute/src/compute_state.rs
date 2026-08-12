@@ -1691,10 +1691,7 @@ impl<'a> ActiveComputeState<'a> {
                             .compute_state
                             .metrics
                             .index_peek_result_sort_seconds,
-                        result_sort_rows: &self
-                            .compute_state
-                            .metrics
-                            .index_peek_result_sort_rows,
+                        result_sort_rows: &self.compute_state.metrics.index_peek_result_sort_rows,
                         row_collection_seconds: &self
                             .compute_state
                             .metrics
