@@ -2621,9 +2621,8 @@ mod interactive_import_tests {
     }
 
     /// The interactive import's read hold pins the maintenance trace at `as_of` only while it is
-    /// alive: once the importing dataflow drops (and with it the `tokens` entry holding
-    /// `oks_hold`/`errs_hold`), the trace is free to compact past `as_of`, which it could not do
-    /// before the drop.
+    /// alive: once the importing dataflow drops, and with it every registration the import made, the
+    /// trace is free to compact past `as_of`, which it could not do before the drop.
     ///
     /// Mirrors the differential-dataflow primitive's own `import_hold_pins_then_releases`
     /// (`differential-dataflow/tests/sharing.rs`), which demonstrates the identical pin-then-release
@@ -2721,6 +2720,89 @@ mod interactive_import_tests {
             assert!(
                 released_oks.snapshot_at(&as_of_time).is_none(),
                 "after the hold drops, the trace must be free to compact past `as_of`"
+            );
+        });
+    }
+
+    /// A stream-only import still holds the shared trace after dataflow construction ends.
+    ///
+    /// This is the regression that matters for anything long-lived on the interactive runtime. The
+    /// hold that a consumer keeps is the returned `Arranged`'s own trace, and only `mz_join_core`
+    /// keeps one: it moves its input traces into its operator. `as_collection` and the reduce path
+    /// take the stream and drop the handle, and the `CollectionBundle` holding it lives in the
+    /// build-time `Context`, which dies when `build_compute_dataflow` returns. So without a hold owned
+    /// by the import's own source operator there is no registration left once the dataflow is built,
+    /// the publisher falls back to the writer-driven frontier, and it compacts straight past the
+    /// `as_of` the dataflow is still reading at.
+    ///
+    /// The assertion is on `Published::logical_holds` rather than on a read, because a read cannot
+    /// tell "a hold exists at `f`" from "no hold exists and the publisher is forwarding `f` from the
+    /// fallback". Those two look identical from outside and are the whole difference here.
+    #[mz_ore::test]
+    fn interactive_import_holds_after_construction() {
+        let id = GlobalId::User(1);
+        let rows = test_rows();
+        // `as_of` beyond the published seal, so the import cannot acknowledge past it and downgrade
+        // the hold away. That keeps the assertion about the hold's existence rather than its value.
+        let as_of = Antichain::from_elem(Timestamp::from(5_u64));
+        let registry = ArrangementSharingRegistry::new();
+
+        timely::execute_directly(move |worker| {
+            let (mut oks_input, _errs_input, _oks_writer) =
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    publish_index_with_writer(scope, &registry, id, rows.clone())
+                });
+
+            // Build an interactive import whose only consumer is the batch stream, and let every
+            // handle it produced go out of scope with the builder, exactly as production does.
+            let probe = ProbeHandle::new();
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_arranged, _errs_arranged, _slot) = import_shared_index(
+                    scope.clone(),
+                    &registry,
+                    id,
+                    "Index",
+                    &as_of,
+                    &Antichain::new(),
+                );
+                let collected = Arranged::<SharedOksFrontier>::flat_map_batches(
+                    oks_arranged.stream,
+                    |k: DatumSeq, _v: DatumSeq| {
+                        [Row::pack_slice(&k.into_iter().collect::<Vec<_>>())]
+                    },
+                );
+                collected.inner.probe_with(&probe);
+            });
+
+            // Run both dataflows, so the import registers its queue and drains what is published.
+            // `tick` advances the input, so each call needs a fresh, larger time. It stops at 3,
+            // leaving the published seal below the `as_of` of 5.
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(1_u64),
+                Timestamp::from(2_u64),
+            );
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(2_u64),
+                Timestamp::from(3_u64),
+            );
+
+            let holds = registry
+                .published_logical_holds(&id, 0)
+                .expect("still published");
+            assert!(
+                !holds.is_empty(),
+                "a built import must leave a read hold behind, else the publisher compacts past its \
+                 as_of as soon as the controller allows it"
+            );
+            assert!(
+                holds
+                    .iter()
+                    .all(|hold| timely::PartialOrder::less_equal(hold, &as_of)),
+                "the import's hold must not have released past its own as_of: {holds:?}"
             );
         });
     }

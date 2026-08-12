@@ -237,6 +237,18 @@ where
         }
     }
 
+    /// The logical holds currently registered against this publication point.
+    ///
+    /// Test-only, and the only way to distinguish "a hold exists and sits at `f`" from "no hold
+    /// exists and the publisher happens to be forwarding `f` from the writer-driven fallback". Those
+    /// two look identical from the published frontiers, and telling them apart is the difference
+    /// between an import that is protected and one that is not.
+    #[cfg(test)]
+    pub(crate) fn logical_holds(&self) -> Vec<Antichain<Tr::Time>> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.logical_holds.values().cloned().collect()
+    }
+
     /// Records the controller's logical compaction frontier for this arrangement.
     ///
     /// The publisher reads it as the logical floor when no reader hold pins the arrangement, so
@@ -821,6 +833,19 @@ where
 
         let trace = TraceFrontier::make_from(self.clone(), as_of.borrow(), until.borrow());
         let shared = Arc::clone(&self.shared);
+        // The read hold that lives as long as the import.
+        //
+        // The returned `Arranged`'s own trace is a hold too, but only a consumer that keeps the trace
+        // keeps it: `mz_join_core` moves its input traces into its operator, while `as_collection`
+        // and the reduce path take the stream and drop the handle during dataflow construction. So
+        // for every consumer but a join there would otherwise be no registration left once the
+        // dataflow is built, and the publisher would fall back to the writer-driven frontier and
+        // compact past the `as_of` the dataflow still reads at.
+        //
+        // Owning it here rather than in the dataflow's token set is what makes it downgradeable. The
+        // publisher forwards the MEET of the registered holds, so a hold nobody downgrades is a floor
+        // under every hold that is. This one follows `acknowledged` below.
+        let mut hold = Some(self.clone());
 
         let stream = source(scope, name, move |capability, info| {
             let activator = scope.worker().sync_activator_for(info.address.to_vec());
@@ -897,6 +922,23 @@ where
                                 }
                                 acknowledged = frontier.clone();
                                 draining_seed = false;
+                                // Follow the stream with the read hold. Everything at or below
+                                // `acknowledged` has been delivered and will never be replayed, so this
+                                // import will not read there again and the publisher is free to
+                                // compact behind it.
+                                //
+                                // The setter joins, so this never lowers the hold, which matters while
+                                // the seed is draining: the seeded coverage can already lead `as_of`,
+                                // and the hold must stay at `as_of` until the stream really passes it.
+                                //
+                                // This is the import's own obligation only. A consumer that reads the
+                                // returned trace rather than the stream needs accuracy at times its own
+                                // progress governs, which can lag this, and it holds its own separate
+                                // registration for exactly that. The publisher forwards the meet, so the
+                                // slower of the two wins.
+                                if let Some(hold) = hold.as_mut() {
+                                    hold.set_logical_compaction(acknowledged.borrow());
+                                }
                                 // Bound the read at `until`: once the trace's frontier reaches it, drop
                                 // the capability so a single-time read completes. Otherwise track the
                                 // trace's `upper`, keeping the stream frontier equal to the trace upper
@@ -906,6 +948,9 @@ where
                                     || timely::PartialOrder::less_equal(&until, &frontier)
                                 {
                                     capabilities = None;
+                                    // The read is over, so stop holding the trace back. A consumer of
+                                    // the returned trace still holds its own registration.
+                                    hold = None;
                                     break;
                                 }
                                 caps.downgrade(&frontier.borrow()[..]);

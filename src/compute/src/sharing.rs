@@ -222,6 +222,22 @@ impl ArrangementSharingRegistry {
         Self::mint(&map, id, worker_index)
     }
 
+    /// The `oks` logical holds registered against `id` on `worker_index`, if published.
+    ///
+    /// Test-only. Minting a handle to observe the published frontiers cannot distinguish a live
+    /// reader hold from the publisher's writer-driven fallback, and that distinction is what says
+    /// whether an import is still protected.
+    #[cfg(test)]
+    pub(crate) fn published_logical_holds(
+        &self,
+        id: &GlobalId,
+        worker_index: usize,
+    ) -> Option<Vec<Antichain<Timestamp>>> {
+        let map = self.inner.map.lock().expect("registry poisoned");
+        let slot = map.get(id)?.get(worker_index)?.as_ref()?;
+        Some(slot.oks.logical_holds())
+    }
+
     /// Registers `activator` as interactive worker `worker_index`'s waker, growing the waker vector
     /// as needed. Called once per interactive worker at startup.
     ///
