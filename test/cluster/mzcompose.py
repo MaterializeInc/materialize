@@ -21,14 +21,14 @@ import time
 from collections.abc import Callable
 from copy import copy
 from datetime import datetime, timedelta
-from statistics import quantiles
+from statistics import median, quantiles
 from textwrap import dedent
 from threading import Event, Thread
 
 import psycopg
 import requests
 import websocket
-from psycopg import Cursor
+from psycopg import Cursor, sql
 from psycopg.errors import (
     DatabaseError,
     InternalError_,
@@ -7828,3 +7828,184 @@ def workflow_test_metrics_null_label(c: Composition) -> None:
         assert c.sql_query("SELECT 1", reuse_connection=False)[0][0] == 1
     finally:
         c.sql("DROP CLUSTER sql198_unmgd CASCADE", port=6877, user="mz_system")
+
+
+def workflow_test_controller_oracle_stall(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """Scheduled-cluster count must not determine unrelated reconciliation latency."""
+    parser.add_argument("--latency-ms", type=int, default=500)
+    parser.add_argument("--scheduled-clusters", type=int, default=8)
+    args = parser.parse_args()
+    if args.latency_ms < 100:
+        parser.error("--latency-ms must be at least 100")
+    if args.scheduled_clusters < 8:
+        parser.error("--scheduled-clusters must be at least 8")
+    oracle_port = 26258
+
+    def set_latency(toxi: str, latency_ms: int) -> None:
+        requests.delete(f"{toxi}/proxies/oracle/toxics/lat")
+        if latency_ms > 0:
+            response = requests.post(
+                f"{toxi}/proxies/oracle/toxics",
+                json={
+                    "name": "lat",
+                    "type": "latency",
+                    "attributes": {"latency": latency_ms, "jitter": 0},
+                },
+            )
+            assert response.status_code == 200, response.text
+
+    with c.override(
+        Materialized(
+            external_metadata_store=True,
+            options=[
+                f"--timestamp-oracle-url=postgres://root@toxiproxy:{oracle_port}"
+                "?options=--search_path=tsoracle",
+            ],
+        )
+    ):
+        c.up("toxiproxy")
+        toxi = f"http://localhost:{c.default_port('toxiproxy')}"
+        requests.delete(f"{toxi}/proxies/oracle")
+        response = requests.post(
+            f"{toxi}/proxies",
+            json={
+                "name": "oracle",
+                "listen": f"0.0.0.0:{oracle_port}",
+                "upstream": "postgres-metadata:26257",
+                "enabled": True,
+            },
+        )
+        assert response.status_code == 201, response.text
+        c.up("materialized")
+
+        c.sql(
+            "ALTER SYSTEM SET cluster_controller_tick_interval = '100ms'",
+            port=6877,
+            user="mz_system",
+        )
+        mz = c.sql_cursor()
+        mz.execute("SET transaction_isolation = 'serializable'")
+
+        def converge_ms(replication_factor: int) -> float:
+            start = time.monotonic()
+            mz.execute(
+                sql.SQL("ALTER CLUSTER cc_probe SET (REPLICATION FACTOR {})").format(
+                    sql.Literal(replication_factor)
+                )
+            )
+            while True:
+                mz.execute(
+                    "SELECT count(*) FROM mz_cluster_replicas r JOIN mz_clusters c "
+                    "ON r.cluster_id = c.id WHERE c.name = 'cc_probe'"
+                )
+                if mz.fetchall()[0][0] == replication_factor:
+                    return (time.monotonic() - start) * 1000
+                assert (
+                    time.monotonic() - start < 120
+                ), f"cc_probe never reached rf {replication_factor}"
+                time.sleep(0.05)
+
+        def convergence_samples() -> list[float]:
+            samples = []
+            replication_factor = 1
+            for _ in range(3):
+                samples.append(converge_ms(replication_factor))
+                replication_factor = 1 - replication_factor
+            return samples
+
+        def await_scheduled_replicas() -> None:
+            start = time.monotonic()
+            while True:
+                mz.execute(
+                    "SELECT count(DISTINCT c.id), count(*) "
+                    "FROM mz_clusters c JOIN mz_cluster_replicas r "
+                    "ON r.cluster_id = c.id "
+                    "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\'"
+                )
+                cluster_count, replica_count = mz.fetchall()[0]
+                if (
+                    cluster_count == args.scheduled_clusters
+                    and replica_count == args.scheduled_clusters
+                ):
+                    return
+                if time.monotonic() - start >= 120:
+                    mz.execute(
+                        "SELECT c.name, count(r.id) "
+                        "FROM mz_clusters c LEFT JOIN mz_cluster_replicas r "
+                        "ON r.cluster_id = c.id "
+                        "WHERE c.name LIKE 'cc\\_sched%' ESCAPE '\\' "
+                        "GROUP BY c.name ORDER BY c.name"
+                    )
+                    replica_counts = mz.fetchall()
+                    raise AssertionError(
+                        "scheduled cluster replica counts after 120s: "
+                        f"{replica_counts}. Expected exactly "
+                        f"{args.scheduled_clusters} cc_sched clusters with "
+                        "exactly one replica each"
+                    )
+                time.sleep(0.05)
+
+        set_latency(toxi, 0)
+        mz.execute(
+            "CREATE CLUSTER cc_probe "
+            "(SIZE 'scale=1,workers=1', REPLICATION FACTOR 0)"
+        )
+
+        no_latency_samples = convergence_samples()
+        no_latency_ms = median(no_latency_samples)
+        converge_ms(0)
+
+        set_latency(toxi, args.latency_ms)
+        control_samples = convergence_samples()
+        control_ms = median(control_samples)
+        set_latency(toxi, 0)
+        latency_increase_ms = control_ms - no_latency_ms
+        minimum_increase_ms = args.latency_ms / 2
+        assert latency_increase_ms >= minimum_increase_ms, (
+            f"injecting {args.latency_ms}ms oracle latency increased the control "
+            f"measurement by only {latency_increase_ms:.0f}ms, expected at least "
+            f"{minimum_increase_ms:.0f}ms. The oracle may be bypassing toxiproxy"
+        )
+
+        converge_ms(0)
+        mz.execute("CREATE TABLE cc_sched_t (x int)")
+        for i in range(args.scheduled_clusters):
+            cluster_name = sql.Identifier(f"cc_sched{i}")
+            mz.execute(
+                sql.SQL(
+                    "CREATE CLUSTER {} (SIZE 'scale=1,workers=1', "
+                    "SCHEDULE = ON REFRESH "
+                    "(HYDRATION TIME ESTIMATE = '60 seconds'))"
+                ).format(cluster_name)
+            )
+            mz.execute(
+                sql.SQL(
+                    "CREATE MATERIALIZED VIEW {} IN CLUSTER {} "
+                    "WITH (REFRESH = EVERY '1 second') AS "
+                    "SELECT count(*) FROM cc_sched_t"
+                ).format(sql.Identifier(f"cc_sched{i}_mv"), cluster_name)
+            )
+
+        await_scheduled_replicas()
+        set_latency(toxi, args.latency_ms)
+        stalled_samples = convergence_samples()
+        stalled_ms = median(stalled_samples)
+        set_latency(toxi, 0)
+
+    excess_ms = stalled_ms - control_ms
+    ceiling_ms = 4 * args.latency_ms
+    print(f"cc_probe 0 -> 1 replica at {args.latency_ms}ms oracle latency:")
+    print(f"  no injected latency : {no_latency_ms:.0f}ms")
+    print(f"  0 scheduled clusters : {control_ms:.0f}ms")
+    print(f"  {args.scheduled_clusters} scheduled clusters : {stalled_ms:.0f}ms")
+    print(
+        f"  excess : {excess_ms:.0f}ms (ceiling {ceiling_ms}ms, "
+        "expected bounded oracle round-trips per controller phase)"
+    )
+    assert excess_ms < ceiling_ms, (
+        f"{args.scheduled_clusters} unrelated ON REFRESH clusters delayed the "
+        f"probe cluster's reconciliation by {excess_ms:.0f}ms "
+        f"(ceiling {ceiling_ms}ms)"
+    )
