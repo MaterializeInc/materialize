@@ -384,14 +384,16 @@ pub const CONSOLIDATING_VEC_GROWTH_DAMPENER: Config<usize> = Config::new(
 
 /// The number of dataflows that may hydrate concurrently.
 ///
-/// Environment-scoped despite bounding a single replica's hydration: the limit
-/// is enforced by the controller's per-replica hydration task in
-/// `environmentd`, which withholds `Schedule` commands, not by the replica.
+/// Enforced in `environmentd`, by the controller's per-replica hydration
+/// interceptor withholding `Schedule` commands, rather than by the replica. The
+/// interceptor resolves it from the configuration commands it observes, which
+/// are already specialized for its replica, so the limit still follows the
+/// replica's scoped override.
 pub const HYDRATION_CONCURRENCY: Config<usize> = Config::new(
     "compute_hydration_concurrency",
     4,
     "Controls how many compute dataflows may hydrate concurrently.",
-    ParameterScope::Environment,
+    ParameterScope::Replica,
 );
 
 /// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.

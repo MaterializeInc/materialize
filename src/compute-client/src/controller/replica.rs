@@ -229,8 +229,7 @@ impl ReplicaTask {
         // The sequential hydration interceptor holds back `Schedule` commands and releases them as
         // hydration capacity frees up. It is recreated per incarnation, matching the lifetime of
         // the connection: any in-flight hydration state is reset when we reconnect.
-        let mut hydration =
-            SequentialHydration::new(Arc::clone(&self.dyncfg), self.metrics.clone());
+        let mut hydration = SequentialHydration::new(&self.dyncfg, self.metrics.clone());
 
         loop {
             select! {
