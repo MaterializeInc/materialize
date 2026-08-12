@@ -15,17 +15,21 @@ Arrangement dictionary compression
 
 {{% include-headless "/headless/dictionary-compression/overview" %}}
 
-The values that repeat most often within a column are stored this way, and
-everything else is stored as-is, exactly as it would be without compression.
-Compression is applied per column, so a wide row can have one column compressed
-and the rest untouched.
-
-{{% include-headless "/headless/dictionary-compression/availability" %}}
+Within a column, the values that repeat most often are the ones Materialize
+stores once and references. Everything else is stored as-is, exactly as it would
+be without compression. Compression is applied per column, so a wide row can
+have one column compressed and the rest untouched.
 
 ## Enable dictionary compression
 
-Set the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option on each cluster whose
-arrangements you want compressed. No other setting is involved.
+Set the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option on each managed cluster
+whose arrangements you want compressed.
+
+The option is configured on the cluster, but the arrangements it applies to live
+in the cluster's replicas, in each replica's memory. A replica picks up the
+configured value when it is created and holds it for its lifetime.
+
+{{% include-headless "/headless/dictionary-compression/replica-replacement" %}}
 
 ### Set the option on a cluster
 
@@ -52,12 +56,6 @@ ALTER CLUSTER my_cluster RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION);
 
 [`SHOW CREATE CLUSTER`] reports the configured value.
 
-{{% include-headless "/headless/dictionary-compression/replica-replacement" %}}
-
-The option is configured on the cluster, but the arrangements it applies to live
-in the cluster's replicas, in each replica's memory. A replica picks up the
-configured value when it is created and holds it for its lifetime.
-
 ## The tradeoff
 
 Dictionary compression trades CPU for memory, and it does **not** reduce memory
@@ -66,27 +64,29 @@ on every workload. Use this section to judge whether it suits your workload, and
 
 ### When it helps
 
-- Columns that hold a small set of longer values that repeat often. Status
-  strings, enum-like labels, country codes, and tenant IDs are typical examples.
-  Essentially all of the savings come from columns like these. See [How distinct
-  values affect the benefit](#how-distinct-values-affect-the-benefit) for how the
-  benefit changes as that set grows.
-- Large arrangements. The larger the arrangement, the more occurrences of each
-  repeated value there are to collapse.
+- Columns that hold a small set of often-repeated, longer values. Typical
+  examples are status strings, enum-like labels, country codes, and tenant IDs.
+  Most or all of the memory savings come from columns like these. See [How
+  distinct values affect the benefit](#how-distinct-values-affect-the-benefit)
+  for how the benefit changes as that set grows.
+- Large arrangements. Compression saves more memory when repeated values occur
+  across more rows, so larger arrangements generally offer more opportunity for
+  savings.
 
 Only data held in an arrangement is affected. That means [indexes] and the
-arrangements a dataflow builds internally for joins and aggregations (`GROUP BY`,
-`DISTINCT`). Data that is not arranged is untouched.
+arrangements that a dataflow builds internally for joins and aggregations
+(`GROUP BY`, `DISTINCT`). Data that is not arranged is untouched. A materialized
+view's stored result is not an arrangement, but the dataflow that maintains it
+builds these internal arrangements for any joins and aggregations it computes.
 
 ### When it does not help
 
-- **High-cardinality or near-unique columns.** A value that never repeats is
-  never worth storing in a dictionary, so such a column sees no memory savings.
-  Materialize has no heuristic that detects this and skips the column. It
-  inspects every column of every row regardless, so a near-unique column pays
-  the full CPU cost for zero memory benefit. Large arrangements dominated by
-  unique identifiers, timestamps, or free-form text carry the cost without the
-  benefit.
+- **High-cardinality or near-unique columns.** Unique values are not worth
+  storing in a dictionary, so columns dominated by them see little or no memory
+  savings. Materialize has no heuristic for detecting and skipping
+  high-cardinality columns. It inspects every column of every row regardless, so
+  a near-unique column pays the full CPU cost for little or no memory benefit.
+  Unique identifiers, timestamps, and free-form text are typical examples.
 - **Columns of short values.** Booleans, `NULL`s, and small integers are already
   stored compactly enough that a dictionary reference cannot beat storing the
   value itself. They are never compressed.
@@ -96,8 +96,9 @@ arrangements a dataflow builds internally for joins and aggregations (`GROUP BY`
 
 ### The CPU cost
 
-The cost falls mainly on the write path. As updates arrive, Materialize has to
-track which values in each column repeat and maintain the dictionary. The most
+The cost falls mainly on the write path. As updates arrive, Materialize keeps
+approximate counts of which values repeat most in each column and maintains the
+dictionary. The most
 visible symptom is slower arrangement hydration. A replica in a cluster with
 compression enabled takes longer to build its arrangements after it is created,
 restarted, or resized.

@@ -1,7 +1,13 @@
 ---
 headless: true
 ---
+{{< warn-if-unreleased "v26.37" >}}
+
+Starting in v26.37, dictionary compression is available for managed clusters.
 Dictionary compression reduces the memory that
 [arrangements](/get-started/arrangements/#arrangements) use when a column holds
-the same values over and over. Instead of storing a repeated value in full once
-per row, Materialize stores that value once and has each row reference it.
+the same values repeatedly. Instead of storing a repeated column value each time
+it appears, Materialize stores that value once and has each row reference it.
+
+Dictionary compression is off by default. You opt in per cluster with the
+`EXPERIMENTAL ARRANGEMENT COMPRESSION` option.

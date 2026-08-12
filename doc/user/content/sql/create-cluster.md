@@ -186,8 +186,6 @@ Arrangement dictionary compression
 
 {{% include-headless "/headless/dictionary-compression/overview" %}}
 
-{{% include-headless "/headless/dictionary-compression/availability" %}}
-
 {{% include-headless "/headless/dictionary-compression/tradeoff-summary" %}}
 
 ### Replication factor

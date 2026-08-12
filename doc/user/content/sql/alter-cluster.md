@@ -266,8 +266,6 @@ Arrangement dictionary compression
 
 {{% include-headless "/headless/dictionary-compression/overview" %}}
 
-{{% include-headless "/headless/dictionary-compression/availability" %}}
-
 Turn compression on for an existing cluster with `ALTER CLUSTER ... SET
 (EXPERIMENTAL ARRANGEMENT COMPRESSION = true)`, and go back to the default with
 `ALTER CLUSTER ... RESET (EXPERIMENTAL ARRANGEMENT COMPRESSION)`.
