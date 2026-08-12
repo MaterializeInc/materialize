@@ -59,10 +59,11 @@ use differential_dataflow::trace::chunk::Chunk;
 use mz_ore::cast::CastFrom;
 use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, IDENTITY_CODEC, Pool};
 use timely::Accountable;
+use timely::PartialOrder;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Timestamp;
-use timely::progress::frontier::AntichainRef;
+use timely::progress::frontier::{Antichain, AntichainRef};
 
 use crate::columnar::batcher::{ColumnChunker, gallop};
 use crate::columnar::unload::UnloadChunk;
@@ -256,15 +257,24 @@ fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, 
 
 /// A spilled chunk body: the serialized column in the pool, plus the resident
 /// metadata every [`Chunk`] must answer without fetching. That metadata is
-/// the record count and the first and last data items (the fence entries
-/// [`UnloadChunk::locate`] consults).
-pub struct SpilledBody<D: Columnar> {
+/// the record count, the first and last data items (the fence entries
+/// [`UnloadChunk::locate`] consults), and the time bounds `extract` consults
+/// to pass frontier-disjoint chunks through without loading them.
+pub struct SpilledBody<D: Columnar, T> {
     /// Number of updates in the body.
     records: usize,
     /// The first and last data items, as a two-element container. One
     /// container rather than two singletons, so the leaf allocations are not
     /// duplicated per fence.
     fences: D::Container,
+    /// The minimal times in the body: a lower bound antichain every
+    /// contained time is greater-or-equal to. Folded into `extract`'s
+    /// residual frontier when the chunk is kept whole.
+    time_lower: Antichain<T>,
+    /// The maximal times in the body. Some contained time is
+    /// greater-or-equal to a frontier exactly when some maximal time is,
+    /// which is `extract`'s ship-whole test.
+    time_upper: Vec<T>,
     /// The chunk's generational depth, mirrored into the pool's
     /// [`ChunkHints`] at spill time.
     depth: u8,
@@ -286,7 +296,7 @@ pub enum ColumnChunk<D: Columnar, T: Columnar, R: Columnar> {
     /// Body on the heap, shared via `Rc`, with its generational depth.
     Resident(Rc<Column<(D, T, R)>>, u8),
     /// Body in the pool. See [`SpilledBody`].
-    Spilled(Rc<SpilledBody<D>>),
+    Spilled(Rc<SpilledBody<D, T>>),
 }
 
 impl<D: Columnar, T: Columnar, R: Columnar> Clone for ColumnChunk<D, T, R> {
@@ -371,7 +381,10 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// Commit a non-empty column at the given generational depth: spill it to
     /// the pool when spilling is on and the body is worth a slot, else keep it
     /// resident.
-    fn commit(column: Column<(D, T, R)>, depth: u8) -> Self {
+    fn commit(column: Column<(D, T, R)>, depth: u8) -> Self
+    where
+        T: Timestamp,
+    {
         mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
         if let Some(pool) = spill_pool() {
             if column.length_in_bytes() >= SPILL_MIN_BYTES {
@@ -388,9 +401,13 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// identity codec: rewritten too soon for compression to amortize, they
     /// stay budgeted and swap-backed while encode and decode reduce to
     /// copies.
-    fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self {
+    fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self
+    where
+        T: Timestamp,
+    {
         let codec = codec_for_depth(depth);
         let len_bytes = column.length_in_bytes();
+        let (time_lower, time_upper) = Self::time_bounds(&column);
         let view = column.borrow();
         let records = view.len();
         let mut fences = D::Container::default();
@@ -400,6 +417,8 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         ColumnChunk::Spilled(Rc::new(SpilledBody {
             records,
             fences,
+            time_lower,
+            time_upper,
             depth,
             handle,
         }))
@@ -417,7 +436,10 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// the body is shared. With no pool available at the crossing the chunk
     /// passes through unchanged, so the crossing retries at the next
     /// survival.
-    fn survive_merge(self) -> Self {
+    fn survive_merge(self) -> Self
+    where
+        T: Timestamp,
+    {
         let depth = self.depth().saturating_add(1);
         match self {
             ColumnChunk::Resident(col, _) => ColumnChunk::Resident(col, depth),
@@ -441,6 +463,42 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 }
             }
         }
+    }
+
+    /// The chunk's time bounds: stored metadata for spilled bodies, a scan
+    /// of the time column for resident ones. The scan costs less than the
+    /// copy it lets `extract` avoid when the chunk passes through whole.
+    fn chunk_time_bounds(&self) -> (Antichain<T>, Vec<T>)
+    where
+        T: Timestamp,
+    {
+        match self {
+            ColumnChunk::Resident(col, _) => Self::time_bounds(col),
+            ColumnChunk::Spilled(body) => (body.time_lower.clone(), body.time_upper.clone()),
+        }
+    }
+
+    /// The time bounds of a non-empty column: the antichain of minimal times
+    /// (every contained time is greater-or-equal to some element) and the
+    /// set of maximal times (some contained time is greater-or-equal to a
+    /// frontier exactly when some maximal one is).
+    fn time_bounds(column: &Column<(D, T, R)>) -> (Antichain<T>, Vec<T>)
+    where
+        T: Timestamp,
+    {
+        let view = column.borrow();
+        let times = view.1;
+        let mut lower = Antichain::new();
+        let mut upper: Vec<T> = Vec::new();
+        for i in 0..times.len() {
+            let t = T::into_owned(rr::<T>(times.get(i)));
+            if !upper.iter().any(|u| PartialOrder::less_equal(&t, u)) {
+                upper.retain(|u| !PartialOrder::less_equal(u, &t));
+                upper.push(t.clone());
+            }
+            lower.insert(t);
+        }
+        (lower, upper)
     }
 }
 
@@ -649,6 +707,25 @@ where
         let Some(chunk) = input.pop_front() else {
             return;
         };
+        // Whole-chunk pass-through from the resident time bounds: a chunk
+        // the frontier is entirely past ships unchanged, one entirely at or
+        // past the frontier keeps unchanged. Spilled bodies pass through
+        // without a load, a re-commit, or any codec work; only chunks the
+        // frontier actually splits are loaded below.
+        let (time_lower, time_upper) = chunk.chunk_time_bounds();
+        if time_upper.iter().all(|t| !frontier.less_equal(t)) {
+            ship.push_back(chunk);
+            return;
+        }
+        if time_lower.elements().iter().all(|m| frontier.less_equal(m)) {
+            // The residual must lower-bound every kept time, which is the
+            // chunk's lower bound antichain by construction.
+            for m in time_lower.elements() {
+                residual.insert(m.clone());
+            }
+            keep.push_back(chunk);
+            return;
+        }
         // Partitioning rewrites within a generation, so both sides keep the
         // input chunk's depth.
         let depth = chunk.depth();
@@ -1526,10 +1603,54 @@ mod tests {
         assert_eq!(collect_chunks(out), consolidate(advanced));
     }
 
+    /// Chunks the extract frontier does not split pass through whole from
+    /// their resident time bounds: spilled bodies land on their side still
+    /// spilled, with no load or re-commit, and a kept chunk's minimal times
+    /// feed the residual frontier.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn extract_passes_frontier_disjoint_chunks_through() {
+        set_spill_override(Some(test_pool()));
+        let low: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), i % 4, 1)).collect();
+        let high: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), 6 + i % 4, 1)).collect();
+        let spilled_chunk = |data: &[Tuple]| {
+            let chunk = TestChunk::commit(build_column(&consolidate(data.to_vec())), 1);
+            assert!(chunk.is_spilled());
+            chunk
+        };
+
+        // A frontier between the two chunks' time ranges: the low chunk
+        // ships whole and the high chunk keeps whole, both still spilled
+        // (no load, no re-commit), and the residual is the kept chunk's
+        // minimal time.
+        let mut input = VecDeque::from([spilled_chunk(&low), spilled_chunk(&high)]);
+        let frontier = Antichain::from_elem(5u64);
+        let mut residual = Antichain::new();
+        let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+        while !input.is_empty() {
+            TestChunk::extract(
+                &mut input,
+                frontier.borrow(),
+                &mut residual,
+                &mut keep,
+                &mut ship,
+            );
+        }
+        assert_eq!(ship.len(), 1);
+        assert!(ship[0].is_spilled(), "shipped whole: body untouched");
+        assert_eq!(keep.len(), 1);
+        assert!(keep[0].is_spilled(), "kept whole: body untouched");
+        assert_eq!(residual, Antichain::from_elem(6));
+        let shipped = ship.pop_front().unwrap().into_column();
+        assert_eq!(collect_column(&shipped), consolidate(low));
+        let kept = keep.pop_front().unwrap().into_column();
+        assert_eq!(collect_column(&kept), consolidate(high));
+        set_spill_override(None);
+    }
+
     /// Extracting a large chunk at an intermediate frontier cuts both sides
     /// into several chunks and partitions exactly by time.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
     fn extract_cuts_large_output() {
         let records: Vec<Tuple> = (0..300_000u64).map(|k| ((k, 0), k % 2, 1)).collect();
         let mut input = VecDeque::from([ColumnChunk::from_column(build_column(&records))]);
