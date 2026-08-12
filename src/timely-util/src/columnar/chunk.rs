@@ -177,6 +177,7 @@ fn borrow_words<C: Columnar>(words: &[u64]) -> BorrowedOf<'_, C> {
 /// Narrow a columnar ref to a shorter lifetime, so refs from different
 /// borrows, such as a probe column and a chunk's own columns, can be compared
 /// (the refs are lifetime-invariant).
+#[inline(always)]
 fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, C> {
     columnar::ContainerOf::<C>::reborrow_ref(item)
 }
@@ -239,7 +240,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// Wrap a sorted, consolidated, non-empty column as a resident chunk of
     /// the youngest generation.
     pub fn from_column(column: Column<(D, T, R)>) -> Self {
-        debug_assert!(column.borrow().len() > 0, "chunks must be non-empty");
+        mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
         ColumnChunk::Resident(Rc::new(column), 0)
     }
 
@@ -297,7 +298,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// the pool when spilling is on and the body is worth a slot, else keep it
     /// resident.
     fn commit(column: Column<(D, T, R)>, depth: u8) -> Self {
-        debug_assert!(column.borrow().len() > 0, "chunks must be non-empty");
+        mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
         if let Some(pool) = spill_pool() {
             if column.length_in_bytes() >= SPILL_MIN_BYTES {
                 return Self::spill_body(column, &pool, depth);
@@ -379,7 +380,7 @@ fn spill_column<C: Columnar>(
     len_bytes: usize,
     hints: ChunkHints,
 ) -> ChunkHandle {
-    debug_assert_eq!(len_bytes % 8, 0);
+    mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
     match column {
         Column::Align(words) => pool.insert_with(words.len(), hints, &LZ4_CODEC, |dst| {
             dst.copy_from_slice(&words)
@@ -479,7 +480,7 @@ where
         loop {
             let mut result: Column<(D, T, R)> = Column::default();
             let yielded = result.merge_from(&mut cols, &mut positions);
-            if result.borrow().len() > 0 {
+            if !result.is_empty() {
                 out.push_back(ColumnChunk::Resident(Rc::new(result), out_depth));
             }
             if !yielded {
@@ -539,7 +540,7 @@ where
         // Move a side's accumulation to its queue, at the ship threshold
         // mid-loop, or any non-empty remainder at the end.
         let cut = |col: &mut Column<(D, T, R)>, queue: &mut VecDeque<Self>, force: bool| {
-            if col.borrow().len() > 0 && (force || at_serialized_capacity(&col.borrow())) {
+            if !col.is_empty() && (force || at_serialized_capacity(&col.borrow())) {
                 queue.push_back(ColumnChunk::Resident(Rc::new(std::mem::take(col)), depth));
             }
         };
@@ -673,7 +674,7 @@ where
                 }
             }
         }
-        if result.borrow().len() > 0 {
+        if !result.is_empty() {
             out.push_back(ColumnChunk::Resident(Rc::new(Column::Typed(result)), depth));
         }
 
@@ -767,7 +768,7 @@ fn extract_view_into<'v, 'p, K, V, T, R>(
     let mut pos = 0;
     while *probe_index < count {
         let probe = probes.get(*probe_index);
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             *probe_index == 0 || rr::<K>(probes.get(*probe_index - 1)) < rr::<K>(probe),
             "probe keys must be sorted and deduplicated"
         );

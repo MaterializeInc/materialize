@@ -347,7 +347,7 @@ where
         FpCategory::Nan => buf.write_str("NaN"),
         FpCategory::Zero if f.is_sign_negative() => buf.write_str("-0"),
         _ => {
-            debug_assert!(f.is_finite());
+            mz_ore::soft_assert_no_log!(f.is_finite());
             let mut ryu_buf = ryu::Buffer::new();
             let mut s = ryu_buf.format_finite(f);
             if let Some(trimmed) = s.strip_suffix(".0") {

@@ -1661,7 +1661,7 @@ const FLOAT_SCALE: f64 = (1_u64 << FLOAT_SCALE_EXP) as f64;
 /// would saturate to `i128::MAX` and `i128::MIN`, which sum to `-1` rather than
 /// `0` (see database-issues#11265).
 fn float_to_fixed_point(n: f64) -> i128 {
-    debug_assert!(n.is_finite());
+    mz_ore::soft_assert_no_log!(n.is_finite());
 
     // Decompose `n` into integer parts such that `n == sign * mantissa *
     // 2^exponent`. Folding in the `* 2^FLOAT_SCALE_EXP` scaling then amounts to

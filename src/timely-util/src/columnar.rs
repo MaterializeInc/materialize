@@ -98,6 +98,19 @@ impl<C: Columnar> Column<C> {
         }
     }
 
+    /// True when the column holds no records.
+    ///
+    /// The `Typed` variant answers from the container itself. The serialized
+    /// variants have to reconstruct their borrowed view to reach a length, so
+    /// there this costs as much as [`Column::borrow`].
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Column::Typed(t) => t.is_empty(),
+            Column::Bytes(_) | Column::Align(_) => self.borrow().is_empty(),
+        }
+    }
+
     /// Borrows the container as a reference.
     #[inline]
     pub fn borrow(&self) -> <C::Container as Borrow>::Borrowed<'_> {

@@ -625,7 +625,7 @@ mod bytes_container {
         }
         #[inline(always)]
         fn len(&self) -> usize {
-            debug_assert_eq!(self.len, self.offsets.len() - 1);
+            mz_ore::soft_assert_eq_no_log!(self.len, self.offsets.len() - 1);
             self.len
         }
 
@@ -1995,7 +1995,7 @@ mod row_codec {
                 I: IntoIterator<Item = &'a [u8]>,
             {
                 for bytes in iter.into_iter() {
-                    debug_assert!(
+                    mz_ore::soft_assert_no_log!(
                         !bytes.is_empty(),
                         "row encoding never yields empty column slices",
                     );
@@ -2012,7 +2012,7 @@ mod row_codec {
                         // entry instead of reading the datum. This `debug_assert` makes
                         // the load-bearing "no later first-byte outside the observed
                         // union" invariant self-checking.
-                        debug_assert!(
+                        mz_ore::soft_assert_no_log!(
                             self.decode.get(bytes[0].into()).is_none(),
                             "raw datum first-byte {} collides with a dictionary tag; \
                              decode would be ambiguous",
@@ -2111,7 +2111,7 @@ mod row_codec {
             ///    occur, ceasing to compress the ones that do.
             #[inline]
             pub fn observe(&mut self, bytes: &[u8]) {
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     !bytes.is_empty(),
                     "row encoding never yields empty column slices",
                 );

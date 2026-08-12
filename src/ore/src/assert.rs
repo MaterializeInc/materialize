@@ -39,6 +39,7 @@
 //!   * [`soft_assert_no_log`](crate::soft_assert_no_log)
 //!   * [`soft_assert_eq_no_log`](crate::soft_assert_eq_no_log)
 //!   * [`soft_assert_ne_no_log`](crate::soft_assert_ne_no_log)
+//!   * [`soft_assert_none_no_log`](crate::soft_assert_none_no_log)
 //!
 //! The `_or_log` variants should be used by default, as they allow us to find
 //! failed condition checks in production. The `_no_log` variants are silent
@@ -147,6 +148,23 @@ macro_rules! soft_assert_ne_no_log {
     ($cond:expr, $($arg:tt)+) => {{
         if $crate::assert::soft_assertions_enabled() {
             assert_ne!($cond, $($arg)+);
+        }
+    }}
+}
+
+/// Asserts that the provided expression, that returns an `Option`, is `None` if
+/// soft assertions are enabled.
+///
+/// Unlike `soft_assert_eq_no_log!(x, None)`, a failure reports the value held by
+/// the `Some(_)` variant. See [`assert_none`](crate::assert_none).
+///
+/// Soft assertions have a small runtime cost even when disabled. See
+/// [`ore::assert`](crate::assert#Soft-assertions) for details.
+#[macro_export]
+macro_rules! soft_assert_none_no_log {
+    ($val:expr $(, $($msg:tt)+)?) => {{
+        if $crate::assert::soft_assertions_enabled() {
+            $crate::assert_none!($val $(, $($msg)+)?);
         }
     }}
 }
