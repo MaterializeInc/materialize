@@ -12,7 +12,6 @@ workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-bytes.workspace = true
 chrono.workspace = true
 derivative.workspace = true
 differential-dataflow.workspace = true
@@ -26,21 +25,15 @@ mz-dyncfgs = { path = "../dyncfgs" }
 mz-ore = { path = "../ore", features = ["async", "chrono", "tracing"] }
 mz-persist-client = { path = "../persist-client" }
 mz-persist-types = { path = "../persist-types" }
-mz-proto = { path = "../proto" }
 mz-repr = { path = "../repr" }
 mz-service = { path = "../service" }
 mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
-mz-tls-util = { path = "../tls-util" }
 mz-txn-wal = { path = "../txn-wal" }
-proptest.workspace = true
-prost.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 timely.workspace = true
 tokio.workspace = true
-tokio-postgres = { workspace = true, features = ["serde"] }
 tokio-stream.workspace = true
 tracing.workspace = true
 uuid.workspace = true

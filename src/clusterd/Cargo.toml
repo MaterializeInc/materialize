@@ -21,10 +21,8 @@ mz-alloc = { path = "../alloc" }
 mz-alloc-default = { path = "../alloc-default", optional = true }
 mz-build-info = { path = "../build-info" }
 mz-cloud-resources = { path = "../cloud-resources" }
-mz-cluster = { path = "../cluster" }
 mz-cluster-client = { path = "../cluster-client" }
 mz-compute = { path = "../compute", default-features = false }
-mz-compute-client = { path = "../compute-client" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-http-util = { path = "../http-util" }
 mz-metrics = { path = "../metrics" }
@@ -34,7 +32,6 @@ mz-persist-client = { path = "../persist-client" }
 mz-prof-http = { path = "../prof-http" }
 mz-service = { path = "../service" }
 mz-storage = { path = "../storage" }
-mz-storage-client = { path = "../storage-client" }
 mz-storage-types = { path = "../storage-types" }
 mz-timely-util = { path = "../timely-util" }
 mz-txn-wal = { path = "../txn-wal" }
@@ -55,5 +52,5 @@ jemalloc = ["mz-alloc/jemalloc"]
 tokio-console = ["mz-ore/tokio-console"]
 foundationdb = ["mz-persist-client/foundationdb"]
 
-[package.metadata.cargo-udeps.ignore]
-normal = ["mz-alloc-default"]
+[package.metadata.unused-deps]
+ignore = ["mz-alloc-default"]

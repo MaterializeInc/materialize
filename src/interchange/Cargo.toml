@@ -30,7 +30,6 @@ mz-ore = { path = "../ore", features = ["network", "cli"] }
 mz-repr = { path = "../repr" }
 mz-pgrepr = { path = "../pgrepr" }
 ordered-float.workspace = true
-prost.workspace = true
 prost-reflect.workspace = true
 seahash.workspace = true
 serde.workspace = true
@@ -42,6 +41,7 @@ uuid = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]
 criterion.workspace = true
+prost.workspace = true
 tokio.workspace = true
 
 [build-dependencies]

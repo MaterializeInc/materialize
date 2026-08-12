@@ -11,10 +11,8 @@ workspace = true
 
 [dependencies]
 aws-sdk-glue.workspace = true
-aws-smithy-runtime-api.workspace = true
 aws-types.workspace = true
 thiserror.workspace = true
-tracing.workspace = true
 uuid.workspace = true
 
 [features]

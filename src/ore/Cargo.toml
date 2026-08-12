@@ -185,7 +185,3 @@ required-features = ["pager"]
 [[example]]
 name = "pager_merge"
 required-features = ["pager"]
-
-[package.metadata.cargo-udeps.ignore]
-# Only used in doc-tests.
-development = ["tokio-test"]
