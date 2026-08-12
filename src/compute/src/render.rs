@@ -171,8 +171,8 @@ use crate::render::errors::DataflowErrorSer;
 use crate::server::ComputeRuntimeRole;
 use crate::shared_trace::PublishArrangement;
 use crate::sharing::{
-    ArrangementSharingRegistry, SharedErrsFrontier, SharedErrsHandle, SharedIndexArrangement,
-    SharedOksFrontier, SharedOksHandle,
+    ArrangementSharingRegistry, SharedErrsFrontier, SharedIndexArrangement, SharedOksFrontier,
+    SharedOksHandle,
 };
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
@@ -574,14 +574,17 @@ pub fn build_compute_dataflow(
 /// lets `handle_create_dataflow` build every interactive dataflow immediately in command arrival order
 /// rather than deferring a build whose dependency is not yet published.
 ///
-/// Returns the slot `Arc<SharedIndexArrangement>` alongside the arrangements and read holds. The
-/// caller MUST retain it for as long as the import is alive. A `SharedTraceHandle` holds only the
-/// inner `Arc<SharedTrace>` one level down, so the slot's strong count is the registry's only measure
-/// of whether a reader still depends on it.
+/// Returns the slot `Arc<SharedIndexArrangement>` alongside the arrangements. The caller MUST retain
+/// it for as long as the import is alive. A `SharedTraceHandle` holds only the inner
+/// `Arc<SharedTrace>` one level down, so the slot's strong count is the registry's only measure of
+/// whether a reader still depends on it.
 ///
-/// The returned handle clones are the importing dataflow's read hold on the shared trace, advanced
-/// to `as_of`. Keeping them alive (for example in the dataflow's token set) pins the shared trace at
-/// `as_of`; dropping them releases the hold, after which maintenance may compact past `as_of`.
+/// The read hold is the returned `Arranged`'s own `trace`, registered at `as_of`, exactly as
+/// differential's `TraceAgent::import_frontier_core` makes its `TraceAgent` clone the hold. Retaining
+/// the `Arranged` (a `CollectionBundle` does) pins the shared trace, and consumers downgrade it as
+/// their frontiers advance, so a long-lived import lets the publisher compact behind it. A separate
+/// hold token would defeat that: the publisher forwards the *meet* of the registered holds, so one
+/// hold nobody downgrades is a floor under every hold that is downgraded.
 ///
 /// Cleanup of the imported maintenance index is not this runtime's responsibility, and is not
 /// coordinated across runtimes. It rests on the controller's read-hold discipline: the controller
@@ -612,8 +615,6 @@ fn import_shared_index<'outer>(
 ) -> (
     Arranged<'outer, SharedOksFrontier>,
     Arranged<'outer, SharedErrsFrontier>,
-    SharedOksHandle,
-    SharedErrsHandle,
     Arc<SharedIndexArrangement>,
 ) {
     // Pairwise import reads publisher worker `i` from importer worker `i`, so worker indices must
@@ -626,12 +627,11 @@ fn import_shared_index<'outer>(
     // wrap only the inner `Arc<SharedTrace>`, which does not contribute to that count.
     let slot = registry.get_or_create_placeholder(idx_id, worker_index, peers);
 
-    // Mint the read-hold tokens directly at `as_of`. `handle_at` checks the published `since` and
-    // registers the hold under one acquisition of the trace's state lock, so the returned holds are
-    // ones the trace can still honour. Observing `since`, deciding it permits `as_of`, and then
-    // advancing a hold would be three acquisitions with the publisher free to advance `since`
-    // between any two. A fresh placeholder's `since` is `minimum`, so this succeeds for an unadopted
-    // slot. The holds release only when the caller drops them.
+    // Mint at `as_of`. `handle_at` checks the published `since` and registers the hold under one
+    // acquisition of the trace's state lock, so the handle is one the trace can still honour.
+    // Observing `since`, deciding it permits `as_of`, and then advancing a hold would be three
+    // acquisitions with the publisher free to advance `since` between any two. A fresh placeholder's
+    // `since` is `minimum`, so this succeeds for an unadopted slot.
     //
     // A failure is a protocol-ordering failure, not a serving failure, so it must stay loud. See the
     // protocol invariants in the design doc: the controller's read hold is realized on the replica
@@ -639,27 +639,28 @@ fn import_shared_index<'outer>(
     // `idx_id` before that. `writer_logical` says which side moved: `Some(f)` with `f` beyond `as_of`
     // means the controller released and maintenance applied it ahead of this render, `None` means the
     // published `since` came from the publisher's own hold instead.
-    let oks_handle = slot.oks.handle();
-    let errs_handle = slot.errs.handle();
-    let compact_beyond_as_of = |since: Antichain<mz_repr::Timestamp>| -> ! {
+    let report_stale = |handle: &SharedOksHandle, since: Antichain<mz_repr::Timestamp>| -> ! {
         panic!(
             "Index {idx_id} has been allowed to compact beyond the dataflow as_of: \
              since {:?}, as_of {:?}, controller allow_compaction {:?}, published upper {:?}",
             since.elements(),
             as_of.elements(),
-            oks_handle.writer_logical().map(|f| f.elements().to_vec()),
-            oks_handle.frontiers().1.elements().to_vec(),
+            handle.writer_logical().map(|f| f.elements().to_vec()),
+            handle.frontiers().1.elements().to_vec(),
         )
     };
-    let oks_hold = match slot.oks.handle_at(as_of) {
-        Ok(hold) => hold,
-        Err(since) => compact_beyond_as_of(since),
+    let oks_handle = match slot.oks.handle_at(as_of) {
+        Ok(handle) => handle,
+        Err(since) => report_stale(&slot.oks.handle(), since),
     };
-    let errs_hold = match slot.errs.handle_at(as_of) {
-        Ok(hold) => hold,
-        Err(since) => compact_beyond_as_of(since),
+    let errs_handle = match slot.errs.handle_at(as_of) {
+        Ok(handle) => handle,
+        Err(since) => report_stale(&slot.oks.handle(), since),
     };
 
+    // These handles' own registrations end with this function. The hold that outlives it is the one
+    // `import_snapshot_at` clones into each returned `Arranged`, which is what a consumer downgrades.
+    //
     // Import a static snapshot at `as_of`, bounded by `until`. Interactive work is single-time, so a
     // snapshot is exactly what is needed, and it avoids the live import's forward-batch replay
     // (whose capability handling and lack of `as_of` coalescing are unsound for a read at `as_of`).
@@ -676,7 +677,7 @@ fn import_shared_index<'outer>(
         until.clone(),
     );
 
-    (oks_arranged, errs_arranged, oks_hold, errs_hold, slot)
+    (oks_arranged, errs_arranged, slot)
 }
 
 // This implementation block allows child timestamps to vary from parent timestamps,
@@ -867,7 +868,7 @@ where
                 .iter()
                 .filter_map(|t| t.try_step_forward()),
         );
-        let (mut oks_arranged, errs_arranged, oks_hold, errs_hold, slot) = import_shared_index(
+        let (mut oks_arranged, errs_arranged, slot) = import_shared_index(
             outer,
             &compute_state.sharing_registry,
             idx_id,
@@ -897,9 +898,10 @@ where
         );
         self.update_id(Id::Global(idx.on_id), bundle);
 
-        // The read hold releases when this token drops with the dataflow. The slot Arc rides along so
-        // the slot's strong count marks a live reader for the dataflow's whole lifetime.
-        tokens.insert(idx_id, Rc::new((oks_hold, errs_hold, slot)));
+        // The slot Arc's strong count marks a live reader, so it must outlive the dataflow. The read
+        // hold is not in here: it lives in the `Arranged`s the bundle above retains, so that a
+        // consumer can downgrade it. See `import_shared_index`.
+        tokens.insert(idx_id, Rc::new(slot));
     }
 }
 
@@ -2497,17 +2499,16 @@ mod interactive_import_tests {
             // Interactive runtime: a temporary dataflow imports the published arrangement via the
             // new path and captures the reconstructed rows.
             let probe = ProbeHandle::new();
-            let (mut oks_hold, mut errs_hold) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
                 // `until` empty: no upper suppression, so the whole snapshot at `as_of` flows.
-                let (oks_arranged, _errs_arranged, oks_hold, errs_hold, _slot) =
-                    import_shared_index(
-                        scope.clone(),
-                        &registry_in,
-                        id,
-                        "Index",
-                        &as_of_in,
-                        &Antichain::new(),
-                    );
+                let (oks_arranged, errs_arranged, _slot) = import_shared_index(
+                    scope.clone(),
+                    &registry_in,
+                    id,
+                    "Index",
+                    &as_of_in,
+                    &Antichain::new(),
+                );
 
                 let collected = Arranged::<SharedOksFrontier>::flat_map_batches(
                     oks_arranged.stream,
@@ -2518,12 +2519,13 @@ mod interactive_import_tests {
                     },
                 );
                 collected.inner.probe_with(&probe).capture_into(capture_tx);
-                (oks_hold, errs_hold)
+                (oks_arranged.trace, errs_arranged.trace)
             });
 
-            // The read hold sits at the dataflow's `as_of`, not the publish-time `since`.
-            assert_eq!(oks_hold.get_logical_compaction(), as_of_in.borrow());
-            assert_eq!(errs_hold.get_logical_compaction(), as_of_in.borrow());
+            // The read hold is the `Arranged`'s own trace, and it sits at the dataflow's `as_of`, not
+            // the publish-time `since`.
+            assert_eq!(oks_trace.get_logical_compaction(), as_of_in.borrow());
+            assert_eq!(errs_trace.get_logical_compaction(), as_of_in.borrow());
 
             // Drive both dataflows until the imported-and-reconstructed output has sealed time 0.
             while probe.less_than(&Timestamp::from(1_u64)) {
@@ -2656,22 +2658,21 @@ mod interactive_import_tests {
                     publish_index_with_writer(scope, &registry, id, rows.clone())
                 });
 
-            // Interactive runtime: import at `as_of`, exactly as `import_index_shared` does. Only
-            // `oks_hold`/`errs_hold` are kept: the `Arranged`s themselves each carry their own
-            // independent hold (`SharedTraceHandle::clone` mints a fresh registration), and
-            // production code drops them the same way once it has read out their `stream`s, keeping
-            // only the hold pair alive in `tokens`.
-            let (oks_hold, errs_hold) = worker.dataflow::<Timestamp, _, _>(|scope| {
-                let (_oks_arranged, _errs_arranged, oks_hold, errs_hold, _slot) =
-                    import_shared_index(
-                        scope.clone(),
-                        &registry,
-                        id,
-                        "Index",
-                        &as_of,
-                        &Antichain::new(),
-                    );
-                (oks_hold, errs_hold)
+            // Interactive runtime: import at `as_of`, exactly as `import_index_shared` does. The read
+            // hold is each `Arranged`'s own `trace`, so those are what is kept here. Production keeps
+            // them the same way, inside the `CollectionBundle` the import is bound into, which is what
+            // lets a consumer downgrade the hold as its frontier advances. The `stream`s are dropped,
+            // as a consumer that only needs the trace would.
+            let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_arranged, errs_arranged, _slot) = import_shared_index(
+                    scope.clone(),
+                    &registry,
+                    id,
+                    "Index",
+                    &as_of,
+                    &Antichain::new(),
+                );
+                (oks_arranged.trace, errs_arranged.trace)
             });
 
             // The controller requests compaction well past `as_of`. `note_allow_compaction` forwards
@@ -2691,18 +2692,22 @@ mod interactive_import_tests {
             );
 
             // The live interactive-import hold still pins the trace at `as_of`: a read there still
-            // succeeds despite the writer's request. `snapshot_at` only inspects the shared trace's
-            // actual state, so reading via `oks_hold` itself introduces no additional hold.
-            assert!(
-                oks_hold.snapshot_at(&as_of_time).is_some(),
-                "the live interactive-import hold must keep `as_of` readable"
-            );
+            // succeeds despite the writer's request. The probe handle is minted only to read and is
+            // dropped immediately, so the hold it registers at the current `since` cannot outlive this
+            // scope and confound the release assertion below.
+            {
+                let (probe_oks, _probe_errs) = registry.handles(&id, 0).expect("still published");
+                assert!(
+                    probe_oks.snapshot_at(&as_of_time).is_some(),
+                    "the live interactive-import hold must keep `as_of` readable"
+                );
+            }
 
-            // Drop the hold, as happens when the interactive dataflow (and its `tokens` entry)
-            // drops. With no reader hold left, the next tick lets the publisher's forwarded `since`
-            // follow the writer's request.
-            drop(oks_hold);
-            drop(errs_hold);
+            // Drop the import's traces, as happens when the interactive dataflow and the
+            // `CollectionBundle` holding its arrangements drop. With no reader hold left, the next tick
+            // lets the publisher's forwarded `since` follow the writer's request.
+            drop(oks_trace);
+            drop(errs_trace);
             tick(
                 worker,
                 &mut oks_input,
@@ -2717,6 +2722,101 @@ mod interactive_import_tests {
                 released_oks.snapshot_at(&as_of_time).is_none(),
                 "after the hold drops, the trace must be free to compact past `as_of`"
             );
+        });
+    }
+
+    /// A live import's hold can be downgraded, so the publisher compacts behind a long-lived reader
+    /// rather than staying pinned at its `as_of` for the reader's whole life.
+    ///
+    /// This is what a join on the interactive runtime does: `mz_join_core` calls
+    /// `set_logical_compaction` on each input trace as the other input's frontier advances, and
+    /// `set_physical_compaction` as it acknowledges batches. An unbounded interactive dataflow that
+    /// could not downgrade would pin the maintenance index at the `as_of` it started from, so the
+    /// publisher could never compact for as long as the dataflow ran.
+    ///
+    /// The hold has to be the `Arranged`'s own trace for this to work. A separate hold token retained
+    /// beside it would defeat the downgrade entirely, since the publisher forwards the *meet* of the
+    /// registered holds and a hold nobody downgrades is a floor under every hold that is.
+    #[mz_ore::test]
+    fn interactive_import_hold_downgrades_while_live() {
+        let id = GlobalId::User(1);
+        let rows = test_rows();
+        let as_of_time = Timestamp::from(1_u64);
+        let as_of = Antichain::from_elem(as_of_time);
+        let registry = ArrangementSharingRegistry::new();
+
+        timely::execute_directly(move |worker| {
+            let (mut oks_input, _errs_input, mut oks_writer) =
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    publish_index_with_writer(scope, &registry, id, rows.clone())
+                });
+
+            let (mut oks_trace, mut errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_arranged, errs_arranged, _slot) = import_shared_index(
+                    scope.clone(),
+                    &registry,
+                    id,
+                    "Index",
+                    &as_of,
+                    &Antichain::new(),
+                );
+                (oks_arranged.trace, errs_arranged.trace)
+            });
+
+            // The controller allows compaction well past `as_of` and the writer applies it.
+            let target = Antichain::from_elem(Timestamp::from(10_u64));
+            registry.note_allow_compaction(id, 0, &target);
+            oks_writer.set_logical_compaction(target.borrow());
+            oks_writer.set_physical_compaction(target.borrow());
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(5_u64),
+                Timestamp::from(6_u64),
+            );
+
+            // Still pinned: the import has not downgraded, so `as_of` stays readable.
+            {
+                let (probe_oks, _probe_errs) = registry.handles(&id, 0).expect("still published");
+                assert!(
+                    probe_oks.snapshot_at(&as_of_time).is_some(),
+                    "an import that has not downgraded must keep `as_of` readable"
+                );
+            }
+
+            // The consumer downgrades, as a join does once its other input has advanced. The traces
+            // stay alive throughout, which is the point: this is a downgrade, not a release.
+            oks_trace.set_logical_compaction(target.borrow());
+            oks_trace.set_physical_compaction(target.borrow());
+            errs_trace.set_logical_compaction(target.borrow());
+            errs_trace.set_physical_compaction(target.borrow());
+            assert_eq!(
+                oks_trace.get_logical_compaction(),
+                target.borrow(),
+                "the downgrade must be reflected in what the handle reports holding"
+            );
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(11_u64),
+                Timestamp::from(12_u64),
+            );
+
+            // The publisher followed the downgrade: `as_of` is no longer readable even though the
+            // import is still live and still holding at the downgraded frontier.
+            let (compacted_oks, _compacted_errs) =
+                registry.handles(&id, 0).expect("still published");
+            assert!(
+                compacted_oks.snapshot_at(&as_of_time).is_none(),
+                "after the downgrade, the publisher must compact past the original `as_of`"
+            );
+            assert!(
+                compacted_oks
+                    .snapshot_at(&Timestamp::from(10_u64))
+                    .is_some(),
+                "the downgraded frontier must still be readable"
+            );
+            drop((oks_trace, errs_trace));
         });
     }
 
