@@ -66,9 +66,53 @@ fn snapshot_path() -> String {
     format!("{SNAPSHOT_DIR}/lir_v{LIR_VERSION}.json")
 }
 
+/// Rewrites every ENUM's index-keyed variant map into a name-keyed map.
+///
+/// The stable LIR format is self-describing JSON: an enum value carries its
+/// variant name, never its index, so variant indices and order have no wire
+/// significance. Keying variants by name keeps the snapshot free of index
+/// churn. Adding a variant is a one-entry diff and reordering a declaration
+/// is invisible, matching what actually can and cannot break stored plans.
+///
+/// NOTE: this bakes in the JSON assumption. Under a positional format such
+/// as bincode or MessagePack, indices and declaration order are the wire
+/// format, and this rewrite would hide breaking reorders. Changing the
+/// storage format means removing this and bumping LIR_VERSION.
+fn enum_variants_by_name(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, inner) in map.iter_mut() {
+                if key == "ENUM" {
+                    if let serde_json::Value::Object(variants) = inner {
+                        // Collect through a BTreeMap to sort by name. The
+                        // workspace enables serde_json's preserve_order
+                        // feature, so Map keeps insertion order.
+                        let by_name: BTreeMap<String, serde_json::Value> = variants
+                            .values()
+                            .flat_map(|variant| {
+                                variant
+                                    .as_object()
+                                    .expect("ENUM values are single-entry variant objects")
+                                    .iter()
+                                    .map(|(name, format)| (name.clone(), format.clone()))
+                            })
+                            .collect();
+                        *inner = serde_json::Value::Object(by_name.into_iter().collect());
+                    }
+                }
+                enum_variants_by_name(inner);
+            }
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(enum_variants_by_name),
+        _ => {}
+    }
+}
+
 /// Serializes a registry exactly as the checked-in snapshot stores it.
 fn registry_json(registry: &Registry) -> String {
-    let mut json = serde_json::to_string_pretty(registry).expect("registry serializes to JSON");
+    let mut value = serde_json::to_value(registry).expect("registry serializes to JSON");
+    enum_variants_by_name(&mut value);
+    let mut json = serde_json::to_string_pretty(&value).expect("value serializes to JSON");
     // Lint requires text files to end with a newline.
     json.push('\n');
     json
@@ -84,9 +128,10 @@ fn partial_registry_json(registry: &Registry) -> String {
     let map: BTreeMap<&String, serde_json::Value> = registry
         .iter()
         .map(|(name, container)| {
-            let value = serde_json::to_value(container).unwrap_or_else(|_| {
+            let mut value = serde_json::to_value(container).unwrap_or_else(|_| {
                 serde_json::Value::String(format!("<mid-trace: {container:?}>"))
             });
+            enum_variants_by_name(&mut value);
             (name, value)
         })
         .collect();
@@ -97,11 +142,19 @@ fn partial_registry_json(registry: &Registry) -> String {
 
 /// Writes the traced schema to [`CURRENT_PATH`].
 ///
-/// The three tests trace concurrently in separate processes and write
-/// identical bytes, so each write goes to a per-process temp file first and
-/// then renames into place to avoid interleaving.
+/// The three tests trace concurrently and write identical bytes, so each
+/// write goes to a writer-unique temp file first and then renames into place
+/// to avoid interleaving. The temp name needs both the process id and a
+/// counter: nextest runs the tests in separate processes, but cargo test
+/// runs them as threads of one process.
 fn write_current(contents: &str) {
-    let tmp = format!("{CURRENT_PATH}.tmp.{}", std::process::id());
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static WRITER: AtomicUsize = AtomicUsize::new(0);
+    let tmp = format!(
+        "{CURRENT_PATH}.tmp.{}.{}",
+        std::process::id(),
+        WRITER.fetch_add(1, Ordering::Relaxed)
+    );
     std::fs::create_dir_all(SNAPSHOT_DIR).expect("create snapshot dir");
     std::fs::write(&tmp, contents).expect("write dump");
     std::fs::rename(&tmp, CURRENT_PATH).expect("move dump into place");
@@ -343,12 +396,7 @@ fn schema_diff(expected: &str, actual: &str) -> String {
     }
     fn variant_names(container: &serde_json::Value) -> Option<Vec<&str>> {
         let variants = container.get("ENUM")?.as_object()?;
-        Some(
-            variants
-                .values()
-                .filter_map(|v| v.as_object()?.keys().next().map(String::as_str))
-                .collect(),
-        )
+        Some(variants.keys().map(String::as_str).collect())
     }
 
     let expected = containers(expected);
