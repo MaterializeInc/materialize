@@ -1424,11 +1424,42 @@ decision rather than a patch.
   sealed ahead while the join works through the batch ending there. So once the agent is
   pinned high, every activation is a candidate for the straddle.
 
-  The reader's own hold does not save it, and differential's own guard does not notice.
-  `SharedTraceHandle::get_physical_compaction` returns the handle's recorded frontier
-  rather than the agent's, so the join's assertion that its physical compaction is at or
-  below `acknowledged` passes while the underlying trace has already compacted past that
-  point. The handle believes it holds a cut the trace no longer offers.
+  Two things make the reader's own hold useless here, and the second is the more
+  serious.
+
+  A hold cannot be lowered. `TraceAgent::set_physical_compaction` joins, so asking to
+  hold at `as_of` once the agent sits at `upper` is silently a no-op rather than an
+  error. `Spine::set_physical_compaction` guards rewinding with a `debug_assert!`, which
+  compiles out of the profile we ship, so a lowered meet quietly rewinds the frontier
+  while the batches merged under the old one stay merged. So "pin the import at `as_of`"
+  is not something the API can express after the fact, which is why forwarding `upper`
+  optimistically is irreversible rather than merely aggressive.
+
+  **And our handle reports the request rather than the grant, which disables
+  differential's own tripwire.** `SharedTraceHandle::set_physical_compaction` stores the
+  requested frontier with no join and no clamp, and `get_physical_compaction` returns
+  it. A stock `TraceAgent` returns its joined hold, that is what it actually holds.
+  Differential's join guards itself with a real assertion that its physical compaction is
+  at or below `acknowledged`, and against a stock agent that assertion *fires* when the
+  agent is pinned above the cut, pointing straight at the problem. Against our handle it
+  passes, because the handle reports the low frontier it asked for and never received.
+  The straddle then surfaces later inside `batches_through` as an abort with no obvious
+  cause.
+
+  So the minimal fix is honesty rather than a change of policy: record the publisher's
+  forwarded floor, clamp a registration up to it, and report *that* from
+  `get_physical_compaction`. Differential's existing assertion then does the work it was
+  written for and the failure lands at import time with the right diagnosis. Whether
+  `writer_physical = upper` also has to change is a separate question with a real cost,
+  since forwarding `upper` mirrors `TraceManager::maintenance` and sidesteps a
+  circularity where the publisher's own hold would stop the spine compacting, which is
+  what `map_batches` needs to advance the per-batch `since`. Make it loud, see whether it
+  fires, then decide.
+
+  TODO: determine whether the ordinary maintenance path carries the same exposure, since
+  it also forwards physical compaction to the trace upper. If it does, then stock handles
+  reporting the grant is the only thing that has been catching it, and this is a
+  differential-level property our indirection unmasks rather than one we introduce.
 
   It remains a race rather than a certainty, since being permitted to merge is not
   merging and the spine's fuel schedule decides when.
