@@ -15,8 +15,15 @@
 //! [`ComputeClient`] to the controller, routes each command to the runtime that owns the referenced
 //! work, and merges the two response streams back into one.
 //!
-//! Routing is derived entirely from command contents (see [`Multiplexer::send`]). The only state the
-//! multiplexer keeps is which runtime renders each transient collection (`transient_owner`).
+//! Routing is derived entirely from command contents (see [`Multiplexer::send`]). Beyond which
+//! runtime renders each transient collection (`transient_owner`), the multiplexer keeps the state
+//! needed to preserve one invariant the split would otherwise lose: an index's `since` must not pass
+//! the `as_of` of a dataflow importing it. `CreateDataflow` goes only to interactive while
+//! `AllowCompaction` goes to maintenance, and the two runtimes drain independently, so the
+//! multiplexer caps compaction at what in-flight interactive dataflows still read
+//! (`interactive_holds`, `deferred_compaction`, `compaction_floor`, `pending_compaction`). This is
+//! the only point that observes both command streams. All of it is per-connection and discarded by
+//! `Hello` (see [`Multiplexer::reset`]).
 //!
 //! The multiplexer does not deduplicate peek responses. The exactly-one-`PeekResponse`-per-uuid
 //! contract is already upheld below and above it: the per-worker `PartitionedComputeState` inside
@@ -28,7 +35,7 @@
 //! are sent to process 0 only, reaching other processes' workers through the intra-runtime command
 //! channel), so it cannot gate responses on having seen the command.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use async_trait::async_trait;
 use mz_repr::{GlobalId, Timestamp};
@@ -69,6 +76,11 @@ pub struct Multiplexer {
     /// The last `AllowCompaction` frontier the controller asked for on a held collection, so the
     /// deferred part can be released once the holds are gone.
     deferred_compaction: BTreeMap<GlobalId, Antichain<Timestamp>>,
+    /// Compaction released by a hold retiring, waiting to be forwarded.
+    ///
+    /// A hold retires while handling a response, which must not send (see [`Multiplexer::recv`]'s
+    /// cancel safety), so the work is queued here and flushed by the next `recv`.
+    pending_compaction: VecDeque<(GlobalId, Antichain<Timestamp>)>,
     /// The lowest frontier each collection may still be told to compact to.
     ///
     /// Seeded from a collection's own dataflow `as_of` and raised by every `AllowCompaction` we
@@ -80,6 +92,12 @@ pub struct Multiplexer {
 }
 
 /// The imports an in-flight interactive dataflow reads, and the frontier it reads them at.
+///
+/// `as_of` is written once and never advanced, which is correct because the hold spans only the
+/// window between the `CreateDataflow` being enqueued and the interactive runtime rendering it.
+/// Across that window the dataflow needs exactly its `as_of` and has made no progress that would let
+/// it need less. Once it has rendered, its replica-side hold on the shared trace takes over, and that
+/// one its consumers do downgrade.
 #[derive(Debug)]
 struct InteractiveHold {
     imports: BTreeSet<GlobalId>,
@@ -104,8 +122,23 @@ impl Multiplexer {
             transient_owner: BTreeSet::new(),
             interactive_holds: BTreeMap::new(),
             deferred_compaction: BTreeMap::new(),
+            pending_compaction: VecDeque::new(),
             compaction_floor: BTreeMap::new(),
         }
+    }
+
+    /// Discards all per-connection routing and hold state.
+    ///
+    /// A `Hello` opens a new protocol epoch: the controller then replays its command history, which
+    /// re-establishes ownership, floors and holds from the replayed `CreateDataflow`s and
+    /// `AllowCompaction`s. Carrying the old state across would strand holds for dataflows the new
+    /// epoch never creates, and a stranded hold caps compaction forever.
+    fn reset(&mut self) {
+        self.transient_owner.clear();
+        self.interactive_holds.clear();
+        self.deferred_compaction.clear();
+        self.pending_compaction.clear();
+        self.compaction_floor.clear();
     }
 
     /// The lowest `as_of` any in-flight interactive dataflow reads `id` at, if any.
@@ -133,8 +166,27 @@ impl Multiplexer {
             })
     }
 
-    /// Releases the holds of the interactive dataflow exporting `id`, returning the collections
-    /// whose deferred compaction may now be forwarded.
+    /// Retires the hold of the interactive dataflow exporting `id`, queueing the compaction that was
+    /// deferred behind it.
+    ///
+    /// The trigger is the interactive runtime reporting a frontier for `id`, which proves it has
+    /// processed the `CreateDataflow` and therefore established its own hold on the shared trace.
+    /// From that point the replica-side hold is what protects the read and this cap is redundant.
+    ///
+    /// The trigger must NOT be the controller telling us the dataflow is finished. That is the
+    /// controller's own view, and the interactive runtime may still have the create queued, so
+    /// releasing there is exactly the ordering violation the cap exists to prevent: the next
+    /// `AllowCompaction` on an import goes uncapped, maintenance applies it, and the render that
+    /// follows finds the arrangement compacted past its `as_of`.
+    fn retire_hold(&mut self, id: GlobalId) {
+        let released = self.release_holds(id);
+        for (import, frontier) in released {
+            self.pending_compaction.push_back((import, frontier));
+        }
+    }
+
+    /// Removes the hold of the interactive dataflow exporting `id`, returning the collections whose
+    /// deferred compaction may now be forwarded.
     fn release_holds(&mut self, id: GlobalId) -> Vec<(GlobalId, Antichain<Timestamp>)> {
         let Some(hold) = self.interactive_holds.remove(&id) else {
             return Vec::new();
@@ -197,7 +249,7 @@ impl Multiplexer {
     /// `since` on any upstream index/MV the transient read). Forwarding on `is_transient()` delivers
     /// every frontier report for the collections interactive owns, terminal or not.
     fn filter_response(
-        &self,
+        &mut self,
         source: Runtime,
         response: ComputeResponse,
     ) -> Option<ComputeResponse> {
@@ -207,10 +259,41 @@ impl Multiplexer {
                     Runtime::Maintenance => true,
                     Runtime::Interactive => id.is_transient(),
                 };
+                if source == Runtime::Interactive {
+                    // Interactive reporting any frontier for `id` proves it has rendered the dataflow
+                    // exporting `id`, terminal report or not, so the bridging hold has done its job.
+                    // See `retire_hold`.
+                    self.retire_hold(id);
+                }
                 forward.then_some(ComputeResponse::Frontiers(id, frontiers))
             }
             other => Some(other),
         }
+    }
+
+    /// Forwards compaction that a retired hold released.
+    ///
+    /// Skips an entry that would regress a collection's floor. The stored frontier is the last one the
+    /// controller asked for, so it is normally at or beyond the capped frontier we forwarded in its
+    /// place, but the check keeps that reasoning local rather than spread across two methods.
+    async fn flush_pending_compaction(&mut self) -> Result<(), anyhow::Error> {
+        while let Some((id, frontier)) = self.pending_compaction.front().cloned() {
+            let regresses = self
+                .compaction_floor
+                .get(&id)
+                .is_some_and(|floor| !timely::PartialOrder::less_equal(floor, &frontier));
+            if !regresses {
+                let runtime = self.owner_of(id);
+                self.compaction_floor.insert(id, frontier.clone());
+                self.client_mut(runtime)
+                    .send(ComputeCommand::AllowCompaction { id, frontier })
+                    .await?;
+            }
+            // Only after the send has landed, so a cancellation leaves the entry queued rather than
+            // dropping compaction on the floor.
+            self.pending_compaction.pop_front();
+        }
+        Ok(())
     }
 }
 
@@ -222,10 +305,12 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
         match command {
             // Lifecycle commands drive both runtimes. Send to maintenance first, then interactive.
             // A failure on either surfaces via `?` rather than being swallowed.
-            cmd @ (Hello { .. }
-            | CreateInstance(_)
-            | InitializationComplete
-            | UpdateConfiguration(_)) => {
+            cmd @ Hello { .. } => {
+                self.reset();
+                self.maintenance.send(cmd.clone()).await?;
+                self.interactive.send(cmd).await?;
+            }
+            cmd @ (CreateInstance(_) | InitializationComplete | UpdateConfiguration(_)) => {
                 self.maintenance.send(cmd.clone()).await?;
                 self.interactive.send(cmd).await?;
             }
@@ -330,29 +415,13 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 if evict {
                     self.transient_owner.remove(&id);
                 }
-                // An interactive dataflow's collection reaching the empty frontier is the drop
-                // signal for that dataflow, so its holds go with it. Forward whatever compaction was
-                // deferred behind them, otherwise the imported collections never compact again.
-                //
-                // Only the empty frontier releases. A non-empty `AllowCompaction` on an export is
-                // routine, the controller sends one whenever the collection's read frontier moves,
-                // and releasing on those would drop the hold while the interactive runtime still has
-                // the create queued. That is the exact regression this capping exists to prevent.
-                let released = if frontier_was_empty {
-                    self.release_holds(id)
-                } else {
-                    Vec::new()
-                };
-                for (import, frontier) in released {
-                    let runtime = self.owner_of(import);
-                    self.compaction_floor.insert(import, frontier.clone());
-                    self.client_mut(runtime)
-                        .send(AllowCompaction {
-                            id: import,
-                            frontier,
-                        })
-                        .await?;
-                }
+                // NOTE: the hold is deliberately NOT released here, not even on the empty frontier
+                // that drops the dataflow. This command is the controller's own view of the
+                // dataflow's lifetime, and the interactive runtime may still have the create queued.
+                // Releasing here lets the next `AllowCompaction` on an import go uncapped, so
+                // maintenance compacts past an `as_of` the render that follows still needs. The hold
+                // retires when interactive reports a frontier for the export, which proves the
+                // dataflow exists and holds the shared trace itself. See `retire_hold`.
             }
             Peek(peek) => {
                 // Every peek is served by interactive.
@@ -374,8 +443,13 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
     /// future (the caller cancelling us) drops both inner futures without loss. The only value
     /// taken from an inner client is returned or dropped synchronously, with no intervening await,
     /// so a cancellation can never strand a response.
+    ///
+    /// The compaction flush awaits, but holds nothing: it dequeues only after a send lands, so
+    /// cancelling it leaves the queue intact for the next call. It runs before the `select!` for that
+    /// reason, rather than where the hold retires.
     async fn recv(&mut self) -> Result<Option<ComputeResponse>, anyhow::Error> {
         loop {
+            self.flush_pending_compaction().await?;
             let (source, response) = tokio::select! {
                 r = self.maintenance.recv() => (Runtime::Maintenance, r?),
                 r = self.interactive.recv() => (Runtime::Interactive, r?),
@@ -691,12 +765,13 @@ mod tests {
     async fn interactive_imports_are_not_compacted_past_their_as_of() {
         let mut h = harness();
         let source = GlobalId::User(1);
+        let export = GlobalId::Transient(7);
         let as_of = Antichain::from_elem(Timestamp::from(100u64));
         let beyond = Antichain::from_elem(Timestamp::from(200u64));
 
         // A bounded transient dataflow importing `source`, routed to interactive.
         let mut cmd = create_dataflow_with(
-            &[GlobalId::Transient(7)],
+            &[export],
             &[],
             &[],
             Antichain::from_elem(Timestamp::from(300u64)),
@@ -739,15 +814,37 @@ mod tests {
             "compaction must be capped at the interactive dataflow's as_of, not {beyond:?}"
         );
 
-        // Dropping the interactive dataflow releases the hold, and the deferred compaction is
-        // forwarded so the collection is not pinned forever.
+        // The controller now drops the interactive dataflow. This must NOT release the hold: it is
+        // the controller's own view, and interactive may still have the create queued.
         h.mux
             .send(ComputeCommand::AllowCompaction {
-                id: GlobalId::Transient(7),
+                id: export,
                 frontier: Antichain::new(),
             })
             .await
             .expect("send drop");
+
+        let after_drop: Vec<_> = maint_commands(&h)
+            .into_iter()
+            .filter_map(|cmd| match cmd {
+                ComputeCommand::AllowCompaction { id, frontier } if id == source => Some(frontier),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            after_drop.last(),
+            Some(&as_of),
+            "the controller dropping the dataflow must not release the hold: interactive may not \
+             have rendered yet, and the render would then find the import compacted past its as_of"
+        );
+
+        // Interactive reports a frontier for the export, which proves it rendered the dataflow and
+        // holds the shared trace itself. That retires the bridging hold. The release is queued rather
+        // than sent inline, so the next `recv` is what forwards it.
+        h.inter_tx.send(frontiers(export, 1)).expect("send report");
+        h.mux.recv().await.expect("recv report");
+        h.inter_tx.send(frontiers(export, 2)).expect("send report");
+        h.mux.recv().await.expect("recv report");
 
         let forwarded: Vec<_> = maint_commands(&h)
             .into_iter()
@@ -759,8 +856,139 @@ mod tests {
         assert_eq!(
             forwarded.last(),
             Some(&beyond),
-            "the deferred compaction must be forwarded once the hold is released"
+            "the deferred compaction must be forwarded once interactive confirms the render"
         );
+    }
+
+    /// The controller dropping an interactive dataflow before it has rendered does not expose its
+    /// imports to compaction.
+    ///
+    /// This is the counterexample `protocol.tla` contains for its own `I1`: create the dataflow, drop
+    /// it, then allow compaction. Releasing the hold on the drop makes the third step go uncapped even
+    /// though the create is still queued for interactive, so the render that follows finds the import
+    /// compacted past its `as_of`. The order matters, which is why this is separate from the test
+    /// above: there the compaction precedes the drop.
+    #[mz_ore::test(tokio::test)]
+    async fn dropping_an_unrendered_dataflow_keeps_its_imports_held() {
+        let mut h = harness();
+        let source = GlobalId::User(1);
+        let export = GlobalId::Transient(7);
+        let as_of = Antichain::from_elem(Timestamp::from(100u64));
+        let beyond = Antichain::from_elem(Timestamp::from(200u64));
+
+        h.mux
+            .send(interactive_import_of(source, export, &as_of))
+            .await
+            .expect("send create");
+
+        // The controller decides the dataflow is finished, without interactive ever reporting a
+        // frontier for it.
+        h.mux
+            .send(ComputeCommand::AllowCompaction {
+                id: export,
+                frontier: Antichain::new(),
+            })
+            .await
+            .expect("send drop");
+
+        // Only now does compaction arrive for the import. It must still be capped.
+        h.mux
+            .send(ComputeCommand::AllowCompaction {
+                id: source,
+                frontier: beyond.clone(),
+            })
+            .await
+            .expect("send compaction");
+
+        let seen: Vec<_> = maint_commands(&h)
+            .into_iter()
+            .filter_map(|cmd| match cmd {
+                ComputeCommand::AllowCompaction { id, frontier } if id == source => Some(frontier),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            seen.last(),
+            Some(&as_of),
+            "an unrendered dataflow's hold must survive the controller dropping it"
+        );
+    }
+
+    /// A `Hello` discards hold state, so a hold left over from the previous connection cannot cap
+    /// compaction forever.
+    ///
+    /// A hold retires when interactive reports a frontier for the dataflow. A connection that drops
+    /// before that report leaves the hold in place, and the replayed command history of the next epoch
+    /// need not re-create that dataflow at all, so nothing would ever retire it.
+    #[mz_ore::test(tokio::test)]
+    async fn hello_discards_stale_holds() {
+        let mut h = harness();
+        let source = GlobalId::User(1);
+        let export = GlobalId::Transient(7);
+        let as_of = Antichain::from_elem(Timestamp::from(100u64));
+        let beyond = Antichain::from_elem(Timestamp::from(200u64));
+
+        h.mux
+            .send(interactive_import_of(source, export, &as_of))
+            .await
+            .expect("send create");
+        h.mux
+            .send(ComputeCommand::Hello {
+                nonce: Uuid::from_u128(2),
+            })
+            .await
+            .expect("send hello");
+        h.mux
+            .send(ComputeCommand::AllowCompaction {
+                id: source,
+                frontier: beyond.clone(),
+            })
+            .await
+            .expect("send compaction");
+
+        let seen: Vec<_> = maint_commands(&h)
+            .into_iter()
+            .filter_map(|cmd| match cmd {
+                ComputeCommand::AllowCompaction { id, frontier } if id == source => Some(frontier),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            seen.last(),
+            Some(&beyond),
+            "a hold from the previous connection must not cap the new epoch"
+        );
+    }
+
+    /// A bounded transient dataflow exporting `export` and importing `export`'s source at `as_of`,
+    /// which the multiplexer routes to interactive.
+    fn interactive_import_of(
+        source: GlobalId,
+        export: GlobalId,
+        as_of: &Antichain<Timestamp>,
+    ) -> ComputeCommand {
+        let mut cmd = create_dataflow_with(
+            &[export],
+            &[],
+            &[],
+            Antichain::from_elem(Timestamp::from(300u64)),
+        );
+        if let ComputeCommand::CreateDataflow(desc) = &mut cmd {
+            desc.as_of = Some(as_of.clone());
+            desc.index_imports.insert(
+                source,
+                mz_compute_types::dataflows::IndexImport {
+                    desc: mz_compute_types::dataflows::IndexDesc {
+                        on_id: source,
+                        key: Vec::new(),
+                    },
+                    typ: mz_repr::ReprRelationType::empty(),
+                    monotonic: false,
+                    with_snapshot: true,
+                },
+            );
+        }
+        cmd
     }
 
     /// Capping never sends a collection a frontier below one already sent for it.
