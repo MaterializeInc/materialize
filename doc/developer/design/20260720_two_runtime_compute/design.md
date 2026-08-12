@@ -217,7 +217,7 @@ how many cells are not measured.
 | S11, coordinator sharding | | | | | | **the only candidate**, measured elsewhere at about +25% peek throughput | | | | | | |
 | S12, oracle batching or avoidance | | | | | | | **the only candidate** | | | | | |
 | S13, `SUBSCRIBE ... WITH (SNAPSHOT = false)` | | removes the snapshot's cost | | | | | | removes the snapshot's cost | | | | **removes the work, and already ships** |
-| S14, routing subscribes to the interactive runtime | | the snapshot's cost only | | | | | | the snapshot's cost only | | | | |
+| S14, allowing unbounded *transient* dataflows on the interactive runtime | | the snapshot's cost only | | | | | | the snapshot's cost only | | | | |
 | S15, a chunked snapshot with partial-progress semantics | | | | | | | | | | | | `argued`, and a contract change |
 
 M10 has no row at all, deliberately: no scheduling change manufactures CPU. M9 has no
@@ -226,10 +226,25 @@ produces the effect and none that explains it. M12 has an incumbent escape hatch
 works only for consumers not needing initial state, and nothing that makes a consistent
 prefix available early without changing what `SUBSCRIBE` promises.
 
-S14 is currently impossible rather than merely unbuilt, because the routing condition
-excludes subscribes outright. It is listed because removing that exclusion is a smaller
-change than anything else that would reach the same cells, and because the exclusion's
-rationale is unrecorded.
+S14 is the cheapest thing that reaches an ordinary `SUBSCRIBE`, and it is not the
+change it first looks like. Dropping the subscribe clause alone buys almost nothing,
+because an ordinary subscribe's `until` is *already* empty and so is already excluded
+by the neighbouring finite-`until` condition: `optimize/subscribe.rs` sets
+`until = {MIN}` and joins each sink's `up_to`, which is empty without an explicit
+`UP TO`. The subscribe clause therefore only bites for `SUBSCRIBE ... UP TO`.
+
+What reaches the actual case is dropping **both** the finite-`until` clause and the
+subscribe clause while *keeping* transience, so the predicate becomes
+`desc.is_transient() && desc.copy_to_ids().next().is_none()`. Keeping transience is
+what makes it cheap: transient ids are never retained by reconciliation, so nothing
+regresses there, they pass both frontier-reporting gates unchanged, and their exports
+are freshly rendered so the shared-trace re-export path is not reached. It needs the
+hold advance above, plus two call-site bugs in `import_index_shared` recorded in the
+open findings. Roughly 250 lines with tests.
+
+Maintained collections on the interactive runtime are a strictly larger change and one
+piece of it has no home in the current protocol. See the reconciliation finding in
+[the open findings](#open-findings-from-adversarial-review).
 
 **M8 was predicted to invert the M1 ordering. It inverts one row, not the ordering,
 and the prediction about slicing was wrong.** Registered before E13 ran: cooperative
@@ -413,12 +428,15 @@ Two are code checks, cheap and capable of changing a conclusion. Do these first.
   column?** If it turns the skewed lookup into a bounded seek, the field case that
   motivated much of this work is a plan defect, and S7 dominates the peek program for
   that shape. A code read plus one `EXPLAIN`.
-* **Why are subscribes excluded from the interactive runtime?** The condition is
-  `desc.subscribe_ids().next().is_none()` and its rationale is not recorded, unlike the
-  neighbouring copy-to exclusion which cites reconciliation. An unbounded `until`
-  already excludes an ordinary subscribe, so this only bites for `SUBSCRIBE ... UP TO`.
-  If the reason turns out to be incidental, S14 becomes available and the largest
-  freshness event a single statement can cause becomes movable.
+* ~~Why are subscribes excluded from the interactive runtime?~~ **Answered.** The
+  subscribe clause only bites for `SUBSCRIBE ... UP TO`, because an ordinary
+  subscribe's `until` is already empty and the neighbouring condition already excludes
+  it. Nothing in the subscribe response path blocks interactive: the response buffer is
+  per-runtime, `process_subscribes` runs on every role, `SubscribeResponse` passes
+  `filter_response` verbatim, and subscribes emit no `Frontiers` at all so the
+  transience gates never touch them. The real constraints are the read-hold gap above
+  and the two `import_index_shared` bugs in the open findings. So S14 is available, and
+  it is a wider change than dropping one clause.
 
 Then the measurements, in order of how much they would change the table.
 
@@ -965,16 +983,22 @@ reconciliation and placeholder eviction, should be added once it models the impl
 
 ## The bounded-read boundary
 
-The interactive runtime serves a read only when it is bounded, meaning its
-`until` is a finite frontier, it is not a `SUBSCRIBE`, and it is not a
-`COPY TO`. Everything else runs on the maintenance runtime.
+The interactive runtime serves a read only when the dataflow is **wholly transient**
+*and* its `until` is a finite non-empty frontier *and* it carries no `SUBSCRIBE` sink
+*and* it carries no `COPY TO` sink. Everything else runs on the maintenance runtime.
 
-The routing predicate keys on `until`-finiteness, not on whether the target id is
-transient. A maintained index has an unbounded `until` and so always lands on
-maintenance regardless of catalog transience. `COPY TO` is bounded but still
-excluded, for reconciliation and S3-sink reasons rather than frontier reasons. A
-mixed or non-homogeneous dataflow is treated as maintained by construction, which
-is the safe default.
+NOTE: an earlier version of this paragraph said the predicate keys on
+`until`-finiteness rather than on transience. It requires both, and transience is not
+redundant: a durable dataflow can also carry a finite `until`, since a `REFRESH AT`
+materialized view sets one, and interactive's frontier reports are forwarded only for
+transient ids. Routing such a dataflow to interactive would get its frontier reports
+dropped, so it has to stay on maintenance regardless of `until`.
+
+Of the two sink exclusions, only `COPY TO`'s has a recorded reason, its S3 sink being
+refused by reconciliation. The subscribe clause turns out to bite only for
+`SUBSCRIBE ... UP TO`, because an ordinary subscribe's `until` is already empty. A
+mixed or non-homogeneous dataflow is treated as maintained by construction, which is
+the safe default.
 
 ## The sharing primitive
 
@@ -1055,13 +1079,37 @@ reader from latching an anti-conservative `since` that claims accuracy at
 already-merged times. An index publishes two independent arrangements, so
 readiness and `since` gating operate on `meet(oks, errs)`.
 
-### Bounded import, not live replay
+### Bounded import is a call-site choice, not a limit of the primitive
 
-`SharedTraceHandle::import_snapshot_at` imports the shared arrangement as a static
-snapshot at `as_of`, bounded by `until`. The interactive runtime only ever answers
-bounded reads, so a live-following import would track the source's live frontier,
-gain nothing over the maintenance seal rate, and still consume interactive-lane
-resources. The unbounded live `import` was dead code and was removed.
+NOTE: an earlier version of this section claimed the primitive could only do bounded
+snapshots and that live following had been removed as dead code. **That was wrong,
+and the primitive's own documentation says so.**
+
+`SharedTraceHandle::import_snapshot_at(scope, name, as_of, until)` bounds the import
+by `until`, and `shared_trace.rs` states the contract directly: "For a single-time
+interactive read pass `until = as_of.step_forward()` ... An empty `until` performs no
+bounding and the import stays live with the trace." The bound is checked as
+`frontier.is_empty() || until.less_equal(&frontier)`, and an empty antichain is
+`less_equal` to nothing but the empty frontier, so an empty `until` never fires the
+bound except on the publisher's terminal signal. The signature is the analogue of the
+maintenance path's `TraceAgent::import_frontier_core(outer, name, as_of, until)`, into
+which maintained dataflows pass an empty `until` routinely.
+
+The feed is live already. `adopt_named` is a sink on the arrangement stream that on
+every activation pushes arrived batches to every registered queue, pushes a `Frontier`
+instruction when `upper` advances, and activates every importer. What was deleted was
+a second function that duplicated this, not a capability.
+
+**What actually makes interactive imports bounded is the call site.**
+`import_index_shared` in `render.rs` synthesizes `snapshot_until` as
+`as_of.step_forward()` and passes that instead of `self.until`, with a comment saying
+`self.until` may be empty for a long-lived dependency "so it cannot serve as the
+snapshot bound". That is a deliberate narrowing to single-time reads, and reversing it
+is a one-argument change.
+
+The reason that matters is that it moves the obstacle. Following imports are not the
+hard part. See
+[No way to advance a cross-runtime read hold](#no-way-to-advance-a-cross-runtime-read-hold).
 
 Import is pairwise: importer worker `i` reads publisher worker `i`. That is sound
 only when both sides shard keys the same way, `key.hashed() % peers`, with equal
@@ -1070,6 +1118,44 @@ also asserts `since <= as_of`: a published slot whose `since` already sits above
 the requested `as_of` means the controller offered an unreadable `as_of`, a
 protocol error, and the import must panic rather than silently read coalesced
 data.
+
+### No way to advance a cross-runtime read hold
+
+This is the gap that forecloses both `SUBSCRIBE` on the interactive runtime and
+maintained collections on it, and it is not the import shape.
+
+Every read-hold mechanism on the branch assumes an interactive reader stops on its
+own, and none of them can express a reader that follows.
+
+* `InteractiveHold { imports, as_of }` in the multiplexer is written once from the
+  dataflow's `as_of` and never updated. `hold_floor` returns that frozen value, and
+  `release_holds` fires only when an export's `AllowCompaction` reaches the empty
+  frontier.
+* In the replica, `render.rs` calls `set_logical_compaction(as_of)` and
+  `set_physical_compaction(as_of)` on the imported handles and then retains them as
+  tokens without ever downgrading them.
+
+For a single-time read that is correct and short-lived. For a long-lived importer the
+imported index's `since` is pinned at the importer's creation `as_of` for the
+importer's whole life, while the controller's `AllowCompaction`s pile up in
+`deferred_compaction` unforwarded. That is unbounded history retention on a
+maintenance trace, which is the opposite of what a maintained collection needs, and it
+applies to any long-lived interactive dataflow whether or not it is maintained.
+
+This reframes the release-ordering item in
+[the open findings](#open-findings-from-adversarial-review). That was written as an
+ordering bug at drop time. It is better read as the visible corner of a missing
+capability: **there is no way to advance a cross-runtime read hold**, and once holds
+advance, releasing at drop stops being what unblocks compaction.
+
+The fix is expressible without a protocol change. The multiplexer already observes
+interactive's own progress in `recv`, as `Frontiers` for a transient export or as
+`SubscribeResponse::Batch(upper)`, so `InteractiveHold.as_of` can be advanced there.
+One constraint: `recv` is documented cancel-safe, so awaiting a `send` inside it would
+break that, and a released compaction has to be stashed and flushed at the top of
+`send` instead. In the replica the export's frontier has to feed back into the retained
+handles' `set_logical_compaction`, which is a `TraceReader` method the handle already
+implements.
 
 ## The registry
 
@@ -1251,6 +1337,43 @@ decision rather than a patch.
   withheld entirely; releasing is not. The correct release point is a signal from
   the interactive runtime, which the current protocol does not have. This is the
   same class of bug as the one the capping was introduced to fix, one level up.
+  NOTE: read this together with
+  [No way to advance a cross-runtime read hold](#no-way-to-advance-a-cross-runtime-read-hold).
+  Release ordering is the drop-time corner of that larger gap, and once holds advance,
+  release stops being what unblocks compaction.
+* **`import_index_shared` silently drops `SnapshotMode`.** The maintenance import
+  honours `SnapshotMode::Exclude`, which is what `WITH (SNAPSHOT = false)` lowers to.
+  The shared import's signature has no `snapshot_mode` parameter at all, so the mode is
+  discarded. Unreachable today, because no `Exclude` dataflow routes to interactive.
+  Reachable the instant a subscribe does, and the failure is a **silently wrong
+  answer**: the snapshot is included when the user asked for it to be skipped. This
+  wants fixing before, not with, any routing relaxation.
+* **`export_index` panics on re-exporting a shared trace.** The
+  `unreachable!("interactive runtime does not re-export an imported shared
+  arrangement")` arm holds only while interactive's exports are always freshly rendered
+  local arrangements. A maintained index on interactive whose plan is a bare `Get` of
+  an imported index with a matching key would take it.
+* **Reconciliation cannot retain any cross-runtime importer, and this is stronger than
+  the I2 row that records it.** `dependencies_retained` requires every imported index
+  id to appear in `retain_ids`, and `retain_ids` is populated only from matches within
+  *the same runtime's* new commands. An interactive dataflow's imported maintenance
+  index is routed to maintenance, so it never appears in interactive's stream, so the
+  check is **always false**. Every interactive dataflow with an index import is
+  replaced on every controller reconnect. Harmless for an ephemeral read and fatal for
+  the premise of a maintained collection on interactive, which would rehydrate on every
+  reconnect. Fixing it needs the two runtimes to exchange retained-id sets, and the
+  protocol has no place for that. This is the piece of "maintained dataflows on
+  interactive" that is structurally foreclosed rather than merely unbuilt.
+* **The inert physical hold is worse for a following importer than for a bounded one.**
+  A bounded importer cuts once and retires, so the race has a small window per read. A
+  following importer's downstream operators advance physical compaction on every
+  frontier notification, so it cuts one round behind the publisher's `upper`
+  continuously for the collection's life, retrying the same race on every seal. A
+  remedy that fits the existing types: record the floor the publisher has already
+  forwarded in the shared state, clamp a newly registered hold up to it rather than to
+  `since` alone, and assert against it at import time. That converts a straddle abort
+  into a loud protocol-ordering failure at import, which matches this document's stated
+  failure philosophy.
 * **`compaction_floor` is never evicted**, so the multiplexer retains one entry per
   collection id ever seen, including every transient peek dataflow, for the life of
   the connection. The neighbouring `transient_owner` is evicted precisely to avoid
