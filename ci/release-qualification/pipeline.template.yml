@@ -892,7 +892,7 @@ steps:
       - id: upsert-large-scale
         topics: [kafka]
         label: Upsert large scale ingestion
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 3600
         plugins:
           - ./ci/plugins/mzcompose:

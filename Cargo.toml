@@ -52,7 +52,6 @@ members = [
     "src/kafka-util",
     "src/license-keys",
     "src/materialized",
-    "src/materialized",
     "src/metabase",
     "src/metrics",
     "src/metrics-catalog",
