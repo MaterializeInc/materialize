@@ -13,9 +13,9 @@ This guide shows how to send results from Materialize to turbopuffer. A
 [`mz-tpuf-sink`](https://github.com/MaterializeInc/mz-turbopuffer-sink)
 reads that topic and writes the documents to a turbopuffer namespace.
 
-Use this pipeline to keep a turbopuffer namespace up to date, just using SQL. 
-Materialize maintains the search document as an incrementally updated view 
-over your operational data, and pushes precise deltas to turbopuffer as 
+Use this pipeline to keep a turbopuffer namespace up to date, just using SQL.
+Materialize maintains the search document as an incrementally updated view
+over your operational data, and pushes precise deltas to turbopuffer as
 upstream data changes, so only the affected documents are rewritten.
 
 Vectors come from a **transform**, a Python function that declares the columns
