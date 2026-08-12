@@ -1,5 +1,32 @@
 # Cutting the branch into landable pieces
 
+> **STALE IN ITS ORDERING PREMISE.** The split below is still a reasonable description of
+> where the seams are, but the argument for the *order* rests on a claim that measurement
+> has since refuted. Read
+> `design.md`'s [Problems and mechanisms](design.md#problems-and-mechanisms) first, and
+> treat the stacks here as a map of the diff rather than as a plan.
+>
+> What changed:
+>
+> * **"The peek offload carries essentially all the measured peek benefit" is false.** E12
+>   found it 17% *worse* than doing nothing when a peek queues behind a long operator
+>   activation, and E13 found it ties the second runtime on freshness rather than beating
+>   it. Cooperative peek slicing, which is implemented outside this branch in PR #38040, is
+>   predicted to match or beat it on both fixtures Stack A was justified by.
+> * **A1 is largely subsumed by #38040**, which rewrites the same lines into a `PeekScan`
+>   type and where `IndexPeekMetrics` already exists. Stack A should be rebased onto it
+>   rather than extracted independently.
+> * **C5 should not be cut.** An earlier revision recommended dropping the registry peek
+>   path on the strength of E2. That was wrong twice: E2 measures a different mechanism,
+>   and the multiplexer routes *every* peek to the interactive runtime unconditionally, so
+>   it is not a separable component.
+> * **A new correctness prerequisite exists** that is not in any stack here: the shared
+>   trace handle diverges from `TraceAgent` in two ways that disable differential's own
+>   guard against reading a cut the spine has merged across. It should land regardless of
+>   what else does, because today's bounded reads race it too.
+> * **A new candidate piece exists**: allowing unbounded *transient* dataflows on the
+>   interactive runtime, which is what reaches an ordinary `SUBSCRIBE`.
+
 The branch is about 12,100 inserted lines across 51 files. This is how it splits, what each piece depends on, and why the order is what it is.
 
 ## Already extracted

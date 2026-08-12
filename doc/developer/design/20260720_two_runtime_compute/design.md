@@ -479,6 +479,57 @@ E12 and E13 each settled what was item one on this list at the time. E12 inverte
 cells and cost S5 its claim on M2. E13 refuted a prediction registered against it and
 cost S5 its claim to be uniquely best on freshness.
 
+### Where the design exploration stands
+
+Written as a handover. The purpose of this section is to let someone argue
+implementation order from evidence rather than from the order things happened to get
+built.
+
+**Settled, with measurement.**
+
+* The mechanisms are distinct and their remedies are disjoint. E2 and E12 together are
+  the proof: a point lookup behind concurrent *peeks* and a point lookup behind an
+  *operator activation* respond to different solutions.
+* Cooperative peek slicing reaches M1 and M8 and not M2. Routing peeks to the
+  interactive runtime reaches M2 and M8 and not M1. Running the walk on another thread
+  reaches M1 and M8, and is measurably *worse* than doing nothing on M2.
+* Serving a peek costs freshness, 43x on the measured fixture, and freshness is the one
+  cost here that reaches a customer.
+* The frontier wait is real and only becomes visible once queueing is removed.
+* Publication does not duplicate resident memory.
+
+**Open, and each one blocks an ordering argument.**
+
+* **Cooperative slicing is unmeasured on every axis.** It is scored `argued` on M1, and
+  on M8 only at a light write load. It is the only unmeasured row that could displace
+  something already built, so nothing should be ordered ahead of measuring it.
+* **The offload has no axis on which it is uniquely best.** Its remaining claims are the
+  unexplained swap-walk speedup and an unmeasured quantum floor. Until one of those
+  resolves, an order that puts it first cannot be defended.
+* **M4, M6, M7 and M12 have one candidate row each and no work behind any of them**, and
+  M4 is measured, unconditional, and dominant for the workload the second runtime is
+  justified by. An order that ignores them is choosing to leave the largest measured
+  floor in place.
+* **Two code checks are cheap and could each move a row**: whether the reported
+  freshness number is a minimum across replicas, and whether the fast path exploits an
+  index on the key plus the ordering column.
+* **The physical-hold divergence from `TraceAgent` is a correctness prerequisite**, not
+  a follow-up. Anything that keeps a trace handle across activations depends on it,
+  which includes every `SUBSCRIBE` or long-lived dataflow proposal here.
+
+**Where this document is not yet internally consistent.** Several sections were written
+before the measurements and the code review, and were corrected in place. The corrected
+ones carry an explicit `NOTE:`. Sections without one have not been re-checked against
+E12, E13, or the `TraceAgent` findings, and the ones most likely to be stale are the
+ones that argue from the peek results: the fork's implications, "what it does not buy",
+and the commitment. `pr-split.md` is stale in its ordering premise and says so at the
+top.
+
+**What a clean-up pass should produce.** One ordering, derived from the matrix rather
+than from build history, in which every step names the mechanism it reaches, the
+evidence for that reach, and what it depends on. The matrix is now good enough to derive
+that. The sections arguing for individual pieces are not, because they predate it.
+
 ## Why this architecture
 
 This is a deliberate architectural commitment, not an isolated feature. It is
