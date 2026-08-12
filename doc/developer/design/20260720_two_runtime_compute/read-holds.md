@@ -209,3 +209,43 @@ single-process core and runs in CI, and its habit of parameterising the step
 relation by each retired behaviour is worth keeping. It is the wrong tool for this
 question: it certifies a fix rather than searching for the next defect, and the
 findings that produced this document were all interleavings nobody had imagined.
+
+## Implementation sequence
+
+Step 0 is done (`9babb21b5b`). The rest is deliberately not split further, because
+step 1 without step 2 leaks a hold and step 4 is only safe after 1 to 3.
+
+0. **Command vocabulary.** `ComputeCommand::AcquireHolds`/`ReleaseHolds`, boxed,
+   plus the four exhaustive matches they touch. Nothing emits them and the compute
+   side panics on receipt, so no behaviour changed. `reduce` treats them as
+   unreachable because the multiplexer synthesizes them rather than the controller
+   issuing them.
+1. **Maintenance-side `AcquireHolds`.** For each id, clone that collection's
+   `TraceBundle` handles and pin them at `as_of`, keyed by holder. The clone base
+   matters: `compute_state.traces` sits at the controller's frontier, which by I1a
+   is at or below every `as_of` the controller may offer, so a clone of it can be
+   set to `as_of`. A clone of the publisher's own agent cannot, because that agent
+   has ratcheted (G5).
+2. **Release without a command reaching maintenance.** The publisher reclaims a
+   hold once the importing registration has existed and gone. Needs an
+   `everRegistered` marker per holder, because "no registration" is otherwise
+   ambiguous between "the create has not been processed yet" and "the reader is
+   finished", and reclaiming in the first case is the defect the model found.
+3. **Multiplexer synthesis**, over the alias closure of the imports (G3).
+4. **Delete the cap.** `hold_floor`, `deferred_compaction`, `compaction_floor`,
+   `pending_compaction`, the retire-on-response trigger and `reset`. This is what
+   pays down the debt: it removes the per-query `compaction_floor` leak, the
+   `recv`-performs-`send` cancel-safety dependency, and `reset`'s epoch exposure,
+   by removing the code that has them.
+5. **Then model G2**, with epoch-scoped holder identity, and fold `CtlDrop` into
+   `CtlCompact(export, empty)` so the export becomes a compactable id like any
+   other. The multiplexer routes on the id and treats export and import
+   differently, so a routing or ordering bug between them can only surface if both
+   are the same command class in the model.
+
+Known defects this sequence does not address, tracked separately: the subscribe
+retirement signal (G4) is dissolved by step 2 rather than fixed, since nothing
+depends on a response any more; `hold_floor`'s incomparable-antichain comparator
+disappears with step 4; the publisher's single-agent ratchet (G5) is addressed by
+step 1 only for holds acquired through the command, not for registrations the
+interactive runtime makes on its own.
