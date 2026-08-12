@@ -301,6 +301,8 @@ ignore = [
     "RUSTSEC-2026-0195",
     # `bitmaps` is unmaintained
     "RUSTSEC-2026-0247",
+    # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
+    "RUSTSEC-2026-0253",
 ]
 
 # Must be manually kept in sync with about.toml.

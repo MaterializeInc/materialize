@@ -123,6 +123,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if os.path.exists(junit_path):
         os.remove(junit_path)
 
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
+    # Miri excludes the network-based tests, so it needs none of the services
+    # below and pulls none of their mzbuild images. Dispatch before `c.up()` so
+    # the Buildkite step has nothing to depend on the build for.
+    if not coverage:
+        if args.miri_full:
+            run_miri_slow(dict(os.environ))
+            return
+        if args.miri_fast:
+            run_miri_fast(dict(os.environ))
+            return
+
     c.up(
         "kafka",
         "schema-registry",
@@ -168,7 +181,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         FDB_CLUSTER_FILE=fdb_cluster_file.name,
     )
 
-    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
     metadata = json.loads(
@@ -179,10 +191,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if coverage:
         run_coverage_test(args, env)
-    elif args.miri_full:
-        run_miri_slow(env)
-    elif args.miri_fast:
-        run_miri_fast(env)
     elif sanitizer != Sanitizer.none:
         run_sanitizer(args, env, metadata, sanitizer)
     else:
