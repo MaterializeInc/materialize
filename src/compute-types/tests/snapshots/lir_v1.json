@@ -1596,7 +1596,7 @@
     "STRUCT": {
       "expr_index": "U64",
       "literal": {
-        "TYPENAME": "Row"
+        "TYPENAME": "StableRow"
       }
     }
   },
@@ -2069,7 +2069,7 @@
           "SEQ": {
             "TUPLE": [
               {
-                "TYPENAME": "Row"
+                "TYPENAME": "StableRow"
               },
               "U64",
               {
@@ -2571,7 +2571,7 @@
           },
           {
             "OPTION": {
-              "TYPENAME": "Row"
+              "TYPENAME": "StableRow"
             }
           },
           {
@@ -2962,7 +2962,7 @@
                 },
                 {
                   "OPTION": {
-                    "TYPENAME": "Row"
+                    "TYPENAME": "StableRow"
                   }
                 }
               ]
@@ -3145,7 +3145,7 @@
       },
       "Ok": {
         "NEWTYPE": {
-          "TYPENAME": "Row"
+          "TYPENAME": "StableRow"
         }
       }
     }
@@ -3575,11 +3575,6 @@
   "RoundFloat64": "UNITSTRUCT",
   "RoundNumeric": "UNITSTRUCT",
   "RoundNumericBinary": "UNITSTRUCT",
-  "Row": {
-    "STRUCT": {
-      "data": "BYTES"
-    }
-  },
   "SafeMfpPlan": {
     "STRUCT": {
       "mfp": {
@@ -3757,6 +3752,9 @@
   },
   "SqrtFloat64": "UNITSTRUCT",
   "SqrtNumeric": "UNITSTRUCT",
+  "StableRow": {
+    "NEWTYPESTRUCT": "BYTES"
+  },
   "StartsWith": "UNITSTRUCT",
   "StepMzTimestamp": "UNITSTRUCT",
   "StringToArray": "UNITSTRUCT",

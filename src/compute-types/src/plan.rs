@@ -26,7 +26,7 @@ use mz_ore::str::Indent;
 use mz_repr::explain::text::text_string_at;
 use mz_repr::explain::{DummyHumanizer, ExplainConfig, ExprHumanizer, PlanRenderingContext};
 use mz_repr::optimize::OptimizerFeatures;
-use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_repr::{Diff, GlobalId, StableRow, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::dataflows::DataflowDescription;
@@ -212,7 +212,7 @@ impl std::fmt::Display for LirId {
 /// Bump this when the serialized representation of [`LirRelationExpr`] or
 /// anything it transitively contains changes. The schema snapshot test in
 /// `tests/lir_schema.rs` enforces that the traced schema matches the
-/// checked-in `tests/snapshots/lir_v{LIR_VERSION}.yaml`.
+/// checked-in `tests/snapshots/lir_v{LIR_VERSION}.json`.
 pub const LIR_VERSION: u64 = 1;
 
 pub use constant_rows_serde::ConstantRows;
@@ -226,14 +226,14 @@ pub use constant_rows_serde::ConstantRows;
 /// order as `Result`, so the encoded bytes are unchanged.
 mod constant_rows_serde {
     use mz_expr::EvalError;
-    use mz_repr::{Diff, Row, Timestamp};
+    use mz_repr::{Diff, StableRow, Timestamp};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     /// The serialized form of `LirRelationNode::Constant`'s rows.
     #[derive(Debug, Serialize, Deserialize)]
     pub enum ConstantRows {
         /// See `Result::Ok`.
-        Ok(Vec<(Row, Timestamp, Diff)>),
+        Ok(Vec<(StableRow, Timestamp, Diff)>),
         /// See `Result::Err`.
         Err(EvalError),
     }
@@ -242,12 +242,12 @@ mod constant_rows_serde {
     #[derive(Serialize)]
     #[serde(rename = "ConstantRows")]
     enum ConstantRowsRef<'a> {
-        Ok(&'a Vec<(Row, Timestamp, Diff)>),
+        Ok(&'a Vec<(StableRow, Timestamp, Diff)>),
         Err(&'a EvalError),
     }
 
     pub fn serialize<S: Serializer>(
-        rows: &Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
+        rows: &Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         let mirror = match rows {
@@ -259,7 +259,7 @@ mod constant_rows_serde {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<Result<Vec<(Row, Timestamp, Diff)>, EvalError>, D::Error> {
+    ) -> Result<Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>, D::Error> {
         Ok(match ConstantRows::deserialize(deserializer)? {
             ConstantRows::Ok(rows) => Ok(rows),
             ConstantRows::Err(err) => Err(err),
@@ -283,7 +283,7 @@ pub enum LirRelationNode {
     Constant {
         /// Explicit update triples for the collection.
         #[serde(with = "constant_rows_serde")]
-        rows: Result<Vec<(Row, Timestamp, Diff)>, EvalError>,
+        rows: Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>,
     },
     /// A reference to a bound collection.
     ///
@@ -350,7 +350,7 @@ pub enum LirRelationNode {
         mfp: MfpPlan<LirScalarExpr>,
         /// Whether the input is from an arrangement, and if so,
         /// whether we can seek to a specific value therein
-        input_key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
+        input_key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
     },
     /// A variable number of output records for each input record.
     ///
@@ -626,7 +626,11 @@ pub enum GetPlan {
     /// Simply pass input arrangements on to the next stage.
     PassArrangements,
     /// Using the supplied key, optionally seek the row, and apply the MFP.
-    Arrangement(Vec<LirScalarExpr>, Option<Row>, MfpPlan<LirScalarExpr>),
+    Arrangement(
+        Vec<LirScalarExpr>,
+        Option<StableRow>,
+        MfpPlan<LirScalarExpr>,
+    ),
     /// Scan the input collection (unarranged) and apply the MFP.
     Collection(MfpPlan<LirScalarExpr>),
 }

@@ -24,7 +24,7 @@ use mz_expr::{
 use mz_ore::str::separated;
 use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::explain::ScalarOps;
-use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, StableRow};
 use serde::{Deserialize, Serialize};
 
 /// Scalar expressions, as appear in MFPs.
@@ -36,7 +36,7 @@ pub enum LirScalarExpr {
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
     Literal(
-        #[serde(with = "literal_value_serde")] Result<Row, EvalError>,
+        #[serde(with = "literal_value_serde")] Result<StableRow, EvalError>,
         ReprColumnType,
     ),
     /// A function call that takes one expression as an argument.
@@ -89,14 +89,14 @@ pub use literal_value_serde::LiteralValue;
 /// order as `Result`, so the encoded bytes are unchanged.
 mod literal_value_serde {
     use mz_expr::EvalError;
-    use mz_repr::Row;
+    use mz_repr::StableRow;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     /// The serialized form of `LirScalarExpr::Literal`'s value.
     #[derive(Debug, Serialize, Deserialize)]
     pub enum LiteralValue {
         /// See `Result::Ok`.
-        Ok(Row),
+        Ok(StableRow),
         /// See `Result::Err`.
         Err(EvalError),
     }
@@ -105,12 +105,12 @@ mod literal_value_serde {
     #[derive(Serialize)]
     #[serde(rename = "LiteralValue")]
     enum LiteralValueRef<'a> {
-        Ok(&'a Row),
+        Ok(&'a StableRow),
         Err(&'a EvalError),
     }
 
     pub fn serialize<S: Serializer>(
-        value: &Result<Row, EvalError>,
+        value: &Result<StableRow, EvalError>,
         serializer: S,
     ) -> Result<S::Ok, S::Error> {
         let mirror = match value {
@@ -122,7 +122,7 @@ mod literal_value_serde {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(
         deserializer: D,
-    ) -> Result<Result<Row, EvalError>, D::Error> {
+    ) -> Result<Result<StableRow, EvalError>, D::Error> {
         Ok(match LiteralValue::deserialize(deserializer)? {
             LiteralValue::Ok(row) => Ok(row),
             LiteralValue::Err(err) => Err(err),
@@ -142,7 +142,7 @@ impl LirScalarExpr {
             scalar_type: typ,
             nullable: matches!(res, Ok(Datum::Null)),
         };
-        let row = res.map(|datum| Row::pack_slice(&[datum]));
+        let row = res.map(|datum| StableRow(Row::pack_slice(&[datum])));
         LirScalarExpr::Literal(row, typ)
     }
 
@@ -663,7 +663,7 @@ impl From<&LirScalarExpr> for MirScalarExpr {
         match value {
             Column(c, treat_as_equal) => MirScalarExpr::Column(c.clone(), treat_as_equal.clone()),
             Literal(row, repr_column_type) => {
-                MirScalarExpr::Literal(row.clone(), repr_column_type.clone())
+                MirScalarExpr::Literal(row.clone().map(|row| row.0), repr_column_type.clone())
             }
             CallUnary { func, expr } => MirScalarExpr::CallUnary {
                 func: func.map_expr(),
@@ -696,7 +696,7 @@ impl TryFrom<&MirScalarExpr> for LirScalarExpr {
         match value {
             Column(c, treat_as_equal) => Ok(LirScalarExpr::Column(*c, treat_as_equal.clone())),
             Literal(row, repr_column_type) => Ok(LirScalarExpr::Literal(
-                row.clone(),
+                row.clone().map(StableRow),
                 repr_column_type.clone(),
             )),
             CallUnary { func, expr } => Ok(LirScalarExpr::CallUnary {

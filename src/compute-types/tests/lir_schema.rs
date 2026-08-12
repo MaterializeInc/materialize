@@ -13,10 +13,20 @@
 //! [`LirRelationExpr`] into a [`serde_reflection::Registry`] and compare it
 //! against a checked-in snapshot, `tests/snapshots/lir_v{LIR_VERSION}.json`.
 //! Any change to the serialized format of LIR (including the `*Func` enums,
-//! `EvalError`, `Row`, and everything else in the graph) changes the traced
-//! schema and fails `lir_schema_snapshot` until the snapshot is regenerated
-//! with `REWRITE=1`. The snapshot diff is the reviewable record of the format
+//! `EvalError`, and everything else in the graph) changes the traced schema
+//! and fails `lir_schema_snapshot` until the snapshot is regenerated with
+//! `REWRITE=1`. The snapshot diff is the reviewable record of the format
 //! change.
+//!
+//! Rows are the one place where the schema's guarantee is delegated rather
+//! than direct. `Row`'s own serde impl emits the raw bytes of the in-memory
+//! datum encoding, which is documented as free to change, so `Row` is a
+//! forbidden container here. The stable surface stores rows as `StableRow`,
+//! which serializes as protobuf-encoded `ProtoRow` bytes. The registry sees
+//! those as opaque BYTES, and the contract behind them is CI-guarded
+//! elsewhere: row.proto is covered by the buf breaking lint, and persist
+//! requires `ProtoRow` to stay backward compatible because it is the storage
+//! codec for `SourceData`.
 //!
 //! While a given LIR version is unshipped, regenerating its snapshot in place
 //! is fine. Once pinned plans are durably stored, a schema change must instead
@@ -187,9 +197,8 @@ fn diagnose(context: &str, err: serde_reflection::Error) -> ! {
              the synthesized \"\", chrono_tz reports 'not a valid timezone', \
              and NonZero integers reject the synthesized 0). Record a valid \
              sample of the smallest containing struct with tracer.trace_value \
-             in the samples section of trace_lir_registry. Keep samples \
-             minimal. A recorded sample is replayed wherever the type \
-             appears."
+             in the samples section of run_traces. Keep samples minimal. A \
+             recorded sample is replayed wherever the type appears."
         }
         Error::Incompatible(_, _) => {
             "Two types registered different formats under the same serde \
@@ -202,8 +211,20 @@ fn diagnose(context: &str, err: serde_reflection::Error) -> ! {
         }
         Error::MissingVariants(_) => {
             "An enum reached only through struct fields is explored one \
-             variant per pass and never completes. Add each listed enum to the \
-             trace_enums! list in trace_lir_registry."
+             variant per pass and never completes. If the listed enum is \
+             public, add it to the trace_enums! list in run_traces, at its \
+             LIR instantiation if it is generic (as for \
+             UnaryFunc<LirScalarExpr>). If it is a generic instantiated at \
+             more than one payload type, such as Result, no single trace can \
+             represent it: serialize the field through a named mirror enum \
+             with #[serde(with)] instead, as for ConstantRows in plan.rs. If \
+             it is private and cannot be imported, add its name to the \
+             check_incomplete_enum loop at the end of run_traces, and trace a \
+             public type that reaches it inside that loop. Beware same-named \
+             public types in other modules (mz_repr::adt::datetime and \
+             mz_sql_parser::ast both have a DateTimeField): the registry is \
+             keyed by container name, so tracing the wrong type registers a \
+             wrong format under the right name."
         }
         Error::UnknownFormat | Error::UnknownFormatInContainer(_) => {
             "Part of the traced structure stayed unknown. Usually a recorded \
@@ -214,12 +235,14 @@ fn diagnose(context: &str, err: serde_reflection::Error) -> ! {
         }
         Error::DeserializationError(_) | Error::UnexpectedDeserializationFormat(_, _, _) => {
             "A recorded sample was replayed against a format it no longer \
-             matches. Check the samples section of trace_lir_registry for a \
-             sample whose type changed shape, and regenerate or remove it."
+             matches. Check the samples section of run_traces for a sample \
+             whose type changed shape, and regenerate or remove it."
         }
         Error::NotSupported(_) => {
             "serde_reflection cannot trace this construct (for example \
-             deserialize_any or untagged enums). Change the type's serde \
+             #[serde(flatten)], deserialize_any, or untagged enums). The \
+             error does not name the offending type: look for the last \
+             mid-trace container in the partial dump. Change the type's serde \
              representation to something traceable."
         }
     };
@@ -376,16 +399,15 @@ fn run_traces(
     // formatter), so they cannot be listed above. Tracing their public
     // wrapper advances each incomplete enum on the path by one variant per
     // pass, but only if the enum is cleared from the tracer's incomplete set
-    // between passes (an enum marked incomplete is pinned to variant 0 to
-    // avoid runaway recursion). If the pass count ever becomes too low, the
-    // registry() call below fails and names the incomplete enum.
+    // before the pass (an enum marked incomplete is pinned to variant 0 to
+    // avoid runaway recursion). NOTE: the clear must come at the top of the
+    // pass, not the bottom. An enum that completes drops out of the
+    // incomplete set on its own, so with the clear at the top a still
+    // incomplete enum survives the final pass and the registry() call below
+    // fails and names it if the pass count ever becomes too low. A clear at
+    // the bottom would erase that evidence and let a truncated enum into the
+    // registry silently.
     for _ in 0..128 {
-        tracer
-            .trace_type::<Matcher>(samples)
-            .map_err(|err| ("Matcher".to_string(), err))?;
-        tracer
-            .trace_type::<ToCharTimestamp>(samples)
-            .map_err(|err| ("ToCharTimestamp".to_string(), err))?;
         for private_enum in [
             "MatcherImpl",
             "DateTimeField",
@@ -394,6 +416,12 @@ fn run_traces(
         ] {
             tracer.check_incomplete_enum(private_enum);
         }
+        tracer
+            .trace_type::<Matcher>(samples)
+            .map_err(|err| ("Matcher".to_string(), err))?;
+        tracer
+            .trace_type::<ToCharTimestamp>(samples)
+            .map_err(|err| ("ToCharTimestamp".to_string(), err))?;
     }
 
     Ok(())
@@ -530,7 +558,7 @@ fn lir_schema_contains_expected_types() {
         "LocalId",
         "GlobalId",
         // Data and types.
-        "Row",
+        "StableRow",
         "ReprScalarType",
         "ReprColumnType",
         "EvalError",
@@ -576,11 +604,15 @@ fn lir_schema_contains_only_stable_types() {
         "unexpected LirScalarExpr variants"
     );
 
+    // Row is forbidden because its serde impl emits the in-memory datum
+    // encoding, which is free to change between releases. Rows in the stable
+    // surface must go through StableRow (proto-encoded ProtoRow bytes).
     for forbidden in [
         "MirScalarExpr",
         "UnmaterializableFunc",
         "AggregateExpr",
         "MirRelationExpr",
+        "Row",
     ] {
         assert!(
             !registry.contains_key(forbidden),

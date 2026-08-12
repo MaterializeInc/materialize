@@ -1221,7 +1221,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                         time.advance_by(as_of_frontier.borrow());
                         if !until.less_equal(&time) {
                             Some((
-                                row,
+                                row.0,
                                 <T as Refines<mz_repr::Timestamp>>::to_inner(time),
                                 diff,
                             ))

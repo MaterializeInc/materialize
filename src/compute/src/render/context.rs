@@ -30,7 +30,7 @@ use mz_dyncfg::ConfigSet;
 use mz_expr::{Eval, Id, MfpPlan};
 use mz_ore::soft_assert_or_log;
 use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow};
+use mz_repr::{DatumVec, DatumVecBorrow, Diff, GlobalId, Row, RowArena, SharedRow, StableRow};
 use mz_storage_types::controller::CollectionMetadata;
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -986,13 +986,16 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     pub fn as_collection_core(
         &self,
         mfp_plan: MfpPlan<LirScalarExpr>,
-        key_val: Option<(Vec<LirScalarExpr>, Option<Row>)>,
+        key_val: Option<(Vec<LirScalarExpr>, Option<StableRow>)>,
         until: Antichain<mz_repr::Timestamp>,
         config_set: &ConfigSet,
     ) -> (
         VecCollection<'scope, T, mz_repr::Row, Diff>,
         VecCollection<'scope, T, DataflowErrorSer, Diff>,
     ) {
+        // Unwrap the stable-serialization row wrapper, seeking works on
+        // plain rows.
+        let key_val = key_val.map(|(key, val)| (key, val.map(|val| val.0)));
         // If the MFP is trivial, we can just call `as_collection`.
         // In the case that we weren't going to apply the `key_val` optimization,
         // this path results in a slightly smaller and faster
