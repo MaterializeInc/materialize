@@ -32,3 +32,7 @@ uuid = { workspace = true, features = ["v4"] }
 [features]
 default = []
 foundationdb = ["mz-foundationdb"]
+
+[package.metadata.unused-deps]
+# futures-util is only used by the FoundationDB oracle.
+ignore = ["futures-util"]

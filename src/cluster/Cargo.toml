@@ -30,8 +30,5 @@ mz-ore = { path = "../ore", features = ["turmoil"] }
 tracing-subscriber.workspace = true
 turmoil.workspace = true
 
-[package.metadata.cargo-udeps.ignore]
-# only used on linux
-
 [features]
 default = []

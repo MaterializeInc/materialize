@@ -58,6 +58,3 @@ uuid.workspace = true
 # feature set (see the [dependencies] mz-ore comment).
 mz-ore = { path = "../ore", features = ["test"] }
 tempfile.workspace = true
-
-[package.metadata.cargo-udeps.ignore]
-normal = []
