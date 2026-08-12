@@ -376,6 +376,13 @@ impl ComputeState {
             // `enable_upsert_paged_spill` — so each side writes only its own
             // bit and the flags compose as an OR.
             mz_timely_util::columnar::chunk::set_compute_spill_enabled(compute_spill);
+
+            // The generational depth floor below which spilled bodies store
+            // uncompressed. Subsystem-independent, so applied here alongside
+            // the rest of the process-wide chunk configuration.
+            let compress_min_depth =
+                u8::try_from(COLUMN_CHUNK_COMPRESS_MIN_DEPTH.get(config)).unwrap_or(u8::MAX);
+            mz_timely_util::columnar::chunk::set_compress_min_depth(compress_min_depth);
         }
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
