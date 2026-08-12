@@ -6690,6 +6690,7 @@ dependencies = [
  "mz-cloud-resources",
  "mz-cluster-client",
  "mz-compute",
+ "mz-compute-client",
  "mz-dyncfgs",
  "mz-http-util",
  "mz-metrics",
