@@ -320,8 +320,7 @@ impl StorageController for Controller {
         self.persist.cfg().apply_from(&config_params.dyncfg_updates);
 
         for instance in self.instances.values_mut() {
-            let params = Box::new(config_params.clone());
-            instance.send(StorageCommand::UpdateConfiguration(params));
+            instance.update_configuration(config_params.clone());
         }
         self.config.update(config_params);
         self.statistics_interval_sender
@@ -556,6 +555,7 @@ impl StorageController for Controller {
     fn create_instance(&mut self, id: StorageInstanceId, workload_class: Option<String>) {
         let metrics = self.metrics.for_instance(id);
         let mut instance = Instance::new(
+            self.config.parameters.clone(),
             workload_class,
             metrics,
             self.now.clone(),
@@ -567,9 +567,6 @@ impl StorageController for Controller {
         if !self.read_only {
             instance.send(StorageCommand::AllowWrites);
         }
-
-        let params = Box::new(self.config.parameters.clone());
-        instance.send(StorageCommand::UpdateConfiguration(params));
 
         let old_instance = self.instances.insert(id, instance);
         assert_none!(old_instance, "storage instance {id} already exists");

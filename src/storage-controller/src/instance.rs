@@ -32,6 +32,7 @@ use mz_storage_client::client::{
     RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
 };
 use mz_storage_client::metrics::{InstanceMetrics, ReplicaMetrics};
+use mz_storage_types::parameters::StorageParameters;
 use mz_storage_types::sinks::StorageSinkDesc;
 use mz_storage_types::sources::{IngestionDescription, SourceConnection};
 use timely::progress::Antichain;
@@ -73,6 +74,12 @@ pub(crate) struct Instance {
     /// list of running exports is quite a bit more convenient for the
     /// controller.
     active_exports: BTreeMap<GlobalId, ActiveExport>,
+    /// The instance's current storage configuration.
+    ///
+    /// Seeded at construction and merged on every runtime update via
+    /// [`Instance::update_configuration`]. New replicas receive it by replaying
+    /// the reduced command history, so this field is not read locally today.
+    config: StorageParameters,
     /// The command history, used to replay past commands when introducing new replicas or
     /// reconnecting to existing replicas.
     history: CommandHistory,
@@ -112,8 +119,13 @@ enum ActiveReplicas<'a> {
 }
 
 impl Instance {
-    /// Creates a new [`Instance`].
+    /// Creates a new [`Instance`] configured with `config`.
+    ///
+    /// The configuration is seeded into the command history as an
+    /// `UpdateConfiguration`, so replicas added later replay it without the
+    /// caller having to send the command separately.
     pub fn new(
+        config: StorageParameters,
         workload_class: Option<String>,
         metrics: InstanceMetrics,
         now: NowFn,
@@ -127,6 +139,7 @@ impl Instance {
             active_ingestions: Default::default(),
             ingestion_exports: Default::default(),
             active_exports: BTreeMap::new(),
+            config,
             history,
             metrics,
             now,
@@ -138,8 +151,18 @@ impl Instance {
             // `ReplicaTask::specialize_command`.
             nonce: Default::default(),
         });
+        instance.send(StorageCommand::UpdateConfiguration(Box::new(
+            instance.config.clone(),
+        )));
 
         instance
+    }
+
+    /// Merges `params` into the instance's configuration and forwards the update
+    /// to all replicas.
+    pub fn update_configuration(&mut self, params: StorageParameters) {
+        self.config.update(params.clone());
+        self.send(StorageCommand::UpdateConfiguration(Box::new(params)));
     }
 
     /// Returns the IDs of all replicas connected to this storage instance.
@@ -947,5 +970,72 @@ impl ReplicaTask {
         if let StorageCommand::Hello { nonce } = command {
             *nonce = Uuid::new_v4();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_cluster_client::metrics::ControllerMetrics;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_storage_client::metrics::StorageControllerMetrics;
+    use mz_storage_types::instances::StorageInstanceId;
+
+    use super::*;
+
+    fn instance(config: StorageParameters) -> Instance {
+        let registry = MetricsRegistry::new();
+        let controller_metrics = ControllerMetrics::new(&registry);
+        let metrics = StorageControllerMetrics::new(&registry, controller_metrics)
+            .for_instance(StorageInstanceId::system(0).expect("0 is a valid ID"));
+        let (response_tx, _response_rx) = mpsc::unbounded_channel();
+        Instance::new(config, None, metrics, SYSTEM_TIME.clone(), response_tx)
+    }
+
+    /// Flips one field off its default so the parameters are not `all_unset`,
+    /// which lets the seeded `UpdateConfiguration` survive history reduction.
+    fn non_default_params() -> StorageParameters {
+        let mut params = StorageParameters::default();
+        params.finalize_shards = !params.finalize_shards;
+        params
+    }
+
+    /// The config handed to the constructor is stored and seeded into the
+    /// command history, so a freshly-added replica replays it.
+    #[mz_ore::test]
+    fn new_seeds_configuration() {
+        let params = non_default_params();
+        let mut instance = instance(params.clone());
+
+        assert_eq!(instance.config, params);
+
+        // After reduction the history carries exactly the seeded configuration.
+        instance.history.reduce();
+        let configs: Vec<_> = instance
+            .history
+            .iter()
+            .filter_map(|command| match command {
+                StorageCommand::UpdateConfiguration(params) => Some((**params).clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(configs, vec![params]);
+    }
+
+    /// A runtime update merges into the stored config via
+    /// [`StorageParameters::update`] rather than replacing it wholesale.
+    #[mz_ore::test]
+    fn update_configuration_merges_into_stored_config() {
+        let base = non_default_params();
+        let mut instance = instance(base.clone());
+
+        let mut update = StorageParameters::default();
+        update.keep_n_source_status_history_entries = 42;
+
+        let mut expected = base;
+        expected.update(update.clone());
+
+        instance.update_configuration(update);
+        assert_eq!(instance.config, expected);
     }
 }
