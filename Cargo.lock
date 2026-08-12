@@ -6785,6 +6785,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bincode",
  "bytesize",
  "chrono",
  "derivative",
@@ -8611,6 +8612,7 @@ dependencies = [
  "mz-authenticator",
  "mz-build-info",
  "mz-catalog",
+ "mz-compute-types",
  "mz-controller",
  "mz-dyncfgs",
  "mz-environmentd",

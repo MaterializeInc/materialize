@@ -25,6 +25,7 @@ mz-adapter-types = { path = "../adapter-types" }
 mz-authenticator = { path = "../authenticator", default-features = false }
 mz-build-info = { path = "../build-info" }
 mz-catalog = { path = "../catalog" }
+mz-compute-types = { path = "../compute-types" }
 mz-controller = { path = "../controller" }
 mz-dyncfgs = { path = "../dyncfgs" }
 mz-environmentd = { path = "../environmentd", default-features = false }

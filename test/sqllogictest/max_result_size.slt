@@ -10,6 +10,89 @@
 mode cockroach
 
 simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_row_iteration_limit TO 2;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_row_iteration_limit TO false;
+----
+COMPLETE 0
+
+statement ok
+CREATE CLUSTER peek_limit_cluster SIZE 'scale=1,workers=1';
+
+statement ok
+SET cluster TO 'peek_limit_cluster';
+
+statement ok
+CREATE TABLE peek_iteration_limit (a int);
+
+statement ok
+INSERT INTO peek_iteration_limit VALUES (1), (2);
+
+statement ok
+CREATE INDEX peek_iteration_limit_idx ON peek_iteration_limit (a);
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_row_iteration_limit TO true;
+----
+COMPLETE 0
+
+# A peek may examine exactly the configured number of rows.
+query I
+SELECT a FROM peek_iteration_limit ORDER BY a;
+----
+1
+2
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_row_iteration_limit TO false;
+----
+COMPLETE 0
+
+statement ok
+INSERT INTO peek_iteration_limit VALUES (3);
+
+query I
+SELECT a FROM peek_iteration_limit ORDER BY a;
+----
+1
+2
+3
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_compute_peek_row_iteration_limit TO true;
+----
+COMPLETE 0
+
+query error query exceeded the configured row iteration limit of 2 rows
+SELECT a FROM peek_iteration_limit ORDER BY a;
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET compute_peek_row_iteration_limit TO 3;
+----
+COMPLETE 0
+
+query I
+SELECT a FROM peek_iteration_limit ORDER BY a;
+----
+1
+2
+3
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET compute_peek_row_iteration_limit;
+----
+COMPLETE 0
+
+statement ok
+SET cluster TO 'quickstart';
+
+statement ok
+DROP CLUSTER peek_limit_cluster CASCADE;
+
+simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET max_result_size TO 1;
 ----
 db error: ERROR: parameter "max_result_size" cannot have value "1B": only supports values in range ByteSize(1048576)..

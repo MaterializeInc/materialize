@@ -19,6 +19,7 @@ use std::process::ExitCode;
 use chrono::Utc;
 use clap::ArgAction;
 use mz_adapter_types::dyncfgs::ENABLE_BACKGROUND_ALTER_CLUSTER;
+use mz_compute_types::dyncfgs::{ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -183,6 +184,16 @@ async fn main() -> ExitCode {
     system_parameter_defaults
         .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
         .or_insert_with(|| "true".to_string());
+
+    // Keep the guard enabled in the suite without constraining normal test queries.
+    for (name, value) in [
+        (ENABLE_PEEK_ROW_ITERATION_LIMIT.name(), "true"),
+        (PEEK_ROW_ITERATION_LIMIT.name(), "1000000000"),
+    ] {
+        system_parameter_defaults
+            .entry(name.to_string())
+            .or_insert_with(|| value.to_string());
+    }
 
     let config = RunConfig {
         stdout: &OutputStream::new(io::stdout(), args.timestamps),
