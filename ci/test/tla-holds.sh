@@ -65,6 +65,7 @@ fi
 checks=(
     "Holds.cfg Holds.tla hold"
     "HoldsCap.cfg Holds.tla refute"
+    "HoldsReleaseOnMaint.cfg Holds.tla refute"
 )
 
 status=0
