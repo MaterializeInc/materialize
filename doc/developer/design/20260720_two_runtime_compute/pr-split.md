@@ -68,7 +68,7 @@ A1 is a mechanical refactor and should be reviewed as one. A2 is the substance. 
 |---|---|---|
 | B1 | Multiplex compute commands across two client streams, plus capping `AllowCompaction` at interactive read holds and the `compaction_floor` that stops a cap regressing | ~1200 |
 
-Worth splitting the capping out only if review finds it contentious. The mechanism exists because the split loses command ordering between the two streams, so an index can be told to compact past the `as_of` of an interactive dataflow that imports it. `protocol.tla` models exactly that and belongs with this PR rather than with the design doc.
+Worth splitting the capping out only if review finds it contentious. The mechanism exists because the split loses command ordering between the two streams, so an index can be told to compact past the `as_of` of an interactive dataflow that imports it. The Lean model in `protocol/` proves exactly that, and belongs with this PR rather than with the design doc.
 
 ## Stack C: arrangement sharing and the second runtime
 

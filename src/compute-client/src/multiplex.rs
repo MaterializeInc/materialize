@@ -863,8 +863,9 @@ mod tests {
     /// The controller dropping an interactive dataflow before it has rendered does not expose its
     /// imports to compaction.
     ///
-    /// This is the counterexample `protocol.tla` contains for its own `I1`: create the dataflow, drop
-    /// it, then allow compaction. Releasing the hold on the drop makes the third step go uncapped even
+    /// This is `Protocol.release_on_drop_violates_invariant` in the Lean model under
+    /// `doc/developer/design/20260720_two_runtime_compute/protocol`: create the dataflow, drop it,
+    /// then allow compaction. Releasing the hold on the drop makes the third step go uncapped even
     /// though the create is still queued for interactive, so the render that follows finds the import
     /// compacted past its `as_of`. The order matters, which is why this is separate from the test
     /// above: there the compaction precedes the drop.

@@ -1010,31 +1010,39 @@ couples maintenance's compaction to interactive's progress, which the non-goals 
 can span processes, so an in-process barrier cannot observe the runtimes in the other processes at
 all, which makes it not merely undesirable but insufficient.
 
-### A model to check it against
+### A model that checks it
 
-`protocol.tla` in this directory sketches the protocol: one index, one interactive dataflow, the
-controller's read hold, two independent command streams, and the point at which each runtime realizes
-a command. I1 is stated as an invariant and the capping is a constant.
+`protocol/` in this directory holds a Lean 4 model of the protocol: one index, one interactive
+dataflow, the controller's read hold, the multiplexer's cap, two independent command queues, and the
+point at which each runtime realizes a command. `ci/test/lean-protocol.sh` checks it, and the CI
+pipeline runs that on every change to the directory.
 
-**It has not been run.** No TLC configuration is committed and no model-checking run has been
-performed, so the file is a specification sketch rather than a verification result. Do not cite it as
-evidence that I1 holds.
+I1 is `Protocol.since_le_as_of`. Two further properties are proved: `physical_le_since`, that the
+publisher never forwards a physical compaction frontier beyond the published `since`, and
+`no_regression`, that a compaction frontier in flight never regresses what maintenance applied. All
+three fall out of one inductive invariant, `Inv`, proved preserved by every step.
 
-Review of the sketch against the implementation found it unfaithful in ways that matter, and the
-discrepancies point at real gaps rather than at modelling detail:
+The model also refutes the two behaviours the implementation used to have. `Step` is parameterised by
+two booleans selecting them, and each has a counterexample:
+`release_on_drop_violates_invariant` retires the multiplexer's hold on the controller's drop rather
+than on the interactive runtime's confirmation, and `physical_from_upper_violates_invariant` forwards
+the stream `upper` as the physical compaction target. A model that can only express the fixed system
+cannot tell you it fixed anything.
 
-* There is no `deferred_compaction` variable, so the model cannot express the implementation's release
-  path at all. `CtlDrop` clears the hold while leaving `dfAsOf` and `rendered` untouched, which admits
-  the trace `CtlCreate(1)`, `CtlDrop`, `CtlCompact(2)`, `MaintStep`. That ends with an unrendered
-  dataflow at `as_of` 1 and `since` 2, so **the committed model refutes I1 with capping on**. That
-  counterexample is not a modelling artefact, it is the release-ordering hole described below.
-* `NoPermanentPin` is vacuous. `dfAsOf` is never reset, and `CtlCreate` requires it unset, so only one
-  dataflow ever exists and the property's antecedent is false forever.
+This replaced a TLA+ sketch of the same invariant. That sketch was never run, because the repository
+has no TLC runner and no CI job for one, and it turned out to admit a four-step counterexample to its
+own stated I1 with capping on. A stated-but-unchecked property is worse than none, since it reads as
+assurance. In Lean an unproved goal fails the build, so that particular failure cannot recur, and the
+proof holds for all times rather than a small finite set of them.
 
-The model is still worth keeping, because the failure it is about is an interleaving and interleavings
-are what review misses. But it needs to be corrected and actually checked, with a committed TLC
-configuration, before any claim rests on it. The remaining rows of I2, index replacement under
-reconciliation and placeholder eviction, should be added once it models the implemented algorithm.
+The trade is worth naming. TLC searches for counterexamples; Lean does not. The two refutations above
+are only as good as the imagination that produced them, so this model certifies a fix rather than
+hunting for the next defect. The interleavings review misses are still where the risk is.
+
+What the model does not cover, and what should be added before anything rests on it more broadly:
+liveness, so nothing here says a deferred compaction is eventually forwarded; more than one dataflow
+or index; and the remaining rows of I2, index replacement under reconciliation and placeholder
+eviction.
 
 ## The bounded-read boundary
 
@@ -1538,12 +1546,12 @@ decision rather than a patch.
   reached increments the same counter as one declined because the flag is off, so
   saturation cannot be distinguished from the feature being disabled. It wants a
   gauge.
-* **`protocol.tla` does not model the implemented algorithm.** It has no
-  `deferred_compaction`, its `CtlDrop` leaves the dataflow live, and in that state
-  it refutes I1 *with capping on* by exactly the release-ordering trace above. Its
-  liveness property is vacuous because the model admits only one dataflow. It needs
-  correcting and actually running, with a committed TLC configuration, before
-  anything rests on it.
+* **The protocol model does not cover liveness.** `Protocol/TwoRuntime.lean` proves
+  the safety invariants and refutes the two retired behaviours, but its
+  compaction flush is an action that may fire rather than one that must, so
+  nothing there says a deferred compaction is eventually forwarded. It also admits
+  only one dataflow and one index, so index replacement under reconciliation and
+  placeholder eviction are unmodelled.
 * **The stash diversion has no test.** The equivalence test that compares an
   offloaded walk against an inline one passes `want_stash: false` in every arm, so
   the diverting path and `upload_blocking` are unexercised.
