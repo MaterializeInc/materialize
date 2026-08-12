@@ -98,18 +98,30 @@ def create_polaris_catalog(
     secret_key: str = "",
     endpoint: str = "http://minio:9000",
     region: str = "minio",
+    static_credentials: bool = True,
 ) -> None:
+    """Create a Polaris catalog backed by `bucket_name` in MinIO.
+
+    Catalog properties are returned to clients verbatim on `loadTable`, so the
+    `s3.access-key-id`/`s3.secret-access-key` written here become the credentials
+    every client uses. Pass `static_credentials=False` to leave them out, which
+    makes credential vending the only way a client can reach the bucket. Polaris
+    itself still reaches MinIO through the credentials in its environment.
+    """
+    properties = {
+        "default-base-location": f"s3://{bucket_name}/",
+        "s3.endpoint": endpoint,
+        "s3.path-style-access": "true",
+        "s3.region": region,
+    }
+    if static_credentials:
+        properties["s3.access-key-id"] = username
+        properties["s3.secret-access-key"] = secret_key
+
     catalog_payload = {
         "name": catalog_name,
         "type": "INTERNAL",
-        "properties": {
-            "default-base-location": f"s3://{bucket_name}/",
-            "s3.endpoint": endpoint,
-            "s3.path-style-access": "true",
-            "s3.access-key-id": username,
-            "s3.secret-access-key": secret_key,
-            "s3.region": region,
-        },
+        "properties": properties,
         "storageConfigInfo": {
             "storageType": "S3",
             "allowedLocations": [f"s3://{bucket_name}/*"],
@@ -160,6 +172,62 @@ def create_polaris_namespace(
     )
 
 
+def grant_catalog_role_privilege(
+    c: "Composition",
+    access_token: str,
+    privilege: str,
+    catalog_name: str = "default_catalog",
+    catalog_role: str = "catalog_admin",
+) -> None:
+    """Grant a catalog-level privilege to a catalog role."""
+    c.exec(
+        "polaris",
+        "curl",
+        "-sS",
+        "--fail-with-body",
+        "-X",
+        "PUT",
+        "-H",
+        f"Authorization: Bearer {access_token}",
+        "-H",
+        "Content-Type: application/json",
+        f"http://localhost:8181/api/management/v1/catalogs/{catalog_name}/catalog-roles/{catalog_role}/grants",
+        "-d",
+        json.dumps({"type": "catalog", "privilege": privilege}),
+    )
+
+
+def load_polaris_vended_credentials(
+    c: "Composition",
+    table: str,
+    namespace: str = "default_namespace",
+    catalog_name: str = "default_catalog",
+) -> dict[str, str]:
+    """Load a table through the REST catalog requesting credential vending, and
+    return the vended storage config (the `config` map, which contains the
+    temporary `s3.access-key-id`, `s3.secret-access-key`, and `s3.session-token`).
+
+    Requires the catalog to have been set up with `vended=True` so the principal
+    is authorized for `LOAD_TABLE_WITH_READ_DELEGATION`.
+    """
+    access_token = get_polaris_access_token(c)
+    resp = c.exec(
+        "polaris",
+        "curl",
+        "-sS",
+        "--fail-with-body",
+        "-X",
+        "GET",
+        "-H",
+        f"Authorization: Bearer {access_token}",
+        "-H",
+        "X-Iceberg-Access-Delegation: vended-credentials",
+        f"http://localhost:8181/api/catalog/v1/{catalog_name}/namespaces/{namespace}/tables/{table}",
+        capture=True,
+    )
+    return json.loads(resp.stdout)["config"]
+
+
 def setup_polaris_for_iceberg(
     c: "Composition",
     bucket_name: str = "test-bucket",
@@ -167,6 +235,8 @@ def setup_polaris_for_iceberg(
     username: str = "tduser",
     catalog_name: str = "default_catalog",
     namespace: str = "default_namespace",
+    vended: bool = False,
+    static_credentials: bool = True,
 ) -> tuple[str, str]:
     """
     Set up Polaris catalog with MinIO for Iceberg sink usage.
@@ -176,6 +246,17 @@ def setup_polaris_for_iceberg(
     2. Creating a MinIO user with S3 permissions
     3. Starting Polaris with the user's credentials
     4. Creating a catalog and namespace in Polaris
+
+    With `vended=True`, also grant the catalog role the `TABLE_READ_DATA` and
+    `TABLE_WRITE_DATA` privileges. These authorize credential vending, so a
+    client sending the `X-Iceberg-Access-Delegation: vended-credentials` header
+    on `loadTable`/`commit` receives temporary, table-scoped MinIO STS
+    credentials instead of using its own static ones. Polaris mints them via
+    AssumeRole against MinIO using the credentials passed to it below.
+
+    With `static_credentials=False`, the catalog withholds the long-lived S3
+    credentials it would otherwise hand every client, so vending becomes the only
+    path to the bucket. Combine with `vended=True` to require vending.
     """
     from materialize.mzcompose.composition import Service
 
@@ -211,6 +292,7 @@ def setup_polaris_for_iceberg(
         bucket_name=bucket_name,
         username=username,
         secret_key=key,
+        static_credentials=static_credentials,
     )
 
     create_polaris_namespace(
@@ -219,5 +301,11 @@ def setup_polaris_for_iceberg(
         namespace=namespace,
         catalog_name=catalog_name,
     )
+
+    if vended:
+        for privilege in ("TABLE_READ_DATA", "TABLE_WRITE_DATA"):
+            grant_catalog_role_privilege(
+                c, access_token, privilege, catalog_name=catalog_name
+            )
 
     return (username, key)

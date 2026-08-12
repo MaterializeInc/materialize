@@ -15,10 +15,7 @@ import urllib.error
 import urllib.request
 
 from materialize.mzcompose.composition import Composition, Service
-from materialize.mzcompose.helpers.iceberg import (
-    get_polaris_access_token,
-    setup_polaris_for_iceberg,
-)
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
@@ -44,7 +41,9 @@ SERVICES = [
 ]
 
 
-def _setup(c: Composition) -> str:
+def _setup(
+    c: Composition, vended: bool = False, static_credentials: bool = True
+) -> str:
     """Start fresh and return the S3 access key."""
     c.down(destroy_volumes=True)
     c.up(
@@ -53,7 +52,9 @@ def _setup(c: Composition) -> str:
         Service("polaris-bootstrap", idle=True),
         Service("polaris", idle=True),
     )
-    _, key = setup_polaris_for_iceberg(c)
+    _, key = setup_polaris_for_iceberg(
+        c, vended=vended, static_credentials=static_credentials
+    )
     return key
 
 
@@ -68,40 +69,23 @@ def workflow_default(c: Composition) -> None:
     c.test_parts(list(c.workflows.keys()), process)
 
 
-def workflow_check_vending(c: Composition) -> None:
-    """THROWAWAY probe: does the existing Polaris catalog vend credentials when a
-    client sends `X-Iceberg-Access-Delegation: vended-credentials`?"""
-    c.down(destroy_volumes=True)
-    setup_polaris_for_iceberg(c)  # brings up minio/postgres/polaris, creates catalog+namespace
-    token = get_polaris_access_token(c)
+def workflow_vended_credentials(c: Composition) -> None:
+    """An Iceberg sink must work against a REST catalog that only hands out
+    temporary, table-scoped credentials.
 
-    catalog = "default_catalog"
-    ns = "default_namespace"
-    create_payload = {
-        "name": "vend_probe",
-        "schema": {
-            "type": "struct",
-            "schema-id": 0,
-            "fields": [{"id": 1, "name": "x", "required": False, "type": "long"}],
-        },
-    }
-    print("=== createTable ===")
-    c.exec(
-        "polaris", "curl", "-sS", "-i", "-X", "POST",
-        "-H", f"Authorization: Bearer {token}",
-        "-H", "Content-Type: application/json",
-        f"http://localhost:8181/api/catalog/v1/{catalog}/namespaces/{ns}/tables",
-        "--data-binary", json.dumps(create_payload),
+    The Polaris catalog is created with credential vending enabled and without
+    the long-lived S3 credentials it would otherwise return to clients, so
+    Materialize has no static credentials to fall back on. The sink can only
+    reach MinIO with what Polaris mints for it in response to the
+    `X-Iceberg-Access-Delegation: vended-credentials` request the Iceberg
+    catalog connection sends."""
+    key = _setup(c, vended=True, static_credentials=False)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "vended-credentials.td",
     )
-    print("\n=== loadTable WITH X-Iceberg-Access-Delegation: vended-credentials ===")
-    resp = c.exec(
-        "polaris", "curl", "-sS", "-X", "GET",
-        "-H", f"Authorization: Bearer {token}",
-        "-H", "X-Iceberg-Access-Delegation: vended-credentials",
-        f"http://localhost:8181/api/catalog/v1/{catalog}/namespaces/{ns}/tables/vend_probe",
-        capture=True,
-    )
-    print(resp.stdout)
 
 
 def workflow_smoke(c: Composition) -> None:
