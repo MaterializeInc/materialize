@@ -19,7 +19,7 @@
       * This includes recreating objects to force re-planning. For example,
         after dropping an index, you can drop and recreate its dependent objects
         to force them to re-plan and rehydrate.
-    - **A cluster or replica restarts**, such as during Materialize Cloud's
+    - **A cluster replica restarts**, such as during Materialize Cloud's
       routine maintenance or after an out-of-memory event. Hydration can be
       memory-intensive and can itself trigger the out-of-memory event. The
       replica then restarts and rehydrates again, potentially creating a
@@ -101,7 +101,7 @@
     its session, it is not rehydrated on restart and is not reported in
     `mz_hydration_statuses`.
 
-    - **What**: Rebuilds the dataflow's operator arrangements when it starts.
+    - **What**: Rebuilds the dataflow when it starts.
 
-    - **Memory Use**: Scales with those arrangements, held while the subscription
+    - **Memory Use**: Scales with the dataflow, held while the subscription
     runs.
