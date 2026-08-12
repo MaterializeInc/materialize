@@ -54,6 +54,7 @@ const buildReplica = (overrides: Partial<Replica> = {}): Replica => ({
   name: "r1",
   size: "50cc",
   disk: true,
+  cpuPercent: 12.5,
   statuses: [
     {
       replica_id: "u10",
@@ -66,10 +67,7 @@ const buildReplica = (overrides: Partial<Replica> = {}): Replica => ({
   ...overrides,
 });
 
-/**
- * A filler second replica. Only clusters with more than one replica expand, so
- * tests that need to see replica rows must supply at least two.
- */
+/** A second replica, so the default cluster covers the multi-replica case. */
 const SECOND_REPLICA = buildReplica({
   id: "u11",
   name: "r2",
@@ -109,6 +107,19 @@ const expandCluster = async (
   await user.keyboard("{Enter}");
 };
 
+/**
+ * Position of each visible column, so assertions name what they read instead of
+ * hard-coding an index that shifts whenever a column is added.
+ */
+const COLUMN = {
+  name: 0,
+  replicaCount: 1,
+  size: 2,
+  cpu: 3,
+  lastStatusChange: 4,
+  actions: 5,
+} as const;
+
 /** Text of every visible cell in the row containing `rowLabel`. */
 const cellsForRow = (rowLabel: string) => {
   const row = screen.getByText(rowLabel).closest("tr");
@@ -132,12 +143,13 @@ describe("ClustersList replica rows", () => {
 
     await expandCluster(user, "compute");
 
-    // Columns are name, replica count, size, last status change, actions. The
-    // count and actions columns only apply to clusters, hence the dashes.
+    // The replica count and actions columns only apply to clusters, hence the
+    // dashes.
     expect(cellsForRow("r1")).toEqual([
       "r1",
       "-",
       "50cc",
+      "12.5%",
       formatted(STATUS_UPDATED_AT),
       "",
     ]);
@@ -149,8 +161,8 @@ describe("ClustersList replica rows", () => {
 
     await expandCluster(user, "compute");
 
-    expect(cellsForRow("r1")[2]).toBe("50cc");
-    expect(cellsForRow("r2")[2]).toBe("100cc");
+    expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
+    expect(cellsForRow("r2")[COLUMN.size]).toBe("100cc");
   });
 
   it("renders the most recent status when a replica has several processes", async () => {
@@ -193,7 +205,41 @@ describe("ClustersList replica rows", () => {
 
     await expandCluster(user, "compute");
 
-    expect(cellsForRow("r1")[3]).toBe(formatted(newest));
+    expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe(formatted(newest));
+  });
+
+  it("renders zero CPU as a percentage rather than blank", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [buildReplica({ cpuPercent: 0 }), SECOND_REPLICA],
+      }),
+    ]);
+
+    await expandCluster(user, "compute");
+
+    // An idle replica genuinely reports 0. Treating that as "no reading" would
+    // leave the cell empty and imply the metric is unavailable.
+    expect(cellsForRow("r1")[COLUMN.cpu]).toBe("0.0%");
+  });
+
+  it("renders a dash when the replica has no CPU sample", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [buildReplica({ cpuPercent: null }), SECOND_REPLICA],
+      }),
+    ]);
+
+    await expandCluster(user, "compute");
+
+    expect(cellsForRow("r1")[COLUMN.cpu]).toBe("-");
+  });
+
+  it("leaves the CPU cell empty on cluster rows", async () => {
+    await renderClustersList([buildCluster()]);
+
+    expect(cellsForRow("compute")[COLUMN.cpu]).toBe("");
   });
 
   it("renders a dash when the replica has no size", async () => {
@@ -206,7 +252,7 @@ describe("ClustersList replica rows", () => {
 
     await expandCluster(user, "compute");
 
-    expect(cellsForRow("r1")[2]).toBe("-");
+    expect(cellsForRow("r1")[COLUMN.size]).toBe("-");
   });
 
   it("renders a dash when the replica has no statuses", async () => {
@@ -219,7 +265,7 @@ describe("ClustersList replica rows", () => {
 
     await expandCluster(user, "compute");
 
-    expect(cellsForRow("r1")[3]).toBe("-");
+    expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe("-");
   });
 
   it("does not make a cluster without replicas expandable", async () => {
@@ -227,7 +273,7 @@ describe("ClustersList replica rows", () => {
 
     const row = screen.getByText("compute").closest("tr");
     expect(row).not.toHaveAttribute("aria-expanded");
-    expect(cellsForRow("compute")[1]).toBe("0");
+    expect(cellsForRow("compute")[COLUMN.replicaCount]).toBe("0");
   });
 
   it("makes a cluster with a single replica expandable", async () => {
@@ -246,8 +292,8 @@ describe("ClustersList replica rows", () => {
     await renderClustersList([buildCluster()]);
 
     const cells = cellsForRow("compute");
-    expect(cells[1]).toBe("2");
-    expect(cells[2]).toBe("50cc, 100cc");
-    expect(cells[3]).toBe(formatted(STATUS_UPDATED_AT));
+    expect(cells[COLUMN.replicaCount]).toBe("2");
+    expect(cells[COLUMN.size]).toBe("50cc, 100cc");
+    expect(cells[COLUMN.lastStatusChange]).toBe(formatted(STATUS_UPDATED_AT));
   });
 });

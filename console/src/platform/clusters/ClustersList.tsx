@@ -13,6 +13,7 @@ import {
   Switch,
   Text,
   Tooltip,
+  useTheme,
   VStack,
 } from "@chakra-ui/react";
 import { createColumnHelper } from "@tanstack/react-table";
@@ -57,6 +58,7 @@ import docUrls from "~/mz-doc-urls.json";
 import { relativeClusterPath } from "~/platform/routeHelpers";
 import { useAllClusters } from "~/store/allClusters";
 import WarningIcon from "~/svg/WarningIcon";
+import { MaterializeTheme } from "~/theme";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import {
   formatDate,
@@ -117,6 +119,25 @@ const ReplicaNameCell = ({ replica }: { replica: Replica }) => (
     {replica.name}
   </Text>
 );
+
+const ReplicaCpuCell = ({ cpuPercent }: { cpuPercent: number | null }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  // NOTE: an idle replica reports 0, which must render as "0.0%" rather than
+  // being treated as "no reading". Only a missing sample is a dash.
+  if (cpuPercent === null) {
+    return <>-</>;
+  }
+
+  return (
+    <>
+      {cpuPercent.toFixed(1)}
+      <Text as="span" color={colors.foreground.secondary}>
+        %
+      </Text>
+    </>
+  );
+};
 
 /** Formats a status-change timestamp for display, or "-" when there is none. */
 const formatStatusChange = (timestamp: string | null | undefined) =>
@@ -225,6 +246,23 @@ const columns = [
       header: "Size",
       sortingFn: sortingFunctions.nullsLast,
       cell: (info) => info.getValue() ?? "-",
+    },
+  ),
+  columnHelper.accessor(
+    (row) => (row.rowType === "replica" ? row.cpuPercent : null),
+    {
+      id: "cpuPercent",
+      header: "CPU",
+      sortingFn: sortingFunctions.nullsLast,
+      cell: (info) => {
+        const row = info.row.original;
+        // Utilization is per replica, so a cluster row has nothing to show
+        // here. Deliberately blank rather than a dash.
+        if (row.rowType === "cluster") {
+          return null;
+        }
+        return <ReplicaCpuCell cpuPercent={info.getValue()} />;
+      },
     },
   ),
   columnHelper.accessor(
