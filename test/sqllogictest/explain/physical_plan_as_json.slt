@@ -140,26 +140,30 @@ EXPLAIN PHYSICAL PLAN WITH(no fast path) AS JSON FOR
             "rows": {
               "Ok": [
                 [
-                  {
-                    "data": [
-                      45,
-                      1,
-                      45,
-                      2
-                    ]
-                  },
+                  [
+                    10,
+                    2,
+                    24,
+                    1,
+                    10,
+                    2,
+                    24,
+                    2
+                  ],
                   0,
                   2
                 ],
                 [
-                  {
-                    "data": [
-                      45,
-                      3,
-                      45,
-                      4
-                    ]
-                  },
+                  [
+                    10,
+                    2,
+                    24,
+                    3,
+                    10,
+                    2,
+                    24,
+                    4
+                  ],
                   0,
                   1
                 ]
@@ -343,12 +347,12 @@ SELECT a + b, 1 FROM t
                         {
                           "Literal": [
                             {
-                              "Ok": {
-                                "data": [
-                                  45,
-                                  1
-                                ]
-                              }
+                              "Ok": [
+                                10,
+                                2,
+                                24,
+                                1
+                              ]
                             },
                             {
                               "scalar_type": "Int32",
@@ -579,12 +583,12 @@ SELECT * FROM ov
                 "limit": {
                   "Literal": [
                     {
-                      "Ok": {
-                        "data": [
-                          50,
-                          5
-                        ]
-                      }
+                      "Ok": [
+                        10,
+                        2,
+                        32,
+                        5
+                      ]
                     },
                     {
                       "scalar_type": "Int64",
@@ -916,12 +920,12 @@ SELECT * FROM ov
                 "limit": {
                   "Literal": [
                     {
-                      "Ok": {
-                        "data": [
-                          50,
-                          5
-                        ]
-                      }
+                      "Ok": [
+                        10,
+                        2,
+                        32,
+                        5
+                      ]
                     },
                     {
                       "scalar_type": "Int64",
@@ -1199,12 +1203,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           "expr2": {
                                             "Literal": [
                                               {
-                                                "Ok": {
-                                                  "data": [
-                                                    45,
-                                                    1
-                                                  ]
-                                                }
+                                                "Ok": [
+                                                  10,
+                                                  2,
+                                                  24,
+                                                  1
+                                                ]
                                               },
                                               {
                                                 "scalar_type": "Int32",
@@ -1285,12 +1289,12 @@ WITH cte(x) as (SELECT a FROM t EXCEPT ALL SELECT b FROM mv)
                                           "expr2": {
                                             "Literal": [
                                               {
-                                                "Ok": {
-                                                  "data": [
-                                                    45,
-                                                    1
-                                                  ]
-                                                }
+                                                "Ok": [
+                                                  10,
+                                                  2,
+                                                  24,
+                                                  1
+                                                ]
                                               },
                                               {
                                                 "scalar_type": "Int32",
@@ -1428,12 +1432,12 @@ SELECT x * 5 FROM cte WHERE x = 5
                                                     "rows": {
                                                       "Ok": [
                                                         [
-                                                          {
-                                                            "data": [
-                                                              45,
-                                                              5
-                                                            ]
-                                                          },
+                                                          [
+                                                            10,
+                                                            2,
+                                                            24,
+                                                            5
+                                                          ],
                                                           0,
                                                           1
                                                         ]
@@ -1646,12 +1650,12 @@ SELECT x * 5 FROM cte WHERE x = 5
                     {
                       "Literal": [
                         {
-                          "Ok": {
-                            "data": [
-                              45,
-                              25
-                            ]
-                          }
+                          "Ok": [
+                            10,
+                            2,
+                            24,
+                            25
+                          ]
                         },
                         {
                           "scalar_type": "Int32",
@@ -1809,12 +1813,12 @@ SELECT generate_series(a, b) from t
               {
                 "Literal": [
                   {
-                    "Ok": {
-                      "data": [
-                        45,
-                        1
-                      ]
-                    }
+                    "Ok": [
+                      10,
+                      2,
+                      24,
+                      1
+                    ]
                   },
                   {
                     "scalar_type": "Int32",
@@ -2410,9 +2414,7 @@ FROM t
                                         "rows": {
                                           "Ok": [
                                             [
-                                              {
-                                                "data": []
-                                              },
+                                              [],
                                               0,
                                               1
                                             ]
@@ -2437,11 +2439,12 @@ FROM t
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int64",
@@ -2452,11 +2455,12 @@ FROM t
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            49
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          32,
+                                          0
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int64",
@@ -2872,9 +2876,7 @@ MATERIALIZED VIEW hierarchical_global_mv
                                         "rows": {
                                           "Ok": [
                                             [
-                                              {
-                                                "data": []
-                                              },
+                                              [],
                                               0,
                                               1
                                             ]
@@ -2899,11 +2901,12 @@ MATERIALIZED VIEW hierarchical_global_mv
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -2914,11 +2917,12 @@ MATERIALIZED VIEW hierarchical_global_mv
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -3214,9 +3218,7 @@ SELECT * FROM hierarchical_global
                                         "rows": {
                                           "Ok": [
                                             [
-                                              {
-                                                "data": []
-                                              },
+                                              [],
                                               0,
                                               1
                                             ]
@@ -3241,11 +3243,12 @@ SELECT * FROM hierarchical_global
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -3256,11 +3259,12 @@ SELECT * FROM hierarchical_global
                                   {
                                     "Literal": [
                                       {
-                                        "Ok": {
-                                          "data": [
-                                            0
-                                          ]
-                                        }
+                                        "Ok": [
+                                          10,
+                                          2,
+                                          8,
+                                          1
+                                        ]
                                       },
                                       {
                                         "scalar_type": "Int32",
@@ -3424,13 +3428,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3443,13 +3447,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -3523,13 +3527,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3542,13 +3546,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -3686,13 +3690,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3705,13 +3709,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -3785,13 +3789,13 @@ GROUP BY a
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -3804,13 +3808,13 @@ GROUP BY a
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -4071,13 +4075,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4090,13 +4094,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4170,13 +4174,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4189,13 +4193,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4303,13 +4307,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4322,13 +4326,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4402,13 +4406,13 @@ FROM t
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -4421,13 +4425,13 @@ FROM t
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -4568,9 +4572,7 @@ FROM t
                                               "rows": {
                                                 "Ok": [
                                                   [
-                                                    {
-                                                      "data": []
-                                                    },
+                                                    [],
                                                     0,
                                                     1
                                                   ]
@@ -4595,11 +4597,12 @@ FROM t
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -4610,11 +4613,12 @@ FROM t
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5023,13 +5027,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5042,13 +5046,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5122,13 +5126,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5141,13 +5145,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5285,13 +5289,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5304,13 +5308,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -5384,13 +5388,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -5403,13 +5407,13 @@ MATERIALIZED VIEW collated_group_by_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6448,13 +6452,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6467,13 +6471,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6547,13 +6551,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      49
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    49
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6566,13 +6570,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6710,13 +6714,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6729,13 +6733,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -6809,13 +6813,13 @@ SELECT * FROM collated_group_by
                                             "expr2": {
                                               "Literal": [
                                                 {
-                                                  "Ok": {
-                                                    "data": [
-                                                      19,
-                                                      1,
-                                                      50
-                                                    ]
-                                                  }
+                                                  "Ok": [
+                                                    10,
+                                                    3,
+                                                    66,
+                                                    1,
+                                                    50
+                                                  ]
                                                 },
                                                 {
                                                   "scalar_type": "String",
@@ -6828,13 +6832,13 @@ SELECT * FROM collated_group_by
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  19,
-                                                  1,
-                                                  44
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                3,
+                                                66,
+                                                1,
+                                                44
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -7388,13 +7392,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -7407,13 +7411,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -7487,13 +7491,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -7506,13 +7510,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -7620,13 +7624,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -7639,13 +7643,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -7719,13 +7723,13 @@ MATERIALIZED VIEW collated_global_mv
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -7738,13 +7742,13 @@ MATERIALIZED VIEW collated_global_mv
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -8287,9 +8291,7 @@ MATERIALIZED VIEW collated_global_mv
                                               "rows": {
                                                 "Ok": [
                                                   [
-                                                    {
-                                                      "data": []
-                                                    },
+                                                    [],
                                                     0,
                                                     1
                                                   ]
@@ -8314,11 +8316,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  49
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                32,
+                                                0
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -8329,11 +8332,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -8344,11 +8348,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -8359,11 +8364,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -8374,11 +8380,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -8389,11 +8396,12 @@ MATERIALIZED VIEW collated_global_mv
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -8780,13 +8788,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -8799,13 +8807,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -8879,13 +8887,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  49
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                49
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -8898,13 +8906,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -9012,13 +9020,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -9031,13 +9039,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -9111,13 +9119,13 @@ SELECT * FROM collated_global
                                                         "expr2": {
                                                           "Literal": [
                                                             {
-                                                              "Ok": {
-                                                                "data": [
-                                                                  19,
-                                                                  1,
-                                                                  50
-                                                                ]
-                                                              }
+                                                              "Ok": [
+                                                                10,
+                                                                3,
+                                                                66,
+                                                                1,
+                                                                50
+                                                              ]
                                                             },
                                                             {
                                                               "scalar_type": "String",
@@ -9130,13 +9138,13 @@ SELECT * FROM collated_global
                                                     {
                                                       "Literal": [
                                                         {
-                                                          "Ok": {
-                                                            "data": [
-                                                              19,
-                                                              1,
-                                                              44
-                                                            ]
-                                                          }
+                                                          "Ok": [
+                                                            10,
+                                                            3,
+                                                            66,
+                                                            1,
+                                                            44
+                                                          ]
                                                         },
                                                         {
                                                           "scalar_type": "String",
@@ -9375,9 +9383,7 @@ SELECT * FROM collated_global
                                               "rows": {
                                                 "Ok": [
                                                   [
-                                                    {
-                                                      "data": []
-                                                    },
+                                                    [],
                                                     0,
                                                     1
                                                   ]
@@ -9402,11 +9408,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  49
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                32,
+                                                0
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -9417,11 +9424,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -9432,11 +9440,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -9447,11 +9456,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int32",
@@ -9462,11 +9472,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "Int64",
@@ -9477,11 +9488,12 @@ SELECT * FROM collated_global
                                         {
                                           "Literal": [
                                             {
-                                              "Ok": {
-                                                "data": [
-                                                  0
-                                                ]
-                                              }
+                                              "Ok": [
+                                                10,
+                                                2,
+                                                8,
+                                                1
+                                              ]
                                             },
                                             {
                                               "scalar_type": "String",
@@ -9862,12 +9874,12 @@ WHERE a = c AND d = e AND b + d > 42
                                       "expr2": {
                                         "Literal": [
                                           {
-                                            "Ok": {
-                                              "data": [
-                                                45,
-                                                42
-                                              ]
-                                            }
+                                            "Ok": [
+                                              10,
+                                              2,
+                                              24,
+                                              42
+                                            ]
                                           },
                                           {
                                             "scalar_type": "Int32",
