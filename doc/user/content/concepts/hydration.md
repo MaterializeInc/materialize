@@ -69,6 +69,38 @@ deployments, the additional capacity required.
 
 {{< /note >}}
 
+In addition, consider the following strategies. These strategies trade off peak
+hydration memory against added operational complexity, extra objects, and
+potentially longer total hydration time. You can use them when peak hydration
+memory is the bottleneck rather than as a default modeling pattern.
+
+- <a name="index-order"></a>If multiple objects in the **same** cluster consume
+  the same view, add an [index](/concepts/indexes/) to that view **before**
+  creating the consumers. Consumers in that cluster can reuse the indexed
+  arrangement instead of each building equivalent in-memory state, which can
+  reduce both memory usage during hydration and steady-state memory. Note:
+  - Index reuse is limited to the cluster the index is on, and the index must
+    exist **before** its consumers are created for the optimizer to reuse it.
+  - For a view with only one consumer, an index generally adds memory instead of
+    saving it.
+
+- For a very large materialized view, consider splitting it into several smaller
+  materialized views, for example by a partition key such as customer, region,
+  or date range. Smaller materialized views can hydrate as separate dataflows,
+  which can bound peak memory compared with hydrating one very large
+  materialized view.
+  - This helps most when a cluster runs only a few large materialized views,
+    where a single view's hydration spike can dictate the cluster size. A
+    cluster with many materialized views already hydrates them as separate
+    dataflows and gets this benefit naturally.
+  - A restart, re-plan, or replacement of one split view affects only that
+    portion of the data.
+  - If the split views share expensive computation, put that computation in a
+    [common indexed view first](#index-order), creating the index **before**
+    creating the split views. Otherwise, each split view may rebuild its own
+    copy of the shared work, increasing total memory.
+  - Queries must target or combine the split views.
+
 ## Related pages
 
 - [Snapshotting](/concepts/snapshotting/)
