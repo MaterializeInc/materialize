@@ -14,8 +14,17 @@ use crate::{KeyProber, MySqlError, QualifiedTableRef};
 
 /// Computes up to `num_workers - 1` partition boundaries that divide the primary key space
 /// into `num_workers` roughly even partitions.
-/// This should be run in a repeatable read transaction against a primary key varchar/char column
-/// with the `utf8mb4_bin` collation.
+///
+/// Nothing here validates the setup: the caller must abide by these
+/// constraints or undefined/untested behavior could occur, e.g. boundaries
+/// that fail to partition the key space or a walk that does not converge.
+/// * `pk_col` is the table's single-column primary key.
+/// * The column type is CHAR or VARCHAR with a declared length of at most
+///   [`crate::probe::MAX_KEY_LENGTH`] characters.
+/// * The column collation is `utf8mb4_bin`.
+/// * The connection is inside a REPEATABLE READ transaction, so the probes
+///   (several queries each) all see one snapshot of the table.
+///
 /// `min_split_threshold` is the smallest estimated row count granularity partitioning will
 /// target, which means if the algorithm processes a prefix estimated to cover less
 /// than min_split_threshold rows it won't bother splitting it up further. This is useful to
@@ -420,6 +429,33 @@ mod tests {
 
     // Live tests against MySQL (when available) for more realistic results.
 
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)]
+    async fn basic_partitioning() -> Result<(), anyhow::Error> {
+        let Some(mut conn) = connect().await? else {
+            return Ok(());
+        };
+
+        // 10k 4-digit incrementing integer numbers as strings 0000-9999
+        let mut all_keys = vec![];
+        all_keys.extend((0..10000).map(|i| format!("{i:04}")));
+
+        const DB: &str = "mz_partition_basic_test";
+        let table = setup_table(&mut conn, DB, "utf8mb4_bin", &all_keys).await?;
+        let total = u64::cast_from(all_keys.len());
+
+        let bounds = partition_table(&mut conn, table.clone(), "id", 4, total, 100).await?;
+        assert_eq!(bounds.len(), 3, "{bounds:?}");
+        assert_bounds_increasing(&mut conn, &bounds, "utf8mb4_bin").await?;
+        let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
+        // ~1/4 of the table is 2500, so 2000 for some wiggle room
+        assert!(counts.iter().all(|&c| c > 2000), "{counts:?}");
+
+        drop_db(&mut conn, DB).await?;
+        conn.disconnect().await?;
+        Ok(())
+    }
+
     /// Splitting must reach inside the extensions of the bare key 'a' and
     /// yield boundaries MySQL agrees are strictly increasing.
     #[mz_ore::test(tokio::test)]
@@ -454,13 +490,7 @@ mod tests {
         let bounds = partition_table(&mut conn, table, "id", 4, total, 10).await?;
         assert_eq!(bounds.len(), 3, "{bounds:?}");
 
-        // MySQL agrees the boundaries are strictly increasing.
-        for pair in bounds.windows(2) {
-            let increasing: Option<i64> = conn
-                .exec_first("SELECT ? < ?", (&pair[0], &pair[1]))
-                .await?;
-            assert_eq!(increasing, Some(1), "{bounds:?}");
-        }
+        assert_bounds_increasing(&mut conn, &bounds, "utf8mb4_bin").await?;
         let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
         // ~1/4 of the table is 250 so 100 leaves lots of room for error.
         assert!(counts.iter().all(|&c| c > 100), "{counts:?}");
@@ -526,6 +556,29 @@ mod tests {
     /// Rows per snapshot partition of `bounds`, i.e. the half-open ranges
     /// `[..b0), [b0, b1), .., [bn, ..)`. The server counts, so the
     /// comparisons happen under the column's collation.
+    /// Asserts `bounds` are strictly increasing when MySQL compares them under
+    /// `collation`, the same comparison the column's range predicates use. Bare
+    /// `?` parameters would compare under the session collation instead.
+    async fn assert_bounds_increasing(
+        conn: &mut mysql_async::Conn,
+        bounds: &[String],
+        collation: &str,
+    ) -> Result<(), anyhow::Error> {
+        let charset = collation.split('_').next().expect("nonempty collation");
+        let term = format!("CONVERT(? USING {charset}) COLLATE {collation}");
+        for pair in bounds.windows(2) {
+            let increasing: Option<i64> = conn
+                .exec_first(format!("SELECT {term} < {term}"), (&pair[0], &pair[1]))
+                .await?;
+            assert_eq!(increasing, Some(1), "{bounds:?}");
+        }
+        Ok(())
+    }
+
+    /// Rows per snapshot partition of `bounds`, i.e. the half-open ranges
+    /// `[..b0), [b0, b1), .., [bn, ..)`. The server counts, so the
+    /// comparisons happen under the column's collation. Panics unless `bounds`
+    /// is strictly increasing under it.
     async fn partition_counts(
         conn: &mut mysql_async::Conn,
         db: &str,
@@ -542,10 +595,12 @@ mod tests {
                 )
                 .await?;
             let cumulative = cumulative.expect("COUNT returns a row");
-            counts.push(cumulative - below);
+            // Checked because `ci` builds have overflow checks off, where a
+            // wrapped count would clear every lower bound the tests assert.
+            counts.push(cumulative.checked_sub(below).expect("increasing bounds"));
             below = cumulative;
         }
-        counts.push(total - below);
+        counts.push(total.checked_sub(below).expect("increasing bounds"));
         Ok(counts)
     }
 }
