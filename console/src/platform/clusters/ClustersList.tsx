@@ -97,6 +97,7 @@ const ClusterNameCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
   <HStack>
     <TextLink
       as={RouterLink}
+      aria-label={`View detailed information about cluster ${cluster.name}`}
       to={relativeClusterPath(cluster)}
       textStyle="text-ui-med"
       noOfLines={1}
@@ -425,6 +426,7 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
         table={table}
         variant="linkable"
         data-testid="cluster-table"
+        expandLabel={(row) => `Show replicas of ${row.original.name}`}
         // UniversalTable styles expandable rows as group headings. Cluster rows
         // are ordinary rows that happen to expand, so keep them at the default
         // cell text style, matching their replica rows.

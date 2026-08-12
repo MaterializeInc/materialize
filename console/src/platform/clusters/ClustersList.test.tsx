@@ -15,7 +15,7 @@ import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
 import { mockSubscribeState } from "~/test/mockSubscribe";
-import { renderComponent } from "~/test/utils";
+import { renderComponent, RenderWithPathname } from "~/test/utils";
 import {
   formatDate,
   FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
@@ -41,6 +41,14 @@ vi.mock("~/api/materialize/cluster/useLatestOfflineReplica", async () => {
     ...actual,
     default: vi.fn(() => ({ data: new Map(), error: undefined })),
   };
+});
+
+// A row's actions menu renders only for clusters the user owns, and `useOwners`
+// reports "not the owner" until its query resolves. Claiming ownership up front
+// keeps the menu in the DOM without standing up the roles query.
+vi.mock("./queries", async () => {
+  const actual = await vi.importActual("./queries");
+  return { ...actual, useOwners: () => ({ isOwner: () => true }) };
 });
 
 const STATUS_UPDATED_AT = "2024-03-05T10:00:00.000Z";
@@ -90,21 +98,26 @@ const buildCluster = (overrides: Partial<Cluster> = {}): Cluster => ({
 
 const renderClustersList = async (clusters: Cluster[]) => {
   getStore().set(allClusters, mockSubscribeState({ data: clusters }));
-  return renderComponent(<ClustersListPage />);
+  const rendered = renderComponent(
+    <RenderWithPathname>
+      <ClustersListPage />
+    </RenderWithPathname>,
+  );
+  await screen.findByRole("table");
+  return rendered;
 };
 
-/**
- * Expands a cluster's sub-rows via the keyboard. The name cell is a link to the
- * cluster detail page, so clicking it would navigate as well as toggle.
- */
+/** The caret that expands `clusterName`, or null when the cluster has none. */
+const caretFor = (clusterName: string) =>
+  screen.queryByRole("button", { name: `Show replicas of ${clusterName}` });
+
 const expandCluster = async (
   user: ReturnType<typeof userEvent.setup>,
   clusterName: string,
 ) => {
-  const row = screen.getByText(clusterName).closest("tr");
-  if (!row) throw new Error(`no row found for cluster "${clusterName}"`);
-  row.focus();
-  await user.keyboard("{Enter}");
+  const caret = caretFor(clusterName);
+  if (!caret) throw new Error(`no expand caret found for "${clusterName}"`);
+  await user.click(caret);
 };
 
 /**
@@ -271,17 +284,15 @@ describe("ClustersList replica rows", () => {
   it("does not make a cluster without replicas expandable", async () => {
     await renderClustersList([buildCluster({ replicas: [] })]);
 
-    const row = screen.getByText("compute").closest("tr");
-    expect(row).not.toHaveAttribute("aria-expanded");
-    expect(cellsForRow("compute")[COLUMN.replicaCount]).toBe("0");
+    expect(caretFor("compute")).not.toBeInTheDocument();
+    expect(cellsForRow("compute")[1]).toBe("0");
   });
 
   it("makes a cluster with a single replica expandable", async () => {
     const user = userEvent.setup();
     await renderClustersList([buildCluster({ replicas: [buildReplica()] })]);
 
-    const row = screen.getByText("compute").closest("tr");
-    expect(row).toHaveAttribute("aria-expanded", "false");
+    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "false");
     expect(cellsForRow("compute")[1]).toBe("1");
 
     await expandCluster(user, "compute");
@@ -295,5 +306,64 @@ describe("ClustersList replica rows", () => {
     expect(cells[COLUMN.replicaCount]).toBe("2");
     expect(cells[COLUMN.size]).toBe("50cc, 100cc");
     expect(cells[COLUMN.lastStatusChange]).toBe(formatted(STATUS_UPDATED_AT));
+  });
+});
+
+describe("ClustersList keyboard navigation", () => {
+  // A cluster with replicas puts an expand caret ahead of its name, which would
+  // shift every tab stop in the row. These tests are about the name and the
+  // actions menu, so they leave the caret out.
+  const unexpandableCluster = () => buildCluster({ replicas: [] });
+
+  const clusterNameLink = () =>
+    screen.getByRole("link", {
+      name: "View detailed information about cluster compute",
+    });
+
+  it("tabs from the page controls to the cluster name, then its actions", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([unexpandableCluster()]);
+
+    // The header's system-objects switch and the table's search box precede the
+    // rows in document order.
+    await user.tab();
+    expect(screen.getByLabelText("Show system clusters")).toHaveFocus();
+
+    await user.tab();
+    expect(screen.getByLabelText("Search clusters...")).toHaveFocus();
+
+    await user.tab();
+    expect(clusterNameLink()).toHaveFocus();
+
+    await user.tab();
+    expect(screen.getByRole("button", { name: "More actions" })).toHaveFocus();
+  });
+
+  it("opens the cluster detail view on Enter", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([unexpandableCluster()]);
+
+    clusterNameLink().focus();
+    await user.keyboard("{Enter}");
+
+    // `relativeClusterPath`: the cluster's id, then its name.
+    expect(screen.getByTestId("pathname")).toHaveTextContent("/u1/compute");
+  });
+
+  it("opens the actions menu on Enter", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([unexpandableCluster()]);
+
+    const actionsButton = screen.getByRole("button", { name: "More actions" });
+    actionsButton.focus();
+    await user.keyboard("{Enter}");
+
+    expect(actionsButton).toHaveAttribute("aria-expanded", "true");
+    expect(
+      await screen.findByRole("menuitem", { name: "Alter cluster" }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("menuitem", { name: "Drop cluster" }),
+    ).toBeVisible();
   });
 });

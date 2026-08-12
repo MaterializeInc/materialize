@@ -43,6 +43,14 @@ export interface UniversalTableProps<TData> {
    * distinguishable via `row.getCanExpand()`.
    */
   rowTestId?: (row: Row<TData>) => string | undefined;
+  /**
+   * Accessible name for a group row's expand caret, called only for rows that
+   * can expand. Without it every caret in the table shares one generic name,
+   * leaving screen reader users unable to tell them apart, so name the row's
+   * subject: "Show replicas of quickstart". Returning `undefined` falls back to
+   * that generic name.
+   */
+  expandLabel?: (row: Row<TData>) => string | undefined;
   /** Chakra `sx` merged onto the footer `<Tr>`. */
   footerSx?: HTMLChakraProps<"tr">["sx"];
   /** `data-testid` for the footer `<Tr>`. */

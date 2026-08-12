@@ -84,6 +84,11 @@ function clusterLabel(cluster: CostBreakdownCluster): string {
   return `${cluster.region} / ${label}`;
 }
 
+/** An account's display name, falling back to a shortened id when unnamed. */
+function accountLabel(account: CostBreakdownAccount): string {
+  return account.name || shortAccountId(account.external_customer_id);
+}
+
 const usageNumberFormatter = Intl.NumberFormat("default", {
   maximumFractionDigits: 2,
 });
@@ -439,9 +444,7 @@ const ledgerColumns = [
             flexShrink={0}
           />
           <Tooltip label={r.account.external_customer_id}>
-            <Text whiteSpace="nowrap">
-              {r.account.name || shortAccountId(r.account.external_customer_id)}
-            </Text>
+            <Text whiteSpace="nowrap">{accountLabel(r.account)}</Text>
           </Tooltip>
         </>
       );
@@ -556,12 +559,17 @@ const UnifiedLedger = ({
         rowTestId={(row) =>
           row.original.kind === "account" ? "account-row" : undefined
         }
+        expandLabel={(row) =>
+          row.original.kind === "account"
+            ? `Show clusters of ${accountLabel(row.original.account)}`
+            : undefined
+        }
         footerTestId="account-total-row"
         // Ledger look: compact borderless rows, each account group opened by
         // a taller top-bordered row, a bordered total row closing the table.
         rowSx={{
           td: { borderBottomWidth: 0, height: "8" },
-          "&[aria-expanded] td": {
+          "&[data-group-row] td": {
             height: "16",
             borderTopWidth: "1px",
             borderTopStyle: "solid",

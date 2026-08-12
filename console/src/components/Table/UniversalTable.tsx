@@ -151,15 +151,43 @@ const ColumnHeader = <TData,>({
 // Caret width (4) + caret/label gap (2), so an indented child row's label
 // lines up just past its parent row's caret.
 const CHILD_ROW_INDENT = 6;
+const CARET_SIZE = 8;
 
-const GroupRowCaret = ({ isOpen }: { isOpen: boolean }) => (
-  <ChevronRightIcon
-    aria-hidden="true"
-    flexShrink={0}
-    marginRight={2}
-    transform={isOpen ? "rotate(90deg)" : undefined}
-    transition="transform 0.1s"
-  />
+/** Fallback caret name when the table supplies no `expandLabel`. */
+const DEFAULT_EXPAND_LABEL = "Display child rows";
+
+const GroupRowCaret = ({
+  isOpen,
+  label,
+  onToggle,
+}: {
+  isOpen: boolean;
+  label: string;
+  onToggle: () => void;
+}) => (
+  <IconButton
+    aria-label={label}
+    aria-expanded={isOpen}
+    variant="ghost"
+    w={CARET_SIZE}
+    h={CARET_SIZE}
+    minW={CARET_SIZE}
+    p={0}
+    mr={2}
+    onClick={(event) => {
+      // The enclosing row toggles expansion as well. Without this the row's
+      // handler fires next and immediately undoes the caret's toggle.
+      event.stopPropagation();
+      onToggle();
+    }}
+  >
+    <ChevronRightIcon
+      aria-hidden="true"
+      flexShrink={0}
+      transform={isOpen ? "rotate(90deg)" : undefined}
+      transition="transform 0.1s"
+    />
+  </IconButton>
 );
 
 const BodyRow = <TData,>({
@@ -167,11 +195,13 @@ const BodyRow = <TData,>({
   onRowClick,
   rowSx,
   rowTestId,
+  expandLabel,
 }: {
   row: Row<TData>;
   onRowClick?: (row: TData) => void;
   rowSx?: UniversalTableProps<TData>["rowSx"];
   rowTestId?: UniversalTableProps<TData>["rowTestId"];
+  expandLabel?: UniversalTableProps<TData>["expandLabel"];
 }) => {
   // NOTE: an expandable row is assumed to be a group heading from
   // getSubRows. A row-detail expander via getRowCanExpand on flat data
@@ -183,24 +213,13 @@ const BodyRow = <TData,>({
     : onRowClick
       ? () => onRowClick(row.original)
       : undefined;
-  const groupRowProps = isGroupRow
-    ? {
-        "aria-expanded": row.getIsExpanded(),
-        tabIndex: 0,
-        onKeyDown: (e: React.KeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            row.toggleExpanded();
-          }
-        },
-      }
-    : undefined;
 
   return (
     <Tr
       onClick={handleClick}
       data-testid={rowTestId?.(row)}
-      {...groupRowProps}
+      // A styling hook for `rowSx` selectors that need to target group rows.
+      data-group-row={isGroupRow ? "" : undefined}
       sx={{
         cursor: handleClick ? "pointer" : undefined,
         ...(isGroupRow && { td: { textStyle: "heading-xs" } }),
@@ -226,7 +245,13 @@ const BodyRow = <TData,>({
                 alignItems="center"
                 paddingLeft={row.depth * CHILD_ROW_INDENT}
               >
-                {isGroupRow && <GroupRowCaret isOpen={row.getIsExpanded()} />}
+                {isGroupRow && (
+                  <GroupRowCaret
+                    isOpen={row.getIsExpanded()}
+                    label={expandLabel?.(row) ?? DEFAULT_EXPAND_LABEL}
+                    onToggle={row.getToggleExpandedHandler()}
+                  />
+                )}
                 {content}
               </Box>
             ) : (
@@ -267,6 +292,7 @@ export const UniversalTable = <TData,>({
   skeletonRowCount = SKELETON_ROW_COUNT,
   rowSx,
   rowTestId,
+  expandLabel,
   footerSx,
   footerTestId,
   "data-testid": testId,
@@ -300,6 +326,7 @@ export const UniversalTable = <TData,>({
               onRowClick={onRowClick}
               rowSx={rowSx}
               rowTestId={rowTestId}
+              expandLabel={expandLabel}
             />
           ))
         )}
