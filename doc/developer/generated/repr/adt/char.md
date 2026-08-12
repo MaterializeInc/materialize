@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/char.rs
-revision: 94ee2d5448
+revision: 37d0a1c9ac
 ---
 
 # mz-repr::adt::char

@@ -1,6 +1,6 @@
 ---
 source: src/pgwire/src/protocol.rs
-revision: 5d15af5cd7
+revision: f9ffa16cba
 ---
 
 # pgwire::protocol
@@ -17,5 +17,9 @@ In the ready state, stray `CopyData`, `CopyDone`, and `CopyFail` messages are ac
 `COPY TO STDOUT` and query result encoding both read the session's `text_encode_settings()` (which packages `extra_float_digits` and similar session variables into a `TextEncodeSettings`) and forward it to the codec and to `encode_copy_format`. This ensures session-configured text encoding (e.g. float digit count) is honored for session-bound output, while dataflow-layer encoding (e.g. `COPY TO <external destination>`) always uses `TextEncodeSettings::STABLE`.
 
 When decoding bind parameters, NUL characters in a decoded string value produce an error with `SqlState::CHARACTER_NOT_IN_REPERTOIRE`, matching PostgreSQL's SQLSTATE for this condition.
+
+In the extended query protocol, after each `Execute` message is processed the handler checks whether the current implicit transaction `may_span_pipeline`. Transactions that can span the pipeline stay open, allowing the whole pipeline to commit or roll back as a unit. Transactions that cannot span the pipeline are marked for commit (`txn_needs_commit = true`) so that `ensure_transaction` commits them before the next statement begins; this keeps single-statement optimizations available. The `Sync` message commits any open implicit transaction. The flag `extended_protocol_implicit_transaction_enabled` gates this pipeline-spanning behavior; when the flag is off, every implicit transaction is marked for commit after each Execute.
+
+When an implicit transaction ends (via `end_transaction`), any session parameters that changed during the transaction are announced to the client as `ParameterStatus` messages, restricted to the notify set established at startup. This mirrors the behavior of explicit `COMMIT`/`ROLLBACK`. Without this announcement, a `SET LOCAL` issued outside an explicit transaction would send its new value at SET time but never announce the revert when the implicit transaction closes, leaving clients that cache parameters with a stale value.
 
 When `enable_statement_arrival_logging` is on, `maybe_log_message_arrival` logs each arriving frontend message at info level before it is processed, so a message that crashes the process still appears in the log. SQL text is redacted with the same policy as the statement log. Bind parameter values are data that redaction cannot reach, so only their count is logged. Authentication payloads are never logged. COPY data payloads are logged as their byte length only.
