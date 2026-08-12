@@ -1526,6 +1526,35 @@ scale=1,workers=2 2
 > SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
 scale=1,workers=2 2
 
+# A factor change while a record is in flight stays refused on every path that
+# leaves the record in flight: the record's own cut-over would write its target
+# factor a tick later and silently clobber the change.
+> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=4')
+
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
+in-progress
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=2 2
+scale=1,workers=4 2
+
+! ALTER CLUSTER cc_cutover SET (REPLICATION FACTOR 3)
+contains:cannot change replication factor while a reconfiguration is in progress
+
+# The synchronous cut-over is exempt: it folds the factor into the target it
+# transacts and retires the record in the same transaction, so nothing survives
+# to clobber the write. This is the escape hatch forcing a wedged resize through
+# and scaling down in one statement, rather than paying the old factor at the new
+# size until a second ALTER lands. The record wanted factor 2, so its target was
+# abandoned and it settles `cancelled` rather than `finalized`.
+> ALTER CLUSTER cc_cutover SET (SIZE 'scale=1,workers=4', REPLICATION FACTOR 1) WITH (WAIT FOR '0s')
+
+> SELECT size, replication_factor FROM mz_clusters WHERE name = 'cc_cutover'
+scale=1,workers=4 1
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_cutover' GROUP BY r.size
+scale=1,workers=4 1
+> SELECT recon.status FROM mz_internal.mz_cluster_reconfigurations recon JOIN mz_clusters ON mz_clusters.id = recon.cluster_id WHERE mz_clusters.name = 'cc_cutover'
+cancelled
+
 > DROP CLUSTER cc_cutover CASCADE
 > DROP TABLE cc_cutover_t
 

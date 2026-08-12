@@ -297,7 +297,17 @@ impl Coordinator {
         // flight would be silently clobbered at cut-over. Refused even when the
         // same statement also re-targets the shape, so a record's target
         // replication factor is always the one it started with.
-        if reconfiguration_in_flight && !matches!(options.replication_factor, Unchanged) {
+        //
+        // The synchronous cut-over is exempt: it folds the factor into the
+        // target it transacts and retires the record in the same transaction,
+        // so there is no later cut-over left to clobber the write. Without the
+        // exemption the escape hatch could not force a wedged reshape through
+        // and change the factor in one statement, which is the shape of the
+        // request when a stuck resize is being scaled down to cut cost.
+        if reconfiguration_in_flight
+            && !matches!(options.replication_factor, Unchanged)
+            && !requests_immediate_cut_over(strategy)
+        {
             return Err(AdapterError::AlterClusterReplicationFactorWhileReconfiguring);
         }
 
@@ -2290,11 +2300,11 @@ fn alter_reconfiguration_target(
 /// AZ-only) from silently reverting the in-flight transition along every dimension
 /// it did not mention.
 ///
-/// Replication factor folds the same way, but only matters for the
-/// nothing-in-flight case: a change to it while a reconfiguration is in
-/// flight is refused before an `ALTER` reaches here, so
-/// `unchanged.replication_factor` is always `true` when `in_flight` is
-/// `Some`.
+/// Replication factor folds the same way. A change to it while a reconfiguration
+/// is in flight reaches here only on the synchronous cut-over, which transacts
+/// the folded target and retires the record together. Every other path refuses
+/// such a change, so `unchanged.replication_factor` is `false` under an
+/// `in_flight` target only for a cut-over.
 fn fold_reconfiguration_target(
     in_flight: Option<&ReconfigurationTarget>,
     new_target: ReconfigurationTarget,

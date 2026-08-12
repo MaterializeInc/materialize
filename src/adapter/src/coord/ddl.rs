@@ -1374,7 +1374,6 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateClusterReplicaConfig { .. }
                 | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }
