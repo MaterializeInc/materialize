@@ -163,7 +163,7 @@ steps:
   - id: miri-test
     topics: [kafka, mysql, postgres]
     label: ":rust: Miri test (full)"
-    depends_on: build-aarch64
+    depends_on: []
     timeout_in_minutes: 60
     plugins:
       - ./ci/plugins/mzcompose:
@@ -587,7 +587,7 @@ steps:
   - id: ssh-connection-extended
     topics: [kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: Extended SSH connection
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 45
     plugins:
       - ./ci/plugins/mzcompose:

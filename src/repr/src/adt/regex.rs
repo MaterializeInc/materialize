@@ -546,6 +546,7 @@ mod tests {
     /// ~7.8 GB in envd before erroring, reachable from an unprivileged `SELECT 'x' ~* <pattern>`.
     /// It must now be rejected without compiling.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn regex_class_heavy_pattern_rejected_before_compiling() {
         let pattern = r"\p{L}".repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION / r"\p{L}".len());
         assert!(pattern.len() <= MAX_REGEX_SIZE_BEFORE_COMPILATION);
@@ -563,6 +564,7 @@ mod tests {
     /// The guard has to charge classes nested in a bracketed class too, else `[\p{L}]` repeated
     /// evades it while costing the same as `\p{L}` repeated.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn regex_bracketed_class_is_charged() {
         let unit = r"[\p{L}]";
         let pattern = unit.repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION / unit.len());
@@ -604,6 +606,7 @@ mod tests {
     /// The budget must not cost legitimate long patterns. A plain literal is orders of magnitude
     /// cheaper per node than a Unicode class, so a large pattern of them still has to compile.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn regex_long_literal_pattern_still_compiles() {
         // A long alternation of literals, the shape a generated pattern takes. Kept at 12000
         // branches: past that the compiled NFA runs into MAX_REGEX_SIZE_AFTER_COMPILATION, which
@@ -618,6 +621,7 @@ mod tests {
     /// node. Otherwise the two limits collide and the byte limit becomes unreachable, silently
     /// tightening what users can submit.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn regex_cheap_nodes_do_not_collide_with_the_byte_limit() {
         let pattern = "a".repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION);
         assert!(
@@ -688,6 +692,7 @@ mod tests {
     /// compiler's incremental `size_limit` check rejects it. Pin that, since the budget
     /// deliberately does not multiply by repetition bounds.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn regex_counted_repetition_rejected_by_size_limit() {
         let err = Regex::new(r"\p{L}{200000}", true).expect_err("must be rejected");
         assert!(
@@ -698,6 +703,7 @@ mod tests {
 
     /// Short patterns, the overwhelmingly common case, must be unaffected.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn regex_ordinary_patterns_unaffected() {
         for pattern in [
             r"a+b",
@@ -716,6 +722,7 @@ mod tests {
     /// A pattern we cannot parse must fall through to `RegexBuilder`, so users keep getting the
     /// regex crate's error message rather than one about the budget.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn regex_unparseable_pattern_reports_regex_error() {
         let err = Regex::new("(", false).expect_err("must be rejected");
         assert!(
