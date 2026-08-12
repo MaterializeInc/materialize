@@ -3055,6 +3055,11 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["column_chunk_compress_min_depth"] = [
+            "0",  # compress every spilled body
+            "1",  # the default: fresh chunks store uncompressed
+            "4",  # exempt several young generations
+        ]
         # 0 forces the estimated-size path for every table, the default forces
         # the exact COUNT(*) path for workload-sized tables.
         self.flags_with_values["mysql_source_snapshot_exact_count_max_rows"] = [
