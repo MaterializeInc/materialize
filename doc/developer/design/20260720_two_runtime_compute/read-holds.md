@@ -1,7 +1,8 @@
 # Read holds across two compute runtimes
 
-Status: design, not implemented. The open questions in the last section must be
-settled by the model before code is written.
+Status: implemented through step 4 of the sequence at the end. Only the epoch work
+(step 5) remains, and G2 is open with it. The open questions are settled, and three of
+them were settled by building the thing rather than by the model.
 
 ## The invariant
 
@@ -45,10 +46,13 @@ compactions reconciliation synthesizes locally and which never traverse the
 multiplexer, can therefore land while interactive still has an old-epoch
 `CreateDataflow` queued.
 
-**G3, alias closure.** `reexport` installs one publication point under a second
-id. A hold recorded against the first does not cap `AllowCompaction` for the
-second, so the shared `since` can be driven past a held `as_of` by a command the
-multiplexer has no reason to cap.
+**G3, alias closure. DISSOLVED.** With a cap, `reexport` installing one publication
+point under a second id meant a hold recorded against the first did not cap
+`AllowCompaction` for the second. A real hold is keyed by arrangement rather than by id:
+`ArrangementFlavor::Trace` installs a clone of the same `TraceBundle` under the second
+id, so both ids' handles are agents on one `TraceBox` and share one publication point. A
+hold on either pins the arrangement both name, and compaction of the other only advances
+that other agent, which the box's meet absorbs.
 
 **G4, retirement signal.** The cap retires when interactive reports a frontier for
 the dataflow. Subscribe and copy-to collections are excluded from frontier
@@ -77,14 +81,18 @@ mechanism for downgrade already exists.
 When the multiplexer sees `CreateDataflow(D, as_of = X, imports = Is)` routed to
 interactive, it also emits to maintenance
 
-    AcquireHolds { holder: D, ids: alias_closure(Is), as_of: X, nonce: N }
+    AcquireHolds { holder: E, ids: index_imports(D), as_of: X }
+
+one per export `E` of `D`, because the drop that releases a hold is per export and a
+dataflow's exports may drop at different times. Index imports only: a source import is
+served from persist and carries its own read hold.
 
 The ordering that matters is **entirely within maintenance's own stream**:
 `AcquireHolds` precedes the later `AllowCompaction(I, F)` there, because the
 multiplexer sees the create before the compaction and emits to maintenance in that
 order. Maintenance's stream is ordered and is re-broadcast per runtime to every
 process, so every process installs the hold before it applies that compaction.
-That restores I1b **per process**, which closes G1. `alias_closure` closes G3.
+That restores I1b **per process**, which closes G1. G3 needs nothing, see above.
 
 Nothing here assumes an ordering between the two runtimes' protocols, and none
 exists. In particular the order in which the multiplexer emits to interactive is
@@ -126,25 +134,45 @@ command handling, so it can be stale-low after a compaction has been applied. Th
 hole exists today. It stops being reachable here, since the trace cannot have
 compacted past `as_of` at all, but the gate is not the reason.
 
-### Downgrade and release, intra-process
+### Downgrade, intra-process
 
-An interactive import already writes its hold into the publication point's shared
-state, and already follows the frontier it has acknowledged. The publisher, running
-on the maintenance worker, forwards each registration's hold into that
-registration's own agent rather than forwarding a single meet into a single agent.
+The acquired hold follows the publication point's reader registrations, floored at its
+own `as_of`, re-evaluated on the maintenance runtime's maintenance tick. The floor is
+what lets this work without attributing registrations to holders: the meet is at or
+below every registration, so flooring it cannot carry a hold past its own reader. A
+holder that lags therefore delays another's downgrade, which costs retained history and
+not correctness.
 
-Release is the same channel: when a registration disappears from the shared state,
-the publisher drops the corresponding agent.
+Following is not optional. A hold frozen at its `as_of` for the dataflow's life is a
+permanent pin, and an interactive `SUBSCRIBE` lives as long as its client.
 
-No command is needed for either, so G4 dissolves rather than being solved: nothing
-depends on a response that subscribe collections do not emit.
+### Release
+
+`ReleaseHolds { holder }` goes to the runtime that *renders* the holder, so it is
+ordered behind that holder's own create and drop there. The multiplexer emits it when
+the holder's `AllowCompaction` reaches the empty frontier, after forwarding that drop.
+The rendering runtime records it into the per-process sharing registry, and the owning
+runtime reclaims from there on its maintenance tick.
+
+That asymmetry against acquisition is load-bearing and the model forced it. A release on
+the owning runtime's stream can overtake a create the rendering runtime has not
+processed, so the owning runtime would apply acquire, release and compaction while the
+dataflow was still queued.
+
+Because the release is a command the controller's drop derives, and not a response, G4
+dissolves: nothing depends on a frontier report that subscribe collections do not emit.
+
+A release recorded before the matching acquisition is applied, which the two independent
+streams allow, is consumed by that acquisition, which then installs nothing.
 
 ### Epoch
 
-Holds carry the connection nonce. Maintenance drops holds from an older nonce when
-it processes the nonce change, in stream order, so there is no window of the G2
-kind. The multiplexer keeps no state that has to survive a reconnection, which is
-what made G2 possible.
+Not solved. Both replicas discard their command holds and their release records at
+reconnection, and the controller replays the creates the multiplexer re-derives the
+holds from. That is conservative rather than correct: reconciliation synthesizes
+compactions locally that never traverse the multiplexer, so one can apply between the
+discard and the re-derived acquisition. G2 stays open, and step 5 is where it is
+addressed.
 
 ## What this deletes
 
@@ -211,8 +239,14 @@ findings that produced this document were all interleavings nobody had imagined.
 
 ## Implementation sequence
 
-Step 0 is done (`9babb21b5b`). The rest is deliberately not split further, because
-step 1 without step 2 leaks a hold and step 4 is only safe after 1 to 3.
+Steps 0 to 4 are done (`9babb21b5b`, `cb496355e0`, `4198ec1e77`). Only step 5 remains.
+The grouping was forced: step 1 without step 2 leaks a hold, and step 4 is only safe
+once synthesis exists, so 3 and 4 landed together.
+
+The mechanism is live rather than inert as of step 3, and `enable_two_runtime_compute`
+defaults on in the CI system parameters, so every mzcompose test exercises it. The first
+interactive dataflow to acquire holds in any session is a system-catalog query over the
+introspection indexes, not a user query.
 
 0. **Command vocabulary.** `ComputeCommand::AcquireHolds`/`ReleaseHolds`, boxed,
    plus the four exhaustive matches they touch. Nothing emits them and the compute
@@ -259,7 +293,7 @@ step 1 without step 2 leaks a hold and step 4 is only safe after 1 to 3.
    gone. A release recorded before the matching acquisition is applied, which the two
    independent streams allow, is consumed by that acquisition, which then installs
    nothing.
-3. **Multiplexer synthesis.** One `AcquireHolds` per export of an interactive
+3. **Multiplexer synthesis.** Done. One `AcquireHolds` per export of an interactive
    dataflow, naming its *index* imports, emitted to maintenance before the create is
    forwarded to interactive. Per export rather than per dataflow because the drop that
    releases a hold is per export, and a dataflow's exports may drop at different
@@ -273,7 +307,7 @@ step 1 without step 2 leaks a hold and step 4 is only safe after 1 to 3.
    publication point. A hold on either id therefore pins the arrangement both ids
    name, and `AllowCompaction` on the other only advances that other agent, which the
    box's meet absorbs. Holds are keyed by arrangement where the cap was keyed by id.
-4. **Delete the cap.** `hold_floor`, `deferred_compaction`, `compaction_floor`,
+4. **Delete the cap.** Done. `hold_floor`, `deferred_compaction`, `compaction_floor`,
    `pending_compaction`, the retire-on-response trigger and `reset`. This is what
    pays down the debt: it removes the per-query `compaction_floor` leak, the
    `recv`-performs-`send` cancel-safety dependency, and `reset`'s epoch exposure,
