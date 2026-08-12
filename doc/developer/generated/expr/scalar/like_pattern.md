@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/like_pattern.rs
-revision: 94ee2d5448
+revision: d14129847b
 ---
 
 # mz-expr::scalar::like_pattern

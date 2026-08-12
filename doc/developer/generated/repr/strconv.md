@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/strconv.rs
-revision: 94ee2d5448
+revision: 38293e9a93
 ---
 
 # mz-repr::strconv
