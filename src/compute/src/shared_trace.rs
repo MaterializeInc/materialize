@@ -45,7 +45,7 @@
 //! joins and so only ever advances. A reader that must be admitted below where the agent already
 //! sits is served by a *command hold* instead: its holder pins the trace with a handle of its own,
 //! cloned from a base low enough to represent the frontier, and records the pinned frontier through
-//! [`Published::acquire_command_hold`] so the published `since` reflects it. Those two kinds meet
+//! `Published::acquire_command_hold` so the published `since` reflects it. Those two kinds meet
 //! into `since`; only the first is forwarded.
 //!
 //! The physical frontier is not held by readers at all. The publisher forwards the published `since`,

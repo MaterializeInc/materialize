@@ -35,7 +35,7 @@
 //!
 //! State is therefore only which runtime renders each transient collection (`transient_owner`) and
 //! which of those exports has holds outstanding (`held_exports`). Both are per-connection and
-//! discarded by `Hello` (see [`Multiplexer::reset`]).
+//! discarded by `Hello`, see `Multiplexer::reset`.
 //!
 //! The multiplexer does not deduplicate peek responses. The exactly-one-`PeekResponse`-per-uuid
 //! contract is already upheld below and above it: the per-worker `PartitionedComputeState` inside
