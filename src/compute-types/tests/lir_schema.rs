@@ -66,44 +66,58 @@ fn snapshot_path() -> String {
     format!("{SNAPSHOT_DIR}/lir_v{LIR_VERSION}.json")
 }
 
-/// Rewrites every ENUM's index-keyed variant map into a name-keyed map.
+/// Rewrites ENUM variant maps and STRUCT field lists into name-keyed,
+/// name-sorted maps.
 ///
-/// The stable LIR format is self-describing JSON: an enum value carries its
-/// variant name, never its index, so variant indices and order have no wire
-/// significance. Keying variants by name keeps the snapshot free of index
-/// churn. Adding a variant is a one-entry diff and reordering a declaration
-/// is invisible, matching what actually can and cannot break stored plans.
+/// The stable LIR format is self-describing JSON: enum values carry their
+/// variant name, never their index, and struct fields deserialize by name in
+/// any order. So variant indices, variant order, and field order have no
+/// wire significance, and keying both by name keeps them out of the
+/// snapshot. Adding a variant or field is a one-entry diff and reordering a
+/// declaration is invisible, matching what actually can and cannot break
+/// stored plans. Tuples stay positional, JSON arrays really are ordered.
 ///
 /// NOTE: this bakes in the JSON assumption. Under a positional format such
 /// as bincode or MessagePack, indices and declaration order are the wire
 /// format, and this rewrite would hide breaking reorders. Changing the
 /// storage format means removing this and bumping LIR_VERSION.
-fn enum_variants_by_name(value: &mut serde_json::Value) {
+fn canonicalize_for_json(value: &mut serde_json::Value) {
+    // Collect through BTreeMaps to sort by name. The workspace enables
+    // serde_json's preserve_order feature, so Map keeps insertion order.
+    fn named_entries<'a>(
+        entries: impl IntoIterator<Item = &'a serde_json::Value>,
+        what: &str,
+    ) -> BTreeMap<String, serde_json::Value> {
+        entries
+            .into_iter()
+            .flat_map(|entry| {
+                entry
+                    .as_object()
+                    .unwrap_or_else(|| panic!("{what} are single-entry name-to-format objects"))
+                    .iter()
+                    .map(|(name, format)| (name.clone(), format.clone()))
+            })
+            .collect()
+    }
+
     match value {
         serde_json::Value::Object(map) => {
             for (key, inner) in map.iter_mut() {
-                if key == "ENUM" {
-                    if let serde_json::Value::Object(variants) = inner {
-                        // Collect through a BTreeMap to sort by name. The
-                        // workspace enables serde_json's preserve_order
-                        // feature, so Map keeps insertion order.
-                        let by_name: BTreeMap<String, serde_json::Value> = variants
-                            .values()
-                            .flat_map(|variant| {
-                                variant
-                                    .as_object()
-                                    .expect("ENUM values are single-entry variant objects")
-                                    .iter()
-                                    .map(|(name, format)| (name.clone(), format.clone()))
-                            })
-                            .collect();
+                match (key.as_str(), &*inner) {
+                    ("ENUM", serde_json::Value::Object(variants)) => {
+                        let by_name = named_entries(variants.values(), "ENUM variants");
                         *inner = serde_json::Value::Object(by_name.into_iter().collect());
                     }
+                    ("STRUCT", serde_json::Value::Array(fields)) => {
+                        let by_name = named_entries(fields.iter(), "STRUCT fields");
+                        *inner = serde_json::Value::Object(by_name.into_iter().collect());
+                    }
+                    _ => {}
                 }
-                enum_variants_by_name(inner);
+                canonicalize_for_json(inner);
             }
         }
-        serde_json::Value::Array(items) => items.iter_mut().for_each(enum_variants_by_name),
+        serde_json::Value::Array(items) => items.iter_mut().for_each(canonicalize_for_json),
         _ => {}
     }
 }
@@ -111,7 +125,7 @@ fn enum_variants_by_name(value: &mut serde_json::Value) {
 /// Serializes a registry exactly as the checked-in snapshot stores it.
 fn registry_json(registry: &Registry) -> String {
     let mut value = serde_json::to_value(registry).expect("registry serializes to JSON");
-    enum_variants_by_name(&mut value);
+    canonicalize_for_json(&mut value);
     let mut json = serde_json::to_string_pretty(&value).expect("value serializes to JSON");
     // Lint requires text files to end with a newline.
     json.push('\n');
@@ -131,7 +145,7 @@ fn partial_registry_json(registry: &Registry) -> String {
             let mut value = serde_json::to_value(container).unwrap_or_else(|_| {
                 serde_json::Value::String(format!("<mid-trace: {container:?}>"))
             });
-            enum_variants_by_name(&mut value);
+            canonicalize_for_json(&mut value);
             (name, value)
         })
         .collect();

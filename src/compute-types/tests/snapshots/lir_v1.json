@@ -6,39 +6,33 @@
   "AbsInt64": "UNITSTRUCT",
   "AbsNumeric": "UNITSTRUCT",
   "AccumulablePlan": {
-    "STRUCT": [
-      {
-        "full_aggrs": {
-          "SEQ": {
-            "TYPENAME": "LirAggregateExpr"
-          }
+    "STRUCT": {
+      "distinct_aggrs": {
+        "SEQ": {
+          "TUPLE": [
+            "U64",
+            {
+              "TYPENAME": "LirAggregateExpr"
+            }
+          ]
         }
       },
-      {
-        "simple_aggrs": {
-          "SEQ": {
-            "TUPLE": [
-              "U64",
-              {
-                "TYPENAME": "LirAggregateExpr"
-              }
-            ]
-          }
+      "full_aggrs": {
+        "SEQ": {
+          "TYPENAME": "LirAggregateExpr"
         }
       },
-      {
-        "distinct_aggrs": {
-          "SEQ": {
-            "TUPLE": [
-              "U64",
-              {
-                "TYPENAME": "LirAggregateExpr"
-              }
-            ]
-          }
+      "simple_aggrs": {
+        "SEQ": {
+          "TUPLE": [
+            "U64",
+            {
+              "TYPENAME": "LirAggregateExpr"
+            }
+          ]
         }
       }
-    ]
+    }
   },
   "AclItemGrantee": "UNITSTRUCT",
   "AclItemGrantor": "UNITSTRUCT",
@@ -66,40 +60,32 @@
     }
   },
   "AdjustTimestampPrecision": {
-    "STRUCT": [
-      {
-        "from": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+    "STRUCT": {
+      "from": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       },
-      {
-        "to": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+      "to": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       }
-    ]
+    }
   },
   "AdjustTimestampTzPrecision": {
-    "STRUCT": [
-      {
-        "from": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+    "STRUCT": {
+      "from": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       },
-      {
-        "to": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+      "to": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       }
-    ]
+    }
   },
   "AgeTimestamp": "UNITSTRUCT",
   "AgeTimestampTz": "UNITSTRUCT",
@@ -108,169 +94,131 @@
       "All": "UNIT",
       "Any": "UNIT",
       "ArrayConcat": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "Count": "UNIT",
       "DenseRank": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "Dummy": "UNIT",
       "FirstValue": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           },
-          {
-            "window_frame": {
-              "TYPENAME": "WindowFrame"
-            }
+          "window_frame": {
+            "TYPENAME": "WindowFrame"
           }
-        ]
+        }
       },
       "FusedValueWindowFunc": {
-        "STRUCT": [
-          {
-            "funcs": {
-              "SEQ": {
-                "TYPENAME": "AggregateFunc"
-              }
+        "STRUCT": {
+          "funcs": {
+            "SEQ": {
+              "TYPENAME": "AggregateFunc"
             }
           },
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "FusedWindowAggregate": {
-        "STRUCT": [
-          {
-            "wrapped_aggregates": {
-              "SEQ": {
-                "TYPENAME": "AggregateFunc"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           },
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
-            }
+          "window_frame": {
+            "TYPENAME": "WindowFrame"
           },
-          {
-            "window_frame": {
-              "TYPENAME": "WindowFrame"
+          "wrapped_aggregates": {
+            "SEQ": {
+              "TYPENAME": "AggregateFunc"
             }
           }
-        ]
+        }
       },
       "JsonbAgg": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "JsonbObjectAgg": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "LagLead": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
-            }
+        "STRUCT": {
+          "ignore_nulls": "BOOL",
+          "lag_lead": {
+            "TYPENAME": "LagLeadType"
           },
-          {
-            "lag_lead": {
-              "TYPENAME": "LagLeadType"
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
-          },
-          {
-            "ignore_nulls": "BOOL"
           }
-        ]
+        }
       },
       "LastValue": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           },
-          {
-            "window_frame": {
-              "TYPENAME": "WindowFrame"
-            }
+          "window_frame": {
+            "TYPENAME": "WindowFrame"
           }
-        ]
+        }
       },
       "ListConcat": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "MapAgg": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           },
-          {
-            "value_type": {
-              "TYPENAME": "SqlScalarType"
-            }
+          "value_type": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "MaxBool": "UNIT",
       "MaxDate": "UNIT",
@@ -307,37 +255,31 @@
       "MinUInt32": "UNIT",
       "MinUInt64": "UNIT",
       "Rank": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "RowNumber": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "StringAgg": {
-        "STRUCT": [
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           }
-        ]
+        }
       },
       "SumFloat32": "UNIT",
       "SumFloat64": "UNIT",
@@ -349,25 +291,19 @@
       "SumUInt32": "UNIT",
       "SumUInt64": "UNIT",
       "WindowAggregate": {
-        "STRUCT": [
-          {
-            "wrapped_aggregate": {
-              "TYPENAME": "AggregateFunc"
+        "STRUCT": {
+          "order_by": {
+            "SEQ": {
+              "TYPENAME": "ColumnOrder"
             }
           },
-          {
-            "order_by": {
-              "SEQ": {
-                "TYPENAME": "ColumnOrder"
-              }
-            }
+          "window_frame": {
+            "TYPENAME": "WindowFrame"
           },
-          {
-            "window_frame": {
-              "TYPENAME": "WindowFrame"
-            }
+          "wrapped_aggregate": {
+            "TYPENAME": "AggregateFunc"
           }
-        ]
+        }
       }
     }
   },
@@ -387,14 +323,10 @@
     ]
   },
   "AnalyzedRegexOpts": {
-    "STRUCT": [
-      {
-        "case_insensitive": "BOOL"
-      },
-      {
-        "global": "BOOL"
-      }
-    ]
+    "STRUCT": {
+      "case_insensitive": "BOOL",
+      "global": "BOOL"
+    }
   },
   "And": "UNITSTRUCT",
   "ArrangementStrategy": {
@@ -408,42 +340,34 @@
   "ArrayContainsArray": "UNITSTRUCT",
   "ArrayContainsArrayRev": "UNITSTRUCT",
   "ArrayCreate": {
-    "STRUCT": [
-      {
-        "elem_type": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "elem_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "ArrayFill": {
-    "STRUCT": [
-      {
-        "elem_type": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "elem_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "ArrayIndex": {
-    "STRUCT": [
-      {
-        "offset": "I64"
-      }
-    ]
+    "STRUCT": {
+      "offset": "I64"
+    }
   },
   "ArrayLength": "UNITSTRUCT",
   "ArrayLower": "UNITSTRUCT",
   "ArrayPosition": "UNITSTRUCT",
   "ArrayRemove": "UNITSTRUCT",
   "ArrayToString": {
-    "STRUCT": [
-      {
-        "elem_type": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "elem_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "ArrayUpper": "UNITSTRUCT",
   "Ascii": "UNITSTRUCT",
@@ -452,30 +376,26 @@
   "Atan": "UNITSTRUCT",
   "Atanh": "UNITSTRUCT",
   "AvailableCollections": {
-    "STRUCT": [
-      {
-        "raw": "BOOL"
-      },
-      {
-        "arranged": {
-          "SEQ": {
-            "TUPLE": [
-              {
-                "SEQ": {
-                  "TYPENAME": "LirScalarExpr"
-                }
-              },
-              {
-                "SEQ": "U64"
-              },
-              {
-                "SEQ": "U64"
+    "STRUCT": {
+      "arranged": {
+        "SEQ": {
+          "TUPLE": [
+            {
+              "SEQ": {
+                "TYPENAME": "LirScalarExpr"
               }
-            ]
-          }
+            },
+            {
+              "SEQ": "U64"
+            },
+            {
+              "SEQ": "U64"
+            }
+          ]
         }
-      }
-    ]
+      },
+      "raw": "BOOL"
+    }
   },
   "BasicPlan": {
     "ENUM": {
@@ -494,59 +414,45 @@
     }
   },
   "BasicThresholdPlan": {
-    "STRUCT": [
-      {
-        "ensure_arrangement": {
-          "TUPLE": [
-            {
-              "SEQ": {
-                "TYPENAME": "LirScalarExpr"
-              }
-            },
-            {
-              "SEQ": "U64"
-            },
-            {
-              "SEQ": "U64"
+    "STRUCT": {
+      "ensure_arrangement": {
+        "TUPLE": [
+          {
+            "SEQ": {
+              "TYPENAME": "LirScalarExpr"
             }
-          ]
-        }
+          },
+          {
+            "SEQ": "U64"
+          },
+          {
+            "SEQ": "U64"
+          }
+        ]
       }
-    ]
+    }
   },
   "BasicTopKPlan": {
-    "STRUCT": [
-      {
-        "group_key": {
-          "SEQ": "U64"
+    "STRUCT": {
+      "arity": "U64",
+      "buckets": {
+        "SEQ": "U64"
+      },
+      "group_key": {
+        "SEQ": "U64"
+      },
+      "limit": {
+        "OPTION": {
+          "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "order_key": {
-          "SEQ": {
-            "TYPENAME": "ColumnOrder"
-          }
-        }
-      },
-      {
-        "limit": {
-          "OPTION": {
-            "TYPENAME": "LirScalarExpr"
-          }
-        }
-      },
-      {
-        "offset": "U64"
-      },
-      {
-        "arity": "U64"
-      },
-      {
-        "buckets": {
-          "SEQ": "U64"
+      "offset": "U64",
+      "order_key": {
+        "SEQ": {
+          "TYPENAME": "ColumnOrder"
         }
       }
-    ]
+    }
   },
   "BinaryFunc": {
     "ENUM": {
@@ -1652,98 +1558,72 @@
   "BitXorUint32": "UNITSTRUCT",
   "BitXorUint64": "UNITSTRUCT",
   "BucketedPlan": {
-    "STRUCT": [
-      {
-        "aggr_funcs": {
-          "SEQ": {
-            "TYPENAME": "AggregateFunc"
-          }
+    "STRUCT": {
+      "aggr_funcs": {
+        "SEQ": {
+          "TYPENAME": "AggregateFunc"
         }
       },
-      {
-        "buckets": {
-          "SEQ": "U64"
-        }
+      "buckets": {
+        "SEQ": "U64"
       }
-    ]
+    }
   },
   "ByteLengthBytes": "UNITSTRUCT",
   "ByteLengthString": "UNITSTRUCT",
   "CaptureGroupDesc": {
-    "STRUCT": [
-      {
-        "index": "U32"
+    "STRUCT": {
+      "index": "U32",
+      "name": {
+        "OPTION": "STR"
       },
-      {
-        "name": {
-          "OPTION": "STR"
-        }
-      },
-      {
-        "nullable": "BOOL"
-      }
-    ]
+      "nullable": "BOOL"
+    }
   },
   "CaseLiteral": {
-    "STRUCT": [
-      {
-        "lookup": {
-          "SEQ": {
-            "TYPENAME": "CaseLiteralEntry"
-          }
+    "STRUCT": {
+      "lookup": {
+        "SEQ": {
+          "TYPENAME": "CaseLiteralEntry"
         }
       },
-      {
-        "return_type": {
-          "TYPENAME": "SqlColumnType"
-        }
+      "return_type": {
+        "TYPENAME": "SqlColumnType"
       }
-    ]
+    }
   },
   "CaseLiteralEntry": {
-    "STRUCT": [
-      {
-        "literal": {
-          "TYPENAME": "Row"
-        }
-      },
-      {
-        "expr_index": "U64"
+    "STRUCT": {
+      "expr_index": "U64",
+      "literal": {
+        "TYPENAME": "Row"
       }
-    ]
+    }
   },
   "CastArrayToArray": {
-    "STRUCT": [
-      {
-        "return_ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "cast_expr": {
+        "TYPENAME": "LirScalarExpr"
       },
-      {
-        "cast_expr": {
-          "TYPENAME": "LirScalarExpr"
-        }
+      "return_ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastArrayToJsonb": {
-    "STRUCT": [
-      {
-        "cast_element": {
-          "TYPENAME": "LirScalarExpr"
-        }
+    "STRUCT": {
+      "cast_element": {
+        "TYPENAME": "LirScalarExpr"
       }
-    ]
+    }
   },
   "CastArrayToListOneDim": "UNITSTRUCT",
   "CastArrayToString": {
-    "STRUCT": [
-      {
-        "ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastBoolToInt32": "UNITSTRUCT",
   "CastBoolToInt64": "UNITSTRUCT",
@@ -1869,45 +1749,35 @@
   "CastJsonbToString": "UNITSTRUCT",
   "CastJsonbableToJsonb": "UNITSTRUCT",
   "CastList1ToList2": {
-    "STRUCT": [
-      {
-        "return_ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "cast_expr": {
+        "TYPENAME": "LirScalarExpr"
       },
-      {
-        "cast_expr": {
-          "TYPENAME": "LirScalarExpr"
-        }
+      "return_ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastListToJsonb": {
-    "STRUCT": [
-      {
-        "cast_element": {
-          "TYPENAME": "LirScalarExpr"
-        }
+    "STRUCT": {
+      "cast_element": {
+        "TYPENAME": "LirScalarExpr"
       }
-    ]
+    }
   },
   "CastListToString": {
-    "STRUCT": [
-      {
-        "ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastMapToString": {
-    "STRUCT": [
-      {
-        "ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastMzTimestampToString": "UNITSTRUCT",
   "CastMzTimestampToTimestamp": "UNITSTRUCT",
@@ -1933,71 +1803,55 @@
   "CastPgLegacyCharToString": "UNITSTRUCT",
   "CastPgLegacyCharToVarChar": "UNITSTRUCT",
   "CastRangeToString": {
-    "STRUCT": [
-      {
-        "ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastRecord1ToRecord2": {
-    "STRUCT": [
-      {
-        "return_ty": {
-          "TYPENAME": "SqlScalarType"
+    "STRUCT": {
+      "cast_exprs": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "cast_exprs": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
-        }
+      "return_ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastRecordToString": {
-    "STRUCT": [
-      {
-        "ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastRegClassToOid": "UNITSTRUCT",
   "CastRegProcToOid": "UNITSTRUCT",
   "CastRegTypeToOid": "UNITSTRUCT",
   "CastStringToArray": {
-    "STRUCT": [
-      {
-        "return_ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "cast_expr": {
+        "TYPENAME": "LirScalarExpr"
       },
-      {
-        "cast_expr": {
-          "TYPENAME": "LirScalarExpr"
-        }
+      "return_ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastStringToBool": "UNITSTRUCT",
   "CastStringToBytes": "UNITSTRUCT",
   "CastStringToChar": {
-    "STRUCT": [
-      {
-        "length": {
-          "OPTION": {
-            "TYPENAME": "CharMaxLength"
-          }
+    "STRUCT": {
+      "fail_on_len": "BOOL",
+      "length": {
+        "OPTION": {
+          "TYPENAME": "CharMaxLength"
         }
-      },
-      {
-        "fail_on_len": "BOOL"
       }
-    ]
+    }
   },
   "CastStringToDate": "UNITSTRUCT",
   "CastStringToFloat32": "UNITSTRUCT",
@@ -2009,32 +1863,24 @@
   "CastStringToInterval": "UNITSTRUCT",
   "CastStringToJsonb": "UNITSTRUCT",
   "CastStringToList": {
-    "STRUCT": [
-      {
-        "return_ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "cast_expr": {
+        "TYPENAME": "LirScalarExpr"
       },
-      {
-        "cast_expr": {
-          "TYPENAME": "LirScalarExpr"
-        }
+      "return_ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastStringToMap": {
-    "STRUCT": [
-      {
-        "return_ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "cast_expr": {
+        "TYPENAME": "LirScalarExpr"
       },
-      {
-        "cast_expr": {
-          "TYPENAME": "LirScalarExpr"
-        }
+      "return_ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastStringToMzTimestamp": "UNITSTRUCT",
   "CastStringToNumeric": {
@@ -2048,18 +1894,14 @@
   "CastStringToPgLegacyChar": "UNITSTRUCT",
   "CastStringToPgLegacyName": "UNITSTRUCT",
   "CastStringToRange": {
-    "STRUCT": [
-      {
-        "return_ty": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "cast_expr": {
+        "TYPENAME": "LirScalarExpr"
       },
-      {
-        "cast_expr": {
-          "TYPENAME": "LirScalarExpr"
-        }
+      "return_ty": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "CastStringToTime": "UNITSTRUCT",
   "CastStringToTimestamp": {
@@ -2081,18 +1923,14 @@
   "CastStringToUint64": "UNITSTRUCT",
   "CastStringToUuid": "UNITSTRUCT",
   "CastStringToVarChar": {
-    "STRUCT": [
-      {
-        "length": {
-          "OPTION": {
-            "TYPENAME": "VarCharMaxLength"
-          }
+    "STRUCT": {
+      "fail_on_len": "BOOL",
+      "length": {
+        "OPTION": {
+          "TYPENAME": "VarCharMaxLength"
         }
-      },
-      {
-        "fail_on_len": "BOOL"
       }
-    ]
+    }
   },
   "CastTimeToInterval": "UNITSTRUCT",
   "CastTimeToString": "UNITSTRUCT",
@@ -2101,44 +1939,36 @@
   "CastTimestampToString": "UNITSTRUCT",
   "CastTimestampToTime": "UNITSTRUCT",
   "CastTimestampToTimestampTz": {
-    "STRUCT": [
-      {
-        "from": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+    "STRUCT": {
+      "from": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       },
-      {
-        "to": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+      "to": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       }
-    ]
+    }
   },
   "CastTimestampTzToDate": "UNITSTRUCT",
   "CastTimestampTzToMzTimestamp": "UNITSTRUCT",
   "CastTimestampTzToString": "UNITSTRUCT",
   "CastTimestampTzToTime": "UNITSTRUCT",
   "CastTimestampTzToTimestamp": {
-    "STRUCT": [
-      {
-        "from": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+    "STRUCT": {
+      "from": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       },
-      {
-        "to": {
-          "OPTION": {
-            "TYPENAME": "TimestampPrecision"
-          }
+      "to": {
+        "OPTION": {
+          "TYPENAME": "TimestampPrecision"
         }
       }
-    ]
+    }
   },
   "CastUint16ToFloat32": "UNITSTRUCT",
   "CastUint16ToFloat64": "UNITSTRUCT",
@@ -2219,17 +2049,11 @@
     "NEWTYPESTRUCT": "STR"
   },
   "ColumnOrder": {
-    "STRUCT": [
-      {
-        "column": "U64"
-      },
-      {
-        "desc": "BOOL"
-      },
-      {
-        "nulls_last": "BOOL"
-      }
-    ]
+    "STRUCT": {
+      "column": "U64",
+      "desc": "BOOL",
+      "nulls_last": "BOOL"
+    }
   },
   "Concat": "UNITSTRUCT",
   "ConcatWs": "UNITSTRUCT",
@@ -2314,21 +2138,15 @@
   "DateTimeFormatNode": {
     "ENUM": {
       "Field": {
-        "STRUCT": [
-          {
-            "field": {
-              "TYPENAME": "DateTimeField"
-            }
+        "STRUCT": {
+          "field": {
+            "TYPENAME": "DateTimeField"
           },
-          {
-            "fill": "BOOL"
-          },
-          {
-            "ordinal": {
-              "TYPENAME": "OrdinalMode"
-            }
+          "fill": "BOOL",
+          "ordinal": {
+            "TYPENAME": "OrdinalMode"
           }
-        ]
+        }
       }
     }
   },
@@ -2373,81 +2191,59 @@
   "Decode": "UNITSTRUCT",
   "Degrees": "UNITSTRUCT",
   "DeltaJoinPlan": {
-    "STRUCT": [
-      {
-        "path_plans": {
-          "SEQ": {
-            "TYPENAME": "DeltaPathPlan"
-          }
+    "STRUCT": {
+      "path_plans": {
+        "SEQ": {
+          "TYPENAME": "DeltaPathPlan"
         }
       }
-    ]
+    }
   },
   "DeltaPathPlan": {
-    "STRUCT": [
-      {
-        "source_relation": "U64"
-      },
-      {
-        "source_key": {
-          "OPTION": {
-            "SEQ": {
-              "TYPENAME": "LirScalarExpr"
-            }
-          }
-        }
-      },
-      {
-        "initial_closure": {
+    "STRUCT": {
+      "final_closure": {
+        "OPTION": {
           "TYPENAME": "JoinClosure"
         }
       },
-      {
-        "stage_plans": {
+      "initial_closure": {
+        "TYPENAME": "JoinClosure"
+      },
+      "source_key": {
+        "OPTION": {
           "SEQ": {
-            "TYPENAME": "DeltaStagePlan"
+            "TYPENAME": "LirScalarExpr"
           }
         }
       },
-      {
-        "final_closure": {
-          "OPTION": {
-            "TYPENAME": "JoinClosure"
-          }
+      "source_relation": "U64",
+      "stage_plans": {
+        "SEQ": {
+          "TYPENAME": "DeltaStagePlan"
         }
       }
-    ]
+    }
   },
   "DeltaStagePlan": {
-    "STRUCT": [
-      {
-        "lookup_relation": "U64"
+    "STRUCT": {
+      "closure": {
+        "TYPENAME": "JoinClosure"
       },
-      {
-        "stream_key": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
+      "lookup_key": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "stream_thinning": {
-          "SEQ": "U64"
+      "lookup_relation": "U64",
+      "stream_key": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "lookup_key": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
-        }
-      },
-      {
-        "closure": {
-          "TYPENAME": "JoinClosure"
-        }
+      "stream_thinning": {
+        "SEQ": "U64"
       }
-    ]
+    }
   },
   "DigestBytes": "UNITSTRUCT",
   "DigestString": "UNITSTRUCT",
@@ -2495,17 +2291,11 @@
         "NEWTYPE": "STR"
       },
       "DateDiffOverflow": {
-        "STRUCT": [
-          {
-            "unit": "STR"
-          },
-          {
-            "a": "STR"
-          },
-          {
-            "b": "STR"
-          }
-        ]
+        "STRUCT": {
+          "a": "STR",
+          "b": "STR",
+          "unit": "STR"
+        }
       },
       "DateOutOfRange": "UNIT",
       "DivisionByZero": "UNIT",
@@ -2521,28 +2311,22 @@
         "NEWTYPE": "STR"
       },
       "IncompatibleArrayDimensions": {
-        "STRUCT": [
-          {
-            "dims": {
-              "OPTION": {
-                "TUPLEARRAY": {
-                  "CONTENT": "U64",
-                  "SIZE": 2
-                }
+        "STRUCT": {
+          "dims": {
+            "OPTION": {
+              "TUPLEARRAY": {
+                "CONTENT": "U64",
+                "SIZE": 2
               }
             }
           }
-        ]
+        }
       },
       "IndexOutOfRange": {
-        "STRUCT": [
-          {
-            "provided": "I32"
-          },
-          {
-            "valid_end": "I32"
-          }
-        ]
+        "STRUCT": {
+          "provided": "I32",
+          "valid_end": "I32"
+        }
       },
       "InfinityOutOfDomain": {
         "NEWTYPE": "STR"
@@ -2573,14 +2357,10 @@
         "NEWTYPE": "CHAR"
       },
       "InvalidByteSequence": {
-        "STRUCT": [
-          {
-            "byte_sequence": "STR"
-          },
-          {
-            "encoding_name": "STR"
-          }
-        ]
+        "STRUCT": {
+          "byte_sequence": "STR",
+          "encoding_name": "STR"
+        }
       },
       "InvalidCatalogJson": {
         "NEWTYPE": "STR"
@@ -2598,36 +2378,24 @@
         "NEWTYPE": "STR"
       },
       "InvalidIdentifier": {
-        "STRUCT": [
-          {
-            "ident": "STR"
+        "STRUCT": {
+          "detail": {
+            "OPTION": "STR"
           },
-          {
-            "detail": {
-              "OPTION": "STR"
-            }
-          }
-        ]
+          "ident": "STR"
+        }
       },
       "InvalidJsonbCast": {
-        "STRUCT": [
-          {
-            "from": "STR"
-          },
-          {
-            "to": "STR"
-          }
-        ]
+        "STRUCT": {
+          "from": "STR",
+          "to": "STR"
+        }
       },
       "InvalidLayer": {
-        "STRUCT": [
-          {
-            "max_layer": "U64"
-          },
-          {
-            "val": "I64"
-          }
-        ]
+        "STRUCT": {
+          "max_layer": "U64",
+          "val": "I64"
+        }
       },
       "InvalidParameterValue": {
         "NEWTYPE": "STR"
@@ -2714,14 +2482,10 @@
         "NEWTYPE": "STR"
       },
       "StringValueTooLong": {
-        "STRUCT": [
-          {
-            "target_type": "STR"
-          },
-          {
-            "length": "U64"
-          }
-        ]
+        "STRUCT": {
+          "length": "U64",
+          "target_type": "STR"
+        }
       },
       "TimestampCannotBeNan": "UNIT",
       "TimestampOutOfRange": "UNIT",
@@ -2744,16 +2508,12 @@
         "NEWTYPE": "STR"
       },
       "Unsupported": {
-        "STRUCT": [
-          {
-            "feature": "STR"
+        "STRUCT": {
+          "discussion_no": {
+            "OPTION": "U64"
           },
-          {
-            "discussion_no": {
-              "OPTION": "U64"
-            }
-          }
-        ]
+          "feature": "STR"
+        }
       },
       "UnsupportedUnits": {
         "TUPLE": [
@@ -2884,14 +2644,10 @@
         "NEWTYPE": "U64"
       },
       "WrongCardinality": {
-        "STRUCT": [
-          {
-            "actual": "U64"
-          },
-          {
-            "expected": "U64"
-          }
-        ]
+        "STRUCT": {
+          "actual": "U64",
+          "expected": "U64"
+        }
       }
     }
   },
@@ -2926,22 +2682,18 @@
   "IsRegexpMatchCaseSensitive": "UNITSTRUCT",
   "IsTrue": "UNITSTRUCT",
   "JoinClosure": {
-    "STRUCT": [
-      {
-        "ready_equivalences": {
+    "STRUCT": {
+      "before": {
+        "TYPENAME": "SafeMfpPlan"
+      },
+      "ready_equivalences": {
+        "SEQ": {
           "SEQ": {
-            "SEQ": {
-              "TYPENAME": "LirScalarExpr"
-            }
+            "TYPENAME": "LirScalarExpr"
           }
         }
-      },
-      {
-        "before": {
-          "TYPENAME": "SafeMfpPlan"
-        }
       }
-    ]
+    }
   },
   "JoinPlan": {
     "ENUM": {
@@ -2980,18 +2732,14 @@
   "KafkaMurmur2Bytes": "UNITSTRUCT",
   "KafkaMurmur2String": "UNITSTRUCT",
   "KeyValPlan": {
-    "STRUCT": [
-      {
-        "key_plan": {
-          "TYPENAME": "SafeMfpPlan"
-        }
+    "STRUCT": {
+      "key_plan": {
+        "TYPENAME": "SafeMfpPlan"
       },
-      {
-        "val_plan": {
-          "TYPENAME": "SafeMfpPlan"
-        }
+      "val_plan": {
+        "TYPENAME": "SafeMfpPlan"
       }
-    ]
+    }
   },
   "LagLeadType": {
     "ENUM": {
@@ -3002,468 +2750,338 @@
   "Least": "UNITSTRUCT",
   "Left": "UNITSTRUCT",
   "LetRecLimit": {
-    "STRUCT": [
-      {
-        "max_iters": "U64"
-      },
-      {
-        "return_at_limit": "BOOL"
-      }
-    ]
+    "STRUCT": {
+      "max_iters": "U64",
+      "return_at_limit": "BOOL"
+    }
   },
   "LikeEscape": "UNITSTRUCT",
   "LinearJoinPlan": {
-    "STRUCT": [
-      {
-        "source_relation": "U64"
-      },
-      {
-        "source_key": {
-          "OPTION": {
-            "SEQ": {
-              "TYPENAME": "LirScalarExpr"
-            }
-          }
-        }
-      },
-      {
-        "initial_closure": {
-          "OPTION": {
-            "TYPENAME": "JoinClosure"
-          }
-        }
-      },
-      {
-        "stage_plans": {
-          "SEQ": {
-            "TYPENAME": "LinearStagePlan"
-          }
-        }
-      },
-      {
-        "final_closure": {
-          "OPTION": {
-            "TYPENAME": "JoinClosure"
-          }
-        }
-      }
-    ]
-  },
-  "LinearStagePlan": {
-    "STRUCT": [
-      {
-        "lookup_relation": "U64"
-      },
-      {
-        "stream_key": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
-        }
-      },
-      {
-        "stream_thinning": {
-          "SEQ": "U64"
-        }
-      },
-      {
-        "lookup_key": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
-        }
-      },
-      {
-        "closure": {
+    "STRUCT": {
+      "final_closure": {
+        "OPTION": {
           "TYPENAME": "JoinClosure"
         }
-      }
-    ]
-  },
-  "LirAggregateExpr": {
-    "STRUCT": [
-      {
-        "func": {
-          "TYPENAME": "AggregateFunc"
+      },
+      "initial_closure": {
+        "OPTION": {
+          "TYPENAME": "JoinClosure"
         }
       },
-      {
-        "expr": {
+      "source_key": {
+        "OPTION": {
+          "SEQ": {
+            "TYPENAME": "LirScalarExpr"
+          }
+        }
+      },
+      "source_relation": "U64",
+      "stage_plans": {
+        "SEQ": {
+          "TYPENAME": "LinearStagePlan"
+        }
+      }
+    }
+  },
+  "LinearStagePlan": {
+    "STRUCT": {
+      "closure": {
+        "TYPENAME": "JoinClosure"
+      },
+      "lookup_key": {
+        "SEQ": {
           "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "distinct": "BOOL"
+      "lookup_relation": "U64",
+      "stream_key": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
+        }
+      },
+      "stream_thinning": {
+        "SEQ": "U64"
       }
-    ]
+    }
+  },
+  "LirAggregateExpr": {
+    "STRUCT": {
+      "distinct": "BOOL",
+      "expr": {
+        "TYPENAME": "LirScalarExpr"
+      },
+      "func": {
+        "TYPENAME": "AggregateFunc"
+      }
+    }
   },
   "LirId": {
     "NEWTYPESTRUCT": "U64"
   },
   "LirRelationExpr": {
-    "STRUCT": [
-      {
-        "lir_id": {
-          "TYPENAME": "LirId"
-        }
+    "STRUCT": {
+      "lir_id": {
+        "TYPENAME": "LirId"
       },
-      {
-        "node": {
-          "TYPENAME": "LirRelationNode"
-        }
+      "node": {
+        "TYPENAME": "LirRelationNode"
       }
-    ]
+    }
   },
   "LirRelationNode": {
     "ENUM": {
       "ArrangeBy": {
-        "STRUCT": [
-          {
-            "input_key": {
-              "OPTION": {
-                "SEQ": {
-                  "TYPENAME": "LirScalarExpr"
-                }
-              }
-            }
+        "STRUCT": {
+          "forms": {
+            "TYPENAME": "AvailableCollections"
           },
-          {
-            "input": {
-              "TYPENAME": "LirRelationExpr"
-            }
+          "input": {
+            "TYPENAME": "LirRelationExpr"
           },
-          {
-            "input_mfp": {
-              "TYPENAME": "MfpPlan"
-            }
-          },
-          {
-            "forms": {
-              "TYPENAME": "AvailableCollections"
-            }
-          },
-          {
-            "strategy": {
-              "TYPENAME": "ArrangementStrategy"
-            }
-          }
-        ]
-      },
-      "Constant": {
-        "STRUCT": [
-          {
-            "rows": {
-              "TYPENAME": "ConstantRows"
-            }
-          }
-        ]
-      },
-      "FlatMap": {
-        "STRUCT": [
-          {
-            "input_key": {
-              "OPTION": {
-                "SEQ": {
-                  "TYPENAME": "LirScalarExpr"
-                }
-              }
-            }
-          },
-          {
-            "input": {
-              "TYPENAME": "LirRelationExpr"
-            }
-          },
-          {
-            "exprs": {
+          "input_key": {
+            "OPTION": {
               "SEQ": {
                 "TYPENAME": "LirScalarExpr"
               }
             }
           },
-          {
-            "func": {
-              "TYPENAME": "TableFunc"
-            }
+          "input_mfp": {
+            "TYPENAME": "MfpPlan"
           },
-          {
-            "mfp_after": {
-              "TYPENAME": "MfpPlan"
-            }
+          "strategy": {
+            "TYPENAME": "ArrangementStrategy"
           }
-        ]
+        }
       },
-      "Get": {
-        "STRUCT": [
-          {
-            "id": {
-              "TYPENAME": "Id"
-            }
-          },
-          {
-            "keys": {
-              "TYPENAME": "AvailableCollections"
-            }
-          },
-          {
-            "plan": {
-              "TYPENAME": "GetPlan"
-            }
+      "Constant": {
+        "STRUCT": {
+          "rows": {
+            "TYPENAME": "ConstantRows"
           }
-        ]
+        }
       },
-      "Join": {
-        "STRUCT": [
-          {
-            "inputs": {
+      "FlatMap": {
+        "STRUCT": {
+          "exprs": {
+            "SEQ": {
+              "TYPENAME": "LirScalarExpr"
+            }
+          },
+          "func": {
+            "TYPENAME": "TableFunc"
+          },
+          "input": {
+            "TYPENAME": "LirRelationExpr"
+          },
+          "input_key": {
+            "OPTION": {
               "SEQ": {
-                "TYPENAME": "LirRelationExpr"
+                "TYPENAME": "LirScalarExpr"
               }
             }
           },
-          {
-            "plan": {
-              "TYPENAME": "JoinPlan"
-            }
+          "mfp_after": {
+            "TYPENAME": "MfpPlan"
           }
-        ]
+        }
+      },
+      "Get": {
+        "STRUCT": {
+          "id": {
+            "TYPENAME": "Id"
+          },
+          "keys": {
+            "TYPENAME": "AvailableCollections"
+          },
+          "plan": {
+            "TYPENAME": "GetPlan"
+          }
+        }
+      },
+      "Join": {
+        "STRUCT": {
+          "inputs": {
+            "SEQ": {
+              "TYPENAME": "LirRelationExpr"
+            }
+          },
+          "plan": {
+            "TYPENAME": "JoinPlan"
+          }
+        }
       },
       "Let": {
-        "STRUCT": [
-          {
-            "id": {
+        "STRUCT": {
+          "body": {
+            "TYPENAME": "LirRelationExpr"
+          },
+          "id": {
+            "TYPENAME": "LocalId"
+          },
+          "value": {
+            "TYPENAME": "LirRelationExpr"
+          }
+        }
+      },
+      "LetRec": {
+        "STRUCT": {
+          "body": {
+            "TYPENAME": "LirRelationExpr"
+          },
+          "ids": {
+            "SEQ": {
               "TYPENAME": "LocalId"
             }
           },
-          {
-            "value": {
-              "TYPENAME": "LirRelationExpr"
-            }
-          },
-          {
-            "body": {
-              "TYPENAME": "LirRelationExpr"
-            }
-          }
-        ]
-      },
-      "LetRec": {
-        "STRUCT": [
-          {
-            "ids": {
-              "SEQ": {
-                "TYPENAME": "LocalId"
+          "limits": {
+            "SEQ": {
+              "OPTION": {
+                "TYPENAME": "LetRecLimit"
               }
             }
           },
-          {
-            "values": {
-              "SEQ": {
-                "TYPENAME": "LirRelationExpr"
-              }
-            }
-          },
-          {
-            "limits": {
-              "SEQ": {
-                "OPTION": {
-                  "TYPENAME": "LetRecLimit"
-                }
-              }
-            }
-          },
-          {
-            "body": {
+          "values": {
+            "SEQ": {
               "TYPENAME": "LirRelationExpr"
             }
           }
-        ]
+        }
       },
       "Mfp": {
-        "STRUCT": [
-          {
-            "input": {
-              "TYPENAME": "LirRelationExpr"
-            }
+        "STRUCT": {
+          "input": {
+            "TYPENAME": "LirRelationExpr"
           },
-          {
-            "mfp": {
-              "TYPENAME": "MfpPlan"
-            }
-          },
-          {
-            "input_key_val": {
-              "OPTION": {
-                "TUPLE": [
-                  {
-                    "SEQ": {
-                      "TYPENAME": "LirScalarExpr"
-                    }
-                  },
-                  {
-                    "OPTION": {
-                      "TYPENAME": "Row"
-                    }
+          "input_key_val": {
+            "OPTION": {
+              "TUPLE": [
+                {
+                  "SEQ": {
+                    "TYPENAME": "LirScalarExpr"
                   }
-                ]
-              }
+                },
+                {
+                  "OPTION": {
+                    "TYPENAME": "Row"
+                  }
+                }
+              ]
             }
+          },
+          "mfp": {
+            "TYPENAME": "MfpPlan"
           }
-        ]
+        }
       },
       "Negate": {
-        "STRUCT": [
-          {
-            "input": {
-              "TYPENAME": "LirRelationExpr"
-            }
+        "STRUCT": {
+          "input": {
+            "TYPENAME": "LirRelationExpr"
           }
-        ]
+        }
       },
       "Reduce": {
-        "STRUCT": [
-          {
-            "input_key": {
-              "OPTION": {
-                "SEQ": {
-                  "TYPENAME": "LirScalarExpr"
-                }
+        "STRUCT": {
+          "input": {
+            "TYPENAME": "LirRelationExpr"
+          },
+          "input_key": {
+            "OPTION": {
+              "SEQ": {
+                "TYPENAME": "LirScalarExpr"
               }
             }
           },
-          {
-            "input": {
-              "TYPENAME": "LirRelationExpr"
-            }
+          "key_val_plan": {
+            "TYPENAME": "KeyValPlan"
           },
-          {
-            "key_val_plan": {
-              "TYPENAME": "KeyValPlan"
-            }
+          "mfp_after": {
+            "TYPENAME": "SafeMfpPlan"
           },
-          {
-            "plan": {
-              "TYPENAME": "ReducePlan"
-            }
+          "plan": {
+            "TYPENAME": "ReducePlan"
           },
-          {
-            "mfp_after": {
-              "TYPENAME": "SafeMfpPlan"
-            }
-          },
-          {
-            "temporal_bucketing_strategy": {
-              "TYPENAME": "ArrangementStrategy"
-            }
+          "temporal_bucketing_strategy": {
+            "TYPENAME": "ArrangementStrategy"
           }
-        ]
+        }
       },
       "Threshold": {
-        "STRUCT": [
-          {
-            "input": {
-              "TYPENAME": "LirRelationExpr"
-            }
+        "STRUCT": {
+          "input": {
+            "TYPENAME": "LirRelationExpr"
           },
-          {
-            "threshold_plan": {
-              "TYPENAME": "ThresholdPlan"
-            }
+          "threshold_plan": {
+            "TYPENAME": "ThresholdPlan"
           }
-        ]
+        }
       },
       "TopK": {
-        "STRUCT": [
-          {
-            "input": {
+        "STRUCT": {
+          "input": {
+            "TYPENAME": "LirRelationExpr"
+          },
+          "temporal_bucketing_strategy": {
+            "TYPENAME": "ArrangementStrategy"
+          },
+          "top_k_plan": {
+            "TYPENAME": "TopKPlan"
+          }
+        }
+      },
+      "Union": {
+        "STRUCT": {
+          "consolidate_output": "BOOL",
+          "inputs": {
+            "SEQ": {
               "TYPENAME": "LirRelationExpr"
             }
           },
-          {
-            "top_k_plan": {
-              "TYPENAME": "TopKPlan"
-            }
-          },
-          {
-            "temporal_bucketing_strategy": {
+          "temporal_bucketing_strategies": {
+            "SEQ": {
               "TYPENAME": "ArrangementStrategy"
             }
           }
-        ]
-      },
-      "Union": {
-        "STRUCT": [
-          {
-            "inputs": {
-              "SEQ": {
-                "TYPENAME": "LirRelationExpr"
-              }
-            }
-          },
-          {
-            "consolidate_output": "BOOL"
-          },
-          {
-            "temporal_bucketing_strategies": {
-              "SEQ": {
-                "TYPENAME": "ArrangementStrategy"
-              }
-            }
-          }
-        ]
+        }
       }
     }
   },
   "LirScalarExpr": {
     "ENUM": {
       "CallBinary": {
-        "STRUCT": [
-          {
-            "func": {
-              "TYPENAME": "BinaryFunc"
-            }
+        "STRUCT": {
+          "expr1": {
+            "TYPENAME": "LirScalarExpr"
           },
-          {
-            "expr1": {
-              "TYPENAME": "LirScalarExpr"
-            }
+          "expr2": {
+            "TYPENAME": "LirScalarExpr"
           },
-          {
-            "expr2": {
-              "TYPENAME": "LirScalarExpr"
-            }
+          "func": {
+            "TYPENAME": "BinaryFunc"
           }
-        ]
+        }
       },
       "CallUnary": {
-        "STRUCT": [
-          {
-            "func": {
-              "TYPENAME": "UnaryFunc"
-            }
+        "STRUCT": {
+          "expr": {
+            "TYPENAME": "LirScalarExpr"
           },
-          {
-            "expr": {
-              "TYPENAME": "LirScalarExpr"
-            }
+          "func": {
+            "TYPENAME": "UnaryFunc"
           }
-        ]
+        }
       },
       "CallVariadic": {
-        "STRUCT": [
-          {
-            "func": {
-              "TYPENAME": "VariadicFunc"
+        "STRUCT": {
+          "exprs": {
+            "SEQ": {
+              "TYPENAME": "LirScalarExpr"
             }
           },
-          {
-            "exprs": {
-              "SEQ": {
-                "TYPENAME": "LirScalarExpr"
-              }
-            }
+          "func": {
+            "TYPENAME": "VariadicFunc"
           }
-        ]
+        }
       },
       "Column": {
         "TUPLE": [
@@ -3474,23 +3092,17 @@
         ]
       },
       "If": {
-        "STRUCT": [
-          {
-            "cond": {
-              "TYPENAME": "LirScalarExpr"
-            }
+        "STRUCT": {
+          "cond": {
+            "TYPENAME": "LirScalarExpr"
           },
-          {
-            "then": {
-              "TYPENAME": "LirScalarExpr"
-            }
+          "els": {
+            "TYPENAME": "LirScalarExpr"
           },
-          {
-            "els": {
-              "TYPENAME": "LirScalarExpr"
-            }
+          "then": {
+            "TYPENAME": "LirScalarExpr"
           }
-        ]
+        }
       },
       "Literal": {
         "TUPLE": [
@@ -3507,23 +3119,19 @@
   "ListContainsList": "UNITSTRUCT",
   "ListContainsListRev": "UNITSTRUCT",
   "ListCreate": {
-    "STRUCT": [
-      {
-        "elem_type": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "elem_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "ListElementConcat": "UNITSTRUCT",
   "ListIndex": "UNITSTRUCT",
   "ListLength": "UNITSTRUCT",
   "ListLengthMax": {
-    "STRUCT": [
-      {
-        "max_layer": "U64"
-      }
-    ]
+    "STRUCT": {
+      "max_layer": "U64"
+    }
   },
   "ListListConcat": "UNITSTRUCT",
   "ListRemove": "UNITSTRUCT",
@@ -3557,74 +3165,56 @@
   "MakeMzAclItem": "UNITSTRUCT",
   "MakeTimestamp": "UNITSTRUCT",
   "MapBuild": {
-    "STRUCT": [
-      {
-        "value_type": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "value_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "MapBuildFromRecordList": {
-    "STRUCT": [
-      {
-        "value_type": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "value_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "MapContainsAllKeys": "UNITSTRUCT",
   "MapContainsAnyKeys": "UNITSTRUCT",
   "MapContainsKey": "UNITSTRUCT",
   "MapContainsMap": "UNITSTRUCT",
   "MapFilterProject": {
-    "STRUCT": [
-      {
-        "expressions": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
+    "STRUCT": {
+      "expressions": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "predicates": {
-          "SEQ": {
-            "TUPLE": [
-              "U64",
-              {
-                "TYPENAME": "LirScalarExpr"
-              }
-            ]
-          }
+      "input_arity": "U64",
+      "predicates": {
+        "SEQ": {
+          "TUPLE": [
+            "U64",
+            {
+              "TYPENAME": "LirScalarExpr"
+            }
+          ]
         }
       },
-      {
-        "projection": {
-          "SEQ": "U64"
-        }
-      },
-      {
-        "input_arity": "U64"
+      "projection": {
+        "SEQ": "U64"
       }
-    ]
+    }
   },
   "MapGetValue": "UNITSTRUCT",
   "MapLength": "UNITSTRUCT",
   "Matcher": {
-    "STRUCT": [
-      {
-        "pattern": "STR"
+    "STRUCT": {
+      "case_insensitive": "BOOL",
+      "matcher_impl": {
+        "TYPENAME": "MatcherImpl"
       },
-      {
-        "case_insensitive": "BOOL"
-      },
-      {
-        "matcher_impl": {
-          "TYPENAME": "MatcherImpl"
-        }
-      }
-    ]
+      "pattern": "STR"
+    }
   },
   "MatcherImpl": {
     "ENUM": {
@@ -3643,27 +3233,21 @@
     }
   },
   "MfpPlan": {
-    "STRUCT": [
-      {
-        "mfp": {
-          "TYPENAME": "SafeMfpPlan"
+    "STRUCT": {
+      "lower_bounds": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "lower_bounds": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
-        }
+      "mfp": {
+        "TYPENAME": "SafeMfpPlan"
       },
-      {
-        "upper_bounds": {
-          "SEQ": {
-            "TYPENAME": "LirScalarExpr"
-          }
+      "upper_bounds": {
+        "SEQ": {
+          "TYPENAME": "LirScalarExpr"
         }
       }
-    ]
+    }
   },
   "ModFloat32": "UNITSTRUCT",
   "ModFloat64": "UNITSTRUCT",
@@ -3675,69 +3259,47 @@
   "ModUint32": "UNITSTRUCT",
   "ModUint64": "UNITSTRUCT",
   "MonotonicPlan": {
-    "STRUCT": [
-      {
-        "aggr_funcs": {
-          "SEQ": {
-            "TYPENAME": "AggregateFunc"
-          }
+    "STRUCT": {
+      "aggr_funcs": {
+        "SEQ": {
+          "TYPENAME": "AggregateFunc"
         }
       },
-      {
-        "must_consolidate": "BOOL"
-      }
-    ]
+      "must_consolidate": "BOOL"
+    }
   },
   "MonotonicTop1Plan": {
-    "STRUCT": [
-      {
-        "group_key": {
-          "SEQ": "U64"
+    "STRUCT": {
+      "arity": "U64",
+      "group_key": {
+        "SEQ": "U64"
+      },
+      "must_consolidate": "BOOL",
+      "order_key": {
+        "SEQ": {
+          "TYPENAME": "ColumnOrder"
         }
-      },
-      {
-        "order_key": {
-          "SEQ": {
-            "TYPENAME": "ColumnOrder"
-          }
-        }
-      },
-      {
-        "arity": "U64"
-      },
-      {
-        "must_consolidate": "BOOL"
       }
-    ]
+    }
   },
   "MonotonicTopKPlan": {
-    "STRUCT": [
-      {
-        "group_key": {
-          "SEQ": "U64"
+    "STRUCT": {
+      "arity": "U64",
+      "group_key": {
+        "SEQ": "U64"
+      },
+      "limit": {
+        "OPTION": {
+          "TYPENAME": "LirScalarExpr"
         }
       },
-      {
-        "order_key": {
-          "SEQ": {
-            "TYPENAME": "ColumnOrder"
-          }
+      "must_consolidate": "BOOL",
+      "order_key": {
+        "SEQ": {
+          "TYPENAME": "ColumnOrder"
         }
-      },
-      {
-        "limit": {
-          "OPTION": {
-            "TYPENAME": "LirScalarExpr"
-          }
-        }
-      },
-      {
-        "arity": "U64"
-      },
-      {
-        "must_consolidate": "BOOL"
       }
-    ]
+    }
   },
   "MulFloat32": "UNITSTRUCT",
   "MulFloat64": "UNITSTRUCT",
@@ -3782,15 +3344,13 @@
     "NEWTYPESTRUCT": "I64"
   },
   "PadChar": {
-    "STRUCT": [
-      {
-        "length": {
-          "OPTION": {
-            "TYPENAME": "CharMaxLength"
-          }
+    "STRUCT": {
+      "length": {
+        "OPTION": {
+          "TYPENAME": "CharMaxLength"
         }
       }
-    ]
+    }
   },
   "PadLeading": "UNITSTRUCT",
   "Panic": "UNITSTRUCT",
@@ -3801,24 +3361,16 @@
   "ParseCatalogPrivileges": "UNITSTRUCT",
   "ParseConnectionDetails": "UNITSTRUCT",
   "ParseError": {
-    "STRUCT": [
-      {
-        "kind": {
-          "TYPENAME": "ParseErrorKind"
-        }
+    "STRUCT": {
+      "details": {
+        "OPTION": "STR"
       },
-      {
-        "type_name": "STR"
+      "input": "STR",
+      "kind": {
+        "TYPENAME": "ParseErrorKind"
       },
-      {
-        "input": "STR"
-      },
-      {
-        "details": {
-          "OPTION": "STR"
-        }
-      }
-    ]
+      "type_name": "STR"
+    }
   },
   "ParseErrorKind": {
     "ENUM": {
@@ -3864,13 +3416,11 @@
   "RangeContainsTimestampTz": "UNITSTRUCT",
   "RangeContainsTimestampTzRev": "UNITSTRUCT",
   "RangeCreate": {
-    "STRUCT": [
-      {
-        "elem_type": {
-          "TYPENAME": "SqlScalarType"
-        }
+    "STRUCT": {
+      "elem_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "RangeDifference": "UNITSTRUCT",
   "RangeEmpty": "UNITSTRUCT",
@@ -3886,15 +3436,13 @@
   "RangeUpperInc": "UNITSTRUCT",
   "RangeUpperInf": "UNITSTRUCT",
   "RecordCreate": {
-    "STRUCT": [
-      {
-        "field_names": {
-          "SEQ": {
-            "TYPENAME": "ColumnName"
-          }
+    "STRUCT": {
+      "field_names": {
+        "SEQ": {
+          "TYPENAME": "ColumnName"
         }
       }
-    ]
+    }
   },
   "RecordGet": {
     "NEWTYPESTRUCT": "U64"
@@ -3921,17 +3469,11 @@
     }
   },
   "Regex": {
-    "STRUCT": [
-      {
-        "pattern": "STR"
-      },
-      {
-        "case_insensitive": "BOOL"
-      },
-      {
-        "dot_matches_new_line": "BOOL"
-      }
-    ]
+    "STRUCT": {
+      "case_insensitive": "BOOL",
+      "dot_matches_new_line": "BOOL",
+      "pattern": "STR"
+    }
   },
   "RegexpMatch": "UNITSTRUCT",
   "RegexpMatchStatic": {
@@ -3941,16 +3483,12 @@
   },
   "RegexpReplace": "UNITSTRUCT",
   "RegexpReplaceStatic": {
-    "STRUCT": [
-      {
-        "regex": {
-          "TYPENAME": "Regex"
-        }
-      },
-      {
-        "limit": "U64"
+    "STRUCT": {
+      "limit": "U64",
+      "regex": {
+        "TYPENAME": "Regex"
       }
-    ]
+    }
   },
   "RegexpSplitToArray": "UNITSTRUCT",
   "RegexpSplitToArrayStatic": {
@@ -3961,16 +3499,12 @@
   "RepeatString": "UNITSTRUCT",
   "Replace": "UNITSTRUCT",
   "ReprColumnType": {
-    "STRUCT": [
-      {
-        "scalar_type": {
-          "TYPENAME": "ReprScalarType"
-        }
-      },
-      {
-        "nullable": "BOOL"
+    "STRUCT": {
+      "nullable": "BOOL",
+      "scalar_type": {
+        "TYPENAME": "ReprScalarType"
       }
-    ]
+    }
   },
   "ReprScalarType": {
     "ENUM": {
@@ -3992,45 +3526,37 @@
       "Interval": "UNIT",
       "Jsonb": "UNIT",
       "List": {
-        "STRUCT": [
-          {
-            "element_type": {
-              "TYPENAME": "ReprScalarType"
-            }
+        "STRUCT": {
+          "element_type": {
+            "TYPENAME": "ReprScalarType"
           }
-        ]
+        }
       },
       "Map": {
-        "STRUCT": [
-          {
-            "value_type": {
-              "TYPENAME": "ReprScalarType"
-            }
+        "STRUCT": {
+          "value_type": {
+            "TYPENAME": "ReprScalarType"
           }
-        ]
+        }
       },
       "MzAclItem": "UNIT",
       "MzTimestamp": "UNIT",
       "Numeric": "UNIT",
       "Range": {
-        "STRUCT": [
-          {
-            "element_type": {
-              "TYPENAME": "ReprScalarType"
-            }
+        "STRUCT": {
+          "element_type": {
+            "TYPENAME": "ReprScalarType"
           }
-        ]
+        }
       },
       "Record": {
-        "STRUCT": [
-          {
-            "fields": {
-              "SEQ": {
-                "TYPENAME": "ReprColumnType"
-              }
+        "STRUCT": {
+          "fields": {
+            "SEQ": {
+              "TYPENAME": "ReprColumnType"
             }
           }
-        ]
+        }
       },
       "String": "UNIT",
       "Time": "UNIT",
@@ -4050,68 +3576,52 @@
   "RoundNumeric": "UNITSTRUCT",
   "RoundNumericBinary": "UNITSTRUCT",
   "Row": {
-    "STRUCT": [
-      {
-        "data": "BYTES"
-      }
-    ]
+    "STRUCT": {
+      "data": "BYTES"
+    }
   },
   "SafeMfpPlan": {
-    "STRUCT": [
-      {
-        "mfp": {
-          "TYPENAME": "MapFilterProject"
-        }
+    "STRUCT": {
+      "mfp": {
+        "TYPENAME": "MapFilterProject"
       }
-    ]
+    }
   },
   "SeahashBytes": "UNITSTRUCT",
   "SeahashString": "UNITSTRUCT",
   "Sin": "UNITSTRUCT",
   "SingleBasicPlan": {
-    "STRUCT": [
-      {
-        "expr": {
-          "TYPENAME": "LirAggregateExpr"
-        }
+    "STRUCT": {
+      "expr": {
+        "TYPENAME": "LirAggregateExpr"
       },
-      {
-        "fused_unnest_list": "BOOL"
-      }
-    ]
+      "fused_unnest_list": "BOOL"
+    }
   },
   "Sinh": "UNITSTRUCT",
   "Sleep": "UNITSTRUCT",
   "SplitPart": "UNITSTRUCT",
   "SqlColumnType": {
-    "STRUCT": [
-      {
-        "scalar_type": {
-          "TYPENAME": "SqlScalarType"
-        }
-      },
-      {
-        "nullable": "BOOL"
+    "STRUCT": {
+      "nullable": "BOOL",
+      "scalar_type": {
+        "TYPENAME": "SqlScalarType"
       }
-    ]
+    }
   },
   "SqlRelationType": {
-    "STRUCT": [
-      {
-        "column_types": {
-          "SEQ": {
-            "TYPENAME": "SqlColumnType"
-          }
+    "STRUCT": {
+      "column_types": {
+        "SEQ": {
+          "TYPENAME": "SqlColumnType"
         }
       },
-      {
-        "keys": {
-          "SEQ": {
-            "SEQ": "U64"
-          }
+      "keys": {
+        "SEQ": {
+          "SEQ": "U64"
         }
       }
-    ]
+    }
   },
   "SqlScalarType": {
     "ENUM": {
@@ -4124,15 +3634,13 @@
       "Bool": "UNIT",
       "Bytes": "UNIT",
       "Char": {
-        "STRUCT": [
-          {
-            "length": {
-              "OPTION": {
-                "TYPENAME": "CharMaxLength"
-              }
+        "STRUCT": {
+          "length": {
+            "OPTION": {
+              "TYPENAME": "CharMaxLength"
             }
           }
-        ]
+        }
       },
       "Date": "UNIT",
       "Float32": "UNIT",
@@ -4144,86 +3652,70 @@
       "Interval": "UNIT",
       "Jsonb": "UNIT",
       "List": {
-        "STRUCT": [
-          {
-            "element_type": {
-              "TYPENAME": "SqlScalarType"
+        "STRUCT": {
+          "custom_id": {
+            "OPTION": {
+              "TYPENAME": "CatalogItemId"
             }
           },
-          {
-            "custom_id": {
-              "OPTION": {
-                "TYPENAME": "CatalogItemId"
-              }
-            }
+          "element_type": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "Map": {
-        "STRUCT": [
-          {
-            "value_type": {
-              "TYPENAME": "SqlScalarType"
+        "STRUCT": {
+          "custom_id": {
+            "OPTION": {
+              "TYPENAME": "CatalogItemId"
             }
           },
-          {
-            "custom_id": {
-              "OPTION": {
-                "TYPENAME": "CatalogItemId"
-              }
-            }
+          "value_type": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "MzAclItem": "UNIT",
       "MzTimestamp": "UNIT",
       "Numeric": {
-        "STRUCT": [
-          {
-            "max_scale": {
-              "OPTION": {
-                "TYPENAME": "NumericMaxScale"
-              }
+        "STRUCT": {
+          "max_scale": {
+            "OPTION": {
+              "TYPENAME": "NumericMaxScale"
             }
           }
-        ]
+        }
       },
       "Oid": "UNIT",
       "PgLegacyChar": "UNIT",
       "PgLegacyName": "UNIT",
       "Range": {
-        "STRUCT": [
-          {
-            "element_type": {
-              "TYPENAME": "SqlScalarType"
-            }
+        "STRUCT": {
+          "element_type": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "Record": {
-        "STRUCT": [
-          {
-            "fields": {
-              "SEQ": {
-                "TUPLE": [
-                  {
-                    "TYPENAME": "ColumnName"
-                  },
-                  {
-                    "TYPENAME": "SqlColumnType"
-                  }
-                ]
-              }
+        "STRUCT": {
+          "custom_id": {
+            "OPTION": {
+              "TYPENAME": "CatalogItemId"
             }
           },
-          {
-            "custom_id": {
-              "OPTION": {
-                "TYPENAME": "CatalogItemId"
-              }
+          "fields": {
+            "SEQ": {
+              "TUPLE": [
+                {
+                  "TYPENAME": "ColumnName"
+                },
+                {
+                  "TYPENAME": "SqlColumnType"
+                }
+              ]
             }
           }
-        ]
+        }
       },
       "RegClass": "UNIT",
       "RegProc": "UNIT",
@@ -4231,41 +3723,35 @@
       "String": "UNIT",
       "Time": "UNIT",
       "Timestamp": {
-        "STRUCT": [
-          {
-            "precision": {
-              "OPTION": {
-                "TYPENAME": "TimestampPrecision"
-              }
+        "STRUCT": {
+          "precision": {
+            "OPTION": {
+              "TYPENAME": "TimestampPrecision"
             }
           }
-        ]
+        }
       },
       "TimestampTz": {
-        "STRUCT": [
-          {
-            "precision": {
-              "OPTION": {
-                "TYPENAME": "TimestampPrecision"
-              }
+        "STRUCT": {
+          "precision": {
+            "OPTION": {
+              "TYPENAME": "TimestampPrecision"
             }
           }
-        ]
+        }
       },
       "UInt16": "UNIT",
       "UInt32": "UNIT",
       "UInt64": "UNIT",
       "Uuid": "UNIT",
       "VarChar": {
-        "STRUCT": [
-          {
-            "max_length": {
-              "OPTION": {
-                "TYPENAME": "VarCharMaxLength"
-              }
+        "STRUCT": {
+          "max_length": {
+            "OPTION": {
+              "TYPENAME": "VarCharMaxLength"
             }
           }
-        ]
+        }
       }
     }
   },
@@ -4294,17 +3780,11 @@
   "SubUint32": "UNITSTRUCT",
   "SubUint64": "UNITSTRUCT",
   "Subpattern": {
-    "STRUCT": [
-      {
-        "consume": "U64"
-      },
-      {
-        "many": "BOOL"
-      },
-      {
-        "suffix": "STR"
-      }
-    ]
+    "STRUCT": {
+      "consume": "U64",
+      "many": "BOOL",
+      "suffix": "STR"
+    }
   },
   "Substr": "UNITSTRUCT",
   "TableFunc": {
@@ -4320,13 +3800,11 @@
       "GenerateSeriesUnoptimized": "UNIT",
       "GenerateSubscriptsArray": "UNIT",
       "GuardSubquerySize": {
-        "STRUCT": [
-          {
-            "column_type": {
-              "TYPENAME": "SqlScalarType"
-            }
+        "STRUCT": {
+          "column_type": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "JsonbArrayElements": "UNIT",
       "JsonbArrayElementsStringify": "UNIT",
@@ -4343,43 +3821,33 @@
       "RepeatRow": "UNIT",
       "RepeatRowNonNegative": "UNIT",
       "TabletizedScalar": {
-        "STRUCT": [
-          {
-            "name": "STR"
-          },
-          {
-            "relation": {
-              "TYPENAME": "SqlRelationType"
-            }
+        "STRUCT": {
+          "name": "STR",
+          "relation": {
+            "TYPENAME": "SqlRelationType"
           }
-        ]
+        }
       },
       "UnnestArray": {
-        "STRUCT": [
-          {
-            "el_typ": {
-              "TYPENAME": "SqlScalarType"
-            }
+        "STRUCT": {
+          "el_typ": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "UnnestList": {
-        "STRUCT": [
-          {
-            "el_typ": {
-              "TYPENAME": "SqlScalarType"
-            }
+        "STRUCT": {
+          "el_typ": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "UnnestMap": {
-        "STRUCT": [
-          {
-            "value_type": {
-              "TYPENAME": "SqlScalarType"
-            }
+        "STRUCT": {
+          "value_type": {
+            "TYPENAME": "SqlScalarType"
           }
-        ]
+        }
       },
       "WithOrdinality": {
         "NEWTYPE": {
@@ -4387,18 +3855,14 @@
         }
       },
       "Wrap": {
-        "STRUCT": [
-          {
-            "types": {
-              "SEQ": {
-                "TYPENAME": "SqlColumnType"
-              }
+        "STRUCT": {
+          "types": {
+            "SEQ": {
+              "TYPENAME": "SqlColumnType"
             }
           },
-          {
-            "width": "U64"
-          }
-        ]
+          "width": "U64"
+        }
       }
     }
   },
@@ -4432,16 +3896,12 @@
   "TimezoneIntervalTimestampTzBinary": "UNITSTRUCT",
   "TimezoneOffset": "UNITSTRUCT",
   "TimezoneTime": {
-    "STRUCT": [
-      {
-        "tz": {
-          "TYPENAME": "Timezone"
-        }
+    "STRUCT": {
+      "tz": {
+        "TYPENAME": "Timezone"
       },
-      {
-        "wall_time": "STR"
-      }
-    ]
+      "wall_time": "STR"
+    }
   },
   "TimezoneTimeVariadic": "UNITSTRUCT",
   "TimezoneTimestamp": {
@@ -4457,29 +3917,21 @@
   },
   "TimezoneTimestampTzBinary": "UNITSTRUCT",
   "ToCharTimestamp": {
-    "STRUCT": [
-      {
-        "format_string": "STR"
+    "STRUCT": {
+      "format": {
+        "TYPENAME": "DateTimeFormat"
       },
-      {
-        "format": {
-          "TYPENAME": "DateTimeFormat"
-        }
-      }
-    ]
+      "format_string": "STR"
+    }
   },
   "ToCharTimestampFormat": "UNITSTRUCT",
   "ToCharTimestampTz": {
-    "STRUCT": [
-      {
-        "format_string": "STR"
+    "STRUCT": {
+      "format": {
+        "TYPENAME": "DateTimeFormat"
       },
-      {
-        "format": {
-          "TYPENAME": "DateTimeFormat"
-        }
-      }
-    ]
+      "format_string": "STR"
+    }
   },
   "ToCharTimestampTzFormat": "UNITSTRUCT",
   "ToTimestamp": "UNITSTRUCT",
@@ -6417,23 +5869,17 @@
     }
   },
   "WindowFrame": {
-    "STRUCT": [
-      {
-        "units": {
-          "TYPENAME": "WindowFrameUnits"
-        }
+    "STRUCT": {
+      "end_bound": {
+        "TYPENAME": "WindowFrameBound"
       },
-      {
-        "start_bound": {
-          "TYPENAME": "WindowFrameBound"
-        }
+      "start_bound": {
+        "TYPENAME": "WindowFrameBound"
       },
-      {
-        "end_bound": {
-          "TYPENAME": "WindowFrameBound"
-        }
+      "units": {
+        "TYPENAME": "WindowFrameUnits"
       }
-    ]
+    }
   },
   "WindowFrameBound": {
     "ENUM": {
@@ -6456,12 +5902,10 @@
     }
   },
   "WithOrdinality": {
-    "STRUCT": [
-      {
-        "inner": {
-          "TYPENAME": "TableFunc"
-        }
+    "STRUCT": {
+      "inner": {
+        "TYPENAME": "TableFunc"
       }
-    ]
+    }
   }
 }
