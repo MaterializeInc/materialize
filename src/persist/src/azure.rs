@@ -51,13 +51,13 @@ const AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
 const AZURE_FEDERATED_TOKEN: &str = "AZURE_FEDERATED_TOKEN";
 const AZURE_FEDERATED_TOKEN_FILE: &str = "AZURE_FEDERATED_TOKEN_FILE";
 
-/// Slop subtracted from an access token's expiry when deciding whether to
+/// Buffer subtracted from an access token's expiry when deciding whether to
 /// refresh it, so we never present a token that expires while a request is in
-/// flight. Matches the slop in `azure_identity`'s internal token cache.
-const TOKEN_EXPIRY_SLOP: Duration = Duration::from_secs(20);
+/// flight. Matches the margin in `azure_identity`'s internal token cache.
+const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(20);
 
 fn is_expired(token: &AccessToken) -> bool {
-    token.expires_on < OffsetDateTime::now_utc() + TOKEN_EXPIRY_SLOP
+    token.expires_on < OffsetDateTime::now_utc() + TOKEN_EXPIRY_BUFFER
 }
 
 /// Exchanges a client assertion (the projected service account token) for an
@@ -82,7 +82,7 @@ struct RefreshingWorkloadIdentityCredential {
     federated_token_file: PathBuf,
     exchange: ExchangeFn,
     /// AAD access tokens by requested scopes, refreshed when within
-    /// [TOKEN_EXPIRY_SLOP] of expiry. Mirrors the caching semantics of
+    /// [TOKEN_EXPIRY_BUFFER] of expiry. Mirrors the caching semantics of
     /// `azure_identity`'s internal token cache.
     cache: RwLock<BTreeMap<Vec<String>, AccessToken>>,
 }
