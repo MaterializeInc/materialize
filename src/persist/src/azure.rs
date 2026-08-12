@@ -48,6 +48,7 @@ use crate::metrics::S3BlobMetrics;
 /// names match the ones `azure_identity`'s credential chain reads.
 const AZURE_TENANT_ID: &str = "AZURE_TENANT_ID";
 const AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
+const AZURE_FEDERATED_TOKEN: &str = "AZURE_FEDERATED_TOKEN";
 const AZURE_FEDERATED_TOKEN_FILE: &str = "AZURE_FEDERATED_TOKEN_FILE";
 
 /// Slop subtracted from an access token's expiry when deciding whether to
@@ -99,6 +100,13 @@ impl RefreshingWorkloadIdentityCredential {
     /// are present, or `None` to indicate that a different credential type
     /// must be used.
     fn from_env() -> Option<azure_core::Result<Self>> {
+        // A token provided directly via AZURE_FEDERATED_TOKEN is static, so
+        // there is nothing to re-read. `azure_identity`'s credential chain
+        // prefers it over the token file, defer to it to preserve that
+        // precedence.
+        if std::env::var(AZURE_FEDERATED_TOKEN).is_ok() {
+            return None;
+        }
         let (Ok(tenant_id), Ok(client_id), Ok(token_file)) = (
             std::env::var(AZURE_TENANT_ID),
             std::env::var(AZURE_CLIENT_ID),
