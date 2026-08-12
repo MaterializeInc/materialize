@@ -1424,42 +1424,52 @@ decision rather than a patch.
   sealed ahead while the join works through the batch ending there. So once the agent is
   pinned high, every activation is a candidate for the straddle.
 
-  Two things make the reader's own hold useless here, and the second is the more
-  serious.
+  **Take differential and the single-runtime path as correct, and the defect localises
+  entirely to our reimplementation of a mechanism differential already has.**
 
-  A hold cannot be lowered. `TraceAgent::set_physical_compaction` joins, so asking to
-  hold at `as_of` once the agent sits at `upper` is silently a no-op rather than an
-  error. `Spine::set_physical_compaction` guards rewinding with a `debug_assert!`, which
-  compiles out of the profile we ship, so a lowered meet quietly rewinds the frontier
-  while the batches merged under the old one stay merged. So "pin the import at `as_of`"
-  is not something the API can express after the fact, which is why forwarding `upper`
-  optimistically is irreversible rather than merely aggressive.
+  Why there is a reimplementation at all: `TraceReader`'s compaction setters take
+  `&mut self`, so they cannot be driven through an `Arc`. Differential's own answer to
+  the same problem is `TraceBox`, which holds a `MutableAntichain` over every handle's
+  hold and applies the aggregate to the trace, with each `TraceAgent` clone owning an
+  entry. That is unavailable across threads because `TraceAgent` is built on
+  `Rc<RefCell<..>>` and is not `Send`. So `SharedTraceHandle` is a per-reader owned
+  struct over an `Arc<SharedTrace<Tr>>`, readers record intent under a mutex, and the
+  publisher applies the meet to the one real `TraceAgent` it owns. The `Arc` is what
+  forces the indirection, and the indirection is where the semantics drifted.
 
-  **And our handle reports the request rather than the grant, which disables
-  differential's own tripwire.** `SharedTraceHandle::set_physical_compaction` stores the
-  requested frontier with no join and no clamp, and `get_physical_compaction` returns
-  it. A stock `TraceAgent` returns its joined hold, that is what it actually holds.
-  Differential's join guards itself with a real assertion that its physical compaction is
-  at or below `acknowledged`, and against a stock agent that assertion *fires* when the
-  agent is pinned above the cut, pointing straight at the problem. Against our handle it
-  passes, because the handle reports the low frontier it asked for and never received.
-  The straddle then surfaces later inside `batches_through` as an abort with no obvious
-  cause.
+  It drifts in two places, both mechanical.
 
-  So the minimal fix is honesty rather than a change of policy: record the publisher's
-  forwarded floor, clamp a registration up to it, and report *that* from
-  `get_physical_compaction`. Differential's existing assertion then does the work it was
-  written for and the failure lands at import time with the right diagnosis. Whether
-  `writer_physical = upper` also has to change is a separate question with a real cost,
-  since forwarding `upper` mirrors `TraceManager::maintenance` and sidesteps a
-  circularity where the publisher's own hold would stop the spine compacting, which is
-  what `map_batches` needs to advance the per-batch `since`. Make it loud, see whether it
-  fires, then decide.
+  1. **We overwrite where differential joins.** `set_physical_compaction` stores the
+     requested frontier with no join and no clamp, and `get_physical_compaction` returns
+     it. `TraceAgent::set_physical_compaction` joins the request into the handle's own
+     hold and reports the join, so differential forbids a handle from lowering its own
+     hold and always reports what it actually holds. Ours permits lowering and reports
+     the request. That is what disables differential's tripwire: the join asserts its
+     physical compaction is at or below `acknowledged`, which *fires* against a stock
+     agent pinned above the cut and points straight at the cause, and passes against our
+     handle because the handle reports a frontier it asked for and never received. The
+     straddle then surfaces later inside `batches_through` as an abort with no obvious
+     origin.
+  2. **`register` seeds the physical hold from a logical quantity.** Both dimensions are
+     seeded from `state.since`, which is computed as a meet of logical frontiers, while
+     the publisher's agent may have forwarded physical compaction far above it. So a
+     fresh handle enters holding a physical frontier the trace does not honour, the meet
+     drops below the agent's floor, and `Spine::set_physical_compaction` rewinds past
+     already-merged batches with only a `debug_assert!` in the way, which compiles out of
+     the profile we ship. `TraceAgent::clone` does not do this: it seeds the new entry
+     from the cloned handle's own current hold, which is a value the trace already
+     honours.
 
-  TODO: determine whether the ordinary maintenance path carries the same exposure, since
-  it also forwards physical compaction to the trace upper. If it does, then stock handles
-  reporting the grant is the only thing that has been catching it, and this is a
-  differential-level property our indirection unmasks rather than one we introduce.
+  So the fix is to mirror `TraceAgent` rather than to change policy. Join on set and
+  report the join. Seed a registration from the publisher's forwarded physical floor
+  rather than from `since`, and assert against that floor at import time so a request the
+  trace cannot honour fails loudly where it is made.
+
+  Note what is *not* a divergence. `writer_physical = upper` matches differential, where
+  a trace with zero live handles also permits maximal merging. The fallback is not the
+  bug, and the circularity its comment describes, that the publisher's own hold would
+  stop the spine compacting and so stop the per-batch `since` from advancing, is a real
+  constraint to preserve.
 
   It remains a race rather than a certainty, since being permitted to merge is not
   merging and the spine's fuel schedule decides when.
