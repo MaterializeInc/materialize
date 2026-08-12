@@ -38,8 +38,8 @@ pub enum LirScalarExpr {
     Literal(Result<Row, EvalError>, ReprColumnType),
     /// A function call that takes one expression as an argument.
     CallUnary {
-        /// Function
-        func: UnaryFunc,
+        /// Function. This instantiation stores no MirScalarExpr.
+        func: UnaryFunc<LirScalarExpr>,
         /// Argument
         expr: Box<LirScalarExpr>,
     },
@@ -120,7 +120,7 @@ impl LirScalarExpr {
     }
 
     /// Calls a unary function, with `self` as the argument.
-    pub fn call_unary<U: Into<UnaryFunc>>(self, func: U) -> Self {
+    pub fn call_unary<U: Into<UnaryFunc<LirScalarExpr>>>(self, func: U) -> Self {
         LirScalarExpr::CallUnary {
             func: func.into(),
             expr: Box::new(self),
@@ -611,7 +611,7 @@ impl From<&LirScalarExpr> for MirScalarExpr {
                 MirScalarExpr::Literal(row.clone(), repr_column_type.clone())
             }
             CallUnary { func, expr } => MirScalarExpr::CallUnary {
-                func: func.clone(),
+                func: func.map_expr(),
                 expr: Box::new(MirScalarExpr::from(expr.as_ref())),
             },
             CallBinary { func, expr1, expr2 } => MirScalarExpr::CallBinary {
@@ -645,7 +645,7 @@ impl TryFrom<&MirScalarExpr> for LirScalarExpr {
                 repr_column_type.clone(),
             )),
             CallUnary { func, expr } => Ok(LirScalarExpr::CallUnary {
-                func: func.clone(),
+                func: func.try_map_expr()?,
                 expr: Box::new(LirScalarExpr::try_from(expr.as_ref())?),
             }),
             CallBinary { func, expr1, expr2 } => {

@@ -95,11 +95,11 @@ impl fmt::Display for CastListToString {
     Deserialize,
     Hash
 )]
-pub struct CastListToJsonb {
-    pub cast_element: Box<MirScalarExpr>,
+pub struct CastListToJsonb<E = MirScalarExpr> {
+    pub cast_element: Box<E>,
 }
 
-impl LazyUnaryFunc for CastListToJsonb {
+impl<E: Eval> LazyUnaryFunc for CastListToJsonb<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -155,7 +155,27 @@ impl LazyUnaryFunc for CastListToJsonb {
     }
 }
 
-impl fmt::Display for CastListToJsonb {
+impl<E> CastListToJsonb<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastListToJsonb<E2>, E2::Error> {
+        Ok(CastListToJsonb {
+            cast_element: Box::new(E2::try_from(&*self.cast_element)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastListToJsonb<E2> {
+        CastListToJsonb {
+            cast_element: Box::new(E2::from(&*self.cast_element)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastListToJsonb<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("listtojsonb")
     }
@@ -174,14 +194,14 @@ impl fmt::Display for CastListToJsonb {
     Deserialize,
     Hash
 )]
-pub struct CastList1ToList2 {
+pub struct CastList1ToList2<E = MirScalarExpr> {
     /// List2's type
     pub return_ty: SqlScalarType,
     /// The expression to cast List1's elements to List2's elements' type
-    pub cast_expr: Box<MirScalarExpr>,
+    pub cast_expr: Box<E>,
 }
 
-impl LazyUnaryFunc for CastList1ToList2 {
+impl<E: Eval> LazyUnaryFunc for CastList1ToList2<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -235,7 +255,29 @@ impl LazyUnaryFunc for CastList1ToList2 {
     }
 }
 
-impl fmt::Display for CastList1ToList2 {
+impl<E> CastList1ToList2<E> {
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastList1ToList2<E2>, E2::Error> {
+        Ok(CastList1ToList2 {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::try_from(&*self.cast_expr)?),
+        })
+    }
+
+    /// Rebuilds this function with the element cast expression converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastList1ToList2<E2> {
+        CastList1ToList2 {
+            return_ty: self.return_ty.clone(),
+            cast_expr: Box::new(E2::from(&*self.cast_expr)),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastList1ToList2<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("list1tolist2")
     }
