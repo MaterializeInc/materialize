@@ -239,8 +239,12 @@ subscribe clause while *keeping* transience, so the predicate becomes
 what makes it cheap: transient ids are never retained by reconciliation, so nothing
 regresses there, they pass both frontier-reporting gates unchanged, and their exports
 are freshly rendered so the shared-trace re-export path is not reached. It needs the
-early hold release above, which in turn needs the release-ordering fix first, plus two
-call-site bugs in `import_index_shared` recorded in the open findings.
+compaction downgrade described in
+[Compaction feedback exists, and two frozen holds defeat it](#compaction-feedback-exists-and-two-frozen-holds-defeat-it),
+plus two call-site bugs in `import_index_shared` recorded in the open findings. A
+`SUBSCRIBE` sink needs the stream and not the trace, so it is the easiest case of that
+downgrade, but the downgrade is what any other long-lived interactive dataflow needs and
+it should be built for the general case.
 
 Maintained collections on the interactive runtime are a strictly larger change and one
 piece of it has no home in the current protocol. See the reconciliation finding in
@@ -1109,7 +1113,7 @@ is a one-argument change.
 
 The reason that matters is that it moves the obstacle. Following imports are not the
 hard part. See
-[The interactive read hold outlives its purpose](#the-interactive-read-hold-outlives-its-purpose).
+[Compaction feedback exists, and two frozen holds defeat it](#compaction-feedback-exists-and-two-frozen-holds-defeat-it).
 
 Import is pairwise: importer worker `i` reads publisher worker `i`. That is sound
 only when both sides shard keys the same way, `key.hashed() % peers`, with equal
@@ -1119,56 +1123,73 @@ the requested `as_of` means the controller offered an unreadable `as_of`, a
 protocol error, and the import must panic rather than silently read coalesced
 data.
 
-### The interactive read hold outlives its purpose
+### Compaction feedback exists, and two frozen holds defeat it
 
-NOTE: an earlier version of this section said a follower needs a read hold that
-*advances* with its progress, and called the absence of one the gap that forecloses
-long-lived interactive dataflows. That overstates it. **A follower needs a hold only at
-registration.** What is wrong is that the hold is kept until the dataflow drops.
+NOTE: this section has been wrong twice. It first said there is no way to advance a
+cross-runtime read hold, which is false because the mechanism exists. It then said the
+hold only needs early release, which is false for any importer that keeps a trace
+handle. What follows is the version that matches the code.
 
-The reason is that a registered importer stops depending on the publisher's trace.
+An arranged collection is two things: a stream of batches, and a handle to the trace. A
+long-running dataflow generally needs both. A join looks up each side's incoming batches
+against the *other* side's trace, so it holds a trace handle for its whole life and
+cannot release it. Such an importer must instead **downgrade** logical and physical
+compaction as its own frontier advances, or the publisher can never merge or truncate
+in the background. So compaction information has to flow backwards, from the importing
+runtime to the publishing one.
 
-* `adopt_named` sinks the *arrangement stream*, and pushes the batches that arrive on
-  it into every registered queue, along with a `Frontier` instruction whenever `upper`
-  advances. Those batches are immutable and carry their original timestamps, so
-  compacting the publisher's trace afterwards cannot alter what a queue already holds
-  or will receive.
-* The seed is a one-time prefix. The chain is captured when the importer registers, and
-  `draining_seed` flips off on the first advancing `Frontier` instruction. There is no
-  incremental re-read of the trace, so there is no window that grows with the
-  collection.
+**That backward channel exists, and it is shared memory rather than protocol, which is
+why it needs no new command.**
 
-So the hold's whole job is to make registration safe: `since <= as_of`, and no spine
-merge straddling the cut while the chain is captured. After that the importer owns
-`Arc`-cloned batches and consumes an immutable stream.
+* `SharedTraceHandle` implements `TraceReader`, and its `set_logical_compaction` and
+  `set_physical_compaction` mirror the handle's frontier into
+  `SharedTraceState::logical_holds[id]` and `physical_holds[id]`.
+* On every activation the publisher computes
+  `compaction_target(&state.logical_holds, &writer_logical)` and the physical analogue,
+  and forwards the result to its own `TraceAgent`.
+* Handles handed downstream behave normally. Differential's join and reduce downgrade
+  their trace handles as their frontiers advance, and `TraceFrontier` forwards the
+  downgrades through. So a well-behaved importer already causes the maintenance trace to
+  compact.
 
-What the current mechanism does instead is hold from `CreateDataflow` until an export's
-`AllowCompaction` reaches the empty frontier, which for a long-lived dataflow means
-until `DROP`. `InteractiveHold { imports, as_of }` is written once and `hold_floor`
-returns it unchanged, and in the replica the imported handles have compaction set once
-and are then retained as tokens. For a single-time read the difference is milliseconds
-and invisible. For a follower it pins the imported index's `since` at the follower's
-start time for hours, while the controller's `AllowCompaction`s accumulate in
-`deferred_compaction` unforwarded.
+**Two frozen holds defeat it, at two different levels.**
 
-**The fix is early release, not advancing**, which is a smaller change than tracking
-progress: release the hold once the importer has registered and drained its seed. That
-is observable on both sides, as the first advancing `Frontier` instruction in the
-replica and as the first frontier or subscribe batch from interactive in the
-multiplexer.
+First, in the replica, `import_shared_index`'s caller sets
+`set_logical_compaction(as_of)` and `set_physical_compaction(as_of)` on `oks_hold` and
+`errs_hold` and then retains those handles as dataflow tokens, never downgrading them.
+The reason this is fatal rather than merely redundant is the aggregation:
+`compaction_target` is a **meet** across all holds, so a single hold pinned at `as_of`
+dominates it no matter how far every other hold advances. The downstream handles
+downgrade correctly and it makes no difference.
 
-It does introduce a hazard that does not exist today. Release currently happens after
-the dataflow is gone, so ordering it against command enqueue rather than against
-interactive having rendered is a narrow race. With early release, the release happens
-while the dataflow is alive and reading, so the
-[release-ordering hole](#open-findings-from-adversarial-review) stops being a corner
-case and becomes a routine path. **The ordering fix is a prerequisite for early
-release, not an independent cleanup.**
+Second, the multiplexer's `InteractiveHold { imports, as_of }` is written once from the
+dataflow's `as_of` and `hold_floor` returns it unchanged, so the `AllowCompaction` sent
+to maintenance is capped at the importer's start time until `release_holds` fires on an
+export reaching the empty frontier. Even with the in-replica holds fixed, maintenance is
+never *told* it may compact past `as_of`.
 
-What genuinely remains hard for a follower is not compaction. It is that the import
-queue is unbounded with no backpressure, deliberately, so that maintenance progress is
-never coupled to a slow reader. A follower that lags accumulates a second copy of every
-batch it has not drained, for as long as it lags.
+For a single-time read both pins last milliseconds and neither is observable. For a
+long-lived importer each independently pins the imported index's `since` at the
+importer's start time for its whole life, and the controller's `AllowCompaction`s
+accumulate in `deferred_compaction` unforwarded.
+
+**So the fix is to downgrade both, not to release either.** In the replica, feed the
+export's frontier into the retained handles' `set_logical_compaction` rather than
+pinning them at `as_of`, or do not retain a separate hold at all. In the multiplexer,
+advance `InteractiveHold.as_of` from interactive's own observed progress, which arrives
+as `Frontiers` for a transient export or as `SubscribeResponse::Batch(upper)`. One
+constraint there: `recv` is documented cancel-safe, so awaiting a `send` inside it would
+break that, and a released compaction has to be stashed and flushed at the top of
+`send`.
+
+Release rather than downgrade is sufficient only for an importer that needs the stream
+and never the trace, which a `SUBSCRIBE` sink plausibly is. That is a narrower case than
+the general one and it should not be the basis of the design.
+
+Separately, and not a compaction problem: the import queue is unbounded with no
+backpressure, deliberately, so that maintenance progress is never coupled to a slow
+reader. A long-lived importer that lags holds a second copy of every undrained batch for
+as long as it lags.
 
 ## The registry
 
@@ -1351,7 +1372,7 @@ decision rather than a patch.
   the interactive runtime, which the current protocol does not have. This is the
   same class of bug as the one the capping was introduced to fix, one level up.
   NOTE: read this together with
-  [The interactive read hold outlives its purpose](#the-interactive-read-hold-outlives-its-purpose).
+  [Compaction feedback exists, and two frozen holds defeat it](#compaction-feedback-exists-and-two-frozen-holds-defeat-it).
   Release ordering is the drop-time corner of that larger gap, and once holds advance,
   release stops being what unblocks compaction.
 * **`import_index_shared` silently drops `SnapshotMode`.** The maintenance import
@@ -1385,12 +1406,13 @@ decision rather than a patch.
   floor the publisher has already forwarded in the shared state, clamp a newly
   registered hold up to it rather than to `since` alone, and assert against it at import
   time, converting a straddle abort into a loud protocol-ordering failure at import.
-  NOTE: it was claimed here that a *following* importer makes this worse, because its
-  downstream operators advance physical compaction on every frontier notification and so
-  re-cut continuously. That looks wrong for the same reason the read-hold section was
-  wrong: the assert lives in `batches_through`, which a registered importer does not
-  call again. The exposure is one window per registration either way. Worth confirming
-  before either version of the claim is relied on.
+  It is **worse for an importer that keeps a trace handle**, which is any join with a
+  symmetric arranged input and anything else that answers lookups rather than only
+  consuming the stream. `cursor_through` goes through `batches_through`, so such an
+  importer re-cuts the spine on every activation while its downstream operators advance
+  physical compaction one round behind the publisher's `upper`. That retries the race
+  continuously for the dataflow's life instead of once per registration. A stream-only
+  consumer is exposed once, at registration.
 * **`compaction_floor` is never evicted**, so the multiplexer retains one entry per
   collection id ever seen, including every transient peek dataflow, for the life of
   the connection. The neighbouring `transient_owner` is evicted precisely to avoid
