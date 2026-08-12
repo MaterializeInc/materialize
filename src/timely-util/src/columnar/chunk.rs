@@ -44,10 +44,10 @@
 //! resident fence metadata so a probe set faults only the chunk bodies it
 //! actually touches.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use columnar::bytes::indexed;
 use columnar::{Borrow, BorrowedOf, Columnar, Container as _, FromBytes, Index, Len, Push as _};
@@ -55,7 +55,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::Chunk;
 use mz_ore::cast::CastFrom;
-use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, Pool};
+use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, IDENTITY_CODEC, Pool};
 use timely::Accountable;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::ContainerBytes;
@@ -78,6 +78,11 @@ thread_local! {
     /// enable flag and pool. Lets tests and benches spill through a private
     /// pool without touching process-global state.
     static SPILL_OVERRIDE: RefCell<Option<Pool>> = const { RefCell::new(None) };
+
+    /// A thread-scoped depth-floor override, taking precedence over the
+    /// global value. Lets tests and benches pin the floor without racing
+    /// concurrently running tests on the process-global state.
+    static COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
 
     /// Reusable staging for call-scoped reads of spilled bodies.
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -112,6 +117,51 @@ pub fn set_storage_spill_enabled(enabled: bool) {
 /// restores the global resolution.
 pub fn set_spill_override(pool: Option<Pool>) {
     SPILL_OVERRIDE.with(|cell| *cell.borrow_mut() = pool);
+}
+
+/// The youngest generational depth whose spilled bodies are compressed. See
+/// [`set_compress_min_depth`].
+static COMPRESS_MIN_DEPTH: AtomicU8 = AtomicU8::new(DEFAULT_COMPRESS_MIN_DEPTH);
+
+/// Set the youngest generational depth whose spilled bodies are compressed.
+///
+/// A chunk at depth `d` is rewritten (merged, extracted, advanced) with
+/// frequency proportional to `2^-d` under geometric merging, so compressing
+/// a shallow chunk buys a short stay in the pool at the cost of a guaranteed
+/// near-term codec round-trip: the body is encoded only to be read back and
+/// decoded by the next rewrite. Generations below the floor spill under the
+/// identity codec instead: still budgeted and swap-backed like every extent,
+/// but encode and decode are copies. The floor never exempts a body from the
+/// pool, so it cannot grow unbudgeted resident state.
+///
+/// `0` compresses every spilled body. Consulted at every commit, so changes
+/// apply to running dataflows.
+pub fn set_compress_min_depth(depth: u8) {
+    COMPRESS_MIN_DEPTH.store(depth, Ordering::Relaxed);
+}
+
+/// Set or unset a thread-scoped depth-floor override, taking precedence over
+/// [`set_compress_min_depth`]. For tests and benches, which run concurrently
+/// and must not race on the process-global floor.
+pub fn set_compress_min_depth_override(depth: Option<u8>) {
+    COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.set(depth));
+}
+
+/// The depth floor in effect for this thread's commits.
+fn compress_min_depth() -> u8 {
+    COMPRESS_MIN_DEPTH_OVERRIDE
+        .with(|cell| cell.get())
+        .unwrap_or_else(|| COMPRESS_MIN_DEPTH.load(Ordering::Relaxed))
+}
+
+/// The codec a body at `depth` stores under: identity below the compression
+/// floor, lz4 at and past it.
+fn codec_for_depth(depth: u8) -> &'static dyn ExtentCodec {
+    if depth < compress_min_depth() {
+        &IDENTITY_CODEC
+    } else {
+        &LZ4_CODEC
+    }
 }
 
 /// The pool committed chunks spill to, if any.
@@ -161,6 +211,16 @@ const COMMIT_BYTES: usize = 2 << 20;
 /// floor. A caller that commits many small chunks directly accumulates
 /// unbudgeted heap, and no accounting here would catch it.
 const SPILL_MIN_BYTES: usize = 64 << 10;
+
+/// The default compression depth floor: fresh (depth 0) bodies spill
+/// uncompressed.
+///
+/// A fresh chunk is consumed by its first merge with certainty, so
+/// compressing it can never save pool bytes for longer than one merge
+/// cadence and always costs a full encode plus decode. Depth 1 and beyond
+/// have survived a merge and wait geometrically longer for the next, so
+/// their compression amortizes.
+const DEFAULT_COMPRESS_MIN_DEPTH: u8 = 1;
 
 /// Whether a column is big enough to commit on its own. A monotone
 /// threshold, so settle's carry, which grows by whole chunks, cannot step
@@ -310,14 +370,20 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
 
     /// Spill a non-empty column into `pool` unconditionally, capturing the
     /// resident fence metadata.
+    ///
+    /// Generations below the compression depth floor store under the
+    /// identity codec: rewritten too soon for compression to amortize, they
+    /// stay budgeted and swap-backed while encode and decode reduce to
+    /// copies.
     fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self {
+        let codec = codec_for_depth(depth);
         let len_bytes = column.length_in_bytes();
         let view = column.borrow();
         let records = view.len();
         let mut fences = D::Container::default();
         fences.push(view.0.get(0));
         fences.push(view.0.get(records - 1));
-        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth });
+        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth }, codec);
         ColumnChunk::Spilled(Rc::new(SpilledBody {
             records,
             fences,
@@ -380,13 +446,14 @@ fn spill_column<C: Columnar>(
     pool: &Pool,
     len_bytes: usize,
     hints: ChunkHints,
+    codec: &'static dyn ExtentCodec,
 ) -> ChunkHandle {
     mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
     match column {
-        Column::Align(words) => pool.insert_with(words.len(), hints, &LZ4_CODEC, |dst| {
-            dst.copy_from_slice(&words)
-        }),
-        other => pool.insert_with(len_bytes / 8, hints, &LZ4_CODEC, |dst| {
+        Column::Align(words) => {
+            pool.insert_with(words.len(), hints, codec, |dst| dst.copy_from_slice(&words))
+        }
+        other => pool.insert_with(len_bytes / 8, hints, codec, |dst| {
             let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
             let mut cursor = std::io::Cursor::new(bytes);
             other.into_bytes(&mut cursor);
@@ -1702,6 +1769,39 @@ mod tests {
         set_spill_override(None);
     }
 
+    /// The compression depth floor picks the codec, not whether a body
+    /// spills: shallow generations store at identity, the floor and deeper
+    /// at lz4, and every depth spills and round-trips.
+    #[mz_ore::test]
+    fn spill_codec_depth_floor() {
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(2));
+        // Codec identity via Debug: ZST statics and dyn vtables make
+        // pointer comparison unreliable.
+        let codec_name = |depth: u8| format!("{:?}", codec_for_depth(depth));
+        assert_eq!(codec_name(0), "IdentityCodec");
+        assert_eq!(codec_name(1), "IdentityCodec");
+        assert_eq!(codec_name(2), "Lz4Codec");
+        assert_eq!(codec_name(u8::MAX), "Lz4Codec");
+
+        let data: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
+        let data = consolidate(data);
+        let column = build_column(&data);
+        for depth in [0u8, 1, 2, 3] {
+            let chunk = TestChunk::commit(column.clone(), depth);
+            assert!(chunk.is_spilled(), "depth {depth} must spill");
+            assert_eq!(collect_column(&chunk.into_column()), data);
+        }
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+
+        // The default floor stores only fresh (depth 0) bodies at identity.
+        set_compress_min_depth_override(Some(DEFAULT_COMPRESS_MIN_DEPTH));
+        assert_eq!(codec_name(0), "IdentityCodec");
+        assert_eq!(codec_name(1), "Lz4Codec");
+        set_compress_min_depth_override(None);
+    }
+
     /// The compute and storage spill gates compose as an OR: either gate
     /// routes commits to the installed pool, and each setter writes only its
     /// own gate.
@@ -1733,6 +1833,7 @@ mod tests {
         assert!(commit(&col), "the compute gate alone spills");
         set_compute_spill_enabled(false);
         assert!(!commit(&col), "both gates off again");
+        set_compress_min_depth_override(None);
     }
 
     /// Re-spilling an already-serialized body exercises the `Column::Align`

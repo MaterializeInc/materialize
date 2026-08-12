@@ -596,6 +596,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "linear_join_yielding",
     "enable_column_paged_batcher",
     "enable_column_paged_batcher_spill",
+    "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",

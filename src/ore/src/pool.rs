@@ -159,6 +159,37 @@ pub trait ExtentCodec: std::fmt::Debug + Send + Sync {
     }
 }
 
+/// The identity [`ExtentCodec`]: the stored form is the body. Encode and
+/// decode are copies, and range reads copy the range directly, so a chunk
+/// stored under this codec pays no compression work in either direction
+/// while remaining fully budgeted and swap-backed like any other extent.
+#[derive(Debug)]
+pub struct IdentityCodec;
+
+/// The [`IdentityCodec`] instance to pass to [`Pool::insert_with`].
+pub static IDENTITY_CODEC: IdentityCodec = IdentityCodec;
+
+impl ExtentCodec for IdentityCodec {
+    fn encode(&self, body: &[u8], out: &mut Vec<u8>) {
+        out.clear();
+        out.extend_from_slice(body);
+    }
+
+    fn decode(&self, stored: &[u8], body: &mut [u8]) {
+        assert_eq!(stored.len(), body.len(), "identity stored form is the body");
+        body.copy_from_slice(stored);
+    }
+
+    fn decode_range(&self, stored: &[u8], body_len: usize, offset: usize, dst: &mut [u8]) {
+        assert_eq!(stored.len(), body_len, "identity stored form is the body");
+        let end = offset
+            .checked_add(dst.len())
+            .expect("range end overflows usize");
+        assert!(end <= body_len, "range end {end} exceeds body {body_len}");
+        dst.copy_from_slice(&stored[offset..end]);
+    }
+}
+
 /// The largest stored form [`ExtentCodec::encode`] may produce for a
 /// `body_len`-byte body: an incompressible-input expansion matching lz4's
 /// worst case plus a four-byte length prefix. The extent store's size-class
@@ -3734,6 +3765,24 @@ mod tests {
         pool.quiesce_spill();
         pool.join_spill_threads();
         assert_eq!(pool.stats().resident_bytes, 0);
+    }
+
+    /// The identity codec stores the body verbatim: eviction and reads,
+    /// whole and by range, reconstruct it unchanged.
+    #[mz_ore::test]
+    fn identity_codec_round_trips() {
+        let pool = test_pool(usize::MAX);
+        let want = payload(SMALL, 601);
+        let h = pool.insert_with(SMALL, ChunkHints::default(), &IDENTITY_CODEC, |dst| {
+            dst.copy_from_slice(&want);
+        });
+        assert_eq!(read(&h), want);
+        pool.evict(&h);
+        assert_eq!(read(&h), want, "round-trips through the extent");
+        pool.evict(&h);
+        let mut range = Vec::new();
+        h.read_range_into(8..24, &mut range);
+        assert_eq!(range, want[8..24], "range reads copy the range directly");
     }
 
     #[mz_ore::test]
