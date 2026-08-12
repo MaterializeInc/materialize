@@ -214,19 +214,6 @@ impl Row {
         self.clone()
     }
 
-    /// Like [`Row::pack`], but the provided iterator is allowed to produce an
-    /// error, in which case the packing operation is aborted and the error
-    /// returned.
-    pub fn try_pack<'a, I, D, E>(iter: I) -> Result<Row, E>
-    where
-        I: IntoIterator<Item = Result<D, E>>,
-        D: Borrow<Datum<'a>>,
-    {
-        let mut row = Row::default();
-        row.packer().try_extend(iter)?;
-        Ok(row)
-    }
-
     /// Pack a slice of `Datum`s into a `Row`.
     ///
     /// This method has the advantage over `pack` that it can determine the required

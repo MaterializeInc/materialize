@@ -375,22 +375,6 @@ impl<T: bytemuck::AnyBitPattern> Region<T> {
     pub fn new_heap_zeroed(capacity: usize) -> Self {
         Self::Heap(vec![T::zeroed(); capacity])
     }
-
-    /// Construct a new region with the specified capacity, initialized to 0.
-    pub fn new_auto_zeroed(capacity: usize) -> Self {
-        if ENABLE_LGALLOC_REGION.load(std::sync::atomic::Ordering::Relaxed) {
-            match Region::new_mmap_zeroed(capacity) {
-                Ok(r) => return r,
-                Err(lgalloc::AllocError::Disabled)
-                | Err(lgalloc::AllocError::InvalidSizeClass(_)) => {}
-                Err(e) => {
-                    eprintln!("lgalloc error: {e}, falling back to heap");
-                }
-            }
-        }
-        // Fall-through
-        Self::new_heap_zeroed(capacity)
-    }
 }
 
 impl<T: Clone> Region<T> {

@@ -169,19 +169,6 @@ fn map_null_lsn_to_retry<T>(result: Result<T, SqlServerError>) -> RetryResult<T,
     }
 }
 
-/// Increments the log sequence number.
-///
-/// See: <https://learn.microsoft.com/en-us/sql/relational-databases/system-functions/sys-fn-cdc-increment-lsn-transact-sql?view=sql-server-ver16>
-pub async fn increment_lsn(client: &mut Client, lsn: Lsn) -> Result<Lsn, SqlServerError> {
-    static INCREMENT_LSN_QUERY: &str = "SELECT sys.fn_cdc_increment_lsn(@P1);";
-    let result = client
-        .query(INCREMENT_LSN_QUERY, &[&lsn.as_bytes().as_slice()])
-        .await?;
-
-    mz_ore::soft_assert_eq_or_log!(result.len(), 1);
-    parse_lsn(&result[..1])
-}
-
 /// Parse an [`Lsn`] in Decimal(25,0) format of the provided [`tiberius::Row`].
 ///
 /// Returns an error if the provided slice doesn't have exactly one row.

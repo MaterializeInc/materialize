@@ -690,25 +690,6 @@ impl<'a> StatementContext<'a> {
         })
     }
 
-    // Creates a `ResolvedItemName::Item` from a `GlobalId` and an
-    // `UnresolvedItemName`.
-    pub fn allocate_resolved_item_name(
-        &self,
-        id: CatalogItemId,
-        name: UnresolvedItemName,
-    ) -> Result<ResolvedItemName, PlanError> {
-        let partial = normalize::unresolved_item_name(name)?;
-        let qualified = self.allocate_qualified_name(partial.clone())?;
-        let full_name = self.allocate_full_name(partial)?;
-        Ok(ResolvedItemName::Item {
-            id,
-            qualifiers: qualified.qualifiers,
-            full_name,
-            print_id: true,
-            version: RelationVersionSelector::Latest,
-        })
-    }
-
     pub fn active_database(&self) -> Option<&DatabaseId> {
         self.catalog.active_database()
     }

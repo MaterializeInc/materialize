@@ -263,11 +263,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
-    enable_off_thread_optimization
     enable_password_auth
     enable_paused_cluster_readhold_downgrade
-    enable_persist_streaming_compaction
-    enable_persist_streaming_snapshot_and_fetch
     enable_primary_key_not_enforced
     enable_projection_pushdown_after_relation_cse
     enable_public_metrics_endpoint
@@ -461,6 +458,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     enable_iceberg_sink
     enable_kafka_sink_partition_by
     enable_multi_replica_sources
+    enable_multi_worker_storage_persist_sink
     enable_reduce_reduction
     enable_repr_typecheck
     enable_unified_cluster_arrangment

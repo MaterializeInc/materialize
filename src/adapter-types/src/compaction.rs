@@ -46,15 +46,6 @@ pub enum CompactionWindow {
 }
 
 impl CompactionWindow {
-    pub fn lag_from(&self, from: Timestamp) -> Timestamp {
-        let lag = match self {
-            CompactionWindow::Default => DEFAULT_LOGICAL_COMPACTION_WINDOW_TS,
-            CompactionWindow::DisableCompaction => return Timestamp::minimum(),
-            CompactionWindow::Duration(d) => *d,
-        };
-        from.saturating_sub(lag)
-    }
-
     /// Returns self as a Timestamp that can be used for comparisons.
     pub fn comparable_timestamp(&self) -> Timestamp {
         match self {

@@ -519,20 +519,6 @@ pub fn column_union(
     diffs
 }
 
-/// Returns true when it is safe to treat a `sub` row as an `sup` row
-///
-/// In particular, the core types must be equal, and if a column in `sup` is nullable, that column should also be nullable in `sub`
-/// Conversely, it is okay to treat a known non-nullable column as nullable: `sub` may be nullable when `sup` is not
-pub fn is_subtype_of(sub: &[ReprColumnType], sup: &[ReprColumnType]) -> bool {
-    if sub.len() != sup.len() {
-        return false;
-    }
-
-    sub.iter().zip_eq(sup.iter()).all(|(got, known)| {
-        (!known.nullable || got.nullable) && got.scalar_type == known.scalar_type
-    })
-}
-
 /// Characterizes how a Datum differs from a ReprColumnType
 #[derive(Clone, Debug)]
 pub enum DatumTypeDifference {

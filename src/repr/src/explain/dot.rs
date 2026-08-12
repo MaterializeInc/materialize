@@ -64,25 +64,3 @@ pub fn dot_string<T: DisplayDot<()>>(t: &T) -> String {
 
     DotString::<'_>(t).to_string()
 }
-
-/// Apply `f: F` to create a rendering context of type `C` and render the given
-/// type `t: T` as [`ExplainFormat::Dot`] within that context.
-///
-/// # Panics
-///
-/// Panics if the [`DisplayDot::fmt_dot`] call returns a [`fmt::Error`].
-pub fn dot_string_at<'a, T: DisplayDot<C>, C, F: Fn() -> C>(t: &'a T, f: F) -> String {
-    struct DotStringAt<'a, T, C, F: Fn() -> C> {
-        t: &'a T,
-        f: F,
-    }
-
-    impl<T: DisplayDot<C>, C, F: Fn() -> C> DisplayDot<()> for DotStringAt<'_, T, C, F> {
-        fn fmt_dot(&self, f: &mut fmt::Formatter<'_>, _ctx: &mut ()) -> fmt::Result {
-            let mut ctx = (self.f)();
-            self.t.fmt_dot(f, &mut ctx)
-        }
-    }
-
-    dot_string(&DotStringAt { t, f })
-}

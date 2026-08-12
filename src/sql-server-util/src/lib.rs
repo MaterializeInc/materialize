@@ -314,27 +314,6 @@ impl Client {
         Ok(())
     }
 
-    /// Returns the current transaction isolation level for the current session.
-    pub async fn get_transaction_isolation(
-        &mut self,
-    ) -> Result<TransactionIsolationLevel, SqlServerError> {
-        const QUERY: &str = "SELECT transaction_isolation_level FROM sys.dm_exec_sessions where session_id = @@SPID;";
-        let rows = self.simple_query(QUERY).await?;
-        match &rows[..] {
-            [row] => {
-                let val: i16 = row
-                    .try_get(0)
-                    .context("getting 0th column")?
-                    .ok_or_else(|| anyhow::anyhow!("no 0th column?"))?;
-                let level = TransactionIsolationLevel::try_from_sql_server(val)?;
-                Ok(level)
-            }
-            other => Err(SqlServerError::InvariantViolated(format!(
-                "expected one row, got {other:?}"
-            ))),
-        }
-    }
-
     /// Returns the [`EngineEdition`] of the connected instance, querying it on
     /// first access and caching the result for the life of this [`Client`].
     pub async fn engine_edition(&mut self) -> Result<EngineEdition, SqlServerError> {
@@ -562,19 +541,6 @@ impl TransactionIsolationLevel {
             TransactionIsolationLevel::Snapshot => "SNAPSHOT",
             TransactionIsolationLevel::Serializable => "SERIALIZABLE",
         }
-    }
-
-    /// Try to parse a [`TransactionIsolationLevel`] from the value returned from SQL Server.
-    fn try_from_sql_server(val: i16) -> Result<TransactionIsolationLevel, anyhow::Error> {
-        let level = match val {
-            1 => TransactionIsolationLevel::ReadUncommitted,
-            2 => TransactionIsolationLevel::ReadCommitted,
-            3 => TransactionIsolationLevel::RepeatableRead,
-            4 => TransactionIsolationLevel::Serializable,
-            5 => TransactionIsolationLevel::Snapshot,
-            x => anyhow::bail!("unknown level {x}"),
-        };
-        Ok(level)
     }
 }
 

@@ -1870,15 +1870,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c676a478f63e9fa2dd5368a42f28bba0d6c560b775f38583c8bbaa7fcd67c9c"
 
 [[package]]
-name = "bytefmt"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "590b1af059a21c47d4da7cd11f05e08b1992b58b5b4acf2a5e10d7e53aed3d74"
-dependencies = [
- "regex",
-]
-
-[[package]]
 name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6968,23 +6959,13 @@ dependencies = [
 name = "mz-durable-cache"
 version = "0.0.0"
 dependencies = [
- "async-trait",
- "bytes",
  "differential-dataflow",
- "futures",
- "itertools 0.14.0",
- "mz-dyncfg",
  "mz-ore",
  "mz-persist-client",
  "mz-persist-types",
- "mz-timely-util",
- "prometheus",
- "prost",
- "serde",
  "timely",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -8308,24 +8289,6 @@ dependencies = [
  "mz-repr",
  "mz-timely-util",
  "timely",
-]
-
-[[package]]
-name = "mz-s3-datagen"
-version = "0.0.0"
-dependencies = [
- "anyhow",
- "aws-config",
- "aws-sdk-s3",
- "bytefmt",
- "clap",
- "futures",
- "indicatif",
- "mz-aws-util",
- "mz-ore",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

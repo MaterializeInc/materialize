@@ -1910,24 +1910,6 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
-        name: enable_multi_worker_storage_persist_sink,
-        desc: "multi-worker storage persist sink",
-        default: true,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_persist_streaming_snapshot_and_fetch,
-        desc: "use the new streaming consolidate for snapshot_and_fetch",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
-        name: enable_persist_streaming_compaction,
-        desc: "use the new streaming consolidate for compaction",
-        default: false,
-        enable_for_item_parsing: true,
-    },
-    {
         name: enable_raise_statement,
         desc: "RAISE statement",
         default: false,
@@ -2134,12 +2116,6 @@ feature_flags!(
         default: false,
         enable_for_item_parsing: false,
         scope: ParameterScope::Cluster,
-    },
-    {
-        name: enable_off_thread_optimization,
-        desc: "use off-thread optimization in `CREATE` statements",
-        default: true,
-        enable_for_item_parsing: false,
     },
     {
         name: enable_refresh_every_mvs,

@@ -449,26 +449,6 @@ impl Controller {
         Ok(ws_id)
     }
 
-    /// Uninstalls a previously installed WatchSetId. The method is a no-op if the watch set has
-    /// already finished and therefore it's safe to call this function unconditionally.
-    ///
-    /// # Panics
-    /// This method panics if called with a WatchSetId that was never returned by the function.
-    pub fn uninstall_watch_set(&mut self, ws_id: &WatchSetId) {
-        if let Some((obj_ids, _)) = self.unfulfilled_watch_sets.remove(ws_id) {
-            for obj_id in obj_ids {
-                let mut entry = match self.unfulfilled_watch_sets_by_object.entry(obj_id) {
-                    Entry::Occupied(entry) => entry,
-                    Entry::Vacant(_) => panic!("corrupted watchset state"),
-                };
-                entry.get_mut().remove(ws_id);
-                if entry.get().is_empty() {
-                    entry.remove();
-                }
-            }
-        }
-    }
-
     /// Process a pending response from the storage controller. If necessary,
     /// return a higher-level response to our client.
     fn process_storage_response(

@@ -47,10 +47,6 @@ impl SynchronizedParameters {
         }
     }
 
-    pub fn is_synchronized(&self, name: &str) -> bool {
-        self.synchronized.contains(name)
-    }
-
     /// Return a clone of the set of names of synchronized values.
     ///
     /// Mostly useful when we need to iterate over each value, while still

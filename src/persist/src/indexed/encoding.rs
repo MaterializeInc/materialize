@@ -28,9 +28,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_panic_or_log;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
-use mz_persist_types::columnar::{
-    ColumnEncoder, Schema, codec_to_schema, data_type, schema_to_codec,
-};
+use mz_persist_types::columnar::{ColumnEncoder, Schema, codec_to_schema, data_type};
 use mz_persist_types::parquet::EncodingConfig;
 use mz_persist_types::part::Part;
 use mz_persist_types::schema::backward_compatible;
@@ -102,17 +100,6 @@ impl BatchColumnarFormat {
             BatchColumnarFormat::Both(2) => "both_v2",
             BatchColumnarFormat::Structured => "structured",
             BatchColumnarFormat::Both(_) => panic!("unknown batch columnar format"),
-        }
-    }
-
-    /// Returns if we should encode a Batch in a structured format.
-    pub const fn is_structured(&self) -> bool {
-        match self {
-            BatchColumnarFormat::Row => false,
-            // The V0 format has been deprecated and we ignore its structured columns.
-            BatchColumnarFormat::Both(0 | 1) => false,
-            BatchColumnarFormat::Both(_) => true,
-            BatchColumnarFormat::Structured => true,
         }
     }
 }
@@ -311,33 +298,6 @@ impl BlobTraceUpdates {
                 key_values.goodbytes()
                     + timestamps.values().to_byte_slice().len()
                     + diffs.values().to_byte_slice().len()
-            }
-        }
-    }
-
-    /// Return the [ColumnarRecords] of the blob, generating it if it does not exist.
-    pub fn get_or_make_codec<K: Codec, V: Codec>(
-        &mut self,
-        key_schema: &K::Schema,
-        val_schema: &V::Schema,
-    ) -> &ColumnarRecords {
-        match self {
-            BlobTraceUpdates::Row(records) => records,
-            BlobTraceUpdates::Both(records, _) => records,
-            BlobTraceUpdates::Structured {
-                key_values,
-                timestamps,
-                diffs,
-            } => {
-                let key = schema_to_codec::<K>(key_schema, &*key_values.key).expect("valid keys");
-                let val = schema_to_codec::<V>(val_schema, &*key_values.val).expect("valid values");
-                let records = ColumnarRecords::new(key, val, timestamps.clone(), diffs.clone());
-
-                *self = BlobTraceUpdates::Both(records, key_values.clone());
-                let BlobTraceUpdates::Both(records, _) = self else {
-                    unreachable!("set to BlobTraceUpdates::Both in previous line")
-                };
-                records
             }
         }
     }

@@ -19,12 +19,10 @@ use axum::response::{Html, IntoResponse, Response};
 use axum_extra::TypedHeader;
 use headers::ContentType;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::tracing::TracingHandle;
 use prometheus::Encoder;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tower_http::cors::AllowOrigin;
-use tracing_subscriber::EnvFilter;
 
 /// MIME type used for the Prometheus protobuf scrape format.
 /// <https://prometheus.io/docs/instrumenting/content_negotiation/#protocol-headers>
@@ -165,22 +163,6 @@ pub async fn handle_prometheus(
 #[derive(Serialize, Deserialize)]
 pub struct DynamicFilterTarget {
     targets: String,
-}
-
-/// Dynamically reloads a filter for a tracing layer.
-#[allow(clippy::unused_async)]
-pub async fn handle_reload_tracing_filter(
-    handle: &TracingHandle,
-    reload: fn(&TracingHandle, EnvFilter) -> Result<(), anyhow::Error>,
-    Json(cfg): Json<DynamicFilterTarget>,
-) -> impl IntoResponse {
-    match cfg.targets.parse::<EnvFilter>() {
-        Ok(targets) => match reload(handle, targets) {
-            Ok(()) => (StatusCode::OK, cfg.targets.to_string()),
-            Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-        },
-        Err(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-    }
 }
 
 /// Returns information about the current status of tracing.
