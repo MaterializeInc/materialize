@@ -671,12 +671,13 @@ tiberius = { git = "https://github.com/MaterializeInc/tiberius", rev="64ca594cc2
 async-compression = { git = "https://github.com/MaterializeInc/async-compression.git", rev = "fe7411eb6104a02a89e2c3a76ab326dd6594214d" }
 
 # Custom iceberg features for mz
-# All changes should go to the `mz_v0.9.0` branch.
-# NOTE: Temporarily pointed at a local checkout for development. Restore the
-# git source before committing.
-iceberg = { path = "/Users/patrickbutler/Documents/code/iceberg-rust/crates/iceberg" }
-iceberg-catalog-rest = { path = "/Users/patrickbutler/Documents/code/iceberg-rust/crates/catalog/rest" }
-iceberg-storage-opendal = { path = "/Users/patrickbutler/Documents/code/iceberg-rust/crates/storage/opendal" }
+# All changes should go to the `vended-creds` branch.
+# NOTE: The `[workspace.dependencies]` version requirement above must stay
+# semver-compatible with this revision's crate version, otherwise Cargo drops
+# these patches into `[[patch.unused]]` and silently builds against crates.io.
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "016a2a1c1a8342a721d13aa870334cd5459076fd" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "016a2a1c1a8342a721d13aa870334cd5459076fd" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "016a2a1c1a8342a721d13aa870334cd5459076fd" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.
