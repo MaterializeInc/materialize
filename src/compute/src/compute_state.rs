@@ -23,7 +23,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
-    ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
+    ComputeCommand, ComputeParameters, HoldRequest, InstanceConfig, Peek, PeekTarget,
 };
 use mz_compute_client::protocol::history::ComputeCommandHistory;
 use mz_compute_client::protocol::response::{
@@ -81,9 +81,12 @@ use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
 use crate::sharing::{ArrangementSharingRegistry, SharedErrsHandle, SharedOksHandle};
 use crate::typedefs::{ErrAgent, RowRowAgent};
 
+mod command_hold;
 mod local_snapshot;
 mod peek_result_iterator;
 mod peek_stash;
+
+pub use command_hold::CommandHold;
 
 /// Worker-local state that is maintained across dataflows.
 ///
@@ -101,6 +104,12 @@ pub struct ComputeState {
     pub collections: BTreeMap<GlobalId, CollectionState>,
     /// The traces available for sharing across dataflows.
     pub traces: TraceManager,
+    /// Read holds this runtime keeps on behalf of dataflows the other compute runtime in this
+    /// process renders, keyed by holding dataflow and then by held collection.
+    ///
+    /// Installed by `ComputeCommand::AcquireHolds`. See [`CommandHold`] for what one is and
+    /// [`ActiveComputeState::maintain_command_holds`] for how it moves and when it goes.
+    pub command_holds: BTreeMap<GlobalId, BTreeMap<GlobalId, CommandHold>>,
     /// Shared buffer with SUBSCRIBE operator instances by which they can respond.
     ///
     /// The entries are pairs of sink identifier (to identify the subscribe instance)
@@ -245,6 +254,7 @@ impl ComputeState {
         Self {
             collections: Default::default(),
             traces,
+            command_holds: Default::default(),
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             pending_peeks: Default::default(),
@@ -643,13 +653,8 @@ impl<'a> ActiveComputeState<'a> {
             AllowWrites(id) => {
                 self.handle_allow_writes(id);
             }
-            // The semantics are not built yet, and no component emits these, so reaching here means
-            // something started emitting them before the handling landed. Failing is the point:
-            // silently ignoring an `AcquireHolds` would leave a dataflow on the other runtime
-            // reading a collection nothing holds.
-            cmd @ (AcquireHolds(_) | ReleaseHolds { .. }) => {
-                panic!("hold commands are not implemented yet: {cmd:?}")
-            }
+            AcquireHolds(request) => self.handle_acquire_holds(*request),
+            ReleaseHolds { holder } => self.handle_release_holds(holder),
         }
 
         timer.observe_duration();
@@ -913,6 +918,129 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state
                 .sharing_registry
                 .note_allow_compaction(id, worker_index, &frontier);
+        }
+    }
+
+    /// Pins the requested collections at `as_of` on behalf of a dataflow the other runtime renders.
+    ///
+    /// Ordered against compaction only within this runtime's own command stream, which is the point:
+    /// the multiplexer sees the importing `CreateDataflow` before any later `AllowCompaction`, so this
+    /// precedes that compaction here and the pin is in place before it applies. Nothing about the
+    /// other runtime's stream enters the argument, so a runtime that is arbitrarily behind, or that
+    /// never processes the create at all, cannot break it.
+    fn handle_acquire_holds(&mut self, request: HoldRequest) {
+        // Routing this to the runtime that renders the dataflow instead would put the acquisition on
+        // the wrong stream: it would no longer precede the compactions it has to precede, and this
+        // runtime maintains no trace to pin anyway. That is a multiplexer bug, not a serving
+        // condition, so it fails rather than degrading.
+        assert_eq!(
+            self.compute_state.role,
+            ComputeRuntimeRole::Maintenance,
+            "AcquireHolds must be routed to the runtime that owns the held collections"
+        );
+
+        let HoldRequest { holder, ids, as_of } = request;
+
+        // The release travels on the other runtime's stream, so it can be processed there before this
+        // acquisition is processed here. Installing a hold whose release has already arrived would
+        // leak it for the rest of the connection, since nothing will release it a second time.
+        let worker_index = self.timely_worker.index();
+        if self
+            .compute_state
+            .sharing_registry
+            .reclaim_holder(worker_index, &holder)
+        {
+            return;
+        }
+
+        let peers = self.timely_worker.peers();
+        let mut held = BTreeMap::new();
+        for id in ids {
+            let Some(base) = self.compute_state.traces.get_mut(&id) else {
+                // Either the id is not an index this runtime maintains, or its dataflow is already
+                // gone. Neither is expected: the multiplexer derives these ids from the importing
+                // dataflow's index imports, which this runtime owns. Reporting is what lets the
+                // reader's own refusal be traced back here, since without the hold it will find the
+                // published `since` beyond its `as_of` and fail there instead.
+                soft_panic_or_log!("acquire holds for {holder}: no trace for {id}");
+                continue;
+            };
+            // Reuses the slot the publisher adopts, so a hold acquired before the index is published
+            // is inherited by that publication rather than being lost to a second, disconnected one.
+            let slot = self
+                .compute_state
+                .sharing_registry
+                .get_or_create_placeholder(id, worker_index, peers);
+            match CommandHold::acquire(base, slot, as_of.clone()) {
+                Ok(hold) => {
+                    held.insert(id, hold);
+                }
+                Err(current) => soft_panic_or_log!(
+                    "acquire holds for {holder}: {id} has compacted to {:?}, past the requested \
+                     as_of {:?}",
+                    current.elements(),
+                    as_of.elements()
+                ),
+            }
+        }
+
+        let previous = self.compute_state.command_holds.insert(holder, held);
+        // One acquisition per holder. A second would orphan the first, whose collections may differ,
+        // and whose release record has already been consumed.
+        if previous.is_some() {
+            soft_panic_or_log!("acquire holds for {holder}: holds already existed");
+        }
+    }
+
+    /// Releases the holds acquired for `holder`.
+    ///
+    /// Routed to the runtime that renders `holder`, so that it is ordered against `holder`'s own
+    /// lifecycle commands there and cannot overtake a create that runtime has not processed yet. The
+    /// holds live on the runtime that owns the held collections, so this only records the release for
+    /// [`Self::maintain_command_holds`] to act on.
+    fn handle_release_holds(&self, holder: GlobalId) {
+        // On the runtime that owns the held collections this would appear to work, since both
+        // runtimes' worker `i` share the registry, but it is the ordering the model refuted: a release
+        // on that stream can overtake a create the rendering runtime has not processed yet, and the
+        // hold would be gone before the dataflow reads.
+        assert_eq!(
+            self.compute_state.role,
+            ComputeRuntimeRole::Interactive,
+            "ReleaseHolds must be routed to the runtime that renders the holder"
+        );
+
+        let worker_index = self.timely_worker.index();
+        self.compute_state
+            .sharing_registry
+            .release_holder(worker_index, holder);
+    }
+
+    /// Downgrades the command-acquired read holds to follow their readers, and drops the ones whose
+    /// dataflow is gone.
+    ///
+    /// Runs on the maintenance cadence rather than every step. Both effects only let compaction
+    /// proceed sooner, so a late pass costs retained history and never correctness.
+    pub fn maintain_command_holds(&mut self) {
+        if self.compute_state.command_holds.is_empty() {
+            return;
+        }
+
+        let worker_index = self.timely_worker.index();
+        let registry = &self.compute_state.sharing_registry;
+        for holder in registry.released_holders(worker_index) {
+            // Consume the record only for a holder we actually hold for. One whose acquisition has
+            // not arrived yet must stay recorded, so that acquisition declines instead.
+            if self.compute_state.command_holds.contains_key(&holder)
+                && registry.reclaim_holder(worker_index, &holder)
+            {
+                self.compute_state.command_holds.remove(&holder);
+            }
+        }
+
+        for holds in self.compute_state.command_holds.values_mut() {
+            for hold in holds.values_mut() {
+                let _ = hold.downgrade();
+            }
         }
     }
 

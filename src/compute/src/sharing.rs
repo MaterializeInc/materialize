@@ -99,6 +99,13 @@ struct Inner {
     aliases: Mutex<BTreeMap<GlobalId, BTreeSet<GlobalId>>>,
     /// Indexed by worker ordinal; `None` until that interactive worker registers its waker.
     wakers: Mutex<Vec<Option<Waker>>>,
+    /// Per worker ordinal, the dataflows whose command-acquired read holds may be reclaimed.
+    ///
+    /// The command that releases a hold is routed to the runtime that renders the holding dataflow,
+    /// while the hold itself lives on the runtime that owns the held collections. This carries the
+    /// release across, since both runtimes' worker `i` share this registry. See
+    /// [`ArrangementSharingRegistry::release_holder`].
+    released_holders: Mutex<Vec<BTreeSet<GlobalId>>>,
 }
 
 /// Per-process registry of published index arrangements.
@@ -304,6 +311,74 @@ impl ArrangementSharingRegistry {
         {
             arr.oks.note_writer_logical(frontier);
             arr.errs.note_writer_logical(frontier);
+        }
+    }
+
+    /// Records that `holder`'s command-acquired read holds on worker `worker_index` may be
+    /// reclaimed.
+    ///
+    /// Called from the release handler on the runtime that renders `holder`, which is where the
+    /// release command is routed so that it is ordered against `holder`'s own lifecycle commands. The
+    /// holds themselves sit on the runtime that owns the held collections, and it reclaims them from
+    /// here through [`Self::reclaim_holder`].
+    pub fn release_holder(&self, worker_index: usize, holder: GlobalId) {
+        let mut released = self
+            .inner
+            .released_holders
+            .lock()
+            .expect("registry poisoned");
+        if worker_index >= released.len() {
+            released.resize_with(worker_index + 1, BTreeSet::new);
+        }
+        released[worker_index].insert(holder);
+    }
+
+    /// Whether `holder`'s holds on worker `worker_index` have been released, consuming the record if
+    /// so.
+    ///
+    /// The two runtimes' command streams are independent, so a release can be processed on one before
+    /// the matching acquisition is processed on the other. The record therefore persists until it is
+    /// consumed, and the acquisition path consumes it too, declining to install a hold whose release
+    /// has already arrived. Draining unconditionally would drop such a record and leak the hold that
+    /// follows it.
+    pub fn reclaim_holder(&self, worker_index: usize, holder: &GlobalId) -> bool {
+        let mut released = self
+            .inner
+            .released_holders
+            .lock()
+            .expect("registry poisoned");
+        match released.get_mut(worker_index) {
+            Some(holders) => holders.remove(holder),
+            None => false,
+        }
+    }
+
+    /// The dataflows with an outstanding release record on worker `worker_index`.
+    ///
+    /// A snapshot for the reclaim pass to iterate, which consumes each record it matches through
+    /// [`Self::reclaim_holder`]. Records for holders whose acquisition has not arrived yet stay.
+    pub fn released_holders(&self, worker_index: usize) -> BTreeSet<GlobalId> {
+        let released = self
+            .inner
+            .released_holders
+            .lock()
+            .expect("registry poisoned");
+        released.get(worker_index).cloned().unwrap_or_default()
+    }
+
+    /// Discards worker `worker_index`'s outstanding release records.
+    ///
+    /// Called at the connection boundary, where the holds those records would have released are
+    /// discarded too. A record that outlived its connection would be consumed by the next
+    /// connection's acquisition for the same holder, which would install no hold at all.
+    pub fn clear_released(&self, worker_index: usize) {
+        let mut released = self
+            .inner
+            .released_holders
+            .lock()
+            .expect("registry poisoned");
+        if let Some(holders) = released.get_mut(worker_index) {
+            holders.clear();
         }
     }
 
@@ -759,6 +834,47 @@ mod tests {
         publish_index_into(&registry, id, test_rows());
         assert_eq!(registry.take_dirty(0), BTreeSet::from([id]));
         assert!(registry.take_dirty(1).is_empty());
+    }
+
+    /// A release record survives until the runtime holding the hold consumes it, and is consumed
+    /// exactly once.
+    ///
+    /// The release travels on one runtime's command stream and the acquisition on the other's, so the
+    /// release can be recorded before the acquisition is applied. A record that drained on the first
+    /// look would be gone by the time the acquisition arrived, and that hold would then never be
+    /// released.
+    #[mz_ore::test]
+    fn release_record_persists_until_consumed() {
+        let holder = GlobalId::User(1);
+        let other = GlobalId::User(2);
+        let registry = ArrangementSharingRegistry::new();
+
+        registry.release_holder(0, holder);
+        assert_eq!(registry.released_holders(0), BTreeSet::from([holder]));
+        // Listing does not consume, so a pass that finds no matching hold leaves the record for the
+        // acquisition that has not arrived yet.
+        assert_eq!(registry.released_holders(0), BTreeSet::from([holder]));
+
+        assert!(registry.reclaim_holder(0, &holder));
+        assert!(
+            !registry.reclaim_holder(0, &holder),
+            "a record must be consumed exactly once"
+        );
+        assert!(registry.released_holders(0).is_empty());
+        assert!(!registry.reclaim_holder(0, &other));
+    }
+
+    /// Release records are per worker ordinal, since each worker holds its own slice of a
+    /// collection and installs its own hold on it.
+    #[mz_ore::test]
+    fn release_record_is_per_worker() {
+        let holder = GlobalId::User(1);
+        let registry = ArrangementSharingRegistry::new();
+
+        registry.release_holder(1, holder);
+        assert!(registry.released_holders(0).is_empty());
+        assert!(!registry.reclaim_holder(0, &holder));
+        assert!(registry.reclaim_holder(1, &holder));
     }
 
     #[mz_ore::test]

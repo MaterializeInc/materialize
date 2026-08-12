@@ -163,20 +163,19 @@ needed for the import-time gate.
 These are not stylistic. Each has more than one defensible answer and the wrong
 one reintroduces a gap.
 
-1. **When may an unadopted acquired hold be released?** If interactive never
-   renders the dataflow, because it was cancelled or reconciliation refused it, the
-   acquired hold has no registration to hand off to. Candidates: release on the
-   holder's drop reaching the multiplexer, which races a create still queued on
-   interactive; release only once the publisher has observed a registration for the
-   holder appear and then disappear, which leaks when the create never arrives;
-   release on nonce change only, which leaks for the connection's lifetime.
+1. **When may an unadopted acquired hold be released?** Settled: on the explicit
+   release, which reaches the rendering runtime whether or not that runtime ever
+   built the dataflow. Cancelled and refused creates are covered because the release
+   is ordered after the create on that runtime's stream, so "the create will never be
+   processed" and "the reader has finished" both present as "no registrations now".
 2. **Is handing off from the acquired hold to the registration's hold safe, or
-   should the acquired hold persist for the dataflow's life?** Handing off is
-   cheaper but has a window; persisting is simpler but means the hold does not
-   follow the reader's progress, which is what step 3 of the requirement asks for.
-3. **Does the per-registration agent need a floor agent alongside it?** The
-   acquired hold may be that floor. If it is released at handoff, is there an
-   interval with no floor?
+   should the acquired hold persist for the dataflow's life?** Settled: neither.
+   Handing off is unsafe, because at handoff the publisher's agent may already sit
+   above the registration's frontier and then nothing represents it. Persisting is a
+   permanent pin. The hold instead follows the readers, floored at its `as_of`.
+3. **Does the per-registration agent need a floor agent alongside it?** Moot. There
+   is no per-registration agent and no handoff, so the acquired hold is the floor
+   throughout, and the interval with no floor cannot arise.
 4. **What must hold for `alias_closure` to be correct under a re-export that
    appears after the hold is acquired?**
 5. **Does the design still hold when the interactive runtime spans processes and a
@@ -220,17 +219,46 @@ step 1 without step 2 leaks a hold and step 4 is only safe after 1 to 3.
    side panics on receipt, so no behaviour changed. `reduce` treats them as
    unreachable because the multiplexer synthesizes them rather than the controller
    issuing them.
-1. **Maintenance-side `AcquireHolds`.** For each id, clone that collection's
+1. **Maintenance-side `AcquireHolds`.** Done. For each id, clone that collection's
    `TraceBundle` handles and pin them at `as_of`, keyed by holder. The clone base
    matters: `compute_state.traces` sits at the controller's frontier, which by I1a
    is at or below every `as_of` the controller may offer, so a clone of it can be
    set to `as_of`. A clone of the publisher's own agent cannot, because that agent
    has ratcheted (G5).
-2. **Release without a command reaching maintenance.** The publisher reclaims a
-   hold once the importing registration has existed and gone. Needs an
-   `everRegistered` marker per holder, because "no registration" is otherwise
-   ambiguous between "the create has not been processed yet" and "the reader is
-   finished", and reclaiming in the first case is the defect the model found.
+
+   Two things this needed that were not written down. The pin has to be *published*
+   as well as taken: `since` is what a reader gates on, and a pin the publication
+   point does not know about leaves `since` at the writer's frontier, so `handle_at`
+   refuses the very reader the pin was for. `since` is therefore derived from the
+   publisher-driven part and the recorded pins together, recomputed by whichever
+   side moves, rather than assigned once per publisher activation. And the clone's
+   *physical* hold, inherited from the base by `TraceAgent::clone`, is released at
+   acquisition. Both setters join, so a physical hold kept here could never be
+   lowered again and would pin batch granularity for the hold's whole life.
+2. **Release.** Done, and not via `everRegistered`. The hold follows its reader and
+   is dropped on an explicit `ReleaseHolds`, recorded by the rendering runtime into
+   the per-process registry for the owning runtime to act on.
+
+   Persisting the acquired hold at `as_of` for the dataflow's life, which is what
+   step 1 alone amounts to, is a permanent pin: an interactive `SUBSCRIBE` lives as
+   long as its client, so its index would never compact again. That is the same
+   unbounded-growth failure as a reader hold nobody downgrades. So the acquired hold
+   downgrades to the meet of the publication point's reader registrations, floored at
+   its own `as_of`. The floor is what makes this work without attributing
+   registrations to holders: the meet is at or below every registration, so flooring
+   it cannot carry a hold past its own reader. A holder that lags therefore delays
+   another's downgrade, which costs retained history and not correctness.
+
+   This also answers open question 2 below: handing off to the registration and
+   releasing the acquired hold is **unsafe**. At handoff the publisher's agent may
+   sit above the registration's frontier, and then nothing represents it.
+
+   `everRegistered` is not needed because the explicit release carries directly what
+   that marker was inferring. It is ordered after the holder's own drop on the
+   rendering runtime's stream, so by the time it is recorded the registrations are
+   gone. A release recorded before the matching acquisition is applied, which the two
+   independent streams allow, is consumed by that acquisition, which then installs
+   nothing.
 3. **Multiplexer synthesis**, over the alias closure of the imports (G3).
 4. **Delete the cap.** `hold_floor`, `deferred_compaction`, `compaction_floor`,
    `pending_compaction`, the retire-on-response trigger and `reset`. This is what
