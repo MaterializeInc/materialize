@@ -725,8 +725,8 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
             // NOTE: erroring here is a trap for whoever adds the next item type. The catalog
             // views that call this run it over every item row before their type filter can
             // drop the rows they don't want, so one unclassified `create_sql` takes out
-            // `mz_objects`, `mz_indexes`, and every sibling view at once. Returning null for
-            // an unrecognized item statement would localize the damage.
+            // `mz_objects`, `mz_indexes`, and every sibling view at once. Every item
+            // statement must therefore get an explicit arm above.
             _ => return Err("not a CREATE item statement".into()),
         };
         info.insert("type", json!(item_type));

@@ -1692,6 +1692,8 @@ pub(crate) fn comment_id_to_audit_object_type(id: CommentObjectId) -> ObjectType
         CommentObjectId::MaterializedView(_) => ObjectType::MaterializedView,
         CommentObjectId::Source(_) => ObjectType::Source,
         CommentObjectId::Sink(_) => ObjectType::Sink,
+        // Unreachable by construction: `COMMENT ON METRIC SINK` is rejected at parse, so no
+        // metric-sink comment id is ever built. The arm exists only for exhaustiveness.
         CommentObjectId::MetricSink(_) => ObjectType::MetricSink,
         CommentObjectId::Index(_) => ObjectType::Index,
         CommentObjectId::Func(_) => ObjectType::Func,

@@ -20,7 +20,7 @@ class MetricSink(Check):
     and rebuild the dependency edge to the relation it reads."""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v26.36.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v26.38.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""

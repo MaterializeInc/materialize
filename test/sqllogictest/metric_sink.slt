@@ -169,6 +169,16 @@ SELECT count(*) >= 0::int FROM mz_internal.mz_postgres_sources
 ----
 1
 
+# `mz_audit_events` maps the audit-log `object_type` through a CASE and asserts
+# the column NOT NULL. Creating or dropping a metric sink writes `object_type`
+# 19, so a missing arm would NULL the column and error the whole view. Confirm
+# the metric-sink rows are classified and the view still resolves.
+
+query T
+SELECT DISTINCT object_type FROM mz_catalog.mz_audit_events WHERE object_type = 'metric-sink'
+----
+metric-sink
+
 # And it classifies as `metric-sink`, which is what boot relies on.
 
 simple conn=mz_system,user=mz_system
