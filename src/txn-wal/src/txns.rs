@@ -18,7 +18,7 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use mz_dyncfg::{Config, ConfigSet, ConfigValHandle};
+use mz_dyncfg::{Config, ConfigSet, ConfigValHandle, ParameterScope};
 use mz_ore::collections::HashSet;
 use mz_ore::instrument;
 use mz_persist_client::batch::Batch;
@@ -888,6 +888,7 @@ pub(crate) const APPLY_ENSURE_SCHEMA_MATCH: Config<bool> = Config::new(
     "txn_wal_apply_ensure_schema_match",
     true,
     "CYA to skip updating write handle to batch schema in apply",
+    ParameterScope::Environment,
 );
 
 fn at_most_one_schema(

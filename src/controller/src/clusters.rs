@@ -703,11 +703,20 @@ impl Controller {
             arrangement_exert_proportionality: 1337,
             ..Default::default()
         };
+        // These configure the replica's process rather than environmentd's, so
+        // they are `ParameterScope::Replica` and must be read through this
+        // replica's scoped overrides. They are baked into the process
+        // configuration at provisioning time, so a later change to either the
+        // environment-wide value or the override reaches the replica only when
+        // it is next provisioned.
+        let overrides = self.replica_dyncfg_overrides.get(&replica_id);
         let compute_proto_timely_config = TimelyConfig {
-            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY.get(&self.dyncfg),
-            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get(&self.dyncfg),
-            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC.get(&self.dyncfg),
-            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
+            arrangement_exert_proportionality: ARRANGEMENT_EXERT_PROPORTIONALITY
+                .get_with_overrides(&self.dyncfg, overrides),
+            enable_zero_copy: ENABLE_TIMELY_ZERO_COPY.get_with_overrides(&self.dyncfg, overrides),
+            enable_zero_copy_lgalloc: ENABLE_TIMELY_ZERO_COPY_LGALLOC
+                .get_with_overrides(&self.dyncfg, overrides),
+            zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get_with_overrides(&self.dyncfg, overrides),
             ..Default::default()
         };
 

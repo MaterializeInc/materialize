@@ -58,6 +58,7 @@ pub const PG_CONSENSUS_READ_COMMITTED: mz_dyncfg::Config<bool> = mz_dyncfg::Conf
     false,
     "Run consensus connections under READ COMMITTED isolation instead of SERIALIZABLE when targetting
     PostgreSQL backends. This flag must be off when targetting CockroachDB.",
+    mz_dyncfg::ParameterScope::Replica,
 );
 
 const SCHEMA: &str = "
