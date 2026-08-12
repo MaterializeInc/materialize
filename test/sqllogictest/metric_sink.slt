@@ -210,10 +210,71 @@ DROP VIEW shaped
 statement ok
 DROP VIEW shaped CASCADE
 
-query I
-SELECT count(*) FROM mz_internal.mz_show_all_objects WHERE name = 'ms'
+# The cascade really removed the sink. Re-creating the name is the probe that
+# distinguishes that from silently leaving the item behind, since a metric sink
+# shows up in no catalog relation to count. `shaped` is gone now, so re-create
+# against `raw`.
+
+statement ok
+CREATE METRIC SINK ms FROM raw
+
+statement ok
+DROP METRIC SINK ms
+
+# A metric sink republishes the FROM relation's rows, so it takes read
+# privileges on the source like `CREATE SINK`, not ownership of it like
+# `CREATE INDEX`.
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE rbac_owner
 ----
-0
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE ROLE rbac_reader
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON SCHEMA materialize.public TO rbac_owner, rbac_reader
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT CREATE, USAGE ON CLUSTER quickstart TO rbac_owner, rbac_reader
+----
+COMPLETE 0
+
+# Owning the source is not enough. `rbac_owner` creates it, so it owns it, and
+# revoking SELECT afterwards isolates ownership from read access.
+
+simple conn=rbac_owner,user=rbac_owner
+CREATE TABLE rbac_src (metric_name text, metric_type text, labels map[text=>text], value double, help text)
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE SELECT ON TABLE rbac_src FROM rbac_owner
+----
+COMPLETE 0
+
+simple conn=rbac_owner,user=rbac_owner
+CREATE METRIC SINK rbac_ms FROM rbac_src
+----
+db error: ERROR: permission denied for TABLE "materialize.public.rbac_src"
+DETAIL: The 'rbac_owner' role needs SELECT privileges on TABLE "materialize.public.rbac_src"
+
+# And owning it is not required. SELECT on the source is the whole gate.
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON TABLE rbac_src TO rbac_reader
+----
+COMPLETE 0
+
+simple conn=rbac_reader,user=rbac_reader
+CREATE METRIC SINK rbac_ms FROM rbac_src
+----
+COMPLETE 0
 
 # With the flag off the statement is refused, and the error says which flag.
 

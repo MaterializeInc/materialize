@@ -5912,6 +5912,9 @@ impl<'a> Parser<'a> {
             ObjectType::NetworkPolicy => self
                 .parse_alter_network_policy()
                 .map_parser_err(StatementKind::AlterNetworkPolicy),
+            // Metric sinks are adapter-created and not a user surface, so they deliberately
+            // support no ALTER at all, `RENAME TO` and `OWNER TO` included. REASSIGN OWNED
+            // works off object ids and is unaffected.
             ObjectType::Func | ObjectType::Subsource | ObjectType::MetricSink => parser_err!(
                 self,
                 self.peek_prev_pos(),

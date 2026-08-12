@@ -2527,25 +2527,24 @@ impl CatalogItem {
     }
 
     /// Whether this item runs a dataflow on its cluster's replicas and so has
-    /// hydration state: an index, materialized view, sink, metric sink, or
-    /// ingestion source. Non-ingestion sources (webhooks, ingestion exports)
-    /// are bound to a cluster but run no dataflow on any replica.
+    /// hydration state: an index, materialized view, sink, or ingestion source.
+    /// Non-ingestion sources (webhooks, ingestion exports) are bound to a
+    /// cluster but run no dataflow on any replica.
     ///
-    /// NOTE: metric sinks are classified here for the dataflow they will run,
-    /// not one they run today. Nothing ships a metric-sink dataflow yet, so a
-    /// metric sink has no compute collection for the per-replica hydration
-    /// check to wait on and it resolves vacuously.
+    /// NOTE: `Coordinator::cluster_has_hydratable_objects` routes a cluster onto
+    /// the hydration-aware scheduling and reconfiguration path off this answer,
+    /// so an item that ships no dataflow must answer `false` even where the
+    /// per-replica hydration check would resolve vacuously.
     pub fn is_hydratable(&self) -> bool {
         match self {
-            CatalogItem::Index(_)
-            | CatalogItem::MaterializedView(_)
-            | CatalogItem::Sink(_)
-            | CatalogItem::MetricSink(_) => true,
+            CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => true,
             CatalogItem::Source(source) => matches!(
                 source.data_source,
                 DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
             ),
-            CatalogItem::Table(_)
+            // TODO(SQL-571): return true once metric sinks run a per-replica dataflow.
+            CatalogItem::MetricSink(_)
+            | CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Type(_)

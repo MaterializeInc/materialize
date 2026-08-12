@@ -200,6 +200,9 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
+            // A metric sink packs no builtin-table row, so it holds a catalog name that no
+            // catalog relation reports. SQL-572 adds the `mz_metric_sinks` view. Until then,
+            // listing or dropping a metric sink requires knowing its name out of band.
             CatalogItem::Log(_) | CatalogItem::Secret(_) | CatalogItem::MetricSink(_) => vec![],
             // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
             // mz_aws_connections, mz_aws_privatelink_connections) are now derived

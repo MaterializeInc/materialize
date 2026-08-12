@@ -726,21 +726,24 @@ fn generate_rbac_requirements(
             metric_sink,
             if_not_exists: _,
         }) => {
-            let from_item = catalog.resolve_item_id(&metric_sink.from);
+            // A metric sink republishes the FROM relation's rows on the replica's scrape
+            // endpoint, so it is an egress path for that relation's contents, exactly like
+            // CREATE SINK. The guard is therefore read privileges on the source, not
+            // ownership of it.
+            let mut privileges = vec![(
+                SystemObjectId::Object(name.qualifiers.clone().into()),
+                AclMode::CREATE,
+                role_id,
+            )];
+            let items = iter::once(metric_sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            privileges.push((
+                SystemObjectId::Object(metric_sink.cluster_id.into()),
+                AclMode::CREATE,
+                role_id,
+            ));
             RbacRequirements {
-                ownership: vec![ObjectId::Item(from_item)],
-                privileges: vec![
-                    (
-                        SystemObjectId::Object(name.qualifiers.clone().into()),
-                        AclMode::CREATE,
-                        role_id,
-                    ),
-                    (
-                        SystemObjectId::Object(metric_sink.cluster_id.into()),
-                        AclMode::CREATE,
-                        role_id,
-                    ),
-                ],
+                privileges,
                 item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
