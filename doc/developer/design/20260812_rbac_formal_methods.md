@@ -306,11 +306,111 @@ makes a similar one) but what the bound is, and whether any interleaving of
 `GRANT`, `REVOKE`, `ALTER OWNER`, `DROP OWNED`, and `DROP ROLE` can produce an
 outcome outside it.
 
+## Refactoring for verifiability
+
+Almost every technique below is blocked by the current shape of the code rather
+than by its logic, so the refactor is a precondition and not a cleanup. Three
+facts about the shape matter.
+
+`check_plan` is generic over `catalog: &impl SessionCatalog` and takes
+`session: &dyn SessionMetadata`. `SessionCatalog` has 68 methods and returns
+trait objects (`&dyn CatalogItem`, `&dyn CatalogRole`). `rbac.rs` uses 18 of the
+68, and eight of those 18 (`get_cluster`, `get_cluster_replica`, `get_database`,
+`get_schema`, `get_network_policy`, `resolve_full_name`,
+`resolve_full_schema_name`, and `get_role`) are used only to format error
+messages, not to reach a decision.
+
+That last fact is the useful one. The decision needs roughly ten narrow catalog
+questions. The rest of the coupling is diagnostics that happen to be interleaved
+with deciding, which is also why a diagnostic bug is currently an availability
+bug: `ownership_err` calls panicking getters and contains
+`unreachable!("roles have no owner")`, on a path only reached when a request is
+already being denied.
+
+### Refactor 1: split gather, decide, and diagnose
+
+```rust
+// Catalog-coupled, plan-directed, part of the trusted base. Audited by hand.
+fn gather(catalog: &impl SessionCatalog, plan: &Plan, ids: &ResolvedIds) -> AuthzFacts;
+
+// Verified. Plain data in, plain data out. No traits, no dyn, no lifetimes.
+fn decide(facts: &AuthzFacts, session: &SessionFacts, req: &Requirements) -> Decision;
+
+// Catalog-coupled again, reached only on denial, cannot change the outcome.
+fn diagnose(catalog: &impl SessionCatalog, denial: &Denial) -> UnauthorizedError;
+```
+
+What this buys:
+
+- `decide` becomes monomorphic, total, and free of trait objects, which is the
+  entry requirement for every tool discussed under "Tool selection" below. Its
+  fact tables should be flat sorted vectors rather than `BTreeMap`, which costs
+  nothing at our sizes and is markedly friendlier to a bounded model checker.
+- `diagnose` leaves the trusted base. P1 then only has to hold for `decide`, and
+  `diagnose` is allowed to be best-effort, which is the right posture for code
+  whose only job is to render a message.
+- `AuthzFacts` is serializable, so a denial can be dumped and replayed offline.
+  That is an operational win independent of verification, and it is how real
+  incidents turn into regression tests.
+
+**The design detail that decides whether this is safe: fail closed.** `gather`
+is plan-directed, so it can omit a fact. If `decide` reads a missing fact as "no
+privilege held", an omission produces a spurious denial, which is annoying and
+safe. If it reads a missing fact as "no privilege required", an omission is a
+breach. So fact lookups must be total, with an explicit absent case that denies,
+and the types must make ignoring it impossible. The refactor does not remove the
+risk that `gather` is incomplete. It makes that risk one-directional, which is
+the most a refactor can achieve here.
+
+### Refactor 2: policy as combinators, keeping the exhaustive match
+
+Keep the `match`. Its lack of a wildcard is a real guarantee and all 81 variants
+appear exactly once. Change what the arms build, from ad-hoc struct literals with
+`..Default::default()` to a small vocabulary:
+
+```rust
+Plan::CreateMaterializedView(p) => Policy::new()
+    .creates_in_schema(&p.name.qualifiers)
+    .creates_on_cluster(p.materialized_view.cluster_id)
+    .requires_ownership(
+        p.replace.iter().chain(p.materialized_view.replacement_target.iter()),
+    )
+    .item_usage(&CREATE_ITEM_USAGE),
+```
+
+The P5 uniformity properties then hold by construction for anything expressed in
+combinators, and the audit surface shrinks to the arms that cannot be expressed
+that way. Those are exactly the arms worth a reviewer's attention, and today they
+are camouflaged among 81 similar-looking struct literals.
+
+Relatedly, replace the bare `Default::default()` in the large catch-all group
+with an explicit constructor that names the decision, so "requires nothing" is
+something a person wrote rather than something nobody wrote.
+
+### Refactor 3: one membership implementation
+
+`collect_role_membership` (enforcement, id-keyed, adds `PUBLIC`) and
+`session_role_memberships` (`src/adapter/src/optimize/dataflows.rs:790`,
+name-keyed, recursive, omits `PUBLIC`) compute the same closure twice. The
+difference is currently compensated at the call site, because the
+`mz_show_*_privileges` views special-case `grantee = 'PUBLIC'` before consulting
+the function. That is accidental agreement, and it survives only until someone
+adds a fourth caller who does not know to special-case it.
+
+Project the SQL-visible function from the same closure the enforcement path uses.
+This eliminates half of P6 rather than testing it, which is strictly better.
+
+### Refactor 4: `Authorized<Plan>`
+
+As described in Layer 0b. It belongs in this list because it is a refactor, not a
+verification activity, and it discharges P7 outright.
+
 ## Solution Proposal
 
 A four-layer ladder, ordered by value per unit cost. Layers 0 and 1 are the
 recommended funded work. Layer 2 is opportunistic. Layer 3 is a timeboxed spike
-with a single question to answer.
+with a single question to answer. Refactors 1 through 4 above gate Layers 1
+through 3 and should land first.
 
 The ordering is deliberate and is the main recommendation of this document. The
 instinct with "formal methods for RBAC" is to reach for a model checker first.
@@ -458,6 +558,88 @@ risk rather than to feel better about it.
   `20260508_restrict_to_user_objects.md` reduce to P9 plus the allow-list
   argument. They are only as strong as P9.
 
+## Tool selection
+
+The tools differ less in strength than in what they demand of the code and what
+artifact you have to keep alive afterwards.
+
+| Tool | Guarantee | Annotation cost | Demands on our code | Best target here |
+| --- | --- | --- | --- | --- |
+| `proptest` | none, random search over an unbounded input space | negligible | none, already a dependency of `mz-sql` | P1 through P5, P10, P13 |
+| Kani | bounded, or unbounded with contracts and induction | zero for panic-freedom, low otherwise | monomorphic, modest heap use | P1, `AclMode` algebra, P3 on bounded inputs |
+| Verus | unbounded theorems | high, written in Rust beside the code | its own toolchain and language subset | P2, P3, P4 as real theorems |
+| Creusot | unbounded theorems via Why3 | high, specs in Pearlite | language subset, no unsafe | same as Verus |
+| Aeneas plus Lean | unbounded, full interactive proof | highest, plus Lean expertise | monomorphised concrete types, no trait bounds, no trait objects, no interior mutability or I/O | a reusable theory of the policy |
+
+### Aeneas and Lean
+
+Aeneas translates a subset of safe Rust to a pure functional model in Lean, which
+you then reason about interactively. The published limitations are decisive for
+us in their current form. Generic functions with trait bounds cannot be extracted
+and need concrete monomorphised types, and the translation does not cover interior
+mutability, concurrency, or I/O.
+
+`check_plan` today is generic over `impl SessionCatalog` and consumes
+`&dyn CatalogItem`. Aeneas is therefore not applicable to the current code at
+all. The refactor above is not an optimisation for it, it is an admission
+requirement. Much the same holds for Verus and Creusot, which is worth stating
+plainly: the interesting question is not "Aeneas or Kani", it is "the refactor,
+and then which tool".
+
+Once `decide` exists, the cheap tools cover most of the value, so the case for
+Lean has to rest on something they cannot do. There is exactly one such thing,
+and it is real. P6 is an equivalence between a Rust program and a SQL query.
+Kani, Verus, and Creusot cannot state it, because one side is not Rust. Lean can
+host both, a formalisation of the SQL predicate's semantics and the
+Aeneas-extracted Rust, and prove them equal once for all catalogs.
+
+That is a qualitatively different result rather than a stronger version of the
+same one. It is also person-months and a standing Lean dependency. Recommendation
+is to not do it yet, use the generated differential test instead, and revisit if
+the differential test keeps finding divergences. Repeated divergence is evidence
+that the two implementations are genuinely hard to keep in step by hand, which is
+when a one-time proof starts to pay.
+
+### Kani
+
+Already in the tree (`src/ore/src/pool/region.rs`) with the `kani` cfg
+registered in the workspace lints, so adoption cost is close to zero. It gives
+panic-freedom with no annotations at all, which is P1, the property most likely
+to be violated today. Bounded by default, and the bounds are honest: a proof over
+role graphs of size at most four is a proof about small graphs, which is fine for
+catching sign errors in bitset algebra and worthless for catching a missing
+policy arm.
+
+Our data structures are `BTreeMap` and `BTreeSet` throughout, and heap-allocated
+collections are where bounded model checkers tend to blow up. This is the one
+claim in this document I could not verify against current Kani documentation, so
+the first Kani task should be a half-day spike on `collect_role_membership` to
+find out, before anything is planned around it. Building `AuthzFacts` from flat
+sorted vectors (Refactor 1) hedges against the answer being bad.
+
+### Multiple tools
+
+Yes, but layered, and with one caveat that decides whether it works. Each tool
+constrains the code it verifies, and the intersection of the constraints is a
+narrow language. If tool-constrained code is confined to `decide`, that is fine,
+because `decide` should be deliberately boring anyway. If it is not confined,
+we will end up contorting the coordinator to please a verifier, which is the
+usual way these efforts get abandoned.
+
+So the refactor is what makes "multiple" affordable. It creates one small, stable
+core that several tools can each attack on their own terms, and leaves the rest of
+`adapter` unconstrained.
+
+Recommended allocation:
+
+- `proptest` on `decide`, covering the most for the least, on every PR.
+- Kani for the algebra and panic-freedom, unattended, after the spike.
+- Verus or Creusot only if we want real theorems for P2, P3, and P4. Prefer
+  either over Aeneas plus Lean, because in-place annotations break loudly when
+  the code changes, whereas an external extraction pipeline rots quietly.
+- Aeneas plus Lean only for the Rust-to-SQL equivalence, as a spike with an
+  explicit kill criterion agreed in advance.
+
 ## Minimal Viable Prototype
 
 Layer 0a, on a single statement family, plus one Layer 1 property. Concretely:
@@ -477,11 +659,17 @@ cheap, and that the requirement records are small enough to be worth reading.
 
 ## Alternatives
 
-**Full mechanized proof (Coq, Lean, Verus).** Verify `rbac.rs` itself against a
-machine-checked specification. Rejected. The function is parameterized over
-`impl SessionCatalog` with 68 methods and reaches into the whole catalog, so the
-proof burden is dominated by specifying the catalog rather than the policy. The
-cost is person-years and the artifact rots on the first refactor.
+**Full mechanized proof of `rbac.rs` as it stands.** Rejected, and not on cost
+grounds. It is not possible with any of the tools surveyed, because the function
+is generic over `impl SessionCatalog` and consumes trait objects. See "Tool
+selection" for what each tool requires and which properties survive the
+refactor.
+
+**Skipping the refactor and verifying a copy.** Extract a verifiable model of
+the decision procedure and leave `rbac.rs` untouched. Rejected. Two artifacts
+that are not mechanically tied to each other diverge, and the copy is the one
+nobody runs in production. The refactor is what makes verification apply to the
+code that actually decides.
 
 **TLA+ or Alloy first.** The instinctive answer, and the one most likely to be
 proposed in the meeting. Rejected as a starting point. A model disconnected from
@@ -520,16 +708,26 @@ baseline is hard to defend.
 1. Who owns the model in Layer 1? It only stays alive if updating it is part of
    landing an RBAC change, which means it needs a named owner and a line in the
    RBAC review checklist.
-2. Is exposing requirement generation publicly acceptable, or should Layer 0a
+2. What does materialising `AuthzFacts` cost on the frontend peek path? Refactor
+   1 turns lazy catalog lookups into an eager fact table per statement. The
+   working assumption is that the fact set is small, since it is plan-directed
+   and the current code already walks the same objects, but the fast path exists
+   to be fast and this needs measuring before the refactor lands rather than
+   after.
+3. Does Kani cope with our `BTreeMap` and `BTreeSet` shapes, or does Refactor 1
+   have to commit to flat sorted vectors for the fact tables? A half-day spike on
+   `collect_role_membership` answers this and should precede any planning that
+   depends on Kani.
+4. Is exposing requirement generation publicly acceptable, or should Layer 0a
    use a test-only feature gate? The public version has independent value for
    operator introspection, which argues for public.
-3. Does P12 have a customer-visible answer today that we are committed to? If
+5. Does P12 have a customer-visible answer today that we are committed to? If
    in-flight `SUBSCRIBE` behavior after `REVOKE` is already documented, Layer 3
    is verifying a commitment rather than discovering one, which changes its
    priority.
-4. Should the P8 shadow check be a `ci`-profile assertion or a permanent runtime
+6. Should the P8 shadow check be a `ci`-profile assertion or a permanent runtime
    check? A permanent check costs a second requirement generation per statement
    on the fast path, which is the path that exists to be fast.
-5. Is there appetite for the capability-token refactor in purification (P11), or
+7. Is there appetite for the capability-token refactor in purification (P11), or
    should that assumption simply be documented and audited by hand? The refactor
    touches purification broadly and is the most invasive change proposed here.
