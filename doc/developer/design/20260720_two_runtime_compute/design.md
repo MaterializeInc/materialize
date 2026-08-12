@@ -1406,13 +1406,32 @@ decision rather than a patch.
   floor the publisher has already forwarded in the shared state, clamp a newly
   registered hold up to it rather than to `since` alone, and assert against it at import
   time, converting a straddle abort into a loud protocol-ordering failure at import.
-  It is **worse for an importer that keeps a trace handle**, which is any join with a
-  symmetric arranged input and anything else that answers lookups rather than only
-  consuming the stream. `cursor_through` goes through `batches_through`, so such an
-  importer re-cuts the spine on every activation while its downstream operators advance
-  physical compaction one round behind the publisher's `upper`. That retries the race
-  continuously for the dataflow's life instead of once per registration. A stream-only
-  consumer is exposed once, at registration.
+  Separate the cause from how it manifests, because they have different lifetimes.
+
+  The **cause** is a window in which `physical_holds` is empty. The publisher then uses
+  its `writer_physical = upper` fallback, and `TraceAgent::set_physical_compaction` only
+  joins, so the agent is pinned at `upper` irreversibly. Once any reader hold is
+  registered the target becomes a meet over holds and the fallback is not used, so the
+  window closes. The damage, though, does not heal.
+
+  How it **manifests** depends on what the importer does with the trace.
+  `import_snapshot_at` returns `Arranged<TraceFrontier<SharedTraceHandle>>`, so the
+  handle *is* the downstream trace rather than a local re-arrangement. A stream-only
+  consumer cuts once, at registration, and has one chance to meet a spine that merged
+  across it. A join cuts on every activation: differential's join sets `acknowledged`
+  from arriving batch uppers and calls `batches_through(acknowledged)` each time, and
+  `acknowledged` necessarily trails the publisher's `upper` because the publisher has
+  sealed ahead while the join works through the batch ending there. So once the agent is
+  pinned high, every activation is a candidate for the straddle.
+
+  The reader's own hold does not save it, and differential's own guard does not notice.
+  `SharedTraceHandle::get_physical_compaction` returns the handle's recorded frontier
+  rather than the agent's, so the join's assertion that its physical compaction is at or
+  below `acknowledged` passes while the underlying trace has already compacted past that
+  point. The handle believes it holds a cut the trace no longer offers.
+
+  It remains a race rather than a certainty, since being permitted to merge is not
+  merging and the spine's fuel schedule decides when.
 * **`compaction_floor` is never evicted**, so the multiplexer retains one entry per
   collection id ever seen, including every transient peek dataflow, for the life of
   the connection. The neighbouring `transient_owner` is evicted precisely to avoid
