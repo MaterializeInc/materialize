@@ -20,8 +20,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.37.0
-*Released to Materialize Cloud: 2026-08-13* <br>
-*Released to Materialize Self-Managed: 2026-08-14* <br>
+*Released to Materialize Cloud: 2026-08-12* <br>
+*Released to Materialize Self-Managed: 2026-08-13* <br>
 
 ### Improvements {#v26.37-improvements}
 - **Self-Managed: Highly available operator**: The Materialize operator now runs two replicas by default, so rolling out an operator update no longer interrupts the CRD conversion webhook. Installations that manage their own RBAC must grant the operator `get`, `create`, and `update` on `leases` in `coordination.k8s.io`, because the two replicas coordinate through lease-based leader election.
