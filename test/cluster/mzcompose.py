@@ -37,6 +37,7 @@ from psycopg.errors import (
 )
 
 from materialize import buildkite, ui
+from materialize.mzcompose import sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -112,6 +113,12 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         if (args.slow_only and name not in slow_tests) or (
             not args.slow_only and name in slow_tests
         ):
+            return
+
+        # The profiling endpoints this exercises are backed by jemalloc, which
+        # sanitizer builds drop, so there is nothing to fetch there.
+        if name == "test-profile-fetch" and sanitizer_enabled():
+            ui.warn(f"Skipping {name} under a sanitizer: build has no jemalloc")
             return
 
         with c.test_case(name):

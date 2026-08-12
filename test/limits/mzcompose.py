@@ -24,6 +24,7 @@ from textwrap import dedent
 from urllib.parse import quote
 
 from materialize import MZ_ROOT, buildkite
+from materialize.mzcompose import sanitizer_enabled
 from materialize.mzcompose.composition import (
     Composition,
     Service,
@@ -62,6 +63,13 @@ from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
 from materialize.util import all_subclasses
 
 PRODUCT_LIMITS_FRAMEWORK_VERSION = "1.0.0"
+
+SLOWDOWN = 10 if sanitizer_enabled() else 1
+
+
+def sql_timeout(seconds: int) -> int:
+    """The deadline to give a statement, in seconds, scaled for the build."""
+    return seconds * SLOWDOWN
 
 
 class Statistics:
@@ -403,7 +411,7 @@ class KafkaSourcesSameTopic(Generator):
               ENVELOPE NONE;
               """)
 
-        print("$ set-sql-timeout duration=600s")
+        print(f"$ set-sql-timeout duration={sql_timeout(600)}s")
 
         for i in cls.all():
             cls.store_explain_and_run(f"SELECT * FROM s{i}")
@@ -421,7 +429,7 @@ class KafkaPartitions(Generator):
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         # gh#12193 : topic_metadata_refresh_interval_ms is not observed so a default refresh interval of 300s applies
-        print("$ set-sql-timeout duration=600s")
+        print(f"$ set-sql-timeout duration={sql_timeout(600)}s")
         print('$ set key-schema={"type": "string"}')
         print(
             '$ set value-schema={"type": "record", "name": "r", "fields": [{"name": "f1", "type": "string"}]}'
@@ -693,7 +701,7 @@ class IcebergSinks(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -757,7 +765,7 @@ class IcebergSinksSameSource(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sinks = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1048,7 +1056,7 @@ class ViewsMaterializedNested(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_materialized_views = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1217,7 +1225,7 @@ class WhereExpression(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='120s'")
+        print(f"> SET statement_timeout='{sql_timeout(120)}s'")
         column_list = ", ".join(f"f{i} INTEGER" for i in cls.all())
         print(f"> CREATE TABLE t1 ({column_list});")
 
@@ -1497,8 +1505,8 @@ class ArrayAgg(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print(f"""> CREATE TABLE t ({
             ", ".join(
                 ", ".join([
@@ -1541,8 +1549,8 @@ class FilterSubqueries(Generator):
         print("> INSERT INTO t1 VALUES (1);")
 
         # TODO: Slow optimization, possibly due to https://linear.app/materializeinc/issue/STG-42/use-equivalences-more-broadly
-        print("$ set-sql-timeout duration=3600s")
-        print("> SET statement_timeout = '3600s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(3600)}s")
+        print(f"> SET statement_timeout = '{sql_timeout(3600)}s'")
 
         cls.store_explain_and_run(
             f"SELECT * FROM t1 AS a1 WHERE {' AND '.join(f'f1 IN (SELECT * FROM t1 WHERE f1 = a1.f1 AND f1 <= {i})' for i in cls.all())}"
@@ -1580,7 +1588,7 @@ class Rows(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='60s'")
+        print(f"> SET statement_timeout='{sql_timeout(60)}s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT})")
 
@@ -1659,7 +1667,7 @@ class RowsJoinLargeRetraction(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("> SET statement_timeout='60s'")
+        print(f"> SET statement_timeout='{sql_timeout(60)}s'")
         print("> CREATE TABLE t1 (f1 INTEGER);")
         print(f"> INSERT INTO t1 SELECT * FROM generate_series(1, {cls.COUNT});")
 
@@ -1710,8 +1718,8 @@ class PostgresSources(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1751,8 +1759,8 @@ class PostgresSources(Generator):
 class PostgresTables(Generator):
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_objects_per_schema = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1792,8 +1800,8 @@ class PostgresTablesOldSyntax(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
-        print("> SET statement_timeout='300s'")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
+        print(f"> SET statement_timeout='{sql_timeout(300)}s'")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1834,7 +1842,7 @@ class MySqlSources(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
@@ -1887,7 +1895,7 @@ class SqlServerSources(Generator):
 
     @classmethod
     def body(cls) -> None:
-        print("$ set-sql-timeout duration=300s")
+        print(f"$ set-sql-timeout duration={sql_timeout(300)}s")
         print("$ postgres-execute connection=mz_system")
         print(f"ALTER SYSTEM SET max_sources = {cls.COUNT * 10};")
         print("$ postgres-execute connection=mz_system")
