@@ -343,9 +343,13 @@ fn diagnose(catalog: &impl SessionCatalog, denial: &Denial) -> UnauthorizedError
 What this buys:
 
 - `decide` becomes monomorphic, total, and free of trait objects, which is the
-  entry requirement for every tool discussed under "Tool selection" below. Its
-  fact tables should be flat sorted vectors rather than `BTreeMap`, which costs
-  nothing at our sizes and is markedly friendlier to a bounded model checker.
+  entry requirement for every tool discussed under "Tool selection" below. It
+  should also derive `Arbitrary` on its inputs, which is what makes both
+  `proptest` and Kani's `autoharness` apply to it without further work.
+- `decide` should expose an inner kernel over an integer-encoded view of the
+  facts, with the encoder outside it. Bounded model checking is not viable on
+  our collection types at any useful bound, for reasons set out under "Tool
+  selection". The kernel is what a verifier can reach.
 - `diagnose` leaves the trusted base. P1 then only has to hold for `decide`, and
   `diagnose` is allowed to be best-effort, which is the right posture for code
   whose only job is to render a message.
@@ -611,11 +615,64 @@ catching sign errors in bitset algebra and worthless for catching a missing
 policy arm.
 
 Our data structures are `BTreeMap` and `BTreeSet` throughout, and heap-allocated
-collections are where bounded model checkers tend to blow up. This is the one
-claim in this document I could not verify against current Kani documentation, so
-the first Kani task should be a half-day spike on `collect_role_membership` to
-find out, before anything is planned around it. Building `AuthzFacts` from flat
-sorted vectors (Refactor 1) hedges against the answer being bad.
+collections are where bounded model checkers blow up. Kani's own test suite
+settles how badly, and the answer rules out the naive approach. Numbers below are
+from the upstream repository at version 0.67.0.
+
+- `tests/perf/btreeset/insert_any`: inserting **one** nondeterministic `u32` into
+  a `BTreeSet` and asserting `contains` is a performance test. Its comment
+  records roughly 10 seconds and 255 MB, and notes that before CBMC 5.72.0 it ran
+  out of memory entirely.
+- `tests/perf/btreeset/insert_multi`: inserting **two** nondeterministic elements
+  needs an explicit solver override.
+- `tests/expected/bounded-arbitrary/btree`: `kani::bounded_any` can produce a
+  nondeterministic `BTreeMap`, but the upstream harness uses a bound of 1, with
+  the comment that a larger bound takes a long time.
+
+A nondeterministic role graph is a `BTreeMap<RoleId, BTreeSet<RoleId>>`, which is
+the nested case. Kani cannot verify anything about it at a bound worth having, so
+"flat sorted vectors" is not a sufficient hedge either. `Vec` is better than
+`BTreeSet` but still not cheap (`tests/perf/vec/vec` records a few hundred MB for
+concrete two-element nested vectors).
+
+The workable division of labour is to give Kani an integer-encoded view of the
+state and nothing else:
+
+- The role graph becomes an adjacency bitmask, one integer per role. Closure is
+  then a fixpoint over integers, which CBMC handles well, and P4 becomes
+  provable at a bound of 64 roles rather than 2.
+- `AclMode` is already a `bitflags` integer, which is why the algebra proofs will
+  be cheap. This is the part to start with.
+- Kani's `forall!` and `exists!` quantifiers range over integer intervals, which
+  suits this encoding and does not suit collections.
+
+Encoding collections into that view is then checked by `proptest`, not by Kani.
+`decide` should therefore expose an inner kernel over the integer view, with the
+encoder outside it.
+
+Three further constraints, all discovered from the same source and all cheap to
+satisfy if we know them in advance:
+
+- `autoharness` (`-Z autoharness`) generates harnesses for every function whose
+  arguments implement `kani::Arbitrary`, which is the zero-annotation route to
+  P1 across a whole module. It cannot apply to a function taking
+  `&impl SessionCatalog` or `&dyn SessionMetadata`, so it only becomes available
+  after Refactor 1. This is the same admission requirement the other tools
+  impose, arriving from a different direction.
+- Loop contracts, which are how a bounded model checker gets an unbounded result
+  about a loop, do not support `while let` loops. Both worklist traversals we
+  care about are `while let Some(..) = queue.pop_front()`
+  (`collect_role_membership` and `generate_read_privileges_inner`). Rewriting
+  them as `while !queue.is_empty()` is trivial, and worth doing when those loops
+  are touched anyway.
+- Function contracts, loop contracts, quantifiers, and autoharness are all
+  experimental `-Z` features at 0.67.0. Panic-freedom on concrete harnesses is
+  the stable part. Anything in the plan that depends on the experimental
+  features should say so.
+
+One incidental finding worth recording, because it cuts against a rule we
+enforce elsewhere: Kani rewrites `debug_assert!` into `assert!`. Under Kani those
+assertions are live, unlike under the optimized and release profiles.
 
 ### Multiple tools
 
@@ -714,20 +771,16 @@ baseline is hard to defend.
    and the current code already walks the same objects, but the fast path exists
    to be fast and this needs measuring before the refactor lands rather than
    after.
-3. Does Kani cope with our `BTreeMap` and `BTreeSet` shapes, or does Refactor 1
-   have to commit to flat sorted vectors for the fact tables? A half-day spike on
-   `collect_role_membership` answers this and should precede any planning that
-   depends on Kani.
-4. Is exposing requirement generation publicly acceptable, or should Layer 0a
+3. Is exposing requirement generation publicly acceptable, or should Layer 0a
    use a test-only feature gate? The public version has independent value for
    operator introspection, which argues for public.
-5. Does P12 have a customer-visible answer today that we are committed to? If
+4. Does P12 have a customer-visible answer today that we are committed to? If
    in-flight `SUBSCRIBE` behavior after `REVOKE` is already documented, Layer 3
    is verifying a commitment rather than discovering one, which changes its
    priority.
-6. Should the P8 shadow check be a `ci`-profile assertion or a permanent runtime
+5. Should the P8 shadow check be a `ci`-profile assertion or a permanent runtime
    check? A permanent check costs a second requirement generation per statement
    on the fast path, which is the path that exists to be fast.
-7. Is there appetite for the capability-token refactor in purification (P11), or
+6. Is there appetite for the capability-token refactor in purification (P11), or
    should that assumption simply be documented and audited by hand? The refactor
    touches purification broadly and is the most invasive change proposed here.
