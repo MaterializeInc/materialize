@@ -13,20 +13,26 @@
 //! long run we want a group-commit task that runs independently, so that
 //! session tasks can submit write requests to it directly.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_catalog::memory::objects::CatalogItem;
 use mz_repr::CatalogItemId;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogItemType;
 use mz_sql::plan::SubscribeOutput;
+use mz_storage_client::client::TableData;
+use smallvec::smallvec;
 use tokio::sync::mpsc;
+use tracing::Span;
 
 use crate::PeekResponseUnary;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::catalog::Catalog;
 use crate::coord::Coordinator;
-use crate::coord::appends::WriteResult;
+use crate::coord::appends::{
+    InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
+    UserWriteResponder, WriteResult, WriteTarget,
+};
 use crate::error::AdapterError;
 
 /// Adds `id` to the worklist the first time it is seen, enforcing the
@@ -155,15 +161,6 @@ impl Coordinator {
         write_ts: Option<Timestamp>,
         result_tx: tokio::sync::oneshot::Sender<WriteResult>,
     ) {
-        use crate::coord::appends::{
-            InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
-            UserWriteResponder, WriteTarget,
-        };
-        use mz_storage_client::client::TableData;
-        use smallvec::smallvec;
-        use std::collections::BTreeMap;
-        use tracing::Span;
-
         let result = InternalWriteResponder::new(result_tx);
         if !self.active_conns.contains_key(&conn_id) {
             result.send(WriteResult::Canceled);

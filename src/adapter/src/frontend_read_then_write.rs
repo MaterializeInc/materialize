@@ -267,10 +267,246 @@ fn classify_write_result(
     }
 }
 
+/// Validates a read-then-write and resolves the context the rest of the
+/// pipeline runs against.
+///
+/// Rejects `mz_now()` in the selection, the assignments or the returning
+/// clause. `optimize_mir_read_then_write` relies on that rejection by name
+/// when it prepares unmaterializable functions one-shot. Also enforces the
+/// dependency cap, resolves the target cluster and requires it to have a
+/// live replica, honors the session's replica pin, computes the read side's
+/// `TimelineContext`, and fetches the target table's descriptor.
+///
+/// `catalog` must be the snapshot the plan was built against. One snapshot
+/// serves planning, validation and optimization, so items the plan names
+/// cannot disappear from it, and the missing-entry branches below are
+/// failsafes rather than a live concurrent-DDL path.
+fn validate_read_then_write(
+    catalog: &Arc<Catalog>,
+    session: &Session,
+    plan: &plan::ReadThenWritePlan,
+    target_cluster: TargetCluster,
+) -> Result<ValidationResult, AdapterError> {
+    if contains_mz_now(plan) {
+        return Err(AdapterError::Unsupported(
+            "calls to mz_now in write statements",
+        ));
+    }
+
+    // One walk of the selection serves both the dependency check and the
+    // timeline validation below.
+    let depends_on = plan.selection.depends_on();
+
+    // Validate read dependencies. A missing item would mean `catalog` is
+    // not the snapshot the plan was built against, so fail cleanly.
+    let dependency_ids = depends_on
+        .iter()
+        .copied()
+        .map(|gid| {
+            catalog.try_resolve_item_id(&gid).ok_or_else(|| {
+                AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::UnknownItem(gid.to_string())),
+                })
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let max_rw_dependencies = mz_adapter_types::dyncfgs::READ_THEN_WRITE_MAX_DEPENDENCIES
+        .get(catalog.system_config().dyncfgs());
+    validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies)?;
+
+    let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
+    let cluster_id = cluster.id;
+
+    if cluster.replicas().next().is_none() {
+        return Err(AdapterError::NoClusterReplicasAvailable {
+            name: cluster.name.clone(),
+            is_managed: cluster.is_managed(),
+        });
+    }
+
+    let replica_id = session
+        .vars()
+        .cluster_replica()
+        .map(|name| {
+            cluster
+                .replica_id(name)
+                .ok_or(AdapterError::UnknownClusterReplica {
+                    cluster_name: cluster.name.clone(),
+                    replica_name: name.to_string(),
+                })
+        })
+        .transpose()?;
+
+    let timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
+
+    // The write commits at the frontier the subscribe observed, and that
+    // frontier is only comparable with the target table's upper on
+    // `EpochMilliseconds`. A selection in another timeline counts something
+    // else, transactions rather than milliseconds for a CDCv2 source, so the
+    // conflict check would refuse every attempt and the statement would burn
+    // until `statement_timeout`. Refuse it up front instead.
+    //
+    // Only `INSERT ... SELECT` reaches this. A DELETE or UPDATE selection
+    // includes the target table, so a foreign timeline already fails above
+    // as a mixed-timeline query.
+    if let TimelineContext::TimelineDependent(t) = &timeline {
+        if t != &Timeline::EpochMilliseconds {
+            return Err(AdapterError::Unsupported(
+                "read-then-write on a selection outside the EpochMilliseconds timeline",
+            ));
+        }
+    }
+
+    // Get the table descriptor for constraint validation. As above, a
+    // missing entry would mean the snapshot contract was broken.
+    let table_desc = match catalog.try_get_entry(&plan.id) {
+        Some(entry) => entry
+            .relation_desc_latest()
+            .expect("table has desc")
+            .into_owned(),
+        None => {
+            return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::UnknownItem(plan.id.to_string())),
+            }));
+        }
+    };
+
+    Ok(ValidationResult {
+        cluster_id,
+        replica_id,
+        timeline,
+        depends_on,
+        table_desc,
+    })
+}
+
+/// Builds the response for a write that is about to be submitted.
+///
+/// This runs before the write, so the result-size checks in here reject the
+/// statement without having written anything.
+fn build_success_response(
+    kind: &MutationKind,
+    returning: &[MirScalarExpr],
+    all_diffs: &[(Row, Timestamp, Diff)],
+    max_result_size: u64,
+    max_query_result_size: u64,
+    row_set_finishing_seconds: &Histogram,
+) -> Result<ExecuteResponse, AdapterError> {
+    if returning.is_empty() {
+        // For UPDATE each changed row produces a retraction (-1) and an
+        // insertion (+1), so we divide by 2 below.
+        let row_count = all_diffs
+            .iter()
+            .map(|(_, _, diff)| diff.into_inner().unsigned_abs())
+            .sum::<u64>();
+        let row_count = usize::try_from(row_count).expect("positive row count must fit in usize");
+
+        return Ok(match kind {
+            MutationKind::Delete => ExecuteResponse::Deleted(row_count),
+            MutationKind::Update => ExecuteResponse::Updated(row_count / 2),
+            MutationKind::Insert => ExecuteResponse::Inserted(row_count),
+        });
+    }
+
+    let mut returning_rows = Vec::new();
+    let arena = RowArena::new();
+    // RETURNING expressions are evaluated row-by-row in this loop, so an
+    // expression like `RETURNING repeat('x', 10_000_000)` will allocate
+    // unbounded data unless we bail mid-loop. The post-loop
+    // `RowSetFinishing::finish` below would also reject this, but only
+    // after we've materialized everything. The early-bail caps the
+    // temporary allocation. We pick the lower of the two configured caps,
+    // whichever fires first wins.
+    let mut projected_byte_size: u64 = 0;
+    let early_cap = std::cmp::min(max_result_size, max_query_result_size);
+
+    for (row, _ts, diff) in all_diffs {
+        let include = match kind {
+            MutationKind::Delete => diff.is_negative(),
+            MutationKind::Update | MutationKind::Insert => diff.is_positive(),
+        };
+
+        if !include {
+            continue;
+        }
+
+        let mut returning_row = Row::with_capacity(returning.len());
+        let mut packer = returning_row.packer();
+        let datums: Vec<_> = row.iter().collect();
+
+        for expr in returning {
+            match expr.eval(&datums, &arena) {
+                Ok(datum) => packer.push(datum),
+                Err(err) => return Err(err.into()),
+            }
+        }
+
+        let multiplicity = NonZeroUsize::try_from(
+            NonZeroI64::try_from(diff.into_inner().abs()).expect("diff is non-zero"),
+        )
+        .map_err(AdapterError::from)?;
+
+        let row_bytes = u64::cast_from(returning_row.byte_len())
+            .saturating_mul(u64::cast_from(multiplicity.get()));
+        projected_byte_size = projected_byte_size.saturating_add(row_bytes);
+        if projected_byte_size > early_cap {
+            return Err(AdapterError::ResultSize(format!(
+                "result exceeds max size of {}",
+                ByteSize::b(early_cap)
+            )));
+        }
+
+        returning_rows.push((returning_row, multiplicity));
+    }
+
+    // Run the canonical finish to enforce both caps with full precision
+    // (including the sorted-view memory overhead) and to register the
+    // row-set-finishing duration histogram, mirroring the legacy
+    // `send_diffs` path.
+    let finishing = RowSetFinishing {
+        order_by: Vec::new(),
+        limit: None,
+        offset: 0,
+        project: (0..returning.len()).collect(),
+    };
+    match finishing.finish(
+        RowCollection::new(returning_rows, &finishing.order_by),
+        max_result_size,
+        Some(max_query_result_size),
+        row_set_finishing_seconds,
+    ) {
+        Ok((rows, _size_bytes)) => Ok(ExecuteResponse::SendingRowsImmediate {
+            rows: Box::new(rows),
+        }),
+        Err(e) => Err(AdapterError::ResultSize(e)),
+    }
+}
+
+/// Whether a read-then-write mentions `mz_now()` anywhere.
+///
+/// Read time and write time differ on this path, so `mz_now()` has no single
+/// answer and is refused in every position.
+pub(crate) fn contains_mz_now(plan: &plan::ReadThenWritePlan) -> bool {
+    plan.selection.contains_temporal()
+        || plan.assignments.values().any(|e| e.contains_temporal())
+        || plan.returning.iter().any(|e| e.contains_temporal())
+}
+
+/// The timeline whose oracle governs a read-then-write with the given read-side
+/// [`TimelineContext`].
+///
+/// The write target is always a table on `EpochMilliseconds`, so a read side
+/// that pins no timeline (`TimestampDependent`) still maps to
+/// `EpochMilliseconds`. `None` only for timestamp-independent selections, which
+/// need no oracle at all.
+fn governing_timeline(timeline: &TimelineContext) -> Option<Timeline> {
+    <Coordinator as TimestampProvider>::get_timeline(timeline)
+}
+
 /// A handle to an internal subscribe, meaning one that writes no
 /// `mz_subscriptions` row. A `Drop` impl ensures the subscribe's dataflow is
 /// cleaned up when dropped.
-pub(crate) struct SubscribeHandle {
+struct SubscribeHandle {
     rx: mpsc::UnboundedReceiver<PeekResponseUnary>,
     sink_id: GlobalId,
     /// Wrapped in `Option` so we can move it out in `Drop`.
@@ -333,8 +569,7 @@ impl PeekClient {
             return Err(AdapterError::ReadOnlyTransaction);
         }
 
-        let validation_result =
-            self.validate_read_then_write(catalog, session, &plan, target_cluster)?;
+        let validation_result = validate_read_then_write(catalog, session, &plan, target_cluster)?;
 
         let ValidationResult {
             cluster_id,
@@ -378,7 +613,7 @@ impl PeekClient {
             style.prep_scalar_expr(expr)?;
         }
 
-        let (optimizer, global_mir_plan) =
+        let (mut optimizer, global_mir_plan) =
             self.optimize_mir_read_then_write(catalog, session, &plan, cluster_id)?;
 
         // Acquire the OCC semaphore permit *before* acquiring read holds in
@@ -442,8 +677,8 @@ impl PeekClient {
 
         let as_of = determination.timestamp_context.timestamp_or_default();
 
-        let global_lir_plan =
-            self.optimize_lir_read_then_write(optimizer, global_mir_plan, as_of)?;
+        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
+        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
 
         // Log optimization finished
         if let Some(logging_id) = statement_logging_id {
@@ -627,122 +862,6 @@ impl PeekClient {
         response
     }
 
-    /// Validates a read-then-write and resolves the context the rest of the
-    /// pipeline runs against.
-    ///
-    /// Rejects `mz_now()` in the selection, the assignments or the returning
-    /// clause. `optimize_mir_read_then_write` relies on that rejection by name
-    /// when it prepares unmaterializable functions one-shot. Also enforces the
-    /// dependency cap, resolves the target cluster and requires it to have a
-    /// live replica, honors the session's replica pin, computes the read side's
-    /// `TimelineContext`, and fetches the target table's descriptor.
-    ///
-    /// `catalog` must be the snapshot the plan was built against. One snapshot
-    /// serves planning, validation and optimization, so items the plan names
-    /// cannot disappear from it, and the missing-entry branches below are
-    /// failsafes rather than a live concurrent-DDL path.
-    fn validate_read_then_write(
-        &self,
-        catalog: &Arc<Catalog>,
-        session: &Session,
-        plan: &plan::ReadThenWritePlan,
-        target_cluster: TargetCluster,
-    ) -> Result<ValidationResult, AdapterError> {
-        // Disallow mz_now in any position because read time and write time differ.
-        let contains_temporal = plan.selection.contains_temporal()
-            || plan.assignments.values().any(|e| e.contains_temporal())
-            || plan.returning.iter().any(|e| e.contains_temporal());
-        if contains_temporal {
-            return Err(AdapterError::Unsupported(
-                "calls to mz_now in write statements",
-            ));
-        }
-
-        // Validate read dependencies. A missing item would mean `catalog` is
-        // not the snapshot the plan was built against, so fail cleanly.
-        let dependency_ids = plan
-            .selection
-            .depends_on()
-            .into_iter()
-            .map(|gid| {
-                catalog.try_resolve_item_id(&gid).ok_or_else(|| {
-                    AdapterError::Catalog(mz_catalog::memory::error::Error {
-                        kind: ErrorKind::Sql(CatalogError::UnknownItem(gid.to_string())),
-                    })
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let max_rw_dependencies = mz_adapter_types::dyncfgs::READ_THEN_WRITE_MAX_DEPENDENCIES
-            .get(catalog.system_config().dyncfgs());
-        validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies)?;
-
-        let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
-        let cluster_id = cluster.id;
-
-        if cluster.replicas().next().is_none() {
-            return Err(AdapterError::NoClusterReplicasAvailable {
-                name: cluster.name.clone(),
-                is_managed: cluster.is_managed(),
-            });
-        }
-
-        let replica_id = session
-            .vars()
-            .cluster_replica()
-            .map(|name| {
-                cluster
-                    .replica_id(name)
-                    .ok_or(AdapterError::UnknownClusterReplica {
-                        cluster_name: cluster.name.clone(),
-                        replica_name: name.to_string(),
-                    })
-            })
-            .transpose()?;
-
-        let depends_on = plan.selection.depends_on();
-        let timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
-
-        // The write commits at the frontier the subscribe observed, and that
-        // frontier is only comparable with the target table's upper on
-        // `EpochMilliseconds`. A selection in another timeline counts something
-        // else, transactions rather than milliseconds for a CDCv2 source, so the
-        // conflict check would refuse every attempt and the statement would burn
-        // until `statement_timeout`. Refuse it up front instead.
-        //
-        // Only `INSERT ... SELECT` reaches this. A DELETE or UPDATE selection
-        // includes the target table, so a foreign timeline already fails above
-        // as a mixed-timeline query.
-        if let TimelineContext::TimelineDependent(t) = &timeline {
-            if t != &Timeline::EpochMilliseconds {
-                return Err(AdapterError::Unsupported(
-                    "read-then-write on a selection outside the EpochMilliseconds timeline",
-                ));
-            }
-        }
-
-        // Get the table descriptor for constraint validation. As above, a
-        // missing entry would mean the snapshot contract was broken.
-        let table_desc = match catalog.try_get_entry(&plan.id) {
-            Some(entry) => entry
-                .relation_desc_latest()
-                .expect("table has desc")
-                .into_owned(),
-            None => {
-                return Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
-                    kind: ErrorKind::Sql(CatalogError::UnknownItem(plan.id.to_string())),
-                }));
-            }
-        };
-
-        Ok(ValidationResult {
-            cluster_id,
-            replica_id,
-            timeline,
-            depends_on,
-            table_desc,
-        })
-    }
-
     /// Builds the subscribe optimizer and the unresolved global MIR plan for a
     /// read-then-write.
     ///
@@ -829,31 +948,13 @@ impl PeekClient {
         Ok((optimizer, global_mir_plan))
     }
 
-    /// Optimize LIR for a read-then-write operation.
-    fn optimize_lir_read_then_write(
-        &self,
-        mut optimizer: optimize::subscribe::Optimizer,
-        global_mir_plan: optimize::subscribe::GlobalMirPlan<optimize::subscribe::Unresolved>,
-        as_of: Timestamp,
-    ) -> Result<optimize::subscribe::GlobalLirPlan, AdapterError> {
-        let global_mir_plan = global_mir_plan.resolve(Antichain::from_elem(as_of));
-        let global_lir_plan = optimizer.optimize(global_mir_plan)?;
-        Ok(global_lir_plan)
-    }
-
-    /// Get the oracle read timestamp hint for the timeline of this query.
+    /// The governing oracle's read timestamp, used as a lower bound for
+    /// timestamp selection. `None` when the selection needs no oracle.
     async fn oracle_read_ts(
         &mut self,
         timeline: &TimelineContext,
     ) -> Result<Option<Timestamp>, AdapterError> {
-        // See `ensure_read_linearized` for why `get_timeline` is the right
-        // function here: the write target lives on `EpochMilliseconds`, so
-        // we want that oracle's read_ts as the hint for timestamp
-        // selection even when the read side is MV-only
-        // (`TimestampDependent`).
-        let timeline = <Coordinator as TimestampProvider>::get_timeline(timeline);
-
-        match timeline {
+        match governing_timeline(timeline) {
             Some(timeline) => {
                 let oracle = self.ensure_oracle(timeline).await?;
                 Ok(Some(oracle.read_ts().await))
@@ -875,19 +976,12 @@ impl PeekClient {
         timeline: &TimelineContext,
         as_of: Timestamp,
     ) -> Result<(), AdapterError> {
-        // Pick the oracle this RTW operates against. `timeline` is derived from
-        // the read side (`plan.selection.depends_on()`), so an MV-only read
-        // produces `TimestampDependent`, an MV itself does not pin the query to
-        // any source timeline. The write target, however, is always a Table
-        // living on `EpochMilliseconds`, and future readers of that table will
-        // consult the `EpochMilliseconds` oracle, so linearization must target
-        // `EpochMilliseconds` regardless of the read side.
-        //
-        // `get_timeline` encodes that defaulting (`TimestampDependent` →
-        // `Some(EpochMilliseconds)`). `TimelineContext::timeline()` answers a
-        // different question ("is there a source-forced timeline?") and would
-        // return `None` for MV-only reads, silently skipping linearization.
-        let tl = match <Coordinator as TimestampProvider>::get_timeline(timeline) {
+        // Linearization must target the oracle future readers of the target
+        // table will consult, which is why this uses `governing_timeline` and
+        // not `TimelineContext::timeline()`. The latter answers "is there a
+        // source-forced timeline?" and would skip linearization entirely for a
+        // read side that pins none.
+        let tl = match governing_timeline(timeline) {
             Some(tl) => tl,
             None => return Ok(()),
         };
@@ -1026,7 +1120,7 @@ impl PeekClient {
                             observed_ts: None,
                         });
                     }
-                    let success_response = match self.build_success_response(
+                    let success_response = match build_success_response(
                         &kind,
                         &returning,
                         &state.all_diffs,
@@ -1122,7 +1216,7 @@ impl PeekClient {
                     // (the bulk was already consolidated on the last progress).
                     state.consolidate(write_ts);
 
-                    let success_response = match self.build_success_response(
+                    let success_response = match build_success_response(
                         &kind,
                         &returning,
                         &state.all_diffs,
@@ -1138,7 +1232,7 @@ impl PeekClient {
                     //
                     // TODO(aljoscha): Store `Arc<Row>` in `all_diffs` if this
                     // shows up in profiles. Every attempt clones every row, and
-                    // we retry up to `max_occ_retries` times (default 1000).
+                    // we retry up to `max_occ_retries` times.
                     attempt_state.mark_write_submitted();
                     let result = self
                         .call_coordinator(|tx| Command::AttemptWrite {
@@ -1271,110 +1365,6 @@ impl PeekClient {
                     "blind write unexpectedly got TimestampPassed".into(),
                 ))
             }
-        }
-    }
-
-    /// Builds the response for a write that is about to be submitted.
-    ///
-    /// This runs before the write, so the result-size checks in here reject the
-    /// statement without having written anything.
-    fn build_success_response(
-        &self,
-        kind: &MutationKind,
-        returning: &[MirScalarExpr],
-        all_diffs: &[(Row, Timestamp, Diff)],
-        max_result_size: u64,
-        max_query_result_size: u64,
-        row_set_finishing_seconds: &Histogram,
-    ) -> Result<ExecuteResponse, AdapterError> {
-        if returning.is_empty() {
-            // For UPDATE each changed row produces a retraction (-1) and an
-            // insertion (+1), so we divide by 2 below.
-            let row_count = all_diffs
-                .iter()
-                .map(|(_, _, diff)| diff.into_inner().unsigned_abs())
-                .sum::<u64>();
-            let row_count =
-                usize::try_from(row_count).expect("positive row count must fit in usize");
-
-            return Ok(match kind {
-                MutationKind::Delete => ExecuteResponse::Deleted(row_count),
-                MutationKind::Update => ExecuteResponse::Updated(row_count / 2),
-                MutationKind::Insert => ExecuteResponse::Inserted(row_count),
-            });
-        }
-
-        let mut returning_rows = Vec::new();
-        let arena = RowArena::new();
-        // RETURNING expressions are evaluated row-by-row in this loop, so an
-        // expression like `RETURNING repeat('x', 10_000_000)` will allocate
-        // unbounded data unless we bail mid-loop. The post-loop
-        // `RowSetFinishing::finish` below would also reject this, but only
-        // after we've materialized everything. The early-bail caps the
-        // temporary allocation. We pick the lower of the two configured caps,
-        // whichever fires first wins.
-        let mut projected_byte_size: u64 = 0;
-        let early_cap = std::cmp::min(max_result_size, max_query_result_size);
-
-        for (row, _ts, diff) in all_diffs {
-            let include = match kind {
-                MutationKind::Delete => diff.is_negative(),
-                MutationKind::Update | MutationKind::Insert => diff.is_positive(),
-            };
-
-            if !include {
-                continue;
-            }
-
-            let mut returning_row = Row::with_capacity(returning.len());
-            let mut packer = returning_row.packer();
-            let datums: Vec<_> = row.iter().collect();
-
-            for expr in returning {
-                match expr.eval(&datums, &arena) {
-                    Ok(datum) => packer.push(datum),
-                    Err(err) => return Err(err.into()),
-                }
-            }
-
-            let multiplicity = NonZeroUsize::try_from(
-                NonZeroI64::try_from(diff.into_inner().abs()).expect("diff is non-zero"),
-            )
-            .map_err(AdapterError::from)?;
-
-            let row_bytes = u64::cast_from(returning_row.byte_len())
-                .saturating_mul(u64::cast_from(multiplicity.get()));
-            projected_byte_size = projected_byte_size.saturating_add(row_bytes);
-            if projected_byte_size > early_cap {
-                return Err(AdapterError::ResultSize(format!(
-                    "result exceeds max size of {}",
-                    ByteSize::b(early_cap)
-                )));
-            }
-
-            returning_rows.push((returning_row, multiplicity));
-        }
-
-        // Run the canonical finish to enforce both caps with full precision
-        // (including the sorted-view memory overhead) and to register the
-        // row-set-finishing duration histogram, mirroring the legacy
-        // `send_diffs` path.
-        let finishing = RowSetFinishing {
-            order_by: Vec::new(),
-            limit: None,
-            offset: 0,
-            project: (0..returning.len()).collect(),
-        };
-        match finishing.finish(
-            RowCollection::new(returning_rows, &finishing.order_by),
-            max_result_size,
-            Some(max_query_result_size),
-            row_set_finishing_seconds,
-        ) {
-            Ok((rows, _size_bytes)) => Ok(ExecuteResponse::SendingRowsImmediate {
-                rows: Box::new(rows),
-            }),
-            Err(e) => Err(AdapterError::ResultSize(e)),
         }
     }
 }
@@ -1562,7 +1552,7 @@ fn process_message(
                     if state.byte_size > max_result_size {
                         return ProcessResult::Error(AdapterError::ResultSize(format!(
                             "result exceeds max size of {}",
-                            max_result_size
+                            ByteSize::b(max_result_size)
                         )));
                     }
                     state.max_data_ts = Some(match state.max_data_ts {

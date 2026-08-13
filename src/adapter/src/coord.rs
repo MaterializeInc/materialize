@@ -91,6 +91,7 @@ use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_adapter_types::dyncfgs::{
     ENABLE_SCOPED_SYSTEM_PARAMETERS, USER_ID_POOL_BATCH_SIZE,
     WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
@@ -5083,8 +5084,7 @@ pub fn serve(
                 let max_concurrent_occ_writes =
                     usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
                 let frontend_read_then_write_enabled = {
-                    use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
-                    FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
+                                FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
                 };
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());

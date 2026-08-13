@@ -26,6 +26,7 @@ use mz_auth::{Authenticated, AuthenticatorKind};
 use mz_build_info::BuildInfo;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::UnmaterializableFunc;
+use mz_expr::{CollectionPlan, RowSetFinishing};
 use mz_ore::channel::OneshotReceiverExt;
 use mz_ore::collections::CollectionExt;
 use mz_ore::id_gen::{IdAllocator, IdAllocatorInnerBitSet, MAX_ORG_ID, org_id_conn_bits};
@@ -37,8 +38,10 @@ use mz_ore::thread::JoinOnDropHandle;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_repr::user::InternalUserMetadata;
 use mz_repr::{CatalogItemId, ColumnIndex, SqlScalarType};
+use mz_sql::ast::ConstantVisitor;
 use mz_sql::ast::{Raw, Statement};
 use mz_sql::catalog::{EnvironmentId, SessionCatalog};
+use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
 use mz_sql::session::hint::ApplicationNameHint;
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::SUPPORT_USER;
@@ -46,6 +49,7 @@ use mz_sql::session::vars::{
     CLUSTER, ENABLE_FRONTEND_PEEK_SEQUENCING, OwnedVarInput, SystemVars, Var,
 };
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::{InsertStatement, StatementKind};
 use mz_sql_parser::parser::{ParserStatementError, StatementParseResult};
 use prometheus::Histogram;
 use serde_json::json;
@@ -1590,17 +1594,12 @@ impl SessionClient {
     /// Returns `Ok(Some(response))` if we handled the operation, or `Ok(None)`
     /// to fall back to the Coordinator's sequencing. If it returns an error, it
     /// should be returned to the user.
-    pub(crate) async fn try_frontend_read_then_write(
+    async fn try_frontend_read_then_write(
         &mut self,
         portal_name: &str,
         logging: &mut ExecutionLogging,
         attempt_state: Arc<FrontendWriteAttemptState>,
     ) -> Result<Option<ExecuteResponse>, AdapterError> {
-        use mz_expr::{CollectionPlan, RowSetFinishing};
-        use mz_sql::ast::ConstantVisitor;
-        use mz_sql::plan::{MutationKind, Plan, ReadThenWritePlan};
-        use mz_sql_parser::ast::{InsertStatement, Statement};
-
         // Re-checked here rather than relying on the caller's gate. See the
         // module-level docs on `frontend_read_then_write` for why the flag is
         // fixed for the lifetime of the process.
@@ -1957,10 +1956,7 @@ impl SessionClient {
             let single_statement = matches!(session.transaction(), TransactionStatus::Started(_))
                 && !session.transaction().contains_ops();
             if !single_statement {
-                let contains_temporal = rtw_plan.selection.contains_temporal()
-                    || rtw_plan.assignments.values().any(|e| e.contains_temporal())
-                    || rtw_plan.returning.iter().any(|e| e.contains_temporal());
-                if contains_temporal {
+                if crate::frontend_read_then_write::contains_mz_now(&rtw_plan) {
                     return Err(AdapterError::Unsupported(
                         "calls to mz_now in write statements",
                     ));
@@ -2001,7 +1997,6 @@ fn is_read_then_write_statement(stmt: &Statement<Raw>) -> bool {
 /// sensitive literals are redacted because the error message is persisted in
 /// `mz_statement_execution_history`.
 fn prohibited_in_transaction(stmt: &Statement<Raw>) -> AdapterError {
-    use mz_sql_parser::ast::StatementKind;
     let op = if StatementKind::from(stmt).is_sensitive() {
         stmt.to_ast_string_redacted()
     } else {
