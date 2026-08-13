@@ -17,8 +17,9 @@ Arrangement dictionary compression
 
 Within a column, the values that repeat most often are the ones Materialize
 stores once and references. Everything else is stored as-is, exactly as it would
-be without compression. Compression is applied per column, so a wide row can
-have one column compressed and the rest untouched.
+be without compression. Materialize applies compression per column and decides
+which columns to compress, so a wide row can have one column compressed and the
+rest untouched.
 
 ## Enable dictionary compression
 
@@ -65,9 +66,9 @@ on every workload. Use this section to judge whether it suits your workload, and
 {{< note >}}
 A single arrangement usually holds both columns that compress well and columns
 that do not. Only the columns that compress save memory, and every column still
-pays the CPU cost. You cannot target individual columns, because the option is
-set per cluster and the optimizer decides which intermediate arrangements a
-dataflow builds.
+pays the CPU cost. Materialize decides which columns get compressed, and you
+cannot select them yourself. You turn compression on per cluster, and the
+optimizer chooses which intermediate arrangements a dataflow builds.
 {{< /note >}}
 
 ### When it helps
@@ -91,10 +92,10 @@ builds these internal arrangements for any joins and aggregations it computes.
 
 - **High-cardinality or near-unique columns.** Unique values are not worth
   storing in a dictionary, so columns dominated by them see little or no memory
-  savings. Materialize has no heuristic for detecting and skipping
-  high-cardinality columns. It inspects every column of every row regardless, so
-  a near-unique column pays the full CPU cost for little or no memory benefit.
-  Unique identifiers, timestamps, and free-form text are typical examples.
+  savings. Materialize does not detect a high-cardinality column and skip it up
+  front. It inspects every column of every row regardless, so a near-unique
+  column pays the full CPU cost for little or no memory benefit. Unique
+  identifiers, timestamps, and free-form text are typical examples.
 - **Columns of short values.** Booleans, `NULL`s, and small integers are already
   stored compactly enough that a dictionary reference cannot beat storing the
   value itself. They are never compressed.
