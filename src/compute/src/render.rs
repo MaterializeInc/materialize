@@ -2692,13 +2692,15 @@ mod interactive_import_tests {
                 (oks_arranged.trace, errs_arranged.trace)
             });
 
-            // The controller requests compaction well past `as_of`. `note_allow_compaction` forwards
-            // that floor into the published slot, exactly as `handle_allow_compaction` does in
-            // production, and the writer handle advances too so the trace can physically compact. A
-            // filler tick reactivates the publisher so it recomputes its forwarded `since` (still
-            // pinned to `as_of` here by the live reader hold).
+            // The controller requests compaction well past `as_of`, and both runtimes apply it:
+            // `note_allow_compaction` forwards the writer floor into the published slot and
+            // `note_standing_hold` advances the importing runtime's own position, exactly as
+            // `handle_allow_compaction` does on each side. The writer handle advances too so the trace
+            // can physically compact. A filler tick reactivates the publisher so it recomputes its
+            // forwarded `since` (still pinned to `as_of` here by the live reader hold).
             let target = Antichain::from_elem(Timestamp::from(10_u64));
             registry.note_allow_compaction(id, 0, &target);
+            registry.note_standing_hold(id, 0, &target);
             oks_writer.set_logical_compaction(target.borrow());
             oks_writer.set_physical_compaction(target.borrow());
             tick(
@@ -2975,9 +2977,11 @@ mod interactive_import_tests {
                 (oks_arranged.trace, errs_arranged.trace)
             });
 
-            // The controller allows compaction well past `as_of` and the writer applies it.
+            // The controller allows compaction well past `as_of`, both runtimes apply it, and the
+            // writer applies it to the trace.
             let target = Antichain::from_elem(Timestamp::from(10_u64));
             registry.note_allow_compaction(id, 0, &target);
+            registry.note_standing_hold(id, 0, &target);
             oks_writer.set_logical_compaction(target.borrow());
             oks_writer.set_physical_compaction(target.borrow());
             tick(
@@ -3056,10 +3060,12 @@ mod interactive_import_tests {
                 });
 
             // The controller advances compaction well past `as_of`, with no reader hold registered
-            // yet. `note_allow_compaction` forwards it into the slot so the publisher advances the
-            // published `since` past `as_of` on the next tick.
+            // yet, and both runtimes apply it. The publisher then advances the published `since` past
+            // `as_of` on the next tick: no reader hold pins it, and the standing hold has moved with
+            // the writer floor.
             let target = Antichain::from_elem(Timestamp::from(10_u64));
             registry.note_allow_compaction(id, 0, &target);
+            registry.note_standing_hold(id, 0, &target);
             oks_writer.set_logical_compaction(target.borrow());
             oks_writer.set_physical_compaction(target.borrow());
             tick(
@@ -3080,6 +3086,90 @@ mod interactive_import_tests {
                     &Antichain::new(),
                 );
             });
+        });
+    }
+
+    /// The standing hold keeps `as_of` importable while the importing runtime is behind.
+    ///
+    /// This is [`import_asserts_since_at_most_as_of`] with one difference: the importing runtime has
+    /// not applied the controller's compaction. That is the state the two-runtime split makes
+    /// reachable, and it is not a protocol error. The controller can create a dataflow at `as_of`,
+    /// drop it (a cancelled peek releases its read hold), and allow compaction, all before the runtime
+    /// rendering that dataflow has applied the create. From the controller's side nothing is wrong.
+    /// The create is still queued, so no reader hold exists to pin the arrangement, and the writer
+    /// floor alone would let the publisher compact straight past the `as_of` the queued create is
+    /// about to read at.
+    ///
+    /// Asserting the import *succeeds* is the point. The sibling test asserts the panic that a genuine
+    /// protocol error produces, so between them a mechanism that pinned nothing, or one that pinned
+    /// everything, fails one of the two.
+    #[mz_ore::test]
+    fn standing_hold_pins_until_the_importing_runtime_applies() {
+        let id = GlobalId::User(1);
+        let rows = test_rows();
+        let as_of_time = Timestamp::from(1_u64);
+        let as_of = Antichain::from_elem(as_of_time);
+        let registry = ArrangementSharingRegistry::new();
+
+        timely::execute_directly(move |worker| {
+            let (mut oks_input, _errs_input, mut oks_writer) =
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    publish_index_with_writer(scope, &registry, id, rows.clone())
+                });
+
+            // The maintenance runtime applies `AllowCompaction(10)` in full: the writer floor moves and
+            // its own trace handle compacts. The interactive runtime has not applied the broadcast copy
+            // of that command, so its standing hold does not move.
+            let target = Antichain::from_elem(Timestamp::from(10_u64));
+            registry.note_allow_compaction(id, 0, &target);
+            oks_writer.set_logical_compaction(target.borrow());
+            oks_writer.set_physical_compaction(target.borrow());
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(5_u64),
+                Timestamp::from(6_u64),
+            );
+
+            // The queued create is now applied. It must import, and the rows it reads at `as_of` must
+            // be the ones a read at `as_of` should see rather than a coalesced history.
+            let (oks_trace, errs_trace) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (oks_arranged, errs_arranged, _slot) = import_shared_index(
+                    scope.clone(),
+                    &registry,
+                    id,
+                    "Index",
+                    &as_of,
+                    &Antichain::new(),
+                );
+                (oks_arranged.trace, errs_arranged.trace)
+            });
+
+            // Scoped: the probe registers a hold of its own at the current `since`, which would pin the
+            // arrangement at `as_of` and make the release assertion below pass for the wrong reason.
+            {
+                let (probe_oks, _probe_errs) = registry.handles(&id, 0).expect("still published");
+                assert!(
+                    probe_oks.snapshot_at(&as_of_time).is_some(),
+                    "the standing hold must keep `as_of` readable while the importing runtime is behind"
+                );
+            }
+
+            // Once that runtime applies the compaction, the bound lifts. The live import's own hold
+            // takes over from here, which is what the sibling hold tests cover.
+            registry.note_standing_hold(id, 0, &target);
+            drop((oks_trace, errs_trace));
+            tick(
+                worker,
+                &mut oks_input,
+                Timestamp::from(11_u64),
+                Timestamp::from(12_u64),
+            );
+            let (released_oks, _released_errs) = registry.handles(&id, 0).expect("still published");
+            assert!(
+                released_oks.snapshot_at(&as_of_time).is_none(),
+                "with the standing hold advanced and no reader left, the arrangement must compact"
+            );
         });
     }
 
@@ -3153,8 +3243,13 @@ mod interactive_import_tests {
         tick(worker, oks_input, at, next);
     }
 
-    /// Advances the controller's read frontier for `id` to `to`, as `handle_allow_compaction` does:
-    /// the local trace manager's handle and the published slot's writer floor together.
+    /// Advances the controller's read frontier for `id` to `to`, as `handle_allow_compaction` does on
+    /// both runtimes: the local trace manager's handle, the published slot's writer floor, and the
+    /// standing hold the importing runtime advances when it applies the same broadcast command.
+    ///
+    /// Moving only the writer floor is the state *between* the two runtimes applying it, where the
+    /// standing hold pins the arrangement and no reader hold is under test at all. See
+    /// [`standing_hold_pins_until_the_importing_runtime_applies`].
     fn allow_compaction(
         registry: &ArrangementSharingRegistry,
         id: GlobalId,
@@ -3162,6 +3257,7 @@ mod interactive_import_tests {
         to: &Antichain<Timestamp>,
     ) {
         registry.note_allow_compaction(id, 0, to);
+        registry.note_standing_hold(id, 0, to);
         base.oks_mut().set_logical_compaction(to.borrow());
         base.errs_mut().set_logical_compaction(to.borrow());
         base.oks_mut().set_physical_compaction(to.borrow());

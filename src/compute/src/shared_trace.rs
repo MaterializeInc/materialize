@@ -48,6 +48,11 @@
 //! `Published::acquire_command_hold` so the published `since` reflects it. Those two kinds meet
 //! into `since`; only the first is forwarded.
 //!
+//! A reader hold protects a dataflow that has been built. The *standing hold* protects one that has
+//! not: it tracks the compaction frontier the importing runtime has applied, and the publisher's
+//! logical target is bounded by it, so this arrangement compacts only as fast as the slowest
+//! runtime's command stream. See [`SharedTraceState::standing_hold`].
+//!
 //! The physical frontier is a separate question, and mixing it with the logical one is the mistake to
 //! avoid. Logical compaction decides which times stay *distinguishable*. Physical compaction decides
 //! which batches may *merge*, and so where a batch boundary still exists. A reader needs
@@ -166,6 +171,21 @@ struct SharedTraceState<Tr: TraceReader> {
     /// zero readers compaction follows the writer. `None` until the first `AllowCompaction` arrives,
     /// where the publisher falls back to its own current hold (the dataflow `as_of` at startup).
     writer_logical: Option<Antichain<Tr::Time>>,
+    /// The compaction frontier the runtime that may import this arrangement has applied, which the
+    /// publisher's logical target is bounded by.
+    ///
+    /// The two runtimes drain their command streams independently, so the owning runtime can apply a
+    /// compaction the importing one has not. An importing dataflow whose `CreateDataflow` is still
+    /// queued there would then be built against an arrangement already compacted past its `as_of`.
+    /// Bounding by this frontier is what forbids that: a shared arrangement compacts only as fast as
+    /// the slowest runtime's stream position. See
+    /// `doc/developer/design/20260720_two_runtime_compute/broadcast-compaction.md`.
+    ///
+    /// Joins, so it only ever rises, and it starts at the publisher's compaction frontier at adoption
+    /// (`crate::shared_trace::PublishArrangement::adopt`). That start is at or below the `as_of` of
+    /// every dataflow that may import the collection, because the controller does not offer an `as_of`
+    /// below a collection's own `since`.
+    standing_hold: Antichain<Tr::Time>,
     /// Importer queues, keyed by registration id. A handle may back several registrations, so this
     /// is keyed separately from any handle.
     queues: BTreeMap<usize, ImportQueue<Tr>>,
@@ -251,6 +271,7 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 physical_holds: BTreeMap::new(),
                 command_holds: BTreeMap::new(),
                 writer_logical: None,
+                standing_hold: Antichain::from_elem(batch_min::<Tr>()),
                 queues: BTreeMap::new(),
                 next_id: 0,
                 closed: false,
@@ -431,6 +452,26 @@ where
         if let Ok(mut state) = self.shared.state.lock() {
             state.writer_logical = Some(frontier.clone());
         }
+    }
+
+    /// Advances the standing hold to `frontier`, recording that the runtime which may import this
+    /// arrangement has applied the controller's compaction that far.
+    ///
+    /// Joins rather than assigning. The frontiers arrive in the order the importing runtime applies
+    /// them, so they only rise, and joining keeps a reordered or replayed command from lowering the
+    /// bound the publisher already forwarded (which its agent's own joining setter could not honour
+    /// anyway). See [`SharedTraceState::standing_hold`].
+    pub(crate) fn note_standing_hold(&self, frontier: &Antichain<Tr::Time>) {
+        if let Ok(mut state) = self.shared.state.lock() {
+            state.standing_hold = state.standing_hold.join(frontier);
+        }
+    }
+
+    /// The standing hold currently bounding this arrangement's logical compaction.
+    #[cfg(test)]
+    pub(crate) fn standing_hold(&self) -> Antichain<Tr::Time> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.standing_hold.clone()
     }
 }
 
@@ -851,6 +892,20 @@ where
         // refused against a `since` that no writer ever asked for.
         let initial_logical = agent.get_logical_compaction().to_owned();
 
+        // Seed the standing hold at the same floor. The importing runtime may not have applied any
+        // compaction for this collection yet, and until it has, this is the frontier the publisher may
+        // compact to: the controller offers no `as_of` below a collection's own `since`, so no importer
+        // can need a frontier below it. Without this seed a placeholder created before adoption would
+        // hold the bound at the minimum time and stop the arrangement compacting at all.
+        {
+            let mut state = placeholder
+                .shared
+                .state
+                .lock()
+                .expect("shared trace poisoned");
+            state.standing_hold = state.standing_hold.join(&initial_logical);
+        }
+
         let publisher = Publisher {
             shared: Arc::clone(&placeholder.shared),
         };
@@ -896,10 +951,11 @@ where
                 let mut chain = Vec::new();
                 agent.map_batches(|batch| chain.push(batch.clone()));
                 // Contract: publishing carries no independent compaction floor. In Materialize the
-                // controller drives `since` through the maintained trace's own handle. Only a live
-                // importer's registered hold may hold this shared view back, and it releases on drop.
-                // The publisher keeps a holding agent solely so importer holds have somewhere to
-                // forward to, so that hold must FOLLOW the writer rather than pin the trace.
+                // controller drives `since` through the maintained trace's own handle. What may hold
+                // this shared view back is a live importer's registered hold, which releases on drop,
+                // and the standing hold, which tracks the importing runtime's own stream position. The
+                // publisher keeps a holding agent solely so those holds have somewhere to forward to,
+                // so its hold must FOLLOW them rather than pin the trace on its own.
                 //
                 // The logical writer-driven floor is used only when no reader hold pins it: the
                 // controller's last `AllowCompaction` frontier, forwarded into this slot by
@@ -939,10 +995,17 @@ where
                         .writer_logical
                         .clone()
                         .unwrap_or_else(|| initial_logical.clone());
-                    let logical = SharedTraceState::<Tr>::compaction_target(
+                    let requested = SharedTraceState::<Tr>::compaction_target(
                         &state.logical_holds,
                         &writer_logical,
                     );
+                    // I1c: bound by the standing hold, so this arrangement compacts only as fast as
+                    // the slowest runtime's command stream. A reader's own registration is not enough
+                    // for that, because a dataflow whose create is still queued on the importing
+                    // runtime has no registration yet, and the writer-driven fallback would then let
+                    // the target follow the controller past its `as_of`.
+                    let logical =
+                        antichain_meet(&requested.borrow()[..], &state.standing_hold.borrow()[..]);
 
                     state.chain = chain;
                     // Publish the trace's real logical compaction after we forward `logical` below.
@@ -957,6 +1020,18 @@ where
                     let publisher_after = publisher_logical.join(&logical);
                     state.writer_since =
                         antichain_meet(&publisher_after.borrow()[..], &writer_logical.borrow()[..]);
+                    // I1c restated on the published frontier, which is what a reader gates on. It
+                    // follows from `logical` being bounded above by the standing hold and from the
+                    // hold only rising: every frontier this publisher has ever forwarded was at or
+                    // below the hold as it stood then, so their join is at or below it now. Asserted
+                    // rather than left implicit, because an edit that lets the target escape the bound
+                    // shows up here rather than as a reader admitted below what the trace holds.
+                    debug_assert!(
+                        timely::PartialOrder::less_equal(&state.writer_since, &state.standing_hold),
+                        "writer_since {:?} passed the standing hold {:?}",
+                        state.writer_since.elements(),
+                        state.standing_hold.elements(),
+                    );
                     // A command hold is a further agent on the same trace, one this publisher does
                     // not own and cannot forward to, so it enters `since` here rather than through
                     // the forward below. Leaving it out is what would make a command hold inert: the
@@ -1588,8 +1663,13 @@ mod tests {
             // the writer handle advances too so the underlying trace can physically compact. A fresh
             // tick reactivates the publisher so it recomputes its forwarded `since` from
             // `writer_logical` (there being no reader holds to meet against).
+            //
+            // The standing hold moves with it, as it does in production once the importing runtime
+            // applies the same broadcast command. Without it the target stays bounded at the adoption
+            // floor, which is what `standing_hold_holds_since_behind_the_writer` covers.
             let target = Antichain::from_elem(Timestamp::from(10_u64));
             published.note_writer_logical(&target);
+            published.note_standing_hold(&target);
             writer.set_logical_compaction(target.borrow());
             writer.set_physical_compaction(target.borrow());
             tick(
@@ -1609,6 +1689,101 @@ mod tests {
             assert!(
                 handle.snapshot_at(&Timestamp::from(10_u64)).is_some(),
                 "snapshot at the compaction frontier must succeed"
+            );
+        });
+    }
+
+    /// I1c: a compaction the importing runtime has not applied does not advance the published `since`.
+    ///
+    /// This is the invariant the two-runtime split loses without a standing hold. The controller's
+    /// `AllowCompaction` reaches both runtimes, but they drain independently, so the owning runtime can
+    /// realize a frontier the importing one has not. A dataflow whose `CreateDataflow` is still queued
+    /// there has registered no reader hold yet, so the publisher's writer-driven fallback would happily
+    /// follow the controller past that dataflow's `as_of` and it would render against compacted data.
+    ///
+    /// The third phase is what keeps the bound from being a permanent pin: with no standing hold noted
+    /// at all, compaction still reaches the frontier the arrangement was adopted at.
+    #[mz_ore::test]
+    fn standing_hold_holds_since_behind_the_writer() {
+        timely::execute_directly(move |worker| {
+            let (mut writer, published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+                let mut arranged = collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("standing-hold oks");
+                let writer = arranged.trace.clone();
+                // Adopt at 3, standing in for a dataflow whose `as_of` is 3: the publisher captures
+                // that as the floor it may compact to before any command has been applied anywhere.
+                // Set on the arrangement's own agent, not on a temporary clone, whose `Drop` would
+                // give the hold straight back before `adopt` clones from it.
+                let at_three = Antichain::from_elem(Timestamp::from(3_u64));
+                arranged.trace.set_logical_compaction(at_three.borrow());
+                let published = adopt_fresh(&arranged);
+                (writer, published, input)
+            });
+
+            for t in 0..5 {
+                tick(
+                    worker,
+                    &mut input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+            }
+            assert_eq!(
+                published.standing_hold(),
+                Antichain::from_elem(Timestamp::from(3_u64)),
+                "adoption seeds the standing hold at the publisher's own compaction frontier"
+            );
+
+            // The maintenance runtime applies `AllowCompaction(10)` and its trace really does compact:
+            // both the writer handle and the publisher's writer-driven floor move to 10. The importing
+            // runtime has not applied it, so its standing hold stays at 3.
+            let target = Antichain::from_elem(Timestamp::from(10_u64));
+            published.note_writer_logical(&target);
+            writer.set_logical_compaction(target.borrow());
+            writer.set_physical_compaction(target.borrow());
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(10_u64),
+                Timestamp::from(11_u64),
+            );
+
+            // A read at 5 is still admitted, and is still accurate: the trace's real compaction is the
+            // meet over its agents, and the publisher's own agent is still held at 3.
+            assert!(
+                published
+                    .handle()
+                    .snapshot_at(&Timestamp::from(5_u64))
+                    .is_some(),
+                "the published since advanced past the importing runtime's applied frontier"
+            );
+
+            // Once that runtime applies the same command, the bound lifts and the arrangement compacts.
+            published.note_standing_hold(&target);
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(11_u64),
+                Timestamp::from(12_u64),
+            );
+            assert!(
+                published
+                    .handle()
+                    .snapshot_at(&Timestamp::from(5_u64))
+                    .is_none(),
+                "the standing hold advanced but the arrangement did not compact"
+            );
+            assert!(
+                published
+                    .handle()
+                    .snapshot_at(&Timestamp::from(10_u64))
+                    .is_some(),
+                "compaction overshot the frontier both runtimes have applied"
             );
         });
     }
@@ -1675,10 +1850,11 @@ mod tests {
             );
             drop(hold);
 
-            // The controller allows compaction to 10 and the writer applies it, so the publisher
+            // The controller allows compaction to 10 and both runtimes apply it, so the publisher
             // forwards a `since` of 10 on its next activation.
             let target = Antichain::from_elem(Timestamp::from(10_u64));
             published.note_writer_logical(&target);
+            published.note_standing_hold(&target);
             writer.set_logical_compaction(target.borrow());
             writer.set_physical_compaction(target.borrow());
             tick(

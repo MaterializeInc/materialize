@@ -1,7 +1,8 @@
 # Broadcast compaction
 
-Status: design. Supersedes the mechanism in [read-holds.md](read-holds.md), whose
-invariant (I1) and gap analysis still stand and are not restated here.
+Status: steps 1 to 3 implemented, the acquisition layer not yet deleted. Supersedes the
+mechanism in [read-holds.md](read-holds.md), whose invariant (I1) and gap analysis still
+stand and are not restated here.
 
 ## The conclusion that motivates this
 
@@ -128,11 +129,42 @@ cheap to check once holder identity is out of the model.
 
 1. **Assert I1c first.** Add the standing hold and the broadcast, and a test that a
    compaction the rendering runtime has not applied does not advance the published
-   `since`. The deletions below are then verified rather than hoped.
+   `since`. The deletions below are then verified rather than hoped. **Done.**
 2. Broadcast `AllowCompaction` in the multiplexer, and accept it for non-hosted
-   collections in the rendering runtime.
+   collections in the rendering runtime. **Done.**
 3. Install and downgrade the standing hold, and bound the publisher's forward by it.
+   **Done.**
 4. Delete the acquisition layer in one commit, keeping its findings in
    `read-holds.md` as rejected alternatives.
 5. Remodel `protocol-holds` around stream positions, and drop the mechanisms that no
    longer exist in the code once nothing references them.
+
+## As implemented
+
+The standing hold is one frontier per publication point (`SharedTraceState::standing_hold`),
+joined so it only rises, and the publisher's logical target is met against it. The published
+`since` is then bounded by it without further work, because `writer_since` is derived from the
+publisher's own agent hold and that hold is the join of targets it has already forwarded. A
+`debug_assert` in the publisher states that, so an edit that lets the target escape the bound
+fails there rather than admitting a reader below what the trace holds.
+
+Two things were not obvious from the design.
+
+**The hold must be seeded at the adoption floor, not at the minimum time.** An arrangement whose
+importing runtime has not yet applied any compaction for it would otherwise be pinned at the
+minimum time for as long as that lasts, which for a collection the controller never compacts again
+is forever. The publisher's own compaction frontier at adoption is the right seed: the controller
+does not offer an `as_of` below a collection's `since`, so no importer can need a frontier below
+it. That also makes the no-broadcast-yet behaviour identical to what the writer-driven fallback
+did before.
+
+**The rendering runtime tells its own publications apart by transience, not by whether it hosts
+the collection.** It holds empty local copies of the maintenance runtime's introspection indexes,
+so "do I have a collection for this id" answers yes for ids whose *publication* is the peer's. A
+non-transient id there is the peer's, a transient one is its own. It must also not apply the
+broadcast frontier as the writer-driven floor, which is the peer's to drive, and it must not run
+`drop_collection` for a broadcast drop, which would remove the peer's slot from the registry.
+
+Its own transient publications keep their adoption floor as their standing hold, since nothing
+notes one for them. They are single-`as_of` dataflows with a bounded `until`, so there is no
+history for that to retain.

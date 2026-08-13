@@ -314,6 +314,34 @@ impl ArrangementSharingRegistry {
         }
     }
 
+    /// Advances the standing hold on `id`'s published slot on `worker_index`, if one exists.
+    ///
+    /// Called from `handle_allow_compaction` on the runtime that may import `id` but does not host it,
+    /// which reaches it because the multiplexer broadcasts `AllowCompaction`. The publisher bounds its
+    /// logical compaction by this, so a frontier the importing runtime has not applied does not
+    /// compact the arrangement.
+    ///
+    /// A no-op for ids with no slot on this worker. Nothing has been published there, so no import can
+    /// have been built over it, and the frontier a later publisher seeds the hold with (its own
+    /// compaction frontier at adoption) is at or below every `as_of` the controller may offer for it.
+    /// Does not `notify`: compaction bookkeeping gives a waiting reader nothing new to serve.
+    pub fn note_standing_hold(
+        &self,
+        id: GlobalId,
+        worker_index: usize,
+        frontier: &Antichain<Timestamp>,
+    ) {
+        let map = self.inner.map.lock().expect("registry poisoned");
+        if let Some(arr) = map
+            .get(&id)
+            .and_then(|slots| slots.get(worker_index))
+            .and_then(|slot| slot.as_ref())
+        {
+            arr.oks.note_standing_hold(frontier);
+            arr.errs.note_standing_hold(frontier);
+        }
+    }
+
     /// Records that `holder`'s command-acquired read holds on worker `worker_index` may be
     /// reclaimed.
     ///

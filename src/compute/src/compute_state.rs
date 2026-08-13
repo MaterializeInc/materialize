@@ -905,6 +905,37 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
+        let worker_index = self.timely_worker.index();
+
+        // The multiplexer broadcasts compaction, so this runtime also sees the frontiers of
+        // collections its peer hosts. On the interactive runtime a non-transient id is exactly one of
+        // those: the maintenance runtime renders and publishes it, and this runtime keeps at most an
+        // empty local copy (the introspection indexes). Its own publications are the transient query
+        // outputs.
+        let shared_by_peer =
+            self.compute_state.role == ComputeRuntimeRole::Interactive && !id.is_transient();
+
+        if shared_by_peer {
+            // The standing hold: this runtime's own position in the command stream, which the peer's
+            // publisher bounds its compaction by. An importing dataflow of ours whose `CreateDataflow`
+            // is still queued here has registered no reader hold yet, so nothing else keeps the
+            // arrangement at or below the `as_of` it is about to read at.
+            self.compute_state
+                .sharing_registry
+                .note_standing_hold(id, worker_index, &frontier);
+            if !frontier.is_empty() {
+                // Keeps an empty local copy of an introspection index in step. A no-op for every
+                // other broadcast id, which has no trace here.
+                self.compute_state
+                    .traces
+                    .allow_compaction(id, frontier.borrow());
+            }
+            // Never `drop_collection` from here. It would also `sharing_registry.remove(&id)` and so
+            // unpublish an arrangement this runtime does not own. The empty local copies live for the
+            // process lifetime.
+            return;
+        }
+
         if frontier.is_empty() {
             // Indicates that we may drop `id`, as there are no more valid times to read.
             self.drop_collection(id);
@@ -914,7 +945,6 @@ impl<'a> ActiveComputeState<'a> {
                 .allow_compaction(id, frontier.borrow());
             // Forward the same frontier to the sharing registry so a cross-runtime publisher of this
             // index follows the controller's logical compaction. A no-op unless `id` is published.
-            let worker_index = self.timely_worker.index();
             self.compute_state
                 .sharing_registry
                 .note_allow_compaction(id, worker_index, &frontier);

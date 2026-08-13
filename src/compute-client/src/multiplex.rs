@@ -18,14 +18,21 @@
 //! Routing is derived entirely from command contents (see [`Multiplexer::send`]).
 //!
 //! The split would otherwise lose one invariant: an index's `since` must not pass the `as_of` of a
-//! dataflow importing it. `CreateDataflow` goes only to interactive while `AllowCompaction` goes to
-//! maintenance, and the two runtimes drain independently, so the ordering a single stream used to
-//! provide is gone. The multiplexer restores it by synthesizing `AcquireHolds` onto maintenance's
-//! stream when it routes an importing create to interactive. It does not modify compaction
-//! frontiers, and the guarantee is entirely within maintenance's own stream: this is the only point
-//! that observes both, and it is sequential, so the acquisition precedes every compaction that
-//! follows the create. Nothing about interactive's stream enters the argument, which is what makes it
-//! hold when interactive is arbitrarily behind or never processes the create at all.
+//! dataflow importing it. A single command stream ordered the create against every later compaction.
+//! Routing the two commands to different runtimes loses that, so `AllowCompaction` for a
+//! maintenance-owned collection is *broadcast*: interactive sees it too, applies it as a standing hold
+//! on the shared arrangement, and the publisher compacts only as far as the slower of the two runtimes
+//! has applied. Interactive therefore has the create and the compactions that follow it back on one
+//! ordered stream. See `doc/developer/design/20260720_two_runtime_compute/broadcast-compaction.md`.
+//!
+//! A second, older mechanism guards the same invariant from the other side: the multiplexer
+//! synthesizes `AcquireHolds` onto maintenance's stream when it routes an importing create to
+//! interactive. It does not modify compaction frontiers, and the guarantee is entirely within
+//! maintenance's own stream: this is the only point that observes both, and it is sequential, so the
+//! acquisition precedes every compaction that follows the create. Nothing about interactive's stream
+//! enters the argument, which is what makes it hold when interactive is arbitrarily behind or never
+//! processes the create at all. The two are independent, and holding both is only redundant, since the
+//! trace's `since` is the meet of every hold on it.
 //!
 //! `ReleaseHolds` goes to interactive instead, so it is ordered against the holder's own lifecycle
 //! there. That asymmetry is load-bearing and was forced by the TLA+ model under
@@ -264,8 +271,24 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                 // also what removes the regression hazard a cap carries, since the command history
                 // derives a dataflow's effective `as_of` from the last frontier seen per export.
                 self.client_mut(runtime)
-                    .send(AllowCompaction { id, frontier })
+                    .send(AllowCompaction {
+                        id,
+                        frontier: frontier.clone(),
+                    })
                     .await?;
+
+                // Broadcast a maintenance-owned compaction to interactive as well, where it advances
+                // the standing hold on the shared arrangement rather than compacting a local trace.
+                // This is what puts the create and the compactions that follow it on one ordered
+                // stream for the runtime that renders the importing dataflow, so a compaction
+                // interactive has not applied cannot advance the arrangement's `since` past the `as_of`
+                // of a create still queued there. Interactive-owned collections are not published to
+                // maintenance and it hosts nothing for them, so those stay routed.
+                if runtime == Runtime::Maintenance {
+                    self.interactive
+                        .send(AllowCompaction { id, frontier })
+                        .await?;
+                }
 
                 if release {
                     // After the drop, and on interactive's stream, so it is ordered behind both the
@@ -430,8 +453,12 @@ mod tests {
 
     /// The compaction frontiers maintenance was told for `id`, in order.
     fn compactions_for(h: &Harness, id: GlobalId) -> Vec<Antichain<Timestamp>> {
-        maint_commands(h)
-            .into_iter()
+        compactions_in(maint_commands(h), id)
+    }
+
+    /// The compaction frontiers `cmds` carries for `id`, in order.
+    fn compactions_in(cmds: Vec<ComputeCommand>, id: GlobalId) -> Vec<Antichain<Timestamp>> {
+        cmds.into_iter()
             .filter_map(|cmd| match cmd {
                 ComputeCommand::AllowCompaction { id: seen, frontier } if seen == id => {
                     Some(frontier)
@@ -1017,6 +1044,49 @@ mod tests {
             maint_commands(&h).len(),
             1,
             "evicted id defaults to maintenance"
+        );
+    }
+
+    /// A compaction for a collection maintenance hosts reaches interactive too, verbatim.
+    ///
+    /// This is the routing half of I1c. Interactive applies it as a standing hold on the shared
+    /// arrangement, which is what puts an importing create and the compactions that follow it back on
+    /// one ordered stream there. Withholding it would leave the arrangement compacting at the
+    /// controller's pace regardless of what interactive has applied.
+    #[mz_ore::test(tokio::test)]
+    async fn maintained_compaction_is_broadcast_to_both() {
+        let mut h = harness();
+        let id = GlobalId::User(7);
+        let ten = Antichain::from_elem(Timestamp::from(10u64));
+
+        h.mux
+            .send(ComputeCommand::AllowCompaction {
+                id,
+                frontier: ten.clone(),
+            })
+            .await
+            .expect("send");
+        assert_eq!(compactions_for(&h, id), vec![ten.clone()]);
+        assert_eq!(
+            compactions_in(inter_commands(&h), id),
+            vec![ten],
+            "interactive must see a maintenance-owned compaction"
+        );
+
+        // The drop travels the same way. Interactive releasing its standing hold matters least of all
+        // (the arrangement is going away), but the id must not be left with a hold pinning a slot a
+        // later collection could reuse.
+        h.mux
+            .send(ComputeCommand::AllowCompaction {
+                id,
+                frontier: Antichain::new(),
+            })
+            .await
+            .expect("send");
+        assert_eq!(
+            compactions_in(inter_commands(&h), id).len(),
+            2,
+            "the drop is broadcast as well"
         );
     }
 
