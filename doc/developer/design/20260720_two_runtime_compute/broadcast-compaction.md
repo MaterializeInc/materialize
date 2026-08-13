@@ -1,8 +1,8 @@
 # Broadcast compaction
 
-Status: steps 1 to 3 implemented, the acquisition layer not yet deleted. Supersedes the
-mechanism in [read-holds.md](read-holds.md), whose invariant (I1) and gap analysis still
-stand and are not restated here.
+Status: implemented, steps 1 to 4. Only the remodelling of `protocol-holds` (step 5) is
+left. Supersedes the mechanism in [read-holds.md](read-holds.md), whose invariant (I1) and
+gap analysis still stand and are not restated here.
 
 ## The conclusion that motivates this
 
@@ -78,7 +78,7 @@ removes is the publisher's freedom to run ahead of the rendering runtime.
 * A collection's standing hold is installed when the collection first appears and removed
   when its compaction reaches the empty frontier, so it needs no per-dataflow identity.
 
-## What this deletes
+## What this deleted
 
 Steps 0 through 4 of the sequence in `read-holds.md`:
 
@@ -135,7 +135,7 @@ cheap to check once holder identity is out of the model.
 3. Install and downgrade the standing hold, and bound the publisher's forward by it.
    **Done.**
 4. Delete the acquisition layer in one commit, keeping its findings in
-   `read-holds.md` as rejected alternatives.
+   `read-holds.md` as rejected alternatives. **Done.**
 5. Remodel `protocol-holds` around stream positions, and drop the mechanisms that no
    longer exist in the code once nothing references them.
 
@@ -143,7 +143,7 @@ cheap to check once holder identity is out of the model.
 
 The standing hold is one frontier per publication point (`SharedTraceState::standing_hold`),
 joined so it only rises, and the publisher's logical target is met against it. The published
-`since` is then bounded by it without further work, because `writer_since` is derived from the
+`since` is then bounded by it without further work, because `since` is derived from the
 publisher's own agent hold and that hold is the join of targets it has already forwarded. A
 `debug_assert` in the publisher states that, so an edit that lets the target escape the bound
 fails there rather than admitting a reader below what the trace holds.
@@ -168,3 +168,24 @@ broadcast frontier as the writer-driven floor, which is the peer's to drive, and
 Its own transient publications keep their adoption floor as their standing hold, since nothing
 notes one for them. They are single-`as_of` dataflows with a bounded `until`, so there is no
 history for that to retain.
+
+## What the deletion also removed
+
+Two things fell out that the list above does not name, both of which existed only because a
+command hold was a second writer of the published `since`.
+
+`SharedTraceState::writer_since` and `refresh_since`. A command hold moved from the
+publisher's own thread but outside its dataflow, so `since` had to be recomputable without
+the publisher's inputs, which is why it was split in two and derived. With one writer left,
+the publisher assigns `since` directly.
+
+The four `Published` methods that recorded a hold the point did not own
+(`acquire_command_hold`, `downgrade_command_hold`, `release_command_hold`,
+`reader_hold_meet`). The distinction between a hold that is a *request* forwarded through the
+publisher's agent and a hold that is a *grant* backed by someone else's handle goes with
+them. Every hold is a request again.
+
+The replica no longer clears anything at a reconnection. A standing hold is per collection,
+carries no dataflow identity, and only rises, so clearing it would only drop the bound to the
+minimum time until the replayed compactions raised it again. That is G2 being vacuous rather
+than handled.

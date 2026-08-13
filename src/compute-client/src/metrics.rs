@@ -504,10 +504,6 @@ pub struct CommandMetrics<M> {
     pub update_configuration: M,
     /// Metrics for `AllowWrites`.
     pub allow_writes: M,
-    /// Multiplexer-synthesized, so nonzero only on a two-runtime replica.
-    pub acquire_holds: M,
-    /// Multiplexer-synthesized, so nonzero only on a two-runtime replica.
-    pub release_holds: M,
 }
 
 impl<M> CommandMetrics<M> {
@@ -527,8 +523,6 @@ impl<M> CommandMetrics<M> {
             initialization_complete: build_metric("initialization_complete"),
             update_configuration: build_metric("update_configuration"),
             allow_writes: build_metric("allow_writes"),
-            acquire_holds: build_metric("acquire_holds"),
-            release_holds: build_metric("release_holds"),
         }
     }
 
@@ -546,8 +540,6 @@ impl<M> CommandMetrics<M> {
         f(&self.peek);
         f(&self.cancel_peek);
         f(&self.allow_writes);
-        f(&self.acquire_holds);
-        f(&self.release_holds);
     }
 
     /// TODO(database-issues#7533): Add documentation.
@@ -565,8 +557,6 @@ impl<M> CommandMetrics<M> {
             Peek(_) => &self.peek,
             CancelPeek { .. } => &self.cancel_peek,
             AllowWrites { .. } => &self.allow_writes,
-            AcquireHolds(_) => &self.acquire_holds,
-            ReleaseHolds { .. } => &self.release_holds,
         }
     }
 }

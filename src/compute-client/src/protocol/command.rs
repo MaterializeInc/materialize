@@ -9,7 +9,6 @@
 
 //! Compute protocol commands.
 
-use std::collections::BTreeSet;
 use std::time::Duration;
 
 use mz_cluster_client::client::TryIntoProtocolNonce;
@@ -263,51 +262,6 @@ pub enum ComputeCommand {
         /// This Value must match a [`Peek::uuid`] value transmitted in a previous `Peek` command.
         uuid: Uuid,
     },
-    /// Hold `ids` at `as_of` on behalf of a dataflow rendered by another compute runtime in this
-    /// process.
-    ///
-    /// Synthesized by `mz_compute_client::multiplex::Multiplexer`, never issued by the controller,
-    /// so it does not appear in a `ComputeCommandHistory`. The multiplexer derives it from the
-    /// `CreateDataflow` it routes to the interactive runtime and emits it to the *maintenance*
-    /// runtime, which is the runtime that owns `ids` and applies their `AllowCompaction`s.
-    ///
-    /// The point is ordering, and only within maintenance's own stream: the multiplexer sees the
-    /// create before any later `AllowCompaction`, so this precedes that compaction in the queue,
-    /// and every process therefore installs the hold before it compacts. Nothing here assumes an
-    /// ordering between the two runtimes' streams, and none exists. A backlogged maintenance
-    /// runtime is not an exposure either, since a backlog delays this command and the compaction it
-    /// guards equally.
-    ///
-    /// Released by [`ComputeCommand::ReleaseHolds`], which travels on the *interactive* runtime's
-    /// stream instead. That asymmetry is deliberate and was forced by the TLA+ model under
-    /// `doc/developer/design/20260720_two_runtime_compute/protocol-holds`: a release on
-    /// maintenance's stream can overtake a create the interactive runtime has not processed yet, so
-    /// maintenance would apply acquire, release and compaction while the dataflow was still queued,
-    /// and the dataflow would then render against compacted data.
-    /// Boxed to keep `ComputeCommand` small, as `CreateDataflow` and `Peek` are: every command is
-    /// cloned into the controller's history.
-    AcquireHolds(Box<HoldRequest>),
-    /// Release the holds acquired for `holder`.
-    ///
-    /// Emitted to the runtime that renders `holder`, so that it is ordered against that dataflow's
-    /// `CreateDataflow`. See [`ComputeCommand::AcquireHolds`] for why it cannot go to the runtime
-    /// that owns the held collections.
-    ReleaseHolds {
-        /// The dataflow whose holds are released.
-        holder: GlobalId,
-    },
-}
-
-/// The holds one interactive dataflow needs on the collections it imports.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct HoldRequest {
-    /// The dataflow the holds are for. Not a collection the receiving runtime hosts.
-    pub holder: GlobalId,
-    /// The collections to hold. Must be the alias closure of the dataflow's imports, since one
-    /// publication point can answer to more than one id.
-    pub ids: BTreeSet<GlobalId>,
-    /// The frontier to hold them at, which is the importing dataflow's `as_of`.
-    pub as_of: Antichain<Timestamp>,
 }
 
 /// Configuration for a replica, passed with the `CreateInstance`. Replicas should halt

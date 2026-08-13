@@ -131,16 +131,6 @@ where
                 ComputeCommand::Peek(peek) => {
                     live_peeks.insert(peek.uuid, peek);
                 }
-                // Dropped from the reduced history rather than retained.
-                //
-                // These are synthesized by the process-local multiplexer, so a controller-side
-                // history never holds one, but a replica pushes every command it receives into its
-                // own history and reduces that at reconnection. Retaining one there would replay it
-                // against a fresh epoch's holds and double-acquire. Dropping is right because the
-                // hold carries no state that has to survive the reconnection: the controller replays
-                // the `CreateDataflow` and the multiplexer re-derives the hold, which puts it back
-                // ahead of the replayed compactions.
-                ComputeCommand::AcquireHolds(_) | ComputeCommand::ReleaseHolds { .. } => (),
                 ComputeCommand::CancelPeek { uuid } => {
                     live_peeks.remove(&uuid);
                 }

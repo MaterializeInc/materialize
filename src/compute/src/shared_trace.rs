@@ -42,16 +42,14 @@
 //! forwards the empty frontier, which would irreversibly release the trace.
 //!
 //! Forwarding through one agent bounds how low a reader hold can reach, because the agent's setter
-//! joins and so only ever advances. A reader that must be admitted below where the agent already
-//! sits is served by a *command hold* instead: its holder pins the trace with a handle of its own,
-//! cloned from a base low enough to represent the frontier, and records the pinned frontier through
-//! `Published::acquire_command_hold` so the published `since` reflects it. Those two kinds meet
-//! into `since`; only the first is forwarded.
+//! joins and so only ever advances. That ratchet is why a reader hold alone is not enough: a reader
+//! registers only once its dataflow is built, and the agent may already sit above the `as_of` that
+//! dataflow was created at.
 //!
-//! A reader hold protects a dataflow that has been built. The *standing hold* protects one that has
-//! not: it tracks the compaction frontier the importing runtime has applied, and the publisher's
-//! logical target is bounded by it, so this arrangement compacts only as fast as the slowest
-//! runtime's command stream. See [`SharedTraceState::standing_hold`].
+//! So a reader hold protects a dataflow that has been built, and the *standing hold* protects one
+//! that has not. It tracks the compaction frontier the importing runtime has applied, and the
+//! publisher's logical target is bounded by it, which keeps the agent at or below every `as_of` that
+//! runtime can still present. See [`SharedTraceState::standing_hold`].
 //!
 //! The physical frontier is a separate question, and mixing it with the logical one is the mistake to
 //! avoid. Logical compaction decides which times stay *distinguishable*. Physical compaction decides
@@ -110,20 +108,10 @@ struct SharedTraceState<Tr: TraceReader> {
     /// Logical compaction frontier of the published view. Reads at times not beyond `since` are not
     /// accurate. A snapshot must pick a time at or beyond it.
     ///
-    /// Derived, never assigned directly: it is the meet of [`Self::writer_since`] and the command
-    /// holds. Both of its inputs have their own writer, on different threads, so
-    /// [`SharedTraceState::refresh_since`] recomputes it from both under the lock whenever either
-    /// moves.
+    /// Written only by the publisher, as the meet of its agent's post-forward hold and the
+    /// writer-driven frontier. That is the trace's real logical compaction, since those are the only
+    /// agents on it.
     since: Antichain<Tr::Time>,
-    /// The part of `since` this publication point's own publisher drives: the meet of its agent's
-    /// post-forward hold and the writer-driven frontier.
-    ///
-    /// Kept apart from `since` so that a command hold moving can recompute `since` without needing
-    /// the publisher's inputs. Recomputing has to be possible off the publisher's activation,
-    /// because the holder advances its backing handle from the same thread as the publisher but
-    /// outside its dataflow, and a `since` left stale across that advance would under-report the
-    /// trace's compaction and admit a reader below it.
-    writer_since: Antichain<Tr::Time>,
     /// Seal frontier: the join of the chain's batch uppers. Batches strictly below `upper` are
     /// complete and readable.
     upper: Antichain<Tr::Time>,
@@ -150,21 +138,6 @@ struct SharedTraceState<Tr: TraceReader> {
     /// coverage at or above every earlier one, so no arriving reader needs a boundary below a
     /// frontier already forwarded.
     physical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
-    /// Logical holds that are backed by a trace handle the publication point does not own, recorded
-    /// here so the published `since` reflects them.
-    ///
-    /// A [`Self::logical_holds`] entry is a *request*: the publisher forwards the meet of those
-    /// requests into its own agent, and that agent's setter joins, so a request below where the agent
-    /// already sits cannot be honoured. A command hold is a *grant*: whoever recorded it pinned the
-    /// trace with a handle of its own, taken from a base low enough to represent the frontier, so the
-    /// trace really is held there whatever the publisher's agent says. The publisher must therefore
-    /// not forward these, only publish them, and the meet over both kinds is what the trace
-    /// guarantees.
-    ///
-    /// The recorded frontier and the backing handle's must be kept in step. A recorded frontier below
-    /// the handle's would publish a `since` the trace does not honour, and a reader admitted there
-    /// would read coalesced times.
-    command_holds: BTreeMap<usize, Antichain<Tr::Time>>,
     /// The controller's last logical compaction frontier for this arrangement, forwarded from
     /// `handle_allow_compaction` via `crate::sharing::ArrangementSharingRegistry::note_allow_compaction`.
     /// The publisher uses it as the logical floor when no reader hold pins the arrangement, so with
@@ -224,18 +197,6 @@ where
     ) -> Antichain<Tr::Time> {
         Self::meet_of(holds).unwrap_or_else(|| fallback.clone())
     }
-
-    /// Recomputes `since` from `writer_since` and the command holds.
-    ///
-    /// Every write to either input must call this, or the published `since` disagrees with what the
-    /// trace holds. Disagreeing upward refuses reads the trace could serve; disagreeing downward
-    /// admits reads it cannot.
-    fn refresh_since(&mut self) {
-        self.since = match Self::meet_of(&self.command_holds) {
-            None => self.writer_since.clone(),
-            Some(command) => antichain_meet(&self.writer_since.borrow()[..], &command.borrow()[..]),
-        };
-    }
 }
 
 /// A publication point: the shared state every reader of one published arrangement sees.
@@ -265,11 +226,9 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 // frontier reads as "complete through the end of time", making every snapshot wait
                 // vacuously true and returning empty results instead of blocking.
                 since: Antichain::from_elem(batch_min::<Tr>()),
-                writer_since: Antichain::from_elem(batch_min::<Tr>()),
                 upper: Antichain::from_elem(batch_min::<Tr>()),
                 logical_holds: BTreeMap::new(),
                 physical_holds: BTreeMap::new(),
-                command_holds: BTreeMap::new(),
                 writer_logical: None,
                 standing_hold: Antichain::from_elem(batch_min::<Tr>()),
                 queues: BTreeMap::new(),
@@ -378,68 +337,6 @@ where
             state.since.clone(),
             state.upper.clone(),
         )
-    }
-
-    /// Records a hold at `at` that the caller has already pinned the trace with, and returns its id.
-    ///
-    /// The caller owns the pin: a trace handle cloned from a base low enough to sit at `at`, kept
-    /// alive for as long as the hold. This only makes that pin visible in the published `since`, so a
-    /// reader gating on `since` is admitted at `at`. Recording without pinning publishes a `since` the
-    /// trace does not honour. See [`SharedTraceState::command_holds`].
-    ///
-    /// Not gated on the published `since`, unlike [`Self::handle_at`]: the caller pins from the
-    /// trace's own frontier, which is what admits `at`, and the published `since` is a value this
-    /// call is about to lower.
-    pub(crate) fn acquire_command_hold(&self, at: &Antichain<Tr::Time>) -> usize {
-        let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        let id = state.next_id;
-        state.next_id += 1;
-        state.command_holds.insert(id, at.clone());
-        state.refresh_since();
-        id
-    }
-
-    /// Moves the command hold `id` to `to`.
-    ///
-    /// The caller must have advanced the backing handle to `to` first. Advancing the record ahead of
-    /// the handle only publishes a `since` that lags the trace, which refuses reads the trace could
-    /// still serve. Advancing the handle ahead of the record is the unsound order.
-    pub(crate) fn downgrade_command_hold(&self, id: usize, to: &Antichain<Tr::Time>) {
-        let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        if let Some(hold) = state.command_holds.get_mut(&id) {
-            *hold = to.clone();
-            state.refresh_since();
-        }
-    }
-
-    /// Drops the command hold `id`, whether or not it is still recorded.
-    ///
-    /// Must run before the backing handle is dropped, so the published `since` gives up the frontier
-    /// before the trace does.
-    pub(crate) fn release_command_hold(&self, id: usize) {
-        let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        if state.command_holds.remove(&id).is_some() {
-            state.refresh_since();
-        }
-    }
-
-    /// The meet of the reader registrations, or `None` when there are none.
-    ///
-    /// The frontier a command hold may downgrade to, once floored at its own acquisition frontier.
-    /// `None` distinguishes "every reader has advanced past this" from "no reader has registered
-    /// yet", and only the first permits a downgrade: an importing dataflow the other runtime has not
-    /// built yet has no registration, and a command hold that downgraded on that basis would compact
-    /// past the `as_of` that dataflow is about to read at.
-    pub(crate) fn reader_hold_meet(&self) -> Option<Antichain<Tr::Time>> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        SharedTraceState::<Tr>::meet_of(&state.logical_holds)
-    }
-
-    /// The command holds currently recorded against this publication point.
-    #[cfg(test)]
-    pub(crate) fn command_holds(&self) -> Vec<Antichain<Tr::Time>> {
-        let state = self.shared.state.lock().expect("shared trace poisoned");
-        state.command_holds.values().cloned().collect()
     }
 
     /// Records the controller's logical compaction frontier for this arrangement.
@@ -1018,7 +915,7 @@ where
                     // equals it), so a handle registering in this window cannot latch an
                     // anti-conservative `since` that claims accuracy at already-merged times.
                     let publisher_after = publisher_logical.join(&logical);
-                    state.writer_since =
+                    state.since =
                         antichain_meet(&publisher_after.borrow()[..], &writer_logical.borrow()[..]);
                     // I1c restated on the published frontier, which is what a reader gates on. It
                     // follows from `logical` being bounded above by the standing hold and from the
@@ -1027,17 +924,11 @@ where
                     // rather than left implicit, because an edit that lets the target escape the bound
                     // shows up here rather than as a reader admitted below what the trace holds.
                     debug_assert!(
-                        timely::PartialOrder::less_equal(&state.writer_since, &state.standing_hold),
-                        "writer_since {:?} passed the standing hold {:?}",
-                        state.writer_since.elements(),
+                        timely::PartialOrder::less_equal(&state.since, &state.standing_hold),
+                        "the published since {:?} passed the standing hold {:?}",
+                        state.since.elements(),
                         state.standing_hold.elements(),
                     );
-                    // A command hold is a further agent on the same trace, one this publisher does
-                    // not own and cannot forward to, so it enters `since` here rather than through
-                    // the forward below. Leaving it out is what would make a command hold inert: the
-                    // trace would be held at the hold's frontier while `since` claimed the writer's,
-                    // and `handle_at` would refuse the very reader the hold was acquired for.
-                    state.refresh_since();
                     state.upper = upper;
                     // The physical target is the meet of the readers' own cut floors, and `upper`
                     // when there are none. `set_physical_compaction(F)` is about batch boundaries,

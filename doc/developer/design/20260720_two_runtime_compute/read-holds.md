@@ -13,8 +13,9 @@ rather than solving it.
 
 Read the rest of this document for why a retroactive per-dataflow hold was tried and what
 each attempt cost, which is what makes the simpler mechanism defensible rather than
-merely simpler. Steps 0 through 4 of the sequence at the end are implemented and will be
-deleted.
+merely simpler. Steps 0 through 4 of the sequence at the end were implemented and have
+been deleted, so the code they describe no longer exists. Every hold command, module and
+registry method named below is gone.
 
 ## The invariant
 

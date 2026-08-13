@@ -560,7 +560,6 @@ impl<'w> Worker<'w> {
                 // Report frontier information back the coordinator.
                 if let Some(mut compute_state) = self.activate_compute() {
                     compute_state.compute_state.traces.maintenance();
-                    compute_state.maintain_command_holds();
                     compute_state.report_frontiers();
                     compute_state.report_metrics();
                     compute_state.check_expiration();
@@ -721,27 +720,11 @@ impl<'w> Worker<'w> {
             compute_state.command_history.discard_peeks();
             compute_state.command_history.reduce();
 
-            // Drop the command-acquired read holds and any outstanding release records, both scoped
-            // to the connection that produced them.
-            //
-            // A release travels on the other runtime's command stream, and that stream is being reset
-            // too, so nothing will release these. The controller replays the importing
-            // `CreateDataflow`s and the multiplexer re-derives the holds, so a retained dataflow gets
-            // its hold back on the new stream.
-            //
-            // Clearing the release records matters in this direction and not the other. A record left
-            // over from the old connection would be consumed by the new connection's acquisition for
-            // the same holder, which would then install no hold and leave that reader unprotected. A
-            // record lost the other way only leaks a hold until the next reconnection.
-            //
-            // NOTE: this does not close the epoch window described as G2 in
-            // `doc/developer/design/20260720_two_runtime_compute/read-holds.md`. Reconciliation
-            // synthesizes compactions locally that never traverse the multiplexer, so one can still
-            // apply between this drop and the re-derived acquisition.
-            compute_state.command_holds.clear();
-            compute_state
-                .sharing_registry
-                .clear_released(self.timely_worker.index());
+            // NOTE: the standing holds in the sharing registry are deliberately NOT cleared here.
+            // One is per collection and carries no dataflow identity, so it cannot go stale across a
+            // reconnection, and it only ever rises. Clearing it would drop the arrangement's bound to
+            // the minimum time until the replayed compactions raised it again. See
+            // `doc/developer/design/20260720_two_runtime_compute/broadcast-compaction.md`.
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
             // suitable replacements for the requested dataflows. A dataflow is "certainly installed"
