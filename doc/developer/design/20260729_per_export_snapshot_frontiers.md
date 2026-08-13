@@ -49,6 +49,8 @@ operator, reclock, decode and envelope, and persist sink.
   from a connector that does not already have them.
 - Memory on the replica during hydration is bounded by a configurable target independent of
   snapshot duration and of the number of distinct reclocked timestamps.
+- The number of batches the sink appends is proportional to the number of batch descriptions, not
+  to the number of distinct reclocked timestamps a stall accumulates.
 - A restart during a snapshot remains correct. The snapshot restarts from the beginning, as today.
 
 ## Open Questions
@@ -57,13 +59,14 @@ operator, reclock, decode and envelope, and persist sink.
   - Which restart-during-snapshot interleavings become newly possible once the snapshot and
   replication phases overlap, and what test coverage (platform checks, testdrive) demonstrates
   each is handled.
-- **Choosing Lag.**
-  - How the lag `L` is chosen and validated (a fixed configurable value, or adaptive to observed
-  description propagation delay), and whether the restart fallback when the lag is exceeded needs a
-  metric and alert since it silently costs a rehydration.
+- **Eviction visibility.**
+  - Whether the batch count produced by stash eviction needs a metric, so a stall that spreads
+  evenly across many timestamps and degrades toward one batch per timestamp is visible rather than
+  inferred from persist shard shape.
 - **Multiple concurrent hydrations.**
-  - Whether the sink change needs per-export tuning when several large tables hydrate at once on one
-  replica.
+  - The stash budget is per worker per export, so a replica's exposure is the budget times the
+  number of exports snapshotting at once times the worker count. Whether the default holds up when
+  several large tables hydrate together, or whether the budget should be a replica-wide pool.
 
 ## Out of Scope
 
@@ -144,12 +147,10 @@ export continues to pin WAL retention, but no longer pins any other export's fro
 
 ### 4. Bounded sink accumulation
 
-The main concept here is to create a builder, the coalesced builder, that snapshot data and
-replication data will route to. `BatchBuilder` already spills to blob storage, which bounds
-memory usage. The challenge with this approach is that data can outrun the frontier change that
-defines the upper of the batch. The design needs to account for learning the upper of the batch
-via a frontier change, where some data may have timestamps beyond that upper and should be written
-to the next batch.
+A batch's bounds come from a batch description, which `mint_batch_descriptions` emits when the
+collection's frontier advances. While an export snapshots its frontier is pinned, so no
+description is minted for the duration. The sink still receives snapshot rows at the pinned time
+and CDC events at later times, and must hold them until it learns which description covers them.
 
 Sources have the time domains `F` and `T`, `FromTime` and `MzTime`, respectively. The snapshot
 operator emits data at `F:min`, which is reclocked to `T:c`, where `T:c` is the current time. The
@@ -159,43 +160,59 @@ replication operator downgrades caps as today.
 
 Because snapshot has pinned its capability at `F:min`, the downgrades of the replication operator
 do not move the frontier forward, so all downstream operators see events reclocked to the correct
-`T` times, but the frontier does not advance, which keeps the builder open.
+`T` times, but the frontier does not advance.
 
-Once the snapshot is done, it will drop its capability, allowing timely to propagate some time,
-`T:n`, and that will establish the end of the batch that both snapshot events and CDC events are
-being written to.
+Once the snapshot is done it drops its capability, timely propagates some time `T:n`, and the
+minter emits a single description `[T:c, T:n)` covering everything that accumulated during the
+stall.
 
-Timely does not guarantee the ordering of data and progress messages. So it is expected that
-data, reclocked to some `t >= T:n`, have made their way to the persist sink. They cannot be
-written to the coalesced batch, which will only include data for `[T:min, T:n)`. The batch's
-lower bound here comes from the shard upper, which is `T:min` for a shard that's not been written
-to. The persist sink must error rather than write a row into a batch whose bounds do not cover it.
+Stage arriving updates in the sink as raw rows keyed by timestamp instead of opening a
+`BatchBuilder` per timestamp. A description is only acted on once the frontier has reached its
+upper, so every update it covers has already arrived and one builder can take all of them. This
+keeps the batch count proportional to the number of descriptions rather than to the number of
+distinct reclocked timestamps the stall accumulated. Building on arrival cannot do this. The
+grouping would have to be chosen before the bounds are known, and a `BatchBuilder` cannot be split
+once a description boundary lands inside it.
 
-To prevent those rows from finding their way into that batch, we modify the persist sink to stash
-new rows before writing to the batch. Data lands in the stash and lives there for a time
-determined by the lag `L`, which is some number of timestamps. As data arrives, data from the
-stash is aged out according to the latest data time, into the coalesced builder. When the
-frontier does advance, the coalesced builder is adopted as `[T:min, T:n)`, and remaining stashed
-rows route to it or to a newer batch. The lag, `L`, must exceed the propagation delay of the
-frontier, otherwise data from the stash will have aged out into the coalesced builder. The
-persist sink will detect data beyond the bounds of the builder when the builder is rotated and
-error, which discards the unlinked batches.
+`storage_persist_sink_max_raw_stash_bytes` bounds the stash, per worker per export. Over budget the
+sink consolidates first. At the pinned timestamp the snapshot's rows and the rewind retractions
+that supersede them are both staged and cancel exactly, so consolidation often reclaims the excess
+without writing anything. If it does not, the heaviest timestamps are written out into
+single-timestamp builders. A single timestamp is safe to write before its description exists,
+because a description covers a timestamp entirely or not at all, so such a builder cannot straddle
+a boundary.
 
-Resident memory is bounded for both the coalesced builder and the stash. Each coalesced builder
-holds at most `blob_target_size` plus one part upload in flight, and open builders are limited to
-the number of in-flight descriptions plus one. The stash contains only data within the trailing
-window `L`, so its size is bounded by `L` times the ingest rate, rather than by snapshot duration.
+Eviction costs one batch per timestamp evicted. Taking the heaviest first does well when volume
+concentrates in a few timestamps and poorly when it spreads evenly across many, so a stall staging
+far more than the budget with an even spread converges toward one batch per timestamp. That is the
+behavior before this change rather than a regression.
 
-In steady state, updates enter their description's builder on arrival or drain into it when the
-description finishes (i.e. the open builder stays empty). The open builder fills only when the
-frontier stalls for longer than `L`, which is the hydration case. The API and crash-leak behavior
-of persist remains unchanged from today.
+Batches now span multiple timestamps, which does not change the recovery path. When a concurrent
+writer raises the shard upper into the middle of a description, the sink advances the description's
+lower and re-appends. Persist registers a batch under the narrowed description and filters the
+updates outside those bounds on read, so a batch holding data on both sides of the new lower stays
+usable: the updates the concurrent writer already committed do not come back, and the ones the sink
+still owes are preserved. Each batch carries the largest timestamp it holds, which is enough to
+delete the batches lying entirely below the new lower rather than registering parts that would be
+truncated away in full.
+
+#### Statistics semantics
+
+`updates_staged` counts on arrival rather than when an update reaches a builder, so a pinned
+frontier does not make the sink look idle while it is ingesting hard. `updates_committed` counts at
+append, from batch metrics that only cover updates which survived consolidation.
+
+The two therefore relate as `updates_staged >= updates_committed`, and the gap is whatever the
+stash consolidated away. Before this change the sink never consolidated, so the two matched exactly
+for every workload. The gap is information rather than drift, it reports the work the sink avoided
+writing. Back to back upstream transactions that reclock to the same timestamp and touch the same
+row are the ordinary way to produce one.
 
 #### Handling for large xacts
 
-If an upstream transaction contains a large number of rows, they will all land in the stash and
-put pressure on memory. The prototype stores the stash in a `BTreeMap`. For production, consider a
-merge batcher (as upsert uses) instead.
+If an upstream transaction contains a large number of rows they all land at a single timestamp in
+the stash. That is what eviction takes first, so it is written out on its own rather than held in
+memory. Memory stays bounded, at the cost of one batch for that transaction.
 
 ### Kafka: backfill consumer with offset handoff
 
@@ -319,3 +336,35 @@ The research document records the full option space. Summary of the rejected opt
   - A second temporary pipeline with its own replication slot snapshots the new table, follows CDC
   to an agreed LSN, and hands off. Rejected as this does not improve slot's WAL retention, adds
   connection cost on the upstream database, and requires an exactly-once handoff protocol.
+
+The following were considered for step 4 specifically, and all share a root cause. Each tries to
+choose a batch's grouping before its bounds are known, which is the thing that cannot be done
+safely.
+
+- **Trailing-lag stash.**
+  - Age rows out of the stash into a coalesced builder once they fall a fixed lag `L` behind the
+  latest data time, and rotate that builder when the frontier advances. Rejected because `L` must
+  exceed the frontier's propagation delay, which is not a quantity the sink can bound, and
+  exceeding it is only detected at rotation, where the recovery is a dataflow restart.
+- **A coalescing horizon published by the minter.**
+  - Have `mint_batch_descriptions` broadcast a promise that no future description will end below
+  some time, so write operators can group updates below it before their description exists.
+  Rejected because the promise is derived from the minter's frontier, which is pinned for exactly
+  the duration of a snapshot, so it cannot advance during the stall it exists to cover.
+- **Source read progress as the coalescing horizon.**
+  - Feed the source's reclocked read progress into the minter so the promise can advance while the
+  collection's frontier is pinned. Rejected because it adds a progress marker to every source's
+  dataflow to serve one sink concern, and each new source pays that cost again.
+- **Splitting the pinned traffic onto its own output.**
+  - Give the traffic at the minimum offset, the snapshot rows and the rewind retractions, a
+  separate output so the ongoing replication stream keeps an unpinned frontier. Rejected because
+  the split is not static. The replication operator's schema-validation errors are emitted at
+  whatever the port's capability currently holds, which is the minimum only while a rewind is
+  pending, so routing them has no fixed answer. Envelope processing in `render_source_stream` is
+  also stateful for upsert and cannot carry a split through in general.
+- **Pager-backed spill for the stash.**
+  - Evict stashed rows into `mz_ore::pager` chunks rather than into persist batches, keeping the
+  batch count at one per description regardless of budget. Rejected for now because the pager's
+  default backend is swap, which is ordinary heap plus a reclaim hint and so does not change the
+  bound. Only the file backend does, and it depends on a scratch directory and on a process-global
+  setting that compute owns.
