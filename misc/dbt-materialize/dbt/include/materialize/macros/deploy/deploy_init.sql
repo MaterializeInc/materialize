@@ -170,7 +170,7 @@ SELECT
     WHEN object_owner = 'PUBLIC' THEN 'FOR ALL ROLES '
     ELSE 'FOR ROLE ' || quote_ident(object_owner) || ' '
   END ||
-  'IN SCHEMA {{ to }} '         ||
+  'IN SCHEMA ' || quote_ident({{ dbt.string_literal(to) }}) || ' ' ||
   'GRANT '  || privilege_type   || ' ' ||
   'ON '     || object_type      || 's ' ||
   CASE
