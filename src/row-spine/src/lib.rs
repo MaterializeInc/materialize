@@ -380,6 +380,132 @@ mod tests {
         }
     }
 
+    /// Rows over `count` distinct multi-byte strings in column 0, each repeated often
+    /// enough to become a heavy hitter, paired with a never-repeated integer in
+    /// column 1.
+    ///
+    /// Column 1's values are unique, so `MisraGries` never promotes them and that
+    /// column stays entirely raw. It therefore both exercises raw fall-through and
+    /// keeps column 1 out of the overflow-table assertions.
+    fn rows_over_distinct_values(count: usize) -> (Vec<String>, Vec<Row>) {
+        let values: Vec<String> = (0..count).map(|i| format!("value-{i:06}")).collect();
+        let mut unique = 0i64;
+        let rows = std::iter::repeat_n((), 4)
+            .flat_map(|()| values.iter())
+            .map(|value| {
+                unique += 1;
+                Row::pack_slice(&[Datum::String(value), Datum::Int64(unique)])
+            })
+            .collect();
+        (values, rows)
+    }
+
+    /// Builds a codec over `rows` by both construction paths: the merge path, which
+    /// harvests dynamically free tags, and the safe path, which is limited to the
+    /// statically free ones.
+    fn codecs_over_rows(rows: &[Row]) -> Vec<crate::row_codec::ColumnsCodec> {
+        use crate::row_codec::ColumnsCodec;
+
+        let mut stats = ColumnsCodec::default();
+        for row in rows {
+            stats.observe(ColumnsCodec::borrow_row(row));
+        }
+        let merged = ColumnsCodec::new_from([&stats]);
+        let safe = stats.new_safe();
+        vec![merged, safe]
+    }
+
+    /// Popular values beyond the one-byte tag supply must still compress, via the
+    /// two-byte overflow escapes, and must round-trip.
+    ///
+    /// The value count here exceeds the direct-tag supply on both construction paths
+    /// (132 statically safe non-escape tags for `new_safe`; for `new_from`, 253, since
+    /// the string column's literals occupy a single tag) but stays within
+    /// `OVERFLOW_CAPACITY`, so *every* value should be reachable through the
+    /// dictionary.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
+    fn test_overflow_codec_round_trip() {
+        use crate::row_codec::ColumnsCodec;
+
+        let (values, rows) = rows_over_distinct_values(400);
+        for mut codec in codecs_over_rows(&rows) {
+            assert!(
+                codec.overflow_lens()[0] > 0,
+                "overflow never engaged; test no longer covers the escape path",
+            );
+
+            // Every value should hold a dictionary code; classify the widths so the
+            // test fails loudly if the split between direct and overflow disappears.
+            let mut widths = [0usize; 3];
+            for value in &values {
+                let row = Row::pack_slice(&[Datum::String(value)]);
+                let mut buf = Vec::new();
+                codec.encode(ColumnsCodec::borrow_row(&row), &mut buf);
+                assert!(
+                    buf.len() <= 2,
+                    "value {value} did not compress to a dictionary code: {buf:?}",
+                );
+                widths[buf.len()] += 1;
+            }
+            assert!(widths[1] > 0, "no value took a one-byte direct tag");
+            assert!(widths[2] > 0, "no value took a two-byte overflow code");
+
+            // Round-trip the two-column rows. The integer column follows the string
+            // column's code, so a mis-sized escape reference corrupts it rather than
+            // going unnoticed.
+            for row in &rows {
+                let mut buf = Vec::new();
+                codec.encode(ColumnsCodec::borrow_row(row), &mut buf);
+                let decoded = codec.decode(&buf).collect::<Vec<_>>();
+                let expected = ColumnsCodec::borrow_row(row).collect::<Vec<_>>();
+                assert_eq!(decoded, expected, "round-trip mismatch for {row:?}");
+            }
+        }
+    }
+
+    /// Heavy hitters past `OVERFLOW_CAPACITY` are left uncompressed rather than handed
+    /// an index the two-byte code cannot address. They must still round-trip through
+    /// raw fall-through, next to the compressed values.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // integer-to-pointer casts in row decoding are unsupported under miri
+    fn test_overflow_capacity_saturation() {
+        use crate::row_codec::{ColumnsCodec, OVERFLOW_CAPACITY};
+
+        // Comfortably more values than direct tags plus overflow slots, but few
+        // enough that `MisraGries` retains them all (it tidies past `2 * k` = 1024).
+        let (values, rows) = rows_over_distinct_values(900);
+        for mut codec in codecs_over_rows(&rows) {
+            assert_eq!(
+                codec.overflow_lens()[0],
+                OVERFLOW_CAPACITY,
+                "overflow table should saturate, not overflow",
+            );
+
+            let mut raw = 0;
+            for value in &values {
+                let row = Row::pack_slice(&[Datum::String(value)]);
+                let mut buf = Vec::new();
+                codec.encode(ColumnsCodec::borrow_row(&row), &mut buf);
+                if buf.len() > 2 {
+                    raw += 1;
+                }
+            }
+            assert!(
+                raw > 0,
+                "no value fell through raw; capacity was not saturated",
+            );
+
+            for row in &rows {
+                let mut buf = Vec::new();
+                codec.encode(ColumnsCodec::borrow_row(row), &mut buf);
+                let decoded = codec.decode(&buf).collect::<Vec<_>>();
+                let expected = ColumnsCodec::borrow_row(row).collect::<Vec<_>>();
+                assert_eq!(decoded, expected, "round-trip mismatch for {row:?}");
+            }
+        }
+    }
+
     /// A batch built via the builder's `push`/`done` path (as the `reduce` operator
     /// does) that stays under `STATS_THRESHOLD` never installs a codec at build time.
     /// `done` now promotes the gathered statistics into the codec slot, so the batch
@@ -1504,10 +1630,11 @@ mod dictionary {
     /// Number of pushes a from-scratch container observes before it turns its
     /// gathered stats into a safe codec.
     ///
-    /// A safe codec has at most `256 - SAFE_TAG_BASE` (= 134) dictionary slots per
-    /// column, so we only need to identify ~134 genuinely-popular values. The
-    /// `MisraGries` summary retains up to `2 * k` (= 1024) distinct candidates
-    /// between tidies and reduces to `k` (= 512), comfortably more than 134, so the
+    /// A safe codec has `256 - SAFE_TAG_BASE` (= 134) spare tags per column, of which
+    /// all but the escapes name a value directly and the escapes reach a further
+    /// `OVERFLOW_CAPACITY` (= 512) values, so we need to identify up to ~644
+    /// genuinely-popular values. The `MisraGries` summary retains up to `2 * k`
+    /// (= 1024) distinct candidates between tidies and reduces to `k` (= 512), so the
     /// threshold just needs to be large enough that heavy hitters accumulate counts
     /// well above 1 before we freeze the codec. 64Ki pushes gives that headroom while
     /// keeping the pre-codec (uncompressed) window short.
@@ -1751,7 +1878,7 @@ mod row_codec {
     pub use columns::{ColumnsCodec, ColumnsIter};
     pub use dictionary::DictionaryCodec;
     #[cfg(test)]
-    pub use dictionary::SAFE_TAG_BASE;
+    pub use dictionary::{OVERFLOW_CAPACITY, SAFE_TAG_BASE};
 
     // Deterministic hasher state for the codecs' hash maps: a fixed-seed
     // `ahash::RandomState` shared with `mz_timely_util`'s consolidation hasher, so
@@ -1830,6 +1957,12 @@ mod row_codec {
         }
 
         impl ColumnsCodec {
+            /// Per-column count of values referenced through two-byte overflow codes.
+            #[cfg(test)]
+            pub(crate) fn overflow_lens(&self) -> Vec<usize> {
+                self.columns.iter().map(|c| c.overflow_len()).collect()
+            }
+
             /// Visit contained allocations to determine their size and capacity.
             pub(crate) fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
                 let elem = std::mem::size_of::<DictionaryCodec>();
@@ -1890,13 +2023,13 @@ mod row_codec {
             fn next(&mut self) -> Option<Self::Item> {
                 if self.data.is_empty() {
                     None
-                } else if let Some(bytes) = self
+                } else if let Some((bytes, width)) = self
                     .index
                     .as_ref()
                     .and_then(|i| i.columns.get(self.column))
-                    .and_then(|i| i.decode.get(self.data[0].into()))
+                    .and_then(|i| i.lookup(self.data))
                 {
-                    self.data = &self.data[1..];
+                    self.data = &self.data[width..];
                     self.column += 1;
                     Some(bytes)
                 } else {
@@ -1942,6 +2075,14 @@ mod row_codec {
     ///
     /// It goes without saying that if either of these approaches are incorrect,
     /// there are calamitous unsoundness implications.
+    ///
+    /// The supply of free tags is small (as few as `256 - SAFE_TAG_BASE` when the
+    /// codec cannot observe the data first), and smaller than the number of heavy
+    /// hitters the [`MisraGries`] summary can identify. To spend the surplus, the
+    /// codec reserves the top `ESCAPE_TAGS` safe tags as *escapes*: an escape tag
+    /// followed by one index byte references an entry in an overflow table holding
+    /// up to `OVERFLOW_CAPACITY` further values. Overflow references cost two bytes
+    /// rather than one, which is still a win for any value longer than that.
     mod dictionary {
         // The `encode` map is a pure value->tag lookup table (never iterated for logic),
         // so `mz_ore::collections::HashMap`'s order-hiding would suffice — but it offers
@@ -1967,9 +2108,81 @@ mod row_codec {
         /// that test fails loudly rather than silently corrupting decoding.
         pub const SAFE_TAG_BASE: u8 = 122;
 
+        /// How many of the top safe tags are reserved as overflow escapes rather than
+        /// handed out as one-byte dictionary entries.
+        ///
+        /// Each escape addresses a 256-entry block of the overflow table, so this
+        /// trades `ESCAPE_TAGS` one-byte slots for `ESCAPE_TAGS * 256` two-byte ones.
+        const ESCAPE_TAGS: u8 = 2;
+
+        /// Lowest escape tag. Tags in `ESCAPE_BASE ..= u8::MAX` are escapes, and are
+        /// never assigned as one-byte dictionary entries.
+        ///
+        /// Escapes must be structurally safe (`>= SAFE_TAG_BASE`), else a literal
+        /// datum's first byte could be mistaken for an escape.
+        const ESCAPE_BASE: u8 = u8::MAX - ESCAPE_TAGS + 1;
+
+        /// Number of values addressable through the escape tags.
+        // Widening a `u8` is lossless, and `usize::from` is not a `const fn`.
+        #[allow(clippy::as_conversions)]
+        pub const OVERFLOW_CAPACITY: usize = ESCAPE_TAGS as usize * 256;
+
+        const _: () = assert!(
+            ESCAPE_BASE >= SAFE_TAG_BASE,
+            "escape tags must lie in the structurally safe range",
+        );
+        const _: () = assert!(
+            OVERFLOW_CAPACITY >= MisraGries::<Vec<u8>>::DEFAULT_K,
+            "overflow capacity should cover every heavy hitter the summary retains",
+        );
+
+        /// True for byte values that introduce a two-byte overflow reference.
+        #[inline(always)]
+        fn is_escape(tag: u8) -> bool {
+            tag >= ESCAPE_BASE
+        }
+
+        /// An encoded reference to a dictionary entry: either a single direct tag, or
+        /// an escape tag plus the index of an entry within that escape's block.
+        #[derive(Clone, Copy, Debug)]
+        struct Code {
+            bytes: [u8; 2],
+            len: u8,
+        }
+
+        impl Code {
+            #[inline]
+            fn direct(tag: u8) -> Self {
+                debug_assert!(!is_escape(tag), "escape tags are not direct entries");
+                Self {
+                    bytes: [tag, 0],
+                    len: 1,
+                }
+            }
+
+            #[inline]
+            fn overflow(index: usize) -> Self {
+                assert!(
+                    index < OVERFLOW_CAPACITY,
+                    "overflow index {index} exceeds the {OVERFLOW_CAPACITY} addressable slots",
+                );
+                let block = u8::try_from(index / 256).expect("bounded by OVERFLOW_CAPACITY");
+                let offset = u8::try_from(index % 256).expect("a remainder mod 256 fits in a u8");
+                Self {
+                    bytes: [ESCAPE_BASE + block, offset],
+                    len: 2,
+                }
+            }
+
+            #[inline(always)]
+            fn as_bytes(&self) -> &[u8] {
+                &self.bytes[..usize::from(self.len)]
+            }
+        }
+
         /// Per-column dictionary codec. Encodes column byte slices, replacing popular
-        /// values with spare tags; decoding is performed by `ColumnsIter` reading the
-        /// `decode` map directly.
+        /// values with spare tags; decoding is performed by `ColumnsIter` calling
+        /// [`DictionaryCodec::lookup`].
         #[derive(Default, Debug)]
         pub struct DictionaryCodec {
             // Looked up once per value on the encode path; mostly misses (only popular
@@ -1978,8 +2191,13 @@ mod row_codec {
             // no observable effect; the populated maps are built with `fixed_state` in
             // `new_from`/`new_safe` for consistency, while the derived-`Default` (stats
             // accumulator) variant stays empty and is never consulted.
-            encode: HashMap<Vec<u8>, u8, ahash::RandomState>,
-            pub decode: BytesMap,
+            encode: HashMap<Vec<u8>, Code, ahash::RandomState>,
+            /// Values reachable by a single direct tag, indexed by that tag. Entries at
+            /// escape tags are always absent, so an escape is unambiguous.
+            decode: BytesMap,
+            /// Values reachable by an escape tag plus an index byte, indexed by
+            /// `(escape - ESCAPE_BASE) * 256 + index`.
+            overflow: BytesMap,
             stats: (MisraGries<Vec<u8>>, [u64; 4]),
         }
 
@@ -2000,27 +2218,46 @@ mod row_codec {
                         "row encoding never yields empty column slices",
                     );
                     // If we have an index referencing `bytes`, use the index key.
-                    if let Some(b) = self.encode.get(bytes) {
-                        output.push(*b);
+                    if let Some(code) = self.encode.get(bytes) {
+                        output.extend_from_slice(code.as_bytes());
                     } else {
                         // Raw fall-through. Soundness rests on `bytes[0]` never being a
-                        // tag we hand out as a dictionary key: `new_from`/`new_safe` only
-                        // assign dictionary tags from first-byte values that were never
-                        // observed (or are `>= SAFE_TAG_BASE`, which no datum first-byte
-                        // can equal). If a literal datum's first byte collided with a
-                        // dictionary tag, `decode` would resolve it to the dictionary
-                        // entry instead of reading the datum. This `debug_assert` makes
-                        // the load-bearing "no later first-byte outside the observed
-                        // union" invariant self-checking.
+                        // tag we hand out as a dictionary key, nor an escape:
+                        // `new_from`/`new_safe` only assign dictionary tags from
+                        // first-byte values that were never observed (or are
+                        // `>= SAFE_TAG_BASE`, which no datum first-byte can equal). If a
+                        // literal datum's first byte collided with a dictionary tag,
+                        // `lookup` would resolve it to the dictionary entry instead of
+                        // reading the datum. This `debug_assert` makes the load-bearing
+                        // "no later first-byte outside the observed union" invariant
+                        // self-checking.
                         debug_assert!(
-                            self.decode.get(bytes[0].into()).is_none(),
-                            "raw datum first-byte {} collides with a dictionary tag; \
-                             decode would be ambiguous",
+                            !is_escape(bytes[0]) && self.decode.get(bytes[0].into()).is_none(),
+                            "raw datum first-byte {} collides with a dictionary tag or an \
+                             overflow escape; decode would be ambiguous",
                             bytes[0],
                         );
                         output.extend(bytes);
                     }
                     self.observe(bytes);
+                }
+            }
+
+            /// Resolve the dictionary reference at the head of `data`, if there is one.
+            ///
+            /// Returns the referenced value and how many bytes the reference occupies:
+            /// one for a direct tag, two for an escape plus its index byte. `None` means
+            /// `data` begins with a literal datum, which the caller must parse itself.
+            #[inline(always)]
+            pub fn lookup<'a>(&'a self, data: &[u8]) -> Option<(&'a [u8], usize)> {
+                let tag = data[0];
+                if !is_escape(tag) {
+                    self.decode.get(usize::from(tag)).map(|bytes| (bytes, 1))
+                } else {
+                    // An escape is always written together with its index byte, so a
+                    // missing second byte means the data was not produced by this codec.
+                    let index = (usize::from(tag - ESCAPE_BASE) << 8) | usize::from(*data.get(1)?);
+                    self.overflow.get(index).map(|bytes| (bytes, 2))
                 }
             }
 
@@ -2048,12 +2285,13 @@ mod row_codec {
                 for tag in 0..=255 {
                     let tag_idx: usize = (tag % 4).into();
                     let shift = tag >> 2;
-                    if (tags[tag_idx] >> shift) & 0x01 != 0 {
-                        // Tag is used by a literal datum first-byte; reserve the slot.
+                    if is_escape(tag) || (tags[tag_idx] >> shift) & 0x01 != 0 {
+                        // Tag is an escape, or is used by a literal datum first-byte;
+                        // either way it cannot name a direct entry, so reserve the slot.
                         decode.push(None);
                     } else if let Some((next_bytes, _count)) = mg.next() {
                         decode.push(Some(&next_bytes[..]));
-                        encode.insert(next_bytes, tag);
+                        encode.insert(next_bytes, Code::direct(tag));
                     } else {
                         // Unused tag, but the heavy-hitter supply is exhausted. We must
                         // still push a slot so that `decode`'s index stays aligned with
@@ -2062,13 +2300,39 @@ mod row_codec {
                         decode.push(None);
                     }
                 }
+                let overflow = fill_overflow(mg, &mut encode);
 
                 Self {
                     encode,
                     decode,
+                    overflow,
                     stats: (MisraGries::default(), [0u64; 4]),
                 }
             }
+        }
+
+        /// Spend the heavy hitters left over after the direct tags are exhausted on
+        /// two-byte overflow references.
+        ///
+        /// A direct entry saves `count * (len - 1)` bytes and an overflow entry
+        /// `count * (len - 2)`, so the choice between them is worth exactly one byte per
+        /// occurrence. Assigning direct tags first, in the summary's count-descending
+        /// order, therefore maximizes the saving, and values of length two or less are
+        /// skipped here rather than consuming a slot that cannot pay for itself.
+        fn fill_overflow(
+            mg: impl Iterator<Item = (Vec<u8>, usize)>,
+            encode: &mut HashMap<Vec<u8>, Code, ahash::RandomState>,
+        ) -> BytesMap {
+            let mut overflow = BytesMap::default();
+            let candidates = mg
+                .filter(|(next_bytes, _count)| next_bytes.len() > 2)
+                .take(OVERFLOW_CAPACITY);
+            for (next_bytes, _count) in candidates {
+                let code = Code::overflow(overflow.len());
+                overflow.push(Some(&next_bytes[..]));
+                encode.insert(next_bytes, code);
+            }
+            overflow
         }
 
         impl DictionaryCodec {
@@ -2076,16 +2340,23 @@ mod row_codec {
             ///
             /// The `encode` table is approximated as one logical entry's worth of bytes
             /// per element for size and its reserved `capacity()` for capacity; the
-            /// dominant terms (the owned key bytes and the `decode` map's byte arena)
-            /// are accounted exactly.
+            /// dominant terms (the owned key bytes and the value maps' byte arenas) are
+            /// accounted exactly.
             pub fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
-                let entry = std::mem::size_of::<(Vec<u8>, u8)>();
+                let entry = std::mem::size_of::<(Vec<u8>, Code)>();
                 callback(self.encode.len() * entry, self.encode.capacity() * entry);
                 for key in self.encode.keys() {
                     callback(key.len(), key.capacity());
                 }
                 self.decode.heap_size(callback);
+                self.overflow.heap_size(callback);
                 self.stats.0.heap_size(callback);
+            }
+
+            /// Number of values referenced through a two-byte overflow code.
+            #[cfg(test)]
+            pub fn overflow_len(&self) -> usize {
+                self.overflow.len()
             }
 
             /// Record a single column value in this codec's statistics without
@@ -2146,16 +2417,18 @@ mod row_codec {
                 for _ in 0..SAFE_TAG_BASE {
                     decode.push(None);
                 }
-                // Assign dictionary entries to safe tags.
-                for tag in SAFE_TAG_BASE..=255 {
+                // Assign direct entries to the safe tags that are not escapes.
+                for tag in SAFE_TAG_BASE..ESCAPE_BASE {
                     if let Some((next_bytes, _count)) = mg.next() {
                         decode.push(Some(&next_bytes[..]));
-                        encode.insert(next_bytes, tag);
+                        encode.insert(next_bytes, Code::direct(tag));
                     }
                 }
+                let overflow = fill_overflow(mg, &mut encode);
                 Self {
                     encode,
                     decode,
+                    overflow,
                     stats: (MisraGries::default(), observed_tags),
                 }
             }
@@ -2187,6 +2460,11 @@ mod row_codec {
                 self.bytes.extend(bytes);
             }
             self.offsets.push(self.bytes.len());
+        }
+        /// Number of slots pushed so far, and thus the index the next push will take.
+        #[inline]
+        fn len(&self) -> usize {
+            self.offsets.len() - 1
         }
         /// Visit contained allocations to determine their size and capacity.
         fn heap_size(&self, callback: &mut impl FnMut(usize, usize)) {
@@ -2245,12 +2523,16 @@ mod row_codec {
             fn default() -> Self {
                 Self {
                     inner: HashMap::with_hasher(fixed_state()),
-                    k: 512,
+                    k: Self::DEFAULT_K,
                 }
             }
         }
 
         impl<T: Ord + Hash> MisraGries<T> {
+            /// Number of entries a default summary reduces to when it tidies, and thus
+            /// the practical ceiling on how many heavy hitters a codec can be handed.
+            pub const DEFAULT_K: usize = 512;
+
             /// Inserts an additional element to the summary.
             #[inline(always)]
             pub fn insert(&mut self, element: T) {
