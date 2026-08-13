@@ -451,12 +451,6 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 ///
 /// Disposition: added 2026-06-09; solicit feedback for one month and remove in
 /// the absence of a positive response.
-///
-/// The compiled-in default is on because it is what a deployment without
-/// LaunchDarkly falls back to, and such a deployment would otherwise be unable
-/// to enable the feature at all. This flag only gates the feature: compression
-/// is active only on a cluster that also sets `EXPERIMENTAL ARRANGEMENT
-/// COMPRESSION` (see `mz_compute_client::controller`).
 pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config::new(
     "enable_arrangement_dictionary_compression_alpha",
     true,
