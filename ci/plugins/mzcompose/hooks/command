@@ -404,7 +404,7 @@ cleanup() {
     && [ "$BUILDKITE_LABEL" != "QA Canary Environment Base Load" ] \
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Canary Environment" ] \
     && [ "$BUILDKITE_LABEL" != "Parallel Benchmark against QA Benchmarking Staging Environment" ] \
-    && [ "$BUILDKITE_LABEL" != "Miri test (full)" ] \
+    && [ "$BUILDKITE_LABEL" != ":rust: Miri test (full)" ] \
     && [[ ! "$BUILDKITE_LABEL" =~ Terraform\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Orchestratord\ .* ]] \
     && [[ ! "$BUILDKITE_LABEL" =~ Cluster\ spec\ sheet.* ]]; then

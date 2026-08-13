@@ -761,7 +761,8 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
         retry.setdefault("automatic", []).extend(
             [
                 {
-                    "exit_status": -1,  # Agent lost or job timed out during checkout/setup
+                    "exit_status": -1,
+                    "signal_reason": "none",
                     "limit": 2,
                 },
                 {
