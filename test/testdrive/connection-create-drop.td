@@ -532,8 +532,6 @@ contains: BROKERS must contain at least one static broker address
 
 > DROP CONNECTION kafka_matching_ok
 
-# ALTER CONNECTION rejects a SERVICE NAME that cannot name a VPC endpoint
-# service.
 ! ALTER CONNECTION pl_for_matching SET (SERVICE NAME 'my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com')
 contains: invalid AWS PrivateLink service name "my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com"
 
@@ -556,24 +554,15 @@ contains: unknown catalog item 'foo'
 contains: AWS PrivateLink
 
 # SERVICE NAME must name a VPC endpoint service, not the DNS name of the target.
-# The rejection happens before any endpoint is created, so the error does not
-# depend on cloud resources being available.
 ! CREATE CONNECTION privatelink_elb_hostname TO AWS PRIVATELINK (
     SERVICE NAME 'my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com',
     AVAILABILITY ZONES ()
   )
 contains: invalid AWS PrivateLink service name "my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com"
-hint: The value supplied looks like a DNS hostname
-
-! CREATE CONNECTION privatelink_bare_hostname TO AWS PRIVATELINK (
-    SERVICE NAME 'db.internal.example.org',
-    AVAILABILITY ZONES ()
-  )
-contains: invalid AWS PrivateLink service name "db.internal.example.org"
+hint: SERVICE NAME must name an AWS VPC endpoint service
 
 ! CREATE CONNECTION privatelink_not_a_service_name TO AWS PRIVATELINK (
     SERVICE NAME 'vpce-svc-0e123abc123198abc',
     AVAILABILITY ZONES ()
   )
 contains: invalid AWS PrivateLink service name "vpce-svc-0e123abc123198abc"
-hint: SERVICE NAME must name an AWS VPC endpoint service

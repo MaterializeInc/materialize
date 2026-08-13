@@ -177,12 +177,6 @@ where
 /// Rejects connection options whose values cannot work, independent of any
 /// external system.
 fn check_connection_details(details: &ConnectionDetails) -> Result<(), PlanError> {
-    // These checks live in the sequencer rather than the planner because the
-    // planner also runs against the `create_sql` of items already in the
-    // catalog, on boot. A failure there panics, so tightening a rule in the
-    // planner turns an environment that already stores an offending value into
-    // a crash loop. The sequencer only runs for statements a client issues, so
-    // a rule added here cannot stop an existing item from loading.
     match details {
         ConnectionDetails::AwsPrivatelink(privatelink) => {
             AwsPrivatelinkConnection::check_service_name(&privatelink.service_name)
@@ -3779,10 +3773,8 @@ impl Coordinator {
             }
         };
 
-        // The re-planned connection carries forward every option the statement
-        // did not touch, so an offending value stored by an earlier release
-        // surfaces here even when the statement did not supply it. Setting a
-        // valid value in the same `ALTER` clears it.
+        // `conn` is the whole re-planned connection, so this also rejects a
+        // stored value the statement did not touch.
         if let Err(err) = check_connection_details(&conn.details) {
             return ctx.retire(Err(AdapterError::InvalidAlter("CONNECTION", err)));
         }

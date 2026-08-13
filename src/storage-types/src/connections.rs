@@ -1023,12 +1023,7 @@ impl AlterCompatible for AwsPrivatelinkConnection {
 /// A `SERVICE NAME` that cannot name an AWS VPC endpoint service.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct InvalidAwsPrivatelinkServiceName {
-    /// The offending value.
     pub name: String,
-    /// Whether the value looks like a DNS hostname. Supplying the DNS name of
-    /// the target instead of the endpoint service name is the most common way
-    /// to get this option wrong, so it earns a more specific hint.
-    pub looks_like_hostname: bool,
 }
 
 impl fmt::Display for InvalidAwsPrivatelinkServiceName {
@@ -1046,80 +1041,28 @@ impl std::error::Error for InvalidAwsPrivatelinkServiceName {}
 impl InvalidAwsPrivatelinkServiceName {
     /// Explains how to find the right value.
     pub fn hint(&self) -> String {
-        let mut hint = String::from(
-            "SERVICE NAME must name an AWS VPC endpoint service, for example \
-             `com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc`.",
-        );
-        if self.looks_like_hostname {
-            hint.push_str(
-                " The value supplied looks like a DNS hostname. The DNS name of the target, \
-                 for instance a load balancer hostname, is not an endpoint service name.",
-            );
-        }
-        hint.push_str(
-            " Endpoint service names are listed in the AWS console under VPC > Endpoint \
-             services, and by `aws ec2 describe-vpc-endpoint-service-configurations`.",
-        );
-        hint
+        "SERVICE NAME must name an AWS VPC endpoint service, for example \
+         `com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc`. It is not the DNS name of \
+         the target, such as a load balancer hostname. Endpoint service names are listed in the \
+         AWS console under VPC > Endpoint services."
+            .into()
     }
 }
 
 impl AwsPrivatelinkConnection {
-    /// The prefix of every endpoint service name Materialize can connect to,
-    /// whether the service is customer-owned
-    /// (`com.amazonaws.vpce.<region>.vpce-svc-<id>`) or AWS-managed
-    /// (`com.amazonaws.<region>.<service>`).
-    ///
-    /// NOTE: a handful of AWS-managed services use other prefixes, for example
-    /// `aws.sagemaker.<region>.notebook`. None of them are reachable as a
-    /// Materialize source or sink target, so requiring this prefix does not
-    /// rule out a usable configuration.
-    const SERVICE_NAME_PREFIX: &'static str = "com.amazonaws.";
-
     /// Checks that `service_name` could name an AWS VPC endpoint service.
     ///
-    /// Deliberately permissive. It only rejects values that cannot be endpoint
-    /// service names at all. Rejecting a name AWS would accept breaks a working
-    /// setup, while accepting a name AWS would reject only defers the error to
-    /// endpoint creation, where it was already reported.
+    /// Every endpoint service name starts with `com.amazonaws.`, whether the
+    /// service is customer-owned (`com.amazonaws.vpce.<region>.vpce-svc-<id>`)
+    /// or AWS-managed (`com.amazonaws.<region>.<service>`). Only the prefix is
+    /// checked, so a name AWS would accept is never rejected here.
     pub fn check_service_name(service_name: &str) -> Result<(), InvalidAwsPrivatelinkServiceName> {
-        // Case-sensitive, matching AWS. An endpoint service whose name differs
-        // only in case does not exist as far as AWS is concerned.
-        if service_name.starts_with(Self::SERVICE_NAME_PREFIX) {
+        if service_name.starts_with("com.amazonaws.") {
             return Ok(());
         }
         Err(InvalidAwsPrivatelinkServiceName {
             name: service_name.to_string(),
-            looks_like_hostname: service_name_looks_like_hostname(service_name),
         })
-    }
-}
-
-/// Whether `service_name` looks like a DNS hostname rather than an endpoint
-/// service name.
-///
-/// Only drives the wording of a hint, so a misclassification just produces a
-/// more generic message.
-fn service_name_looks_like_hostname(service_name: &str) -> bool {
-    // Strip a URL scheme, path, and port. Chat and SQL clients turn a bare
-    // hostname into a link, and a broker address carries a port, so users paste
-    // back more than the hostname.
-    let host = service_name.trim();
-    let host = host
-        .split_once("://")
-        .map_or(host, |(_scheme, rest)| rest)
-        .split(['/', '?', '#', ':'])
-        .next()
-        .expect("split always yields at least one element");
-    // Tolerate the root label being spelled out.
-    let host = host.trim_end_matches('.');
-
-    // A hostname's rightmost label is a TLD: all-alphabetic and at least two
-    // characters. Endpoint service names invert this, ending in the service or
-    // endpoint identifier.
-    match host.rsplit_once('.') {
-        Some((_rest, tld)) => tld.len() >= 2 && tld.chars().all(|c| c.is_ascii_alphabetic()),
-        None => false,
     }
 }
 
@@ -3323,10 +3266,8 @@ impl AwsPrivatelinkConnection {
         id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), ConnectionValidationError> {
-        // Check the shape of the service name before reading endpoint status.
-        // A service name that cannot name an endpoint service leaves the
-        // endpoint unable to report a meaningful condition, and the condition it
-        // does report (missing availability zones) points at the wrong option.
+        // An endpoint for an unusable service name reports a misleading
+        // condition (missing availability zones), so check the name first.
         Self::check_service_name(&self.service_name)?;
 
         let Some(ref cloud_resource_reader) = storage_configuration
@@ -3361,15 +3302,13 @@ mod tests {
     use super::*;
 
     #[mz_ore::test]
-    fn test_check_service_name_accepts_endpoint_service_names() {
-        // Customer-owned and AWS-managed endpoint services are both accepted.
+    fn test_check_service_name() {
+        // Customer-owned and AWS-managed endpoint services are both accepted,
+        // as is anything else that could be an endpoint service name.
         for name in [
             "com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc",
-            "com.amazonaws.vpce.eu-central-1.vpce-svc-0e123abc123198abc",
             "com.amazonaws.vpce.test.vpce-svc-e2e-test",
             "com.amazonaws.us-east-1.s3",
-            // Permissive by design. A name AWS itself would reject still gets
-            // through as long as it could be an endpoint service name.
             "com.amazonaws.anything",
         ] {
             assert_eq!(
@@ -3378,51 +3317,17 @@ mod tests {
                 "expected {name} to be accepted"
             );
         }
-    }
 
-    #[mz_ore::test]
-    fn test_check_service_name_rejects_other_values() {
         for name in [
             "",
             "com.amazonaws",
             "vpce-svc-0e123abc123198abc",
             "my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com",
             "db.internal.example.org",
-            "10.0.0.1",
         ] {
             let err = AwsPrivatelinkConnection::check_service_name(name)
                 .expect_err("service name should be rejected");
             assert_eq!(err.name, name);
-        }
-    }
-
-    #[mz_ore::test]
-    fn test_service_name_looks_like_hostname() {
-        for name in [
-            "my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com",
-            "vpce-0123abc-def.vpce-svc-0e123abc.us-east-1.vpce.amazonaws.com",
-            // Chat and SQL clients turn a bare hostname into a link, and users
-            // paste the result back.
-            "http://my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com",
-            "https://my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com/path?q=1",
-            // A broker address carries a port.
-            "broker.elb.eu-central-1.amazonaws.com:9092",
-            "  db.internal.example.org  ",
-            "db.internal.example.org",
-            // Fully qualified, with the root label spelled out.
-            "example.com.",
-        ] {
-            assert!(
-                service_name_looks_like_hostname(name),
-                "expected {name} to look like a hostname"
-            );
-        }
-
-        for name in ["", "vpce-svc-0e123abc123198abc", "10.0.0.1"] {
-            assert!(
-                !service_name_looks_like_hostname(name),
-                "expected {name} not to look like a hostname"
-            );
         }
     }
 }
