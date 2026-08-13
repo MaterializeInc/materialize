@@ -34,7 +34,8 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     false,
     "Whether compute rendering should collapse error multiplicities to one where it arranges \
      errors.",
-);
+)
+.scoped(ParameterScope::Replica);
 
 /// Use the column-paged merge batcher code path at arrange sites. When
 /// `true`, arrange operators use `Col2ValPagedBatcher` (in
