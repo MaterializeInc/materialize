@@ -87,8 +87,11 @@ use tracing::error;
 ///   [`Config::get_with_overrides`] or from a per-replica config set. Without
 ///   that, the override never takes effect and the declaration is a silent
 ///   no-op.
-/// - A config realized in `environmentd` (or `balancerd`) with no single replica
-///   in scope is [`Environment`].
+/// - A config realized in `environmentd` with no single replica in scope is
+///   [`Environment`]. So is every `balancerd` config. `balancerd` syncs
+///   LaunchDarkly itself, against a `balancer` context keyed by cloud provider,
+///   region and build version, and has no environment, cluster or replica
+///   beneath it to target.
 /// - A config consumed at plan time, once per cluster, is [`Cluster`].
 ///
 /// NOTE: a config whose value must agree across the replicas of one cluster
@@ -103,6 +106,10 @@ use tracing::error;
 pub enum ParameterScope {
     /// Environment-wide only; no cluster/replica overrides. The default, so all
     /// existing synced parameters are unchanged.
+    ///
+    /// NOTE: this names the coarsest targeting granularity, not the
+    /// `environmentd` process. A config a process other than `environmentd`
+    /// resolves for itself, with nothing finer beneath it, is `Environment`.
     Environment,
     /// Cluster-coherent: env-wide base plus per-cluster overrides. Evaluated
     /// with the `cluster` context (replica-free) and resolved at plan time via
