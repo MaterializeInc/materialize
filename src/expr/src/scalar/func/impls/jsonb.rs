@@ -722,12 +722,73 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
                 "index"
             }
             CreateType(_) => "type",
-            // NOTE: erroring here is a trap for whoever adds the next item type. The catalog
-            // views that call this run it over every item row before their type filter can
-            // drop the rows they don't want, so one unclassified `create_sql` takes out
-            // `mz_objects`, `mz_indexes`, and every sibling view at once. Every item
-            // statement must therefore get an explicit arm above.
-            _ => return Err("not a CREATE item statement".into()),
+            // NOTE: every statement that creates a catalog item needs an arm above. These
+            // catalog views run this over every item row before their type filter drops the
+            // unwanted rows, so one unclassified `create_sql` takes out `mz_objects`,
+            // `mz_indexes`, and every sibling view at once. The match is exhaustive to make
+            // that a compile error here, not a runtime failure.
+            Select(_)
+            | Insert(_)
+            | Copy(_)
+            | Update(_)
+            | Delete(_)
+            | CreateDatabase(_)
+            | CreateSchema(_)
+            | CreateRole(_)
+            | CreateCluster(_)
+            | CreateClusterReplica(_)
+            | CreateNetworkPolicy(_)
+            | AlterCluster(_)
+            | AlterOwner(_)
+            | AlterObjectRename(_)
+            | AlterObjectSwap(_)
+            | AlterRetainHistory(_)
+            | AlterIndex(_)
+            | AlterSecret(_)
+            | AlterSetCluster(_)
+            | AlterSink(_)
+            | AlterSource(_)
+            | AlterSystemSet(_)
+            | AlterSystemReset(_)
+            | AlterSystemResetAll(_)
+            | AlterConnection(_)
+            | AlterNetworkPolicy(_)
+            | AlterRole(_)
+            | AlterTableAddColumn(_)
+            | AlterMaterializedViewApplyReplacement(_)
+            | Discard(_)
+            | DropObjects(_)
+            | DropOwned(_)
+            | SetVariable(_)
+            | ResetVariable(_)
+            | Show(_)
+            | StartTransaction(_)
+            | SetTransaction(_)
+            | Commit(_)
+            | Rollback(_)
+            | Subscribe(_)
+            | ExplainPlan(_)
+            | ExplainPushdown(_)
+            | ExplainTimestamp(_)
+            | ExplainSinkSchema(_)
+            | ExplainAnalyzeObject(_)
+            | ExplainAnalyzeCluster(_)
+            | Declare(_)
+            | Fetch(_)
+            | Close(_)
+            | Prepare(_)
+            | Execute(_)
+            | ExecuteUnitTest(_)
+            | Deallocate(_)
+            | Raise(_)
+            | GrantRole(_)
+            | RevokeRole(_)
+            | GrantPrivileges(_)
+            | RevokePrivileges(_)
+            | AlterDefaultPrivileges(_)
+            | ReassignOwned(_)
+            | ValidateConnection(_)
+            | Comment(_) => return Err("not a CREATE item statement".into()),
         };
         info.insert("type", json!(item_type));
 

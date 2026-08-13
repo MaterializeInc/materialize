@@ -60,10 +60,11 @@ use mz_sql_parser::ast::{
     CommentStatement, ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateMetricSinkStatement, CreateNetworkPolicyStatement,
-    CreateRoleStatement, CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection,
-    CreateSinkOption, CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection,
-    CreateSourceOption, CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
+    CreateMaterializedViewStatement, CreateMetricSinkOption, CreateMetricSinkOptionName,
+    CreateMetricSinkStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
+    CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
+    CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
+    CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
     CreateSubsourceOptionName, CreateSubsourceStatement, CreateTableFromSourceStatement,
     CreateTableStatement, CreateTypeAs, CreateTypeListOption, CreateTypeListOptionName,
     CreateTypeMapOption, CreateTypeMapOptionName, CreateTypeStatement, CreateViewStatement,
@@ -4247,6 +4248,30 @@ const METRIC_SINK_SOURCE_COLUMNS: &[(&str, fn(&SqlScalarType) -> bool)] = &[
     ("help", |t| matches!(t, SqlScalarType::String)),
 ];
 
+generate_extracted_config!(CreateMetricSinkOption, (Prefix, String));
+
+/// Rejects a prefix that could not start a Prometheus metric name.
+///
+/// The sink prepends this to every name it publishes, so `prefix + name` must stay a legal
+/// family name (`[a-zA-Z_:][a-zA-Z0-9_:]*`, the same grammar the runtime checks each row's
+/// `metric_name` against).
+fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
+    let mut chars = prefix.chars();
+    let valid = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(sql_err!(
+            "metric sink prefix {:?} is not a valid start of a Prometheus metric name",
+            prefix
+        ));
+    }
+    Ok(())
+}
+
 fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
     for (name, type_ok) in METRIC_SINK_SOURCE_COLUMNS {
         let col = ColumnName::from(*name);
@@ -4281,9 +4306,17 @@ pub fn plan_create_metric_sink(
         in_cluster,
         if_not_exists,
         from,
+        with_options,
     } = &mut stmt;
 
     let if_not_exists = *if_not_exists;
+    let CreateMetricSinkOptionExtracted { prefix, seen: _ } = with_options.clone().try_into()?;
+    // Required, not defaulted. A name-derived default reintroduces the collision problem the
+    // moment the sink is renamed, and an empty one never had it solved.
+    let Some(prefix) = prefix else {
+        sql_bail!("CREATE METRIC SINK requires a PREFIX option");
+    };
+    validate_metric_sink_prefix(&prefix)?;
     let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
     let full_name = scx.catalog.resolve_full_name(&name);
     let partial_name = PartialItemName::from(full_name.clone());
@@ -4325,6 +4358,7 @@ pub fn plan_create_metric_sink(
             create_sql,
             from: from_global_id,
             cluster_id,
+            prefix,
         },
         if_not_exists,
     }))

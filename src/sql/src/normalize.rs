@@ -380,6 +380,7 @@ pub fn create_statement(
             in_cluster: _,
             if_not_exists,
             from: _,
+            with_options: _,
         }) => {
             *name = allocate_name(name)?;
             *if_not_exists = false;

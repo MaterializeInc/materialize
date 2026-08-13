@@ -3651,12 +3651,32 @@ impl<'a> Parser<'a> {
         let in_cluster = self.parse_optional_in_cluster()?;
         self.expect_keyword(FROM)?;
         let from = self.parse_raw_name()?;
+        let with_options = if self.parse_keyword(WITH) {
+            self.expect_token(&Token::LParen)?;
+            let options = self.parse_comma_separated(Parser::parse_create_metric_sink_option)?;
+            self.expect_token(&Token::RParen)?;
+            options
+        } else {
+            vec![]
+        };
         Ok(Statement::CreateMetricSink(CreateMetricSinkStatement {
             name,
             in_cluster,
             if_not_exists,
             from,
+            with_options,
         }))
+    }
+
+    /// Parse the PREFIX option for CREATE METRIC SINK
+    fn parse_create_metric_sink_option(
+        &mut self,
+    ) -> Result<CreateMetricSinkOption<Raw>, ParserError> {
+        self.expect_keyword(PREFIX)?;
+        Ok(CreateMetricSinkOption {
+            name: CreateMetricSinkOptionName::Prefix,
+            value: self.parse_optional_option_value()?,
+        })
     }
 
     /// Parse the name of a CREATE SINK optional parameter

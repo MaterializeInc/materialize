@@ -16,11 +16,13 @@
 //!
 //! TODO: optimize and ship the dataflow here, and re-render it during bootstrap.
 
+use anyhow::anyhow;
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{CatalogItem, MetricSink};
+use mz_controller_types::ClusterId;
 use mz_ore::instrument;
 use mz_sql::catalog::CatalogError;
-use mz_sql::names::ResolvedIds;
+use mz_sql::names::{QualifiedItemName, ResolvedIds};
 use mz_sql::plan;
 use mz_sql::session::metadata::SessionMetadata;
 
@@ -45,6 +47,8 @@ impl Coordinator {
             if_not_exists,
         } = plan;
 
+        self.ensure_metric_sink_prefix_is_free(&name, metric_sink.cluster_id, &metric_sink.prefix)?;
+
         let (item_id, global_id) = self.allocate_user_id().await?;
         let op = catalog::Op::CreateItem {
             id: item_id,
@@ -55,6 +59,7 @@ impl Coordinator {
                 from: metric_sink.from,
                 resolved_ids,
                 cluster_id: metric_sink.cluster_id,
+                prefix: metric_sink.prefix,
                 optimized_plan: None,
                 physical_plan: None,
                 dataflow_metainfo: None,
@@ -75,5 +80,49 @@ impl Coordinator {
             }
             Err(err) => Err(err),
         }
+    }
+
+    /// Rejects `prefix` if it is a prefix of, or has as a prefix, any metric sink already on
+    /// `cluster_id`.
+    ///
+    /// Prefix-free, not just distinct: the published name is `prefix + metric_name`, so `a_`
+    /// + `b_c` and `a_b_` + `c` both publish `a_b_c`, and Prometheus silently merges same-named
+    /// families. Uniqueness only holds per cluster: the registry is process-local and every
+    /// replica of a cluster runs the same sinks.
+    ///
+    /// This is the authoritative check, not the plan-time one. Planning is not serialized
+    /// against catalog writes, so two creates can plan against the same state. The coordinator
+    /// sequences one statement at a time, and nothing commits between here and
+    /// `catalog_transact`.
+    ///
+    /// A sink already holding `name` is skipped: the create is then a no-op (`IF NOT EXISTS`)
+    /// or an "already exists" error, neither of which publishes anything new.
+    fn ensure_metric_sink_prefix_is_free(
+        &self,
+        name: &QualifiedItemName,
+        cluster_id: ClusterId,
+        prefix: &str,
+    ) -> Result<(), AdapterError> {
+        let cluster = self.catalog().get_cluster(cluster_id);
+        for item_id in &cluster.bound_objects {
+            let entry = self.catalog().get_entry(item_id);
+            let CatalogItem::MetricSink(existing) = entry.item() else {
+                continue;
+            };
+            if entry.name() == name {
+                continue;
+            }
+            if existing.prefix.starts_with(prefix) || prefix.starts_with(&existing.prefix) {
+                return Err(AdapterError::Unstructured(anyhow!(
+                    "metric sink prefix {:?} conflicts with prefix {:?} of metric sink {} on \
+                     cluster {}",
+                    prefix,
+                    existing.prefix,
+                    entry.name().item,
+                    cluster.name,
+                )));
+            }
+        }
+        Ok(())
     }
 }

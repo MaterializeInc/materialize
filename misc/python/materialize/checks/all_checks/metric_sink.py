@@ -30,7 +30,7 @@ class MetricSink(Check):
 
                 > CREATE VIEW metric_sink_view AS SELECT * FROM metric_sink_table
 
-                > CREATE METRIC SINK metric_sink_one FROM metric_sink_view
+                > CREATE METRIC SINK metric_sink_one FROM metric_sink_view WITH (PREFIX = 'one_')
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -40,12 +40,12 @@ class MetricSink(Check):
                 """
                 > INSERT INTO metric_sink_table VALUES ('b', 'counter', '{x=>z}', 2, 'help b')
 
-                > CREATE METRIC SINK metric_sink_two IN CLUSTER quickstart FROM metric_sink_view
+                > CREATE METRIC SINK metric_sink_two IN CLUSTER quickstart FROM metric_sink_view WITH (PREFIX = 'two_')
                 """,
                 """
                 > INSERT INTO metric_sink_table VALUES ('c', 'gauge', '{}', 3, 'help c')
 
-                > CREATE METRIC SINK IF NOT EXISTS metric_sink_three FROM metric_sink_view
+                > CREATE METRIC SINK IF NOT EXISTS metric_sink_three FROM metric_sink_view WITH (PREFIX = 'three_')
                 """,
             ]
         ]
@@ -61,13 +61,13 @@ class MetricSink(Check):
         # current probe is a proxy: it confirms the catalog item was re-parsed on
         # boot without needing a system connection.
         return Testdrive(dedent("""
-                ! CREATE METRIC SINK metric_sink_one FROM metric_sink_view
+                ! CREATE METRIC SINK metric_sink_one FROM metric_sink_view WITH (PREFIX = 'one_')
                 contains:metric sink "materialize.public.metric_sink_one" already exists
 
-                ! CREATE METRIC SINK metric_sink_two FROM metric_sink_view
+                ! CREATE METRIC SINK metric_sink_two FROM metric_sink_view WITH (PREFIX = 'two_')
                 contains:metric sink "materialize.public.metric_sink_two" already exists
 
-                ! CREATE METRIC SINK metric_sink_three FROM metric_sink_view
+                ! CREATE METRIC SINK metric_sink_three FROM metric_sink_view WITH (PREFIX = 'three_')
                 contains:metric sink "materialize.public.metric_sink_three" already exists
 
                 # The FROM edge came back too, so the view is still pinned.

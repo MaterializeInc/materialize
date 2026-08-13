@@ -1435,6 +1435,42 @@ impl<T: AstInfo> AstDisplay for CreateSinkStatement<T> {
 }
 impl_display_t!(CreateSinkStatement);
 
+/// An option in a `CREATE METRIC SINK` statement.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum CreateMetricSinkOptionName {
+    Prefix,
+}
+
+impl AstDisplay for CreateMetricSinkOptionName {
+    fn fmt<W: fmt::Write>(&self, f: &mut AstFormatter<W>) {
+        match self {
+            CreateMetricSinkOptionName::Prefix => {
+                f.write_str("PREFIX");
+            }
+        }
+    }
+}
+
+impl WithOptionName for CreateMetricSinkOptionName {
+    /// # WARNING
+    ///
+    /// Whenever implementing this trait consider very carefully whether or not
+    /// this value could contain sensitive user data. If you're uncertain, err
+    /// on the conservative side and return `true`.
+    fn redact_value(&self) -> bool {
+        match self {
+            CreateMetricSinkOptionName::Prefix => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CreateMetricSinkOption<T: AstInfo> {
+    pub name: CreateMetricSinkOptionName,
+    pub value: Option<WithOptionValue<T>>,
+}
+impl_display_for_with_option!(CreateMetricSinkOption);
+
 /// `CREATE METRIC SINK`
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CreateMetricSinkStatement<T: AstInfo> {
@@ -1442,6 +1478,7 @@ pub struct CreateMetricSinkStatement<T: AstInfo> {
     pub in_cluster: Option<T::ClusterName>,
     pub if_not_exists: bool,
     pub from: T::ItemName,
+    pub with_options: Vec<CreateMetricSinkOption<T>>,
 }
 
 impl<T: AstInfo> AstDisplay for CreateMetricSinkStatement<T> {
@@ -1459,6 +1496,14 @@ impl<T: AstInfo> AstDisplay for CreateMetricSinkStatement<T> {
         }
         f.write_str("FROM ");
         f.write_node(&self.from);
+
+        // NOTE: `create_sql` is persisted through this impl and re-parsed on boot, so dropping
+        // the clause here would silently lose the prefix across a restart.
+        if !self.with_options.is_empty() {
+            f.write_str(" WITH (");
+            f.write_node(&display::comma_separated(&self.with_options));
+            f.write_str(")");
+        }
     }
 }
 impl_display_t!(CreateMetricSinkStatement);

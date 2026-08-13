@@ -203,6 +203,11 @@ impl CatalogState {
             // A metric sink packs no builtin-table row, so it holds a catalog name that no
             // catalog relation reports. SQL-572 adds the `mz_metric_sinks` view. Until then,
             // listing or dropping a metric sink requires knowing its name out of band.
+            //
+            // NOTE: creating a metric sink takes SELECT on the FROM relation, not ownership
+            // of it, so once metric sinks are user-creatable this gap would let a reader
+            // egress another role's rows with no catalog relation the owner could see it in.
+            // SQL-572 has to land before user-facing metric sink DDL does.
             CatalogItem::Log(_) | CatalogItem::Secret(_) | CatalogItem::MetricSink(_) => vec![],
             // Connection details (mz_kafka_connections, mz_ssh_tunnel_connections,
             // mz_aws_connections, mz_aws_privatelink_connections) are now derived

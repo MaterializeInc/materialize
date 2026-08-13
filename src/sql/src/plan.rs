@@ -1999,6 +1999,9 @@ pub struct MetricSink {
     /// Collection we read into this metric sink.
     pub from: GlobalId,
     pub cluster_id: ClusterId,
+    /// Prepended to every metric name this sink publishes, so that the families it registers
+    /// cannot collide with another sink's or with the platform's own.
+    pub prefix: String,
 }
 
 #[derive(Clone, Debug)]

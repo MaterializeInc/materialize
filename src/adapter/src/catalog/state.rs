@@ -1693,6 +1693,7 @@ impl CatalogState {
                     from: metric_sink.from,
                     resolved_ids,
                     cluster_id: metric_sink.cluster_id,
+                    prefix: metric_sink.prefix,
                     optimized_plan: None,
                     physical_plan: None,
                     dataflow_metainfo: None,

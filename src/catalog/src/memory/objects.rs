@@ -1625,6 +1625,9 @@ pub struct MetricSink {
     pub resolved_ids: ResolvedIds,
     /// Cluster this metric sink runs on.
     pub cluster_id: ClusterId,
+    /// Prepended to every metric name this sink publishes. Not durable on its own: like `from`
+    /// and `cluster_id`, it rides in `create_sql` and is recovered by re-parsing that on boot.
+    pub prefix: String,
     /// Optimized global MIR plan, set after global optimization.
     #[serde(skip)]
     pub optimized_plan: Option<Arc<DataflowDescription<OptimizedMirRelationExpr>>>,
@@ -2542,7 +2545,9 @@ impl CatalogItem {
                 source.data_source,
                 DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
             ),
-            // TODO(SQL-571): return true once metric sinks run a per-replica dataflow.
+            // TODO(SQL-571): return true once metric sinks run a per-replica dataflow, and
+            // move this arm out then. Reporting `false` until then is safe: a sink with no
+            // real hydration state lets graceful reconfiguration cut over without waiting.
             CatalogItem::MetricSink(_)
             | CatalogItem::Table(_)
             | CatalogItem::Log(_)

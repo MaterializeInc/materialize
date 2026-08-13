@@ -1108,14 +1108,28 @@ CREATE METRIC SINK m IN CLUSTER c FROM v
 ----
 CREATE METRIC SINK m IN CLUSTER c FROM v
 =>
-CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("v")])) })
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("v")])), with_options: [] })
 
 parse-statement
 CREATE METRIC SINK IF NOT EXISTS m FROM v
 ----
 CREATE METRIC SINK IF NOT EXISTS m FROM v
 =>
-CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: None, if_not_exists: true, from: Name(UnresolvedItemName([Ident("v")])) })
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: None, if_not_exists: true, from: Name(UnresolvedItemName([Ident("v")])), with_options: [] })
+
+parse-statement
+CREATE METRIC SINK m IN CLUSTER c FROM v WITH (PREFIX = 'myapp_')
+----
+CREATE METRIC SINK m IN CLUSTER c FROM v WITH (PREFIX = 'myapp_')
+=>
+CreateMetricSink(CreateMetricSinkStatement { name: UnresolvedItemName([Ident("m")]), in_cluster: Some(Unresolved(Ident("c"))), if_not_exists: false, from: Name(UnresolvedItemName([Ident("v")])), with_options: [CreateMetricSinkOption { name: Prefix, value: Some(Value(String("myapp_"))) }] })
+
+parse-statement
+CREATE METRIC SINK m FROM v WITH (SNAPSHOT = false)
+----
+error: Expected PREFIX, found SNAPSHOT
+CREATE METRIC SINK m FROM v WITH (SNAPSHOT = false)
+                                  ^
 
 parse-statement
 CREATE INDEX foo ON myschema.bar (a, b)

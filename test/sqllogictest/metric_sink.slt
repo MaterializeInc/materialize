@@ -28,7 +28,7 @@ CREATE VIEW shaped AS SELECT * FROM raw
 # All five columns present with the right types, so this plans.
 
 statement ok
-CREATE METRIC SINK ms FROM shaped
+CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'ms_')
 
 statement ok
 DROP METRIC SINK ms
@@ -39,7 +39,7 @@ statement ok
 CREATE VIEW reordered AS SELECT help, value, labels, metric_type, metric_name FROM raw
 
 statement ok
-CREATE METRIC SINK ms_reordered FROM reordered
+CREATE METRIC SINK ms_reordered FROM reordered WITH (PREFIX = 'reordered_')
 
 statement ok
 DROP METRIC SINK ms_reordered
@@ -50,7 +50,7 @@ statement ok
 CREATE VIEW extra AS SELECT *, 1 AS unrelated FROM raw
 
 statement ok
-CREATE METRIC SINK ms_extra FROM extra
+CREATE METRIC SINK ms_extra FROM extra WITH (PREFIX = 'extra_')
 
 statement ok
 DROP METRIC SINK ms_extra
@@ -61,7 +61,7 @@ statement ok
 CREATE VIEW missing_help AS SELECT metric_name, metric_type, labels, value FROM raw
 
 statement error metric sink source must expose column "help"
-CREATE METRIC SINK bad FROM missing_help
+CREATE METRIC SINK bad FROM missing_help WITH (PREFIX = 'bad_')
 
 # Neither is one of the wrong type.
 
@@ -70,7 +70,7 @@ CREATE VIEW wrong_value_type AS
 SELECT metric_name, metric_type, labels, value::text AS value, help FROM raw
 
 statement error metric sink source column "value" is not of the required type
-CREATE METRIC SINK bad FROM wrong_value_type
+CREATE METRIC SINK bad FROM wrong_value_type WITH (PREFIX = 'bad_')
 
 # `labels` has to be a text=>text map, not just any map.
 
@@ -79,7 +79,7 @@ CREATE VIEW wrong_labels_type AS
 SELECT metric_name, metric_type, '{a=>1}'::map[text=>int] AS labels, value, help FROM raw
 
 statement error metric sink source column "labels" is not of the required type
-CREATE METRIC SINK bad FROM wrong_labels_type
+CREATE METRIC SINK bad FROM wrong_labels_type WITH (PREFIX = 'bad_')
 
 # You can't read from something that has no rows to read.
 
@@ -87,7 +87,7 @@ statement ok
 CREATE SECRET s AS 'x'
 
 statement error cannot create metric sink from s because it is a secret
-CREATE METRIC SINK bad FROM s
+CREATE METRIC SINK bad FROM s WITH (PREFIX = 'bad_')
 
 # An index is in the same boat, and the error should say so instead of being
 # vague about it.
@@ -96,18 +96,72 @@ statement ok
 CREATE INDEX raw_idx ON raw (metric_name)
 
 statement error cannot create metric sink from raw_idx because it is a index
-CREATE METRIC SINK bad FROM raw_idx
+CREATE METRIC SINK bad FROM raw_idx WITH (PREFIX = 'bad_')
 
-# IF NOT EXISTS on a taken name is a no-op.
+# The prefix is required. The names a sink publishes come from its query's rows
+# and so are unknown at plan time, which makes the prefix the only handle we get
+# on them. Defaulting it would give that handle up.
+
+statement error CREATE METRIC SINK requires a PREFIX option
+CREATE METRIC SINK ms_unprefixed FROM shaped
+
+# A published name is `prefix + metric_name`, so the prefix itself has to be a
+# legal start of a Prometheus family name.
+
+statement error metric sink prefix "9bad" is not a valid start of a Prometheus metric name
+CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = '9bad')
+
+statement error metric sink prefix "has-a-dash" is not a valid start of a Prometheus metric name
+CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = 'has-a-dash')
+
+statement error metric sink prefix "" is not a valid start of a Prometheus metric name
+CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = '')
+
+# Prefixes on one cluster have to be prefix-free, not merely distinct: `app_`
+# plus a row named `svc_x` publishes exactly what `app_svc_` plus a row named
+# `x` does, and the Prometheus registry merges same-named families silently.
 
 statement ok
-CREATE METRIC SINK ms FROM shaped
+CREATE METRIC SINK ms_app FROM shaped WITH (PREFIX = 'app_')
+
+statement error metric sink prefix "app_svc_" conflicts with prefix "app_" of metric sink ms_app on cluster quickstart
+CREATE METRIC SINK ms_app_svc FROM shaped WITH (PREFIX = 'app_svc_')
+
+# Either direction, so an existing prefix cannot be swallowed by a shorter one.
+
+statement error metric sink prefix "ap" conflicts with prefix "app_" of metric sink ms_app on cluster quickstart
+CREATE METRIC SINK ms_ap FROM shaped WITH (PREFIX = 'ap')
+
+# The registry a sink publishes into is process-local and every replica of a
+# cluster runs the same sinks, so uniqueness is only ever a per-cluster
+# question. The same prefix on another cluster collides with nothing.
 
 statement ok
-CREATE METRIC SINK IF NOT EXISTS ms FROM shaped
+CREATE CLUSTER other SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
+
+statement ok
+CREATE METRIC SINK ms_other_app IN CLUSTER other FROM shaped WITH (PREFIX = 'app_')
+
+statement ok
+DROP METRIC SINK ms_other_app
+
+statement ok
+DROP CLUSTER other
+
+statement ok
+DROP METRIC SINK ms_app
+
+# IF NOT EXISTS on a taken name is a no-op, and re-stating the prefix the
+# existing sink already has is not a conflict with itself.
+
+statement ok
+CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'ms_')
+
+statement ok
+CREATE METRIC SINK IF NOT EXISTS ms FROM shaped WITH (PREFIX = 'ms_')
 
 statement error metric sink "materialize.public.ms" already exists
-CREATE METRIC SINK ms FROM shaped
+CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'ms_')
 
 # A metric sink can't be indexed.
 
@@ -226,7 +280,7 @@ DROP VIEW shaped CASCADE
 # against `raw`.
 
 statement ok
-CREATE METRIC SINK ms FROM raw
+CREATE METRIC SINK ms FROM raw WITH (PREFIX = 'ms_')
 
 statement ok
 DROP METRIC SINK ms
@@ -269,7 +323,7 @@ REVOKE SELECT ON TABLE rbac_src FROM rbac_owner
 COMPLETE 0
 
 simple conn=rbac_owner,user=rbac_owner
-CREATE METRIC SINK rbac_ms FROM rbac_src
+CREATE METRIC SINK rbac_ms FROM rbac_src WITH (PREFIX = 'rbac_')
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.rbac_src"
 DETAIL: The 'rbac_owner' role needs SELECT privileges on TABLE "materialize.public.rbac_src"
@@ -282,7 +336,7 @@ GRANT SELECT ON TABLE rbac_src TO rbac_reader
 COMPLETE 0
 
 simple conn=rbac_reader,user=rbac_reader
-CREATE METRIC SINK rbac_ms FROM rbac_src
+CREATE METRIC SINK rbac_ms FROM rbac_src WITH (PREFIX = 'rbac_')
 ----
 COMPLETE 0
 
@@ -294,4 +348,4 @@ ALTER SYSTEM SET enable_metric_sink = false
 COMPLETE 0
 
 statement error CREATE METRIC SINK is not available
-CREATE METRIC SINK gated FROM raw
+CREATE METRIC SINK gated FROM raw WITH (PREFIX = 'gated_')
