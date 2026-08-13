@@ -943,6 +943,12 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
                 let oks = oks.into_vec();
+                // Collapses what forward reads see. `err_v` below feeds reads rendered before this
+                // binding and is collapsed separately; without this, a `Get` in a later rec binding
+                // or in the body resolves to the bundle stored here and compounds level over level,
+                // which is exactly what the collapse prevents for non-recursive bindings.
+                let bundle =
+                    self.distinct_shared_binding_errs(Id::Local(id), bundle, &reference_counts);
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 

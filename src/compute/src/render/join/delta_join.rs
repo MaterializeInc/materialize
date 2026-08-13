@@ -299,8 +299,13 @@ fn prune_bundle<'scope, T: RenderTimestamp>(
 /// semantics depend only on presence, so the extra copies buy nothing.
 ///
 /// Expects the pruned bundle (see [`prune_bundle`]), so that it yields errors only for the
-/// collections some path actually reads. A bundle offering both a raw collection and an arrangement
-/// contributes its errors once per offered form, since each form carries its own error collection.
+/// collections some path actually reads.
+///
+/// NOTE: This bounds an input's errors to one copy per retained form, not to one copy outright.
+/// Each form carries its own error collection, and an arrangement's is a distinct stream built from
+/// the raw one plus that key's key-formation errors, so an input the join reads under two lookup
+/// keys still contributes its errors twice. Reachable whenever a delta path set needs an
+/// error-carrying input arranged by more than one key.
 fn bundle_errs<'scope, T: RenderTimestamp>(
     bundle: &CollectionBundle<'scope, T>,
 ) -> Vec<VecCollection<'scope, T, DataflowErrorSer, Diff>> {
