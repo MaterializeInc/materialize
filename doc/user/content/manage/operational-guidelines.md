@@ -57,18 +57,18 @@ putting sinks on the same cluster that hosts sources .
 
 See also [Cluster architecture](#three-tier-architecture).
 
-## Snapshotting and hydration considerations
+## Snapshotting considerations
 
-- For upsert sources, snapshotting is a resource-intensive operation that can
-  require a significant amount of CPU and memory.
+For upsert sources, snapshotting is a resource-intensive operation that can require a significant amount of CPU and memory.
 
-- During hydration (both initial hydration and subsequent rehydrations), materialized
-  views require memory proportional to both the input and output. When
-  estimating required resources, consider both the hydration cost and the
-  steady-state cost.
+## Hydration considerations
 
-- During sink creation (initial hydration), sinks need to load an entire
-  snapshot of the data in memory.
+When sizing a cluster, budget for hydration memory on top of the steady-state
+cost. The table below summarizes, per object type, when each object hydrates and
+the memory it uses. For more on hydration, including strategies to reduce its
+impact, see [Hydration](/concepts/hydration/).
+
+{{% yaml-table data="hydration-objects-table" %}}
 
 ## Role-based access control (RBAC)
 

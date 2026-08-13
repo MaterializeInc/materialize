@@ -19,12 +19,14 @@ hydration](#objects-and-hydration).
 
 ## Objects and hydration
 
-Hydration is per replica. When a trigger above occurs, the objects on the
-affected replicas hydrate as described below. A restart re-hydrates a cluster's
-existing replicas. A resize or an added replica hydrates only the new replicas
-it provisions. On those new replicas, every object hydrates just as it would
-after a restart.
-
+Hydration is per cluster replica. A [cluster](/concepts/clusters/) is a
+collection of replicas, and the replicas, not the cluster, have the lifecycle:
+a replica starts, hydrates, serves, and can crash and restart. A replica's
+properties are also immutable, which is why a resize provisions new replicas
+instead of changing existing ones. When a trigger above occurs, the objects on
+the affected replicas hydrate as described below. When a replica restarts,
+every object on it re-hydrates. A resize or an added replica hydrates only the
+new replicas, where every object hydrates just as it would after a restart.
 
 {{% yaml-table data="hydration-objects-table" %}}
 
@@ -39,10 +41,13 @@ size. Some hydration-related strategies you may want to consider:
   then removes it once a steady-size replica catches up. You pay for the burst
   replica while it is provisioned, but not at steady state.
 
-- Split materialized views and indexes across multiple clusters. Each cluster
-  hydrates its own objects independently, which distributes the memory required
-  for hydration, lets objects on different clusters hydrate in parallel, and
-  limits how much must re-hydrate when a single cluster restarts.
+  - If a steady-size replica runs out of memory during hydration, resize the
+    cluster. During the resizing, the cluster continues to serve from the burst replica.
+
+- Distribute materialized views and indexes across multiple clusters. Each
+  cluster's replicas hydrate their objects independently, which distributes the
+  memory required for hydration, lets objects on different clusters hydrate in
+  parallel, and limits how much must re-hydrate when any one replica restarts.
 
 - When changing a materialized view or index, or forcing dependents to re-plan
   (for example, after dropping an index and recreating the dependents), build
@@ -57,15 +62,15 @@ size. Some hydration-related strategies you may want to consider:
   - For a single materialized view, creating and hydrating a [replacement
     materialized view (public preview) and replacing the existing view in
     place](/transform-data/updating-materialized-views/replace-materialized-view/)
-    may be simpler, but briefly reduces freshness.
+    may be simpler, but briefly reduces freshness. The replacement materialized
+    view can be either on the same or different cluster.
 
 {{< note >}}
 
 The burst-replica and blue/green strategies run extra replicas alongside the
 existing ones, as do a resize or a zero-downtime upgrade. During the overlap,
-the cluster temporarily uses additional resources, up to roughly double during a
-resize or upgrade. Account for the additional cost and, on self-managed
-deployments, the additional capacity required.
+the cluster temporarily uses additional resources. Account for the additional
+cost and, on self-managed deployments, the additional capacity required.
 
 {{< /note >}}
 
@@ -93,8 +98,9 @@ memory is the bottleneck rather than as a default modeling pattern.
     where a single view's hydration spike can dictate the cluster size. A
     cluster with many materialized views already hydrates them as separate
     dataflows and gets this benefit naturally.
-  - A restart, re-plan, or replacement of one split view affects only that
-    portion of the data.
+  - A re-plan or replacement of one split view affects only that portion of
+    the data. A replica restart still re-hydrates all views on the replica,
+    though in smaller units.
   - If the split views share expensive computation, put that computation in a
     [common indexed view first](#index-order), creating the index **before**
     creating the split views. Otherwise, each split view may rebuild its own

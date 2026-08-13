@@ -9,44 +9,46 @@
 - name: definition
   content: |
     Hydration is the reconstruction of an object's in-memory state by reading
-    from Materialize's storage layer; hydration does not read from the upstream
-    system.
+    from Materialize's storage layer and existing indexes; hydration does not
+    read from the upstream system.
 
 - name: triggers
   content: |
     Depending on the object, hydration (or rehydration) occurs after:
-    - **An object is created or recreated**, triggering its hydration.
-      * This includes recreating objects to force re-planning. For example,
-        after dropping an index, you can drop and recreate its dependent objects
-        to force them to re-plan and rehydrate.
+    - **An object is created**, triggering its hydration.
+      * This includes dropping and recreating objects to force re-planning. For
+        example, after dropping an index, you can drop and recreate its
+        dependent objects to force them to re-plan. The recreated objects then
+        hydrate like any newly created object.
     - **A cluster replica restarts**, such as during Materialize Cloud's
       routine maintenance or after an out-of-memory event. Hydration can be
       memory-intensive and can itself trigger the out-of-memory event. The
       replica then restarts and rehydrates again, potentially creating a
       restart-and-rehydrate loop if the replica is undersized.
-    - **A cluster resize**, which provisions new replicas at the target size and
-      hydrates them before retiring the old ones. The cluster keeps serving
-      throughout.
+    - **A cluster resize**. A cluster resize provisions new replicas at the
+      target size and hydrates them before retiring the old ones. The cluster
+      keeps serving throughout.
     - **Adding a replica to a cluster**, which hydrates the new replica only.
       Existing replicas are unaffected and keep serving.
 
 - name: materialized-view
   content: >-
-    - **When**: Hydrates on creation and on every cluster restart or resize.
+    - **When**: Hydrates on creation and on every replica (re)start or cluster resize.
 
     - **What**: Rebuilds the dataflow's operator state: the arrangements that
     joins, aggregations, and similar operators keep to update results
     incrementally. Note: A materialized view's result lives in durable storage,
     so it rebuilds only this maintenance state, not the result.
 
-    - **Memory Use**: Its memory scales with those arrangements, so joins and
-    aggregations are the memory-hungry cases while a pure map or filter view is
-    nearly stateless. It also holds an output-side buffer that scales with the
-    view's output volume and is largest during hydration.
+    - **Memory Use**: Scales with the view's definition, which it holds at
+    steady state, plus a transient output buffer up to twice the output size:
+    the current output plus a read-back of the previously persisted output. On
+    first creation, since there is no previous output, the buffer is a single
+    output size.
 
 - name: index
   content: >-
-    - **When**: Hydrates on creation and on every cluster restart or resize.
+    - **When**: Hydrates on creation and on every replica (re)start or cluster resize.
 
     - **What**: Rebuilds the arranged (indexed) data it keeps in memory to serve
     reads, plus any operator arrangements its dataflow maintains (for joins,
@@ -57,7 +59,7 @@
 
 - name: kafka-upsert-sources
   content: >-
-    - **When**: On restart or resize. These sources do not hydrate on creation;
+    - **When**: On replica (re)start or cluster resize. These sources do not hydrate on creation;
     instead, on creation, their indexes are built as part of
     [snapshotting](/concepts/snapshotting/).
 
@@ -70,7 +72,7 @@
 
 - name: append-only-and-cdc-sources
   content: >-
-    - **When**: On restart or resize, marked hydrated as soon as the dataflow
+    - **When**: On replica (re)start or cluster resize, marked hydrated as soon as the dataflow
     starts.
 
     - **What**: Effectively nothing. These sources keep no internal index to
@@ -86,7 +88,7 @@
 
 - name: sink
   content: >-
-    - **When**: Hydrates on creation and on every cluster restart or resize.
+    - **When**: Hydrates on creation and on every replica (re)start or cluster resize.
 
     - **What**: Loads a full copy of its input snapshot into the arrangement that
     feeds the sink before it can emit.
@@ -97,9 +99,11 @@
 
 - name: subscription
   content: >-
-    - **When**: On creation only. Because a subscription is transient and tied to
-    its session, it is not rehydrated on restart and is not reported in
-    `mz_hydration_statuses`.
+    - **When**: On creation and, while it remains active, on every replica
+    (re)start: the dataflow is re-installed on the (re)started replica and the
+    subscription resumes. A subscription that targets a specific replica instead
+    ends with an error when that replica restarts. A subscription ends with its
+    session and is not reported in `mz_hydration_statuses`.
 
     - **What**: Rebuilds the dataflow when it starts.
 
