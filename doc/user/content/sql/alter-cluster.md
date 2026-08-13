@@ -212,10 +212,17 @@ Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
   regardless of hydration status, which can cause downtime. Prefer
   `WAIT UNTIL READY`.
 
-In v26.35 and later, both options still return immediately and let the resize
-proceed in the background. They do not hold the session open. In v26.34 and
+On current versions, both options still return immediately and let the resize
+proceed in the background. They do not hold the session open. In v26.33 and
 earlier, `WAIT UNTIL READY` blocked the session instead. See [Resizing in
-v26.34 and earlier](#resizing-in-v2634-and-earlier).
+v26.33 and earlier](#resizing-in-v2633-and-earlier). For system clusters, an
+explicit `WAIT UNTIL READY` also blocked the session through v26.37. See
+[System clusters](#system-clusters).
+
+On a self-managed deployment, these options are additionally gated behind the
+`enable_zero_downtime_cluster_reconfiguration` session feature flag, which is
+off by default. Until it is enabled, a statement using them returns an error
+rather than resizing the cluster.
 
 See [Monitoring a resize](#monitoring-a-resize) to track progress and [Cancel a
 resize](#cancel-a-resize) to stop an in-flight resize.
@@ -269,9 +276,14 @@ cluster:
 ALTER CLUSTER mz_catalog_server
 SET (SIZE = '50cc') WITH (WAIT UNTIL READY (TIMEOUT = '30m'));
 ```
+
+On those versions, the explicit option was the only way to resize a system
+cluster gracefully, and it also held the session open until the new replicas
+hydrated or the timeout passed. That is unlike a user cluster, which returns
+immediately.
 {{< /warning >}}
 
-#### Resizing in v26.34 and earlier {#resizing-in-v2634-and-earlier}
+#### Resizing in v26.33 and earlier {#resizing-in-v2633-and-earlier}
 
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
 which incurs **no downtime**. Instead of restarting the cluster, this approach

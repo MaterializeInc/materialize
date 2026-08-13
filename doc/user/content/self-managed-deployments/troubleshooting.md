@@ -127,6 +127,11 @@ To increase the cluster's size, you can follow the following steps:
    SET (SIZE = '50cc') WITH (WAIT UNTIL READY (TIMEOUT = '30m'));
    ```
 
+   That statement holds the session open until the new replica hydrates or the
+   timeout passes. It also requires the
+   `enable_zero_downtime_cluster_reconfiguration` session feature flag, which is
+   off by default, so enable it first.
+
    See [`ALTER CLUSTER`: System
    clusters](/sql/alter-cluster/#system-clusters).
    {{< /warning >}}
