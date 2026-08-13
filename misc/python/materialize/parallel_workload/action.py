@@ -2986,6 +2986,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_bounded_staleness_isolation"] = (
             BOOLEAN_FLAG_VALUES
