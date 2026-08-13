@@ -62,6 +62,14 @@ Dictionary compression trades CPU for memory, and it does **not** reduce memory
 on every workload. Use this section to judge whether it suits your workload, and
 [contact our team](/support/) if you have questions.
 
+{{< note >}}
+A single arrangement usually holds both columns that compress well and columns
+that do not. Only the columns that compress save memory, and every column still
+pays the CPU cost. You cannot target individual columns, because the option is
+set per cluster and the optimizer decides which intermediate arrangements a
+dataflow builds.
+{{< /note >}}
+
 ### When it helps
 
 - Columns that hold a small set of often-repeated, longer values. Typical
@@ -93,12 +101,6 @@ builds these internal arrangements for any joins and aggregations it computes.
 - **Small arrangements.** An arrangement built from scratch does not install a
   dictionary until it has seen on the order of 65,000 rows. Small arrangements
   are effectively unaffected.
-
-Real workloads usually mix the two. An arrangement often holds a few columns that
-compress well alongside others that do not, and only the compressible ones save
-memory while every column still pays the CPU cost. You cannot target individual
-columns, because the option is set per cluster and the optimizer decides which
-intermediate arrangements a dataflow builds.
 
 ### The CPU cost
 
