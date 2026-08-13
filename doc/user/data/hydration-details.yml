@@ -93,9 +93,9 @@
     - **What**: Loads a full copy of its input snapshot into the arrangement that
     feeds the sink before it can emit.
 
-    - **Memory Use**: A transient cost that drains as the snapshot is written out,
-    so unlike an index or materialized view, a sink retains little in memory at
-    steady state.
+    - **Memory Use**: Peaks at roughly a full copy of the input snapshot, then
+    decreases as the snapshot is written out. At steady state, a sink retains
+    little in memory.
 
 - name: subscription
   content: >-
