@@ -198,69 +198,111 @@ pub const TYPE_MZ_ACL_ITEM_ARRAY: BuiltinType<NameReference> = BuiltinType {
     },
 };
 
-pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_iceberg_sinks",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_ICEBERG_SINKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("namespace", SqlScalarType::String.nullable(false))
-        .with_column("table", SqlScalarType::String.nullable(false))
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the sink."),
-        (
-            "namespace",
-            "The namespace of the Iceberg table into which the sink is writing.",
-        ),
-        ("table", "The Iceberg table into which the sink is writing."),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "iceberg_sink",
-        description: "Iceberg-specific sink configuration (namespace, table)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "sink",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_ICEBERG_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_iceberg_sinks",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_ICEBERG_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("namespace", SqlScalarType::String.nullable(false))
+            .with_column("table", SqlScalarType::String.nullable(false))
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the sink."),
+            (
+                "namespace",
+                "The namespace of the Iceberg table into which the sink is writing.",
+            ),
+            ("table", "The Iceberg table into which the sink is writing."),
+        ]),
+        // Planning requires `NAMESPACE` and `TABLE`, so both are always there.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL namespace,
+    ASSERT NOT NULL \"table\"
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    parsed->>'namespace' AS namespace,
+    parsed->>'table' AS \"table\"
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'sink_type' = 'iceberg'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "iceberg_sink",
+            description: "Iceberg-specific sink configuration (namespace, table)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "sink",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 
-pub static MZ_KAFKA_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
-    name: "mz_kafka_sinks",
-    schema: MZ_CATALOG_SCHEMA,
-    oid: oid::TABLE_MZ_KAFKA_SINKS_OID,
-    desc: RelationDesc::builder()
-        .with_column("id", SqlScalarType::String.nullable(false))
-        .with_column("topic", SqlScalarType::String.nullable(false))
-        .with_key(vec![0])
-        .finish(),
-    column_comments: BTreeMap::from_iter([
-        ("id", "The ID of the sink."),
-        (
-            "topic",
-            "The name of the Kafka topic into which the sink is writing.",
-        ),
-    ]),
-    is_retained_metrics_object: false,
-    access: vec![PUBLIC_SELECT],
-    ontology: Some(Ontology {
-        entity_name: "kafka_sink",
-        description: "Kafka-specific sink configuration (topic)",
-        links: &const {
-            [OntologyLink {
-                name: "details_of",
-                target: "sink",
-                properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
-            }]
-        },
-        column_semantic_types: &[("id", SemanticType::CatalogItemId)],
-    }),
+pub static MZ_KAFKA_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
+        name: "mz_kafka_sinks",
+        schema: MZ_CATALOG_SCHEMA,
+        oid: oid::MV_MZ_KAFKA_SINKS_OID,
+        desc: RelationDesc::builder()
+            .with_column("id", SqlScalarType::String.nullable(false))
+            .with_column("topic", SqlScalarType::String.nullable(false))
+            .with_key(vec![0])
+            .finish(),
+        column_comments: BTreeMap::from_iter([
+            ("id", "The ID of the sink."),
+            (
+                "topic",
+                "The name of the Kafka topic into which the sink is writing.",
+            ),
+        ]),
+        // Planning requires `TOPIC`, so it is always there.
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL topic
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    parsed->>'topic' AS topic
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'sink_type' = 'kafka'",
+        is_retained_metrics_object: false,
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "kafka_sink",
+            description: "Kafka-specific sink configuration (topic)",
+            links: &const {
+                [OntologyLink {
+                    name: "details_of",
+                    target: "sink",
+                    properties: LinkProperties::fk("id", "id", Cardinality::OneToOne),
+                }]
+            },
+            column_semantic_types: &[("id", SemanticType::CatalogItemId)],
+        }),
+    }
 });
 // Reads Item rows from `mz_catalog_raw`, pulls the broker addresses and any
 // explicit progress topic out of the persisted `create_sql` via
@@ -1224,11 +1266,15 @@ WHERE
     });
 // mz_sources is generated dynamically in BUILTINS_STATIC via builtin::make_mz_sources()
 // with builtin source/log entries inlined as VALUES. See builtin/builtin.rs.
-pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
-    BuiltinTable {
+/// Sink metadata, all of it derived from the persisted `create_sql`. The
+/// `CreateSink` arm of `parse_catalog_create_sql` does the parsing, including
+/// the deprecated `format` column and its avro/json-only collapse. `size` is
+/// deprecated and always NULL.
+pub static MZ_SINKS: LazyLock<BuiltinMaterializedView> = LazyLock::new(|| {
+    BuiltinMaterializedView {
         name: "mz_sinks",
         schema: MZ_CATALOG_SCHEMA,
-        oid: oid::TABLE_MZ_SINKS_OID,
+        oid: oid::MV_MZ_SINKS_OID,
         desc: RelationDesc::builder()
             .with_column("id", SqlScalarType::String.nullable(false))
             .with_column("oid", SqlScalarType::Oid.nullable(false))
@@ -1294,6 +1340,43 @@ pub static MZ_SINKS: LazyLock<BuiltinTable> = LazyLock::new(|| {
                 "The redacted `CREATE` SQL statement for the sink.",
             ),
         ]),
+        sql: "
+IN CLUSTER mz_catalog_server
+WITH (
+    ASSERT NOT NULL id,
+    ASSERT NOT NULL oid,
+    ASSERT NOT NULL schema_id,
+    ASSERT NOT NULL name,
+    ASSERT NOT NULL type,
+    ASSERT NOT NULL cluster_id,
+    ASSERT NOT NULL owner_id,
+    ASSERT NOT NULL create_sql,
+    ASSERT NOT NULL redacted_create_sql
+) AS
+SELECT
+    mz_internal.parse_catalog_id(data->'key'->'gid') AS id,
+    (data->'value'->>'oid')::oid AS oid,
+    mz_internal.parse_catalog_id(data->'value'->'schema_id') AS schema_id,
+    data->'value'->>'name' AS name,
+    parsed->>'sink_type' AS type,
+    parsed->>'connection_id' AS connection_id,
+    NULL::text AS size,
+    parsed->>'envelope_type' AS envelope_type,
+    parsed->>'format' AS format,
+    parsed->>'key_format' AS key_format,
+    parsed->>'value_format' AS value_format,
+    parsed->>'cluster_id' AS cluster_id,
+    mz_internal.parse_catalog_id(data->'value'->'owner_id') AS owner_id,
+    data->'value'->'definition'->'V1'->>'create_sql' AS create_sql,
+    mz_internal.redact_sql(data->'value'->'definition'->'V1'->>'create_sql') AS redacted_create_sql
+FROM
+    mz_internal.mz_catalog_raw
+    CROSS JOIN LATERAL (
+        SELECT mz_internal.parse_catalog_create_sql(data->'value'->'definition'->'V1'->>'create_sql')
+    ) AS l(parsed)
+WHERE
+    data->>'kind' = 'Item' AND
+    parsed->>'type' = 'sink'",
         is_retained_metrics_object: true,
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {

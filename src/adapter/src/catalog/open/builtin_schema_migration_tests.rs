@@ -402,3 +402,18 @@ fn init_persist(sim: &mut turmoil::Sim) -> PersistLocation {
         consensus_uri: "turmoil://consensus:7000".parse().unwrap(),
     }
 }
+
+/// A step naming a builtin that no longer exists, or that changed
+/// `CatalogItemType`, panics `validate_migration_steps` at catalog open. That
+/// needs a catalog already on disk to reproduce, so the default CI suite never
+/// sees it and only the upgrade nightly does. Much cheaper to catch here.
+#[mz_ore::test]
+fn test_migration_steps_resolve_to_builtins() {
+    for step in MIGRATIONS.iter() {
+        assert!(
+            BUILTIN_LOOKUP.contains_key(&step.object),
+            "migration step for non-existent builtin: {:?}",
+            step.object
+        );
+    }
+}

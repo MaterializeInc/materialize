@@ -40,6 +40,21 @@
     MODE APPEND
     WITH (COMMIT INTERVAL '1s');
 
+# MODE APPEND is the only way to get envelope_type = append, and the catalog
+# relations read it back out of create_sql.
+> SELECT type, envelope_type, format, key_format, value_format, size,
+    connection_id = (SELECT id FROM mz_connections WHERE name = 'append_polaris')
+  FROM mz_sinks WHERE name = 'append_demo'
+iceberg append <null> <null> <null> <null> true
+
+> SELECT namespace, "table" FROM mz_iceberg_sinks
+  WHERE id = (SELECT id FROM mz_sinks WHERE name = 'append_demo')
+default_namespace append_demo_table
+
+> SELECT count(*) FROM mz_kafka_sinks
+  WHERE id = (SELECT id FROM mz_sinks WHERE name = 'append_demo')
+0
+
 # Iceberg sinks commit data asynchronously; wait for at least one commit interval to elapse
 # before querying the table.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s

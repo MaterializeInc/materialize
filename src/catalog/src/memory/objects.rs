@@ -1344,6 +1344,10 @@ impl Sink {
     }
 
     /// Envelope of the sink.
+    ///
+    /// NOTE: the `mz_sinks` view works this out from `create_sql` instead, in
+    /// the `CreateSink` arm of `parse_catalog_create_sql`. Kafka gets it from
+    /// `ENVELOPE` there, iceberg from `MODE`. Change both or they drift.
     pub fn envelope(&self) -> Option<&str> {
         match &self.envelope {
             SinkEnvelope::Debezium => Some("debezium"),
@@ -1356,6 +1360,9 @@ impl Sink {
     /// if the key-format is none or the key & value formats are
     /// both the same (either avro or json), we return the value format name,
     /// otherwise we return a composite name.
+    ///
+    /// NOTE: `parse_catalog_create_sql` redoes this collapse for the `mz_sinks`
+    /// `format` column. Change both or they drift.
     pub fn combined_format(&self) -> Option<Cow<'_, str>> {
         match &self.connection {
             StorageSinkConnection::Kafka(connection) => Some(connection.format.get_format_name()),
@@ -1364,6 +1371,10 @@ impl Sink {
     }
 
     /// Output distinct key_format and value_format of the sink.
+    ///
+    /// NOTE: also derived from `create_sql` for `mz_sinks`. Watch out that a key
+    /// format exists only when the sink has a `KEY`, so the SQL side has to work
+    /// that out from the statement for itself.
     pub fn formats(&self) -> Option<(Option<&str>, &str)> {
         match &self.connection {
             StorageSinkConnection::Kafka(connection) => {
