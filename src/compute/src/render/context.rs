@@ -531,14 +531,14 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
     /// this dataflow cannot rewrite in place. Their errors arrive already collapsed when the
     /// exporting dataflow collapsed at its own bindings.
-    pub fn distinct_errs(mut self, name: &str) -> Self {
+    pub fn distinct_errs(mut self) -> Self {
         /// Rewrites an arranged error collection to hold each of its errors once.
         fn collapse<'a, T: RenderTimestamp>(
             errs: Arranged<'a, ErrAgent<T, Diff>>,
             name: &str,
         ) -> Arranged<'a, ErrAgent<T, Diff>> {
             errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
-                &format!("Distinct {name}"),
+                name,
                 |_err, _input, output| output.push(((), Diff::ONE)),
             )
         }
@@ -550,16 +550,16 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 ErrBatcher<_, _>,
                 ErrBuilder<_, _>,
                 ErrSpine<_, _>,
-            >(
-                &format!("Arrange {name}"),
-            );
-            let errs = collapse(errs, name).as_collection(|err, _| err.clone());
+            >("Arrange errors");
+            let errs = collapse(errs, "Distinct errors").as_collection(|err, _| err.clone());
             self.collection = Some((oks, errs));
         }
         for (key, flavor) in std::mem::take(&mut self.arranged) {
             let flavor = match flavor {
                 ArrangementFlavor::Local(oks, errs) => {
-                    let name = format!("{name} [key: {key:?}]");
+                    // Names the key, not the binding: an operator name carrying a `LocalId` would
+                    // churn the introspection goldens every time the optimizer renumbers locals.
+                    let name = format!("Distinct errors[{key:?}]");
                     ArrangementFlavor::Local(oks, collapse(errs, &name))
                 }
                 flavor @ ArrangementFlavor::Trace(..) => flavor,

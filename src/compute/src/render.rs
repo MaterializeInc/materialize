@@ -1077,7 +1077,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
     ) -> CollectionBundle<'scope, T> {
         let readers = reference_counts.get(&id).copied().unwrap_or(0);
         if readers > 1 && ENABLE_ERROR_DISTINCT.get(&self.config_set) {
-            bundle.distinct_errs(&format!("errors for {id}"))
+            bundle.distinct_errs()
         } else {
             bundle
         }
