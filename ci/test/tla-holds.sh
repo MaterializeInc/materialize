@@ -64,10 +64,8 @@ fi
 # Format: <config> <spec> <expect: hold|refute>
 checks=(
     "Holds.cfg Holds.tla hold"
-    "HoldsCap.cfg Holds.tla refute"
-    "HoldsReleaseOnMaint.cfg Holds.tla refute"
     "HoldsBroadcast.cfg Holds.tla refute"
-    "HoldsBroadcastStanding.cfg Holds.tla hold"
+    "HoldsRouted.cfg Holds.tla refute"
 )
 
 status=0

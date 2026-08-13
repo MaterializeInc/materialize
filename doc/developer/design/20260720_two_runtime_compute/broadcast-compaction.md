@@ -1,8 +1,7 @@
 # Broadcast compaction
 
-Status: implemented, steps 1 to 4. Only the remodelling of `protocol-holds` (step 5) is
-left. Supersedes the mechanism in [read-holds.md](read-holds.md), whose invariant (I1) and
-gap analysis still stand and are not restated here.
+Status: implemented. Supersedes the mechanism in [read-holds.md](read-holds.md), whose
+invariant (I1) and gap analysis still stand and are not restated here.
 
 ## The conclusion that motivates this
 
@@ -45,7 +44,7 @@ Restoring the ordering *within* each stream does not restore it *between* them. 
 runtimes still drain at their own rates, so the owning runtime can realize a frontier the
 rendering runtime has not applied.
 
-TLC refutes it (`protocol-holds/HoldsBroadcast.cfg`, I1 violated in five states):
+TLC refutes it (`protocol-holds/HoldsBroadcast.cfg`, I1 violated in six states):
 
 1. the controller creates a dataflow at `as_of = 0`, queued to the rendering runtime
 2. the controller drops it immediately, as a cancelled peek does, releasing its own read
@@ -59,8 +58,12 @@ its point of view the dataflow is gone.
 
 The standing hold closes exactly this window. In step 4 the bound is the rendering
 runtime's applied frontier, still 0, and it advances only when that runtime applies the
-broadcast compaction, which is queued *behind* the create.
-`protocol-holds/HoldsBroadcastStanding.cfg` holds over 19940 distinct states.
+broadcast compaction, which is queued *behind* the create. `protocol-holds/Holds.cfg` holds
+over 7845 distinct states, including the liveness property that the bound is temporary.
+
+`protocol-holds/HoldsRouted.cfg` fails in the same six states with compaction routed to the
+owning runtime alone, which is the state the split created. Broadcasting the command changes
+the ordering within each stream and buys nothing at all for this counterexample.
 
 ### Why the standing hold costs nothing
 
@@ -137,7 +140,10 @@ cheap to check once holder identity is out of the model.
 4. Delete the acquisition layer in one commit, keeping its findings in
    `read-holds.md` as rejected alternatives. **Done.**
 5. Remodel `protocol-holds` around stream positions, and drop the mechanisms that no
-   longer exist in the code once nothing references them.
+   longer exist in the code once nothing references them. **Done.** The spec lost the
+   acquisition, the release, the reclaim and the cap, and gained the publisher's own
+   recomputation as a separate action from applying a command, which is what makes the
+   liveness question expressible at all.
 
 ## As implemented
 
