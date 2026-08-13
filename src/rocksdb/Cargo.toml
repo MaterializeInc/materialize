@@ -32,5 +32,11 @@ default = []
 
 [dev-dependencies]
 anyhow.workspace = true
+lz4_flex.workspace = true
+mz-ore = { path = "../ore", features = ["pool"] }
 tempfile.workspace = true
 prometheus.workspace = true
+
+[[bench]]
+name = "random_access_swap"
+harness = false

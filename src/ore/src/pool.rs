@@ -124,6 +124,70 @@ pub trait ExtentCodec: std::fmt::Debug + Send + Sync {
     /// original body's length, and implementations must panic on a length
     /// mismatch rather than truncate or pad.
     fn decode(&self, stored: &[u8], body: &mut [u8]);
+
+    /// Reconstructs the byte range `[offset, offset + dst.len())` of the
+    /// `body_len`-byte body into `dst`. The range lies within the body.
+    ///
+    /// The default decodes the whole body into a reused scratch and copies
+    /// the range out, which is all a whole-block stored form can do. A
+    /// codec whose stored form has interior structure (independently
+    /// compressed sub-blocks with an offset index) overrides this to decode
+    /// only the parts the range touches, which is what makes a sub-range
+    /// read cost less than a whole-body read.
+    fn decode_range(&self, stored: &[u8], body_len: usize, offset: usize, dst: &mut [u8]) {
+        let end = offset
+            .checked_add(dst.len())
+            .expect("range end overflows usize");
+        assert!(end <= body_len, "range end {end} exceeds body {body_len}");
+        // Reads run on worker threads, so the scratch mirrors the write
+        // side's `Shrink` policy: capacity beyond the ~2 MiB chunk target
+        // is released rather than parked per thread.
+        use std::cell::RefCell;
+        thread_local! {
+            static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+        }
+        SCRATCH.with(|cell| {
+            let mut scratch = cell.borrow_mut();
+            scratch.resize(body_len, 0);
+            self.decode(stored, &mut scratch);
+            dst.copy_from_slice(&scratch[offset..end]);
+            if scratch.capacity() > 2 << 20 {
+                scratch.clear();
+                scratch.shrink_to_fit();
+            }
+        });
+    }
+}
+
+/// The identity [`ExtentCodec`]: the stored form is the body. Encode and
+/// decode are copies, and range reads copy the range directly, so a chunk
+/// stored under this codec pays no compression work in either direction
+/// while remaining fully budgeted and swap-backed like any other extent.
+#[derive(Debug)]
+pub struct IdentityCodec;
+
+/// The [`IdentityCodec`] instance to pass to [`Pool::insert_with`].
+pub static IDENTITY_CODEC: IdentityCodec = IdentityCodec;
+
+impl ExtentCodec for IdentityCodec {
+    fn encode(&self, body: &[u8], out: &mut Vec<u8>) {
+        out.clear();
+        out.extend_from_slice(body);
+    }
+
+    fn decode(&self, stored: &[u8], body: &mut [u8]) {
+        assert_eq!(stored.len(), body.len(), "identity stored form is the body");
+        body.copy_from_slice(stored);
+    }
+
+    fn decode_range(&self, stored: &[u8], body_len: usize, offset: usize, dst: &mut [u8]) {
+        assert_eq!(stored.len(), body_len, "identity stored form is the body");
+        let end = offset
+            .checked_add(dst.len())
+            .expect("range end overflows usize");
+        assert!(end <= body_len, "range end {end} exceeds body {body_len}");
+        dst.copy_from_slice(&stored[offset..end]);
+    }
 }
 
 /// The largest stored form [`ExtentCodec::encode`] may produce for a
@@ -3701,6 +3765,24 @@ mod tests {
         pool.quiesce_spill();
         pool.join_spill_threads();
         assert_eq!(pool.stats().resident_bytes, 0);
+    }
+
+    /// The identity codec stores the body verbatim: eviction and reads,
+    /// whole and by range, reconstruct it unchanged.
+    #[mz_ore::test]
+    fn identity_codec_round_trips() {
+        let pool = test_pool(usize::MAX);
+        let want = payload(SMALL, 601);
+        let h = pool.insert_with(SMALL, ChunkHints::default(), &IDENTITY_CODEC, |dst| {
+            dst.copy_from_slice(&want);
+        });
+        assert_eq!(read(&h), want);
+        pool.evict(&h);
+        assert_eq!(read(&h), want, "round-trips through the extent");
+        pool.evict(&h);
+        let mut range = Vec::new();
+        h.read_range_into(8..24, &mut range);
+        assert_eq!(range, want[8..24], "range reads copy the range directly");
     }
 
     #[mz_ore::test]
