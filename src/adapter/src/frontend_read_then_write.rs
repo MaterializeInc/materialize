@@ -92,6 +92,7 @@ use mz_repr::{CatalogItemId, Diff, GlobalId, RelationDesc, Row, RowArena, Timest
 use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
+use mz_sql::session::vars::IsolationLevel;
 use prometheus::Histogram;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -405,6 +406,26 @@ impl PeekClient {
 
         // Determine timestamp and acquire read holds.
         let oracle_read_ts = self.oracle_read_ts(&timeline).await?;
+
+        // Real-time recency, on the same terms as the frontend peek path. The
+        // coordinator round trip polls the selection's upstream sources, so we
+        // only pay it when the session actually asked for recency.
+        let vars = session.vars();
+        let real_time_recency_ts: Option<Timestamp> = if vars.real_time_recency()
+            && vars.transaction_isolation() == &IsolationLevel::StrictSerializable
+            && !session.contains_read_timestamp()
+        {
+            let real_time_recency_timeout = *vars.real_time_recency_timeout();
+            self.call_coordinator(|tx| Command::DetermineRealTimeRecentTimestamp {
+                source_ids: depends_on.iter().copied().collect(),
+                real_time_recency_timeout,
+                tx,
+            })
+            .await?
+        } else {
+            None
+        };
+
         let bundle = global_mir_plan.id_bundle(cluster_id);
         let (determination, read_holds) = self
             .frontend_determine_timestamp(
@@ -414,7 +435,7 @@ impl PeekClient {
                 cluster_id,
                 &timeline,
                 oracle_read_ts,
-                None,
+                real_time_recency_ts,
             )
             .await?;
 
