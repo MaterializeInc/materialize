@@ -1327,6 +1327,14 @@ impl UnopenedPersistCatalogState {
             // catalog owner, so all sessions served by previous owners are
             // dead. Reclaim the temporary items they owned here, before
             // anything else reads the catalog.
+            //
+            // NOTE: This only reclaims on the fence, which covers a
+            // single-writer world where every crash is followed by some
+            // process's writable open. Once several serving envds run
+            // concurrently, a peer crash triggers no fence here, so
+            // reclaiming its sessions' items needs the durable
+            // envd-heartbeat mechanism described in the durable temporary
+            // objects design doc.
             if mode != Mode::Readonly {
                 txn.remove_ephemeral_items();
             }

@@ -68,6 +68,8 @@ With N envds, several processes append to the `mz_sessions` shard concurrently. 
 
 Each session record will need to be partitioned by a per-envd identifier and need a durable envd-heartbeat table. This is to identify rows left by dead processes for cleanup. We need a durable heartbeat to tell a crashed peer from a live one.
 
+Ephemeral-item reclamation rides on this same mechanism. Today a crashed envd's temporary items are reclaimed by the next writable catalog open, because every crash fences a new writer in. With several serving envds, a peer crash triggers no fence, so whichever envd detects the dead peer via the heartbeat table drops both its `mz_sessions` rows and the temporary items owned by its sessions.
+
 ## Follow-up: durable per-session temporary schemas
 
 The plan is to adopt Postgres's model, where each backend's temp
