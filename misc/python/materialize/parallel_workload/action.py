@@ -2870,6 +2870,10 @@ class FlipFlagsAction(Action):
             "8",
             "16",
         ]
+        self.flags_with_values["storage_persist_sink_max_raw_stash_bytes"] = (
+            # Always evict, evict under light load, never evict in practice.
+            ["0", "1024", "16777216"]
+        )
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )

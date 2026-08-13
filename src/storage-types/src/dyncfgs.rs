@@ -410,6 +410,26 @@ pub const STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION: Config<bool> = Config:
     snapshot completes, so the replication stream is read concurrently with the snapshot.",
 );
 
+/// How many bytes of raw updates the source `persist_sink` may hold in memory before it starts
+/// writing them out as single-timestamp batches.
+///
+/// The sink groups updates into one batch per batch description, which it can only do once the
+/// description exists. While a collection's frontier is stalled, for example while an export
+/// snapshots, no description is minted and updates accumulate as raw rows. Past this budget the
+/// heaviest timestamps are written out on their own, which bounds memory at the cost of one batch
+/// per timestamp spilled.
+///
+/// This is a per-worker, per-export ceiling, so a replica's exposure is this times the number of
+/// exports snapshotting at once times the worker count. Exceeding it is a graceful degradation to
+/// one batch per timestamp, not a failure, so it is set well below what a single sink could
+/// usefully hold.
+pub const STORAGE_PERSIST_SINK_MAX_RAW_STASH_BYTES: Config<usize> = Config::new(
+    "storage_persist_sink_max_raw_stash_bytes",
+    16 * 1024 * 1024,
+    "How many bytes of raw updates the source persist sink may stash in memory before writing \
+    single-timestamp batches to keep memory bounded.",
+);
+
 /// Configure mz-ore overflowing type behavior.
 pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
@@ -461,6 +481,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_DOWNGRADE_SINCE_DURING_FINALIZATION)
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
+        .add(&STORAGE_PERSIST_SINK_MAX_RAW_STASH_BYTES)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)

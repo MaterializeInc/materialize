@@ -399,6 +399,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     statement_logging_use_reproducible_rng
     storage_cluster_shutdown_grace_period
     storage_downgrade_since_during_finalization
+    storage_persist_sink_max_raw_stash_bytes
     storage_record_source_sink_namespaced_errors
     storage_rocksdb_cleanup_tries
     storage_server_maintenance_interval
