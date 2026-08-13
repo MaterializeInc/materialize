@@ -40,9 +40,9 @@ use mz_repr::{
 use serde::{Deserialize, Serialize};
 
 use crate::func::{
-    CaseLiteral, array_create_scalar, build_regex, date_bin, max_string_func_result_bytes,
-    parse_timezone, regexp_match_static, regexp_replace_parse_flags, regexp_split_to_array_re,
-    stringify_datum, timezone_time,
+    CaseLiteral, array_create_scalar, build_regex, check_datums_fit_budget, date_bin,
+    max_string_func_result_bytes, parse_timezone, regexp_match_static, regexp_replace_parse_flags,
+    regexp_split_to_array_re, stringify_datum, timezone_time,
 };
 use crate::{Eval, EvalError, MirScalarExpr};
 use mz_repr::adt::date::Date;
@@ -213,6 +213,7 @@ fn array_create_multidim<'a>(
     if let Some(d) = datums.first() {
         dims.extend(d.unwrap_array().dims());
     };
+    check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
     let elements = datums
         .iter()
         .flat_map(|d| d.unwrap_array().elements().iter());
@@ -465,10 +466,15 @@ fn array_to_string<'a>(
     array: Array<'a>,
     delimiter: &str,
     null_str_arg: OptionalArg<Option<&str>>,
+    temp_storage: &RowArena,
 ) -> Result<String, EvalError> {
     // `flatten` treats absent arguments (`None`) the same as explicit NULL
     // (`Some(None)`), both becoming `None`.
     let null_str = null_str_arg.flatten();
+    // A delimiter is repeated once per element, so the array size doesn't bound the result. We
+    // check as it grows rather than up front, since an element's stringified length isn't known
+    // without stringifying it. That bounds the peak at the ceiling plus one element.
+    let max_result_bytes = max_string_func_result_bytes(temp_storage);
     let mut out = String::new();
     for elem in array.elements().iter() {
         if elem.is_null() {
@@ -479,6 +485,9 @@ fn array_to_string<'a>(
         } else {
             stringify_datum(&mut out, elem, &self.elem_type)?;
             out.push_str(delimiter);
+        }
+        if out.len() > max_result_bytes {
+            return Err(EvalError::LengthTooLarge);
         }
     }
     if out.len() > 0 {
@@ -839,14 +848,18 @@ pub fn hmac_inner(to_digest: &[u8], key: &[u8], typ: &str) -> Result<Vec<u8>, Ev
 }
 
 #[sqlfunc]
-fn jsonb_build_array<'a>(datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> JsonbRef<'a> {
+fn jsonb_build_array<'a>(
+    datums: Variadic<Datum<'a>>,
+    temp_storage: &'a RowArena,
+) -> Result<JsonbRef<'a>, EvalError> {
+    check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
     let datum = temp_storage.make_datum(|packer| {
         packer.push_list(datums.into_iter().map(|d| match d {
             Datum::Null => Datum::JsonNull,
             d => d,
         }))
     });
-    JsonbRef::from_datum(datum)
+    Ok(JsonbRef::from_datum(datum))
 }
 
 #[sqlfunc]
@@ -856,6 +869,8 @@ fn jsonb_build_object<'a>(
 ) -> Result<JsonbRef<'a>, EvalError> {
     kvs.0.sort_by(|kv1, kv2| kv1.0.cmp(&kv2.0));
     kvs.0.dedup_by(|kv1, kv2| kv1.0 == kv2.0);
+    // Checked after the dedup, so duplicate keys are counted once, as they are packed.
+    check_datums_fit_budget(kvs.0.iter().flat_map(|(k, v)| [*k, *v]), temp_storage)?;
     let datum = temp_storage.try_make_datum(|packer| {
         packer.push_dict_with(|packer| {
             for (k, v) in kvs {
@@ -952,8 +967,13 @@ pub struct ListCreate {
     output_type_expr = "SqlScalarType::List { element_type: Box::new(self.elem_type.clone()), custom_id: None }.nullable(false)",
     introduces_nulls = false
 )]
-fn list_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| packer.push_list(datums))
+fn list_create<'a>(
+    &self,
+    datums: Variadic<Datum<'a>>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
+    Ok(temp_storage.make_datum(|packer| packer.push_list(datums)))
 }
 
 #[derive(
@@ -975,8 +995,13 @@ pub struct RecordCreate {
     output_type_expr = "SqlScalarType::Record { fields: self.field_names.clone().into_iter().zip_eq(input_types.iter().cloned()).collect(), custom_id: None }.nullable(false)",
     introduces_nulls = false
 )]
-fn record_create<'a>(&self, datums: Variadic<Datum<'a>>, temp_storage: &'a RowArena) -> Datum<'a> {
-    temp_storage.make_datum(|packer| packer.push_list(datums.iter().copied()))
+fn record_create<'a>(
+    &self,
+    datums: Variadic<Datum<'a>>,
+    temp_storage: &'a RowArena,
+) -> Result<Datum<'a>, EvalError> {
+    check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
+    Ok(temp_storage.make_datum(|packer| packer.push_list(datums.iter().copied())))
 }
 
 #[sqlfunc(
@@ -1122,14 +1147,19 @@ fn map_build<'a>(
     &self,
     datums: Variadic<(Option<&str>, Datum<'a>)>,
     temp_storage: &'a RowArena,
-) -> Datum<'a> {
+) -> Result<Datum<'a>, EvalError> {
     // Collect into a `BTreeMap` to provide the same semantics as it.
     let map: std::collections::BTreeMap<&str, _> = datums
         .into_iter()
         .filter_map(|(k, v)| k.map(|k| (k, v)))
         .collect();
 
-    temp_storage.make_datum(|packer| packer.push_dict(map))
+    // Checked after the collect, so duplicate keys are counted once, as they are packed.
+    check_datums_fit_budget(
+        map.iter().flat_map(|(k, v)| [Datum::String(k), *v]),
+        temp_storage,
+    )?;
+    Ok(temp_storage.make_datum(|packer| packer.push_dict(map)))
 }
 
 #[derive(
@@ -1223,19 +1253,37 @@ fn pad_leading(
             ));
         }
     };
-    if len > max_string_func_result_bytes(temp_storage) {
+    let pad_string = pad.unwrap_or(" ");
+
+    // `len` is a character count but the ceiling is in bytes, so a multi-byte pad character writes
+    // several bytes per character the check allowed. Bound the bytes instead. The result is the kept
+    // prefix of `string` plus `len - string_chars` padding characters, each at most as wide as the
+    // widest character in `pad_string`. Truncation (`len <= string_chars`) writes at most
+    // `string.len()`, which the same expression covers.
+    let widest_pad = pad_string.chars().map(char::len_utf8).max().unwrap_or(0);
+    let pad_chars = len.saturating_sub(string.chars().count());
+    let max_result_bytes = string
+        .len()
+        .saturating_add(pad_chars.saturating_mul(widest_pad));
+    if max_result_bytes > max_string_func_result_bytes(temp_storage) {
         return Err(EvalError::LengthTooLarge);
     }
-
-    let pad_string = pad.unwrap_or(" ");
 
     let (end_char, end_char_byte_offset) = string
         .chars()
         .take(len)
         .fold((0, 0), |acc, char| (acc.0 + 1, acc.1 + char.len_utf8()));
 
-    let mut buf = String::with_capacity(len);
-    if len == end_char {
+    // NOTE: reserve from the bytes actually written, not from `len`, which is a character count.
+    // Reserving `len` is too little for a multi-byte pad, and unbounded for an empty one, which
+    // writes nothing and so has no result size for the ceiling above to refuse.
+    let truncating = len == end_char;
+    let mut buf = String::with_capacity(if truncating {
+        end_char_byte_offset
+    } else {
+        max_result_bytes
+    });
+    if truncating {
         buf.push_str(&string[0..end_char_byte_offset]);
     } else {
         buf.extend(pad_string.chars().cycle().take(len - end_char));
@@ -1281,10 +1329,41 @@ fn regexp_replace<'a>(
     pattern: &str,
     replacement: &str,
     flags_opt: OptionalArg<&str>,
+    temp_storage: &RowArena,
 ) -> Result<Cow<'a, str>, EvalError> {
     let flags = flags_opt.0.unwrap_or("");
     let (limit, flags) = regexp_replace_parse_flags(flags);
     let regexp = build_regex(pattern, &flags)?;
+
+    // The result is the unreplaced parts of `source` plus one replacement per match. A `$ref` in the
+    // replacement expands to captured text, which is at most the match, and matches are disjoint, so
+    // all the expansions together cost at most one `source` per `$`.
+    let dollars = replacement.matches('$').count();
+    let max_result_bytes = |matches: usize| {
+        let expansions = match matches {
+            0 => 0,
+            _ => dollars.saturating_mul(source.len()),
+        };
+        source
+            .len()
+            .saturating_add(matches.saturating_mul(replacement.len()))
+            .saturating_add(expansions)
+    };
+    // A `limit` of 0 means replace every match, and a pattern that matches the empty string matches
+    // at every position. Assume that first, and only pay for counting the real matches when the
+    // assumption is over the ceiling. Same compromise as `replace`.
+    let most_matches = match limit {
+        0 => source.len().saturating_add(1),
+        limit => limit,
+    };
+    let ceiling = max_string_func_result_bytes(temp_storage);
+    if max_result_bytes(most_matches) > ceiling {
+        let matches = regexp.find_iter(source).take(most_matches).count();
+        if max_result_bytes(matches) > ceiling {
+            return Err(EvalError::LengthTooLarge);
+        }
+    }
+
     Ok(regexp.replacen(source, limit, replacement))
 }
 
@@ -1378,6 +1457,11 @@ fn string_to_array_impl<'a>(
         lower_bound: 1,
         length: found.len(),
     }];
+
+    // Splitting amplifies: each chunk is packed with its own tag and length, so a delimiter that
+    // splits per character costs several times the input. `Datum::Null` packs smaller than the
+    // chunk it replaces, so treating every chunk as a string is an upper bound.
+    check_datums_fit_budget(found.iter().copied().map(Datum::String), temp_storage)?;
 
     if let Some(null_string) = null_string {
         let found_datums = found.into_iter().map(|chunk| {
@@ -1519,17 +1603,41 @@ fn concat_ws(
 }
 
 #[sqlfunc]
-fn translate(string: &str, from_str: &str, to_str: &str) -> String {
+fn translate(
+    string: &str,
+    from_str: &str,
+    to_str: &str,
+    temp_storage: &RowArena,
+) -> Result<String, EvalError> {
+    // Translating to a wider character amplifies: each byte of an ASCII input can become four.
+    // Every output character is either the input character or a `to` character, so it costs at most
+    // `max(len_utf8(c), widest)` bytes, and at most `len_utf8(c) + widest - 1` since a character is
+    // at least one byte. Summed, that's the input's byte length plus one `widest - 1` per character.
+    // Tight when every character widens, exactly the input length when `to` is ASCII, so we refuse
+    // only calls that really would exceed the ceiling.
+    let widest = to_str.chars().map(char::len_utf8).max().unwrap_or(0);
+    let max_result_bytes = match widest.saturating_sub(1) {
+        // An ASCII `to` widens nothing, so the result fits the input and counting characters isn't
+        // worth a second pass.
+        0 => string.len(),
+        widening => string
+            .len()
+            .saturating_add(string.chars().count().saturating_mul(widening)),
+    };
+    if max_result_bytes > max_string_func_result_bytes(temp_storage) {
+        return Err(EvalError::LengthTooLarge);
+    }
+
     let from = from_str.chars().collect::<Vec<_>>();
     let to = to_str.chars().collect::<Vec<_>>();
 
-    string
+    Ok(string
         .chars()
         .filter_map(|c| match from.iter().position(|f| f == &c) {
             Some(idx) => to.get(idx).copied(),
             None => Some(c),
         })
-        .collect()
+        .collect())
 }
 
 #[sqlfunc(

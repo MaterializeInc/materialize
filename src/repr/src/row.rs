@@ -838,9 +838,10 @@ pub struct RowArena {
     // finds the slot empty and allocates its own buffer instead of double-borrowing.
     scratch: RefCell<Option<Vec<u8>>>,
     // Optional ceiling on the bytes this arena will hold, and a running total of what it holds.
-    // `None` is unbounded, which is what every arena in a dataflow uses. A budget is for evaluating
-    // a user-authored expression in a shared process, where that expression's memory use has to be
-    // bounded (see `mz_adapter::webhook`).
+    // `None` is unbounded, which is what every arena in a dataflow must keep using: a budget that
+    // can change mid-run would make dataflow evaluation non-deterministic (see
+    // [`RowArena::with_budget`]). A budget is for evaluating a user-authored expression in a shared
+    // process, where that expression's memory use must be bounded (see `mz_adapter::webhook`).
     //
     // NOTE: exceeding the budget does not make a push fail. The pushes are infallible, and a
     // refused push would hand back a truncated value, i.e. a corrupt datum. The budget is instead a
@@ -3101,6 +3102,15 @@ impl RowArena {
     /// truncated value would corrupt the datum. It is the caller's job to poll `over_budget` at a
     /// point where it can fail, so the bytes an arena actually reaches is `budget` plus whatever the
     /// operation in flight at the time added.
+    ///
+    /// NOTE: a budget bounds a single ad-hoc evaluation in a shared process (see
+    /// `mz_adapter::webhook`). It must not be given to an arena that feeds a compute dataflow. A
+    /// dataflow re-evaluates the same expression against the same input and must return the same
+    /// result every time. Whether an evaluation is over budget depends on what else the arena has
+    /// accumulated, and the webhook budget is a runtime dyncfg, so a budgeted dataflow arena would
+    /// make the result depend on when it ran. Differential then turns a changed-but-not-retracted
+    /// result into non-accumulating diffs that corrupt the collection. A dataflow that ever needs a
+    /// budget must fix it for the lifetime of a cluster replica.
     pub fn with_budget(budget: usize) -> Self {
         RowArena {
             budget: Some(budget),
@@ -3216,23 +3226,31 @@ impl RowArena {
 
     /// Moves `bytes` into the arena and returns a reference valid for its lifetime.
     ///
-    /// Prefer this to [`RowArena::push_bytes`] whenever the bytes are already owned: when they do
-    /// not fit the active region, their allocation is adopted as a region instead of a fresh region
-    /// being allocated and copied into, which for a large value halves the peak.
+    /// Prefer this to [`RowArena::push_bytes`] whenever the bytes are already owned: a value large
+    /// enough that it would get a region to itself has its allocation adopted as that region, rather
+    /// than a fresh region being allocated and copied into, which for a large value halves the peak.
+    /// Smaller values are copied, so the arena keeps bump allocating.
     pub fn push_owned_bytes<'a>(&'a self, bytes: Vec<u8>) -> &'a [u8] {
+        /// Never adopt below this, however empty the arena. `last_cap` alone would let every value
+        /// on a fresh or small arena look big enough, and then each gets an exactly-sized region
+        /// with no headroom: one region and one `Vec<u8>` header per value.
+        const MIN_ADOPT_BYTES: usize = 4 * 1024;
+
         let need = bytes.len();
         if need == 0 {
             return &[];
         }
 
         let mut inner = self.inner.borrow_mut();
-        let has_room = inner
-            .last()
-            .map_or(false, |region| region.capacity() - region.len() >= need);
-        if has_room {
-            // Copying into a region that is already paid for beats giving these bytes one of their
-            // own. Adopting unconditionally would turn every small string into its own allocation
-            // and defeat the bump allocator.
+        // Adopt only when `push_bytes` would have given these bytes a dedicated, `need`-sized region
+        // anyway, i.e. when `need` exceeds the `last_cap * 2` it would otherwise allocate. There's
+        // no headroom to lose, so adoption saves a copy for free. Below that we copy, because
+        // `push_bytes` grows a region *with* headroom that later values reuse. Adopting there would
+        // defeat the bump allocator: adoption leaves an empty region (capacity 0) on top, so nothing
+        // would ever grow a region with headroom again.
+        let last_cap = inner.last().map_or(0, |region| region.capacity());
+        let adopt = need > std::cmp::max(MIN_ADOPT_BYTES, last_cap.saturating_mul(2));
+        if !adopt {
             drop(inner);
             return self.push_bytes(&bytes[..]);
         }
@@ -3713,6 +3731,53 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_arena_owned_pushes_keep_bump_allocating() {
+        // Adoption never *creates* a region with headroom: it inserts the caller's buffer, whose
+        // capacity equals its length, below whatever is on top. Only `push_bytes` grows the arena
+        // geometrically (`new_cap = max(need, last_cap * 2)`), so once the active region cannot fit
+        // an incoming value it never can again and every later owned push adopts: one retained
+        // allocation and one `Vec<u8>` header per value, rather than `O(log n)` regions. That is the
+        // default path for every `String`- and `Vec<u8>`-returning scalar function, and the arenas
+        // in the MFP and join paths outlive a single row, so the region list grows with the number
+        // of string values in a batch. `RowArena::clear` scans every region, so it degrades too.
+        const VALUES: usize = 500;
+        const VALUE: &str = "0123456789";
+
+        let regions = |arena: &RowArena| arena.inner.borrow().len();
+        let push_all = |arena: &RowArena, owned: bool| {
+            for _ in 0..VALUES {
+                match owned {
+                    true => _ = arena.push_string(VALUE.to_string()),
+                    false => _ = arena.push_bytes(VALUE.as_bytes()),
+                }
+            }
+        };
+
+        // The bump allocator working as intended, as the baseline to hold the owned path to.
+        let copied = RowArena::new();
+        push_all(&copied, false);
+
+        let owned = RowArena::new();
+        push_all(&owned, true);
+
+        // Seeding with ordinary copies first must not change the answer. The arena never recovers,
+        // so this is not just the empty-arena case where the placeholder on top has capacity 0.
+        let seeded = RowArena::new();
+        let _ = seeded.push_bytes(VALUE.as_bytes());
+        push_all(&seeded, true);
+
+        // Compare against the copy path rather than an absolute count, so this pins the property (a
+        // run of small owned pushes still ends with a region that has headroom) and leaves the
+        // adoption predicate to the fix.
+        let (copied, owned, seeded) = (regions(&copied), regions(&owned), regions(&seeded));
+        assert!(
+            owned <= copied * 2 && seeded <= copied * 2,
+            "{VALUES} owned pushes left {owned} regions on an empty arena and {seeded} on a seeded \
+             one, against {copied} for the same bytes copied",
+        );
+    }
+
+    #[mz_ore::test]
     fn miri_test_arena_budget() {
         // Without a budget nothing is ever over it, however much is pushed.
         let arena = RowArena::new();
@@ -3739,8 +3804,9 @@ mod tests {
         assert_eq!(arena.budget_remaining(), 0);
 
         // An adopted buffer counts against the budget too, or adoption would be a way around it.
+        // Large enough to actually be adopted rather than copied.
         let mut arena = RowArena::with_budget(100);
-        let _ = arena.push_owned_bytes(vec![0u8; 101]);
+        let _ = arena.push_owned_bytes(vec![0u8; 8 * 1024]);
         assert!(arena.over_budget());
 
         arena.clear();

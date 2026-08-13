@@ -280,13 +280,16 @@ pub const WEBHOOK_MAX_REQUEST_SIZE_BYTES: Config<usize> = Config::new(
 /// validating one request. A `CHECK` that exceeds it fails the request with HTTP
 /// 400 rather than holding the memory.
 ///
-/// This exists because a `CHECK` can allocate a multiple of the request body,
-/// and `environmentd` evaluates one per in-flight request: without a bound
-/// proportionate to the request, a bounded amount of network input becomes an
-/// unbounded amount of heap on a process shared by every connection. The default
-/// is 4x `WEBHOOK_MAX_REQUEST_SIZE_BYTES`, far above what a realistic `CHECK`
-/// (an HMAC, a `decode`, a `concat` with a secret) needs, and well below the
-/// 100 MiB per-call ceiling that applies in a cluster.
+/// A `CHECK` can allocate a multiple of the request body, and `environmentd`
+/// evaluates one per in-flight request. Without a bound proportionate to the
+/// request, bounded network input becomes unbounded heap on a process shared by
+/// every connection. The default is 4x `WEBHOOK_MAX_REQUEST_SIZE_BYTES`, well
+/// above what a realistic `CHECK` (an HMAC, a `decode`, a `concat` with a
+/// secret) needs and well below the 100 MiB per-call ceiling used in a cluster.
+///
+/// NOTE: this is runtime-reconfigurable, so it must only bound a single webhook
+/// validation. Do not feed it (or any mutable budget) to a `RowArena` used in a
+/// compute dataflow (see `mz_repr::RowArena::with_budget`).
 pub const WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
     "webhook_validation_memory_budget_bytes",
     20 * 1024 * 1024,

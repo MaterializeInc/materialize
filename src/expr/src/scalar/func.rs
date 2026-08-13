@@ -187,6 +187,31 @@ pub fn max_string_func_result_bytes(temp_storage: &RowArena) -> usize {
     )
 }
 
+/// Refuses a collection `temp_storage`'s budget cannot afford, before it is packed.
+///
+/// The collection builders (`ARRAY[..]`, `LIST[..]`, `ROW(..)`, `MAP[..]`, `jsonb_build_*`) pack the
+/// datums they are handed straight into `temp_storage`, so the result is as large as those datums
+/// times however many times the expression names each one. Unlike the string functions bounded by
+/// [`max_string_func_result_bytes`], `ARRAY[body, body, ..]` has no ceiling of its own.
+///
+/// Like that ceiling, this must be consulted *before* the result is built, since the arena's budget
+/// is only observable once the bytes exist. [`mz_repr::datum_size`] is the size a datum occupies
+/// once packed, so summing it bounds the result without allocating anything. Without a budget
+/// `budget_remaining` is `usize::MAX` and nothing is refused.
+pub fn check_datums_fit_budget<'a>(
+    datums: impl IntoIterator<Item = Datum<'a>>,
+    temp_storage: &RowArena,
+) -> Result<(), EvalError> {
+    let need: usize = datums
+        .into_iter()
+        .map(|d| mz_repr::datum_size(&d))
+        .fold(0, usize::saturating_add);
+    if need > temp_storage.budget_remaining() {
+        return Err(EvalError::TempStorageBudgetExceeded);
+    }
+    Ok(())
+}
+
 pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&'a str> {
     match a {
         Datum::JsonNull => None,
@@ -2480,6 +2505,9 @@ fn regexp_split_to_array_re<'a>(
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
     let found = mz_regexp::regexp_split_to_array(text, regexp);
+    // Splitting amplifies: each chunk is packed with its own tag and length, so a pattern that
+    // splits per character costs several times the input.
+    check_datums_fit_budget(found.iter().copied().map(Datum::String), temp_storage)?;
     let mut row = Row::default();
     let mut packer = row.packer();
     packer.try_push_array(
@@ -2683,6 +2711,7 @@ fn array_create_scalar<'a>(
         // strangely to satisfy the borrow checker while avoiding an allocation.
         dims = &[];
     }
+    check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
     let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(dims, datums))?;
     Ok(datum)
 }

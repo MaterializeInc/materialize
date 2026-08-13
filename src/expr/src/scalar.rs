@@ -2634,6 +2634,84 @@ mod tests {
         expr.eval(&datums, &arena).expect("within budget");
     }
 
+    /// A budget has to bound what a single call allocates, not just what is observable between
+    /// calls (SQL-431).
+    ///
+    /// The evaluator only polls the budget after `func.eval` has built its result and moved it into
+    /// the arena, and erroring then does not give the bytes back. They stay resident until the arena
+    /// drops, which for a webhook `CHECK` is the end of the request. So we assert on arena residency,
+    /// not the returned `Result`. The overshoot is not a constant either. It scales with the body and
+    /// with a multiplier the `CHECK` author picks at DDL time.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // multi-MB allocations; the small-size UB coverage is in `row.rs`
+    fn test_single_call_respects_arena_budget() {
+        use mz_ore::cast::CastLossy;
+
+        use crate::scalar::func::variadic::{ArrayCreate, PadLeading, Translate};
+
+        // Scaled down from the shipped 5 MiB body and 20 MiB budget. Every amplifier here is linear
+        // in the body, so the ratios hold at any scale.
+        const BODY_BYTES: usize = 1024 * 1024;
+        const BUDGET: usize = 2 * 1024 * 1024;
+        const WIDE: &str = "\u{1F4A5}"; // one character, four bytes
+
+        let str_lit = |s| MirScalarExpr::literal_ok(Datum::String(s), ReprScalarType::String);
+        // `ARRAY[body, ...]` is not a string function, so no ceiling of its own applies. The
+        // multiplier is just how many times the author wrote `body`.
+        let array_of = |n| {
+            let elem_type = mz_repr::SqlScalarType::String;
+            let refs = vec![MirScalarExpr::column(0); n];
+            MirScalarExpr::call_variadic(ArrayCreate { elem_type }, refs)
+        };
+        let cases = [
+            ("ARRAY[body x4]", array_of(4)),
+            ("ARRAY[body x16]", array_of(16)),
+            // `lpad`'s pre-check is budget-aware but compares `len`, a character count, against a
+            // budget in bytes, so a 4-byte pad passes a check for exactly the budget then writes 4x.
+            (
+                "lpad(body, BUDGET, wide)",
+                MirScalarExpr::call_variadic(
+                    PadLeading,
+                    vec![
+                        MirScalarExpr::column(0),
+                        MirScalarExpr::literal_ok(
+                            Datum::Int32(i32::try_from(BUDGET).unwrap()),
+                            ReprScalarType::Int32,
+                        ),
+                        str_lit(WIDE),
+                    ],
+                ),
+            ),
+            // `translate` has no pre-check at all, and widening each body byte is a 4x amplifier
+            // that needs no length argument to drive it.
+            (
+                "translate(body, 'a', wide)",
+                MirScalarExpr::call_variadic(
+                    Translate,
+                    vec![MirScalarExpr::column(0), str_lit("a"), str_lit(WIDE)],
+                ),
+            ),
+        ];
+
+        let body = "a".repeat(BODY_BYTES);
+        let datums = [Datum::String(&body)];
+        let mut over = Vec::new();
+        for (name, expr) in cases {
+            let arena = RowArena::with_budget(BUDGET);
+            let _ = expr.eval(&datums, &arena); // refused or not, we only care what's left resident
+            let held = arena.allocated_bytes();
+            if held > BUDGET {
+                let ratio = f64::cast_lossy(held) / f64::cast_lossy(BUDGET);
+                over.push(format!("  {name}: held {held} bytes, {ratio:.1}x"));
+            }
+        }
+        assert!(
+            over.is_empty(),
+            "a single call left a {BUDGET} byte arena holding more:\n{}",
+            over.join("\n"),
+        );
+    }
+
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
     fn test_reduce() {
