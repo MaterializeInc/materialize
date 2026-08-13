@@ -88,13 +88,20 @@
 
 - name: sink
   content: >-
-    - **When**: Hydrates on creation and on every replica (re)start or cluster resize.
+    - **When**: If created `WITH (SNAPSHOT = true)` (the default), hydrates:
+      - On creation, when the sink first emits its input snapshot.
+      - On a replica (re)start, but only if the sink restarted before recording
+        any progress: it then re-reads the whole input snapshot, and any data
+        already written to the external system is discarded, but the memory
+        cost still occurs. An established sink resumes from its recorded
+        progress without re-reading the snapshot.
 
-    - **What**: Loads a full copy of its input snapshot into the arrangement that
-    feeds the sink before it can emit.
+    - **What**: Loads a full copy of its input snapshot into the arrangement
+    that feeds the sink before it can emit.
 
     - **Memory Use**: Peaks at roughly a full copy of the input snapshot, then
-    decreases as the snapshot is written out. At steady state, a sink retains
+    decreases as the snapshot is written out. Negligible on a restart of an
+    established sink. At steady state, a sink retains
     little in memory.
 
 - name: subscription

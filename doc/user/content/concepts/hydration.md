@@ -31,14 +31,31 @@ replicas.
 Hydration primarily impacts memory usage, and its speed scales with cluster
 size. Some hydration-related strategies you may want to consider:
 
+- Use a dedicated cluster for [sources](/concepts/sources/).
+
+- In addition, use a dedicated cluster for upsert sources; i.e., do not
+  co-locate with append-only Kafka sources or CDC database sources.
+
+  - Keeping append-only Kafka sources and CDC database sources (PostgreSQL,
+    MySQL, and SQL Server sources) on a separate cluster isolates ingestion from
+    possible OOM loops caused by memory-heavy objects such as Kafka upsert
+    sources.
+
+  - Note: PostgreSQL, MySQL, and SQL Server sources run on a single
+    replica, the oldest, and remain there until that replica is removed. As
+    such, the use of a burst replica (through `AUTO SCALING STRATEGY (ON
+    HYDRATION)`) has no impact on these single-replica sources.
+
 - Add an [`AUTO SCALING STRATEGY (ON HYDRATION)`](/sql/alter-cluster/) to your
-  cluster. With this strategy, Materialize automatically provisions an extra,
-  larger replica (a burst replica) while the cluster has un-hydrated objects,
-  then removes it once a steady-size replica catches up. You pay for the burst
-  replica while it is provisioned, but not at steady state.
+  cluster with memory-heavy objects. With this strategy, Materialize
+  automatically provisions an extra, larger replica (a burst replica) while the
+  cluster has unhydrated objects, then removes it once a steady-size replica
+  catches up. You pay for the burst replica while it is provisioned, but not at
+  steady state.
 
   - If a steady-size replica runs out of memory during hydration, resize the
-    cluster. During the resizing, the cluster continues to serve from the burst replica.
+    cluster. During the resize, the cluster continues to serve from the burst
+    replica.
 
 - Distribute materialized views and indexes across multiple clusters. Each
   cluster's replicas hydrate their objects independently, which distributes the
