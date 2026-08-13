@@ -1599,12 +1599,11 @@ mod tests {
     /// spine fold the batches below it together.
     ///
     /// The test asserts both halves of the shape rather than assuming them. A merge must have
-    /// happened, so the import really does seed from a folded chain. And no batch may straddle the
-    /// `as_of`, which is the invariant the publisher maintains by forwarding the published `since` as
-    /// its physical compaction target: `set_physical_compaction` promises readability at or beyond
-    /// what it is given, and every legal `as_of` is at or beyond `since`. A straddling batch would
-    /// make `SharedTraceHandle::batches_through` either fail its cut check or hand the join updates at
-    /// times not before the cut and double count them, so the join output is the observable.
+    /// happened, so the import really does seed from a folded chain. And a batch must straddle the
+    /// `as_of`, because that is the case being covered: an import does not cut at its `as_of`, it is
+    /// seeded with the whole chain and wrapped in `TraceFrontier`, which advances times instead of
+    /// cutting. The join and reduce output is the observable, so a straddling batch mishandled would
+    /// show up as updates at times not before the cut, double counted.
     #[mz_ore::test]
     fn stale_as_of_import_over_merged_chain_matches_direct() {
         let id_a = GlobalId::User(1);
@@ -1673,9 +1672,10 @@ mod tests {
             }
 
             // The controller allows compaction up to the read time, exactly as
-            // `handle_allow_compaction` does in production. That raises the published `since`, which
-            // is what the publisher forwards as its physical compaction target, so the spine folds
-            // the history below the read time together. The extra ticks give it activations to do so.
+            // `handle_allow_compaction` does in production. That raises the published `since`, so the
+            // spine may coalesce the history below the read time. No importer has registered yet, so
+            // the publisher's physical target is the chain coverage and the spine is free to fold
+            // those batches together. The extra ticks give it activations to do so.
             let allow = Antichain::from_elem(as_of_ts);
             registry.note_allow_compaction(id_a, 0, &allow);
             registry.note_allow_compaction(id_b, 0, &allow);
@@ -1693,9 +1693,12 @@ mod tests {
             // published time seals its own `[t, t+1)` batch, so a batch spanning more than one time
             // can only come from a merge.
             //
-            // Second half: no batch straddles `as_of`, so the read below has a clean cut. This is the
-            // publisher's invariant, not an accident of this fixture, and it is what makes registering
-            // a hold at `as_of` safe without synchronizing with the publishing worker.
+            // Second half: a batch *does* straddle `as_of`, which is the case this fixture exists to
+            // cover. An import does not cut at `as_of`, it is seeded with the whole chain and wrapped
+            // in `TraceFrontier`, which advances times instead. So a straddling batch is harmless and
+            // the observable is the join and reduce output below, which must still match the direct
+            // computation. Asserting the straddle rather than its absence keeps this test as the
+            // detector for a publisher that holds physical compaction down collectively again.
             let mut merged = false;
             let mut straddles_as_of = false;
             oks_a.map_batches(|batch| {
@@ -1716,9 +1719,12 @@ mod tests {
                  is not exercising the merged-chain cut"
             );
             assert!(
-                !straddles_as_of,
-                "a published batch straddles as_of {as_of_ts:?}; the publisher must keep the trace \
-                 cuttable at every frontier at or beyond the published `since`"
+                straddles_as_of,
+                "no published batch straddles as_of {as_of_ts:?}, so this fixture is not reaching \
+                 the case it exists for: an import whose `as_of` falls inside a batch. If this \
+                 fires, the publisher has gone back to holding physical compaction down to a \
+                 collective floor such as the published `since`, which stops the spine merging \
+                 across `as_of` at all"
             );
 
             let join_probe = ProbeHandle::new();

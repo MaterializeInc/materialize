@@ -48,14 +48,18 @@
 //! `Published::acquire_command_hold` so the published `since` reflects it. Those two kinds meet
 //! into `since`; only the first is forwarded.
 //!
-//! The physical frontier is not held by readers at all. The publisher forwards the published `since`,
-//! which keeps the trace cuttable at every frontier a reader may ask for: `set_physical_compaction`
-//! promises readability at or beyond what it is given, and the controller promises every dataflow's
-//! `as_of` is at or beyond the index's `since`. A reader may therefore register at its `as_of`
-//! without synchronizing with the publishing worker, which it cannot do, since the setters on
-//! `TraceReader` take `&mut self` and a `TraceAgent` is neither `Send` nor reachable behind an `Arc`.
-//! Reader physical holds would not suffice in their place, because their meet covers only readers
-//! that already exist and the next one can arrive below all of them.
+//! The physical frontier is a separate question, and mixing it with the logical one is the mistake to
+//! avoid. Logical compaction decides which times stay *distinguishable*. Physical compaction decides
+//! which batches may *merge*, and so where a batch boundary still exists. A reader needs
+//! distinguishability at its `as_of`, which is the logical hold, and it needs a boundary at each
+//! frontier it passes to `cursor_through`, which is the physical one. It does not need a boundary at
+//! its `as_of`: an import is seeded with the whole chain and wrapped in `TraceFrontier`, which
+//! advances times instead of cutting.
+//!
+//! So the publisher forwards the meet of the readers' own physical requests, and `upper` when there
+//! are none, which is what an unshared index gets. Those requests only rise, which is what makes them
+//! safe to forward through one agent whose setter joins: a reader's cut floor starts at the coverage
+//! it was seeded with, and a later reader seeds at or above every earlier one.
 //!
 //! The sharing machinery lives entirely in Materialize, so it builds against a released
 //! differential-dataflow rather than a fork. Publishing is exposed as the [`PublishArrangement`]
@@ -121,6 +125,26 @@ struct SharedTraceState<Tr: TraceReader> {
     /// Per-registration logical holds. The publisher forwards their meet, falling back to the
     /// writer-driven frontier when empty (never the destructive empty meet of zero holds).
     logical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
+    /// Per-registration physical holds: the lowest frontier each reader may still cut at. The
+    /// publisher forwards their meet, falling back to `upper` when there are none, which is what an
+    /// unshared index gets from `crate::arrangement::manager::TraceManager::maintenance`.
+    ///
+    /// A reader needs a batch boundary at every frontier it passes to `cursor_through`, and a merge
+    /// that spans such a frontier destroys it. This is the only thing that prevents that merge, so
+    /// it is a correctness mechanism, not a tuning knob. It mirrors what a local consumer gets for
+    /// free: `crate::render::join::mz_join_core` is an agent on its own trace, so its
+    /// `set_physical_compaction(acknowledged)` reaches the `TraceBox` directly. A shared reader is
+    /// not an agent, so its request has to travel through here.
+    ///
+    /// An entry starts at the chain coverage at registration, never at `since` and never at `as_of`:
+    /// `acknowledged` is initialised to that coverage in `SharedTraceHandle::import_snapshot_at` and
+    /// only advances, so no cut ever happens below it.
+    ///
+    /// These only ever rise, which is what makes forwarding them sound through the publisher's single
+    /// agent, whose setter joins and cannot lower a frontier again. A later reader registers at a
+    /// coverage at or above every earlier one, so no arriving reader needs a boundary below a
+    /// frontier already forwarded.
+    physical_holds: BTreeMap<usize, Antichain<Tr::Time>>,
     /// Logical holds that are backed by a trace handle the publication point does not own, recorded
     /// here so the published `since` reflects them.
     ///
@@ -224,6 +248,7 @@ impl<Tr: TraceReader> SharedTrace<Tr> {
                 writer_since: Antichain::from_elem(batch_min::<Tr>()),
                 upper: Antichain::from_elem(batch_min::<Tr>()),
                 logical_holds: BTreeMap::new(),
+                physical_holds: BTreeMap::new(),
                 command_holds: BTreeMap::new(),
                 writer_logical: None,
                 queues: BTreeMap::new(),
@@ -301,6 +326,16 @@ where
     pub(crate) fn logical_holds(&self) -> Vec<Antichain<Tr::Time>> {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         state.logical_holds.values().cloned().collect()
+    }
+
+    /// The number of batches in the published chain.
+    ///
+    /// Test-only. Counting through a handle would register a physical hold and perturb the merge
+    /// behaviour being measured, which is the whole observable here.
+    #[cfg(test)]
+    pub(crate) fn chain_len(&self) -> usize {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.chain.len()
     }
 
     /// The controller's last `AllowCompaction` frontier for this arrangement, or `None` if none has
@@ -411,10 +446,8 @@ pub struct SharedTraceHandle<Tr: TraceReader> {
     /// This handle's own logical frontier, mirrored into `logical_holds[id]`. Kept locally so
     /// `get_logical_compaction` can return a borrow.
     logical: Antichain<Tr::Time>,
-    /// This handle's requested physical frontier. Recorded only so `get_physical_compaction` can
-    /// return a borrow, as [`TraceReader`] requires. It drives nothing: the publisher forwards the
-    /// published `since` as the physical target so that a cut stays available for every reader the
-    /// controller may admit, including ones that have not registered yet.
+    /// This handle's own physical frontier, mirrored into `physical_holds[id]`. Kept locally so
+    /// `get_physical_compaction` can return a borrow.
     physical: Antichain<Tr::Time>,
 }
 
@@ -430,6 +463,9 @@ where
             state.next_id += 1;
             let since = state.since.clone();
             state.logical_holds.insert(id, since.clone());
+            // The cut floor starts at the chain coverage, NOT at `since`. See `register_at`.
+            let coverage = seed_frontier::<Tr>(&state.chain, &state.upper);
+            state.physical_holds.insert(id, coverage);
             (id, since)
         };
         Self {
@@ -453,8 +489,27 @@ where
             }
             let id = state.next_id;
             state.next_id += 1;
+            let since = state.since.clone();
             state.logical_holds.insert(id, as_of.clone());
-            (id, state.since.clone())
+            // The cut floor is the CHAIN COVERAGE, and it is neither `as_of` nor `since`.
+            //
+            // Not `since`: `since` is a logical frontier, the floor on which times stay
+            // distinguishable. Using it here would hold every batch boundary above the controller's
+            // read frontier, which is what stopped published arrangements from merging at all.
+            //
+            // Not `as_of` either, and not because `as_of` is too low to be honoured. It is that no
+            // cut ever happens there. `Self::import_snapshot_at` seeds an import with the whole
+            // chain and initialises `acknowledged` to that seed's coverage, and `TraceFrontier`
+            // advances times rather than cutting, so a batch straddling `as_of` is harmless. Cuts
+            // only ever happen at or above the coverage, and only rise from there.
+            //
+            // The coverage lags the stream `upper` when the publisher has sealed batches the chain
+            // does not yet carry (see `seed_frontier_covers_the_chain_not_the_stream_frontier`), so
+            // `upper` is the wrong value too: it would sit above the seed a reader registering now
+            // will get, and permit a merge across the very first frontier that reader cuts at.
+            let coverage = seed_frontier::<Tr>(&state.chain, &state.upper);
+            state.physical_holds.insert(id, coverage);
+            (id, since)
         };
         Ok(Self {
             shared,
@@ -555,6 +610,20 @@ where
             state.logical_holds.insert(self.id, self.logical.clone());
         }
     }
+
+    /// Mirrors this handle's physical frontier into the publication point.
+    ///
+    /// Removes rather than records an empty frontier, for the reason [`Self::update_hold`] gives:
+    /// an empty request means this reader will never cut again, so it must stop constraining the
+    /// meet rather than drive it to the empty frontier.
+    fn update_physical_hold(&self) {
+        let mut state = self.shared.state.lock().expect("shared trace poisoned");
+        if self.physical.is_empty() {
+            state.physical_holds.remove(&self.id);
+        } else {
+            state.physical_holds.insert(self.id, self.physical.clone());
+        }
+    }
 }
 
 impl<Tr: TraceReader> Clone for SharedTraceHandle<Tr>
@@ -571,6 +640,7 @@ where
             let id = state.next_id;
             state.next_id += 1;
             state.logical_holds.insert(id, self.logical.clone());
+            state.physical_holds.insert(id, self.physical.clone());
             id
         };
         Self {
@@ -586,6 +656,7 @@ impl<Tr: TraceReader> Drop for SharedTraceHandle<Tr> {
     fn drop(&mut self) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.logical_holds.remove(&self.id);
+            state.physical_holds.remove(&self.id);
         }
     }
 }
@@ -601,15 +672,18 @@ where
         let state = self.shared.state.lock().expect("shared trace poisoned");
         // NOTE: `Spine::batches_through` asserts that the cut is at or beyond the spine's physical
         // frontier, and that precondition does NOT transfer to a shared handle. A local reader is one
-        // of the trace's own agents, so the trace's physical frontier is held down by that reader's
-        // own hold and the reader can never cut below it. A shared reader is not an agent, and holds
-        // no physical frontier of its own: the publisher forwards the published `since`, which is a
-        // floor for every reader collectively rather than one reader's position. An importer's
-        // consumer advances through the replayed `Frontier` instructions from the coverage it was
-        // seeded with, so it legitimately cuts below `since` while draining that seed. Asserting the
-        // spine's precondition here therefore panics on a correct read, which is what it did.
+        // of the trace's own agents, so the spine's frontier is the meet across agents including this
+        // reader's own, and the reader can never cut below it. A shared reader's request reaches the
+        // spine only through the publisher's single agent, whose setter joins, so the spine's frontier
+        // can sit above where this reader still legitimately cuts: it may be draining a seed whose
+        // coverage predates a later forward. Asserting the spine's precondition here therefore panics
+        // on a correct read, which is what it did.
         //
-        // The straddle check below is the real guard, and it does not depend on the precondition.
+        // The straddle check below is the real guard, and it does not depend on the precondition. It
+        // is also the falsifier for the physical-hold forwarding in `PublishArrangement`: if a reader
+        // ever does need a boundary that forwarding merged away, this fires and names the frontier,
+        // where deleting it would leave a consumer silently double counting updates at times not
+        // before its cut. Do not remove it.
         // A clean cut of the published chain: all non-empty batches whose upper is not beyond
         // `upper`, and none whose lower is beyond `upper`. Empty batches are dropped, as
         // `Spine::batches_through` does.
@@ -651,6 +725,7 @@ where
 
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) {
         self.physical = self.physical.join(&frontier.to_owned());
+        self.update_physical_hold();
     }
 
     fn get_physical_compaction(&mut self) -> AntichainRef<'_, Tr::Time> {
@@ -832,7 +907,8 @@ where
                 // first command arrives the slot holds `None` and `initial_logical` stands in, which
                 // is the trace's compaction frontier at adoption and does not move.
                 //
-                // The physical frontier is NOT derived from reader holds. See the forward below.
+                // The physical frontier is derived separately, from the readers' own cut floors. See
+                // the forward below.
                 let publisher_logical = agent.get_logical_compaction().to_owned();
 
                 let (logical_target, physical_target, upper_advanced) = {
@@ -888,27 +964,34 @@ where
                     // and `handle_at` would refuse the very reader the hold was acquired for.
                     state.refresh_since();
                     state.upper = upper;
-                    // The physical target is the published `since`, and it is deliberately not
-                    // derived from reader holds.
+                    // The physical target is the meet of the readers' own cut floors, and `upper`
+                    // when there are none. `set_physical_compaction(F)` is about batch boundaries,
+                    // not about which times remain distinguishable: it lets the Spine merge batches
+                    // whose upper is at or below `F`, destroying boundaries there and preserving
+                    // boundaries above. Distinguishability at a reader's `as_of` is the LOGICAL
+                    // hold's job, and forwarding `since` here confuses the two.
                     //
-                    // `set_physical_compaction(F)` promises the trace stays cuttable at every
-                    // frontier at or beyond `F`, and the controller promises every dataflow's `as_of`
-                    // is at or beyond the index's `since`. Forwarding `since` therefore keeps a cut
-                    // available for every reader the controller may ever admit, including one that
-                    // has not registered yet. That is what makes registering a hold at `as_of` safe
-                    // without synchronizing with this worker.
+                    // A reader does not need a boundary at its `as_of`. `Self::import_snapshot_at`
+                    // seeds it with the whole chain and wraps the handle in `TraceFrontier`, which
+                    // advances times rather than cutting, so a batch straddling `as_of` is harmless.
+                    // Its `acknowledged` starts at that seed's coverage and only rises, so it never
+                    // cuts below where the chain already ended when it registered. Batches are
+                    // immutable, so merges after a seed is captured cannot disturb it.
                     //
-                    // Reader physical holds cannot substitute for this. Their meet only covers
-                    // readers that exist now, and the next reader can legitimately arrive below all
-                    // of them, at any point at or beyond `since`. Forwarding the stream `upper`, as a
-                    // trace whose only readers are its own agents does, breaks the promise outright:
-                    // the Spine merges across cuts that a later `batches_through` still needs, and
-                    // the straddle check in `Self::batches_through` fails on a correct read.
+                    // What a reader does need is a boundary at each frontier it later passes to
+                    // `cursor_through`, which is why the floors have to be forwarded rather than
+                    // discarded, and why this is a correctness mechanism rather than a tuning knob.
                     //
-                    // The cost is that a published arrangement keeps batch granularity above `since`
-                    // where an unshared one would merge freely. That is the price of being
-                    // importable, and it is bounded by how far the controller lets `since` lag.
-                    let physical = state.since.clone();
+                    // With no readers this is the chain coverage, which permits merging every batch
+                    // the chain carries, as an unshared index gets from
+                    // `crate::arrangement::manager::TraceManager::maintenance`. Forwarding `since`
+                    // instead stopped every published arrangement from merging whether anything
+                    // imported it or not, measured as a >=5x batch count on an index with no importer.
+                    //
+                    // The coverage rather than `upper` for the same reason `SharedTraceHandle::register_at`
+                    // uses it: it must never lead what the chain actually carries.
+                    let physical = SharedTraceState::<Tr>::meet_of(&state.physical_holds)
+                        .unwrap_or_else(|| seed_frontier::<Tr>(&state.chain, &state.upper));
 
                     // Wake importers and any peek waiters.
                     for queue in state.queues.values() {
@@ -1799,6 +1882,116 @@ mod tests {
             observed_lead,
             "trace map_batches upper never observed leading the stream frontier"
         );
+    }
+
+    /// A live reader's cut floor bounds the spine's merging, and with no reader the publisher lets it
+    /// merge freely.
+    ///
+    /// Both arms run in one worker over the same tick sequence and the observable is the difference
+    /// between their chain lengths, which is immune to the spine's particular merge policy. Absolute
+    /// batch counts are not: "a merge happened" is true even when the publisher forwards the
+    /// published `since`, because everything below `since` may merge either way. Merging *above*
+    /// `since` is what separates the two, and neither arm calls `note_allow_compaction`, so `since`
+    /// stays at the minimum and every merge here is above it.
+    ///
+    /// Chain length is read off the publication point rather than through a handle, because minting a
+    /// handle registers a floor and would perturb the arm that is supposed to have no reader.
+    #[mz_ore::test]
+    fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
+        timely::execute_directly(move |worker| {
+            let (held, free, mut held_input, mut free_input) =
+                worker.dataflow::<Timestamp, _, _>(|scope| {
+                    let (held_input, held_collection) = scope.new_collection::<(Row, Row), Diff>();
+                    let held_arranged = held_collection.mz_arrange::<
+                        ColumnationChunker<_>,
+                        RowRowBatcher<_, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >("held oks");
+                    let (free_input, free_collection) = scope.new_collection::<(Row, Row), Diff>();
+                    let free_arranged = free_collection.mz_arrange::<
+                        ColumnationChunker<_>,
+                        RowRowBatcher<_, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >("free oks");
+                    (
+                        adopt_fresh(&held_arranged),
+                        adopt_fresh(&free_arranged),
+                        held_input,
+                        free_input,
+                    )
+                });
+
+            // Seal a few times on both, then take a handle on `held` only. Its floor pins at the
+            // coverage as of now, so every batch sealed after this cannot merge: a merge needs the
+            // physical frontier at or beyond the batches' upper, and those uppers are all above the
+            // floor. `_reader` must outlive the ticks below, it *is* the floor.
+            for t in 0..4u64 {
+                tick(
+                    worker,
+                    &mut held_input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+                tick(
+                    worker,
+                    &mut free_input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+            }
+            let mut reader = held.handle();
+
+            for t in 4..20u64 {
+                tick(
+                    worker,
+                    &mut held_input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+                tick(
+                    worker,
+                    &mut free_input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+            }
+
+            let held_len = held.chain_len();
+            let free_len = free.chain_len();
+            assert!(
+                held_len > free_len,
+                "held chain {held_len} is not longer than unheld chain {free_len}: the floor a \
+                 registration installs is not reaching the publisher, so a merge can eat a boundary \
+                 the reader still cuts at"
+            );
+            assert!(
+                free_len < 16,
+                "unheld chain {free_len} did not fold: the publisher is holding physical compaction \
+                 down even with no reader, which is what stopped every published index from merging"
+            );
+
+            // Now the reader advances its own floor, as `mz_join_core` does when its acknowledged
+            // frontier moves. That must reach the publication point through the setter and free the
+            // batches behind it, which is the half a bare registration does not exercise.
+            reader.set_physical_compaction(Antichain::from_elem(Timestamp::from(20_u64)).borrow());
+            for t in 20..24u64 {
+                tick(
+                    worker,
+                    &mut held_input,
+                    Timestamp::from(t),
+                    Timestamp::from(t + 1),
+                );
+            }
+            let raised_len = held.chain_len();
+            assert!(
+                raised_len < held_len,
+                "held chain went {held_len} -> {raised_len} after the reader raised its floor to 20: \
+                 a `set_physical_compaction` call on a shared handle is not reaching the publication \
+                 point, so a reader can never release the boundaries it has moved past"
+            );
+        });
     }
 
     /// A fresh importer is seeded with the frontier its seeded chain covers, not the stream frontier
