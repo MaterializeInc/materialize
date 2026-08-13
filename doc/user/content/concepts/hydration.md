@@ -19,14 +19,10 @@ hydration](#objects-and-hydration).
 
 ## Objects and hydration
 
-Hydration is per cluster replica. A [cluster](/concepts/clusters/) is a
-collection of replicas, and the replicas, not the cluster, have the lifecycle:
-a replica starts, hydrates, serves, and can crash and restart. A replica's
-properties are also immutable, which is why a resize provisions new replicas
-instead of changing existing ones. When a trigger above occurs, the objects on
-the affected replicas hydrate as described below. When a replica restarts,
-every object on it re-hydrates. A resize or an added replica hydrates only the
-new replicas, where every object hydrates just as it would after a restart.
+Hydration is per cluster replica. When a trigger above occurs, the objects on
+the affected replicas hydrate as described below. When a replica restarts, every
+object on it re-hydrates. A resize or an added replica hydrates only the new
+replicas.
 
 {{% yaml-table data="hydration-objects-table" %}}
 
