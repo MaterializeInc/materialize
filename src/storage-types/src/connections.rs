@@ -545,6 +545,8 @@ pub enum ConnectionValidationError {
     Aws(#[from] AwsConnectionValidationError),
     #[error(transparent)]
     Gcp(#[from] gcp::GcpConnectionValidationError),
+    #[error(transparent)]
+    AwsPrivatelinkServiceName(#[from] InvalidAwsPrivatelinkServiceName),
     #[error("{}", .0.display_with_causes())]
     Other(#[from] anyhow::Error),
 }
@@ -558,6 +560,7 @@ impl ConnectionValidationError {
             ConnectionValidationError::SqlServer(e) => e.detail(),
             ConnectionValidationError::Aws(e) => e.detail(),
             ConnectionValidationError::Gcp(e) => e.detail(),
+            ConnectionValidationError::AwsPrivatelinkServiceName(_) => None,
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -570,6 +573,7 @@ impl ConnectionValidationError {
             ConnectionValidationError::SqlServer(e) => e.hint(),
             ConnectionValidationError::Aws(e) => e.hint(),
             ConnectionValidationError::Gcp(e) => e.hint(),
+            ConnectionValidationError::AwsPrivatelinkServiceName(e) => Some(e.hint()),
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -3318,21 +3322,18 @@ impl AwsPrivatelinkConnection {
         &self,
         id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), ConnectionValidationError> {
         // Check the shape of the service name before reading endpoint status.
-        // A service name that cannot be parsed as one leaves the endpoint
-        // unable to report a meaningful condition, and the condition it does
-        // report (missing availability zones) points at the wrong option.
-        if let Err(err) = Self::check_service_name(&self.service_name) {
-            let hint = err.hint();
-            return Err(anyhow!("{err}. {hint}"));
-        }
+        // A service name that cannot name an endpoint service leaves the
+        // endpoint unable to report a meaningful condition, and the condition it
+        // does report (missing availability zones) points at the wrong option.
+        Self::check_service_name(&self.service_name)?;
 
         let Some(ref cloud_resource_reader) = storage_configuration
             .connection_context
             .cloud_resource_reader
         else {
-            return Err(anyhow!("AWS PrivateLink connections are unsupported"));
+            return Err(anyhow!("AWS PrivateLink connections are unsupported").into());
         };
 
         // No need to optionally run this in a task, as we are just validating from envd.
@@ -3345,8 +3346,8 @@ impl AwsPrivatelinkConnection {
 
         match availability {
             Some(condition) if condition.status == "True" => Ok(()),
-            Some(condition) => Err(anyhow!("{}", condition.message)),
-            None => Err(anyhow!("Endpoint availability is unknown")),
+            Some(condition) => Err(anyhow!("{}", condition.message).into()),
+            None => Err(anyhow!("Endpoint availability is unknown").into()),
         }
     }
 
