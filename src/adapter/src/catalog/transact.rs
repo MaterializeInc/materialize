@@ -73,6 +73,7 @@ use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
@@ -1761,31 +1762,8 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    // The durable owner of a temporary item is the uuid of
-                    // the session that created it.
-                    let session = session.ok_or_else(|| {
-                        AdapterError::Internal(
-                            "temporary items must have an owner session".to_string(),
-                        )
-                    })?;
-                    let owner_session = session.uuid();
-                    soft_assert_or_log!(
-                        Some(session.conn_id()) == item.conn_id(),
-                        "temporary item connection must match the creating session"
-                    );
-
-                    // Defensive check: the connection -> session mapping is
-                    // registered lazily in `catalog_transact_inner`. We
-                    // ensure that the mapping exists as expected.
-                    if state.temporary_namespaces.uuid_for_conn(session.conn_id())
-                        != Some(owner_session)
-                    {
-                        return Err(AdapterError::Internal(format!(
-                            "connection {} has no temporary namespace while creating temporary item {}",
-                            session.conn_id(),
-                            name.item,
-                        )));
-                    }
+                    let owner_session =
+                        temporary_item_owner_session(state, session, &item, &name.item)?;
 
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
@@ -3285,6 +3263,36 @@ impl Catalog {
 
         *privileges = PrivilegeMap::from_mz_acl_items(flat_privileges);
     }
+}
+
+/// Resolves the session UUID that durably owns a temporary item being
+/// created. The durable owner is the session that created the item.
+///
+/// The connection -> session mapping is registered lazily in
+/// `catalog_transact_inner`, so we defensively verify that the registered
+/// mapping matches the creating session.
+fn temporary_item_owner_session(
+    state: &CatalogState,
+    session: Option<&ConnMeta>,
+    item: &CatalogItem,
+    item_name: &str,
+) -> Result<Uuid, AdapterError> {
+    let session = session.ok_or_else(|| {
+        AdapterError::Internal("temporary items must have an owner session".to_string())
+    })?;
+    let owner_session = session.uuid();
+    soft_assert_or_log!(
+        Some(session.conn_id()) == item.conn_id(),
+        "temporary item connection must match the creating session"
+    );
+    if state.temporary_namespaces.uuid_for_conn(session.conn_id()) != Some(owner_session) {
+        return Err(AdapterError::Internal(format!(
+            "connection {} has no temporary namespace while creating temporary item {}",
+            session.conn_id(),
+            item_name,
+        )));
+    }
+    Ok(owner_session)
 }
 
 /// Prepare the given transaction for replacing a catalog item with a new version.
