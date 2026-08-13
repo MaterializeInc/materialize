@@ -46,17 +46,14 @@
 //! The answer decides where the diffs go. Diffs from a selection that reads
 //! persisted state are only correct at the frontier they were observed at, so
 //! they commit inside the OCC loop. Diffs from a selection that reads nothing
-//! are frontier-independent, so the caller of the loop either submits them
-//! right after it or, inside a multi-statement transaction, buffers them as
-//! session write ops that land at COMMIT.
+//! are frontier-independent, so the caller of the loop submits them right after
+//! it.
 //!
-//! Disagreement is caught on both sides, and only one side can still refuse.
-//! `frontend_read_then_write` re-checks the syntactic predicate before running a
-//! dataflow, which catches a caller that skipped the gate. If the syntactic
-//! predicate were laxer than the dynamic one, that check would pass and the
-//! write would commit mid-transaction, so the loop's `Committed` arm soft-panics
-//! when it has a write timestamp to apply inside a transaction. By then the
-//! write is durable, so all that arm can do is make the disagreement loud.
+//! A write on this path commits immediately and cannot be rolled back at
+//! transaction end, so `frontend_read_then_write` refuses to run a dataflow
+//! inside a multi-statement transaction at all. That refusal sits behind the
+//! gate in `SessionClient::try_frontend_read_then_write` as defense in depth,
+//! and it is the last point where refusing is still possible.
 //!
 //! ## Rollout note
 //!
