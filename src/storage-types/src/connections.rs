@@ -1042,9 +1042,8 @@ impl InvalidAwsPrivatelinkServiceName {
     /// Explains how to find the right value.
     pub fn hint(&self) -> String {
         "SERVICE NAME must name an AWS VPC endpoint service, for example \
-         `com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc`. It is not the DNS name of \
-         the target, such as a load balancer hostname. Endpoint service names are listed in the \
-         AWS console under VPC > Endpoint services."
+         `com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc`. Endpoint service names are \
+         listed in the AWS console under VPC > Endpoint services."
             .into()
     }
 }

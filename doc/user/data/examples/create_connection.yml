@@ -657,8 +657,7 @@
         *Value:* `text`. Required.
 
         The name of the AWS VPC endpoint service, which always starts with
-        `com.amazonaws.`. This is not the DNS name of the target, such as the
-        hostname of a load balancer or database.
+        `com.amazonaws.`.
     - name: "`AVAILABILITY ZONES`"
       description: |
         *Value:* `text[]`. Required.
