@@ -31,21 +31,51 @@ show up as one-sided rows. Rows naming an object that does not exist on the
 other side at all are tolerated automatically, but changes to a builtin
 view's definition between the two versions are reported and need human
 judgement.
+
+To validate an already-shipped table-to-view conversion, diff against the
+last release before the conversion version (see the MIGRATIONS list in
+builtin_schema_migration.rs), restricted to the converted relations. Pass
+--user-rows-only so relations whose builtin rows legitimately drift between
+versions (builtin view definitions, builtin comments) only compare
+user-created rows:
+
+    bin/mzcompose --find builtin-relation-diff run default \\
+        --old-image ghcr.io/materializeinc/materialize/materialized:vX.Y.Z \\
+        --relation mz_catalog.mz_clusters --user-rows-only
 """
 
 import argparse
+import random
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 from materialize.docker import commit_to_image_tag, image_registry
 from materialize.mzcompose.composition import Composition, WorkflowArgumentParser
+from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
+from materialize.mzcompose.services.postgres import Postgres
+from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
+from materialize.mzcompose.services.testdrive import Testdrive
+from materialize.ui import UIError
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_CORRECTNESS_REGRESSIONS,
 )
 from materialize.version_list import resolve_ancestor_image_tag
+from materialize.workload_replay.config import (
+    additional_system_parameter_defaults,
+    cluster_replica_sizes,
+)
+from materialize.workload_replay.executor import test as replay_workload
+from materialize.workload_replay.util import (
+    get_paths,
+    load_workload,
+    update_captured_workloads_repo,
+)
 
 # One row of a canonicalized dump: column name -> canonicalized value.
 Row = dict[str, str]
@@ -93,13 +123,135 @@ class RelationDiffConfig:
     # namespace for every id-shaped cell is "object"; other namespaces are
     # "cluster", "replica" and "role".
     id_namespace_by_column: dict[str, str] = field(default_factory=dict)
+    # Columns holding a textual array whose element order is insignificant:
+    # the cell is rewritten with its elements sorted before diffing.
+    sort_array_columns: list[str] = field(default_factory=list)
+    # WHERE clause selecting rows attributable to user objects. Applied only
+    # when the workflow runs with --user-rows-only, for cross-version
+    # baselines where builtin rows legitimately drift between versions.
+    user_rows_where: str | None = None
 
 
+# Covers every builtin-table-to-materialized-view conversion recorded in
+# builtin_schema_migration.rs (the MIGRATIONS list). Relations the corpus
+# cannot populate without external systems (Kafka, PostgreSQL, MySQL, SQL
+# Server, AWS PrivateLink) are empty on both sides; their entries only
+# validate the dump machinery against the relation's schema.
+#
+# The table-era populators sorted mz_aclitem arrays by grantee role id, while
+# the converted views emit them in durable-JSON order. The contents are
+# identical, so privileges columns use sort_array_columns.
 RELATIONS: dict[str, RelationDiffConfig] = {
+    # Wall-clock event times differ between the environments by construction.
+    # Everything else, including the monotonic event ids, must match: both
+    # sides run the identical bootstrap-plus-corpus DDL sequence.
+    "mz_catalog.mz_audit_events": RelationDiffConfig(
+        ignore_columns=["occurred_at"],
+    ),
+    "mz_catalog.mz_cluster_replicas": RelationDiffConfig(
+        id_namespace_by_column={
+            "id": "replica",
+            "cluster_id": "cluster",
+            "owner_id": "role",
+        },
+    ),
+    "mz_catalog.mz_clusters": RelationDiffConfig(
+        id_namespace_by_column={"id": "cluster", "owner_id": "role"},
+        sort_array_columns=["privileges"],
+    ),
+    "mz_catalog.mz_connections": RelationDiffConfig(
+        id_namespace_by_column={"owner_id": "role"},
+        sort_array_columns=["privileges"],
+    ),
+    "mz_catalog.mz_databases": RelationDiffConfig(
+        id_namespace_by_column={"owner_id": "role"},
+        sort_array_columns=["privileges"],
+    ),
+    "mz_catalog.mz_default_privileges": RelationDiffConfig(
+        id_namespace_by_column={"role_id": "role", "grantee": "role"},
+    ),
+    "mz_catalog.mz_indexes": RelationDiffConfig(
+        id_namespace_by_column={"cluster_id": "cluster", "owner_id": "role"},
+        user_rows_where="id LIKE 'u%'",
+    ),
+    "mz_catalog.mz_kafka_connections": RelationDiffConfig(),
+    "mz_catalog.mz_kafka_sources": RelationDiffConfig(),
+    # Builtin view definitions drift between versions, hence user_rows_where.
+    "mz_catalog.mz_materialized_views": RelationDiffConfig(
+        id_namespace_by_column={"cluster_id": "cluster", "owner_id": "role"},
+        sort_array_columns=["privileges"],
+        user_rows_where="id LIKE 'u%'",
+    ),
+    "mz_catalog.mz_role_members": RelationDiffConfig(
+        id_namespace_by_column={
+            "role_id": "role",
+            "member": "role",
+            "grantor": "role",
+        },
+    ),
+    "mz_catalog.mz_role_parameters": RelationDiffConfig(
+        id_namespace_by_column={"role_id": "role"},
+    ),
+    "mz_catalog.mz_roles": RelationDiffConfig(
+        id_namespace_by_column={"id": "role"},
+    ),
+    "mz_catalog.mz_schemas": RelationDiffConfig(
+        id_namespace_by_column={"owner_id": "role"},
+        sort_array_columns=["privileges"],
+    ),
+    "mz_catalog.mz_secrets": RelationDiffConfig(
+        id_namespace_by_column={"owner_id": "role"},
+        sort_array_columns=["privileges"],
+    ),
+    "mz_catalog.mz_sources": RelationDiffConfig(
+        id_namespace_by_column={"cluster_id": "cluster", "owner_id": "role"},
+        sort_array_columns=["privileges"],
+    ),
+    # The SSH keypair is generated randomly per environment.
+    "mz_catalog.mz_ssh_tunnel_connections": RelationDiffConfig(
+        ignore_columns=["public_key_1", "public_key_2"],
+    ),
+    "mz_catalog.mz_system_privileges": RelationDiffConfig(),
+    "mz_internal.mz_aws_connections": RelationDiffConfig(),
+    "mz_catalog.mz_aws_privatelink_connections": RelationDiffConfig(),
+    "mz_internal.mz_cluster_schedules": RelationDiffConfig(
+        id_namespace_by_column={"cluster_id": "cluster"},
+    ),
+    "mz_internal.mz_cluster_workload_classes": RelationDiffConfig(
+        id_namespace_by_column={"id": "cluster"},
+    ),
+    # Builtin comments drift between versions, hence user_rows_where.
+    "mz_internal.mz_comments": RelationDiffConfig(
+        user_rows_where="id LIKE 'u%'",
+    ),
+    "mz_internal.mz_internal_cluster_replicas": RelationDiffConfig(
+        id_namespace_by_column={"id": "replica"},
+    ),
+    "mz_internal.mz_kafka_source_tables": RelationDiffConfig(),
+    "mz_internal.mz_mysql_source_tables": RelationDiffConfig(),
+    "mz_internal.mz_network_policies": RelationDiffConfig(
+        id_namespace_by_column={"owner_id": "role"},
+        sort_array_columns=["privileges"],
+    ),
+    "mz_internal.mz_network_policy_rules": RelationDiffConfig(),
     "mz_internal.mz_object_dependencies": RelationDiffConfig(
         allow_old_only=is_dropped_element_ref_edge,
     ),
+    "mz_internal.mz_pending_cluster_replicas": RelationDiffConfig(
+        id_namespace_by_column={"id": "replica"},
+    ),
+    "mz_internal.mz_postgres_source_tables": RelationDiffConfig(),
+    "mz_internal.mz_postgres_sources": RelationDiffConfig(),
+    "mz_internal.mz_sql_server_source_tables": RelationDiffConfig(),
 }
+
+# Statements that need the system account, applied before CORPUS: network
+# policy creation is flag-gated on older versions, and workload classes are
+# settable only by system users.
+SYSTEM_CORPUS = [
+    "ALTER SYSTEM SET enable_network_policies = true",
+    "ALTER CLUSTER quickstart SET (WORKLOAD CLASS 'corpus_wc')",
+]
 
 # User objects covering the edge classes of mz_object_dependencies: relation,
 # function and type references, casts, arrays, custom types, secrets,
@@ -132,15 +284,67 @@ CORPUS = [
     "CREATE SOURCE auction IN CLUSTER quickstart FROM LOAD GENERATOR AUCTION FOR ALL TABLES",
     "CREATE TYPE int4_list AS LIST (ELEMENT TYPE = int4)",
     "CREATE TYPE int4_list_map AS MAP (KEY TYPE = text, VALUE TYPE = int4_list)",
+    # Rows for the cluster, replica, privilege and audit-event relations:
+    # managed and unmanaged clusters, a default-privilege grant, and one
+    # audit event of each event_type (the statements above cover create).
+    "CREATE CLUSTER c_managed (SIZE 'scale=1,workers=1', REPLICATION FACTOR 2)",
+    """CREATE CLUSTER c_unmanaged REPLICAS (
+        r1 (SIZE 'scale=1,workers=1'),
+        r2 (SIZE 'scale=1,workers=2')
+    )""",
+    "ALTER DEFAULT PRIVILEGES FOR ROLE materialize IN SCHEMA public GRANT SELECT ON TABLES TO PUBLIC",
+    "GRANT SELECT ON TABLE t TO PUBLIC",
+    "REVOKE SELECT ON TABLE t FROM PUBLIC",
+    "COMMENT ON TABLE t IS 'corpus comment'",
+    "COMMENT ON COLUMN t.a IS 'corpus column comment'",
+    "CREATE TABLE renamed (a int)",
+    "ALTER TABLE renamed RENAME TO renamed2",
+    "CREATE TABLE dropped (a int)",
+    "DROP TABLE dropped",
+    # Rows for the role, network-policy and AWS-connection relations.
+    "CREATE ROLE corpus_role",
+    "CREATE ROLE corpus_member",
+    "GRANT corpus_role TO corpus_member",
+    "ALTER ROLE corpus_role SET cluster = 'c_managed'",
+    """CREATE NETWORK POLICY corpus_np (RULES (
+        r1 (address='12.34.56.0/24', action='allow', direction='ingress')
+    ))""",
+    """CREATE CONNECTION aws_conn TO AWS (
+        ACCESS KEY ID = 'unused',
+        SECRET ACCESS KEY = SECRET pw,
+        REGION = 'us-east-1'
+    ) WITH (VALIDATE = false)""",
     "CREATE TEMPORARY TABLE tmp_t (a int)",
     "CREATE TEMPORARY VIEW tmp_v AS SELECT * FROM t",
 ]
 
 ID_PATTERN = re.compile(r"^(?:[ust]|si)\d+$")
 
+# A canonicalized name: a namespaced cluster/replica/role value or a dotted
+# qualified object name. Values that merely contain a dot but are not names
+# (JSON details blobs, numbers, intervals) must not match, else one-sided
+# rows containing them would be silently tolerated.
+NAME_PATTERN = re.compile(
+    r"^(?:cluster|replica|role):\S+$|^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$"
+)
+
 SERVICES = [
     Materialized(name="mz_old"),  # Overridden below
     Materialized(name="mz_new"),  # Overridden below
+    # Workload replay drives a single service named `materialized` (see
+    # `workload_snapshot`), alongside the external systems a capture's
+    # connections may reference. Mirrors test/workload-replay/mzcompose.py;
+    # the shared config module keeps the sizes and parameters in step.
+    Materialized(
+        cluster_replica_size=cluster_replica_sizes,
+        additional_system_parameter_defaults=additional_system_parameter_defaults,
+    ),
+    Kafka(auto_create_topics=False),
+    SchemaRegistry(),
+    Postgres(),
+    MySql(),
+    SshBastionHost(allow_any_key=True),
+    Testdrive(),
     Mz(app_password=""),
 ]
 
@@ -151,12 +355,28 @@ class Snapshot:
 
     # relation -> canonicalized rows (sorted).
     dumps: dict[str, list[Row]]
-    # All qualified object names known to this environment, used to tolerate
-    # rows naming an object the other side does not have at all.
-    object_names: set[str]
+    # All canonicalized names known to this environment (qualified object
+    # names plus the cluster:, replica: and role: namespaces), used to
+    # tolerate rows naming an object the other side does not have at all.
+    known_names: set[str]
 
 
-def snapshot(c: Composition, service: str, port: int, relations: list[str]) -> Snapshot:
+def snapshot(
+    c: Composition,
+    service: str,
+    port: int,
+    system_port: int,
+    relations: list[str],
+    user_rows_only: bool,
+) -> Snapshot:
+    """Apply CORPUS to one environment and dump the configured relations."""
+    system_conn = c.sql_connection(service=service, port=system_port, user="mz_system")
+    system_conn.autocommit = True
+    system_cursor = system_conn.cursor()
+    for stmt in SYSTEM_CORPUS:
+        system_cursor.execute(stmt.encode())
+    system_conn.close()
+
     conn = c.sql_connection(service=service, port=port)
     conn.autocommit = True
     cursor = conn.cursor()
@@ -166,32 +386,51 @@ def snapshot(c: Composition, service: str, port: int, relations: list[str]) -> S
     for stmt in CORPUS:
         cursor.execute(stmt.encode())
 
+    try:
+        return dump(cursor, relations, user_rows_only)
+    finally:
+        conn.close()
+
+
+def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
+    """Canonicalize and dump `relations` over an already-populated connection.
+
+    Split out from `snapshot` so that workload replay, which populates the
+    environment by a wholly different route, shares the canonicalization.
+    """
     namespaces: dict[str, dict[str, str]] = {
         "object": {},
         "cluster": {},
         "replica": {},
         "role": {},
     }
-    cursor.execute(b"""
+    cursor.execute(
+        b"""
         SELECT o.id, coalesce(d.name || '.', '') || s.name || '.' || o.name
         FROM mz_objects o
         JOIN mz_schemas s ON o.schema_id = s.id
         LEFT JOIN mz_databases d ON s.database_id = d.id
-        """)
+        """
+    )
     namespaces["object"] = {row[0]: row[1] for row in cursor.fetchall()}
     cursor.execute(b"SELECT id, 'cluster:' || name FROM mz_clusters")
     namespaces["cluster"] = {row[0]: row[1] for row in cursor.fetchall()}
-    cursor.execute(b"""
+    cursor.execute(
+        b"""
         SELECT r.id, 'replica:' || c.name || '.' || r.name
         FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id
-        """)
+        """
+    )
     namespaces["replica"] = {row[0]: row[1] for row in cursor.fetchall()}
     cursor.execute(b"SELECT id, 'role:' || name FROM mz_roles")
     namespaces["role"] = {row[0]: row[1] for row in cursor.fetchall()}
 
     dumps = {}
     for relation, config in ((r, RELATIONS[r]) for r in relations):
-        cursor.execute(f"SELECT * FROM {relation}".encode())
+        query = f"SELECT * FROM {relation}"
+        if user_rows_only and config.user_rows_where:
+            query += f" WHERE {config.user_rows_where}"
+        cursor.execute(query.encode())
         columns = [d[0] for d in cursor.description]
         rows = []
         for raw in cursor.fetchall():
@@ -203,13 +442,89 @@ def snapshot(c: Composition, service: str, port: int, relations: list[str]) -> S
                 if ID_PATTERN.match(value):
                     namespace = config.id_namespace_by_column.get(column, "object")
                     value = namespaces[namespace].get(value, value)
+                if (
+                    column in config.sort_array_columns
+                    and value.startswith("{")
+                    and value.endswith("}")
+                ):
+                    value = "{" + ",".join(sorted(value[1:-1].split(","))) + "}"
                 row[column] = value
             rows.append(row)
         rows.sort(key=lambda r: sorted(r.items()))
         dumps[relation] = rows
 
-    conn.close()
-    return Snapshot(dumps=dumps, object_names=set(namespaces["object"].values()))
+    known_names = set()
+    for namespace in namespaces.values():
+        known_names.update(namespace.values())
+    return Snapshot(dumps=dumps, known_names=known_names)
+
+
+def workload_snapshot(
+    c: Composition,
+    image: str | None,
+    workload: dict[str, Any],
+    workload_path: Any,
+    relations: list[str],
+    user_rows_only: bool,
+    seed: str,
+    verbose: bool,
+) -> Snapshot:
+    """Replay a captured workload on `image` and dump the configured relations.
+
+    Only the object-creation phase runs: no initial data, no ingestion, no
+    query load. The relations this harness diffs are catalog metadata, so the
+    objects are the corpus and their contents are irrelevant.
+
+    `replay_workload` brings up a service named `materialized` itself, so the
+    two sides run sequentially here rather than side by side as in corpus
+    mode. The dump is taken from `during_continuous`, which the replay invokes
+    once the objects exist and have hydrated.
+
+    The seed is pinned rather than defaulted to the clock: a diff between two
+    builds is meaningless if the corpus differs between them.
+    """
+    random.seed(seed)
+    captured: dict[str, Snapshot] = {}
+
+    def capture() -> None:
+        conn = c.sql_connection(service="materialized", port=6875)
+        conn.autocommit = True
+        try:
+            captured["snapshot"] = dump(conn.cursor(), relations, user_rows_only)
+        finally:
+            conn.close()
+
+    with c.override(
+        Materialized(
+            image=image,
+            cluster_replica_size=cluster_replica_sizes,
+            additional_system_parameter_defaults=additional_system_parameter_defaults,
+            use_default_volumes=False,
+        )
+    ):
+        replay_workload(
+            c,
+            workload,
+            workload_path,
+            factor_initial_data=1,
+            factor_ingestions=1,
+            factor_queries=1,
+            runtime=0,
+            verbose=verbose,
+            create_objects=True,
+            initial_data=False,
+            early_initial_data=False,
+            run_ingestions=False,
+            run_queries=False,
+            max_concurrent_queries=1,
+            during_continuous=capture,
+        )
+
+    if "snapshot" not in captured:
+        raise AssertionError(
+            "workload replay finished without reaching the dump callback"
+        )
+    return captured["snapshot"]
 
 
 def one_sided(rows: list[Row], other: list[Row]) -> list[Row]:
@@ -223,10 +538,9 @@ def one_sided(rows: list[Row], other: list[Row]) -> list[Row]:
     return result
 
 
-def names_object_absent_from(row: Row, object_names: set[str]) -> bool:
+def names_object_absent_from(row: Row, known_names: set[str]) -> bool:
     return any(
-        "." in value and value not in object_names and not ID_PATTERN.match(value)
-        for value in row.values()
+        NAME_PATTERN.match(value) and value not in known_names for value in row.values()
     )
 
 
@@ -250,6 +564,29 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         choices=sorted(RELATIONS),
         help="relation to diff (default: all configured relations)",
     )
+    parser.add_argument(
+        "--user-rows-only",
+        action="store_true",
+        help="for relations configuring it, compare only user-created rows; "
+        "use when builtin rows legitimately drift between the two versions",
+    )
+    parser.add_argument(
+        "--workload",
+        type=str,
+        default=None,
+        help="replay this captured workload as the corpus instead of CORPUS, "
+        "e.g. 'workload_prod_sandbox' (see test/workload-replay/README.md). "
+        "Richer, but needs the captured-workloads repo and external systems, "
+        "and cannot cover temporary items",
+    )
+    parser.add_argument(
+        "--workload-seed",
+        type=str,
+        default="builtin-relation-diff",
+        help="seed for workload replay; both sides use it, so changing it "
+        "changes the corpus but never introduces a difference between builds",
+    )
+    parser.add_argument("--verbose", action=argparse.BooleanOptionalAction)
     args: argparse.Namespace = parser.parse_args()
 
     relations = args.relation or sorted(RELATIONS)
@@ -264,24 +601,62 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     c.down(destroy_volumes=True)
 
-    internal_sql_port = 6875
-    with c.override(
-        Materialized(
-            name="mz_old",
-            image=old_image,
-            ports=[f"16875:{internal_sql_port}"],
-            use_default_volumes=False,
-        ),
-        Materialized(
-            name="mz_new",
-            image=None,
-            ports=[f"26875:{internal_sql_port}"],
-            use_default_volumes=False,
-        ),
-    ):
-        c.up("mz_old", "mz_new")
-        old = snapshot(c, "mz_old", internal_sql_port, relations)
-        new = snapshot(c, "mz_new", internal_sql_port, relations)
+    sql_port = 6875
+    system_port = 6877
+
+    if args.workload:
+        # Replay drives one `materialized` service, so the sides run one after
+        # the other, each against a freshly reset environment.
+        update_captured_workloads_repo()
+        matches = get_paths([f"{args.workload}.yml"])
+        if len(matches) != 1:
+            raise UIError(
+                f"--workload {args.workload!r} matched {len(matches)} capture files; "
+                "pass the file's basename without the .yml suffix"
+            )
+        workload_path = matches[0]
+        workload = load_workload(workload_path)
+        print(f"Corpus: replay of {workload_path.name}")
+
+        snapshots = []
+        for label, image in (("baseline", old_image), ("new", None)):
+            print(f"--- Replaying workload on the {label} build")
+            snapshots.append(
+                workload_snapshot(
+                    c,
+                    image,
+                    workload,
+                    workload_path,
+                    relations,
+                    args.user_rows_only,
+                    args.workload_seed,
+                    bool(args.verbose),
+                )
+            )
+            c.down(destroy_volumes=True)
+        old, new = snapshots
+    else:
+        with c.override(
+            Materialized(
+                name="mz_old",
+                image=old_image,
+                ports=[f"16875:{sql_port}", f"16877:{system_port}"],
+                use_default_volumes=False,
+            ),
+            Materialized(
+                name="mz_new",
+                image=None,
+                ports=[f"26875:{sql_port}", f"26877:{system_port}"],
+                use_default_volumes=False,
+            ),
+        ):
+            c.up("mz_old", "mz_new")
+            old = snapshot(
+                c, "mz_old", sql_port, system_port, relations, args.user_rows_only
+            )
+            new = snapshot(
+                c, "mz_new", sql_port, system_port, relations, args.user_rows_only
+            )
 
     failures = []
     for relation in relations:
@@ -296,7 +671,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         for row in old_only:
             if config.allow_old_only and config.allow_old_only(row, old_rows, new_rows):
                 continue
-            if names_object_absent_from(row, new.object_names):
+            if names_object_absent_from(row, new.known_names):
                 print(
                     f"{relation}: tolerating old-only row naming an object absent from the new build: {row}"
                 )
@@ -305,7 +680,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         for row in new_only:
             if config.allow_new_only and config.allow_new_only(row, old_rows, new_rows):
                 continue
-            if names_object_absent_from(row, old.object_names):
+            if names_object_absent_from(row, old.known_names):
                 print(
                     f"{relation}: tolerating new-only row naming an object absent from the baseline: {row}"
                 )
