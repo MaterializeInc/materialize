@@ -21,7 +21,6 @@ use std::process::ExitCode;
 use chrono::Utc;
 use clap::ArgAction;
 use mz_adapter_types::dyncfgs::ENABLE_BACKGROUND_ALTER_CLUSTER;
-use mz_compute_types::dyncfgs::ENABLE_ERROR_DISTINCT;
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -185,13 +184,6 @@ async fn main() -> ExitCode {
     // wins.
     system_parameter_defaults
         .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
-        .or_insert_with(|| "true".to_string());
-
-    // Pin error deduplication on for the suite, so the collapse of error multiplicities at shared
-    // bindings is exercised here before it earns a production default. This is a dyncfg (set by
-    // name), and a caller-provided value wins.
-    system_parameter_defaults
-        .entry(ENABLE_ERROR_DISTINCT.name().to_string())
         .or_insert_with(|| "true".to_string());
 
     let config = RunConfig {
