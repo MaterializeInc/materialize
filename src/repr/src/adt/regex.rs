@@ -35,96 +35,103 @@ const MAX_REGEX_SIZE_AFTER_COMPILATION: usize = 10 * 1024 * 1024;
 /// be the case. Since we compile regexes in envd, we need strict limits to prevent envd OOMs.
 /// See <https://github.com/MaterializeInc/database-issues/issues/9907> for an example.
 ///
-/// This bounds the AST parse, which is what `estimate_compile_memory` needs before it can say
-/// anything about the pattern. It does not bound the compile itself, see
-/// `MAX_REGEX_COMPILE_MEMORY`.
+/// This bounds the AST's node count, since every node needs at least one pattern byte, and with it
+/// every node kind whose cost is bounded. Character classes are not, hence
+/// `MAX_REGEX_CHARACTER_CLASSES`.
 ///
 /// Note: This number is mentioned in our user-facing docs at the "String operators" in the function
 /// reference.
 const MAX_REGEX_SIZE_BEFORE_COMPILATION: usize = 1 * 1024 * 1024;
 
-/// The maximum heap a single compile may be projected to allocate.
+/// The maximum number of character classes a pattern may contain.
 ///
-/// Neither limit above bounds what a compile actually spends. `size_limit` bounds the compiled
-/// NFA, and a pattern's byte length bounds only itself. The memory goes to `regex-syntax`
-/// translating the pattern's AST into its HIR, a stage that runs before anything `size_limit`
-/// measures. Cost there is linear in the AST's node count, but the cost *per node* spans two
-/// orders of magnitude, from a few hundred bytes for a literal or a group up to tens of kilobytes
-/// for a Unicode property under the `i` flag, so a byte budget cannot bound it. The per-kind costs
-/// themselves are a fact about the `regex-syntax` version we pin, so they are measured rather than
-/// written down here, in `regex_compile_memory_charges_cover_measured_cost`.
+/// Byte length cannot bound what a compile spends, and neither can `size_limit`, which covers only
+/// the compiled NFA. The memory goes to `regex-syntax` translating the AST into its HIR, where a
+/// character class expands to hundreds of Unicode ranges out of a handful of pattern bytes. `\p{L}`
+/// is five bytes, and under case folding `[a-\x{2FFF}]` is no cheaper, since the translator walks
+/// the range codepoint by codepoint keeping one range per fold mapping.
+/// See <https://github.com/MaterializeInc/database-issues/issues/9907>.
 ///
-/// A 1 MiB pattern of `\p{L}` under the `i` flag, one byte under
-/// `MAX_REGEX_SIZE_BEFORE_COMPILATION`, therefore allocates gigabytes before returning
-/// `CompiledTooBig`. Since we compile regexes in envd, that made any `SELECT` an OOM vector,
-/// which is what this limit exists to close.
+/// Counting rather than pricing is deliberate. Per-kind byte prices need calibrating against the
+/// pinned `regex-syntax` and fail silently when one is set too low, whereas a count only asks
+/// whether a kind can expand without bound, and over-counting merely costs a few legitimate
+/// patterns.
 ///
-/// NOTE: a counted repetition needs no budget of its own. `\p{L}{200000}` stays two AST nodes,
-/// and the expansion happens later in the NFA compiler, where `size_limit` already rejects it
-/// incrementally.
-const MAX_REGEX_COMPILE_MEMORY: usize = 1024 * 1024 * 1024;
+/// This and the byte limit are independent, and multiply out to a bound on one compile that
+/// `regex_two_limits_bound_what_a_compile_spends` holds against measurement.
+///
+/// Note: This number is mentioned in our user-facing docs at the "String operators" in the function
+/// reference.
+///
+/// NOTE: `\p{L}{200000}` stays one class in the AST. `size_limit` rejects its expansion later, in
+/// the NFA compiler.
+const MAX_REGEX_CHARACTER_CLASSES: usize = 2000;
 
-/// Charged per AST node against `MAX_REGEX_COMPILE_MEMORY`. Covers every node kind that expands
-/// to at most a handful of Unicode ranges: literals, `.`, `[a-c]`, groups, repetitions,
-/// assertions. Sized a few times above the costliest of them so it absorbs allocator differences,
-/// but capped well under `MAX_REGEX_COMPILE_MEMORY / MAX_REGEX_SIZE_BEFORE_COMPILATION`, since a
-/// 1 MiB pattern of plain literals, which is what a machine-generated alternation looks like, has
-/// to stay within the budget. See `regex_cheap_nodes_do_not_collide_with_the_byte_limit`.
-const COMPILE_MEMORY_PER_NODE: usize = 768;
-
-/// Charged in place of `COMPILE_MEMORY_PER_NODE` for a Unicode-property or Perl class item, the
-/// node kinds that expand to hundreds of ranges.
+/// Counts the character classes in an AST, the node kinds whose translated size is not bounded by
+/// the pattern bytes that spell them.
 ///
-/// Sized well above the costliest such node measured, which is what
-/// `regex_compile_memory_charges_cover_measured_cost` checks. The margin is deliberate. Which
-/// property costs the most is a fact about the Unicode tables `regex-syntax` ships, so a version
-/// bump can shift it, and no legitimate pattern carries the thousands of Unicode classes it takes
-/// to reach the budget.
-const COMPILE_MEMORY_PER_CLASS: usize = 96 * 1024;
-
-/// Sums the projected translation cost of every node in an AST.
-struct CompileMemoryEstimator {
-    estimate: usize,
+/// Flags do not enter into it. Folding is the expensive direction for every kind, and `(?i)` turns
+/// it on from inside the pattern, out of reach of the flag [`Regex`] is built with, so a kind is
+/// judged by what it costs folded.
+///
+/// NOTE: the matches are exhaustive on purpose. A `regex-syntax` bump adding a node kind has to
+/// fail to compile here rather than default to "not a class", which no test could catch.
+struct CharacterClassCounter {
+    count: usize,
 }
 
-impl Visitor for CompileMemoryEstimator {
+impl Visitor for CharacterClassCounter {
     type Output = usize;
     type Err = Infallible;
 
     fn finish(self) -> Result<usize, Infallible> {
-        Ok(self.estimate)
+        Ok(self.count)
     }
 
     fn visit_pre(&mut self, ast: &Ast) -> Result<(), Infallible> {
-        self.estimate = self.estimate.saturating_add(match ast {
-            Ast::ClassUnicode(_) | Ast::ClassPerl(_) => COMPILE_MEMORY_PER_CLASS,
-            _ => COMPILE_MEMORY_PER_NODE,
-        });
+        self.count += match ast {
+            Ast::ClassUnicode(_) | Ast::ClassPerl(_) => 1,
+            // A bracketed class carries no ranges itself. Its items do, and are counted below.
+            Ast::Empty(_)
+            | Ast::Flags(_)
+            | Ast::Literal(_)
+            | Ast::Dot(_)
+            | Ast::Assertion(_)
+            | Ast::ClassBracketed(_)
+            | Ast::Repetition(_)
+            | Ast::Group(_)
+            | Ast::Alternation(_)
+            | Ast::Concat(_) => 0,
+        };
         Ok(())
     }
 
     fn visit_class_set_item_pre(&mut self, item: &ClassSetItem) -> Result<(), Infallible> {
-        // Items nested inside a bracketed class, e.g. the `\p{L}` in `[a\p{L}]`. Each contributes
-        // its own ranges to the one translated class, so each is charged. A union can only merge
-        // ranges, never add them, so the sum of the parts is an upper bound on the whole.
-        self.estimate = self.estimate.saturating_add(match item {
-            ClassSetItem::Unicode(_) | ClassSetItem::Perl(_) => COMPILE_MEMORY_PER_CLASS,
-            _ => COMPILE_MEMORY_PER_NODE,
-        });
+        // Items of a bracketed class, e.g. the `\p{L}` in `[a\p{L}]`. Each contributes its own
+        // ranges, and a union only merges ranges, so counting the parts bounds the whole.
+        self.count += match item {
+            ClassSetItem::Unicode(_)
+            | ClassSetItem::Perl(_)
+            | ClassSetItem::Ascii(_)
+            | ClassSetItem::Range(_) => 1,
+            ClassSetItem::Empty(_)
+            | ClassSetItem::Literal(_)
+            | ClassSetItem::Bracketed(_)
+            | ClassSetItem::Union(_) => 0,
+        };
         Ok(())
     }
 }
 
-/// Projects the heap that compiling `pattern` would allocate, or `None` if it does not parse.
+/// Counts the character classes in `pattern`, or `None` if it does not parse.
 ///
-/// A pattern we cannot parse is left to [`RegexBuilder`], which rejects it with the message users
-/// already see. That is not an escape hatch: both parse through the same `regex-syntax` version
-/// with the same default configuration (`nest_limit` 250, `octal` off), so a pattern that fails
-/// here fails there too.
-fn estimate_compile_memory(pattern: &str) -> Option<usize> {
+/// Not an escape hatch: an unparseable pattern is left to [`RegexBuilder`], and both parse through
+/// the same `regex-syntax` with the same configuration (`nest_limit` 250, `octal` off), so a pattern
+/// that fails here fails there too.
+fn count_character_classes(pattern: &str) -> Option<usize> {
     let ast = ast::parse::Parser::new().parse(pattern).ok()?;
-    match ast::visit(&ast, CompileMemoryEstimator { estimate: 0 }) {
-        Ok(estimate) => Some(estimate),
+    match ast::visit(&ast, CharacterClassCounter { count: 0 }) {
+        Ok(count) => Some(count),
         Err(infallible) => match infallible {},
     }
 }
@@ -181,9 +188,9 @@ impl Regex {
                 pattern_size: pattern.len(),
             });
         }
-        if let Some(estimate) = estimate_compile_memory(pattern) {
-            if estimate > MAX_REGEX_COMPILE_MEMORY {
-                return Err(RegexCompilationError::PatternTooExpensive { estimate });
+        if let Some(classes) = count_character_classes(pattern) {
+            if classes > MAX_REGEX_CHARACTER_CLASSES {
+                return Err(RegexCompilationError::TooManyCharacterClasses { classes });
             }
         }
         let mut regex_builder = RegexBuilder::new(pattern);
@@ -212,9 +219,8 @@ pub enum RegexCompilationError {
     RegexError(Error),
     /// Regex pattern size exceeds MAX_REGEX_SIZE_BEFORE_COMPILATION.
     PatternTooLarge { pattern_size: usize },
-    /// Compiling the pattern is projected to allocate more than
-    /// MAX_REGEX_COMPILE_MEMORY.
-    PatternTooExpensive { estimate: usize },
+    /// Regex pattern contains more than MAX_REGEX_CHARACTER_CLASSES character classes.
+    TooManyCharacterClasses { classes: usize },
 }
 
 impl fmt::Display for RegexCompilationError {
@@ -228,11 +234,12 @@ impl fmt::Display for RegexCompilationError {
                 "regex pattern too large ({} bytes, max {} bytes)",
                 patter_size, MAX_REGEX_SIZE_BEFORE_COMPILATION
             ),
-            RegexCompilationError::PatternTooExpensive { estimate } => write!(
+            RegexCompilationError::TooManyCharacterClasses { classes } => write!(
                 f,
-                "regex pattern too expensive to compile (needs about {} bytes, max {} bytes); \
-                 reduce the number of character classes",
-                estimate, MAX_REGEX_COMPILE_MEMORY
+                "regex pattern has too many character classes ({}, max {}). \
+                 A character class is a Unicode, Perl or POSIX class such as `\\p{{L}}`, `\\d` \
+                 or `[[:alpha:]]`, or a range such as `a-z`",
+                classes, MAX_REGEX_CHARACTER_CLASSES
             ),
         }
     }
@@ -437,13 +444,11 @@ mod tests {
 
     use super::*;
 
-    /// Wraps the system allocator to record the peak heap the calling thread has asked for, so
-    /// [`regex_compile_memory_charges_cover_measured_cost`] can hold the charges in this module
-    /// against what `regex-syntax` actually allocates.
+    /// Wraps the system allocator to record the peak heap the calling thread has asked for.
     ///
-    /// Counters are per thread, so tests running in parallel do not perturb each other. What is
-    /// counted is bytes requested, not resident bytes, which makes a measurement reproducible
-    /// across allocators at the cost of running a little above true RSS.
+    /// Counters are per thread, so tests running in parallel do not perturb each other. Bytes
+    /// requested are counted, not resident bytes, which keeps a measurement reproducible across
+    /// allocators at the cost of running a little above true RSS.
     struct TrackingAllocator;
 
     thread_local! {
@@ -515,13 +520,12 @@ mod tests {
     static ALLOC: TrackingAllocator = TrackingAllocator;
 
     /// Peak heap the calling thread requests while parsing `pattern` and translating it to HIR,
-    /// the stage [`estimate_compile_memory`] projects.
+    /// the stage the two limits bound.
     ///
-    /// Compiling the NFA afterwards is deliberately left out. `size_limit` bounds it, and its
-    /// cost is close to a constant (a few times `MAX_REGEX_SIZE_AFTER_COMPILATION`) that would
-    /// swamp the per-node signal at the pattern sizes this test can afford. The translator flags
-    /// mirror what [`Regex::new_dot_matches_new_line`] hands to [`RegexBuilder`], since
-    /// `case_insensitive` alone moves a class's cost by an order of magnitude.
+    /// Compiling the NFA afterwards is left out: `size_limit` bounds it, and its near-constant cost
+    /// would swamp the per-node signal at the pattern sizes a test can afford. The translator flags
+    /// mirror [`Regex::new_dot_matches_new_line`], since `case_insensitive` alone moves a class's
+    /// cost by an order of magnitude.
     fn peak_translate_bytes(pattern: &str, case_insensitive: bool) -> usize {
         let base = LIVE_BYTES.with(|live| live.get());
         PEAK_BYTES.with(|peak| peak.set(base));
@@ -542,155 +546,193 @@ mod tests {
         PEAK_BYTES.with(|peak| peak.get()).saturating_sub(base)
     }
 
-    /// A class-heavy pattern one byte under `MAX_REGEX_SIZE_BEFORE_COMPILATION` used to allocate
-    /// ~7.8 GB in envd before erroring, reachable from an unprivileged `SELECT 'x' ~* <pattern>`.
-    /// It must now be rejected without compiling.
+    /// A class-heavy pattern one byte under `MAX_REGEX_SIZE_BEFORE_COMPILATION` costs gigabytes to
+    /// translate, and is reachable from an unprivileged `SELECT 'x' ~* <pattern>`, so it has to be
+    /// rejected without compiling.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn regex_class_heavy_pattern_rejected_before_compiling() {
         let pattern = r"\p{L}".repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION / r"\p{L}".len());
         assert!(pattern.len() <= MAX_REGEX_SIZE_BEFORE_COMPILATION);
-        // Case-insensitive is the expensive direction, but the estimate does not depend on the
-        // flag, so both must be rejected.
+        // The count does not depend on the flag, so both directions must be rejected.
         for case_insensitive in [true, false] {
             let err = Regex::new(&pattern, case_insensitive).expect_err("must be rejected");
             assert!(
-                matches!(err, RegexCompilationError::PatternTooExpensive { .. }),
-                "expected PatternTooExpensive, got {err:?}"
+                matches!(err, RegexCompilationError::TooManyCharacterClasses { .. }),
+                "expected TooManyCharacterClasses, got {err:?}"
             );
         }
     }
 
-    /// The guard has to charge classes nested in a bracketed class too, else `[\p{L}]` repeated
-    /// evades it while costing the same as `\p{L}` repeated.
+    /// Case folding walks a range's whole span, so a wide one buys as many Unicode ranges per
+    /// pattern byte as `\p{...}` does. It has to count as a class, not as the two codepoints it
+    /// spells.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
-    fn regex_bracketed_class_is_charged() {
+    fn regex_wide_bracketed_range_counts_as_a_class() {
+        let unit = r"[a-\x{2FFF}]";
+        let pattern = unit.repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION / unit.len());
+        // `(?i)` reaches the same folding path from inside the pattern, so the flag we build with
+        // must make no difference.
+        for case_insensitive in [true, false] {
+            let err = Regex::new(&pattern, case_insensitive).expect_err("must be rejected");
+            assert!(
+                matches!(err, RegexCompilationError::TooManyCharacterClasses { .. }),
+                "expected TooManyCharacterClasses, got {err:?}"
+            );
+        }
+    }
+
+    /// Nested classes have to count too, else `[\p{L}]` evades the limit while costing what
+    /// `\p{L}` costs.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn regex_bracketed_class_is_counted() {
         let unit = r"[\p{L}]";
         let pattern = unit.repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION / unit.len());
         let err = Regex::new(&pattern, true).expect_err("must be rejected");
         assert!(
-            matches!(err, RegexCompilationError::PatternTooExpensive { .. }),
-            "expected PatternTooExpensive, got {err:?}"
+            matches!(err, RegexCompilationError::TooManyCharacterClasses { .. }),
+            "expected TooManyCharacterClasses, got {err:?}"
         );
     }
 
-    /// The budget has to admit as well as reject. A pattern one class short of it must still reach
-    /// the compiler, and one class past it must not, so that the limit lands where the constants
-    /// say it does rather than somewhere earlier.
+    /// The limit has to admit as well as reject: a pattern at the limit reaches the compiler, one
+    /// class past it does not.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // Compiling tens of thousands of classes is far too slow under miri.
-    fn regex_budget_boundary_is_where_the_constants_put_it() {
+    #[cfg_attr(miri, ignore)] // Compiling thousands of classes is far too slow under miri.
+    fn regex_class_limit_boundary_is_where_the_constant_puts_it() {
         let unit = r"\p{L}";
-        // The concat node holding the classes is charged too, hence the extra node.
-        let classes =
-            (MAX_REGEX_COMPILE_MEMORY - COMPILE_MEMORY_PER_NODE) / COMPILE_MEMORY_PER_CLASS;
-        assert!(unit.len() * (classes + 1) <= MAX_REGEX_SIZE_BEFORE_COMPILATION);
-
-        // Case-sensitive on purpose. The estimate does not depend on the flag, but the compile
-        // this drives all the way into the NFA compiler does, and folding costs many times the
-        // memory for no extra coverage here.
-        let err = Regex::new(&unit.repeat(classes), false).expect_err("must be rejected");
         assert!(
-            matches!(err, RegexCompilationError::RegexError(_)),
-            "one class under the budget must reach the compiler, got {err:?}"
+            unit.len() * (MAX_REGEX_CHARACTER_CLASSES + 1) <= MAX_REGEX_SIZE_BEFORE_COMPILATION
         );
 
-        let err = Regex::new(&unit.repeat(classes + 1), false).expect_err("must be rejected");
+        // Case-sensitive on purpose: this drives a real compile, and folding costs many times the
+        // memory for no extra coverage. Whether that compile succeeds or hits `size_limit` is not
+        // this test's business, only that our own limit lets it through.
+        let at_limit = Regex::new(&unit.repeat(MAX_REGEX_CHARACTER_CLASSES), false);
         assert!(
-            matches!(err, RegexCompilationError::PatternTooExpensive { .. }),
-            "one class over the budget must be turned away, got {err:?}"
+            !matches!(
+                at_limit,
+                Err(RegexCompilationError::TooManyCharacterClasses { .. })
+            ),
+            "a pattern at the limit must reach the compiler, got {at_limit:?}"
+        );
+
+        let err = Regex::new(&unit.repeat(MAX_REGEX_CHARACTER_CLASSES + 1), false)
+            .expect_err("must be rejected");
+        assert!(
+            matches!(err, RegexCompilationError::TooManyCharacterClasses { .. }),
+            "one class over the limit must be turned away, got {err:?}"
         );
     }
 
-    /// The budget must not cost legitimate long patterns. A plain literal is orders of magnitude
-    /// cheaper per node than a Unicode class, so a large pattern of them still has to compile.
+    /// Literals carry no character classes, so a large pattern of them is bounded by its bytes
+    /// alone and still has to compile.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn regex_long_literal_pattern_still_compiles() {
         // A long alternation of literals, the shape a generated pattern takes. Kept at 12000
-        // branches: past that the compiled NFA runs into MAX_REGEX_SIZE_AFTER_COMPILATION, which
-        // would make this pass or fail for an unrelated reason.
+        // branches, past which the NFA runs into MAX_REGEX_SIZE_AFTER_COMPILATION instead.
         let pattern = vec!["abcdefgh"; 12_000].join("|");
         assert!(pattern.len() > 100 * 1024);
+        assert_eq!(count_character_classes(&pattern), Some(0));
         assert!(Regex::new(&pattern, true).is_ok());
     }
 
-    /// `COMPILE_MEMORY_PER_NODE` has to stay low enough that the largest pattern
-    /// `MAX_REGEX_SIZE_BEFORE_COMPILATION` admits still fits the budget when every byte is a cheap
-    /// node. Otherwise the two limits collide and the byte limit becomes unreachable, silently
-    /// tightening what users can submit.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn regex_cheap_nodes_do_not_collide_with_the_byte_limit() {
-        let pattern = "a".repeat(MAX_REGEX_SIZE_BEFORE_COMPILATION);
-        assert!(
-            estimate_compile_memory(&pattern).unwrap() <= MAX_REGEX_COMPILE_MEMORY,
-            "a pattern of single-byte nodes at the byte limit must fit the memory budget"
-        );
-    }
-
-    /// The charges are calibrated against the `regex-syntax` version we pin, so hold them against
-    /// what that version actually allocates, one case per cost tier. A bump that makes a node kind
-    /// pricier then fails here, rather than silently reopening the OOM vector the budget closes.
+    /// The limits bound a compile only if the per-item ceilings below hold, and those are facts
+    /// about the pinned `regex-syntax`, so measure them. A bump that makes a node kind pricier
+    /// fails here.
     ///
-    /// Costs are measured here rather than written down, so nothing to keep in sync: the failure
-    /// message reports what a kind now costs against what it is charged, which is what a bump
-    /// needs in order to decide whether the charge or the case list has to move.
+    /// Each case also pins how [`count_character_classes`] classifies its kind, the one judgement
+    /// the limits rest on. A kind left uncounted while it can expand without bound shows up as the
+    /// measured cost outgrowing the bytes that bought it.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // Unicode class translation is far too slow under miri.
-    fn regex_compile_memory_charges_cover_measured_cost() {
-        /// Enough class nodes for their own cost to dominate a compile's fixed cost, few enough
-        /// that a case stays within a few tens of megabytes.
-        const CLASS_NODES: usize = 150;
-        /// Cheap nodes cost orders of magnitude less each, so they need proportionally more
-        /// repetitions to clear that same bar.
-        const CHEAP_NODES: usize = 10_000;
+    fn regex_two_limits_bound_what_a_compile_spends() {
+        /// Ceiling on the heap spent translating one character class. However wide a range is, it
+        /// keeps at most one range per entry of the simple case-fold table, so it stays under this.
+        const MAX_MEMORY_PER_CHARACTER_CLASS: usize = 96 * 1024;
+        /// Ceiling on the heap spent translating one node that is not a character class. A literal
+        /// under `i` is the costliest, since it folds to a small class rather than staying a byte.
+        const MAX_MEMORY_PER_AST_NODE: usize = 768;
 
-        let cases: &[(&str, bool, usize)] = &[
-            // Unicode-property and Perl classes, charged `COMPILE_MEMORY_PER_CLASS`.
-            // `\p{Grapheme_Base}` under `i` is the costliest of these we have found.
-            (r"\p{Grapheme_Base}", true, CLASS_NODES),
-            (r"\p{XID_Continue}", true, CLASS_NODES),
-            (r"\p{Alphabetic}", true, CLASS_NODES),
-            (r"\p{L}", true, CLASS_NODES),
-            (r"\p{L}", false, CLASS_NODES),
-            (r"\w", true, CLASS_NODES),
-            (r"\W", true, CLASS_NODES),
-            (r"\d", true, CLASS_NODES),
-            (r"\s", true, CLASS_NODES),
-            // The same classes nested in a bracketed class, where each item is charged separately.
-            (r"[\p{L}]", true, CLASS_NODES),
-            (r"[a\p{L}\d]", true, CLASS_NODES),
-            // Everything else, charged `COMPILE_MEMORY_PER_NODE`. A literal under `i` is the
-            // costliest of these, since it folds to a small class rather than staying a byte.
-            ("a", true, CHEAP_NODES),
-            ("a", false, CHEAP_NODES),
-            (".", true, CHEAP_NODES),
-            ("[a-c]", true, CHEAP_NODES),
-            ("(a)", false, CHEAP_NODES),
-            ("a|", false, CHEAP_NODES),
-            ("a*", false, CHEAP_NODES),
-            ("a{2}", false, CHEAP_NODES),
-            ("^", false, CHEAP_NODES),
+        /// Enough repetitions for a class's own cost to dominate a compile's fixed cost, few
+        /// enough that a case stays within a few tens of megabytes.
+        const CLASS_UNITS: usize = 150;
+        /// A non-class node costs orders of magnitude less, so it needs proportionally more
+        /// repetitions to clear that same bar.
+        const CHEAP_UNITS: usize = 10_000;
+
+        // (unit, case_insensitive, repetitions, character classes per repetition)
+        let cases: &[(&str, bool, usize, usize)] = &[
+            // Unicode-property and Perl classes. `\p{Grapheme_Base}` under `i` is the costliest
+            // single class found, so it is what sizes `MAX_MEMORY_PER_CHARACTER_CLASS`.
+            (r"\p{Grapheme_Base}", true, CLASS_UNITS, 1),
+            (r"\p{XID_Continue}", true, CLASS_UNITS, 1),
+            (r"\p{Alphabetic}", true, CLASS_UNITS, 1),
+            (r"\p{L}", true, CLASS_UNITS, 1),
+            (r"\p{L}", false, CLASS_UNITS, 1),
+            (r"\w", true, CLASS_UNITS, 1),
+            (r"\W", true, CLASS_UNITS, 1),
+            (r"\d", true, CLASS_UNITS, 1),
+            (r"\s", true, CLASS_UNITS, 1),
+            // The same nested in a bracketed class, where every item counts on its own.
+            (r"[\p{L}]", true, CLASS_UNITS, 1),
+            (r"[a\p{L}\d]", true, CLASS_UNITS, 2),
+            // Ranges, from one too narrow to reach the case-fold table up to one covering all of
+            // it, including the stretch of Latin where it is densest. Span alone does not predict
+            // the cost: `[\x{100}-\x{17F}]` costs 2.5x what the equally wide `[\x00-\x7F]` does,
+            // which is why ranges are counted rather than priced.
+            (r"[a-\x{10FFFF}]", true, CLASS_UNITS, 1),
+            (r"[^a-\x{10FFFF}]", true, CLASS_UNITS, 1),
+            (r"[a-\x{2FFF}]", true, CLASS_UNITS, 1),
+            (r"[\x{100}-\x{250}]", true, CLASS_UNITS, 1),
+            (r"[\x{100}-\x{17F}]", true, CLASS_UNITS, 1),
+            (r"[a-\x{FF}]", true, CLASS_UNITS, 1),
+            (r"[a-z]", true, CLASS_UNITS, 1),
+            (r"[[:alpha:]]", true, CLASS_UNITS, 1),
+            // Nodes carrying no class, bounded by the byte limit alone. `[abc]` is here on
+            // purpose: a bracketed class of literals is not counted, so its cost has to stay
+            // within what its bytes buy.
+            ("a", true, CHEAP_UNITS, 0),
+            ("a", false, CHEAP_UNITS, 0),
+            (".", true, CHEAP_UNITS, 0),
+            ("[abc]", true, CHEAP_UNITS, 0),
+            ("(a)", false, CHEAP_UNITS, 0),
+            ("a|", false, CHEAP_UNITS, 0),
+            ("a*", false, CHEAP_UNITS, 0),
+            ("a{2}", false, CHEAP_UNITS, 0),
+            ("^", false, CHEAP_UNITS, 0),
         ];
 
-        for (unit, case_insensitive, repeats) in cases {
+        for (unit, case_insensitive, repeats, classes_per_unit) in cases {
             let pattern = unit.repeat(*repeats);
-            let charged = estimate_compile_memory(&pattern).expect("pattern parses");
+            let expected_classes = repeats * classes_per_unit;
+            let classes = count_character_classes(&pattern).expect("pattern parses");
+            assert_eq!(
+                classes, expected_classes,
+                "`{unit}` x{repeats} counts as {classes} character classes, expected \
+                 {expected_classes}"
+            );
+
+            // The same product the two limits bound, evaluated for this pattern. Pattern bytes
+            // stand in for the node count, which they bound.
+            let bound =
+                classes * MAX_MEMORY_PER_CHARACTER_CLASS + pattern.len() * MAX_MEMORY_PER_AST_NODE;
             let measured = peak_translate_bytes(&pattern, *case_insensitive);
             assert!(
-                measured <= charged,
+                measured <= bound,
                 "`{unit}` x{repeats} (case_insensitive: {case_insensitive}) allocated {measured} \
-                 bytes, above the {charged} bytes charged for it, so the budget no longer bounds \
-                 what a compile spends"
+                 bytes, above the {bound} bytes the limits allow it, so they no longer bound what \
+                 a compile spends"
             );
         }
     }
 
-    /// A counted repetition needs no budget of its own: it stays small in the AST, and the NFA
-    /// compiler's incremental `size_limit` check rejects it. Pin that, since the budget
-    /// deliberately does not multiply by repetition bounds.
+    /// A counted repetition stays one class in the AST, and the NFA compiler's incremental
+    /// `size_limit` check rejects it. Pin that, since the count does not multiply by repetition
+    /// bounds.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn regex_counted_repetition_rejected_by_size_limit() {
