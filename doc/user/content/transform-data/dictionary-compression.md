@@ -94,6 +94,12 @@ builds these internal arrangements for any joins and aggregations it computes.
   dictionary until it has seen on the order of 65,000 rows. Small arrangements
   are effectively unaffected.
 
+Real workloads usually mix the two. An arrangement often holds a few columns that
+compress well alongside others that do not, and only the compressible ones save
+memory while every column still pays the CPU cost. You cannot target individual
+columns, because the option is set per cluster and the optimizer decides which
+intermediate arrangements a dataflow builds.
+
 ### The CPU cost
 
 The cost falls mainly on the write path. As updates arrive, Materialize keeps
