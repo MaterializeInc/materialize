@@ -1,6 +1,6 @@
 ---
 source: src/storage-client/src/controller.rs
-revision: a60edac7f1
+revision: 9de9cddf5e
 ---
 
 # storage-client::controller
@@ -11,4 +11,5 @@ Provides key supporting types: `CollectionDescription`, `DataSource`, `ExportDes
 `StorageWriteOp` represents high-level write operations (`Append` and `Delete`) used to update differential introspection collections.
 `WallclockLagHistogramPeriod` represents a `[start, end)` time range for wallclock lag histogram bucketing.
 The `StorageTxn` trait abstracts durable metadata persistence for shard-to-collection mappings, unfinalized shard tracking, and the txn WAL shard. `remove_unfinalized_shards` removes entries from the unfinalized shard set without finalizing the underlying Persist shards; callers are responsible for reconciling the set against active collection metadata before calling it, since stale entries can refer to active collections.
+`StorageController::update_replica_dyncfg_overrides` replaces the per-replica dyncfg overrides for the given storage instances. It only stores the overrides; callers must follow it with a configuration push (e.g. `update_parameters`) for existing replicas to observe the new values. Instances absent from the map have their overrides cleared, reverting those replicas to environment-wide configuration.
 `collections_hydrated_on_replicas` skips ingestions whose scheduled replica set is disjoint from the target replicas: a single-replica source stays scheduled on its current replica and cannot hydrate on a replica it is not scheduled on, so such ingestions must not count against the target's hydration readiness. Replica health (online/offline status) is a caller concern and is checked separately outside this method.
