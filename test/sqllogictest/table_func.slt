@@ -1986,3 +1986,47 @@ SELECT max(b), generate_series(1, 3) AS g, generate_series(4, 5) AS h FROM srf_a
 30  1  4
 30  2  5
 30  3  NULL
+
+# A window function over the reduced rows runs before the expansion, matching
+# PostgreSQL, which evaluates table functions after window functions.
+query III
+SELECT max(b), generate_series(1, 3) AS g, row_number() OVER () AS rn FROM srf_agg ORDER BY g
+----
+30  1  1
+30  2  1
+30  3  1
+
+query IIII
+SELECT a, count(*), generate_series(1, 2) AS g, row_number() OVER (ORDER BY a) AS rn FROM srf_agg GROUP BY a ORDER BY a, g
+----
+1  2  1  1
+1  2  2  1
+2  1  1  2
+2  1  2  2
+
+# The functions join below the TopK that implements `DISTINCT ON`, so the
+# distinct would collapse their expansion. PostgreSQL expands after the
+# distinct once the query has an ORDER BY, so reject instead of answering
+# differently.
+query error SELECT list table function with DISTINCT ON and ORDER BY over an aggregation not yet supported
+SELECT DISTINCT ON (count(*)) count(*), generate_series(1, 3) AS g FROM srf_agg ORDER BY count(*)
+
+query error SELECT list table function with DISTINCT ON and ORDER BY over an aggregation not yet supported
+SELECT DISTINCT ON (a) a, count(*), generate_series(1, 3) AS g FROM srf_agg GROUP BY a ORDER BY a
+
+# Without an ORDER BY, PostgreSQL also expands before the distinct, so the
+# expansion collapsing to one row per key matches. Which row survives is
+# unspecified, hence only the count.
+query I
+SELECT count(*) FROM (SELECT DISTINCT ON (a) a, count(*), generate_series(1, 3) AS g FROM srf_agg GROUP BY a)
+----
+2
+
+# `SELECT DISTINCT` distincts on the expansion in PostgreSQL too, because every
+# SELECT list column is a distinct key there.
+query II
+SELECT DISTINCT max(b), generate_series(1, 3) AS g FROM srf_agg ORDER BY g
+----
+30  1
+30  2
+30  3

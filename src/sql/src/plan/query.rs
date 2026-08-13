@@ -2750,6 +2750,19 @@ fn plan_select_from_where(
                 relation_expr = relation_expr.distinct();
             }
             Some(Distinct::On(exprs)) => {
+                // The table functions deferred in Step 5 join below this TopK,
+                // so the distinct would collapse their expansion rather than
+                // expand the rows the distinct picks. PostgreSQL instead
+                // evaluates a SELECT list table function after the distinct
+                // whenever the query has an ORDER BY and the function's output
+                // is not itself a distinct or sort key. Reject these queries
+                // rather than answer them differently.
+                if table_funcs_deferred && !order_by_exprs.is_empty() {
+                    bail_unsupported!(
+                        "SELECT list table function with DISTINCT ON and ORDER BY over an aggregation"
+                    );
+                }
+
                 let ecx = &ExprContext {
                     qcx,
                     name: "DISTINCT ON clause",
