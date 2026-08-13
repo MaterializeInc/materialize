@@ -49,7 +49,7 @@
 //! So a reader hold protects a dataflow that has been built, and the *standing hold* protects one
 //! that has not. It tracks the compaction frontier the importing runtime has applied, and the
 //! publisher's logical target is bounded by it, which keeps the agent at or below every `as_of` that
-//! runtime can still present. See [`SharedTraceState::standing_hold`].
+//! runtime can still present. See the `standing_hold` field of the shared state.
 //!
 //! The physical frontier is a separate question, and mixing it with the logical one is the mistake to
 //! avoid. Logical compaction decides which times stay *distinguishable*. Physical compaction decides
@@ -357,7 +357,7 @@ where
     /// Joins rather than assigning. The frontiers arrive in the order the importing runtime applies
     /// them, so they only rise, and joining keeps a reordered or replayed command from lowering the
     /// bound the publisher already forwarded (which its agent's own joining setter could not honour
-    /// anyway). See [`SharedTraceState::standing_hold`].
+    /// anyway). See the `standing_hold` field of the shared state.
     pub(crate) fn note_standing_hold(&self, frontier: &Antichain<Tr::Time>) {
         if let Ok(mut state) = self.shared.state.lock() {
             state.standing_hold = state.standing_hold.join(frontier);

@@ -228,14 +228,18 @@ impl GenericClient<ComputeCommand, ComputeResponse> for Multiplexer {
                     })
                     .await?;
 
-                // Broadcast a maintenance-owned compaction to interactive as well, where it advances
-                // the standing hold on the shared arrangement rather than compacting a local trace.
-                // This is what puts the create and the compactions that follow it on one ordered
-                // stream for the runtime that renders the importing dataflow, so a compaction
-                // interactive has not applied cannot advance the arrangement's `since` past the `as_of`
-                // of a create still queued there. Interactive-owned collections are not published to
-                // maintenance and it hosts nothing for them, so those stay routed.
-                if runtime == Runtime::Maintenance {
+                // Broadcast to interactive as well, where the frontier advances the standing hold on
+                // the shared arrangement rather than compacting a local trace. This is what puts the
+                // create and the compactions that follow it on one ordered stream for the runtime that
+                // renders the importing dataflow, so a compaction interactive has not applied cannot
+                // advance the arrangement's `since` past the `as_of` of a create still queued there.
+                //
+                // Only for the collections interactive can import, which are the non-transient ones
+                // maintenance publishes. Maintenance also owns transient collections, its subscribes
+                // and copy-tos, and those are sinks with no arrangement for anything to import. Sending
+                // one to interactive would hand it a frontier for a collection it has never installed,
+                // and the drop in that sequence would ask it to drop what it does not have.
+                if runtime == Runtime::Maintenance && !id.is_transient() {
                     self.interactive
                         .send(AllowCompaction { id, frontier })
                         .await?;
@@ -614,6 +618,24 @@ mod tests {
             .expect("send");
         assert_eq!(maint_commands(&h).len(), 2);
         assert!(inter_commands(&h).is_empty());
+
+        // And its compaction is NOT broadcast. Interactive can import an arrangement, and a
+        // maintenance-owned transient collection is a sink with none, so interactive has installed
+        // nothing under this id. Handing it the drop asks it to drop a collection it does not have.
+        for frontier in [
+            Antichain::from_elem(Timestamp::from(10u64)),
+            Antichain::new(),
+        ] {
+            h.mux
+                .send(ComputeCommand::AllowCompaction { id, frontier })
+                .await
+                .expect("send");
+        }
+        assert_eq!(compactions_for(&h, id).len(), 2);
+        assert!(
+            inter_commands(&h).is_empty(),
+            "a maintenance-owned transient collection's compaction must not reach interactive"
+        );
     }
 
     /// An importing create goes only to interactive, and the compaction that follows is forwarded

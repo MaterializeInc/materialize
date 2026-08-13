@@ -895,15 +895,13 @@ impl<'a> ActiveComputeState<'a> {
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
         let worker_index = self.timely_worker.index();
 
-        // The multiplexer broadcasts compaction, so this runtime also sees the frontiers of
-        // collections its peer hosts. On the interactive runtime a non-transient id is exactly one of
-        // those: the maintenance runtime renders and publishes it, and this runtime keeps at most an
-        // empty local copy (the introspection indexes). Its own publications are the transient query
-        // outputs.
-        let shared_by_peer =
-            self.compute_state.role == ComputeRuntimeRole::Interactive && !id.is_transient();
+        let interactive = self.compute_state.role == ComputeRuntimeRole::Interactive;
 
-        if shared_by_peer {
+        // The multiplexer broadcasts compaction for the collections its peer publishes, which are the
+        // ones this runtime may import, so on the interactive runtime a non-transient id is one of
+        // those. This runtime's own publications are its transient query outputs.
+        let peer_published = interactive && !id.is_transient();
+        if peer_published {
             // The standing hold: this runtime's own position in the command stream, which the peer's
             // publisher bounds its compaction by. An importing dataflow of ours whose `CreateDataflow`
             // is still queued here has registered no reader hold yet, so nothing else keeps the
@@ -911,16 +909,28 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state
                 .sharing_registry
                 .note_standing_hold(id, worker_index, &frontier);
+        }
+
+        // Whether there is local work is a question about `collections`, NOT about the id: this
+        // runtime holds empty local copies of the peer's introspection indexes, whose ids are the
+        // peer's to publish, and the peer renders transient collections of its own (subscribes and
+        // copy-tos) that this runtime has never seen. Asking the id instead sends a broadcast frontier
+        // for one of those down the drop path, where `drop_collection` panics on a collection that was
+        // never installed here.
+        if interactive && !self.compute_state.collections.contains_key(&id) {
+            return;
+        }
+
+        if peer_published {
             if !frontier.is_empty() {
-                // Keeps an empty local copy of an introspection index in step. A no-op for every
-                // other broadcast id, which has no trace here.
+                // Keeps this runtime's empty local copy of an introspection index in step.
                 self.compute_state
                     .traces
                     .allow_compaction(id, frontier.borrow());
             }
-            // Never `drop_collection` from here. It would also `sharing_registry.remove(&id)` and so
-            // unpublish an arrangement this runtime does not own. The empty local copies live for the
-            // process lifetime.
+            // Never `drop_collection` for one of those. It would also `sharing_registry.remove(&id)`
+            // and so unpublish an arrangement this runtime does not own. The empty copies live for
+            // the process lifetime, and the peer drops the real collection on its own stream.
             return;
         }
 
