@@ -319,21 +319,29 @@ where
     }
 
     /// The controller's last `AllowCompaction` frontier for this arrangement, or `None` if none has
-    /// arrived, and the published `(since, upper)`.
+    /// arrived, the standing hold, and the published `(since, upper)`.
     ///
     /// Diagnostics for a caller whose `as_of` was refused. Reading them off the publication point
     /// rather than off a handle keeps a failure path from registering a hold on its way to a panic,
     /// and lets the caller report the point that actually refused rather than a sibling.
+    ///
+    /// The standing hold is what makes a refusal diagnosable. It is the frontier the importing
+    /// runtime has applied, so a refusal with the standing hold AT the refusing `since` means that
+    /// runtime had already applied this compaction before it built the importing dataflow, and no
+    /// replica-side hold could have prevented it. A standing hold BELOW that `since` means the
+    /// publisher escaped its own bound, which is a bug here rather than upstream.
     pub(crate) fn diagnostics(
         &self,
     ) -> (
         Option<Antichain<Tr::Time>>,
         Antichain<Tr::Time>,
         Antichain<Tr::Time>,
+        Antichain<Tr::Time>,
     ) {
         let state = self.shared.state.lock().expect("shared trace poisoned");
         (
             state.writer_logical.clone(),
+            state.standing_hold.clone(),
             state.since.clone(),
             state.upper.clone(),
         )

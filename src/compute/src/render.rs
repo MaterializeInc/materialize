@@ -611,21 +611,32 @@ pub fn build_compute_dataflow(
 /// released and maintenance applied it ahead of this render, while `None` means the published `since`
 /// came from the publisher's own floor instead. `part` names which of an index's two arrangements
 /// refused, since they are independent publication points with independent holds.
+///
+/// The standing hold is the value that says whether anything here could have prevented it. Equal to
+/// the refusing `since` means this runtime had already applied the compaction before it built this
+/// dataflow, so the create was ordered behind it on this runtime's own stream and the arrangement was
+/// legitimately compacted. Below it means the publisher escaped its bound.
 fn report_compacted_past<T: std::fmt::Debug>(
     idx_id: GlobalId,
     part: &str,
     as_of: &Antichain<mz_repr::Timestamp>,
     since: &Antichain<mz_repr::Timestamp>,
-    diagnostics: (Option<Antichain<T>>, Antichain<T>, Antichain<T>),
+    diagnostics: (
+        Option<Antichain<T>>,
+        Antichain<T>,
+        Antichain<T>,
+        Antichain<T>,
+    ),
 ) -> ! {
-    let (writer_logical, published_since, published_upper) = diagnostics;
+    let (writer_logical, standing_hold, published_since, published_upper) = diagnostics;
     panic!(
         "Index {idx_id} ({part}) has been allowed to compact beyond the dataflow as_of: \
-         since {:?}, as_of {:?}, controller allow_compaction {:?}, published since {:?}, \
-         published upper {:?}",
+         since {:?}, as_of {:?}, controller allow_compaction {:?}, standing hold {:?}, \
+         published since {:?}, published upper {:?}",
         since.elements(),
         as_of.elements(),
         writer_logical.as_ref().map(|f| f.elements()),
+        standing_hold.elements(),
         published_since.elements(),
         published_upper.elements(),
     )
