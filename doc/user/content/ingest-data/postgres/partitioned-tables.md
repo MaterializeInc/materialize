@@ -267,15 +267,24 @@ network access), with the following differences:
    without a suitable index, each replicated change requires a sequential scan
    of the table.
 
-1. On the **replica**, subscribe to the primary's publication. This creates a
-   replication slot on the primary, copies the existing rows out of all the
-   partitions, and then streams ongoing changes:
+1. On the **replica**, subscribe to the primary's publication:
 
    ```sql
    CREATE SUBSCRIPTION orders_sub
        CONNECTION 'host=<primary_host> port=5432 dbname=<db> user=repuser password=<password>'
        PUBLICATION repl_to_replica;
    ```
+
+   This statement does not name any tables, because the set of replicated tables
+   is defined by the publication on the primary. By default, it also creates a
+   replication slot on the primary, copies the existing rows out of every
+   partition, and then begins streaming ongoing changes.
+
+   {{< warning >}} Create the table on the replica **before** the subscription.
+   PostgreSQL does not replicate DDL, so the subscriber never creates tables
+   itself. If `orders` does not already exist on the replica, the subscription
+   fails with `logical replication target relation "public.orders" does not
+   exist` and stops applying changes until you create it. {{< /warning >}}
 
 1. Verify that the flattening worked. The replica should have a single, ordinary
    table holding the rows from every partition:
