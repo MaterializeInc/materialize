@@ -30,6 +30,13 @@
 \*   "cap"               the multiplexer caps AllowCompaction and retires the cap
 \*                       when the rendering runtime reports a frontier. The
 \*                       mechanism this work deleted. Expected to violate I1.
+\*   "broadcast"         AllowCompaction goes to both runtimes and nothing else is
+\*                       added. Expected to violate I1: restoring the ordering
+\*                       within each stream does not restore it between them.
+\*   "broadcast-standing" as "broadcast", plus the rendering runtime holding every
+\*                       shared collection at the last frontier IT has applied, so
+\*                       compaction is bounded by that runtime's stream position.
+\*                       Needs no acquisition, no release and no reclaim.
 \*
 \* G1 is why `Procs` is a set: commands reach process 0 only and each runtime
 \* re-broadcasts to its own processes independently, so process 1 gets no
@@ -44,12 +51,29 @@ CONSTANTS
     MaxEpochs,      \* how many connections to allow
     NoTime          \* sentinel for "no hold", a number outside Times
 
-ASSUME Mechanism \in {"acquire", "release-on-maint", "cap"}
+ASSUME Mechanism \in {"acquire", "release-on-maint", "cap", "broadcast",
+                      "broadcast-standing"}
 \* Sets here must stay homogeneous: TLC canonicalizes a set value by sorting its
 \* elements, so a set mixing a string sentinel with numbers fails to compare.
 ASSUME NoTime \notin Times
 
 Acquires == Mechanism \in {"acquire", "release-on-maint"}
+
+\* The proposed alternative: stop routing compaction to one runtime and hand it to
+\* both, so that within each runtime the create and the compaction are back on one
+\* ordered stream, which is the ordering routing destroyed and which every
+\* acquisition mechanism above exists to reconstruct.
+Broadcasts == Mechanism \in {"broadcast", "broadcast-standing"}
+
+\* Broadcast ALONE, with no hold at all, is modelled deliberately so TLC decides
+\* whether it suffices rather than leaving it argued. It should not: the runtimes
+\* still drain independently, so the owning runtime can realize a compaction the
+\* rendering runtime has not reached.
+\*
+\* `broadcast-standing` adds the standing per-collection hold: the rendering
+\* runtime holds the collection at the last frontier IT has applied, so the owning
+\* runtime's compaction is bounded by the rendering runtime's stream position.
+Standing == Mechanism = "broadcast-standing"
 
 VARIABLES
     \* Controller state.
@@ -68,13 +92,14 @@ VARIABLES
     since,          \* [p \in Procs |-> applied compaction frontier]
     acquired,       \* [p \in Procs |-> command-acquired hold, or NoTime]
     readerHold,     \* [p \in Procs |-> the built import's own hold, or NoTime]
+    standing,       \* [p \in Procs |-> frontier the rendering runtime has applied]
     dropped,        \* [p \in Procs |-> the rendering runtime has applied the drop]
     released,       \* [p \in Procs |-> the rendering runtime has applied the release]
     reported        \* has any process reported a frontier for the dataflow
 
 vars == <<ctlSince, ctlHold, dfAsOf, epoch, muxHold, muxFloor, muxHeld,
-          maintQ, interQ, since, acquired, readerHold, dropped, released,
-          reported>>
+          maintQ, interQ, since, acquired, readerHold, standing, dropped,
+          released, reported>>
 
 \* Commands. Each carries the epoch it was issued in, so a runtime can be given
 \* stale commands after a Hello, which is G2.
@@ -102,6 +127,7 @@ Init ==
     /\ since = [p \in Procs |-> 0]
     /\ acquired = [p \in Procs |-> NoTime]
     /\ readerHold = [p \in Procs |-> NoTime]
+    /\ standing = [p \in Procs |-> 0]
     /\ dropped = [p \in Procs |-> FALSE]
     /\ released = [p \in Procs |-> FALSE]
     /\ reported = FALSE
@@ -133,7 +159,7 @@ CtlCreate(t) ==
     /\ interQ' = Broadcast(interQ, Create(t, epoch))
     /\ dropped' = [p \in Procs |-> FALSE]
     /\ released' = [p \in Procs |-> FALSE]
-    /\ UNCHANGED <<ctlSince, epoch, muxFloor, since, acquired, readerHold,
+    /\ UNCHANGED <<ctlSince, epoch, muxFloor, since, acquired, readerHold, standing,
                    reported>>
 
 \* The controller allows compaction to t. It never releases past its own hold
@@ -150,9 +176,15 @@ CtlCompact(t) ==
                      THEN muxHold
                      ELSE t
        IN /\ maintQ' = Broadcast(maintQ, Compact(capped, epoch))
+          \* The whole of the proposal: the same frontier also goes to the rendering
+          \* runtime, so on that stream it sits BEHIND any create already queued
+          \* there. Nothing else about the routing changes.
+          /\ interQ' = IF Broadcasts
+                       THEN Broadcast(interQ, Compact(capped, epoch))
+                       ELSE interQ
           /\ muxFloor' = capped
-    /\ UNCHANGED <<ctlHold, dfAsOf, epoch, muxHold, muxHeld, interQ, since,
-                   acquired, readerHold, dropped, released, reported>>
+    /\ UNCHANGED <<ctlHold, dfAsOf, epoch, muxHold, muxHeld, since,
+                   acquired, readerHold, standing, dropped, released, reported>>
 
 \* The controller finishes with the dataflow: it drops its own hold and sends the
 \* dataflow's drop, which the multiplexer routes to the runtime that renders it.
@@ -186,7 +218,7 @@ CtlDrop ==
             /\ muxHold' = IF reported THEN NoTime ELSE muxHold
     /\ muxHeld' = FALSE
     /\ UNCHANGED <<ctlSince, dfAsOf, epoch, muxFloor, since, acquired,
-                   readerHold, dropped, released, reported>>
+                   readerHold, standing, dropped, released, reported>>
 
 \* A reconnection. The multiplexer's per-connection state goes; the runtimes'
 \* queues do NOT, because a stale-nonce command is stashed and still executes.
@@ -204,7 +236,7 @@ Hello ==
     /\ muxHeld' = FALSE
     /\ dfAsOf' = NoTime
     /\ ctlHold' = NoTime
-    /\ UNCHANGED <<ctlSince, maintQ, interQ, since, acquired, readerHold,
+    /\ UNCHANGED <<ctlSince, maintQ, interQ, since, acquired, readerHold, standing,
                    dropped, released, reported>>
 
 -----------------------------------------------------------------------------
@@ -224,7 +256,14 @@ MaintStep(p) ==
                     \* registration below where that agent already sits cannot be
                     \* honoured. Treating the registration as a bound here would
                     \* assume away the very ratchet the acquired hold exists for.
-                    LET bound == IF acquired[p] # NoTime THEN acquired[p]
+                    \* Under `broadcast-standing` the bound is the rendering
+                    \* runtime's own stream position instead: it holds the
+                    \* collection at the last frontier it has applied, so this
+                    \* runtime cannot realize a compaction that one has not
+                    \* reached. That is the entire mechanism, and it replaces both
+                    \* the acquisition and its reclaim.
+                    LET bound == IF Standing THEN standing[p]
+                                 ELSE IF acquired[p] # NoTime THEN acquired[p]
                                  ELSE cmd.time
                     IN /\ since' = [since EXCEPT ![p] =
                                         IF cmd.time > since[p]
@@ -243,7 +282,7 @@ MaintStep(p) ==
                     /\ acquired' = [acquired EXCEPT ![p] = NoTime]
                     /\ UNCHANGED since
     /\ UNCHANGED <<ctlSince, ctlHold, dfAsOf, epoch, muxHold, muxFloor, muxHeld,
-                   interQ, readerHold, dropped, released, reported>>
+                   interQ, readerHold, standing, dropped, released, reported>>
 
 \* The acquired hold follows the reader's own progress, floored at the frontier it
 \* was acquired at. Run on the owning runtime's maintenance tick.
@@ -260,7 +299,7 @@ HoldDowngrade(p) ==
     /\ acquired[p] < readerHold[p]
     /\ acquired' = [acquired EXCEPT ![p] = readerHold[p]]
     /\ UNCHANGED <<ctlSince, ctlHold, dfAsOf, epoch, muxHold, muxFloor, muxHeld,
-                   maintQ, interQ, since, readerHold, dropped, released,
+                   maintQ, interQ, since, readerHold, standing, dropped, released,
                    reported>>
 
 \* The owning runtime reclaims the hold once the rendering runtime has recorded the
@@ -275,7 +314,7 @@ HoldReclaim(p) ==
     /\ released[p]
     /\ acquired' = [acquired EXCEPT ![p] = NoTime]
     /\ UNCHANGED <<ctlSince, ctlHold, dfAsOf, epoch, muxHold, muxFloor, muxHeld,
-                   maintQ, interQ, since, readerHold, dropped, released,
+                   maintQ, interQ, since, readerHold, standing, dropped, released,
                    reported>>
 
 -----------------------------------------------------------------------------
@@ -290,7 +329,14 @@ InterStep(p) ==
        /\ interQ' = [interQ EXCEPT ![p] = Tail(interQ[p])]
        /\ CASE cmd.kind = "create" ->
                     /\ readerHold' = [readerHold EXCEPT ![p] = cmd.time]
-                    /\ UNCHANGED <<dropped, released>>
+                    /\ UNCHANGED <<standing, dropped, released>>
+            [] cmd.kind = "compact" ->
+                    \* Only reachable under a broadcast mechanism. Applying the
+                    \* frontier here is what advances this runtime's standing hold,
+                    \* and it happens strictly after every command queued ahead of
+                    \* it, which is where the ordering comes from.
+                    /\ standing' = [standing EXCEPT ![p] = cmd.time]
+                    /\ UNCHANGED <<readerHold, dropped, released>>
             [] cmd.kind = "drop" ->
                     \* Dropping the dataflow drops the import, and with it the
                     \* registration. Separate from the release below: they are two
@@ -298,10 +344,10 @@ InterStep(p) ==
                     \* mis-ordering between them.
                     /\ readerHold' = [readerHold EXCEPT ![p] = NoTime]
                     /\ dropped' = [dropped EXCEPT ![p] = TRUE]
-                    /\ UNCHANGED released
+                    /\ UNCHANGED <<standing, released>>
             [] cmd.kind = "release" ->
                     /\ released' = [released EXCEPT ![p] = TRUE]
-                    /\ UNCHANGED <<readerHold, dropped>>
+                    /\ UNCHANGED <<readerHold, standing, dropped>>
     /\ UNCHANGED <<ctlSince, ctlHold, dfAsOf, epoch, muxHold, muxFloor, muxHeld,
                    maintQ, since, acquired, reported>>
 
@@ -313,7 +359,7 @@ InterReport(p) ==
     /\ ~reported
     /\ reported' = TRUE
     /\ UNCHANGED <<ctlSince, ctlHold, dfAsOf, epoch, muxHold, muxFloor, muxHeld,
-                   maintQ, interQ, since, acquired, readerHold, dropped,
+                   maintQ, interQ, since, acquired, readerHold, standing, dropped,
                    released>>
 
 \* The import makes progress and downgrades its own hold. Being late here only
@@ -323,7 +369,8 @@ ReaderDowngrade(p, t) ==
     /\ readerHold[p] < t
     /\ readerHold' = [readerHold EXCEPT ![p] = t]
     /\ UNCHANGED <<ctlSince, ctlHold, dfAsOf, epoch, muxHold, muxFloor, muxHeld,
-                   maintQ, interQ, since, acquired, dropped, released, reported>>
+                   maintQ, interQ, since, acquired, standing, dropped, released,
+                   reported>>
 
 -----------------------------------------------------------------------------
 
@@ -373,6 +420,7 @@ TypeOK ==
     /\ \A p \in Procs : since[p] \in Times
     /\ \A p \in Procs : acquired[p] \in Times \cup {NoTime}
     /\ \A p \in Procs : readerHold[p] \in Times \cup {NoTime}
+    /\ \A p \in Procs : standing[p] \in Times
     /\ \A p \in Procs : dropped[p] \in BOOLEAN
     /\ \A p \in Procs : released[p] \in BOOLEAN
 

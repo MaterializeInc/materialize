@@ -66,6 +66,8 @@ checks=(
     "Holds.cfg Holds.tla hold"
     "HoldsCap.cfg Holds.tla refute"
     "HoldsReleaseOnMaint.cfg Holds.tla refute"
+    "HoldsBroadcast.cfg Holds.tla refute"
+    "HoldsBroadcastStanding.cfg Holds.tla hold"
 )
 
 status=0
