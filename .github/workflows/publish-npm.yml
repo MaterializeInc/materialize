@@ -1,0 +1,124 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Publishes the wasm npm packages that the `deploy-npm` Buildkite step builds.
+#
+# Buildkite remains the release pipeline: it builds and packs the tarballs,
+# stages them in S3, triggers this workflow, and fails its step if this
+# workflow fails. This workflow exists only because npm's trusted publishing
+# accepts OIDC tokens from GitHub Actions, GitLab, and CircleCI, but not from
+# Buildkite -- so this is the smallest possible amount of publishing that has
+# to happen outside of Buildkite in order to retire the long-lived NPM_TOKEN.
+#
+# Each package's trusted publisher on npmjs.com must name this workflow file
+# ("publish-npm.yml") and the "npm-publish" environment. The repository
+# variable NPM_PUBLISH_ROLE_ARN must name the GithubActionsNpmPublish role
+# from MaterializeInc/i2, which grants read access to the staging bucket.
+
+name: publish npm packages
+
+run-name: publish npm packages (${{ inputs.staging_uri || github.event.client_payload.staging_uri }})
+
+on:
+  repository_dispatch:
+    types: [publish-npm]
+  workflow_dispatch:
+    inputs:
+      staging_uri:
+        description: "s3:// URI of a staging directory left behind by a Buildkite deploy-npm step"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  # Mints the OIDC tokens used both to assume the AWS role and to authenticate
+  # to npm. Without this, npm falls back to token auth and the publish fails.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # npm's trusted publisher configuration is pinned to this environment, and
+    # the AWS role's trust policy only accepts tokens issued for it.
+    environment: npm-publish
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+        with:
+          role-to-assume: ${{ vars.NPM_PUBLISH_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # Node 22.14+ and npm 11.5.1+ are what support OIDC publishing.
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Download staged packages
+        env:
+          STAGING_URI: ${{ inputs.staging_uri || github.event.client_payload.staging_uri }}
+        run: |
+          set -euo pipefail
+          case "$STAGING_URI" in
+            s3://*) ;;
+            *) echo "refusing to fetch non-s3 staging URI: $STAGING_URI" >&2; exit 1 ;;
+          esac
+          mkdir staging
+          aws s3 cp --recursive "$STAGING_URI" staging/
+          test -f staging/manifest.json
+          cat staging/manifest.json
+
+      - name: Publish to npm
+        # Provenance is generated automatically when publishing over OIDC, but
+        # it would attest that this workflow built the tarballs, and it did
+        # not -- Buildkite did. Publishing an attestation we know to be untrue
+        # is worse than publishing none, which is what we do today.
+        env:
+          NPM_CONFIG_PROVENANCE: "false"
+        run: |
+          set -euo pipefail
+          jq -c '.packages[]' staging/manifest.json | while read -r package; do
+            name=$(jq -r '.name' <<<"$package")
+            version=$(jq -r '.version' <<<"$package")
+            tarball=$(jq -r '.tarball' <<<"$package")
+            tag=$(jq -r '.tag' <<<"$package")
+            echo "::group::publishing $name@$version (tag $tag)"
+            npm publish "staging/$tarball" --access public --tag "$tag"
+            echo "::endgroup::"
+            echo "- \`$name@$version\` published with tag \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Apply additional dist-tags
+        # OIDC covers `npm publish` and `npm stage publish` only, so the
+        # `latest-X.Y` tags that release builds also carry still need a token.
+        # It lives in this environment rather than in every Buildkite build,
+        # and it is only ever used to move a tag -- it cannot publish, because
+        # the packages disallow token publishes.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+        run: |
+          set -euo pipefail
+          extra=$(jq -r '[.packages[] | select(.extra_tags | length > 0)] | length' staging/manifest.json)
+          if [ "$extra" -eq 0 ]; then
+            echo "no additional dist-tags requested"
+            exit 0
+          fi
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::warning::NPM_DIST_TAG_TOKEN is not set; the latest-X.Y dist-tags below were NOT applied"
+            jq -r '.packages[] | select(.extra_tags | length > 0) | .extra_tags[] as $t | "npm dist-tag add \(.name)@\(.version) \($t)"' \
+              staging/manifest.json | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          jq -r '.packages[] | select(.extra_tags | length > 0) | .extra_tags[] as $t | "\(.name)@\(.version) \($t)"' \
+            staging/manifest.json | while read -r spec tag; do
+            echo "::group::tagging $spec as $tag"
+            npm dist-tag add "$spec" "$tag"
+            echo "::endgroup::"
+            echo "- \`$spec\` tagged \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          done

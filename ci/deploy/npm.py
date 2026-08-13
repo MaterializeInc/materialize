@@ -12,15 +12,17 @@ import json
 import logging
 import os
 import shutil
+import tempfile
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import requests
 from semver.version import VersionInfo
 
-from materialize import MZ_ROOT, cargo, spawn
+from materialize import MZ_ROOT, buildkite, cargo, github, spawn
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -29,6 +31,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 PUBLISH_CRATES = ["mz-sql-lexer-wasm", "mz-sql-parser-wasm", "mz-sql-pretty-wasm"]
+
+# The GitHub Actions workflow that performs the actual publish. Each package's
+# trusted publisher on npmjs.com is pinned to this filename, so renaming the
+# workflow requires updating those configurations too.
+PUBLISH_WORKFLOW = "publish-npm.yml"
 
 
 @dataclass(frozen=True)
@@ -85,13 +92,20 @@ def build_package(version: NpmPackageVersion, crate_path: Path) -> Path:
     return package_path
 
 
-def release_package(version: NpmPackageVersion, package_path: Path) -> None:
+def stage_package(
+    version: NpmPackageVersion, package_path: Path, staging_path: Path
+) -> dict[str, Any] | None:
+    """Pack a built package for publishing, returning its manifest entry.
+
+    Returns None if the version is already on npm, in which case there is
+    nothing to publish.
+    """
     with open(package_path / "package.json") as package_file:
         package = json.load(package_file)
     name = package["name"]
     if version_exists_in_npm(name, version):
         logger.warning("%s %s already released, skipping.", name, version.node)
-        return
+        return None
     else:
         dist_tag: str | None = "dev" if version.is_development else "latest"
         branch_tag: str | None = None
@@ -106,45 +120,129 @@ def release_package(version: NpmPackageVersion, package_path: Path) -> None:
                     version.node,
                 )
                 dist_tag = None
-        logger.info("Releasing %s %s", name, version.node)
-        set_npm_credentials(package_path)
-        # If we do not specify a dist tag, this automatically is tagged as
-        # `latest`. So, force a dist tag for release builds that are lower than
-        # the stable version. This usually happens when we cut a hotfix release
-        # for the in-production version after a release has been cut for the
-        # next version.
+        logger.info("Packing %s %s", name, version.node)
+        before = set(staging_path.glob("*.tgz"))
         spawn.runv(
-            [
-                "npm",
-                "publish",
-                "--access",
-                "public",
-                "--tag",
-                cast(str, dist_tag or branch_tag),
-            ],
+            ["npm", "pack", "--pack-destination", str(staging_path)],
             cwd=package_path,
         )
-        # If we didn't tag the release with the branch tag, add it now.
-        if dist_tag == "latest" and branch_tag:
-            spawn.runv(
-                ["npm", "dist-tag", "add", f"{name}@{version.node}", branch_tag],
-                cwd=package_path,
+        packed = set(staging_path.glob("*.tgz")) - before
+        if len(packed) != 1:
+            raise RuntimeError(
+                f"expected npm pack to produce one tarball for {name}, "
+                f"got {sorted(p.name for p in packed)}"
             )
+        tarball = packed.pop().name
+        # If we do not specify a dist tag, npm automatically tags the publish
+        # as `latest`. So, force a dist tag for release builds that are lower
+        # than the stable version. This usually happens when we cut a hotfix
+        # release for the in-production version after a release has been cut
+        # for the next version.
+        return {
+            "name": name,
+            "version": version.node,
+            "tarball": tarball,
+            "tag": cast(str, dist_tag or branch_tag),
+            # The branch tag has to be applied after the publish, because a
+            # publish can only set one tag.
+            "extra_tags": [branch_tag] if dist_tag == "latest" and branch_tag else [],
+        }
+
+
+def publish_via_github(packages: list[dict[str, Any]], staging_path: Path) -> None:
+    """Hand the packed tarballs off to GitHub Actions to publish.
+
+    npm's trusted publishing does not accept OIDC tokens from Buildkite, so
+    the actual `npm publish` runs in the publish-npm workflow, which
+    authenticates to npm with an OIDC token instead of a long-lived one. This
+    uploads the tarballs to a staging bucket that the workflow's AWS role can
+    read, triggers the workflow, and fails this step if the workflow fails, so
+    that a broken publish still turns the Buildkite pipeline red.
+    """
+    bucket = os.environ["NPM_STAGING_BUCKET"]
+    # Unique per job, and reused as the handle for finding the run that this
+    # dispatch creates.
+    dispatch_id = os.environ.get("BUILDKITE_JOB_ID") or str(uuid.uuid4())
+    staging_uri = f"s3://{bucket}/npm/{dispatch_id}/"
+    sha = os.environ.get("BUILDKITE_COMMIT", "")
+    build_url = os.environ.get("BUILDKITE_BUILD_URL", "")
+
+    with open(staging_path / "manifest.json", "w") as manifest_file:
+        json.dump(
+            {
+                "dispatch_id": dispatch_id,
+                "sha": sha,
+                "build_url": build_url,
+                "packages": packages,
+            },
+            manifest_file,
+            indent=2,
+        )
+
+    spawn.runv(
+        [
+            "aws",
+            "s3",
+            "cp",
+            "--recursive",
+            "--only-show-errors",
+            str(staging_path),
+            staging_uri,
+        ],
+    )
+    logger.info("Staged %d package(s) at %s", len(packages), staging_uri)
+
+    github.repository_dispatch(
+        "publish-npm",
+        {
+            "staging_uri": staging_uri,
+            "dispatch_id": dispatch_id,
+            "sha": sha,
+            "build_url": build_url,
+        },
+    )
+    logger.info("Dispatched publish-npm, waiting for the workflow run")
+    # Comfortably inside the Buildkite step's timeout, so that a workflow that
+    # hangs surfaces as an annotated failure here rather than as a killed step.
+    run = github.wait_for_workflow_run(PUBLISH_WORKFLOW, staging_uri, timeout_secs=1200)
+
+    summary = "\n".join(
+        f"- `{p['name']}@{p['version']}` ({p['tag']})" for p in packages
+    )
+    if buildkite.is_in_buildkite():
+        buildkite.add_annotation(
+            "info" if run["conclusion"] == "success" else "error",
+            f"npm publish {run['conclusion']}: {run['html_url']}",
+            summary,
+        )
+    if run["conclusion"] != "success":
+        raise RuntimeError(
+            f"publish-npm workflow {run['conclusion']}: {run['html_url']}"
+        )
+    logger.info("Published %d package(s): %s", len(packages), run["html_url"])
 
 
 def build_all(
     workspace: cargo.Workspace, version: NpmPackageVersion, *, do_release: bool = True
 ) -> None:
-    for crate_name in PUBLISH_CRATES:
-        crate_path = workspace.all_crates[crate_name].path
-        logger.info("Building %s @ %s", crate_path, version.node)
-        package_path = build_package(version, crate_path)
-        logger.info("Built %s", crate_path)
-        if do_release:
-            release_package(version, package_path)
-            logger.info("Released %s", package_path)
-        else:
-            logger.info("Skipping release for %s", package_path)
+    with tempfile.TemporaryDirectory() as staging_dir:
+        staging_path = Path(staging_dir)
+        packages: list[dict[str, Any]] = []
+        for crate_name in PUBLISH_CRATES:
+            crate_path = workspace.all_crates[crate_name].path
+            logger.info("Building %s @ %s", crate_path, version.node)
+            package_path = build_package(version, crate_path)
+            logger.info("Built %s", crate_path)
+            if not do_release:
+                logger.info("Skipping release for %s", package_path)
+                continue
+            package = stage_package(version, package_path, staging_path)
+            if package is not None:
+                packages.append(package)
+        if packages:
+            publish_via_github(packages, staging_path)
+        elif do_release:
+            logger.info("Nothing to publish; all versions already exist on npm")
 
 
 def _query_npm_version(name: str, version: str) -> requests.Response:
@@ -171,12 +269,6 @@ def version_exists_in_npm(name: str, version: NpmPackageVersion) -> bool:
         return False
     res.raise_for_status()
     return True
-
-
-def set_npm_credentials(package_path: Path) -> None:
-    (package_path / ".npmrc").write_text(
-        "//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n"
-    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -216,8 +308,10 @@ if __name__ == "__main__":
             )
         else:
             build_id = int(os.environ["BUILDKITE_BUILD_NUMBER"])
-    if args.do_release and "NPM_TOKEN" not in os.environ:
-        raise ValueError("'NPM_TOKEN' must be set")
+    if args.do_release:
+        for var in ["GITHUB_TOKEN", "NPM_STAGING_BUCKET"]:
+            if var not in os.environ:
+                raise ValueError(f"{var!r} must be set")
     root_workspace = cargo.Workspace(MZ_ROOT)
     wasm_workspace = cargo.Workspace(MZ_ROOT / "misc" / "wasm")
     crate_version = VersionInfo.parse(

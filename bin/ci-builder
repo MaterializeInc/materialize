@@ -310,7 +310,7 @@ case "$cmd" in
                 --env NIGHTLY_CANARY_APP_PASSWORD
                 --env MZ_CI_LICENSE_KEY
                 --env MZ_CLI_APP_PASSWORD
-                --env NPM_TOKEN
+                --env NPM_STAGING_BUCKET
                 --env POLAR_SIGNALS_API_TOKEN
                 --env PRODUCTION_ANALYTICS_USERNAME
                 --env PRODUCTION_ANALYTICS_APP_PASSWORD
