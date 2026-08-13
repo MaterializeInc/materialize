@@ -3057,6 +3057,15 @@ class FlipFlagsAction(Action):
             "5242880",
             "10485760",
         ]
+        # The CHECK expressions this workload generates allocate at most a few
+        # bytes of temporary storage, well under the 1 MiB floor here, so none of
+        # these values can make one fail.
+        self.flags_with_values["webhook_validation_memory_budget_bytes"] = [
+            # 1 MiB, 20 MiB (default), 100 MiB
+            "1048576",
+            "20971520",
+            "104857600",
+        ]
         self.flags_with_values["aws_prefetch_sts_connect_timeout"] = [
             "'3100ms'",
             "'30s'",

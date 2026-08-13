@@ -178,6 +178,79 @@ func_name! {
 /// function where it applies.
 pub const MAX_STRING_FUNC_RESULT_BYTES: usize = 1024 * 1024 * 100;
 
+/// The largest result a string function may build into `temp_storage`.
+///
+/// [`MAX_STRING_FUNC_RESULT_BYTES`] unless the arena carries a tighter budget, which is how an
+/// expression evaluated in `environmentd` on behalf of a request (a webhook `CHECK`) is held to a
+/// size proportionate to that request rather than to the constant, which is sized for a cluster.
+///
+/// A function that can predict its result size must consult this *before* building the result: the
+/// arena's own budget is only observable after the bytes exist, which for an amplifying function is
+/// exactly too late.
+pub fn max_string_func_result_bytes(temp_storage: &RowArena) -> usize {
+    std::cmp::min(
+        MAX_STRING_FUNC_RESULT_BYTES,
+        temp_storage.budget_remaining(),
+    )
+}
+
+/// Refuses a collection `temp_storage`'s budget cannot afford, before it is packed.
+///
+/// The collection builders (`ARRAY[..]`, `LIST[..]`, `ROW(..)`, `MAP[..]`, `jsonb_build_*`) pack the
+/// datums they are handed straight into `temp_storage`, so the result is as large as those datums
+/// times however many times the expression names each one. Unlike the string functions bounded by
+/// [`max_string_func_result_bytes`], `ARRAY[body, body, ..]` has no ceiling of its own.
+///
+/// Like that ceiling, this must be consulted *before* the result is built, since the arena's budget
+/// is only observable once the bytes exist. [`mz_repr::datum_size`] is the size a datum occupies
+/// once packed, so summing it bounds the result without allocating anything. Without a budget
+/// `budget_remaining` is `usize::MAX` and nothing is refused.
+pub fn check_datums_fit_budget<'a>(
+    datums: impl IntoIterator<Item = Datum<'a>>,
+    temp_storage: &RowArena,
+) -> Result<(), EvalError> {
+    let need: usize = datums
+        .into_iter()
+        .map(|d| mz_repr::datum_size(&d))
+        .fold(0, usize::saturating_add);
+    if need > temp_storage.budget_remaining() {
+        return Err(EvalError::TempStorageBudgetExceeded);
+    }
+    Ok(())
+}
+
+/// Refuses an input-scaled transient the arena's budget cannot afford, before it is built.
+///
+/// A function that gathers `n_elems` of `elem_size` bytes into its own `Vec` before packing them
+/// holds that allocation on the stack, where the arena never sees it. The evaluator's post-call
+/// check counts arena bytes only, so a transient wider than the result it becomes can slip past a
+/// budget the packed result fits under. A `Vec<&str>` of split chunks is one: a 16-byte fat pointer
+/// per chunk against the ~2 bytes an empty chunk packs to. Pair this with
+/// [`check_datums_fit_budget`], which bounds the packed result.
+///
+/// `n_elems` is a closure so an unbudgeted arena, which is every arena in a dataflow, never pays for
+/// a count that can cost a pass over the input.
+///
+/// NOTE: the reformatters (`jsonb_pretty`, `pretty_sql`, `redact_sql`) are the known exception.
+/// Sizing their output needs the same walk that produces it, so only the post-call check bounds
+/// them.
+pub fn check_build_fits_budget(
+    n_elems: impl FnOnce() -> usize,
+    elem_size: usize,
+    temp_storage: &RowArena,
+) -> Result<(), EvalError> {
+    let budget_remaining = temp_storage.budget_remaining();
+    // `usize::MAX` is the unbudgeted sentinel. Return before the count so an unbudgeted arena never
+    // pays for it.
+    if budget_remaining == usize::MAX {
+        return Ok(());
+    }
+    if n_elems().saturating_mul(elem_size) > budget_remaining {
+        return Err(EvalError::TempStorageBudgetExceeded);
+    }
+    Ok(())
+}
+
 pub fn jsonb_stringify<'a>(a: Datum<'a>, temp_storage: &'a RowArena) -> Option<&'a str> {
     match a {
         Datum::JsonNull => None,
@@ -476,10 +549,10 @@ fn encode(bytes: &[u8], format: &str) -> Result<String, EvalError> {
 }
 
 #[sqlfunc]
-fn decode(string: &str, format: &str) -> Result<Vec<u8>, EvalError> {
+fn decode(string: &str, format: &str, temp_storage: &RowArena) -> Result<Vec<u8>, EvalError> {
     let format = encoding::lookup_format(format)?;
     let out = format.decode(string)?;
-    if out.len() > MAX_STRING_FUNC_RESULT_BYTES {
+    if out.len() > max_string_func_result_bytes(temp_storage) {
         Err(EvalError::LengthTooLarge)
     } else {
         Ok(out)
@@ -2470,7 +2543,17 @@ fn regexp_split_to_array_re<'a>(
     regexp: &Regex,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
+    // Bound the transient `Vec<&str>` before the split builds it. The count follows the split's own
+    // zero-length-match rule, so it refuses exactly the calls the split would build.
+    check_build_fits_budget(
+        || mz_regexp::regexp_split_to_array_count(text, regexp),
+        std::mem::size_of::<&str>(),
+        temp_storage,
+    )?;
     let found = mz_regexp::regexp_split_to_array(text, regexp);
+    // Splitting amplifies: each chunk is packed with its own tag and length, so a pattern that
+    // splits per character costs several times the input.
+    check_datums_fit_budget(found.iter().copied().map(Datum::String), temp_storage)?;
     let mut row = Row::default();
     let mut packer = row.packer();
     packer.try_push_array(
@@ -2483,6 +2566,7 @@ fn regexp_split_to_array_re<'a>(
     Ok(temp_storage.push_unary_row(row))
 }
 
+// NOTE: no budget pre-check, see the exception on `check_build_fits_budget`.
 #[sqlfunc(propagates_nulls = true)]
 fn pretty_sql<'a>(sql: &str, width: i32, temp_storage: &'a RowArena) -> Result<&'a str, EvalError> {
     let width =
@@ -2499,6 +2583,7 @@ fn pretty_sql<'a>(sql: &str, width: i32, temp_storage: &'a RowArena) -> Result<&
     Ok(pretty)
 }
 
+// NOTE: no budget pre-check, see the exception on `check_build_fits_budget`.
 #[sqlfunc]
 fn redact_sql(sql: &str) -> Result<String, EvalError> {
     let stmts = mz_sql_parser::parser::parse_statements(sql)
@@ -2528,8 +2613,8 @@ fn starts_with(a: &str, b: &str) -> bool {
     // 'A' < 'AA' but 'AZ' > 'AAZ'.)
     is_monotone = (false, true),
 )]
-fn text_concat_binary(a: &str, b: &str) -> Result<String, EvalError> {
-    if a.len() + b.len() > MAX_STRING_FUNC_RESULT_BYTES {
+fn text_concat_binary(a: &str, b: &str, temp_storage: &RowArena) -> Result<String, EvalError> {
+    if a.len() + b.len() > max_string_func_result_bytes(temp_storage) {
         return Err(EvalError::LengthTooLarge);
     }
     let mut buf = String::with_capacity(a.len() + b.len());
@@ -2646,9 +2731,9 @@ pub fn build_regex(needle: &str, flags: &str) -> Result<Regex, EvalError> {
 }
 
 #[sqlfunc(sqlname = "repeat")]
-fn repeat_string(string: &str, count: i32) -> Result<String, EvalError> {
+fn repeat_string(string: &str, count: i32, temp_storage: &RowArena) -> Result<String, EvalError> {
     let len = usize::try_from(count).unwrap_or(0);
-    if (len * string.len()) > MAX_STRING_FUNC_RESULT_BYTES {
+    if len.saturating_mul(string.len()) > max_string_func_result_bytes(temp_storage) {
         return Err(EvalError::LengthTooLarge);
     }
     Ok(string.repeat(len))
@@ -2674,6 +2759,7 @@ fn array_create_scalar<'a>(
         // strangely to satisfy the borrow checker while avoiding an allocation.
         dims = &[];
     }
+    check_datums_fit_budget(datums.iter().copied(), temp_storage)?;
     let datum = temp_storage.try_make_datum(|packer| packer.try_push_array(dims, datums))?;
     Ok(datum)
 }
@@ -2922,8 +3008,16 @@ fn array_remove<'a>(
         return Err(EvalError::MultidimensionalArrayRemovalNotSupported);
     }
 
-    let elems: Vec<_> = arr.elements().iter().filter(|v| v != &b).collect();
     let mut dims = arr.dims().into_iter().collect::<Vec<_>>();
+    // Removal can't grow the result, but the transient `Vec<Datum>` it filters into is a fresh
+    // input-scaled allocation. One-dimensional by the check above, so dim 0's length is the count.
+    check_build_fits_budget(
+        || dims[0].length,
+        std::mem::size_of::<Datum<'a>>(),
+        temp_storage,
+    )?;
+
+    let elems: Vec<_> = arr.elements().iter().filter(|v| v != &b).collect();
     // This access is safe because `dims` is guaranteed to be non-empty
     dims[0] = ArrayDimension {
         lower_bound: 1,

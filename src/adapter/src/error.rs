@@ -476,6 +476,7 @@ fn eval_error_code(err: &EvalError) -> SqlState {
         EvalError::StringValueTooLong { .. } => SqlState::STRING_DATA_RIGHT_TRUNCATION,
         EvalError::LikePatternTooLong
         | EvalError::LengthTooLarge
+        | EvalError::TempStorageBudgetExceeded
         | EvalError::NullCharacterNotPermitted
         | EvalError::MaxArraySizeExceeded(_)
         | EvalError::LetRecLimitExceeded(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,

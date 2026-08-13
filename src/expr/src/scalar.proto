@@ -165,5 +165,6 @@ message ProtoEvalError {
     string invalid_catalog_json = 81;
     string redact_error = 82;
     google.protobuf.Empty negative_rows_from_subquery = 83;
+    google.protobuf.Empty temp_storage_budget_exceeded = 84;
   }
 }
