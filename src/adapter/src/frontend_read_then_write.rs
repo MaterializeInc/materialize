@@ -563,6 +563,10 @@ impl PeekClient {
         // bounds concurrency. An early drop would let a waiter start its
         // subscribe while we are still consolidating diffs, retrying, or
         // waiting for our write to commit.
+        //
+        // The zero-row linearization wait below is the one exception, and hands
+        // the permit back before it parks.
+        let mut permit = Some(permit);
         let response = match result {
             Ok(OccOutcome::Committed { response, write_ts }) => {
                 session.apply_write(write_ts);
@@ -579,10 +583,20 @@ impl PeekClient {
                 // see yet, and that read finds the rows we said were not
                 // there.
                 match observed_ts {
-                    Some(observed_ts) => self
-                        .ensure_read_linearized(&timeline, observed_ts)
-                        .await
-                        .map(|()| response),
+                    Some(observed_ts) => {
+                        // Nothing is left to write and `run_occ_loop` consumed
+                        // the subscribe handle, so its dataflow is already gone
+                        // and the permit guards nothing. `observed_ts` is an
+                        // upper, so this parks until the *next* write applies,
+                        // which on an idle system is the next keepalive, up to
+                        // a full `default_timestamp_interval`. Holding one of
+                        // the few permits for that would throttle unrelated
+                        // writes for no benefit.
+                        drop(permit.take());
+                        self.ensure_read_linearized(&timeline, observed_ts)
+                            .await
+                            .map(|()| response)
+                    }
                     None => Ok(response),
                 }
             }
