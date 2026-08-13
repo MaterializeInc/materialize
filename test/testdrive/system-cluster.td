@@ -14,8 +14,6 @@ $ set-arg-default default-replica-size=scale=1,workers=1
 $ skip-if
 SELECT ${arg.replicas} > 1;
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
 $ postgres-execute connection=mz_system
 > SELECT name FROM (SHOW CLUSTERS)
 mz_analytics
