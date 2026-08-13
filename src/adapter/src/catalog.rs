@@ -1187,9 +1187,8 @@ impl Catalog {
             .unwrap_or(false)
     }
 
-    /// Removes the connection's temporary namespace, if it has one. Returns
-    /// Ok if none exists.
-    pub fn drop_temporary_namespace(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
+    /// Removes the connection's temporary namespace, if it has one.
+    pub fn drop_temporary_namespace(&mut self, conn_id: &ConnectionId) {
         self.state.temporary_namespaces.unregister(conn_id)
     }
 

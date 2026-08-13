@@ -269,21 +269,26 @@ impl TemporaryNamespaces {
     }
 
     /// Removes `conn_id`'s temporary namespace.
-    pub(super) fn unregister(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
+    pub(super) fn unregister(&mut self, conn_id: &ConnectionId) {
         let Some(namespace) = self.by_conn.get(conn_id) else {
-            return Ok(());
+            return;
         };
+        // A non-empty schema here means temporary items (and
+        // possibly their storage shards) weren't cleaned up, so we surface the
+        // invariant violation and keep the namespace registered.
         if namespace
             .schema
             .as_ref()
             .is_some_and(|schema| !schema.items.is_empty())
         {
-            return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
+            mz_ore::soft_panic_or_log!(
+                "temporary namespace for connection {conn_id} still has items at unregistration"
+            );
+            return;
         }
         let uuid = namespace.uuid;
         self.by_conn.remove(conn_id);
         self.conns_by_uuid.remove(&uuid);
-        Ok(())
     }
 
     pub(super) fn schema(&self, conn_id: &ConnectionId) -> Option<&Schema> {

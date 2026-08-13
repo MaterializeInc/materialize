@@ -2023,9 +2023,7 @@ impl Coordinator {
         // This avoids an expensive Arc::make_mut clone for the common case where the connection
         // never created any temporary objects.
         if self.catalog().state().has_temporary_namespace(&conn_id) {
-            if let Err(err) = self.catalog_mut().drop_temporary_namespace(&conn_id) {
-                warn!(%conn_id, "failed to drop temporary namespace: {err:?}");
-            }
+            self.catalog_mut().drop_temporary_namespace(&conn_id);
         }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());
