@@ -33,7 +33,10 @@ topic from the new table's start offsets, and the shared output port means no ex
 data until the re-read reaches the tip.
 
 Everything downstream of the snapshot/replication operators is already per export: statistics
-operator, reclock, decode and envelope, and persist sink.
+operator, reclock, decode and envelope, and persist sink. One thing was not. The committed upper
+coming back from the persist sinks was concatenated into a single feedback edge, so its frontier
+was the meet across exports and every export reported the slowest one's `offset_committed`. See
+Statistics semantics.
 
 ## Success Criteria
 
@@ -49,6 +52,8 @@ operator, reclock, decode and envelope, and persist sink.
   from a connector that does not already have them.
 - Memory on the replica during hydration is bounded by a configurable target independent of
   snapshot duration and of the number of distinct reclocked timestamps.
+- The number of batches the sink appends is proportional to the number of batch descriptions, not
+  to the number of distinct reclocked timestamps a stall accumulates.
 - A restart during a snapshot remains correct. The snapshot restarts from the beginning, as today.
 
 ## Open Questions
@@ -57,13 +62,16 @@ operator, reclock, decode and envelope, and persist sink.
   - Which restart-during-snapshot interleavings become newly possible once the snapshot and
   replication phases overlap, and what test coverage (platform checks, testdrive) demonstrates
   each is handled.
-- **Choosing Lag.**
-  - How the lag `L` is chosen and validated (a fixed configurable value, or adaptive to observed
-  description propagation delay), and whether the restart fallback when the lag is exceeded needs a
-  metric and alert since it silently costs a rehydration.
+- **Eviction visibility.**
+  - Whether the batch count produced by stash eviction needs a metric, so a stall that spreads
+  evenly across many timestamps and degrades toward one batch per timestamp is visible rather than
+  inferred from persist shard shape.
 - **Multiple concurrent hydrations.**
-  - Whether the sink change needs per-export tuning when several large tables hydrate at once on one
-  replica.
+  - The stash budget is per worker per export, so a replica's exposure is the budget times the
+  number of exports snapshotting at once times the worker count. Whether the default holds up when
+  several large tables hydrate together, or whether the budget should be a replica-wide pool. Note
+  the budget bounds the stash and not the builders it evicts into, so it is the real exposure only
+  once the grid in step 4 lands.
 
 ## Out of Scope
 
@@ -84,6 +92,29 @@ independently later.
     exports' frontier is pinned due to hydration. Records from both the snapshot and steady state
     will collect in the upsert's merge batcher, where before it was only snapshot records.
     Addressing this requires additional design around upsert.
+- **Console assumes exports move in lockstep.**
+  - Ingestion lag tracks the freshest export, `max(offset_committed)` over the source and its
+    tables (`console/src/api/materialize/source/sourceStatistics.ts:83`, and `:142` for the
+    pre-0.148 variant). Fine when every export reported the same offset, but exports can diverge
+    now, so a table that is still snapshotting doesn't show up.
+  - Combined sources may be overcounting. The console unions the source with its tables
+    (`sourceStatistics.ts:55` and `:114`), and `mz_source_statistics` already rolls the tables up
+    into the source (`src/catalog/src/builtin/mz_internal.rs:8413-8437`).
+  - The snapshotting badge is all-or-nothing. It reads the source-level `snapshot_committed`
+    (`console/src/api/materialize/source/sourceList.ts:71`), which is `bool_and` over the exports,
+    so a source still reads as snapshotting when the rest of its exports are streaming
+    (`console/src/platform/connectors/utils.ts:29-41`).
+  - The per-table tab and the queries behind it only know about source status
+    (`console/src/api/materialize/source/sourceTables.ts:36`,
+    `console/src/platform/sources/SourceTables.tsx:90`). They should be expanded to show per-export
+    info, which is where the divergence is most worth seeing.
+  - `SourceDiagnostics` decides the snapshot is done from record counts instead of the
+    `snapshot_committed` flag
+    (`console/src/platform/maintained-objects/SourceDiagnostics.tsx:35-39`). Possibly a bug, though
+    it may have been a workaround, in which case we should fix whatever made the flag unusable.
+  - The maintained objects list drops anything with `sourceType == "subsource"` and shows only the
+    top-level source (`console/src/platform/maintained-objects/queries.ts:160`). That is no longer
+    accurate, the parent says nothing about the subsources under it.
 
 ## Solution Proposal
 
@@ -113,7 +144,7 @@ yielding at `MAX_OUTSTANDING_BYTES` to prevent the CDC stream from overwhelming 
 operators. With the change to multiple output handles, operators must aggregate bytes emitted for
 comparison against `MAX_OUTSTANDING_BYTES`.
 
-There aren't any known issues related to number of input/ouptut ports in timely
+There aren't any known issues related to number of input/output ports in timely
 
 ### 2. Early snapshot bound
 
@@ -144,58 +175,185 @@ export continues to pin WAL retention, but no longer pins any other export's fro
 
 ### 4. Bounded sink accumulation
 
-The main concept here is to create a builder, the coalesced builder, that snapshot data and
-replication data will route to. `BatchBuilder` already spills to blob storage, which bounds
-memory usage. The challenge with this approach is that data can outrun the frontier change that
-defines the upper of the batch. The design needs to account for learning the upper of the batch
-via a frontier change, where some data may have timestamps beyond that upper and should be written
-to the next batch.
+A batch's bounds come from a batch description, which `mint_batch_descriptions` emits when the
+collection's frontier advances. While an export snapshots its frontier is pinned, so no
+description is minted for the duration. The sink still receives snapshot rows at the pinned time
+and CDC events at later times, and must hold them until it learns which description covers them.
 
-Sources have the time domains `F` and `T`, `FromTime` and `MzTime`, respectively. The snapshot
-operator emits data at `F:min`, which is reclocked to `T:c`, where `T:c` is the current time. The
-snapshot operator pins its capability to `F:min`, and by extension, `T:c`. The replication
-operator emits data at from-times `f >= F:min`, that are mapped to MZ times `t >= T:c`. The
-replication operator downgrades caps as today.
+Sources have the time domains `F` and `T`, `FromTime` and `MzTime`, respectively.
+- The snapshot operator emits data at `F:min`, which is reclocked to `T:c`, where `T:c` is the captured current time. The snapshot operator pins its capability to `F:min`, and by extension, `T:c`.
+- The replication operator emits data at from-times `f >= F:min`, that are mapped to MZ times `t >= T:c`. The rewinds are currently the only data emitted by this operator at `F:min`. The replication operator downgrades caps as today.
 
 Because snapshot has pinned its capability at `F:min`, the downgrades of the replication operator
 do not move the frontier forward, so all downstream operators see events reclocked to the correct
-`T` times, but the frontier does not advance, which keeps the builder open.
+`T` times, but the frontier does not advance. Once the snapshot is done, the operator drops its
+capability, and timely propagates some time `T:n`. Left alone, the minter then emits a single
+description `[T:c, T:n)` covering everything that accumulated during the snapshot. That one
+description is the root of everything below. It is the only thing that tells the sink how to group,
+and it arrives only after the stall it has to cover.
 
-Once the snapshot is done, it will drop its capability, allowing timely to propagate some time,
-`T:n`, and that will establish the end of the batch that both snapshot events and CDC events are
-being written to.
+#### Staging
 
-Timely does not guarantee the ordering of data and progress messages. So it is expected that
-data, reclocked to some `t >= T:n`, have made their way to the persist sink. They cannot be
-written to the coalesced batch, which will only include data for `[T:min, T:n)`. The batch's
-lower bound here comes from the shard upper, which is `T:min` for a shard that's not been written
-to. The persist sink must error rather than write a row into a batch whose bounds do not cover it.
+Stage arriving updates in the sink as raw rows keyed by timestamp instead of opening a
+`BatchBuilder` per timestamp. An update enters a builder as soon as the description covering it is
+known, which is when that description arrives rather than when it becomes ready, and the
+description's bounds are wide enough for one builder to take every timestamp in its range. This
+keeps the batch count proportional to the number of descriptions rather than to the number of
+distinct reclocked timestamps the snapshot accumulated. Building on arrival cannot do this. The
+grouping would have to be chosen before the bounds are known, and a `BatchBuilder` cannot be split
+once a description boundary lands inside it.
 
-To prevent those rows from finding their way into that batch, we modify the persist sink to stash
-new rows before writing to the batch. Data lands in the stash and lives there for a time
-determined by the lag `L`, which is some number of timestamps. As data arrives, data from the
-stash is aged out according to the latest data time, into the coalesced builder. When the
-frontier does advance, the coalesced builder is adopted as `[T:min, T:n)`, and remaining stashed
-rows route to it or to a newer batch. The lag, `L`, must exceed the propagation delay of the
-frontier, otherwise data from the stash will have aged out into the coalesced builder. The
-persist sink will detect data beyond the bounds of the builder when the builder is rotated and
-error, which discards the unlinked batches.
+Only updates running ahead of the descriptions stay raw, so the stash is bounded by how far the data
+has run past them rather than by how long the frontier stalls. That holds only while descriptions
+keep arriving during the stall, which is what the grid below is for. Under the grid the leading edge
+is at most a window wide, since the minter commits `[a, a + K)` as soon as the data reaches
+`a + K`.
 
-Resident memory is bounded for both the coalesced builder and the stash. Each coalesced builder
-holds at most `blob_target_size` plus one part upload in flight, and open builders are limited to
-the number of in-flight descriptions plus one. The stash contains only data within the trailing
-window `L`, so its size is bounded by `L` times the ingest rate, rather than by snapshot duration.
+`storage_persist_sink_max_raw_stash_bytes` bounds that edge, per worker per export. Over budget the
+sink consolidates first. The pinned timestamp is where consolidation pays off, since the snapshot's
+rows and the rewind retractions that supersede them cancel exactly, but only while both sides are
+still raw. Once a description covers the pinned timestamp its rows are in a builder a later
+retraction cannot reach, and the cancellation is left to persist compaction. Whatever consolidation
+does not reclaim is evicted into single-timestamp builders. A single timestamp is safe to write
+before its description exists, because a description covers a timestamp entirely or not at all.
 
-In steady state, updates enter their description's builder on arrival or drain into it when the
-description finishes (i.e. the open builder stays empty). The open builder fills only when the
-frontier stalls for longer than `L`, which is the hydration case. The API and crash-leak behavior
-of persist remains unchanged from today.
+An evicted builder holds its rows rather than its budget. A `BatchBuilder` keeps updates in a
+columnar buffer and writes a part only once that buffer reaches `persist_blob_target_size`, so a few
+MiB evicted into a fresh builder leaves the rows resident while the stash accounting reads zero. It
+converges only where one timestamp keeps receiving data until its builder crosses the target, which
+is the large transaction case below. So an evicted builder is finished the moment a description
+covers it, rather than held for the readiness a stall is precisely not delivering. Both the stash
+and the evicted builders are then bounded by the leading edge.
+
+#### Committed description grid
+
+The sink can group without waiting for the frontier if it knows one thing, where the next
+description boundary falls. Have the minter commit to boundaries instead of deriving them from the
+frontier. It emits `[a, a + K)` and, having emitted it, honors it: a frontier arriving at `a + K/2`
+is ignored, and the next description still ends at `a + K`.
+
+Emitting a description before its upper is complete is safe because completeness was never the
+description's job. The sink appends a description only once `desired_frontier` has reached its
+upper, so a committed cell waits in `in_flight_batches` until the frontier certifies it exactly as
+an uncommitted one would.
+
+The minter has to hold the upper it committed to apart from the frontier it observed. Those are one
+value today: it emits `[current_upper, desired_frontier)`, downgrades to `desired_frontier`, and
+carries that forward. A committed cell's upper runs ahead of the frontier, so the downgrade targets
+the emitted upper instead and `current_upper > desired_frontier` becomes a state the operator has
+to expect. The commitment then enforces itself, since a frontier landing at `a + K/2` fails the
+`current_upper < desired_frontier` test and emits nothing. One range not to cut into cells is a
+fresh export's first description: it runs from the shard minimum to `T:c`, which is epoch sized and
+holds no data.
+
+With the boundary in hand the sink routes rather than accumulates. An update whose cell has arrived
+goes straight into that cell's builder, and only what runs ahead of the grid is stashed. Several
+batches may go under one cell, since every batch written for a cell shares its append, so the sink
+finishes a cell's builder whenever memory says to and routes later updates for that cell into a
+fresh one. Nothing needs to know that a cell is complete. Resident memory is one part per open
+builder plus the leading edge, independent of stall duration and of the number of timestamps, and
+single-timestamp eviction falls back to what it is for, data no committed cell covers yet.
+
+The data the minter already sees drives the commitment. It passes the desired collection through, so
+during a stall it observes updates at timestamps far above a frontier that is not moving, which is
+the stall's signature and needs no new input. The grid's anchor is shared for free: `T:c` is a
+reclocked value from the durable remap shard, so every worker and every replica cuts at the same
+points.
+
+Two rules compose without a mode between them. Emit `[current_upper, desired_frontier)` whenever the
+frontier is ahead of the committed upper, which is steady state and quantizes nothing, and emit
+`[current_upper, current_upper + K)` while the largest timestamp seen is at or beyond
+`current_upper + K`, which only happens while the frontier is stuck. In steady state the largest
+timestamp seen stays within a tick of the committed upper, so the second rule stops firing on its
+own, and a frontier arriving inside a committed cell fails the first rule and is ignored. Nothing
+has to detect that the stall ended.
+
+How deep the commitment runs is worker local, since the minter's input is `Pipeline` connected and
+only the active worker mints. Within a replica that is harmless, because the minter broadcasts what
+it decides. Two replicas can commit to different depths, which costs at most one straddling batch
+per transition, where the winner's frontier derived upper lands inside a cell the loser had
+committed. Reading the remap frontier instead of the data would not remove that, since replicas
+observe it at different instants.
+
+Freshness is charged once, at the transition. Cells below the frontier become ready and are
+appended, but the cell holding the frontier cannot be, so the shard upper trails by up to `K` from
+the moment the pin drops until the frontier passes the last speculative boundary. `K` bounds that
+trailing rather than quantizing steady state.
+
+`K` trades two costs against each other. Every committed cell becomes ready in the same pass when
+the pin drops and appends happen one description at a time, so catching up costs `stall / K`
+`compare_and_append` round trips, and an idle cell still costs one to advance the upper through it.
+Parts per append is a cell's volume over the blob target. Both want `K` coarse, minutes rather than
+seconds. Memory does not constrain it, because a cell may hold several batches.
+
+The prototype implements the stash, consolidation, single-timestamp eviction, and the grid.
+`storage_persist_sink_description_window` carries `K` and disables the grid at zero. No bindings
+input is needed, since a cell taking several batches removes the need to certify one as complete.
+
+#### Recovery
+
+Batches now span multiple timestamps, which does not change the recovery path. When a concurrent
+writer raises the shard upper into the middle of a description, the sink advances the description's
+lower and re-appends. Persist registers a batch under the narrowed description and filters the
+updates outside those bounds on read, so a batch holding data on both sides of the new lower stays
+usable: the updates the concurrent writer already committed do not come back, and the ones the sink
+still owes are preserved. Each batch carries the largest timestamp it holds, which is enough to
+delete the batches lying entirely below the new lower rather than registering parts that would be
+truncated away in full.
+
+A batch that straddles a narrowed lower does need one thing from persist. Part `diffs_sum` is
+computed from the part's raw contents and is not adjusted when the batch is registered truncated,
+so compaction reads fewer diffs than the shard claims and its validation trips. Single-timestamp
+batches could never straddle, which is why this only shows up now. Persist has a proposed fix in
+[#38261](https://github.com/MaterializeInc/materialize/pull/38261) and the prototype has been
+through CI and deployed to staging on top of it.
+
+Persist decides a batch is truncated by comparing the bounds the builder declared against the
+bounds it is appended under, not by looking at the data, and it requires the declared bounds to
+contain the append bounds. A builder opened before the description covering it is known has to
+declare the operator's lower, the only lower guaranteed to be at or below every description that
+could cover it, and that declaration is what registers it as truncated even when every update in it
+sits inside the description. Routing into a committed cell's builder avoids the marker, since the
+builder then declares that cell's own lower, which leaves it to the leading edge alone. Worth doing,
+because the marker exempts a run from diff sum validation, so handing it out for declarative reasons
+costs real checking.
+
+#### Statistics semantics
+
+`updates_staged` counts on arrival rather than when an update reaches a builder, so a pinned
+frontier does not make the sink look idle while it is ingesting hard. `updates_committed` counts at
+append, from batch metrics that only cover updates which survived consolidation.
+
+The two therefore relate as `updates_staged >= updates_committed`, and the gap is whatever the
+stash consolidated away. Before this change the sink never consolidated, so the two matched exactly
+for every workload. The gap is information rather than drift, it reports the work the sink avoided
+writing. Back to back upstream transactions that reclock to the same timestamp and touch the same
+row are the ordinary way to produce one.
+
+`offset_committed` is reported per export. Each export gets its own feedback edge from its persist
+sink, and one operator in the pipeline inverts each of those uppers through the remap bindings and
+reports the result for that export alone. `SourceTimestamp::to_offset_stat` does the frontier to
+offset conversion, which every timestamp type already had in some form on the source side. The
+per-source stat sites are gone, so nothing double counts. What the source acknowledges upstream is
+still the meet across exports, that has to respect the slowest one, and `mz_source_statistics`
+reports the parent source as `MIN(offset_committed)` over its exports, so the source-level number
+keeps its old meaning while the per-export rows tell the truth about each table.
+
+Two things fall out of that. Every worker has to initialize the gauge, because the controller only
+aggregates a gauge once every worker has reported a value for it and renders a failed aggregate as
+zero, which single-worker tests will not catch. And PostgreSQL no longer pre-fills
+`offset_committed` with the slot's resume LSN at startup, which existed to keep the lag calculation
+from looking enormous during an initial snapshot. An export reads zero until its first commit now.
+That is the honest per-export lag, but anything subtracting it from `offset_known` will show the
+whole LSN as lag while an export snapshots.
 
 #### Handling for large xacts
 
-If an upstream transaction contains a large number of rows, they will all land in the stash and
-put pressure on memory. The prototype stores the stash in a `BTreeMap`. For production, consider a
-merge batcher (as upsert uses) instead.
+If an upstream transaction contains a large number of rows they all land at a single timestamp in
+the stash. That is what eviction takes first, so it is written out on its own rather than held in
+memory. Memory stays bounded, at the cost of one batch for that transaction.
+
+The prototype holds the stash in a `BTreeMap`. For production, consider a merge batcher instead.
 
 ### Kafka: backfill consumer with offset handoff
 
@@ -319,3 +477,42 @@ The research document records the full option space. Summary of the rejected opt
   - A second temporary pipeline with its own replication slot snapshots the new table, follows CDC
   to an agreed LSN, and hands off. Rejected as this does not improve slot's WAL retention, adds
   connection cost on the upstream database, and requires an exactly-once handoff protocol.
+
+The following were considered for step 4 specifically, and all share a root cause. Each tries to
+choose a batch's grouping before its bounds are known, which is the thing that cannot be done
+safely.
+
+- **Trailing-lag stash.**
+  - Age rows out of the stash into a coalesced builder once they fall a fixed lag `L` behind the
+  latest data time, and rotate that builder when the frontier advances. Rejected because `L` must
+  exceed the frontier's propagation delay, which is not a quantity the sink can bound, and
+  exceeding it is only detected at rotation, where the recovery is a dataflow restart.
+- **A coalescing horizon published by the minter.**
+  - Have `mint_batch_descriptions` broadcast a promise that no future description will end below
+  some time, so write operators can group updates below it before their description exists.
+  Rejected as stated, because the promise was derived from the minter's frontier, which is pinned
+  for exactly the duration of a snapshot. The committed grid in step 4 is the corrected form. The
+  minter commits to boundaries of its own choosing instead of promising something about a frontier
+  it cannot move, and the remap bindings trigger the commitment.
+- **Source read progress as the coalescing horizon.**
+  - Feed the source's reclocked read progress into the minter so the promise can advance while the
+  collection's frontier is pinned. Rejected because a horizon that certifies completeness has to
+  come from the data path to be sound. Computing it beside the data path lets it announce a time
+  the reclock operator has not released updates for yet, so it needs a progress output on the
+  per-export reclock, ordered behind the data that operator emits, and even then it cannot pass the
+  upsert merge batcher. Allowing several batches under one description drops the requirement from
+  completeness to a boundary trigger, which the bindings satisfy without touching source
+  machinery.
+- **Splitting the pinned traffic onto its own output.**
+  - Give the traffic at the minimum offset, the snapshot rows and the rewind retractions, a
+  separate output so the ongoing replication stream keeps an unpinned frontier. Rejected because
+  the split is not static. The replication operator's schema-validation errors are emitted at
+  whatever the port's capability currently holds, which is the minimum only while a rewind is
+  pending, so routing them has no fixed answer. Envelope processing in `render_source_stream` is
+  also stateful for upsert and cannot carry a split through in general.
+- **Pager-backed spill for the stash.**
+  - Evict stashed rows into `mz_ore::pager` chunks rather than into persist batches, keeping the
+  batch count at one per description regardless of budget. Rejected for now because the pager's
+  default backend is swap, which is ordinary heap plus a reclaim hint and so does not change the
+  bound. Only the file backend does, and it depends on a scratch directory and on a process-global
+  setting that compute owns.
