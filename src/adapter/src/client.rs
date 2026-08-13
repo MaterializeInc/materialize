@@ -1672,11 +1672,19 @@ impl SessionClient {
         // planned selection further down narrows this.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
+            // `Started` does not mean "single statement" on its own. An
+            // extended-protocol pipeline keeps the transaction `Started` across
+            // statements until `Sync`, so once it holds write ops this
+            // statement runs alongside them and belongs with the
+            // multi-statement cases. Committing here would commit against a
+            // snapshot that lacks those ops, reordering this statement before
+            // writes that a later pipeline error would roll back.
+            let contains_ops = session.transaction().contains_ops();
             match session.transaction() {
-                TransactionStatus::Default
-                | TransactionStatus::Started(_)
-                | TransactionStatus::Failed(_) => {}
-                TransactionStatus::InTransactionImplicit(_)
+                TransactionStatus::Default | TransactionStatus::Failed(_) => {}
+                TransactionStatus::Started(_) if !contains_ops => {}
+                TransactionStatus::Started(_)
+                | TransactionStatus::InTransactionImplicit(_)
                 | TransactionStatus::InTransaction(_) => {
                     let constant_insert = matches!(
                         &*stmt,
@@ -1926,19 +1934,21 @@ impl SessionClient {
             }
         };
 
-        // Only single-statement (`Started`) transactions may enter the OCC
-        // loop, its writes commit immediately and cannot be rolled back at
-        // transaction end. Multi-statement transactions reach this point only
-        // for AST-constant INSERTs whose planned expression turned out
-        // non-constant. Match the coordinator's error precedence: `mz_now()`
-        // gets its dedicated error, everything else is prohibited in a
-        // transaction block. The coordinator's lock-based path additionally
-        // supports INSERTs of volatile constants (for example `random()`) in
-        // transaction blocks by buffering the diffs until commit, which the
-        // OCC path cannot do.
+        // Only single-statement (`Started` without staged write ops)
+        // transactions may enter the OCC loop, its writes commit immediately
+        // and cannot be rolled back at transaction end. Multi-statement
+        // transactions reach this point only for AST-constant INSERTs whose
+        // planned expression turned out non-constant. Match the coordinator's
+        // error precedence: `mz_now()` gets its dedicated error, everything
+        // else is prohibited in a transaction block. The coordinator's
+        // lock-based path additionally supports INSERTs of volatile constants
+        // (for example `random()`) in transaction blocks by buffering the diffs
+        // until commit, which the OCC path cannot do.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
-            if !matches!(session.transaction(), TransactionStatus::Started(_)) {
+            let single_statement = matches!(session.transaction(), TransactionStatus::Started(_))
+                && !session.transaction().contains_ops();
+            if !single_statement {
                 let contains_temporal = rtw_plan.selection.contains_temporal()
                     || rtw_plan.assignments.values().any(|e| e.contains_temporal())
                     || rtw_plan.returning.iter().any(|e| e.contains_temporal());
