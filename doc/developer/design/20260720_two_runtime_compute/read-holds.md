@@ -1,8 +1,20 @@
 # Read holds across two compute runtimes
 
-Status: implemented through step 4 of the sequence at the end. Only the epoch work
-(step 5) remains, and G2 is open with it. The open questions are settled, and three of
-them were settled by building the thing rather than by the model.
+Status: the diagnosis below stands and the mechanism is superseded. See
+[broadcast-compaction.md](broadcast-compaction.md).
+
+The invariant (I1), the split into I1a and I1b, the gap analysis and the requirement that
+the direct dependency be the mechanism are all still current, and the newer document does
+not restate them. What changed is the answer. Everything here reconstructs the ordering a
+single command stream provided (I1b) by adding a hold protocol on top of the routing that
+lost it. Sending compaction to both runtimes restores that ordering instead, which needs
+no acquisition, no release and no reclaim, and makes the epoch boundary (G2) vacuous
+rather than solving it.
+
+Read the rest of this document for why a retroactive per-dataflow hold was tried and what
+each attempt cost, which is what makes the simpler mechanism defensible rather than
+merely simpler. Steps 0 through 4 of the sequence at the end are implemented and will be
+deleted.
 
 ## The invariant
 
