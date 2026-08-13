@@ -200,25 +200,56 @@ New partitions then flow through without any changes in Materialize.
 
 This is an extension of the [dedicated replica
 guide](/ingest-data/postgres/logical-replica/), and carries the same trade-offs:
-an extra system to operate, and an extra hop of replication lag. Follow that
-guide, with the following changes:
+an extra system to operate, and an extra hop of replication lag.
+
+### How the flattening works
+
+PostgreSQL logical replication matches the publisher's relation to the
+subscriber's relation **by schema-qualified name**. The
+`publish_via_partition_root` option changes which name the publisher advertises:
+with the option on, changes written to any partition are published as though
+they came from the parent table.
+
+So if `public.orders` is partitioned on the primary and the publication uses
+`publish_via_partition_root = true`, the subscriber receives changes for
+`public.orders` and applies them to *its* `public.orders` — which you create as
+an ordinary, non-partitioned table. The subscriber is never told that
+partitioning exists, and the partitions themselves are never named on the wire:
+
+```sql
+-- On the primary, with publish_via_partition_root = true
+SELECT tablename FROM pg_publication_tables WHERE pubname = 'repl_to_replica';
+--  tablename
+-- -----------
+--  orders       -- the parent table, not orders_2026_01, orders_2026_02, ...
+```
+
+This is also why new partitions need no action: a partition added upstream
+publishes under the same parent name, so it lands in the same table on the
+replica.
+
+### Set up the primary → replica hop
+
+Follow the [dedicated replica guide](/ingest-data/postgres/logical-replica/) for
+the base setup on both instances (`wal_level = logical`, a replication user, and
+network access), with the following differences:
 
 1. On the **primary**, create the publication with `publish_via_partition_root =
-   true`. This makes PostgreSQL present each change as coming from the parent
-   table, so the replica does not need to know that the table is partitioned:
+   true`:
 
    ```sql
    CREATE PUBLICATION repl_to_replica FOR TABLE orders
        WITH (publish_via_partition_root = true);
    ```
 
+   List the **parent** table, not the individual partitions.
+
    {{< note >}} This option is safe on the `primary → replica` hop, which is
    native PostgreSQL logical replication. Do not use it on the publication that
    Materialize reads from. {{< /note >}}
 
-1. On the **replica**, create `orders` as a plain table with the same columns
-   and the same primary key as the parent table upstream, but without
-   `PARTITION BY`:
+1. On the **replica**, create `orders` as a plain table with the same name and
+   columns as the parent table upstream, but without `PARTITION BY`:
 
    ```sql
    CREATE TABLE orders (
@@ -236,9 +267,41 @@ guide, with the following changes:
    without a suitable index, each replicated change requires a sequential scan
    of the table.
 
-1. Follow the rest of the [dedicated replica
-   guide](/ingest-data/postgres/logical-replica/) to create the subscription, the
-   publication for Materialize, and the source.
+1. On the **replica**, subscribe to the primary's publication. This creates a
+   replication slot on the primary, copies the existing rows out of all the
+   partitions, and then streams ongoing changes:
+
+   ```sql
+   CREATE SUBSCRIPTION orders_sub
+       CONNECTION 'host=<primary_host> port=5432 dbname=<db> user=repuser password=<password>'
+       PUBLICATION repl_to_replica;
+   ```
+
+1. Verify that the flattening worked. The replica should have a single, ordinary
+   table holding the rows from every partition:
+
+   ```sql
+   -- On the replica
+   SELECT relname, relkind FROM pg_class WHERE relname = 'orders';
+   --  relname | relkind
+   -- ---------+---------
+   --  orders  | r          -- an ordinary table, not 'p' for partitioned
+
+   SELECT count(*) FROM orders;   -- compare against the parent table upstream
+   ```
+
+### Connect Materialize to the replica
+
+From here the replica is an ordinary, non-partitioned PostgreSQL database.
+Follow [Connect Materialize to the
+replica](/ingest-data/postgres/logical-replica/#c-connect-materialize-to-the-replica)
+to create the publication that Materialize reads and the source itself. That
+publication is a plain one:
+
+```sql
+-- On the replica
+CREATE PUBLICATION mz_source FOR TABLE orders;
+```
 
 New partitions created upstream are replicated to the replica automatically, as
 long as the partitioned table has a primary key. If it does not, set `REPLICA
