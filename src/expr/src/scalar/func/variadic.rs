@@ -40,9 +40,10 @@ use mz_repr::{
 use serde::{Deserialize, Serialize};
 
 use crate::func::{
-    CaseLiteral, array_create_scalar, build_regex, check_datums_fit_budget, date_bin,
-    max_string_func_result_bytes, parse_timezone, regexp_match_static, regexp_replace_parse_flags,
-    regexp_split_to_array_re, stringify_datum, timezone_time,
+    CaseLiteral, array_create_scalar, build_regex, check_build_fits_budget,
+    check_datums_fit_budget, date_bin, max_string_func_result_bytes, parse_timezone,
+    regexp_match_static, regexp_replace_parse_flags, regexp_split_to_array_re, stringify_datum,
+    timezone_time,
 };
 use crate::{Eval, EvalError, MirScalarExpr};
 use mz_repr::adt::date::Date;
@@ -1154,7 +1155,9 @@ fn map_build<'a>(
         .filter_map(|(k, v)| k.map(|k| (k, v)))
         .collect();
 
-    // Checked after the collect, so duplicate keys are counted once, as they are packed.
+    // Checked after the collect, so duplicate keys are counted once, as they are packed. The
+    // `BTreeMap` transient needs no pre-check: it holds one entry per argument, a count the query
+    // text fixes, not the input.
     check_datums_fit_budget(
         map.iter().flat_map(|(k, v)| [Datum::String(k), *v]),
         temp_storage,
@@ -1444,6 +1447,20 @@ fn string_to_array_impl<'a>(
     null_string: Option<&'a str>,
     temp_storage: &'a RowArena,
 ) -> Result<Datum<'a>, EvalError> {
+    // Bound the transient `Vec<&str>` before it is collected. The count walks the same iterator the
+    // collect does, so the two agree.
+    check_build_fits_budget(
+        || {
+            if delimiter.is_empty() {
+                string.split(delimiter).filter(|s| !s.is_empty()).count()
+            } else {
+                string.split(delimiter).count()
+            }
+        },
+        std::mem::size_of::<&str>(),
+        temp_storage,
+    )?;
+
     let mut row = Row::default();
     let mut packer = row.packer();
 

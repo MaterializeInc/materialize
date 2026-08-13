@@ -234,6 +234,7 @@ fn jsonb_strip_nulls<'a>(a: JsonbRef<'a>) -> Jsonb {
     Jsonb::from_row(row)
 }
 
+// NOTE: no budget pre-check, see the exception on `crate::func::check_build_fits_budget`.
 #[sqlfunc]
 fn jsonb_pretty<'a>(a: JsonbRef<'a>) -> String {
     let mut buf = String::new();

@@ -2551,12 +2551,13 @@ mod tests {
         assert_eq!(datum.unwrap_str().len(), 20 * 1024 * 1024);
     }
 
-    /// The budget also has to catch a function with no size pre-check of its own, which allocates
-    /// straight into the arena. Enforcement for those is the evaluator's post-call check.
+    /// The budget also has to bound both dimensions of an arena-building function: the packed
+    /// result, and the transient it collects on its own stack first. The arena never sees the
+    /// transient, so the post-call check can't catch it.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // multi-MB allocations; the small-size UB coverage is in `row.rs`
     fn test_arena_built_result_respects_budget() {
-        use crate::scalar::func::variadic::StringToArray;
+        use crate::scalar::func::variadic::{RegexpSplitToArray, StringToArray};
 
         let body = "a".repeat(256 * 1024);
         let expr = MirScalarExpr::call_variadic(
@@ -2579,6 +2580,40 @@ mod tests {
             Err(EvalError::TempStorageBudgetExceeded),
             "an over-budget arena-built result must be refused"
         );
+
+        // A split collects every chunk into a `Vec<&str>` first, 16 bytes per fat pointer against
+        // the 2 an empty chunk packs to. A budget the packed array fits under still refuses it.
+        let intermediate = (body.len() + 1) * std::mem::size_of::<&str>();
+        let budget = 4 * unbudgeted;
+        assert!(
+            unbudgeted < budget && budget < intermediate,
+            "budget sits between"
+        );
+        let arena = RowArena::with_budget(budget);
+        assert!(
+            expr.eval(&datums, &arena).is_err(),
+            "a split costing {intermediate} bytes to build must be refused by a {budget} byte budget"
+        );
+        assert_eq!(
+            arena.allocated_bytes(),
+            0,
+            "refused before the transient was built"
+        );
+
+        // The regexp sibling builds the same transient and takes the same bound.
+        let regexp_expr = MirScalarExpr::call_variadic(
+            RegexpSplitToArray,
+            vec![
+                MirScalarExpr::column(0),
+                MirScalarExpr::literal_ok(Datum::String("a"), ReprScalarType::String),
+            ],
+        );
+        let arena = RowArena::with_budget(budget);
+        assert!(
+            regexp_expr.eval(&datums, &arena).is_err(),
+            "a regexp split costing {intermediate} bytes to build must be refused too"
+        );
+        assert_eq!(arena.allocated_bytes(), 0);
     }
 
     /// `array_fill` sizes its result from a parameter rather than its input, so a budgeted arena
@@ -2631,6 +2666,55 @@ mod tests {
 
         // Budgeted well above both the packed result and the intermediate: unaffected.
         let arena = RowArena::with_budget(256 * 1024 * 1024);
+        expr.eval(&datums, &arena).expect("within budget");
+    }
+
+    /// `array_remove` cannot grow its result, so no packed-size check would ever fire for it. The
+    /// transient `Vec<Datum>` it filters into is a fresh input-scaled allocation on top of the input
+    /// array's own bytes, and only a pre-check bounds that (SQL-431).
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // multi-MB allocations; the small-size UB coverage is in `row.rs`
+    fn test_array_remove_respects_arena_budget() {
+        use crate::scalar::func::ArrayRemove;
+        use mz_repr::adt::array::ArrayDimension;
+
+        const ELEMS: usize = 256 * 1024;
+        let input_storage = RowArena::new();
+        let array = input_storage
+            .try_make_datum(|packer| {
+                packer.try_push_array(
+                    &[ArrayDimension {
+                        lower_bound: 1,
+                        length: ELEMS,
+                    }],
+                    (0..ELEMS).map(|i| Datum::Int32(i32::try_from(i).unwrap())),
+                )
+            })
+            .unwrap();
+        let expr = MirScalarExpr::column(0).call_binary(MirScalarExpr::column(1), ArrayRemove);
+        let datums = [array, Datum::Int32(0)];
+
+        // Unbudgeted: allowed, and the arena holds the packed result.
+        let arena = RowArena::new();
+        expr.eval(&datums, &arena).expect("no ceiling applies");
+        let unbudgeted = arena.allocated_bytes();
+        assert!(unbudgeted > 0);
+
+        // A `Datum` is several times what an `Int32` packs to, so a budget with room for the packed
+        // result twice over still has to refuse the transient.
+        let transient = ELEMS * std::mem::size_of::<Datum<'_>>();
+        let budget = 2 * unbudgeted;
+        assert!(budget < transient, "budget sits between");
+        let arena = RowArena::with_budget(budget);
+        assert_eq!(
+            expr.eval(&datums, &arena),
+            Err(EvalError::TempStorageBudgetExceeded),
+            "an over-budget transient must be refused"
+        );
+        assert_eq!(arena.allocated_bytes(), 0);
+
+        // Budgeted above both: unaffected.
+        let arena = RowArena::with_budget(64 * 1024 * 1024);
         expr.eval(&datums, &arena).expect("within budget");
     }
 
