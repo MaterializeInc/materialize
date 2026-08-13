@@ -656,7 +656,11 @@
       description: |
         *Value:* `text`. Required.
 
-        The name of the AWS PrivateLink service.
+        The name of the AWS VPC endpoint service, which always starts with
+        `com.amazonaws.`. This is not the DNS name of the target, such as the
+        hostname of a load balancer or database. Endpoint service names are
+        listed in the AWS console under **VPC > Endpoint services**, and by
+        `aws ec2 describe-vpc-endpoint-service-configurations`.
     - name: "`AVAILABILITY ZONES`"
       description: |
         *Value:* `text[]`. Required.

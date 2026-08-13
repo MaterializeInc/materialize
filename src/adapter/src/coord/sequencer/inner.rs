@@ -60,7 +60,7 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule, PlanError,
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
@@ -88,6 +88,7 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
+use mz_storage_types::connections::AwsPrivatelinkConnection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sources::SourceConnection;
@@ -170,6 +171,24 @@ where
             ))
         }
         None => StageResult::Immediate(Box::new(build_stage(None))),
+    }
+}
+
+/// Rejects connection options whose values cannot work, independent of any
+/// external system.
+fn check_connection_details(details: &ConnectionDetails) -> Result<(), PlanError> {
+    // These checks live in the sequencer rather than the planner because the
+    // planner also runs against the `create_sql` of items already in the
+    // catalog, on boot. A failure there panics, so tightening a rule in the
+    // planner turns an environment that already stores an offending value into
+    // a crash loop. The sequencer only runs for statements a client issues, so
+    // a rule added here cannot stop an existing item from loading.
+    match details {
+        ConnectionDetails::AwsPrivatelink(privatelink) => {
+            AwsPrivatelinkConnection::check_service_name(&privatelink.service_name)
+                .map_err(PlanError::InvalidPrivatelinkServiceName)
+        }
+        _ => Ok(()),
     }
 }
 
@@ -710,6 +729,10 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
+        if let Err(err) = check_connection_details(&plan.connection.details) {
+            return ctx.retire(Err(AdapterError::PlanError(err)));
+        }
+
         let (connection_id, connection_gid) = match self.allocate_user_id().await {
             Ok(item_id) => item_id,
             Err(err) => return ctx.retire(Err(err)),
@@ -3755,6 +3778,14 @@ impl Coordinator {
                 return ctx.retire(Err(e));
             }
         };
+
+        // The re-planned connection carries forward every option the statement
+        // did not touch, so an offending value stored by an earlier release
+        // surfaces here even when the statement did not supply it. Setting a
+        // valid value in the same `ALTER` clears it.
+        if let Err(err) = check_connection_details(&conn.details) {
+            return ctx.retire(Err(AdapterError::InvalidAlter("CONNECTION", err)));
+        }
 
         // Inspect guarded secrets whether or not validation was requested,
         // before the altered connection is installed in the catalog.
