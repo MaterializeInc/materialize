@@ -93,3 +93,90 @@ select coalesce(a, (select a/b from test)) from test;
 
 query error Evaluation error: division by zero
 select *, case when a = 5 then (select a/b from test) else 7 end from test;
+
+# A chain of diamond-shaped CTEs over an erroring expression. Each level reads the level
+# below it twice, so an undeduplicated error collection doubles its multiplicity per level
+# and overflows `Diff` well before the chain ends. The multiplicity of an error is not
+# observable, so the only thing to assert is that the error still comes back, and does so
+# without an overflow (which CI catches as a panic).
+
+statement ok
+create table diamond (a int, b int)
+
+statement ok
+insert into diamond values (1, 0)
+
+query error division by zero
+with
+  c0 as (select a, a / b as q from diamond),
+  c1 as (select a, q from c0 where a = 1 union all select q, a from c0 where a = 2),
+  c2 as (select a, q from c1 where a = 1 union all select q, a from c1 where a = 2),
+  c3 as (select a, q from c2 where a = 1 union all select q, a from c2 where a = 2),
+  c4 as (select a, q from c3 where a = 1 union all select q, a from c3 where a = 2),
+  c5 as (select a, q from c4 where a = 1 union all select q, a from c4 where a = 2),
+  c6 as (select a, q from c5 where a = 1 union all select q, a from c5 where a = 2),
+  c7 as (select a, q from c6 where a = 1 union all select q, a from c6 where a = 2),
+  c8 as (select a, q from c7 where a = 1 union all select q, a from c7 where a = 2),
+  c9 as (select a, q from c8 where a = 1 union all select q, a from c8 where a = 2),
+  c10 as (select a, q from c9 where a = 1 union all select q, a from c9 where a = 2),
+  c11 as (select a, q from c10 where a = 1 union all select q, a from c10 where a = 2),
+  c12 as (select a, q from c11 where a = 1 union all select q, a from c11 where a = 2),
+  c13 as (select a, q from c12 where a = 1 union all select q, a from c12 where a = 2),
+  c14 as (select a, q from c13 where a = 1 union all select q, a from c13 where a = 2),
+  c15 as (select a, q from c14 where a = 1 union all select q, a from c14 where a = 2),
+  c16 as (select a, q from c15 where a = 1 union all select q, a from c15 where a = 2),
+  c17 as (select a, q from c16 where a = 1 union all select q, a from c16 where a = 2),
+  c18 as (select a, q from c17 where a = 1 union all select q, a from c17 where a = 2),
+  c19 as (select a, q from c18 where a = 1 union all select q, a from c18 where a = 2),
+  c20 as (select a, q from c19 where a = 1 union all select q, a from c19 where a = 2),
+  c21 as (select a, q from c20 where a = 1 union all select q, a from c20 where a = 2),
+  c22 as (select a, q from c21 where a = 1 union all select q, a from c21 where a = 2),
+  c23 as (select a, q from c22 where a = 1 union all select q, a from c22 where a = 2),
+  c24 as (select a, q from c23 where a = 1 union all select q, a from c23 where a = 2),
+  c25 as (select a, q from c24 where a = 1 union all select q, a from c24 where a = 2),
+  c26 as (select a, q from c25 where a = 1 union all select q, a from c25 where a = 2),
+  c27 as (select a, q from c26 where a = 1 union all select q, a from c26 where a = 2),
+  c28 as (select a, q from c27 where a = 1 union all select q, a from c27 where a = 2),
+  c29 as (select a, q from c28 where a = 1 union all select q, a from c28 where a = 2),
+  c30 as (select a, q from c29 where a = 1 union all select q, a from c29 where a = 2),
+  c31 as (select a, q from c30 where a = 1 union all select q, a from c30 where a = 2),
+  c32 as (select a, q from c31 where a = 1 union all select q, a from c31 where a = 2),
+  c33 as (select a, q from c32 where a = 1 union all select q, a from c32 where a = 2),
+  c34 as (select a, q from c33 where a = 1 union all select q, a from c33 where a = 2),
+  c35 as (select a, q from c34 where a = 1 union all select q, a from c34 where a = 2),
+  c36 as (select a, q from c35 where a = 1 union all select q, a from c35 where a = 2),
+  c37 as (select a, q from c36 where a = 1 union all select q, a from c36 where a = 2),
+  c38 as (select a, q from c37 where a = 1 union all select q, a from c37 where a = 2),
+  c39 as (select a, q from c38 where a = 1 union all select q, a from c38 where a = 2),
+  c40 as (select a, q from c39 where a = 1 union all select q, a from c39 where a = 2),
+  c41 as (select a, q from c40 where a = 1 union all select q, a from c40 where a = 2),
+  c42 as (select a, q from c41 where a = 1 union all select q, a from c41 where a = 2),
+  c43 as (select a, q from c42 where a = 1 union all select q, a from c42 where a = 2),
+  c44 as (select a, q from c43 where a = 1 union all select q, a from c43 where a = 2),
+  c45 as (select a, q from c44 where a = 1 union all select q, a from c44 where a = 2),
+  c46 as (select a, q from c45 where a = 1 union all select q, a from c45 where a = 2),
+  c47 as (select a, q from c46 where a = 1 union all select q, a from c46 where a = 2),
+  c48 as (select a, q from c47 where a = 1 union all select q, a from c47 where a = 2),
+  c49 as (select a, q from c48 where a = 1 union all select q, a from c48 where a = 2),
+  c50 as (select a, q from c49 where a = 1 union all select q, a from c49 where a = 2),
+  c51 as (select a, q from c50 where a = 1 union all select q, a from c50 where a = 2),
+  c52 as (select a, q from c51 where a = 1 union all select q, a from c51 where a = 2),
+  c53 as (select a, q from c52 where a = 1 union all select q, a from c52 where a = 2),
+  c54 as (select a, q from c53 where a = 1 union all select q, a from c53 where a = 2),
+  c55 as (select a, q from c54 where a = 1 union all select q, a from c54 where a = 2),
+  c56 as (select a, q from c55 where a = 1 union all select q, a from c55 where a = 2),
+  c57 as (select a, q from c56 where a = 1 union all select q, a from c56 where a = 2),
+  c58 as (select a, q from c57 where a = 1 union all select q, a from c57 where a = 2),
+  c59 as (select a, q from c58 where a = 1 union all select q, a from c58 where a = 2),
+  c60 as (select a, q from c59 where a = 1 union all select q, a from c59 where a = 2),
+  c61 as (select a, q from c60 where a = 1 union all select q, a from c60 where a = 2),
+  c62 as (select a, q from c61 where a = 1 union all select q, a from c61 where a = 2),
+  c63 as (select a, q from c62 where a = 1 union all select q, a from c62 where a = 2),
+  c64 as (select a, q from c63 where a = 1 union all select q, a from c63 where a = 2),
+  c65 as (select a, q from c64 where a = 1 union all select q, a from c64 where a = 2),
+  c66 as (select a, q from c65 where a = 1 union all select q, a from c65 where a = 2),
+  c67 as (select a, q from c66 where a = 1 union all select q, a from c66 where a = 2),
+  c68 as (select a, q from c67 where a = 1 union all select q, a from c67 where a = 2),
+  c69 as (select a, q from c68 where a = 1 union all select q, a from c68 where a = 2),
+  c70 as (select a, q from c69 where a = 1 union all select q, a from c69 where a = 2)
+select * from c70

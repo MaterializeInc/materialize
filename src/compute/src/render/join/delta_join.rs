@@ -55,9 +55,6 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
     ) -> CollectionBundle<'scope, T> {
         // We create a new region to contain the dataflow paths for the delta join.
         let (oks, errs) = self.scope.clone().region_named("Join(Delta)", |inner| {
-            // Collects error streams for the ambient scope.
-            let mut inner_errs = Vec::new();
-
             // Our plan is to iterate through each input relation, and attempt
             // to find a plan that maximally uses existing keys (better: uses
             // existing arrangements, to which we have access).
@@ -85,6 +82,11 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     prune_bundle(cb, raw[index], &arrangements[index]).enter_region(inner)
                 })
                 .collect::<Vec<_>>();
+
+            // Collects error streams for the ambient scope, seeded with the errors the inputs
+            // arrive with. Every path reads every input, but an input's pre-existing errors belong
+            // in the output once, not once per path. See [`bundle_errs`].
+            let mut inner_errs: Vec<_> = inputs.iter().flat_map(bundle_errs).collect();
 
             for path_plan in join_plan.path_plans {
                 // Deconstruct the stages of the path plan.
@@ -288,12 +290,46 @@ fn prune_bundle<'scope, T: RenderTimestamp>(
     }
 }
 
+/// The error collections of every collection and arrangement `bundle` holds.
+///
+/// A delta join reads every input from every one of its paths, but an input's pre-existing errors
+/// belong in the join's error output once. Propagating them per path would multiply their
+/// multiplicities by the number of paths, and because a join's output is another join's input, those
+/// factors compound multiplicatively through a nested plan until the `Diff` overflows. Error
+/// semantics depend only on presence, so the extra copies buy nothing.
+///
+/// Expects the pruned bundle (see [`prune_bundle`]), so that it yields errors only for the
+/// collections some path actually reads. A bundle offering both a raw collection and an arrangement
+/// contributes its errors once per offered form, since each form carries its own error collection.
+fn bundle_errs<'scope, T: RenderTimestamp>(
+    bundle: &CollectionBundle<'scope, T>,
+) -> Vec<VecCollection<'scope, T, DataflowErrorSer, Diff>> {
+    let mut collected = Vec::with_capacity(bundle.arranged.len() + 1);
+    if let Some((_oks, errs)) = &bundle.collection {
+        collected.push(errs.clone());
+    }
+    for flavor in bundle.arranged.values() {
+        let errs = match flavor {
+            ArrangementFlavor::Local(_oks, errs) => errs.clone().as_collection(|k, _v| k.clone()),
+            ArrangementFlavor::Trace(_id, _oks, errs) => {
+                errs.clone().as_collection(|k, _v| k.clone())
+            }
+        };
+        collected.push(errs);
+    }
+    collected
+}
+
 /// Constructs a `half_join` against the arrangement held by a collection bundle.
 ///
 /// This wrapper demuxes over the two flavors of arrangement (dataflow-local or imported trace)
 /// that the bundle might hold for `lookup_key`, dispatching to the generic [`build_halfjoin_trace`]
 /// for each. `source_precedes_lookup` selects the tie-breaking comparison: `le` if the source
 /// relation precedes the lookup relation in the total order on relations, otherwise `lt`.
+///
+/// The returned error collection holds only the errors this stage produces. The errors `bundle`
+/// already carries are the caller's to propagate, once, rather than once per delta path that looks
+/// the input up. See [`bundle_errs`].
 fn build_halfjoin<'scope, T>(
     updates: VecCollection<'scope, T, (Row, T), Diff>,
     prev_key: Vec<LirScalarExpr>,
@@ -311,7 +347,7 @@ where
     T: RenderTimestamp,
 {
     match bundle.arrangement(&lookup_key) {
-        Some(ArrangementFlavor::Local(oks, errs)) => {
+        Some(ArrangementFlavor::Local(oks, _errs)) => {
             let (oks, errs2) = if source_precedes_lookup {
                 build_halfjoin_trace::<_, RowRowAgent<_, _>, _>(
                     updates,
@@ -333,9 +369,9 @@ where
                     config_set,
                 )
             };
-            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+            (oks, errs2)
         }
-        Some(ArrangementFlavor::Trace(_, oks, errs)) => {
+        Some(ArrangementFlavor::Trace(_, oks, _errs)) => {
             let (oks, errs2) = if source_precedes_lookup {
                 build_halfjoin_trace::<_, RowRowEnter<_, _, _>, _>(
                     updates,
@@ -357,7 +393,7 @@ where
                     config_set,
                 )
             };
-            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+            (oks, errs2)
         }
         None => panic!("Arrangement promised by the planner is absent!"),
     }
@@ -658,6 +694,10 @@ where
 /// With a `source_key`, demuxes over the two flavors of arrangement the bundle might hold for that
 /// key, dispatching to the generic [`build_update_stream_trace`]. Without a `source_key`, the source
 /// relation is consumed as a raw (unarranged) collection via [`build_update_stream_stream`].
+///
+/// The returned error collection holds only the errors the initial closure produces. The errors
+/// `bundle` already carries are the caller's to propagate, once, rather than once per delta path.
+/// See [`bundle_errs`].
 fn build_update_stream<'scope, T>(
     bundle: &CollectionBundle<'scope, T>,
     as_of: Antichain<mz_repr::Timestamp>,
@@ -675,32 +715,28 @@ where
         // No source key means a single-time dataflow (e.g. a `SELECT`) whose plan was truncated to
         // this one path, letting us hydrate the source from its raw collection instead of an
         // arrangement.
-        let (oks, errs) = bundle
+        let (oks, _errs) = bundle
             .collection
             .clone()
             .expect("The unarranged collection doesn't exist.");
-        let (oks, errs2) =
-            build_update_stream_stream(oks.into_vec(), as_of, source_relation, initial_closure);
-        return (oks, errs2.concat(errs));
+        return build_update_stream_stream(oks.into_vec(), as_of, source_relation, initial_closure);
     };
     match bundle.arrangement(&source_key) {
-        Some(ArrangementFlavor::Local(oks, errs)) => {
-            let (oks, errs2) = build_update_stream_trace::<_, RowRowAgent<_, _>>(
+        Some(ArrangementFlavor::Local(oks, _errs)) => {
+            build_update_stream_trace::<_, RowRowAgent<_, _>>(
                 oks,
                 as_of,
                 source_relation,
                 initial_closure,
-            );
-            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+            )
         }
-        Some(ArrangementFlavor::Trace(_, oks, errs)) => {
-            let (oks, errs2) = build_update_stream_trace::<_, RowRowEnter<_, _, _>>(
+        Some(ArrangementFlavor::Trace(_, oks, _errs)) => {
+            build_update_stream_trace::<_, RowRowEnter<_, _, _>>(
                 oks,
                 as_of,
                 source_relation,
                 initial_closure,
-            );
-            (oks, errs2.concat(errs.as_collection(|k, _v| k.clone())))
+            )
         }
         None => panic!("Arrangement promised by the planner is absent!"),
     }

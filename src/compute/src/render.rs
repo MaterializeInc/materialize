@@ -125,7 +125,8 @@ use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
 use mz_compute_types::dyncfgs::{
     COMPUTE_APPLY_COLUMN_DEMANDS, COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK,
     COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES, ENABLE_COMPUTE_LOGICAL_BACKPRESSURE,
-    ENABLE_COMPUTE_TEMPORAL_BUCKETING, SUBSCRIBE_SNAPSHOT_OPTIMIZATION, TEMPORAL_BUCKETING_SUMMARY,
+    ENABLE_COMPUTE_TEMPORAL_BUCKETING, ENABLE_ERROR_DISTINCT, SUBSCRIBE_SNAPSHOT_OPTIMIZATION,
+    TEMPORAL_BUCKETING_SUMMARY,
 };
 use mz_compute_types::plan::render_plan::{
     self, BindStage, LetBind, LetFreePlan, RecBind, RenderPlan,
@@ -891,6 +892,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
         plan: RenderPlan,
         binding: BindingInfo,
     ) -> CollectionBundle<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
+        let reference_counts = plan.reference_counts();
         for BindStage { lets, recs } in plan.binds {
             // Render the let bindings in order.
             let mut let_iter = lets.into_iter().peekable();
@@ -906,6 +908,8 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                                 .render_letfree_plan(object_id, value, binding)
                                 .leave_region(self.scope)
                         });
+                let bundle =
+                    self.distinct_shared_binding_errs(Id::Local(id), bundle, &reference_counts);
                 self.insert_id(Id::Local(id), bundle);
             }
 
@@ -1026,6 +1030,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         plan: RenderPlan,
     ) -> CollectionBundle<'scope, T> {
         let mut in_let = false;
+        let reference_counts = plan.reference_counts();
         for BindStage { lets, recs } in plan.binds {
             assert!(recs.is_empty());
 
@@ -1044,6 +1049,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                                 .render_letfree_plan(object_id, value, binding)
                                 .leave_region(self.scope)
                         });
+                let bundle =
+                    self.distinct_shared_binding_errs(Id::Local(id), bundle, &reference_counts);
                 self.insert_id(Id::Local(id), bundle);
             }
         }
@@ -1054,6 +1061,26 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 .render_letfree_plan(object_id, plan.body, BindingInfo::Body { in_let })
                 .leave_region(self.scope)
         })
+    }
+
+    /// Collapses a binding's error multiplicities when more than one `Get` reads the binding.
+    ///
+    /// A binding a single `Get` reads cannot duplicate its own errors, so the collapse would be
+    /// pure overhead there. See [`CollectionBundle::distinct_errs`] for why the collapse is needed
+    /// at all, and why a binding's definition is the place for it rather than the multi-input
+    /// operators where the duplicate copies happen to meet again.
+    fn distinct_shared_binding_errs(
+        &self,
+        id: Id,
+        bundle: CollectionBundle<'scope, T>,
+        reference_counts: &BTreeMap<Id, usize>,
+    ) -> CollectionBundle<'scope, T> {
+        let readers = reference_counts.get(&id).copied().unwrap_or(0);
+        if readers > 1 && ENABLE_ERROR_DISTINCT.get(&self.config_set) {
+            bundle.distinct_errs(&format!("errors for {id}"))
+        } else {
+            bundle
+        }
     }
 
     /// Renders a let-free plan to a differential dataflow, producing the collection of results.

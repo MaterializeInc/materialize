@@ -48,6 +48,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::CollectionEdge;
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
@@ -505,6 +506,61 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .expect("Must contain a valid collection")
                 .scope()
         }
+    }
+
+    /// Collapses the multiplicity of every error this bundle carries to one.
+    ///
+    /// Belongs at the definition of a binding that more than one `Get` reads. Each reader
+    /// propagates the binding's errors independently, so a binding read `f` times contributes its
+    /// errors `f` times to the dataflow's error output, and those factors apply again at every
+    /// further level of sharing: a chain of diamonds multiplies rather than adds, and reaches
+    /// `Diff` overflow at a depth plans really do have. Collapsing at each definition holds the
+    /// dataflow's error multiplicity to the fan-out of a single level.
+    ///
+    /// Sound because error semantics depend only on whether an error is present, and correct under
+    /// retraction only because it reads the accumulated collection: no pointwise function of the
+    /// input diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the
+    /// errors retract.
+    ///
+    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
+    /// this dataflow cannot rewrite in place. Their errors arrive already collapsed when the
+    /// exporting dataflow collapsed at its own bindings.
+    pub fn distinct_errs(mut self, name: &str) -> Self {
+        /// Rewrites an arranged error collection to hold each of its errors once.
+        fn collapse<'a, T: RenderTimestamp>(
+            errs: Arranged<'a, ErrAgent<T, Diff>>,
+            name: &str,
+        ) -> Arranged<'a, ErrAgent<T, Diff>> {
+            errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
+                &format!("Distinct {name}"),
+                |_err, _input, output| output.push(((), Diff::ONE)),
+            )
+        }
+
+        if let Some((oks, errs)) = self.collection.take() {
+            let errs: KeyCollection<_, _, _> = errs.into();
+            let errs = errs.mz_arrange::<
+                ColumnationChunker<_>,
+                ErrBatcher<_, _>,
+                ErrBuilder<_, _>,
+                ErrSpine<_, _>,
+            >(
+                &format!("Arrange {name}"),
+            );
+            let errs = collapse(errs, name).as_collection(|err, _| err.clone());
+            self.collection = Some((oks, errs));
+        }
+        for (key, flavor) in std::mem::take(&mut self.arranged) {
+            let flavor = match flavor {
+                ArrangementFlavor::Local(oks, errs) => {
+                    let name = format!("{name} [key: {key:?}]");
+                    ArrangementFlavor::Local(oks, collapse(errs, &name))
+                }
+                flavor @ ArrangementFlavor::Trace(..) => flavor,
+            };
+            self.arranged.insert(key, flavor);
+        }
+        self
     }
 
     /// Brings the collection bundle into a region.
