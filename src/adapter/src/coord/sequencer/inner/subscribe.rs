@@ -31,7 +31,7 @@ use tokio_stream::wrappers::UnboundedReceiverStream;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
 
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, SubscribeBufferAccounting};
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, SubscribeBacklogAccounting};
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::peek::PeekResponseUnary;
@@ -553,14 +553,14 @@ impl Coordinator {
         let sink_id = df_desc.sink_id();
 
         let (tx, rx) = mpsc::unbounded_channel::<PeekResponseUnary>();
-        let buffer = Arc::new(Mutex::new(SubscribeBufferAccounting::default()));
+        let backlog_accounting = Arc::new(Mutex::new(SubscribeBacklogAccounting::default()));
         let max_buffered_bytes =
             SUBSCRIBE_MAX_BUFFERED_BYTES.get(self.catalog().system_config().dyncfgs());
         let active_subscribe = ActiveSubscribe {
             conn_id: conn_id.clone(),
             session_uuid,
             channel: tx,
-            buffer: Arc::clone(&buffer),
+            backlog_accounting: Arc::clone(&backlog_accounting),
             max_buffered_bytes,
             emit_progress: plan.emit_progress,
             as_of: df_desc
@@ -618,9 +618,9 @@ impl Coordinator {
         // drained. This keeps the accounting equal to the currently buffered
         // depth, which the coordinator watches to bound this subscribe.
         let rx = UnboundedReceiverStream::new(rx).map(move |response| {
-            buffer
+            backlog_accounting
                 .lock()
-                .expect("subscribe buffer accounting poisoned")
+                .expect("subscribe backlog accounting poisoned")
                 .pop();
             response
         });

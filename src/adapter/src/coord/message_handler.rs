@@ -699,20 +699,20 @@ impl Coordinator {
                 {
                     let finished = active_subscribe.process_response(response);
                     // Read the backlog into a `Copy` local so the mutable borrow
-                    // of `active_subscribe` (and the buffer lock) ends before we
-                    // call `self.retire_compute_sinks`. The producer runs on this
-                    // loop, so it cannot block on a slow client. Instead we bound
-                    // the buffer here and retire the subscribe once its backlog
+                    // of `active_subscribe` (and the accounting lock) ends before
+                    // we call `self.retire_compute_sinks`. The producer runs on
+                    // this loop, so it cannot block on a slow client. Instead we
+                    // bound the backlog here and retire the subscribe once it
                     // exceeds the budget.
                     //
-                    // The backlog excludes the oldest in-flight message, so a
-                    // client draining a single large batch (e.g. the initial
-                    // snapshot) is never retired for receiving one big batch.
+                    // The backlog excludes the message the client is currently
+                    // draining, so a client working through a single large batch
+                    // (e.g. the initial snapshot) is never retired for it.
                     let buffered_bytes = active_subscribe
-                        .buffer
+                        .backlog_accounting
                         .lock()
-                        .expect("subscribe buffer accounting poisoned")
-                        .backlog_behind_oldest();
+                        .expect("subscribe backlog accounting poisoned")
+                        .backlog_size();
                     let max_buffered_bytes = active_subscribe.max_buffered_bytes;
 
                     let reason = if finished {

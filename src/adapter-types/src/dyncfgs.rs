@@ -304,12 +304,11 @@ pub const WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
 /// the subscribe once its buffered backlog exceeds this budget, bounding the
 /// memory a slow client can make the shared process hold.
 ///
-/// The backlog excludes the oldest in-flight message, so this bounds accumulated
-/// backlog, not the size of any single batch. A batch larger than this budget is
-/// still delivered, because the subscribe ships each frontier advance (and the
-/// initial snapshot) as one batch. So a client that keeps up never accumulates
-/// backlog and never approaches this cap, and a large snapshot to a keeping-up
-/// client is not retired.
+/// The backlog excludes the message the client is currently draining, so this
+/// bounds the accumulation of messages, not the size of any single one.
+/// `max_result_size` is what bounds an individual message. A client that keeps
+/// up holds at most one message at a time, so it stays at a zero backlog and a
+/// large snapshot batch is delivered rather than retired.
 pub const SUBSCRIBE_MAX_BUFFERED_BYTES: Config<usize> = Config::new(
     "subscribe_max_buffered_bytes",
     128 * 1024 * 1024,

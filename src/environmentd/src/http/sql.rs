@@ -655,7 +655,7 @@ impl SqlResult {
         let mut datum_vec = mz_repr::DatumVec::new();
         let types = &desc.typ().column_types;
 
-        let mut query_result_size = 0;
+        let mut query_result_size: usize = 0;
 
         loop {
             let peek_response = tokio::select! {
@@ -696,7 +696,7 @@ impl SqlResult {
                 // Enforce `max_result_size` on `Row::byte_len`, the same quantity
                 // pgwire and the WebSocket transport use, so the cap means one
                 // thing across every transport.
-                query_result_size += row.byte_len();
+                query_result_size = query_result_size.saturating_add(row.byte_len());
                 if query_result_size > max_query_result_size {
                     use bytesize::ByteSize;
                     return Ok(SqlResult::err(
@@ -1089,7 +1089,7 @@ impl ResultSender for WebSocket {
 
                             rows_returned += rows.count();
                             while let Some(row) = rows.next() {
-                                result_size += row.byte_len();
+                                result_size = result_size.saturating_add(row.byte_len());
                                 let datums = datum_vec.borrow_with(row);
                                 let types = &desc.typ().column_types;
                                 if let Err(e) = send_ws_response(
@@ -1260,13 +1260,17 @@ async fn stream_ws_peek_rows(
                         vec![WebSocketResponse::Error(err.into())],
                     ));
                 }
+                // The header waits until a batch has passed `verify_datum_desc`,
+                // so a query that fails before producing any rows emits only an
+                // `Error`. Sending it before the loop, as the `Subscribe` arm
+                // does, would put a `Rows` header in front of that `Error`.
                 if !sent_rows_desc {
                     send_ws_response(ws, WebSocketResponse::Rows(desc.into())).await?;
                     sent_rows_desc = true;
                 }
                 let types = &desc.typ().column_types;
                 while let Some(row) = rows.next() {
-                    result_size += row.byte_len();
+                    result_size = result_size.saturating_add(row.byte_len());
                     if result_size > max_result_size {
                         use bytesize::ByteSize;
                         return Ok(ws_peek_result(

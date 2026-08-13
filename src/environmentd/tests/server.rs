@@ -1297,12 +1297,13 @@ fn test_ws_notifies_for_bad_options() {
     };
 }
 
-/// Regression test for SQL-428: a `SELECT` over `/api/ws` streams one `Row`
-/// message per row before `CommandComplete`, rather than buffering the whole
-/// result first. This is the non-buffering path for large results over HTTP.
+/// A `SELECT` over `/api/ws` emits a `Rows` descriptor, then one `Row` message
+/// per row, then `CommandComplete`. This pins the wire shape, which is the same
+/// shape a buffered implementation would produce. What proves the rows are
+/// emitted incrementally is `test_ws_select_streams_rows_then_size_error`.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
-fn test_ws_select_streams_rows() {
+fn test_ws_select_row_message_shape() {
     let server = test_util::TestHarness::default().start_blocking();
     let ws_url = server.ws_addr();
     let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
@@ -1343,10 +1344,76 @@ fn test_ws_select_streams_rows() {
     assert_eq!(rows_seen, 1000);
 }
 
+/// Regression test for SQL-428: a `SELECT` over `/api/ws` emits rows as it
+/// streams them, so a result that outgrows `max_result_size` mid-flight arrives
+/// as some `Row` messages followed by an `Error`. An implementation that
+/// buffered the result would size it before emitting anything and send the
+/// `Error` alone, so this is the assertion that pins streaming.
+///
+/// NOTE: clients must therefore tolerate rows that precede an error, which is
+/// the contract pgwire has always had.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_ws_select_streams_rows_then_size_error() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    // `max_result_size` is a system parameter, so lower it over the internal
+    // (system) port. A normal session cannot.
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    system
+        .batch_execute("ALTER SYSTEM SET max_result_size = '1MB'")
+        .unwrap();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+
+    // Each row is ~10 KB, so the cap trips around row 100 of 500.
+    const ROWS: usize = 500;
+    let query = format!("SELECT repeat('x', 10000) FROM generate_series(1, {ROWS})");
+    let json = serde_json::json!({ "query": query });
+    ws.send(Message::Text(json.to_string().into())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+
+    match read_msg() {
+        WebSocketResponse::CommandStarting(_) => {}
+        other => panic!("expected CommandStarting, got {other:?}"),
+    }
+    match read_msg() {
+        WebSocketResponse::Rows(desc) => assert_eq!(desc.columns.len(), 1),
+        other => panic!("expected Rows description, got {other:?}"),
+    }
+
+    let mut rows_seen = 0;
+    let error = loop {
+        match read_msg() {
+            WebSocketResponse::Row(_) => rows_seen += 1,
+            WebSocketResponse::Notice(_) => continue,
+            WebSocketResponse::Error(err) => break err,
+            other => panic!("unexpected message before the size error: {other:?}"),
+        }
+    };
+
+    assert!(
+        error.message.contains("result exceeds max size"),
+        "expected a result-size error, got: {error:?}"
+    );
+    assert!(
+        rows_seen > 0 && rows_seen < ROWS,
+        "expected a truncated stream of rows before the error, got {rows_seen}"
+    );
+}
+
 /// Regression test for SQL-428: the JSON `/api/sql` endpoint enforces
-/// `max_result_size` on the real serialized footprint. A result that exceeds
-/// the cap fails cleanly with a result-size error rather than being buffered
-/// whole, while a result under the cap succeeds.
+/// `max_result_size` on `Row::byte_len`, the same quantity the WebSocket
+/// transport and pgwire use. A result that exceeds the cap fails cleanly with a
+/// result-size error rather than being buffered whole, while a result under the
+/// cap succeeds.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]
@@ -1371,7 +1438,7 @@ fn test_http_sql_result_size_limit() {
         res.json().unwrap()
     };
 
-    // A result whose serialized JSON exceeds the cap fails cleanly.
+    // A result whose rows exceed the cap fails cleanly.
     let body = post("SELECT * FROM generate_series(1, 500000)");
     let results = body.get("results").unwrap().as_array().unwrap();
     let err = results[0]
@@ -1446,10 +1513,55 @@ fn test_subscribe_buffer_bound() {
     );
 }
 
+/// Regression test for SQL-423: a client that drains each batch as it arrives is
+/// never retired, however many batches flow past the budget in total. A false
+/// `SubscribeFellBehind` on a well-behaved client is the failure mode this
+/// budget must not introduce.
+///
+/// The budget here is 64 KiB and each batch costs at least the 1 KiB per-message
+/// overhead, so a client that stopped draining would be retired within ~64 of
+/// the 200 batches.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_keeping_up_client_not_retired() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "subscribe_max_buffered_bytes".to_string(),
+            "65536".to_string(),
+        )
+        .start_blocking();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    writer.batch_execute("CREATE TABLE t (a bigint)").unwrap();
+
+    let mut reader = server.connect(postgres::NoTls).unwrap();
+    reader
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE t")
+        .unwrap();
+
+    // `FETCH` defaults to `WaitOnce`, so each round trip blocks until the batch
+    // for the insert it follows has arrived. That makes the drain deterministic
+    // rather than timing-dependent.
+    const BATCHES: usize = 200;
+    let mut rows_seen = 0;
+    for i in 0..BATCHES {
+        writer
+            .execute("INSERT INTO t VALUES ($1)", &[&i64::try_from(i).unwrap()])
+            .unwrap();
+        rows_seen += reader
+            .query("FETCH ALL c", &[])
+            .expect("a client that keeps up must not be retired")
+            .len();
+    }
+    assert_eq!(rows_seen, BATCHES);
+}
+
 /// Regression test for SQL-423: a SUBSCRIBE whose snapshot is a single batch
 /// larger than `subscribe_max_buffered_bytes` completes when the client reads it
 /// promptly. The budget bounds accumulated backlog, not the size of any single
-/// batch.
+/// batch, and it is independent of `max_result_size`, which is what bounds an
+/// individual batch.
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // too slow
 #[allow(clippy::disallowed_methods)]

@@ -98,9 +98,14 @@ pub enum ActiveComputeSinkRetireReason {
     },
 }
 
-/// Overhead charged to every buffered message on top of its payload, so a flood
-/// of near-empty messages (frontier-only advances) still counts against the
-/// budget. Without it a stalled client could grow the buffer without bound.
+/// Overhead charged to every queued message on top of its payload.
+///
+/// A frontier-only advance carries no rows, so its payload is zero bytes. It
+/// still costs real memory: a node in the unbounded channel and an entry in
+/// `footprints`. Charging payload alone would leave the backlog flat while
+/// those two grow without bound, so the retire check would never trip on a
+/// stalled client that only receives progress messages. The fixed charge makes
+/// the budget bound message *count* as well as payload bytes.
 const SUBSCRIBE_MESSAGE_OVERHEAD_BYTES: usize = 1024;
 
 /// Footprints of the subscribe messages queued to the client but not yet
@@ -108,18 +113,18 @@ const SUBSCRIBE_MESSAGE_OVERHEAD_BYTES: usize = 1024;
 /// client-writer task pops as it drains. FIFO delivery keeps the queue aligned
 /// with the channel.
 ///
-/// The oldest message is always tolerated, however large, so a client draining
-/// one big batch is not retired. Only the backlog behind it counts against the
-/// budget.
+/// The message at the front is the one the client is currently draining. It is
+/// always tolerated, however large, so a client working through one big batch is
+/// not retired. Only what is queued behind it counts as backlog.
 #[derive(Debug, Default)]
-pub struct SubscribeBufferAccounting {
+pub struct SubscribeBacklogAccounting {
     /// Per-message footprints, in send order.
     footprints: VecDeque<usize>,
     /// Sum of `footprints`.
     total: usize,
 }
 
-impl SubscribeBufferAccounting {
+impl SubscribeBacklogAccounting {
     /// Records a queued message of the given footprint.
     pub fn push(&mut self, footprint: usize) {
         self.footprints.push_back(footprint);
@@ -133,9 +138,10 @@ impl SubscribeBufferAccounting {
         }
     }
 
-    /// Bytes queued behind the oldest in-flight message. The oldest message is
-    /// tolerated, so only this counts against the budget.
-    pub fn backlog_behind_oldest(&self) -> usize {
+    /// Bytes queued behind the message the client is currently draining. That
+    /// message is tolerated whatever its size, so only this counts against the
+    /// budget.
+    pub fn backlog_size(&self) -> usize {
         self.total
             .saturating_sub(self.footprints.front().copied().unwrap_or(0))
     }
@@ -161,9 +167,9 @@ pub struct ActiveSubscribe {
     ///
     /// The producer runs on the non-blockable coordinator loop and cannot block
     /// on a slow client, so instead of applying backpressure the coordinator
-    /// watches `backlog_behind_oldest` against `max_buffered_bytes` and retires
-    /// the subscribe once the backlog exceeds it.
-    pub buffer: Arc<Mutex<SubscribeBufferAccounting>>,
+    /// watches `backlog_size` against `max_buffered_bytes` and retires the
+    /// subscribe once the backlog exceeds it.
+    pub backlog_accounting: Arc<Mutex<SubscribeBacklogAccounting>>,
     /// Budget for the buffered backlog. A snapshot of `subscribe_max_buffered_bytes`
     /// taken when the subscribe was created.
     pub max_buffered_bytes: usize,
@@ -484,15 +490,15 @@ impl ActiveSubscribe {
     /// and if the client has not already gone away.
     ///
     /// `bytes` is the message's payload size. Its footprint (payload plus a fixed
-    /// per-message overhead) is recorded in `buffer` here and released by the
-    /// receiver side when the message is drained. Overflow of the budget is
-    /// detected by the coordinator after `process_response` returns, not here,
-    /// because this method cannot retire the sink.
+    /// per-message overhead) is recorded in `backlog_accounting` here and
+    /// released by the receiver side when the message is drained. Overflow of
+    /// the budget is detected by the coordinator after `process_response`
+    /// returns, not here, because this method cannot retire the sink.
     fn send(&self, response: PeekResponseUnary, bytes: usize) {
         let footprint = bytes.saturating_add(SUBSCRIBE_MESSAGE_OVERHEAD_BYTES);
-        self.buffer
+        self.backlog_accounting
             .lock()
-            .expect("subscribe buffer accounting poisoned")
+            .expect("subscribe backlog accounting poisoned")
             .push(footprint);
         let _ = self.channel.send(response);
     }
@@ -566,31 +572,46 @@ pub(crate) struct ActiveCopyFrom {
 
 #[cfg(test)]
 mod tests {
-    use crate::active_compute_sink::SubscribeBufferAccounting;
+    use crate::active_compute_sink::SubscribeBacklogAccounting;
 
-    /// The backlog excludes the oldest in-flight message, and zero-payload
+    /// The backlog excludes the message being drained, and zero-payload
     /// messages (footprint = overhead only) still accumulate against it.
     #[mz_ore::test]
-    fn test_subscribe_buffer_accounting() {
-        let mut acc = SubscribeBufferAccounting::default();
-        assert_eq!(acc.backlog_behind_oldest(), 0);
+    fn test_subscribe_backlog_accounting() {
+        let mut acc = SubscribeBacklogAccounting::default();
+        assert_eq!(acc.backlog_size(), 0);
 
         // A single large message is fully tolerated: nothing is queued behind it.
         acc.push(10_000);
-        assert_eq!(acc.backlog_behind_oldest(), 0);
+        assert_eq!(acc.backlog_size(), 0);
 
         // Near-empty messages (only per-message overhead) still build backlog, so
         // a flood of frontier-only advances cannot grow without bound.
         acc.push(1_024);
         acc.push(1_024);
-        assert_eq!(acc.backlog_behind_oldest(), 2_048);
+        assert_eq!(acc.backlog_size(), 2_048);
 
         // Draining the oldest message advances the tolerated front.
         acc.pop();
-        assert_eq!(acc.backlog_behind_oldest(), 1_024);
+        assert_eq!(acc.backlog_size(), 1_024);
 
         acc.pop();
         acc.pop();
-        assert_eq!(acc.backlog_behind_oldest(), 0);
+        assert_eq!(acc.backlog_size(), 0);
+    }
+
+    /// A client that drains each message before the next is sent never
+    /// accumulates backlog, however many messages flow and however large they
+    /// are. This is the property that keeps a well-behaved subscribe from ever
+    /// being retired, so it is asserted after every step rather than at the end.
+    #[mz_ore::test]
+    fn test_subscribe_backlog_keeping_up_client() {
+        let mut acc = SubscribeBacklogAccounting::default();
+        for i in 0..1_000 {
+            acc.push(1_024 + i * 4_096);
+            assert_eq!(acc.backlog_size(), 0, "message {i} built backlog");
+            acc.pop();
+            assert_eq!(acc.backlog_size(), 0, "message {i} left backlog behind");
+        }
     }
 }

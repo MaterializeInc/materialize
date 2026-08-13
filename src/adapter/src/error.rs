@@ -21,6 +21,7 @@ use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_expr::EvalError;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -1366,8 +1367,8 @@ impl fmt::Display for AdapterError {
                 max_buffered_bytes,
             } => {
                 use bytesize::ByteSize;
-                let buffered = u64::try_from(*buffered_bytes).unwrap_or(u64::MAX);
-                let max = u64::try_from(*max_buffered_bytes).unwrap_or(u64::MAX);
+                let buffered = u64::cast_from(*buffered_bytes);
+                let max = u64::cast_from(*max_buffered_bytes);
                 write!(
                     f,
                     "SUBSCRIBE fell behind: the client did not read results fast enough, so its backlog reached {}, exceeding the {} budget",
