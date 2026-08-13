@@ -2099,14 +2099,11 @@ mod row_codec {
         /// All byte values >= this are safe to use as dictionary tags without
         /// observing the data, since no datum's first byte can have this value.
         ///
-        /// `mz_repr`'s `Row` `Tag` enum currently has 94 variants (discriminants
-        /// 0..=93), so the truly tight bound is 94. We deliberately pick a larger,
-        /// round-ish constant to leave headroom for new tags without having to also
-        /// bump the safe set, and the `test_safe_tag_base` test pins the real
-        /// invariant: every datum the row format produces must encode with a first
-        /// byte strictly less than this value. If a future tag crosses the boundary
-        /// that test fails loudly rather than silently corrupting decoding.
-        pub const SAFE_TAG_BASE: u8 = 122;
+        /// This is `mz_repr`'s own bound on the bytes its datum tags occupy, so the
+        /// two cannot drift apart. `mz_repr` proves the invariant exhaustively (see
+        /// `TAG_UPPER_BOUND`); `test_safe_tag_base` re-checks it from this side over
+        /// the datums a row can actually hold.
+        pub const SAFE_TAG_BASE: u8 = mz_repr::TAG_UPPER_BOUND;
 
         /// How many of the top safe tags are reserved as overflow escapes rather than
         /// handed out as one-byte dictionary entries.
