@@ -522,6 +522,12 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// input diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the
     /// errors retract.
     ///
+    /// Collapses every form the bundle offers, not just one. Each form carries its own error
+    /// stream, and those streams differ in content as well as identity: an arrangement's errors
+    /// include the key-formation errors that the raw collection's do not. Which form a consumer
+    /// reads is the consumer's choice, and a delta join reads both within one operator, so a
+    /// binding's definition cannot know which form to collapse.
+    ///
     /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
     /// this dataflow cannot rewrite in place. Their errors arrive already collapsed when the
     /// exporting dataflow collapsed at its own bindings.
