@@ -99,10 +99,10 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   we need to record that knowledge. In general comments need to stand on their
   own and make sense from just looking at them and the code around it, not
   previous changes.
-* Avoid em-dashes and semicolons for structuring sentences, everywhere: code
-  comments, specs, design docs, all of it. Restructure with full stops and
-  commas instead. In most cases a sentence that wants an em-dash or semicolon
-  can just be split into two.
+* Avoid em-dashes for structuring sentences in any prose: code comments, specs,
+  design docs, all of it. Restructure with full stops and commas instead. The
+  same goes for semicolons, though one is fine where splitting would mangle the
+  sentence.
 * Our guidance applies both when writing new code or designs, or when we notice
   deviations in code or architecture that we are working on. At the same time,
   we want to keep our changes minimal so it's good to call out deviations and
