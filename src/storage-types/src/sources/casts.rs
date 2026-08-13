@@ -544,6 +544,46 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_cast_string_to_timestamp_frozen_leap_second() {
+        // A `:60` second keeps chrono's leap-second representation on the
+        // frozen path, diverging from the SQL layer, which rolls it into the
+        // next minute. This must not change (see the stability contract
+        // above): rolling over would rewrite the datum an existing source
+        // produced for the same input string.
+        use chrono::{DateTime, NaiveDate, Utc};
+
+        let arena = RowArena::new();
+        let leap = NaiveDate::from_ymd_opt(2015, 6, 30)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_000_000_000)
+            .unwrap();
+
+        let expr = cast_col0(CastFunc::CastStringToTimestamp(None));
+        assert_eq!(
+            expr.eval(&[Datum::String("2015-06-30 23:59:60")], &arena)
+                .unwrap(),
+            Datum::Timestamp(leap.try_into().unwrap())
+        );
+        // The leap second on chrono's maximum date is in range only because it
+        // is not rolled over. It must stay a value, not become an error.
+        assert!(
+            expr.eval(&[Datum::String("262142-12-31 23:59:60")], &arena)
+                .is_ok()
+        );
+
+        let expr = cast_col0(CastFunc::CastStringToTimestampTz(None));
+        assert_eq!(
+            expr.eval(&[Datum::String("2015-06-30 23:59:60+00")], &arena)
+                .unwrap(),
+            Datum::TimestampTz(
+                DateTime::from_naive_utc_and_offset(leap, Utc)
+                    .try_into()
+                    .unwrap()
+            )
+        );
+    }
+
+    #[mz_ore::test]
     fn test_cast_string_to_uuid() {
         let arena = RowArena::new();
         let expr = cast_col0(CastFunc::CastStringToUuid);
@@ -1169,6 +1209,11 @@ mod tests {
         #[mz_ore::test]
         fn parity_timestamp() {
             use mz_expr::func::CastStringToTimestamp;
+            // No `:60` input here on purpose. The storage cast is frozen on
+            // `parse_timestamp_legacy`, which keeps chrono's leap-second
+            // representation, while the SQL cast rolls it into the next
+            // minute, so the two intentionally diverge there. See
+            // `test_cast_string_to_timestamp_frozen_leap_second`.
             assert_parity(
                 "Timestamp",
                 CastFunc::CastStringToTimestamp(None),
@@ -1180,6 +1225,7 @@ mod tests {
         #[mz_ore::test]
         fn parity_timestamptz() {
             use mz_expr::func::CastStringToTimestampTz;
+            // No `:60` input here on purpose, see `parity_timestamp`.
             assert_parity(
                 "TimestampTz",
                 CastFunc::CastStringToTimestampTz(None),

@@ -257,6 +257,14 @@ impl<'a> ResultSpec<'a> {
     }
 
     /// A spec that matches values between the given (non-null) min and max.
+    /// A spec for the values between `min` and `max` inclusive.
+    ///
+    /// Unordered bounds widen to [`ResultSpec::value_all`] instead of collapsing
+    /// to [`ResultSpec::nothing`]: they mean the bounds are unusable, not that
+    /// the column holds nothing. Persist float stats produce them, because arrow
+    /// orders floats totally, putting `-NaN` below `-Infinity`, while the
+    /// [`Datum`] order compared here ranks every NaN above every finite value.
+    /// Collapsing lost every other row in such a part (PER-53).
     pub fn value_between(min: Datum<'a>, max: Datum<'a>) -> ResultSpec<'a> {
         assert!(!min.is_null());
         assert!(!max.is_null());
@@ -266,7 +274,7 @@ impl<'a> ResultSpec<'a> {
                 ..ResultSpec::nothing()
             }
         } else {
-            ResultSpec::nothing()
+            ResultSpec::value_all()
         }
     }
 

@@ -1529,6 +1529,10 @@ mod tests {
             MirScalarExpr::literal_ok(Datum::from(x), ReprScalarType::Float32)
         }
 
+        fn f64_lit(x: f64) -> MirScalarExpr {
+            MirScalarExpr::literal_ok(Datum::from(x), ReprScalarType::Float64)
+        }
+
         fn numeric_datum(x: f64) -> Datum<'static> {
             Datum::from(Numeric::from(x))
         }
@@ -1712,6 +1716,131 @@ mod tests {
             proptest!(|(rows in arb_numeric_rows(), predicate in arb_predicate())| {
                 check(rows, predicate)?;
             });
+        }
+
+        /// Assert that `filter_result` keeps a part it must keep, and that the
+        /// case is not vacuous: the MFP has to yield output on a real row for
+        /// "must keep" to mean anything.
+        fn assert_part_kept(desc: &RelationDesc, rows: &[Row], predicate: MirScalarExpr) {
+            let plan = MapFilterProject::new(1)
+                .filter(std::iter::once(predicate))
+                .into_plan()
+                .expect("into_plan");
+            assert!(
+                mfp_yields_output(&plan, rows),
+                "nothing to keep: the MFP yields no output on any of these rows.\n\
+                 rows={rows:?}\nplan={plan:?}",
+            );
+
+            let part_stats = build_part_stats(desc, rows);
+            let metrics = PartStatsMetrics::new(&MetricsRegistry::new());
+            let stats = RelationPartStats::new("test", &metrics, desc, &part_stats);
+            let decision = filter_result(desc, ResultSpec::anything(), stats, &plan);
+            assert!(
+                !matches!(decision, FilterResult::Discard),
+                "filter pushdown discarded a part whose MFP yields output on a real row.\n\
+                 rows={rows:?}\nplan={plan:?}",
+            );
+        }
+
+        /// A part holding `-NaN` must not hide the rest of its rows from a
+        /// filter on that column.
+        ///
+        /// `PrimitiveStats` takes a float column's bounds in arrow's *total*
+        /// order, where `-NaN` sorts below `-Infinity`, so such a part records
+        /// `lower = -NaN` against a finite `upper`. `OrderedFloat`, the `Datum`
+        /// order the interpreter compares in, ranks every NaN *above* every
+        /// finite value, so those bounds arrive unordered. Reading them as an
+        /// empty range discarded the part, which lost every other row in it
+        /// (PER-53). Both float widths take the same path.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+        fn negative_nan_does_not_discard_matching_part() {
+            // Both rows have to land in the same part. Split across parts each
+            // one gets ordered bounds of its own and nothing is discarded.
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float32.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f32::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f32)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Lt(Lt),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f32_lit(1.0)),
+                },
+            );
+
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float64.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f64::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f64)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Lt(Lt),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f64_lit(1.0)),
+                },
+            );
+        }
+
+        /// A part holding NaNs of both signs must not hide its other rows.
+        ///
+        /// Arrow's total order puts `-NaN` below and `+NaN` above everything,
+        /// so such a part records the bounds `(-NaN, +NaN)`. Under
+        /// `OrderedFloat` those decode to `NaN == NaN`: not an inverted range
+        /// but a seemingly valid one claiming the part holds nothing but NaN,
+        /// so widening unordered bounds does not catch it. A filter that a
+        /// finite row matches but NaN does not then discarded the part. Only
+        /// the stats decode still sees the NaN signs, so the guard lives in
+        /// `mz_repr::stats::col_values`.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function
+        fn mixed_sign_nans_do_not_discard_matching_part() {
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float32.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f32::NAN)]),
+                Row::pack_slice(&[Datum::from(f32::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f32)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Eq(Eq),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f32_lit(0.0)),
+                },
+            );
+
+            let desc = RelationDesc::builder()
+                .with_column("c0", SqlScalarType::Float64.nullable(false))
+                .finish();
+            let rows = [
+                Row::pack_slice(&[Datum::from(-f64::NAN)]),
+                Row::pack_slice(&[Datum::from(f64::NAN)]),
+                Row::pack_slice(&[Datum::from(0.0f64)]),
+            ];
+            assert_part_kept(
+                &desc,
+                &rows,
+                MirScalarExpr::CallBinary {
+                    func: BinaryFunc::Eq(Eq),
+                    expr1: Box::new(MirScalarExpr::column(0)),
+                    expr2: Box::new(f64_lit(0.0)),
+                },
+            );
         }
     }
 }

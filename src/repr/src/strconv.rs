@@ -564,7 +564,7 @@ where
 
 /// Parses a `NaiveDateTime` from `s`.
 pub fn parse_timestamp(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
-    parse_timestamp_inner(s, DateOrder::Mdy)
+    parse_timestamp_inner(s, DateOrder::Mdy, LeapSecond::RollOver)
 }
 
 /// Parses a `NaiveDateTime` from `s` with the frozen legacy year-month-day
@@ -575,17 +575,61 @@ pub fn parse_timestamp(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, Parse
 /// stability contract in `mz_storage_types::sources::casts`). Use
 /// [`parse_timestamp`] everywhere else.
 pub fn parse_timestamp_legacy(s: &str) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
-    parse_timestamp_inner(s, DateOrder::LegacyYmd)
+    parse_timestamp_inner(s, DateOrder::LegacyYmd, LeapSecond::Keep)
 }
 
 fn parse_timestamp_inner(
     s: &str,
     order: DateOrder,
+    leap: LeapSecond,
 ) -> Result<CheckedTimestamp<NaiveDateTime>, ParseError> {
     match parse_timestamp_string(s, order) {
-        Ok((date, time, _)) => CheckedTimestamp::from_timestamplike(date.and_time(time))
-            .map_err(|_| ParseError::out_of_range("timestamp", s)),
+        Ok((date, time, _)) => {
+            let dt = match leap {
+                LeapSecond::RollOver => roll_over_leap_second(date.and_time(time))
+                    .ok_or_else(|| ParseError::out_of_range("timestamp", s))?,
+                LeapSecond::Keep => date.and_time(time),
+            };
+            CheckedTimestamp::from_timestamplike(dt)
+                .map_err(|_| ParseError::out_of_range("timestamp", s))
+        }
         Err(e) => Err(ParseError::invalid_input_syntax("timestamp", s).with_details(e)),
+    }
+}
+
+/// Whether parsing rolls a `:60` second into the next minute.
+///
+/// The SQL entry points roll over, matching Postgres. The `_legacy` entry
+/// points backing the frozen storage source casts keep chrono's leap-second
+/// representation, because rolling it over would change the datum (or error)
+/// an existing source produces for the same input string, breaking the
+/// stability contract in `mz_storage_types::sources::casts`.
+#[derive(Clone, Copy)]
+enum LeapSecond {
+    RollOver,
+    Keep,
+}
+
+/// Postgres normalizes a parsed `:60` second by rolling it into the next
+/// minute. chrono instead keeps a leap-second representation (nanos >= 1e9)
+/// that sorts before the following second while epoch-style conversions
+/// count it at or past that second, which breaks the monotonicity contracts
+/// persist filter pushdown derives ranges with. Roll it over at the parse
+/// boundary so the leap representation never enters a parsed timestamp.
+/// `TIME` keeps the leap representation: rolling it over would wrap to
+/// 00:00:00 and reverse its ordering, and the whole-second leap time is
+/// harmless.
+///
+/// Returns `None` when the rollover overflows chrono's range (a leap second
+/// on the maximum date), which callers report as out of range.
+fn roll_over_leap_second(dt: NaiveDateTime) -> Option<NaiveDateTime> {
+    use chrono::Timelike;
+    match dt.nanosecond().checked_sub(1_000_000_000) {
+        Some(nanos) => dt
+            .with_nanosecond(nanos)
+            .expect("in range")
+            .checked_add_signed(Duration::try_seconds(1).unwrap()),
+        None => Some(dt),
     }
 }
 
@@ -607,7 +651,7 @@ where
 
 /// Parses a `DateTime<Utc>` from `s`. See `mz_expr::scalar::func::timezone_timestamp` for timezone anomaly considerations.
 pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
-    parse_timestamptz_inner(s, DateOrder::Mdy)
+    parse_timestamptz_inner(s, DateOrder::Mdy, LeapSecond::RollOver)
 }
 
 /// Parses a `DateTime<Utc>` from `s` with the frozen legacy year-month-day
@@ -618,12 +662,13 @@ pub fn parse_timestamptz(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, Par
 /// stability contract in `mz_storage_types::sources::casts`). Use
 /// [`parse_timestamptz`] everywhere else.
 pub fn parse_timestamptz_legacy(s: &str) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
-    parse_timestamptz_inner(s, DateOrder::LegacyYmd)
+    parse_timestamptz_inner(s, DateOrder::LegacyYmd, LeapSecond::Keep)
 }
 
 fn parse_timestamptz_inner(
     s: &str,
     order: DateOrder,
+    leap: LeapSecond,
 ) -> Result<CheckedTimestamp<DateTime<Utc>>, ParseError> {
     let invalid_syntax = |details: String| {
         ParseError::invalid_input_syntax("timestamp with time zone", s).with_details(details)
@@ -631,7 +676,15 @@ fn parse_timestamptz_inner(
     let out_of_range = || ParseError::out_of_range("timestamp with time zone", s);
 
     let (date, time, timezone) = parse_timestamp_string(s, order).map_err(&invalid_syntax)?;
-    let mut dt = date.and_time(time);
+    // The rollover applies to the local wall clock, before the offset shifts it
+    // to UTC. A local time that rolls out of chrono's range is rejected even
+    // when the UTC instant it denotes would be representable.
+    let mut dt = match leap {
+        LeapSecond::RollOver => {
+            roll_over_leap_second(date.and_time(time)).ok_or_else(out_of_range)?
+        }
+        LeapSecond::Keep => date.and_time(time),
+    };
     let offset = match timezone {
         Timezone::FixedOffset(offset) => offset,
         Timezone::Tz(tz) => match tz.offset_from_local_datetime(&dt).latest() {
@@ -2369,6 +2422,38 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+
+    /// Rolling a leap second over must not panic at the timestamp maximum:
+    /// chrono's max date parses, and adding the rollover second overflows.
+    /// The leap value on the max date errors as out of range instead.
+    #[mz_ore::test]
+    fn leap_second_rollover_at_max_date_errors() {
+        assert!(parse_timestamp("262142-12-31 23:59:60").is_err());
+        assert!(parse_timestamptz("262142-12-31 23:59:60+00").is_err());
+        // One second below the maximum still rolls over successfully.
+        assert_ok!(parse_timestamp("262142-12-31 23:59:59"));
+        // The frozen legacy parse keeps the leap representation instead of
+        // rolling it over, so the same input stays in range there.
+        assert_ok!(parse_timestamp_legacy("262142-12-31 23:59:60"));
+        assert_ok!(parse_timestamptz_legacy("262142-12-31 23:59:60+00"));
+    }
+
+    /// The `timestamptz` rollover applies to the local wall clock, so an
+    /// offset can move the overflow to either side of it. Both sides must
+    /// report out of range rather than panic, and this pins which inputs the
+    /// wall-clock-first order rejects.
+    #[mz_ore::test]
+    fn leap_second_rollover_at_max_date_with_offset_errors() {
+        // The rollover itself stays in range, then the westward offset carries
+        // the UTC instant past the maximum date.
+        assert!(parse_timestamptz("262142-12-31 08:59:60-15").is_err());
+        // The rollover leaves chrono's range before the offset is applied,
+        // even though the UTC instant it denotes, 262142-12-31 23:00:00, is
+        // representable.
+        assert!(parse_timestamptz("262142-12-31 23:59:60+01").is_err());
+        // An eastward offset on the maximum date leaves room for the rollover.
+        assert_ok!(parse_timestamptz("262142-12-31 08:59:60+15"));
+    }
 
     proptest! {
         #[mz_ore::test]

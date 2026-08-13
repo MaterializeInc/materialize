@@ -1217,6 +1217,46 @@ mod test {
     }
 
     #[mz_ore::test]
+    fn test_checked_offset_with_leapsecond_branches() {
+        // Leap-second values reach these shifts from persisted data and from
+        // the frozen storage source casts, so both branches need coverage
+        // built directly from the leap representation. A SQL `:60` literal
+        // rolls over at parse and cannot reach them.
+        let leap = NaiveDate::from_ymd_opt(2024, 6, 30)
+            .unwrap()
+            .and_hms_nano_opt(23, 59, 59, 1_500_000_000)
+            .unwrap();
+        let second = FixedOffset::east_opt(1).unwrap();
+        let minute = FixedOffset::east_opt(60).unwrap();
+
+        // A shift off `:59` cannot keep the leap representation, so the leap
+        // nanos fold into the following regular second.
+        assert_eq!(
+            checked_add_with_leapsecond(&leap, &second).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 7, 1)
+                .unwrap()
+                .and_hms_nano_opt(0, 0, 1, 500_000_000)
+                .unwrap()
+        );
+        assert_eq!(
+            checked_sub_with_leapsecond(&leap, &second).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 6, 30)
+                .unwrap()
+                .and_hms_nano_opt(23, 59, 59, 500_000_000)
+                .unwrap()
+        );
+
+        // A shift that lands on `:59` keeps the leap representation.
+        assert_eq!(
+            checked_add_with_leapsecond(&leap, &minute).unwrap(),
+            NaiveDate::from_ymd_opt(2024, 7, 1)
+                .unwrap()
+                .and_hms_nano_opt(0, 0, 59, 1_500_000_000)
+                .unwrap()
+        );
+    }
+
+    #[mz_ore::test]
     fn test_round_to_precision_high_date_overflow() {
         // `HIGH_DATE` is exactly `NaiveDate::MAX`, so rounding *up* from the last
         // fraction of that day leaves chrono's range. Both the seventh-digit
