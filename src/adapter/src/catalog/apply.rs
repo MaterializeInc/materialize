@@ -221,11 +221,9 @@ impl CatalogState {
         let mut catalog_updates = Vec::new();
 
         for state_update in updates {
-            // Applying a temporary item whose owning session is not connected
-            // to this process must be a complete no-op. This
-            // covers read-only catalog followers during zero-downtime
-            // deployments, which observe the live writer's temporary items but
-            // serve none of its sessions.
+            // Do not apply temporary item updates from other processes, since
+            // temporary items are scoped per session, which must be in the
+            // same process.
             if self.is_nonlocal_ephemeral_item_update(&state_update) {
                 tracing::debug!(
                     ?state_update,
