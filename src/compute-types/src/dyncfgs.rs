@@ -606,10 +606,15 @@ pub const COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL: Config<Duration> = C
 
 /// If set, skip fetching or processing the snapshot data for subscribes when possible.
 ///
-/// Environment-scoped because it is read twice, once by the optimizer in
-/// `environmentd` and once at render time on the replica, and the two reads must
-/// agree. It also changes what a subscribe emits, which replicas of one cluster
-/// may not disagree about.
+/// Read twice. At plan time in `environmentd` it gates whether snapshot elision runs at all, and
+/// at render time on the replica it gates whether an elided snapshot is honored. The replica-side
+/// read only ever puts a snapshot back, never takes one away, so the two reads disagreeing costs
+/// work rather than correctness.
+///
+/// Environment-scoped because the plan-time read has no replica in scope. Making it
+/// cluster-coherent instead would need plan-time resolution of cluster overrides for
+/// `OptimizerConfig` fields that are not `OptimizerFeatures`, which is the only place cluster
+/// overrides are resolved today.
 pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "compute_subscribe_snapshot_optimization",
     true,

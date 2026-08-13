@@ -796,6 +796,12 @@ impl ComputeController {
 
         instance.replicas.remove(&replica_id);
 
+        // The coordinator only re-pushes the override map when the scoped
+        // configuration itself changes, so a dropped replica's entry would
+        // otherwise be retained until the next such change.
+        self.replica_dyncfg_overrides.remove(&replica_id);
+
+        let instance = self.instance_mut(instance_id).expect("validated");
         instance.call(move |i| i.remove_replica(replica_id).expect("validated"));
 
         Ok(())
