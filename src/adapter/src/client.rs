@@ -1483,6 +1483,14 @@ impl SessionClient {
 
     /// Runs frontend read-then-write while reacting to both local/session
     /// cancellation and coordinator-issued connection cancellation.
+    ///
+    /// Returns `Ok(None)` when the statement is not eligible for this path and
+    /// the caller must fall back to the coordinator, either because
+    /// `try_frontend_read_then_write` declined it or because this wrapper did.
+    ///
+    /// Cancellation and statement timeout are never reported for a write that
+    /// may have committed. Once a write has been submitted we await its
+    /// definitive result instead of returning the cancellation.
     async fn try_frontend_read_then_write_with_cancel(
         &mut self,
         portal_name: &str,

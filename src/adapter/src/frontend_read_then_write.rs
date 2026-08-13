@@ -11,8 +11,17 @@
 //!
 //! This module implements INSERT [...] SELECT FROM [...], DELETE and UPDATE
 //! operations using a subscribe with optimistic concurrency control (OCC),
-//! sequenced from the session task rather than the Coordinator. This reduces
-//! coordinator bottlenecking.
+//! sequenced from the session task rather than the Coordinator.
+//!
+//! The motivation is correctness with concurrent writers, including writers in
+//! different `environmentd` processes, which the coordinator's in-process write
+//! locks cannot provide. The OCC path also fixes a serializability defect of the
+//! lock path, which reads at one timestamp and commits at a later one while
+//! locking only the selection's direct dependency items. See the design doc,
+//! `doc/developer/design/20260210_incremental_occ_read_then_write.md`, and the
+//! comment on the retry arm in `run_occ_loop`. Relieving the coordinator loop is
+//! a side benefit, and only sequencing moves off it. The subscribe's data path
+//! still runs through the coordinator.
 //!
 //! ## Whether the write reads persisted state
 //!
@@ -21,8 +30,18 @@
 //! syntactically, from `depends_on()` on the planned selection, because inside
 //! a transaction a read-dependent write has to be refused while refusing is
 //! still possible. Once the dataflow runs, the subscribe answers it
-//! dynamically: a subscribe over a persisted collection never ends, so a
-//! channel that closes on its own means the selection read nothing.
+//! dynamically: the channel closes on its own only once the sink's output
+//! frontier reaches the empty antichain, which means the selection can never
+//! change again.
+//!
+//! Reading nothing persisted is the common case for a clean close, not the
+//! guarantee. An input whose frontier seals closes cleanly too, despite reading
+//! persisted state, for example a `REFRESH AT` materialized view past its last
+//! refresh, whose write frontier advances to the empty antichain. What holds in
+//! either case is the property the write side actually needs: past the close,
+//! the consolidated diffs are frontier-independent. The syntactic predicate is
+//! correspondingly stricter than the dynamic one, since it refuses a sealed-MV
+//! `INSERT ... SELECT` in a transaction that would technically be bufferable.
 //!
 //! The answer decides where the diffs go. Diffs from a selection that reads
 //! persisted state are only correct at the frontier they were observed at, so
@@ -246,8 +265,8 @@ fn classify_write_result(
     }
 }
 
-/// A handle to an internal subscribe (not visible in introspection collections
-/// like `mz_subscriptions`). A `Drop` impl ensures the subscribe's dataflow is
+/// A handle to an internal subscribe, meaning one that writes no
+/// `mz_subscriptions` row. A `Drop` impl ensures the subscribe's dataflow is
 /// cleaned up when dropped.
 pub(crate) struct SubscribeHandle {
     rx: mpsc::UnboundedReceiver<PeekResponseUnary>,
@@ -468,6 +487,13 @@ impl PeekClient {
         // timeline until then. So a pathological far-future RTW must park
         // here without ever touching the oracle. This park is unbounded on
         // its own, the caller bounds it by `statement_timeout`.
+        //
+        // NOTE: A far-future read reaching a write at all is the
+        // counterintuitive step. It does not simply hang on its read the way
+        // the coordinator's peek path would. Refresh-MV uppers legitimately run
+        // ahead of the wall clock, the upper being the next refresh boundary,
+        // so the subscribe can observe frontiers past `as_of` immediately, and
+        // we derive the write timestamp from those observed frontiers.
         self.ensure_read_linearized(&timeline, as_of).await?;
 
         let subscribe_handle = self
@@ -565,7 +591,20 @@ impl PeekClient {
         response
     }
 
-    /// Validate a read-then-write operation.
+    /// Validates a read-then-write and resolves the context the rest of the
+    /// pipeline runs against.
+    ///
+    /// Rejects `mz_now()` in the selection, the assignments or the returning
+    /// clause. `optimize_mir_read_then_write` relies on that rejection by name
+    /// when it prepares unmaterializable functions one-shot. Also enforces the
+    /// dependency cap, resolves the target cluster and requires it to have a
+    /// live replica, honors the session's replica pin, computes the read side's
+    /// `TimelineContext`, and fetches the target table's descriptor.
+    ///
+    /// `catalog` must be the snapshot the plan was built against. One snapshot
+    /// serves planning, validation and optimization, so items the plan names
+    /// cannot disappear from it, and the missing-entry branches below are
+    /// failsafes rather than a live concurrent-DDL path.
     fn validate_read_then_write(
         &self,
         catalog: &Arc<Catalog>,
@@ -583,9 +622,8 @@ impl PeekClient {
             ));
         }
 
-        // Validate read dependencies. The plan was built against an earlier
-        // catalog snapshot, so an item it depends on may have been dropped by
-        // concurrent DDL before we got here.
+        // Validate read dependencies. A missing item would mean `catalog` is
+        // not the snapshot the plan was built against, so fail cleanly.
         let dependency_ids = plan
             .selection
             .depends_on()
@@ -628,9 +666,8 @@ impl PeekClient {
         let depends_on = plan.selection.depends_on();
         let timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
 
-        // Get the table descriptor for constraint validation. The plan's
-        // target table may have been dropped by concurrent DDL between
-        // planning and here, so tolerate a missing entry.
+        // Get the table descriptor for constraint validation. As above, a
+        // missing entry would mean the snapshot contract was broken.
         let table_desc = match catalog.try_get_entry(&plan.id) {
             Some(entry) => entry
                 .relation_desc_latest()
@@ -652,7 +689,13 @@ impl PeekClient {
         })
     }
 
-    /// Optimize MIR for a read-then-write operation.
+    /// Builds the subscribe optimizer and the unresolved global MIR plan for a
+    /// read-then-write.
+    ///
+    /// The optimized expression is the selection with the mutation already
+    /// applied, so the subscribe's sink emits ready-to-write table diffs rather
+    /// than query results. `finishing` and `returning` are deliberately not part
+    /// of the dataflow, and unmaterializable functions are prepared one-shot.
     fn optimize_mir_read_then_write(
         &self,
         catalog: &Arc<Catalog>,
@@ -814,8 +857,9 @@ impl PeekClient {
         }
     }
 
-    /// Creates an internal subscribe that does not appear in introspection
-    /// tables. Returns a [`SubscribeHandle`] that ensures cleanup on drop.
+    /// Creates an internal subscribe, meaning one that writes no
+    /// `mz_subscriptions` row. Returns a [`SubscribeHandle`] that ensures
+    /// cleanup on drop.
     async fn create_internal_subscribe(
         &self,
         df_desc: Box<optimize::LirDataflowDescription>,
@@ -1098,9 +1142,11 @@ impl PeekClient {
                             if state.retry_count > max_occ_retries {
                                 // High contention is a user-visible
                                 // condition, not an internal invariant
-                                // violation. Surface it as
-                                // `Unstructured` so it doesn't trip
-                                // internal-error alerts.
+                                // violation. NOTE: `Unstructured` renders as
+                                // XX000, so this does read as an internal
+                                // error today. It wants its own variant in a
+                                // serialization-failure class, like
+                                // `DDLTransactionRace` has.
                                 break Err(AdapterError::Unstructured(anyhow::anyhow!(
                                     "read-then-write exceeded maximum retry attempts under contention",
                                 )));
@@ -1490,9 +1536,12 @@ fn process_message(
         PeekResponseUnary::Error(e) => {
             ProcessResult::Error(AdapterError::Unstructured(anyhow::anyhow!(e)))
         }
-        PeekResponseUnary::DependencyDropped(dep) => ProcessResult::Error(
-            AdapterError::Unstructured(anyhow::anyhow!(dep.query_terminated_error())),
-        ),
+        // Match the lock path's classification. `Unstructured` would render
+        // this as an internal error (XX000) for what is an ordinary concurrent
+        // DDL race.
+        PeekResponseUnary::DependencyDropped(dep) => {
+            ProcessResult::Error(dep.to_concurrent_dependency_drop())
+        }
         PeekResponseUnary::Canceled => ProcessResult::Error(AdapterError::Canceled),
     }
 }

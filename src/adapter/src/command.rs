@@ -407,9 +407,10 @@ pub enum Command {
         tx: oneshot::Sender<watch::Receiver<bool>>,
     },
 
-    /// Creates an internal subscribe (not visible in introspection) and returns
-    /// the response channel. Used by frontend-sequenced read-then-write
-    /// (DELETE/UPDATE/INSERT...SELECT) operations via OCC.
+    /// Creates an internal subscribe, meaning one that writes no
+    /// `mz_subscriptions` row, and returns the response channel. Used by
+    /// frontend-sequenced read-then-write (DELETE/UPDATE/INSERT...SELECT)
+    /// operations via OCC.
     CreateInternalSubscribe {
         df_desc: Box<LirDataflowDescription>,
         cluster_id: ComputeInstanceId,

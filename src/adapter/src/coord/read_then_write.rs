@@ -53,7 +53,10 @@ fn enqueue(
 }
 
 impl Coordinator {
-    /// Creates a subscribe that introspection does not see.
+    /// Creates a subscribe that writes no `mz_subscriptions` row.
+    ///
+    /// The dataflow is otherwise ordinary and shows up in replica
+    /// introspection like any other.
     ///
     /// Takes ownership of `read_holds` and drops them only once the dataflow is
     /// shipped, so the `since` cannot advance past `as_of` in between.
