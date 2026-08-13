@@ -1614,3 +1614,72 @@ fn test_cancel_read_then_write() {
         })
         .unwrap();
 }
+
+/// A read dependency dropped underneath a running mutation must surface as a
+/// concurrent dependency drop, SQLSTATE 42704, the same as the coordinator
+/// path reports. Reporting it as an internal error would page us for an
+/// ordinary DDL race.
+///
+/// The sleep in the selection keeps the mutation in flight so the DROP lands
+/// while its dataflow is still running.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_dependency_dropped_under_running_mutation() {
+    const SLEEP_SECS: i32 = 5;
+
+    let server = frontend_occ_harness()
+        .unsafe_mode()
+        .with_system_parameter_default(
+            "unsafe_enable_unsafe_functions".to_string(),
+            "true".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client
+        .batch_execute("CREATE TABLE t (n INT, ts INT)")
+        .unwrap();
+    client
+        .batch_execute(&format!("INSERT INTO t VALUES (0, {SLEEP_SECS})"))
+        .unwrap();
+    client
+        .batch_execute("CREATE VIEW v AS SELECT n, ts FROM t")
+        .unwrap();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = thread::spawn(move || {
+        // The CASE always takes its ELSE branch (`mz_sleep` returns NULL), so
+        // every row matches and the sleep runs in the subscribe dataflow.
+        let result = writer.execute(
+            "DELETE FROM t WHERE n IN (SELECT n FROM v \
+             WHERE ts >= CASE WHEN mz_unsafe.mz_sleep(ts) > 0 THEN 1 ELSE 0 END)",
+            &[],
+        );
+        // Preserve the SqlState: `to_string()` on a server error is only "db
+        // error".
+        let result = result.map_err(|err| {
+            (
+                err.code().cloned(),
+                err.as_db_error().map(|db| db.message().to_string()),
+            )
+        });
+        let _ = tx.send(result);
+    });
+
+    // Drop the view once the mutation has had time to install its dataflow.
+    thread::sleep(Duration::from_secs(2));
+    client.batch_execute("DROP VIEW v").unwrap();
+
+    let result = rx
+        .recv_timeout(Duration::from_secs(120))
+        .expect("mutation never finished");
+    handle.join().unwrap();
+
+    let (code, message) = result.expect_err("dropping a read dependency must fail the mutation");
+    assert_eq!(
+        code.as_ref(),
+        Some(&SqlState::UNDEFINED_OBJECT),
+        "expected a concurrent dependency drop, got {code:?}: {message:?}"
+    );
+}
