@@ -1180,16 +1180,11 @@ impl PeekClient {
                                 break Err(error);
                             }
                             if state.retry_count > max_occ_retries {
-                                // High contention is a user-visible
-                                // condition, not an internal invariant
-                                // violation. NOTE: `Unstructured` renders as
-                                // XX000, so this does read as an internal
-                                // error today. It wants its own variant in a
-                                // serialization-failure class, like
-                                // `DDLTransactionRace` has.
-                                break Err(AdapterError::Unstructured(anyhow::anyhow!(
-                                    "read-then-write exceeded maximum retry attempts under contention",
-                                )));
+                                // Contention is a user-visible condition, not
+                                // an internal invariant violation, and every
+                                // attempt was refused before anything was
+                                // appended, so the statement is retryable.
+                                break Err(AdapterError::ReadThenWriteContention);
                             }
                             tracing::debug!(
                                 retry_count = state.retry_count,
