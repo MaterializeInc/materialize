@@ -82,9 +82,10 @@
         workload. Only available on managed clusters.
 
         {{< warning >}}
-        Changing this option replaces the cluster's replicas, so the cluster
-        re-hydrates. For more information, see [Dictionary
-        compression](#dictionary-compression).
+        Because changing this option never changes an existing replica,
+        Materialize creates a new set of replicas carrying the new setting and
+        cuts over to them once they have hydrated. For more information, see
+        [Dictionary compression](#dictionary-compression).
         {{< /warning >}}
 
         Default: `FALSE`
@@ -133,8 +134,10 @@
         {{< warn-if-unreleased-inline "v26.37" >}}
 
         Optional. Resetting turns [dictionary
-        compression](#dictionary-compression) off for the cluster, which
-        replaces the cluster's replicas.
+        compression](#dictionary-compression) off for the cluster. Because this
+        never changes an existing replica, Materialize creates a new set of
+        replicas without the setting and cuts over to them once they have
+        hydrated.
 
         Default: `FALSE`
 
