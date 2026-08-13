@@ -93,6 +93,7 @@ use mz_sql::catalog::CatalogError;
 use mz_sql::plan::{self, MutationKind, QueryWhen};
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
+use mz_storage_types::sources::Timeline;
 use prometheus::Histogram;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -686,6 +687,24 @@ impl PeekClient {
 
         let depends_on = plan.selection.depends_on();
         let timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
+
+        // The write commits at the frontier the subscribe observed, and that
+        // frontier is only comparable with the target table's upper on
+        // `EpochMilliseconds`. A selection in another timeline counts something
+        // else, transactions rather than milliseconds for a CDCv2 source, so the
+        // conflict check would refuse every attempt and the statement would burn
+        // until `statement_timeout`. Refuse it up front instead.
+        //
+        // Only `INSERT ... SELECT` reaches this. A DELETE or UPDATE selection
+        // includes the target table, so a foreign timeline already fails above
+        // as a mixed-timeline query.
+        if let TimelineContext::TimelineDependent(t) = &timeline {
+            if t != &Timeline::EpochMilliseconds {
+                return Err(AdapterError::Unsupported(
+                    "read-then-write on a selection outside the EpochMilliseconds timeline",
+                ));
+            }
+        }
 
         // Get the table descriptor for constraint validation. As above, a
         // missing entry would mean the snapshot contract was broken.
