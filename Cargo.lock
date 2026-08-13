@@ -6525,6 +6525,7 @@ dependencies = [
  "serde_json",
  "serde_repr",
  "similar-asserts",
+ "uuid",
 ]
 
 [[package]]
