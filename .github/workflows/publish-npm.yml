@@ -54,11 +54,27 @@ jobs:
           aws-region: us-east-1
 
       # Node 22.14+ and npm 11.5.1+ are what support OIDC publishing.
+      #
+      # Deliberately no `registry-url`: it makes setup-node write an
+      # `_authToken` line into .npmrc, and an empty token there makes npm
+      # believe it is already authenticated and skip the OIDC exchange
+      # entirely, which fails the publish with ENEEDAUTH.
+      # See https://github.com/actions/setup-node/issues/1551. The default
+      # registry is registry.npmjs.org, which is where we publish anyway.
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "24"
-          registry-url: "https://registry.npmjs.org"
           package-manager-cache: false
+
+      - name: Check for auth that would preempt OIDC
+        run: |
+          set -euo pipefail
+          npmrc="${NPM_CONFIG_USERCONFIG:-$HOME/.npmrc}"
+          if [ -f "$npmrc" ] && grep -q _authToken "$npmrc"; then
+            echo "::error::$npmrc configures an _authToken, which stops npm from using OIDC"
+            exit 1
+          fi
+          npm --version
 
       - name: Download staged packages
         env:
@@ -88,6 +104,14 @@ jobs:
             version=$(jq -r '.version' <<<"$package")
             tarball=$(jq -r '.tarball' <<<"$package")
             tag=$(jq -r '.tag' <<<"$package")
+            # Tolerating an already-published version is what makes this
+            # workflow re-runnable: if a later step fails, the whole run can be
+            # repeated from the same staging URI, which is how missing
+            # dist-tags get fixed.
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already published, skipping"
+              continue
+            fi
             echo "::group::publishing $name@$version (tag $tag)"
             npm publish "staging/$tarball" --access public --tag "$tag"
             echo "::endgroup::"
@@ -95,30 +119,43 @@ jobs:
           done
 
       - name: Apply additional dist-tags
-        # OIDC covers `npm publish` and `npm stage publish` only, so the
-        # `latest-X.Y` tags that release builds also carry still need a token.
-        # It lives in this environment rather than in every Buildkite build,
-        # and it is only ever used to move a tag -- it cannot publish, because
-        # the packages disallow token publishes.
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_DIST_TAG_TOKEN }}
+        # `npm dist-tag` never performs the OIDC exchange itself -- only
+        # `npm publish` and `npm stage publish` do -- so we perform it by hand
+        # and hand the resulting short-lived, package-scoped registry token to
+        # the CLI. This is what keeps the `latest-X.Y` tags from requiring a
+        # long-lived token that would need rotating every 90 days.
         run: |
           set -euo pipefail
-          extra=$(jq -r '[.packages[] | select(.extra_tags | length > 0)] | length' staging/manifest.json)
-          if [ "$extra" -eq 0 ]; then
+          specs=$(jq -r '.packages[] | select(.extra_tags | length > 0) | .extra_tags[] as $t | "\(.name) \(.version) \($t)"' staging/manifest.json)
+          if [ -z "$specs" ]; then
             echo "no additional dist-tags requested"
             exit 0
           fi
-          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
-            echo "::warning::NPM_DIST_TAG_TOKEN is not set; the latest-X.Y dist-tags below were NOT applied"
-            jq -r '.packages[] | select(.extra_tags | length > 0) | .extra_tags[] as $t | "npm dist-tag add \(.name)@\(.version) \($t)"' \
-              staging/manifest.json | tee -a "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          jq -r '.packages[] | select(.extra_tags | length > 0) | .extra_tags[] as $t | "\(.name)@\(.version) \($t)"' \
-            staging/manifest.json | while read -r spec tag; do
-            echo "::group::tagging $spec as $tag"
-            npm dist-tag add "$spec" "$tag"
+          id_token=$(curl -fsS -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            -G --data-urlencode "audience=npm:registry.npmjs.org" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL" | jq -r '.value')
+          while read -r name version tag; do
+            # npm escapes the scope separator when addressing a package by
+            # name in this API, as npm-package-arg's `escapedName` does.
+            escaped=${name/\//%2f}
+            token=$(curl -fsS -X POST -H "Authorization: Bearer $id_token" \
+              "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/$escaped" \
+              | jq -r '.token')
+            echo "::group::tagging $name@$version as $tag"
+            npm dist-tag add "$name@$version" "$tag" \
+              "--//registry.npmjs.org/:_authToken=$token"
             echo "::endgroup::"
-            echo "- \`$spec\` tagged \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
-          done
+            echo "- \`$name@$version\` tagged \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+          done <<<"$specs"
+
+      - name: Explain a dist-tag failure
+        if: failure()
+        run: |
+          {
+            echo "### Publish incomplete"
+            echo
+            echo "If the packages published but the dist-tag step failed, re-run"
+            echo "this workflow from the same staging URI -- the publish step"
+            echo "skips versions that are already on npm. The staged tarballs"
+            echo "are kept for 14 days."
+          } >> "$GITHUB_STEP_SUMMARY"
