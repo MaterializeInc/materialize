@@ -534,6 +534,11 @@ impl Controller {
         self.replica_http_locator
             .remove_replica(cluster_id, replica_id);
 
+        // The coordinator only re-pushes the override map when the scoped
+        // configuration itself changes, so a dropped replica's entry would
+        // otherwise be retained until the next such change.
+        self.replica_dyncfg_overrides.remove(&replica_id);
+
         self.compute.drop_replica(cluster_id, replica_id)?;
         self.storage.drop_replica(cluster_id, replica_id);
         Ok(())

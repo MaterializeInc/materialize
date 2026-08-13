@@ -17,7 +17,7 @@ use anyhow::bail;
 use mz_build_info::BuildInfo;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_compute_types::dyncfgs::ENABLE_COMPUTE_REPLICA_EXPIRATION;
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_ore::channel::InstrumentedUnboundedSender;
 use mz_ore::retry::{Retry, RetryState};
 use mz_ore::task::AbortOnDropHandle;
@@ -95,6 +95,7 @@ impl ReplicaClient {
                 epoch,
                 metrics: metrics.clone(),
                 connected: Arc::clone(&connected),
+                replica_dyncfg: seed_replica_dyncfg(&dyncfg),
                 dyncfg,
             }
             .run(),
@@ -131,6 +132,27 @@ impl ReplicaClient {
 
 type ComputeCtpClient = transport::Client<ComputeCommand, ComputeResponse>;
 
+/// Creates a replica's effective configuration, seeded from the environment-wide one.
+///
+/// The seed covers the window before the first configuration command arrives, and is replaced
+/// wholesale by the snapshot that `CreateInstance` carries.
+fn seed_replica_dyncfg(dyncfg: &ConfigSet) -> ConfigSet {
+    let replica_dyncfg = mz_dyncfgs::all_dyncfgs();
+    ConfigUpdates::from(dyncfg).apply(&replica_dyncfg);
+    replica_dyncfg
+}
+
+/// Applies the configuration a command carries, if any, to a replica's effective configuration.
+///
+/// `CreateInstance` carries a full snapshot, `UpdateConfiguration` the subsequent deltas.
+fn apply_config_command(command: &ComputeCommand, dyncfg: &ConfigSet) {
+    match command {
+        ComputeCommand::CreateInstance(config) => config.initial_config.apply(dyncfg),
+        ComputeCommand::UpdateConfiguration(params) => params.dyncfg_updates.apply(dyncfg),
+        _ => (),
+    }
+}
+
 /// Configuration for `replica_task`.
 struct ReplicaTask {
     /// The ID of the replica.
@@ -150,8 +172,21 @@ struct ReplicaTask {
     metrics: ReplicaMetrics,
     /// Flag to report successful replica connection.
     connected: Arc<AtomicBool>,
-    /// Dynamic system configuration.
+    /// The controller's environment-wide dynamic system configuration.
     dyncfg: Arc<ConfigSet>,
+    /// This replica's effective dynamic system configuration.
+    ///
+    /// Holds what the replica itself reads, including its scoped overrides, as opposed to
+    /// [`Self::dyncfg`], which holds the environment-wide values. Seeded from the environment-wide
+    /// configuration and then kept current from the configuration commands passing through this
+    /// task, which `Instance::specialize_command_for_replica` has already specialized for this
+    /// replica. Read it for any `ParameterScope::Replica` config the controller realizes on this
+    /// replica's behalf, else the scope declaration is a silent no-op.
+    ///
+    /// A set of its own, rather than a clone of the controller's: a cloned `ConfigSet` shares its
+    /// values with the original, so applying this replica's overrides to a clone would overwrite
+    /// the environment-wide configuration for everyone.
+    replica_dyncfg: ConfigSet,
 }
 
 impl ReplicaTask {
@@ -229,7 +264,7 @@ impl ReplicaTask {
         // The sequential hydration interceptor holds back `Schedule` commands and releases them as
         // hydration capacity frees up. It is recreated per incarnation, matching the lifetime of
         // the connection: any in-flight hydration state is reset when we reconnect.
-        let mut hydration = SequentialHydration::new(&self.dyncfg, self.metrics.clone());
+        let mut hydration = SequentialHydration::new(self.metrics.clone());
 
         loop {
             select! {
@@ -242,7 +277,8 @@ impl ReplicaTask {
 
                     self.specialize_command(&mut command);
                     self.observe_command(&command);
-                    for command in hydration.absorb_command(command) {
+                    apply_config_command(&command, &self.replica_dyncfg);
+                    for command in hydration.absorb_command(command, &self.replica_dyncfg) {
                         client.send(command).await?;
                     }
                 },
@@ -254,7 +290,7 @@ impl ReplicaTask {
 
                     self.observe_response(&response);
 
-                    for command in hydration.observe_response(&response) {
+                    for command in hydration.observe_response(&response, &self.replica_dyncfg) {
                         client.send(command).await?;
                     }
 
@@ -318,5 +354,54 @@ impl ReplicaTask {
             response = ?response,
             "received response from replica",
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
+
+    use crate::protocol::command::{ComputeParameters, InstanceConfig};
+
+    use super::*;
+
+    /// A replica's effective configuration tracks the configuration commands passing through its
+    /// task, which carry the replica's scoped overrides, and leaves the environment-wide
+    /// configuration alone.
+    #[mz_ore::test]
+    fn replica_dyncfg_tracks_config_commands() {
+        let env_wide = mz_dyncfgs::all_dyncfgs();
+        let mut updates = ConfigUpdates::default();
+        updates.add(&HYDRATION_CONCURRENCY, 1);
+        updates.apply(&env_wide);
+
+        let replica_dyncfg = seed_replica_dyncfg(&env_wide);
+        assert_eq!(HYDRATION_CONCURRENCY.get(&replica_dyncfg), 1);
+
+        // A replica-scoped override arrives merged into the create-time snapshot.
+        let mut initial_config = ConfigUpdates::default();
+        initial_config.add(&HYDRATION_CONCURRENCY, 2);
+        let create = ComputeCommand::CreateInstance(Box::new(InstanceConfig {
+            logging: Default::default(),
+            expiration_offset: None,
+            peek_stash_persist_location: mz_persist_client::PersistLocation::new_in_mem(),
+            arrangement_dictionary_compression: false,
+            initial_config,
+        }));
+        apply_config_command(&create, &replica_dyncfg);
+        assert_eq!(HYDRATION_CONCURRENCY.get(&replica_dyncfg), 2);
+
+        // And into subsequent configuration updates.
+        let mut dyncfg_updates = ConfigUpdates::default();
+        dyncfg_updates.add(&HYDRATION_CONCURRENCY, 3);
+        let update = ComputeCommand::UpdateConfiguration(Box::new(ComputeParameters {
+            dyncfg_updates,
+            ..Default::default()
+        }));
+        apply_config_command(&update, &replica_dyncfg);
+        assert_eq!(HYDRATION_CONCURRENCY.get(&replica_dyncfg), 3);
+
+        // The environment-wide configuration is untouched by the replica's overrides.
+        assert_eq!(HYDRATION_CONCURRENCY.get(&env_wide), 1);
     }
 }

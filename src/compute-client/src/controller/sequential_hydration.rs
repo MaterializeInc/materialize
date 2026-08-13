@@ -47,7 +47,7 @@ use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 
 use mz_compute_types::dyncfgs::HYDRATION_CONCURRENCY;
-use mz_dyncfg::{ConfigSet, ConfigUpdates};
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::soft_assert_eq_or_log;
@@ -70,21 +70,13 @@ type Token = Arc<()>;
 /// [`SequentialHydration::observe_response`]). Both methods return the commands the task should
 /// send to the replica, with `Schedule` commands held back or released according to the configured
 /// hydration concurrency.
+///
+/// Both methods take the replica's effective configuration, which the task owns and keeps current.
+/// Reading [`HYDRATION_CONCURRENCY`] from there rather than from the controller's environment-wide
+/// set is what makes its `Replica` scope effective, given that the config is enforced here and
+/// never read on the replica itself.
 #[derive(Debug)]
 pub(super) struct SequentialHydration {
-    /// The replica's dynamic system configuration.
-    ///
-    /// Seeded from the controller's environment-wide configuration and then updated from the
-    /// configuration commands this interceptor absorbs. Those commands have already been
-    /// specialized for this replica by `Instance::specialize_command_for_replica`, so this set
-    /// carries the replica's scoped overrides and holds what the replica itself reads. That is
-    /// what lets a config enforced here, such as [`HYDRATION_CONCURRENCY`], be replica-scoped
-    /// even though it is never read on the replica.
-    ///
-    /// A set of our own, rather than the controller's: a cloned `ConfigSet` shares its values
-    /// with the original, so applying the replica's overrides to a clone would overwrite the
-    /// environment-wide configuration for everyone.
-    dyncfg: ConfigSet,
     /// Tracked metrics.
     metrics: ReplicaMetrics,
     /// Tracked collections.
@@ -104,15 +96,8 @@ pub(super) struct SequentialHydration {
 
 impl SequentialHydration {
     /// Create a new `SequentialHydration` interceptor.
-    ///
-    /// `dyncfg` is the controller's environment-wide configuration, which seeds the replica's
-    /// configuration until the first configuration command arrives.
-    pub(super) fn new(dyncfg: &ConfigSet, metrics: ReplicaMetrics) -> Self {
-        let replica_dyncfg = mz_dyncfgs::all_dyncfgs();
-        ConfigUpdates::from(dyncfg).apply(&replica_dyncfg);
-
+    pub(super) fn new(metrics: ReplicaMetrics) -> Self {
         Self {
-            dyncfg: replica_dyncfg,
             metrics,
             collections: Default::default(),
             hydration_queue: Default::default(),
@@ -125,24 +110,18 @@ impl SequentialHydration {
         Arc::strong_count(&self.hydration_token) - 1
     }
 
-    /// Return how many collections may hydrate at the same time on this replica.
-    fn hydration_concurrency(&self) -> usize {
-        HYDRATION_CONCURRENCY.get(&self.dyncfg)
-    }
-
     /// Absorb a command the task intends to send, returning the commands it should actually send.
-    pub(super) fn absorb_command(&mut self, cmd: ComputeCommand) -> Vec<ComputeCommand> {
+    ///
+    /// `dyncfg` is the replica's effective configuration, as maintained by the task.
+    pub(super) fn absorb_command(
+        &mut self,
+        cmd: ComputeCommand,
+        dyncfg: &ConfigSet,
+    ) -> Vec<ComputeCommand> {
         // Whether to forward this command to the replica.
         let mut forward = true;
 
         match &cmd {
-            // Track the replica's configuration. `CreateInstance` carries a full snapshot,
-            // `UpdateConfiguration` the subsequent deltas, both already carrying this replica's
-            // scoped overrides.
-            ComputeCommand::CreateInstance(config) => config.initial_config.apply(&self.dyncfg),
-            ComputeCommand::UpdateConfiguration(params) => {
-                params.dyncfg_updates.apply(&self.dyncfg)
-            }
             // We enforce sequential hydration only for non-transient dataflows, assuming that
             // transient dataflows are created for interactive user queries and should always be
             // scheduled as soon as possible.
@@ -178,12 +157,18 @@ impl SequentialHydration {
         }
 
         // Schedule collections that are ready now.
-        commands.extend(self.hydrate_collections());
+        commands.extend(self.hydrate_collections(dyncfg));
         commands
     }
 
     /// Observe a response the task received, returning the commands it should send in reaction.
-    pub(super) fn observe_response(&mut self, resp: &ComputeResponse) -> Vec<ComputeCommand> {
+    ///
+    /// `dyncfg` is the replica's effective configuration, as maintained by the task.
+    pub(super) fn observe_response(
+        &mut self,
+        resp: &ComputeResponse,
+        dyncfg: &ConfigSet,
+    ) -> Vec<ComputeCommand> {
         let mut commands = Vec::new();
 
         if let ComputeResponse::Frontiers(
@@ -220,7 +205,7 @@ impl SequentialHydration {
                             // We freed some hydration capacity and may be able to start hydrating
                             // new collections.
                             drop(token);
-                            commands.extend(self.hydrate_collections());
+                            commands.extend(self.hydrate_collections(dyncfg));
                         }
                     }
                 } else {
@@ -233,10 +218,10 @@ impl SequentialHydration {
     }
 
     /// Allow hydration based on the available capacity, returning the `Schedule` commands to send.
-    fn hydrate_collections(&mut self) -> Vec<ComputeCommand> {
+    fn hydrate_collections(&mut self, dyncfg: &ConfigSet) -> Vec<ComputeCommand> {
         let mut commands = Vec::new();
 
-        let capacity = self.hydration_concurrency();
+        let capacity = HYDRATION_CONCURRENCY.get(dyncfg);
         while self.hydration_count() < capacity {
             let Some(id) = self.hydration_queue.pop_front() else {
                 // Hydration queue is empty.
@@ -307,11 +292,13 @@ enum State {
 mod tests {
     use mz_cluster_client::metrics::ControllerMetrics;
     use mz_compute_types::ComputeInstanceId;
+    use mz_compute_types::dataflows::{DataflowDescription, IndexDesc};
     use mz_dyncfg::ConfigUpdates;
     use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::ReprRelationType;
 
     use crate::metrics::ComputeControllerMetrics;
-    use crate::protocol::command::{ComputeParameters, InstanceConfig};
+    use crate::protocol::command::ComputeParameters;
 
     use super::*;
 
@@ -323,45 +310,56 @@ mod tests {
             .for_replica(mz_cluster_client::ReplicaId::User(1))
     }
 
-    /// The interceptor enforces the hydration concurrency of *its* replica: it tracks the
-    /// configuration commands it absorbs, which the instance has already specialized with the
-    /// replica's scoped overrides. This is the regression guard for it reading the
-    /// environment-wide value instead, which would make the config's `Replica` scope inert.
+    /// A `CreateDataflow` command for a non-transient dataflow exporting `id`.
+    fn create_dataflow(id: GlobalId) -> ComputeCommand {
+        let mut desc = DataflowDescription::new("test".into());
+        desc.as_of = Some(Antichain::from_elem(Timestamp::MIN));
+        desc.index_exports.insert(
+            id,
+            (
+                IndexDesc {
+                    on_id: id,
+                    key: Vec::new(),
+                },
+                ReprRelationType::empty(),
+            ),
+        );
+        ComputeCommand::CreateDataflow(Box::new(desc))
+    }
+
+    /// The interceptor enforces the hydration concurrency of the configuration it is handed, which
+    /// is the replica's own, specialized by the replica task. This is the regression guard for it
+    /// reading the environment-wide value instead, which would make the config's `Replica` scope
+    /// inert, given that it is enforced here and never read on the replica.
     #[mz_ore::test]
-    fn hydration_concurrency_follows_replica_config() {
-        let env_wide = mz_dyncfgs::all_dyncfgs();
+    fn hydration_concurrency_follows_supplied_config() {
+        let dyncfg = mz_dyncfgs::all_dyncfgs();
         let mut updates = ConfigUpdates::default();
         updates.add(&HYDRATION_CONCURRENCY, 1);
-        updates.apply(&env_wide);
+        updates.apply(&dyncfg);
 
-        let mut hydration = SequentialHydration::new(&env_wide, metrics());
-        assert_eq!(hydration.hydration_concurrency(), 1);
+        let mut hydration = SequentialHydration::new(metrics());
 
-        // A replica-scoped override arrives merged into the create-time snapshot.
-        let mut initial_config = ConfigUpdates::default();
-        initial_config.add(&HYDRATION_CONCURRENCY, 2);
-        let _ =
-            hydration.absorb_command(ComputeCommand::CreateInstance(Box::new(InstanceConfig {
-                logging: Default::default(),
-                expiration_offset: None,
-                peek_stash_persist_location: mz_persist_client::PersistLocation::new_in_mem(),
-                arrangement_dictionary_compression: false,
-                initial_config,
-            })));
-        assert_eq!(hydration.hydration_concurrency(), 2);
+        let id1 = GlobalId::User(1);
+        let id2 = GlobalId::User(2);
+        for id in [id1, id2] {
+            let commands = hydration.absorb_command(create_dataflow(id), &dyncfg);
+            assert_eq!(commands, vec![create_dataflow(id)]);
+        }
 
-        // And into subsequent configuration updates.
-        let mut dyncfg_updates = ConfigUpdates::default();
-        dyncfg_updates.add(&HYDRATION_CONCURRENCY, 3);
-        let _ = hydration.absorb_command(ComputeCommand::UpdateConfiguration(Box::new(
-            ComputeParameters {
-                dyncfg_updates,
-                ..Default::default()
-            },
-        )));
-        assert_eq!(hydration.hydration_concurrency(), 3);
+        // At a concurrency of one, only the first `Schedule` is released.
+        let commands = hydration.absorb_command(ComputeCommand::Schedule(id1), &dyncfg);
+        assert_eq!(commands, vec![ComputeCommand::Schedule(id1)]);
+        let commands = hydration.absorb_command(ComputeCommand::Schedule(id2), &dyncfg);
+        assert_eq!(commands, vec![]);
 
-        // The environment-wide set is untouched by the replica's overrides.
-        assert_eq!(HYDRATION_CONCURRENCY.get(&env_wide), 1);
+        // Raising the concurrency in the supplied configuration releases the held-back command.
+        let mut updates = ConfigUpdates::default();
+        updates.add(&HYDRATION_CONCURRENCY, 2);
+        updates.apply(&dyncfg);
+
+        let update = ComputeCommand::UpdateConfiguration(Box::new(ComputeParameters::default()));
+        let commands = hydration.absorb_command(update.clone(), &dyncfg);
+        assert_eq!(commands, vec![update, ComputeCommand::Schedule(id2)]);
     }
 }
