@@ -896,10 +896,16 @@ fn write_batches<'scope>(
                 };
                 let entry = raw_stash.remove(&ts).expect("just looked up");
                 raw_stash_bytes -= entry.bytes;
+                let updates = entry.drain();
+                // The entry can consolidate to nothing, in which case there is no builder to
+                // open. Its bytes are already off the budget, so the loop still makes progress.
+                if updates.is_empty() {
+                    continue;
+                }
                 let builder = spilled.entry(ts).or_insert_with(|| {
                     BatchBuilderAndMetadata::new(write.builder(operator_batch_lower.clone()))
                 });
-                for (row, diff) in entry.drain() {
+                for (row, diff) in updates {
                     stage_update(builder, row, ts, diff).await;
                 }
             }
@@ -972,20 +978,27 @@ fn write_batches<'scope>(
                     // This description is only ready once the desired frontier reached its upper,
                     // so every update it covers has arrived. Whatever is still stashed for it is
                     // all of it, and one builder can take the lot.
+                    //
+                    // The builder is opened on the first surviving update rather than up front,
+                    // because every stashed timestamp can consolidate to nothing and a batch with
+                    // no updates has no data bounds to register.
                     let stashed_timestamps: Vec<_> =
                         raw_stash.keys().copied().filter(covered).collect();
-                    if !stashed_timestamps.is_empty() {
-                        let mut builder = BatchBuilderAndMetadata::new(
-                            write.builder(operator_batch_lower.clone()),
-                        );
-                        for ts in stashed_timestamps {
-                            let entry = raw_stash.remove(&ts).expect("just looked up");
-                            raw_stash_bytes -= entry.bytes;
-                            for (row, diff) in entry.drain() {
-                                stage_update(&mut builder, row, ts, diff).await;
-                            }
+                    let mut coalesced: Option<SourceBatchBuilder> = None;
+                    for ts in stashed_timestamps {
+                        let entry = raw_stash.remove(&ts).expect("just looked up");
+                        raw_stash_bytes -= entry.bytes;
+                        for (row, diff) in entry.drain() {
+                            let builder = coalesced.get_or_insert_with(|| {
+                                BatchBuilderAndMetadata::new(
+                                    write.builder(operator_batch_lower.clone()),
+                                )
+                            });
+                            stage_update(builder, row, ts, diff).await;
                         }
+                    }
 
+                    if let Some(builder) = coalesced {
                         if collection_id.is_user() {
                             trace!(
                                 "persist_sink {collection_id}/{shard_id}: \
@@ -1975,6 +1988,39 @@ mod tests {
 
         let total = append_and_read_back(&target, &persist_clients, emitted, DONE).await;
         assert_eq!(total, 1, "the shard should hold exactly the surviving row");
+    }
+
+    /// A row inserted and deleted at the same timestamp consolidates to nothing, which can leave
+    /// a description with no updates at all to write. That must emit no batch rather than open a
+    /// builder that has no data bounds to register.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_emits_nothing_when_a_description_fully_consolidates() {
+        const DONE: u64 = 4;
+
+        let persist_clients = test_persist_clients();
+
+        // A budget the stash never reaches, so the updates sit unconsolidated until the
+        // description drains them, and one that forces eviction to handle the same entry.
+        for budget in [1 << 20, 0] {
+            // Everything the description covers cancels out.
+            let script = vec![
+                Step::Updates(1, 8),
+                Step::Retractions(1, 8),
+                Step::Description(0, DONE),
+                Step::AdvanceTo(DONE),
+            ];
+
+            let emitted =
+                run_write_batches(test_target(), Arc::clone(&persist_clients), budget, script);
+
+            assert!(
+                emitted.is_empty(),
+                "a fully consolidated description should produce no batch at budget {budget}, \
+                got {:?}",
+                emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+            );
+        }
     }
 
     #[mz_ore::test]
