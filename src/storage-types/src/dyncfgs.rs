@@ -416,8 +416,8 @@ pub const STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION: Config<bool> = Config:
 /// The sink groups updates into one batch per batch description, which it can only do once the
 /// description exists. While a collection's frontier is stalled, for example while an export
 /// snapshots, no description is minted and updates accumulate as raw rows. Past this budget the
-/// heaviest timestamps are written out on their own, which bounds memory at the cost of one batch
-/// per timestamp spilled.
+/// stash is consolidated, and if that is not enough the heaviest timestamps are written out on
+/// their own, which bounds memory at the cost of one batch per timestamp evicted.
 ///
 /// This is a per-worker, per-export ceiling, so a replica's exposure is this times the number of
 /// exports snapshotting at once times the worker count. Exceeding it is a graceful degradation to

@@ -95,6 +95,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
@@ -268,6 +269,49 @@ type SourceBatchBuilder = BatchBuilderAndMetadata<SourceData, (), mz_repr::Times
 struct RawStashEntry {
     updates: Vec<(Result<Row, DataflowError>, Diff)>,
     bytes: usize,
+    /// `updates.len()` as of the last consolidation.
+    consolidated_len: usize,
+}
+
+impl RawStashEntry {
+    /// Adds an update, charging its size to the entry.
+    fn push(&mut self, row: Result<Row, DataflowError>, diff: Diff) -> usize {
+        let bytes = stashed_bytes(&row);
+        self.updates.push((row, diff));
+        self.bytes += bytes;
+        bytes
+    }
+
+    /// Consolidates the entry, returning the bytes this freed.
+    fn consolidate(&mut self) -> usize {
+        consolidate(&mut self.updates);
+        self.consolidated_len = self.updates.len();
+
+        let bytes = self.updates.iter().map(|(row, _)| stashed_bytes(row)).sum();
+        let freed = self.bytes.saturating_sub(bytes);
+        self.bytes = bytes;
+        freed
+    }
+
+    /// Consolidates the entry only once it has doubled since the last attempt.
+    ///
+    /// Used on the memory-pressure path, where the same entry can be revisited on every arrival.
+    /// The doubling keeps the total work amortized linear instead of re-sorting a growing entry
+    /// each time the stash is over budget.
+    fn maybe_consolidate(&mut self) -> usize {
+        if self.updates.len() < self.consolidated_len.max(1) * 2 {
+            return 0;
+        }
+        self.consolidate()
+    }
+
+    /// Consolidates and returns the entry's updates, for staging into a builder.
+    fn drain(mut self) -> Vec<(Result<Row, DataflowError>, Diff)> {
+        // Every update is about to be visited anyway, so the sort is nearly free here, and
+        // whatever cancels is a row that never reaches blob storage.
+        self.consolidate();
+        self.updates
+    }
 }
 
 /// The size charged against the raw stash budget for one staged update.
@@ -816,11 +860,8 @@ fn write_batches<'scope>(
                                 if let Some(builder) = spilled.get_mut(&ts) {
                                     stage_update(builder, row, ts, diff).await;
                                 } else {
-                                    let bytes = stashed_bytes(&row);
-                                    let entry = raw_stash.entry(ts).or_default();
-                                    entry.updates.push((row, diff));
-                                    entry.bytes += bytes;
-                                    raw_stash_bytes += bytes;
+                                    raw_stash_bytes +=
+                                        raw_stash.entry(ts).or_default().push(row, diff);
                                 }
                             }
                         }
@@ -829,6 +870,17 @@ fn write_batches<'scope>(
                         desired_frontier = frontier;
                     }
                 }
+            }
+
+            // Consolidate before writing anything out. Updates that cancel cost nothing to
+            // drop and everything to keep: at a pinned timestamp the snapshot's rows and the
+            // rewind retractions that supersede them are both staged here, and they annihilate
+            // exactly. That is the heaviest entry and so the first eviction candidate.
+            if raw_stash_bytes > max_raw_stash_bytes {
+                for entry in raw_stash.values_mut() {
+                    raw_stash_bytes -= entry.maybe_consolidate();
+                }
+                raw_stash.retain(|_, entry| !entry.updates.is_empty());
             }
 
             // Evict the heaviest timestamps until the stash fits its budget. Heaviest first so
@@ -847,7 +899,7 @@ fn write_batches<'scope>(
                 let builder = spilled.entry(ts).or_insert_with(|| {
                     BatchBuilderAndMetadata::new(write.builder(operator_batch_lower.clone()))
                 });
-                for (row, diff) in entry.updates {
+                for (row, diff) in entry.drain() {
                     stage_update(builder, row, ts, diff).await;
                 }
             }
@@ -929,7 +981,7 @@ fn write_batches<'scope>(
                         for ts in stashed_timestamps {
                             let entry = raw_stash.remove(&ts).expect("just looked up");
                             raw_stash_bytes -= entry.bytes;
-                            for (row, diff) in entry.updates {
+                            for (row, diff) in entry.drain() {
                                 stage_update(&mut builder, row, ts, diff).await;
                             }
                         }
@@ -1634,6 +1686,9 @@ mod tests {
         Description(u64, u64),
         /// Deliver `count` updates at time `at`.
         Updates(u64, usize),
+        /// Deliver `count` updates at time `at` with negated diffs, as the rewind of a snapshot
+        /// does for rows the replication stream redelivers at their true offset.
+        Retractions(u64, usize),
         /// Advance both input frontiers.
         AdvanceTo(u64),
     }
@@ -1737,6 +1792,12 @@ mod tests {
                         for i in 0..i64::try_from(count).expect("small count") {
                             let row = Row::pack_slice(&[Datum::Int64(i)]);
                             data_input.send((Ok(row), ts(at), Diff::ONE));
+                        }
+                    }
+                    Step::Retractions(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), -Diff::ONE));
                         }
                     }
                     Step::AdvanceTo(t) => {
@@ -1865,6 +1926,55 @@ mod tests {
             .expect("since <= as_of");
 
         contents.iter().map(|(_, _, d)| *d).sum()
+    }
+
+    /// The rewind mechanism retracts the snapshot's copy of every row the replication stream
+    /// redelivers at its true offset, and both land at the pinned timestamp. Those pairs cancel,
+    /// so the stash collapses them rather than evicting to make room.
+    ///
+    /// NOTE: this only reclaims pairs that are in the stash at the same time. Once a timestamp
+    /// has been evicted its updates live in a builder, where a later retraction cannot reach
+    /// them, and the cancellation is left to persist compaction.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_consolidates_the_stash_before_evicting() {
+        const ROWS: usize = 512;
+        const DONE: u64 = 4;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // The snapshot's rows, then the rewind retracting all but one of them, all at the pinned
+        // timestamp while the frontier is stalled.
+        let script = vec![
+            Step::Updates(1, ROWS),
+            Step::Retractions(1, ROWS - 1),
+            Step::Description(0, DONE),
+            Step::AdvanceTo(DONE),
+        ];
+
+        // Big enough to hold the snapshot's rows, too small to also hold their retractions.
+        // Cancelling pairs only collapse while both sides are still in the stash, so a budget
+        // that evicted the rows before their retractions arrived would prove nothing.
+        let unit = stashed_bytes(&Ok(Row::pack_slice(&[Datum::Int64(0)])));
+        let budget = unit * (ROWS + ROWS / 2);
+
+        let emitted =
+            run_write_batches(target.clone(), Arc::clone(&persist_clients), budget, script);
+
+        assert_eq!(
+            emitted.len(),
+            1,
+            "cancelling updates should consolidate away rather than evict, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            emitted[0].0.inserts, 1,
+            "only the surviving row should reach the batch"
+        );
+
+        let total = append_and_read_back(&target, &persist_clients, emitted, DONE).await;
+        assert_eq!(total, 1, "the shard should hold exactly the surviving row");
     }
 
     #[mz_ore::test]
