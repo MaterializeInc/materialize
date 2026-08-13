@@ -27,6 +27,13 @@ crate::json_compatible!(v90::ItemVersion with v91::ItemVersion);
 /// `Item` records gained a new field, so their stored JSON is no longer
 /// readable as the v91 type and every such record is rewritten. All other
 /// records are unchanged and pass through untouched.
+///
+/// NOTE: The explicit rewrite matters even though serde would default the
+/// missing field to `None` on read. A later edit to an item retracts the
+/// record by writing its v91 encoding (with `ephemeral_owner_session: None`)
+/// at diff -1. Without the backfill, the stored record lacks the field, so
+/// the retraction doesn't match it and the collection is left with negative
+/// multiplicity.
 pub fn upgrade(
     snapshot: Vec<v90::StateUpdateKind>,
 ) -> Vec<MigrationAction<v90::StateUpdateKind, v91::StateUpdateKind>> {
