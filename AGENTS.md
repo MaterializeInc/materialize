@@ -94,12 +94,9 @@ Two files control license policy, **keep in sync**: `deny.toml` (`[licenses].all
   own and make sense from just looking at them and the code around it, not
   previous changes.
 * Avoid em-dashes for structuring sentences in any prose: code comments, specs,
-  design docs, all of it. Restructure with full stops and commas instead.
-* Semicolons are discouraged, not banned. Prefer a full stop or a comma, but
-  keep one where splitting genuinely hurts the sentence, and in lists that need
-  it for their own punctuation. Aim for prose that never needed the semicolon
-  rather than prose with the semicolon stripped back out, since a mangled
-  sentence is worse than the mark.
+  design docs, all of it. Restructure with full stops and commas instead. The
+  same goes for semicolons, though one is fine where splitting would mangle the
+  sentence.
 * Our guidance applies both when writing new code or designs, or when we notice
   deviations in code or architecture that we are working on. At the same time,
   we want to keep our changes minimal so it's good to call out deviations and
