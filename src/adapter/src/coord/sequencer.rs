@@ -94,7 +94,6 @@ use crate::util::ClientTransmitter;
 //   big refactoring after the old peek sequencing is removed.
 
 mod inner;
-pub(crate) use inner::cancel_carried_reconfiguration;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
@@ -551,7 +550,12 @@ impl Coordinator {
                     ctx.retire(Ok(ExecuteResponse::DiscardedTemp));
                 }
                 Plan::DiscardAll => {
-                    let ret = if let TransactionStatus::Started(_) = ctx.session().transaction() {
+                    // Clearing the transaction would silently discard writes staged by an
+                    // earlier statement of the same pipeline.
+                    let txn = ctx.session().transaction();
+                    let discardable =
+                        matches!(txn, TransactionStatus::Started(_)) && !txn.contains_ops();
+                    let ret = if discardable {
                         let (_, retire_notify) = self.clear_transaction(ctx.session_mut()).await;
                         ctx.delay_response_until(retire_notify);
                         self.drop_temp_items(ctx.session().conn_id()).await;
@@ -619,13 +623,19 @@ impl Coordinator {
                     match self.sequence_execute(ctx.session_mut(), plan) {
                         Ok(portal_name) => {
                             let (tx, _, session, extra, response_barriers) = ctx.into_parts();
+                            // The obligation travels as data and
+                            // `handle_execute` arms it again. It cannot be
+                            // dropped in between: the command goes to the
+                            // channel this loop drains, and a spawned barrier
+                            // task is only dropped when the process is going
+                            // down, at which point nothing records anything.
                             let command = Message::Command(
                                 OpenTelemetryContext::obtain(),
                                 Command::Execute {
                                     portal_name,
                                     session,
                                     tx: tx.take(),
-                                    outer_ctx_extra: Some(extra),
+                                    outer_ctx_extra: Some(extra.defuse()),
                                 },
                             );
                             if response_barriers.is_empty() {
@@ -900,6 +910,14 @@ impl Coordinator {
                 // Consolidate rows. This is useful e.g. for an UPDATE where the row
                 // doesn't change, and we need to reflect that in the number of
                 // affected rows.
+                //
+                // NOTE: This differs from PostgreSQL, where `UPDATE t SET x = x`
+                // reports the number of rows matching the WHERE clause even when
+                // no value changes. Because Materialize works in differential
+                // dataflow, the +1 and -1 diffs for an unchanged row cancel out
+                // during consolidation, so it reports 0 affected rows. This is
+                // longstanding behavior and both read-then-write paths agree on
+                // it.
                 differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
                 affected_rows = Diff::ZERO;

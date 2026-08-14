@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/rbac.rs
-revision: 2ba315025c
+revision: 447da2b53e
 ---
 
 # mz-sql::rbac

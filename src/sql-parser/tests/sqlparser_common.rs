@@ -880,6 +880,29 @@ fn test_list_keyword_bare_identifier_subscript_display_roundtrip() {
 
 #[mz_ore::test]
 #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+fn test_map_keyword_bare_identifier_option_value_display_roundtrip() {
+    // A `MAP` that no `[` follows is the item name `map`, which is how a quoted
+    // `"map"` prints. `parse_option_map` used to commit on the keyword alone, so
+    // the printed form failed to reparse in every generic option-value position.
+    // Regression for the sql_roundtrip fuzz finding `(TOPIC = "map")`.
+    for sql in [
+        r#"CREATE SINK s FROM t INTO KAFKA CONNECTION c (TOPIC = "map") FORMAT BYTES ENVELOPE DEBEZIUM"#,
+        r#"CREATE SOURCE s FROM KAFKA CONNECTION c (TOPIC = "map") FORMAT BYTES"#,
+        r#"CREATE MATERIALIZED VIEW v WITH (PARTITION BY = "map") AS SELECT 1"#,
+        // A real map-literal option value still takes the map branch.
+        r#"CREATE SINK s FROM t INTO KAFKA CONNECTION c (TOPIC = 't', TOPIC CONFIG = MAP['a' => 'b']) FORMAT BYTES ENVELOPE DEBEZIUM"#,
+        // Expression position needs no quoting: a subscripted receiver prints as
+        // `(map)[1]`, which is why `can_be_printed_bare` has no `MAP` clause.
+        r#"SELECT "map""#,
+        r#"SELECT "map"[1]"#,
+        r#"SELECT map['a' => 1]"#,
+    ] {
+        assert_display_roundtrips(sql);
+    }
+}
+
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_table_function_special_name_display_roundtrip() {
     // `extract`/`position` carry a special `extract(a FROM b)` / `position(a IN
     // b)` display that only reparses in scalar-expression position. As table

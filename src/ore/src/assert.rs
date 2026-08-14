@@ -51,15 +51,22 @@ use std::sync::atomic::AtomicBool;
 
 /// Whether to enable soft assertions.
 ///
-/// This value defaults to `true` when `debug_assertions` are enabled, or to the
-/// value of the `MZ_SOFT_ASSERTIONS` environment variable otherwise.
+/// `MZ_SOFT_ASSERTIONS` decides this whenever it is set, and `debug_assertions`
+/// decides it otherwise. NOTE: setting the variable to a falsey value therefore
+/// turns soft assertions off even in a build that has `debug_assertions`
+/// compiled in. A caller that feeds the binary state it knows to be corrupt,
+/// such as a catalog-repair test, needs that: the tripwires it would otherwise
+/// hit are guarding the very condition it is there to repair.
 // The rules about what you can do in a `ctor` function are somewhat fuzzy,
 // because Rust does not explicitly support constructors. But a scan of the
 // stdlib suggests that reading environment variables is safe enough.
 #[cfg(not(any(miri, target_arch = "wasm32")))]
-#[ctor::ctor]
+#[ctor::ctor(unsafe)]
 pub static SOFT_ASSERTIONS: AtomicBool = {
-    let default = cfg!(debug_assertions) || crate::env::is_var_truthy("MZ_SOFT_ASSERTIONS");
+    let default = match std::env::var_os("MZ_SOFT_ASSERTIONS") {
+        Some(_) => crate::env::is_var_truthy("MZ_SOFT_ASSERTIONS"),
+        None => cfg!(debug_assertions),
+    };
     AtomicBool::new(default)
 };
 

@@ -656,3 +656,120 @@ ReadyForQuery
 ----
 CommandComplete {"tag":"ROLLBACK"}
 ReadyForQuery {"status":"I"}
+
+# Regression test for SQL-470: the statements between two Syncs are one
+# implicit transaction, so a failure anywhere before the Sync rolls back the
+# writes of every statement in the pipeline. Verified against PostgreSQL 17.
+send
+Query {"query": "CREATE TABLE pipeline_t (a INT)"}
+----
+
+until
+ReadyForQuery
+----
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "INSERT INTO pipeline_t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (2)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (3)"}
+Bind
+Execute
+Parse {"query": "SELECT 1/(SELECT 0)"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT count(*) FROM pipeline_t"}
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# The failing statement can be a write itself. An INSERT whose values fail to
+# evaluate rolls back the writes staged before it, and every statement after
+# the error is skipped until the Sync, so the last INSERT never runs either.
+send
+Parse {"query": "INSERT INTO pipeline_t VALUES (4)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (5)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (1/(SELECT 0))"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (6)"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT count(*) FROM pipeline_t"}
+----
+
+until err_field_typs=M ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"M","value":"division by zero"}]}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}
+
+# A pipeline that reaches its Sync commits all of its writes together.
+send
+Parse {"query": "INSERT INTO pipeline_t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "INSERT INTO pipeline_t VALUES (2)"}
+Bind
+Execute
+Sync
+Query {"query": "SELECT a FROM pipeline_t ORDER BY a"}
+----
+
+until ignore=RowDescription
+ReadyForQuery
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ReadyForQuery {"status":"I"}
+DataRow {"fields":["1"]}
+DataRow {"fields":["2"]}
+CommandComplete {"tag":"SELECT 2"}
+ReadyForQuery {"status":"I"}

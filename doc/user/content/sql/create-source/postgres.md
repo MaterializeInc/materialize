@@ -4,7 +4,7 @@ description: "Connecting Materialize to a PostgreSQL database for Change Data Ca
 pagerank: 40
 menu:
   main:
-    parent: 'create-source'
+    parent: 'create-source-legacy'
     identifier: cs_postgres
     name: PostgreSQL (Legacy Syntax)
     weight: 21
@@ -171,20 +171,6 @@ ingestion progress and debugging related issues, see [Troubleshooting](/ops/trou
 
 ## Known limitations
 
-### Schema changes
-
-Materialize supports schema changes in the upstream database as follows:
-
-#### Compatible schema changes (Legacy syntax)
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-compatible-schema-changes-legacy" %}}
-
-#### Incompatible schema changes
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-incompatible-schema-changes-legacy" %}}
-
 ### Publication membership
 
 {{% include-from-yaml data="postgres_source_details"
@@ -201,11 +187,6 @@ name="postgres-supported-types" %}}
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-unsupported-types" %}}
 
-### Truncation
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
-
 ### Inherited tables
 
 {{% include-from-yaml data="postgres_source_details"
@@ -213,6 +194,10 @@ name="postgres-inherited-tables" %}}
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-inherited-tables-action-legacy" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}
 
 ## Examples
 
@@ -354,7 +339,7 @@ CREATE SOURCE mz_source
 
 {{% include-headless "/headless/schema-changes-in-progress" %}}
 
-To handle upstream [schema changes](#schema-changes) or errored subsources, use
+To handle upstream [schema changes](#handling-upstream-operations) or errored subsources, use
 the [`DROP SOURCE`](/sql/alter-source/#context) syntax to drop the affected
 subsource, and then [`ALTER SOURCE...ADD SUBSOURCE`](/sql/alter-source/) to add
 the subsource back to the source.

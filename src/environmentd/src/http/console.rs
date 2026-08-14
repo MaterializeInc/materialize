@@ -109,7 +109,7 @@ pub(crate) async fn handle_internal_console(
         path_query = stripped_path_query;
     }
 
-    let uri = Uri::try_from(format!("{}{}", &console_config.url, path_query)).unwrap();
+    let uri = Uri::try_from(format!("{}{}", console_config.url, path_query)).unwrap();
     let host = uri.host().unwrap().to_string();
     // Preserve the request, but update the URI to point upstream.
     *req.uri_mut() = uri;

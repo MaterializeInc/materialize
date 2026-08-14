@@ -184,10 +184,13 @@ FROM (
 query error timestamp out of range
 select timezone('1 day'::interval, '0001-12-31'::timestamptz+'262141 years'::interval)
 
-# Regression test for database-issues#CLU-92: a leap-second timestamptz combined
-# with a fixed offset that shifts the seconds off `:59` previously panicked
-# during row encoding because chrono cannot represent a leap-second nanosecond
-# value at a `NaiveTime` whose seconds-of-minute is not 59.
+# Leap-second `:60` literals roll over into the next minute at parse, so these
+# timezone() calls operate on plain timestamps and pin the rolled-over results.
+# They no longer reach the leap-second fold in `checked_offset_with_leapsecond`
+# (the row-encoding panic of database-issues#CLU-92). That fold stays reachable
+# from persisted data and the frozen storage source casts and is covered by
+# `test_checked_offset_with_leapsecond_branches` in `mz_repr::adt::timestamp`,
+# which constructs the leap value directly.
 query T
 SELECT timezone('+00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
 ----
@@ -198,14 +201,101 @@ SELECT timezone('-00:00:01', TIMESTAMPTZ '2024-06-30 23:59:60+00')
 ----
 2024-07-01 00:00:01
 
-# Complementary case: a zero offset keeps the result on `:59`, exercising the
-# `else` branch of `checked_add_with_leapsecond` that restores the leap-second
-# nanos via `with_nanosecond(nanos)`. The resulting leap-second `NaiveDateTime`
-# is then rendered as the following regular second.
+# A zero offset leaves the rolled-over value unchanged.
 query T
 SELECT timezone('+00:00', TIMESTAMPTZ '2024-06-30 23:59:60+00')
 ----
 2024-07-01 00:00:00
+
+# The mirror direction, TIMESTAMP -> TIMESTAMPTZ. `timezone()` reads a numeric
+# offset as POSIX, where a positive offset is *west* of Greenwich (see the note
+# in timezone.slt), so `+00:00:01` shifts the rolled-over value forward and
+# `-00:00:01` shifts it back.
+query T
+SELECT timezone('+00:00:01', TIMESTAMP '2024-06-30 23:59:60')
+----
+2024-07-01 00:00:01+00
+
+query T
+SELECT timezone('-00:00:01', TIMESTAMP '2024-06-30 23:59:60')
+----
+2024-06-30 23:59:59+00
+
+# A zero offset leaves the rolled-over value unchanged.
+query T
+SELECT timezone('+00:00', TIMESTAMP '2024-06-30 23:59:60')
+----
+2024-07-01 00:00:00+00
+
+# The high end of the accepted range, 262142-12-31, is exactly
+# `chrono::NaiveDate::MAX`. Applying a westward offset to a late time on that day
+# leaves chrono's range, and the offset is applied before the range check, so the
+# subtraction itself has to be checked. It previously panicked, which aborts the
+# process through the enhanced panic handler.
+query error is out of range for type timestamp with time zone
+SELECT '262142-12-31 23:00:00-01'::timestamptz
+
+query error is out of range for type timestamp with time zone
+SELECT '262142-12-31 23:59:59-00:00:01'::timestamptz
+
+# The mirror bound, chrono's minimum of January 1, 262144 BCE, with an eastward
+# offset.
+query error is out of range for type timestamp with time zone
+SELECT '262144-01-01 00:00:00+01 BC'::timestamptz
+
+# The opposite offset direction on the same day stays in range.
+query T
+SELECT '262142-12-31 23:00:00+01'::timestamptz
+----
+262142-12-31 22:00:00+00
+
+# Rounding to the column's precision happens after the range check, so rounding
+# *up* off the end of `HIGH_DATE` needs its own check. The lower the precision,
+# the fewer fractional digits it takes: at precision 0 a single `.5` rounds up a
+# whole second, well inside what any client can send.
+query error timestamp out of range
+SELECT '262142-12-31 23:59:59.5'::timestamptz(0)
+
+query error timestamp out of range
+SELECT '262142-12-31 23:59:59.9995'::timestamptz(3)
+
+query error timestamp out of range
+SELECT '262142-12-31 23:59:59.9999995'::timestamptz
+
+# Rounding down on the same day is unaffected.
+query T
+SELECT '262142-12-31 23:59:59.4'::timestamptz(0)
+----
+262142-12-31 23:59:59+00
+
+# A parsed `:60` is stored as chrono's leap second, which is only representable
+# at a second-of-minute of 59. An offset that is not a whole number of minutes
+# shifts it off `:59`; that value used to reach row encoding and panic there.
+# It is folded into the next regular second instead, matching PostgreSQL.
+query T
+SELECT '1970-01-01 00:00:60+00:00:30'::timestamptz
+----
+1970-01-01 00:00:30+00
+
+query T
+SELECT '1970-01-01 12:00:60-00:00:30'::timestamptz
+----
+1970-01-01 12:01:30+00
+
+# Storing and re-reading the same value exercises the row encoding that panicked.
+statement ok
+CREATE TABLE leap_tstz (ts timestamptz)
+
+statement ok
+INSERT INTO leap_tstz VALUES ('1970-01-01 00:00:60+00:00:30')
+
+query T
+SELECT ts FROM leap_tstz
+----
+1970-01-01 00:00:30+00
+
+statement ok
+DROP TABLE leap_tstz
 
 ### to_char
 

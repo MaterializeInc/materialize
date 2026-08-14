@@ -722,7 +722,6 @@ where
             }
 
             let before_heartbeat = Instant::now();
-            let heartbeat_ms = (machine.applier.cfg.now)();
             let current_seqno = machine.seqno();
             let result = leased_seqnos.modify(|s| {
                 if s.expired {
@@ -737,7 +736,7 @@ where
             let actual_since = match result {
                 Ok(held_seqno) => {
                     let (seqno, actual_since, maintenance) = machine
-                        .downgrade_since(&reader_id, held_seqno, &held_since, heartbeat_ms)
+                        .downgrade_since(&reader_id, held_seqno, &held_since)
                         .await;
                     leased_seqnos.modify(|s| {
                         s.applied_since.clone_from(&actual_since.0);
@@ -990,13 +989,11 @@ where
         let new_reader_id = LeasedReaderId::new();
         let machine = self.machine.clone();
         let gc = self.gc.clone();
-        let heartbeat_ts = (self.cfg.now)();
         let (reader_state, maintenance) = machine
             .register_leased_reader(
                 &new_reader_id,
                 purpose,
                 READER_LEASE_DURATION.get(&self.cfg),
-                heartbeat_ts,
                 false,
             )
             .await;

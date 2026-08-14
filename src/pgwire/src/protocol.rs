@@ -1009,17 +1009,28 @@ where
                 // trigger an eager commit of the current implicit transaction,
                 // see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>.
                 //
-                // In Materialize, however, we eagerly commit every statement outside of an explicit
-                // transaction when using the extended query protocol. This allows us to eliminate
-                // the possibility of a multiple statement implicit transaction, which in turn
-                // allows us to apply single-statement optimizations to queries issued in implicit
-                // transactions in the extended query protocol.
+                // In Materialize we instead eagerly commit every implicit transaction that
+                // cannot take on further statements of the same pipeline, which keeps the
+                // single-statement optimizations available to queries issued in the extended
+                // query protocol. The ones that can stay open, so that the pipeline commits
+                // or rolls back as a unit. See `TransactionStatus::may_span_pipeline`.
                 //
                 // We don't immediately commit here to allow users to page through the portal if
                 // necessary. Committing the transaction would destroy the portal before the next
                 // Execute command has a chance to resume it. So we instead mark the transaction
                 // for commit the next time that `ensure_transaction` is called.
-                if self.adapter_client.session().transaction().is_implicit() {
+                let (is_implicit, may_span_pipeline) = {
+                    let txn = self.adapter_client.session().transaction();
+                    (txn.is_implicit(), txn.may_span_pipeline())
+                };
+                // Ordered so that only a write reads the flag, keeping the catalog
+                // snapshot off the read path.
+                let spans_pipeline = may_span_pipeline
+                    && self
+                        .adapter_client
+                        .extended_protocol_implicit_transaction_enabled()
+                        .await;
+                if is_implicit && !spans_pipeline {
                     self.txn_needs_commit = true;
                 }
                 state
@@ -1442,15 +1453,53 @@ where
     }
 
     /// End a transaction and report to the user if an error occurred.
+    ///
+    /// The parameters this changes must be announced, exactly as an explicit
+    /// `COMMIT`/`ROLLBACK` announces them. Otherwise a `SET LOCAL` outside an
+    /// explicit transaction announces its new value and never its revert, and a
+    /// client that caches parameters keeps the reverted value.
     #[instrument(level = "debug")]
     async fn end_transaction(&mut self, action: EndTransactionAction) -> Result<(), io::Error> {
         self.txn_needs_commit = false;
-        let resp = self.adapter_client.end_transaction(action).await;
-        if let Err(err) = resp {
-            self.send(BackendMessage::ErrorResponse(
-                err.into_response(Severity::Error),
-            ))
-            .await?;
+        match self.adapter_client.end_transaction(action).await {
+            Ok(
+                ExecuteResponse::TransactionCommitted { params }
+                | ExecuteResponse::TransactionRolledBack { params },
+            ) => {
+                self.send_parameter_statuses(params).await?;
+            }
+            Ok(_) => {}
+            Err(err) => {
+                self.send(BackendMessage::ErrorResponse(
+                    err.into_response(Severity::Error),
+                ))
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Announces changed parameters, restricted to those the client is told
+    /// about at startup.
+    #[instrument(level = "debug")]
+    async fn send_parameter_statuses(
+        &mut self,
+        params: BTreeMap<&'static str, String>,
+    ) -> Result<(), io::Error> {
+        let notify_set: mz_ore::collections::HashSet<String> = self
+            .adapter_client
+            .session()
+            .vars()
+            .notify_set()
+            .map(|v| v.name().to_string())
+            .collect();
+
+        for (name, value) in params
+            .into_iter()
+            .filter(|(name, _value)| notify_set.contains(*name))
+        {
+            self.send(BackendMessage::ParameterStatus(name, value))
+                .await?;
         }
         Ok(())
     }
@@ -2366,22 +2415,7 @@ where
             }
             ExecuteResponse::TransactionCommitted { params }
             | ExecuteResponse::TransactionRolledBack { params } => {
-                let notify_set: mz_ore::collections::HashSet<String> = self
-                    .adapter_client
-                    .session()
-                    .vars()
-                    .notify_set()
-                    .map(|v| v.name().to_string())
-                    .collect();
-
-                // Only report on parameters that are in the notify set.
-                for (name, value) in params
-                    .into_iter()
-                    .filter(|(name, _v)| notify_set.contains(*name))
-                {
-                    let msg = BackendMessage::ParameterStatus(name, value);
-                    self.send(msg).await?;
-                }
+                self.send_parameter_statuses(params).await?;
                 command_complete!()
             }
 

@@ -82,6 +82,7 @@ iceberg-catalog-rest.workspace = true
 iceberg-storage-opendal.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 criterion.workspace = true
 insta.workspace = true
 mz-persist = { path = "../persist" }

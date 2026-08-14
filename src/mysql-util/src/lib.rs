@@ -41,6 +41,13 @@ pub use privileges::validate_source_privileges;
 
 pub mod decoding;
 pub use decoding::pack_mysql_row;
+
+pub mod probe;
+pub use probe::{KeyProber, MAX_KEY_LENGTH};
+
+pub mod partition;
+pub use partition::partition_table;
+
 mod aws_rds;
 
 #[derive(Debug, Clone)]
@@ -97,6 +104,22 @@ pub enum MySqlError {
         column_name: String,
         qualified_table_name: String,
         error: String,
+    },
+    #[error("non-UTF-8 key value in '{qualified_table_name}' column '{column_name}': {error}")]
+    NonUtf8KeyValue {
+        qualified_table_name: String,
+        column_name: String,
+        error: String,
+    },
+    #[error(
+        "missing row estimate in '{qualified_table_name}' for key range ({lower_bound}, {upper_bound})"
+    )]
+    MissingRowEstimate {
+        qualified_table_name: String,
+        /// Redacted at construction, safe to log.
+        lower_bound: String,
+        /// Redacted at construction, safe to log.
+        upper_bound: String,
     },
     #[error("unsupported data types: {columns:?}")]
     UnsupportedDataTypes { columns: Vec<UnsupportedDataType> },

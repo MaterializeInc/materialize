@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+import re
 import threading
 import time
 
@@ -63,14 +64,18 @@ class TestApplyGrantsAndPrivileges:
             project.run_sql("DROP ROLE IF EXISTS my_role")
         project.run_sql("DROP SCHEMA IF EXISTS blue_schema CASCADE")
         project.run_sql("DROP SCHEMA IF EXISTS green_schema CASCADE")
+        project.run_sql('DROP SCHEMA IF EXISTS "Green_Schema" CASCADE')
         project.run_sql("DROP CLUSTER IF EXISTS blue_cluster CASCADE")
         project.run_sql("DROP CLUSTER IF EXISTS green_cluster CASCADE")
 
-    def test_apply_schema_default_privileges(self, project):
+    # `deploy_init` creates the deployment schema with a quoted name, so a
+    # non-lowercase name has to survive into the generated statements too.
+    @pytest.mark.parametrize("to_schema", ["green_schema", "Green_Schema"])
+    def test_apply_schema_default_privileges(self, project, to_schema):
         project.run_sql("CREATE ROLE my_role")
         project.run_sql("GRANT my_role TO materialize")
         project.run_sql("CREATE SCHEMA blue_schema")
-        project.run_sql("CREATE SCHEMA green_schema")
+        project.run_sql(f'CREATE SCHEMA "{to_schema}"')
         project.run_sql(
             "ALTER DEFAULT PRIVILEGES FOR ROLE my_role IN SCHEMA blue_schema GRANT SELECT ON TABLES TO my_role"
         )
@@ -80,15 +85,15 @@ class TestApplyGrantsAndPrivileges:
                 "run-operation",
                 "internal_copy_schema_default_privs",
                 "--args",
-                "{from: blue_schema, to: green_schema}",
+                f"{{from: blue_schema, to: {to_schema}}}",
             ]
         )
 
         result = project.run_sql(
-            """SELECT count(*) = 1
+            f"""SELECT count(*) = 1
              FROM mz_internal.mz_show_default_privileges
              WHERE database = current_database()
-                AND schema = 'green_schema'
+                AND schema = '{to_schema}'
                 AND grantee = 'my_role'
                 AND object_type = 'table'
                 AND privilege_type = 'SELECT'""",
@@ -540,9 +545,34 @@ class TestTargetDeploy:
             assert (
                 "Deployment by" in tagged_schema_comment[0]
             ), f"Missing deployment info in {schema_name} comment"
-            assert (
-                "on" in tagged_schema_comment[0]
-            ), f"Missing timestamp in {schema_name} comment"
+            # The user and timestamp are read out of a single-row result, so
+            # match on their values rather than on the surrounding words.
+            assert re.search(
+                r"Deployment by \S+ on \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+                tagged_schema_comment[0],
+            ), f"Missing user or timestamp in {schema_name} comment: {tagged_schema_comment[0]}"
+
+    def test_dbt_deploy_init_tags_schema_with_ci_tag(self, project, monkeypatch):
+        monkeypatch.setenv("CI_TAG", "gh_ci_123")
+        project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")
+        project.run_sql("CREATE SCHEMA prod")
+        project.run_sql("CREATE SCHEMA staging")
+
+        run_dbt(["run-operation", "deploy_init"])
+
+        for schema_name in ["prod_dbt_deploy", "staging_dbt_deploy"]:
+            comment = project.run_sql(
+                f"""
+                SELECT c.comment
+                FROM mz_internal.mz_comments c
+                JOIN mz_schemas s USING (id)
+                WHERE s.name = '{schema_name}';
+                """,
+                fetch="one",
+            )
+
+            assert comment is not None, f"No CI tag on schema {schema_name}"
+            assert comment[0] == "gh_ci_123"
 
     def test_dbt_deploy_with_force(self, project):
         project.run_sql("CREATE CLUSTER prod SIZE = 'scale=1,workers=1'")

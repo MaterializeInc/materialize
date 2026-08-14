@@ -50,7 +50,7 @@ $ sql-server-execute name=sql-server
 INSERT INTO t1 SELECT * FROM t1;
 
 > SELECT pg_typeof(f1), pg_typeof(f2), pg_typeof(f3), pg_typeof(f4) FROM t1 LIMIT 1;
-"character varying" "character" "character varying" "character varying"
+"character varying" text "character varying" "character varying"
 
 > SELECT * FROM t1;
 "abc" "abc       " "abc" "abc"

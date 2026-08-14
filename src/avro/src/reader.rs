@@ -29,7 +29,7 @@ use std::str::{FromStr, from_utf8};
 use aws_lc_rs::digest;
 use serde_json::from_slice;
 
-use crate::decode::{AvroRead, decode};
+use crate::decode::{AvroRead, bound_block_object_count, decode};
 use crate::error::{DecodeError, Error as AvroError};
 use crate::schema::{
     FullName, NamedSchemaPiece, ParseSchemaError, RecordField, ResolvedDefaultValueField,
@@ -259,6 +259,16 @@ impl<R: AvroRead> Reader<R> {
         }
 
         self.inner.read_exact(&mut self.buf[..n])?;
+        // Cut the buffer down to exactly this block's payload. The resize above
+        // only ever grows, so a block shorter than a previous one would otherwise
+        // leave that block's tail visible past its own payload, and everything
+        // downstream reads the buffer by its length: `read_next` slices
+        // `self.buf[self.buf_idx..]`, and `Codec::decompress` hands the whole
+        // buffer to the decompressor. A block whose declared object count outruns
+        // its own bytes would then decode stale bytes as values instead of hitting
+        // the end of the block. `truncate` keeps the allocation, so the buffer is
+        // still reused across blocks.
+        self.buf.truncate(n);
         self.buf_idx = 0;
         Ok(())
     }
@@ -294,6 +304,18 @@ impl<R: AvroRead> Reader<R> {
                 // We can address this by using some "limited read" type to decode directly
                 // into the buffer. But this is fine, for now.
                 self.header.codec.decompress(&mut self.buf)?;
+
+                // `safe_len` above bounds the object count only by
+                // `MAX_ALLOCATION_BYTES`, which says nothing about the block that
+                // is supposed to contain those objects: a zero-width schema
+                // encodes every object to no bytes, so a handful of wire bytes can
+                // claim hundreds of millions of them and the reader will decode
+                // every one. Bound it against the payload now that the payload is
+                // known, which is only here, since the declared byte size is the
+                // *compressed* size.
+                let count = self.messages_remaining;
+                let payload_len = self.buf.len();
+                bound_block_object_count(self.schema().top_node(), count, payload_len)?;
 
                 Ok(())
             }
@@ -503,7 +525,7 @@ impl<'a> SchemaResolver<'a> {
                 } else {
                     return Err(SchemaResolutionError::new(format!(
                         "Fixed schema {:?}: sizes don't match ({}, {}) for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wsz,
                         rsz,
                         self.get_current_human_readable_path(),
@@ -526,7 +548,7 @@ impl<'a> SchemaResolver<'a> {
                 if wp != rp {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: precisions don't match: {}, {} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wp,
                         rp,
                         self.get_current_human_readable_path(),
@@ -536,7 +558,7 @@ impl<'a> SchemaResolver<'a> {
                 if wscale != rscale {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: sizes don't match: {}, {} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wscale,
                         rscale,
                         self.get_current_human_readable_path(),
@@ -546,7 +568,7 @@ impl<'a> SchemaResolver<'a> {
                 if wsz != rsz {
                     return Err(SchemaResolutionError::new(format!(
                         "Decimal schema {:?}: sizes don't match: {:?}, {:?} for field `{}`",
-                        &rs.name,
+                        rs.name,
                         wsz,
                         rsz,
                         self.get_current_human_readable_path(),
@@ -956,6 +978,110 @@ mod tests {
     use crate::types::{Record, ToAvro};
 
     use super::*;
+
+    /// Assemble an object-container file: header (writer schema, `null` codec,
+    /// sync marker) followed by `blocks`. Each block is given as `(declared
+    /// count, declared byte size, payload)` so a test can lie about the framing
+    /// the way a corrupt or hostile file does.
+    fn ocf(schema_json: &str, blocks: &[(i64, i64, &[u8])]) -> Vec<u8> {
+        fn blob(bytes: &[u8], out: &mut Vec<u8>) {
+            util::zig_i64(bytes.len() as i64, out);
+            out.extend_from_slice(bytes);
+        }
+
+        let marker = [7u8; 16];
+        let mut out = b"Obj\x01".to_vec();
+        util::zig_i64(2, &mut out); // metadata map: one block of two entries
+        blob(b"avro.schema", &mut out);
+        blob(schema_json.as_bytes(), &mut out);
+        blob(b"avro.codec", &mut out);
+        blob(b"null", &mut out);
+        util::zig_i64(0, &mut out); // end of metadata map
+        out.extend_from_slice(&marker);
+        for (count, size, payload) in blocks {
+            util::zig_i64(*count, &mut out);
+            util::zig_i64(*size, &mut out);
+            out.extend_from_slice(payload);
+            out.extend_from_slice(&marker);
+        }
+        out
+    }
+
+    /// A record of only `null` fields: valid, and encodes to zero bytes.
+    const ZERO_WIDTH_SCHEMA: &str =
+        r#"{"type":"record","name":"R","fields":[{"name":"g","type":"null"}]}"#;
+
+    #[mz_ore::test]
+    fn reader_does_not_decode_a_previous_blocks_bytes() {
+        // One buffer is reused across blocks, so a block shorter than its
+        // predecessor must not leave that predecessor's tail readable. Block 2
+        // here declares two objects but carries only one, and its payload is
+        // shorter than block 1's, whose bytes are arranged so that what lands
+        // past block 2's payload would decode as a perfectly good `"x"`. The
+        // second decode has to run out of input instead.
+        //
+        // The block bound does not catch this: `string` has a one-byte floor and
+        // the block claims 2 objects in 3 bytes.
+        let long = &[0x0a, b'A', b'B', 0x02, b'x', b'C'][..]; // one 5-char string
+        let short = &[0x04, b'a', b'b'][..]; // one 2-char string
+        let file = ocf(
+            r#""string""#,
+            &[(1, long.len() as i64, long), (2, short.len() as i64, short)],
+        );
+
+        let items: Vec<_> = Reader::new(&file[..]).expect("OCF header parses").collect();
+        assert_eq!(items.len(), 3, "expected two values then an error");
+        assert_eq!(
+            items[1].as_ref().expect("block 2's real value decodes"),
+            &Value::String("ab".into())
+        );
+        assert_err!(&items[2]);
+    }
+
+    #[mz_ore::test]
+    fn reader_rejects_zero_width_block_count_within_allocation_budget() {
+        // `safe_len` accepts any count up to `MAX_ALLOCATION_BYTES`, and a
+        // zero-width object consumes no input, so nothing but the block bound
+        // stops a 0-byte payload from claiming 100M objects and being believed.
+        // Regression for a reader_decode cargo-fuzz timeout.
+        let file = ocf(ZERO_WIDTH_SCHEMA, &[(100_000_000, 0, &[])]);
+        let err = Reader::new(&file[..])
+            .expect("OCF header parses")
+            .find_map(|item| item.err())
+            .expect("the oversized count must be rejected");
+        assert!(
+            err.to_string().contains("exceeds limit"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn reader_accepts_honest_zero_width_block() {
+        // The bound above must not reject a real zero-width block: the whole
+        // point of the node weighting is that a byte count cannot judge one.
+        let file = ocf(ZERO_WIDTH_SCHEMA, &[(3, 0, &[])]);
+        let values: Vec<Value> = Reader::new(&file[..])
+            .expect("OCF header parses")
+            .collect::<Result<_, _>>()
+            .expect("an honest zero-width block must decode");
+        assert_eq!(values.len(), 3);
+    }
+
+    #[mz_ore::test]
+    fn reader_rejects_block_count_exceeding_payload() {
+        // A `string` occupies at least its one-byte length varint, so 100 of them
+        // cannot fit in three bytes however the payload is arranged.
+        let payload = &[0x04, b'a', b'b'][..];
+        let file = ocf(r#""string""#, &[(100, payload.len() as i64, payload)]);
+        let err = Reader::new(&file[..])
+            .expect("OCF header parses")
+            .find_map(|item| item.err())
+            .expect("a count larger than the payload must be rejected");
+        assert!(
+            err.to_string().contains("exceeds block payload"),
+            "unexpected error: {err}"
+        );
+    }
 
     #[mz_ore::test]
     fn reader_rejects_huge_block_object_count() {

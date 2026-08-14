@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeField;
 use mz_repr::adt::interval::Interval;
@@ -142,6 +142,20 @@ fn test_parse_time_errors() {
         "03.456",
         "invalid input syntax for type time: have unprocessed tokens 3.456000000: \"03.456\"",
     );
+    // A string that parses without naming a single time field is rejected rather
+    // than read as midnight, matching PostgreSQL.
+    run_test_parse_time_errors(
+        "",
+        "invalid input syntax for type time: no time fields found: \"\"",
+    );
+    run_test_parse_time_errors(
+        " ",
+        "invalid input syntax for type time: no time fields found: \" \"",
+    );
+    run_test_parse_time_errors(
+        ":",
+        "invalid input syntax for type time: no time fields found: \":\"",
+    );
 
     fn run_test_parse_time_errors(s: &str, e: &str) {
         assert_eq!(
@@ -149,6 +163,24 @@ fn test_parse_time_errors() {
             format!("{}", strconv::parse_time(s).unwrap_err())
         );
     }
+}
+
+/// The frozen storage-cast reading of a TIME string with no time field in it.
+/// See the stability contract in `mz_storage_types::sources::casts`.
+#[mz_ore::test]
+fn test_parse_time_legacy_fieldless() {
+    for s in ["", " ", ":"] {
+        assert_eq!(
+            strconv::parse_time_legacy(s).unwrap(),
+            NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+            "for input {s:?}"
+        );
+    }
+    // Everything else parses identically to `parse_time`.
+    assert_eq!(
+        strconv::parse_time_legacy("01:02:03").unwrap(),
+        strconv::parse_time("01:02:03").unwrap()
+    );
 }
 
 #[mz_ore::test]
@@ -311,6 +343,79 @@ fn test_parse_timestamptz_errors() {
             e.to_string(),
             format!("{}", strconv::parse_timestamptz(s).unwrap_err())
         );
+    }
+}
+
+#[mz_ore::test]
+fn test_parse_timestamptz_offset_overflow() {
+    // `HIGH_DATE` is exactly `chrono::NaiveDate::MAX` and the low bound is
+    // PostgreSQL's 4713 BC, so applying the offset to a value just inside either
+    // bound leaves chrono's range. The offset is applied before the
+    // `CheckedTimestamp` bound check, so that check cannot catch it, and chrono's
+    // own `NaiveDateTime - FixedOffset` panics instead of erroring.
+    for s in [
+        // High end: a westward offset moves the value past `NaiveDate::MAX`. One
+        // second of offset is enough on the last second of the day.
+        "262142-12-31 23:00:00-01",
+        "262142-12-31 23:59:59-00:00:01",
+        // Low end: an eastward offset moves the value below chrono's minimum,
+        // January 1, 262144 BCE.
+        "262144-01-01 00:00:00+01 BC",
+        "262144-01-01 00:00:00+00:00:01 BC",
+    ] {
+        assert_eq!(
+            format!("{}", strconv::parse_timestamptz(s).unwrap_err()),
+            format!("{s:?} is out of range for type timestamp with time zone"),
+        );
+    }
+
+    // The opposite offset direction on the high boundary stays in range and is
+    // still accepted, so the check is not simply rejecting the boundary day. The
+    // low boundary has no such counterpart: `LOW_DATE` is 4713 BC, far above
+    // chrono's minimum, so every value near that minimum is rejected either way.
+    assert!(strconv::parse_timestamptz("262142-12-31 23:00:00+01").is_ok());
+    assert!(strconv::parse_timestamptz("262142-12-31 23:59:59+00:00:01").is_ok());
+}
+
+#[mz_ore::test]
+fn test_parse_timestamptz_leap_second_offset_fold() {
+    // A parsed `:60` rolls over into the next minute before the offset is
+    // applied, so every offset lands on a regular second.
+    for (input, expected) in [
+        ("1970-01-01 00:00:60+00:00:30", "1970-01-01 00:00:30+00"),
+        ("1970-01-01 12:00:60-00:00:30", "1970-01-01 12:01:30+00"),
+        ("1970-01-01 00:00:60+01", "1969-12-31 23:01:00+00"),
+    ] {
+        let ts = strconv::parse_timestamptz(input).unwrap();
+        assert_eq!(ts.nanosecond(), 0, "leap-second nanos survived parsing");
+        let mut buf = String::new();
+        strconv::format_timestamptz(&mut buf, &ts);
+        assert_eq!(buf, expected);
+    }
+
+    // The frozen legacy parse keeps chrono's leap-second representation
+    // (sub-second >= 1s), which is only representable at a second-of-minute of
+    // 59. An offset that is not a whole number of minutes shifts it off `:59`,
+    // and the resulting value used to panic in `Row` encoding. Fold it into the
+    // next regular second instead, which is also what PostgreSQL does with
+    // `:60`. The folded values render the same as the rolled-over ones above.
+    for (input, expected) in [
+        ("1970-01-01 00:00:60+00:00:30", "1970-01-01 00:00:30+00"),
+        ("1970-01-01 12:00:60-00:00:30", "1970-01-01 12:01:30+00"),
+    ] {
+        let ts = strconv::parse_timestamptz_legacy(input).unwrap();
+        assert_eq!(ts.nanosecond(), 0, "leap-second nanos survived the fold");
+        let mut buf = String::new();
+        strconv::format_timestamptz(&mut buf, &ts);
+        assert_eq!(buf, expected);
+    }
+
+    // A whole-minute offset keeps the legacy value on `:59`, where the
+    // leap-second representation is legal, so it is preserved rather than
+    // folded.
+    for input in ["1970-01-01 00:00:60+01", "1970-01-01 12:00:60-05:30"] {
+        let ts = strconv::parse_timestamptz_legacy(input).unwrap();
+        assert_eq!(ts.nanosecond(), 1_000_000_000);
     }
 }
 
@@ -679,6 +784,86 @@ fn test_format_timestamp() {
         let mut buf = String::new();
         strconv::format_timestamp(&mut buf, &n);
         assert_eq!(buf, e);
+    }
+}
+
+#[mz_ore::test]
+fn test_format_subsecond_carry() {
+    // A sub-second fraction of `.9999995` or more rounds up to a full second.
+    // The renderer writes microseconds, so that second has to reach the seconds
+    // field. Written into the fraction instead it becomes `1000000` microseconds,
+    // which the trailing-zero stripper reduces to `.1`, i.e. a value rendered
+    // roughly one second early with a nonsense fraction.
+    //
+    // Nothing rounds on the way in: `pgrepr`'s text decoding (COPY, text-format
+    // bind parameters) and the TIME cast both keep the parsed nanoseconds, so
+    // these values reach the renderer as stored.
+    for (input, expected) in [
+        ("2020-01-01 00:00:00.9999999", "2020-01-01 00:00:01"),
+        ("2020-01-01 00:00:00.9999995", "2020-01-01 00:00:01"),
+        ("2020-01-01 00:00:00.9999994", "2020-01-01 00:00:00.999999"),
+        // The carry crosses minute, day, month and year boundaries.
+        ("2020-01-01 00:00:59.9999999", "2020-01-01 00:01:00"),
+        ("2020-01-31 23:59:59.9999999", "2020-02-01 00:00:00"),
+        ("2020-12-31 23:59:59.9999999", "2021-01-01 00:00:00"),
+        // A `:60` rolls over into the next minute at parse, crossing the day
+        // boundary here. The renderer's own leap-second handling is covered
+        // below by constructing the value directly.
+        ("2020-01-01 23:59:60", "2020-01-02 00:00:00"),
+        // `HIGH_DATE` is exactly `chrono::NaiveDate::MAX`, so the carry has
+        // nowhere to go and the fraction saturates instead.
+        (
+            "262142-12-31 23:59:59.9999999",
+            "262142-12-31 23:59:59.999999",
+        ),
+    ] {
+        let ts = strconv::parse_timestamp(input).unwrap();
+        let mut buf = String::new();
+        strconv::format_timestamp(&mut buf, &ts);
+        assert_eq!(buf, expected, "formatting {input}");
+
+        // TIMESTAMPTZ shares the renderer, so it carries identically.
+        let tz = strconv::parse_timestamptz(input).unwrap();
+        let mut buf = String::new();
+        strconv::format_timestamptz(&mut buf, &tz);
+        assert_eq!(buf, format!("{expected}+00"), "formatting {input} as tz");
+    }
+
+    // The renderer takes a bare `NaiveDateTime`, so it also has to hold up on
+    // chrono's leap-second representation, which the SQL parser no longer
+    // produces but persisted data and the frozen storage source casts still
+    // do. A whole-second leap renders as `:60` via chrono's `%S`; a fractional
+    // one carries, and the second after `23:59:60` is `00:00:00` of the next
+    // minute.
+    for (nanos, expected) in [
+        (1_000_000_000, "2020-01-01 23:59:60"),
+        (1_500_000_000, "2020-01-01 23:59:60.5"),
+        (1_999_999_999, "2020-01-02 00:00:00"),
+    ] {
+        let ts = NaiveDate::from_ymd_opt(2020, 1, 1)
+            .unwrap()
+            .and_hms_opt(23, 59, 59)
+            .unwrap()
+            .with_nanosecond(nanos)
+            .unwrap();
+        let mut buf = String::new();
+        strconv::format_timestamp(&mut buf, &ts);
+        assert_eq!(buf, expected, "formatting {nanos}ns past 23:59:59");
+    }
+
+    for (input, expected) in [
+        ("12:34:56.9999999", "12:34:57"),
+        ("12:34:56.9999994", "12:34:56.999999"),
+        ("23:59:60", "23:59:60"),
+        // A `NaiveTime` wraps to midnight rather than reaching PostgreSQL's
+        // `24:00:00`, so the carry out of the last second of the day is dropped
+        // and the fraction saturates.
+        ("23:59:59.9999999", "23:59:59.999999"),
+    ] {
+        let t = strconv::parse_time(input).unwrap();
+        let mut buf = String::new();
+        strconv::format_time(&mut buf, t);
+        assert_eq!(buf, expected, "formatting {input}");
     }
 }
 

@@ -77,6 +77,34 @@ class SmokeTest(unittest.TestCase):
                     row = cur.fetchone()
                     self.assertEqual(row, ([1, 2, 3],))
 
+    def test_psycopg3_pipeline_is_implicit_transaction(self) -> None:
+        """The statements of a pipeline commit or roll back as a unit (SQL-470)."""
+        with psycopg.connect(MATERIALIZED_URL, autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("DROP TABLE IF EXISTS pipeline_t")
+                cur.execute("CREATE TABLE pipeline_t (a int)")
+
+            with self.assertRaises(psycopg.errors.DivisionByZero):
+                with conn.pipeline():
+                    with conn.cursor() as cur:
+                        cur.execute("INSERT INTO pipeline_t VALUES (1)")
+                        cur.execute("INSERT INTO pipeline_t VALUES (2)")
+                        cur.execute("SELECT 1 / 0")
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM pipeline_t")
+                self.assertEqual(cur.fetchone(), (0,))
+
+            # A pipeline that reaches its sync commits all of its writes.
+            with conn.pipeline():
+                with conn.cursor() as cur:
+                    cur.execute("INSERT INTO pipeline_t VALUES (1)")
+                    cur.execute("INSERT INTO pipeline_t VALUES (2)")
+
+            with conn.cursor() as cur:
+                cur.execute("SELECT count(*) FROM pipeline_t")
+                self.assertEqual(cur.fetchone(), (2,))
+
     def test_sqlalchemy(self) -> None:
         engine = sqlalchemy.engine.create_engine(MATERIALIZED_URL)
         with engine.connect() as connection:

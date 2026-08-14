@@ -32,7 +32,7 @@ use differential_dataflow::lattice::Lattice;
 use mz_cluster_client::ReplicaId;
 use mz_cluster_client::client::ClusterReplicaLocation;
 use mz_controller_types::dyncfgs::WALLCLOCK_LAG_HISTOGRAM_PERIOD_INTERVAL;
-use mz_dyncfg::ConfigSet;
+use mz_dyncfg::{ConfigSet, ConfigUpdates};
 use mz_ore::soft_panic_or_log;
 use mz_persist_client::batch::ProtoBatch;
 use mz_persist_types::{Codec64, ShardId};
@@ -351,6 +351,19 @@ pub trait StorageController: Debug {
 
     /// Update storage configuration with new parameters.
     fn update_parameters(&mut self, config_params: StorageParameters);
+
+    /// Replaces the per-replica dyncfg overrides for the given instances.
+    ///
+    /// This only stores the overrides; callers should follow with a
+    /// configuration push (e.g. [`Self::update_parameters`]) so existing
+    /// replicas observe the new values. Instances absent from `overrides` have
+    /// their overrides cleared, so a replica that no longer has an override
+    /// reverts to the environment-wide configuration. Used by the scoped
+    /// feature flags (replica-local) layer.
+    fn update_replica_dyncfg_overrides(
+        &mut self,
+        overrides: BTreeMap<StorageInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
+    );
 
     /// Get the current configuration, including parameters updated with `update_parameters`.
     fn config(&self) -> &StorageConfiguration;

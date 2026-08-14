@@ -1252,8 +1252,8 @@ fn progress_search<C: ConsumerContext + 'static>(
             {
                 bail!(
                     "upper regressed in topic {progress_topic}:{partition} from {:?} to {:?}",
-                    &last_progress.frontier,
-                    &progress.frontier,
+                    last_progress.frontier,
+                    progress.frontier,
                 );
             }
             _ => last_progress = Some(progress),

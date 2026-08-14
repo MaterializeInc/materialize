@@ -444,7 +444,13 @@ impl Interval {
         if self.is_negative() {
             bail!("cannot convert negative interval to duration");
         }
-        let micros: u64 = u64::try_from(self.as_microseconds())?;
+        // Phrase the overflow ourselves rather than letting `TryFromIntError`
+        // through. Its `Display` is std's, and std has reworded it between
+        // toolchains, which would otherwise rewrite a user-facing error message
+        // out from under us.
+        let Ok(micros) = u64::try_from(self.as_microseconds()) else {
+            bail!("interval is too large to convert to duration");
+        };
         Ok(Duration::from_micros(micros))
     }
 
@@ -1325,6 +1331,7 @@ mod test {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_packed_interval_sorts() {
         fn sort_intervals(mut og: Vec<Interval>) {
             let mut packed: Vec<_> = og.iter().copied().map(PackedInterval::from_value).collect();

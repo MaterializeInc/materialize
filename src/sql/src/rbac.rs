@@ -532,6 +532,7 @@ fn generate_rbac_requirements(
             name: _,
             variant: _,
             workload_class: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -541,6 +542,7 @@ fn generate_rbac_requirements(
             cluster_id,
             name: _,
             config: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*cluster_id)],
             item_usage: &CREATE_ITEM_USAGE,

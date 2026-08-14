@@ -8744,3 +8744,59 @@ SELECT (('[1,100)')@>(t_disallowed_types.c0)) IS TRUE FROM t_disallowed_types;
 
 query error range type over real is not supported
 SELECT (('[1,100)')@>(t_disallowed_types.c1)) IS TRUE FROM t_disallowed_types;
+
+# A bound whose rendering contains whitespace is emitted quoted by
+# `format_range`, so parsing has to strip the quotes again. It previously handed
+# the raw substring to the element parser, which tolerates a stray `"` for most
+# values and then misreads it as soon as it abuts a meaningful token: the `BC"`
+# of a pre-Common-Era bound was consumed as a time zone, so a range with such a
+# bound could not be read back from its own output.
+query T
+SELECT tsrange('0001-02-24 BC'::timestamp, '2020-01-01'::timestamp)::text
+----
+["0001-02-24 00:00:00 BC","2020-01-01 00:00:00")
+
+query T
+SELECT tsrange('0001-02-24 BC'::timestamp, '2020-01-01'::timestamp)::text::tsrange::text
+----
+["0001-02-24 00:00:00 BC","2020-01-01 00:00:00")
+
+query T
+SELECT '["0001-02-24 00:00:00 BC","2020-01-01 00:00:00")'::tsrange::text
+----
+["0001-02-24 00:00:00 BC","2020-01-01 00:00:00")
+
+# Only the lower bound quoted, and only the upper bound quoted.
+query T
+SELECT '["0001-02-24 00:00:00 BC",2020-01-01)'::tsrange::text
+----
+["0001-02-24 00:00:00 BC","2020-01-01 00:00:00")
+
+query T
+SELECT '[2020-01-01,"2021-01-01 00:00:00")'::tsrange::text
+----
+["2020-01-01 00:00:00","2021-01-01 00:00:00")
+
+# A `\`-escaped quote inside a quoted bound is unescaped rather than ending the
+# bound early. Here that leaves a trailing `"` in the element text, which the
+# datetime parser happens to tolerate, so the bound still resolves.
+query T
+SELECT '["2020-01-01\"",2021-01-01)'::tsrange::text
+----
+["2020-01-01 00:00:00","2021-01-01 00:00:00")
+
+# Unquoted, absent and empty bounds are unaffected.
+query T
+SELECT '[2020-01-01,2020-06-01)'::daterange::text
+----
+[2020-01-01,2020-06-01)
+
+query T
+SELECT '(,)'::daterange::text
+----
+(,)
+
+query T
+SELECT 'empty'::daterange::text
+----
+empty

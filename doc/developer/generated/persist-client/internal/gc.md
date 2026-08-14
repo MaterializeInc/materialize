@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/gc.rs
-revision: 8c74de9000
+revision: 253293ef87
 ---
 
 # persist-client::internal::gc

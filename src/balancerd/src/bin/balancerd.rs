@@ -32,9 +32,10 @@ use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig};
 use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_server_core::TlsCliArgs;
-use tracing::{Instrument, info_span, warn};
+use tracing::{Instrument, info, info_span, warn};
 
 #[derive(Debug, clap::Parser)]
 #[clap(about = "Balancer service", long_about = None)]
@@ -167,6 +168,17 @@ pub struct ServiceArgs {
     /// Set startup defaults for dynconfig
     #[clap(long, value_parser = parse_key_val::<String, String>, value_delimiter = ',')]
     default_config: Option<Vec<(String, String)>>,
+    /// How long to wait for the static resolver address to become resolvable.
+    /// During upgrades the target service may not be immediately available, so
+    /// balancerd retries DNS resolution with exponential backoff until this
+    /// timeout is reached.
+    #[clap(
+        long,
+        env = "STATIC_RESOLVER_ADDR_TIMEOUT",
+        value_parser = humantime::parse_duration,
+        default_value = "30s"
+    )]
+    static_resolver_addr_timeout: Duration,
 }
 
 fn main() {
@@ -283,16 +295,51 @@ pub async fn run(
             )
         }
         (Some(addr), None) => {
-            // As a typo-check, verify that the passed address resolves to at least one IP. This
-            // result isn't recorded anywhere: we re-resolve on each request in case DNS changes.
-            // Here only to cause startup to crash if mistyped.
-            let mut addrs = tokio::net::lookup_host(&addr)
+            // Verify that the passed address resolves to at least one IP as a
+            // typo-check. This result isn't recorded anywhere: we re-resolve on
+            // each request in case DNS changes. During upgrades the target
+            // service may not be immediately available, so retry with
+            // exponential backoff.
+            let timeout = args.static_resolver_addr_timeout;
+            Retry::default()
+                .initial_backoff(Duration::from_millis(250))
+                .clamp_backoff(Duration::from_secs(2))
+                .max_duration(timeout)
+                .retry_async(|state| {
+                    let addr = &addr;
+                    async move {
+                        match tokio::net::lookup_host(addr).await {
+                            Ok(mut addrs) => {
+                                if addrs.next().is_some() {
+                                    if state.i > 0 {
+                                        info!("resolved {addr} after {} attempts", state.i + 1);
+                                    }
+                                    Ok(())
+                                } else {
+                                    let msg = format!("{addr} did not resolve to any addresses");
+                                    if state.next_backoff.is_some() {
+                                        warn!("{msg}, retrying...");
+                                    }
+                                    Err(anyhow::anyhow!("{msg}"))
+                                }
+                            }
+                            Err(e) => {
+                                let msg = format!(
+                                    "could not resolve {addr}: {}",
+                                    e.display_with_causes()
+                                );
+                                if state.next_backoff.is_some() {
+                                    warn!("{msg}, retrying...");
+                                }
+                                Err(anyhow::anyhow!("{msg}"))
+                            }
+                        }
+                    }
+                })
                 .await
-                .unwrap_or_else(|_| panic!("could not resolve {addr}"));
-            let Some(_resolved) = addrs.next() else {
-                panic!("{addr} did not resolve to any addresses");
-            };
-            drop(addrs);
+                .with_context(|| {
+                    format!("static resolver address {addr} did not resolve within {timeout:?}")
+                })?;
 
             (
                 BalancerResolver::Static(addr.clone()),

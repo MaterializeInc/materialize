@@ -1319,13 +1319,13 @@ impl LinearJoinPlan {
                 writeln!(
                     f,
                     "{}source={{ relation={}, key=[{}] }}",
-                    ctx.indent, &plan.source_relation, source_key
+                    ctx.indent, plan.source_relation, source_key
                 )?
             }
             None => writeln!(
                 f,
                 "{}source={{ relation={}, raw }}",
-                ctx.indent, &plan.source_relation
+                ctx.indent, plan.source_relation
             )?,
         };
         Ok(())
@@ -1523,13 +1523,13 @@ impl DeltaPathPlan {
                 writeln!(
                     f,
                     "{}source={{ relation={}, key=[{}] }}",
-                    ctx.indent, &plan.source_relation, source_key
+                    ctx.indent, plan.source_relation, source_key
                 )?
             }
             None => writeln!(
                 f,
                 "{}source={{ relation={}, raw }}",
-                ctx.indent, &plan.source_relation
+                ctx.indent, plan.source_relation
             )?,
         };
         Ok(())

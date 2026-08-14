@@ -178,3 +178,21 @@ testdrive-upsert-topic-${testdrive.seed}   none            <null>       text
 testdrive-none-topic-${testdrive.seed}     none            text         text
 testdrive-dbzupsert-${testdrive.seed}      debezium        avro         avro
 testdrive-upsert-topic-${testdrive.seed}   upsert          avro         avro
+
+# A kafka source table that omits the ENVELOPE clause defaults to ENVELOPE NONE,
+# so envelope_type must report 'none', not NULL. The omitted clause persists as
+# absent in create_sql, and the view supplies the default.
+> CREATE TABLE table_omit_envelope FROM SOURCE upsert_source (REFERENCE "testdrive-upsert-topic-${testdrive.seed}")
+  FORMAT TEXT
+
+> SELECT kst.envelope_type
+  FROM mz_internal.mz_kafka_source_tables kst
+  JOIN mz_tables t ON t.id = kst.id
+  WHERE t.name = 'table_omit_envelope'
+none
+
+# A new-syntax kafka source ingests nothing into its own relation (envelopes are
+# defined per table), so mz_sources.envelope_type is NULL for it, even though its
+# tables report their own envelopes above.
+> SELECT envelope_type FROM mz_sources WHERE name = 'upsert_source'
+<null>

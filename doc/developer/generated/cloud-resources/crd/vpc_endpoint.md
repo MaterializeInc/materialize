@@ -1,6 +1,6 @@
 ---
 source: src/cloud-resources/src/crd/vpc_endpoint.rs
-revision: 4267863081
+revision: 253293ef87
 ---
 
 # cloud-resources::crd::vpc_endpoint

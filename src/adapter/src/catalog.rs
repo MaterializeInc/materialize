@@ -32,7 +32,9 @@ use mz_catalog::builtin::{
     BUILTIN_PREFIXES, BuiltinCluster, BuiltinLog, BuiltinSource, BuiltinTable,
     MZ_CATALOG_SERVER_CLUSTER,
 };
-use mz_catalog::config::{BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig};
+use mz_catalog::config::{
+    AwsPrincipalContext, BuiltinItemMigrationConfig, ClusterReplicaSizeMap, Config, StateConfig,
+};
 #[cfg(test)]
 use mz_catalog::durable::CatalogError;
 use mz_catalog::durable::{
@@ -45,6 +47,7 @@ use mz_catalog::memory::objects::{
     CatalogCollectionEntry, CatalogEntry, CatalogItem, Cluster, ClusterReplica, Database,
     NetworkPolicy, Role, RoleAuth, Schema,
 };
+use mz_cloud_resources::AwsExternalIdPrefix;
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_controller::clusters::ReplicaLocation;
 use mz_controller_types::{ClusterId, ReplicaId};
@@ -56,7 +59,6 @@ use mz_ore::result::ResultExt as _;
 use mz_persist_client::PersistClient;
 use mz_repr::adt::mz_acl_item::{AclMode, PrivilegeMap};
 use mz_repr::explain::ExprHumanizer;
-use mz_repr::namespaces::MZ_TEMP_SCHEMA;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatures;
 use mz_repr::role_id::RoleId;
@@ -333,6 +335,23 @@ impl ConnectionResolver for ConnCatalog<'_> {
     }
 }
 
+/// AWS environment context for a debug catalog.
+///
+/// The `mz_aws_connections` and `mz_aws_privatelink_connections` builtin
+/// materialized views fold `mz_aws_account_id()`, `mz_aws_external_id_prefix()`,
+/// and `mz_aws_connection_role_arn()` into their optimized expressions. A debug
+/// catalog opened to be compared against a live environment (the testdrive
+/// consistency check) must fold those functions to the same values the live
+/// environment used, otherwise the optimized expressions diverge. This mirrors
+/// how `environment_id` is threaded into the catalog copy. Fields left `None`
+/// fold to SQL NULL, matching an environment without that context.
+#[derive(Debug, Clone, Default)]
+pub struct DebugAwsContext {
+    pub aws_account_id: Option<String>,
+    pub aws_external_id_prefix: Option<String>,
+    pub aws_connection_role_arn: Option<String>,
+}
+
 impl Catalog {
     /// Returns the catalog's transient revision, which starts at 1 and is
     /// incremented on every change. This is not persisted to disk, and will
@@ -375,6 +394,28 @@ impl Catalog {
         let catalog = Self::open_debug_catalog(persist_client, organization_id, &bootstrap_args)
             .await
             .expect("can open debug catalog");
+        f(catalog).await
+    }
+
+    /// Like [`Catalog::with_debug`], but folds the given AWS context into the
+    /// catalog. Used to exercise builtin materialized views that reproduce AWS
+    /// environment context in SQL (see [`DebugAwsContext`]).
+    pub async fn with_debug_aws_context<F, Fut, T>(aws_context: DebugAwsContext, f: F) -> T
+    where
+        F: FnOnce(Catalog) -> Fut,
+        Fut: Future<Output = T>,
+    {
+        let persist_client = PersistClient::new_for_tests().await;
+        let organization_id = Uuid::new_v4();
+        let bootstrap_args = test_bootstrap_args();
+        let catalog = Self::open_debug_catalog_with_aws_context(
+            persist_client,
+            organization_id,
+            &bootstrap_args,
+            Some(aws_context),
+        )
+        .await
+        .expect("can open debug catalog");
         f(catalog).await
     }
 
@@ -441,6 +482,44 @@ impl Catalog {
             system_parameter_defaults,
             bootstrap_args,
             None,
+            None,
+        )
+        .await
+    }
+
+    /// Like [`Catalog::open_debug_catalog`], but folds `aws_context` into the
+    /// catalog (see [`DebugAwsContext`]).
+    ///
+    /// Calls `open_debug_catalog_inner` directly rather than delegating through
+    /// [`Catalog::open_debug_catalog`], to avoid adding an `async fn` layer to
+    /// the returned future. The catalog-open future is close to the crate
+    /// `recursion_limit`, and the extra nesting overflows it when computing the
+    /// layout of callers such as the `catalog` benchmark.
+    pub async fn open_debug_catalog_with_aws_context(
+        persist_client: PersistClient,
+        organization_id: Uuid,
+        bootstrap_args: &BootstrapArgs,
+        aws_context: Option<DebugAwsContext>,
+    ) -> Result<Catalog, anyhow::Error> {
+        let now = SYSTEM_TIME.clone();
+        let environment_id = None;
+        let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
+            .with_organization_id(organization_id)
+            .with_default_deploy_generation()
+            .build()
+            .await?;
+        let storage = openable_storage.open(now().into(), bootstrap_args).await?;
+        let system_parameter_defaults = BTreeMap::default();
+        Self::open_debug_catalog_inner(
+            persist_client,
+            storage,
+            now,
+            environment_id,
+            &DUMMY_BUILD_INFO,
+            system_parameter_defaults,
+            bootstrap_args,
+            None,
+            aws_context,
         )
         .await
     }
@@ -473,6 +552,7 @@ impl Catalog {
             system_parameter_defaults,
             bootstrap_args,
             None,
+            None,
         )
         .await
     }
@@ -489,6 +569,7 @@ impl Catalog {
         build_info: &'static BuildInfo,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
+        aws_context: Option<DebugAwsContext>,
     ) -> Result<Catalog, anyhow::Error> {
         let openable_storage = TestCatalogStateBuilder::new(persist_client.clone())
             .with_organization_id(environment_id.organization_id())
@@ -510,6 +591,7 @@ impl Catalog {
             system_parameter_defaults,
             bootstrap_args,
             enable_expression_cache_override,
+            aws_context,
         )
         .await
     }
@@ -523,6 +605,7 @@ impl Catalog {
         system_parameter_defaults: BTreeMap<String, String>,
         bootstrap_args: &BootstrapArgs,
         enable_expression_cache_override: Option<bool>,
+        aws_context: Option<DebugAwsContext>,
     ) -> Result<Catalog, anyhow::Error> {
         let metrics_registry = &MetricsRegistry::new();
         let secrets_reader = Arc::new(InMemorySecretsController::new());
@@ -531,6 +614,37 @@ impl Catalog {
         let previous_ts = now().into();
         let replica_size = &bootstrap_args.default_cluster_replica_size;
         let read_only = false;
+
+        // Fold the requested AWS context into the connection context and
+        // principal context. The builtin AWS connection views reproduce these
+        // values in SQL, so a catalog compared against a live environment must
+        // resolve them identically. When `aws_context` is `None` the default
+        // `for_tests` context is used unchanged.
+        let mut connection_context = ConnectionContext::for_tests(secrets_reader);
+        let aws_principal_context = match aws_context {
+            None => None,
+            Some(aws_context) => {
+                connection_context.aws_external_id_prefix =
+                    aws_context.aws_external_id_prefix.as_deref().map(|prefix| {
+                        AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(prefix)
+                            .expect("infallible")
+                    });
+                connection_context.aws_connection_role_arn = aws_context.aws_connection_role_arn;
+                aws_context.aws_account_id.map(|aws_account_id| {
+                    AwsPrincipalContext {
+                        aws_account_id,
+                        // Only `aws_account_id` reaches the `mz_aws_account_id()`
+                        // fold. The external id prefix is read from the connection
+                        // context above, so any placeholder works here.
+                        aws_external_id_prefix:
+                            AwsExternalIdPrefix::new_from_cli_argument_or_environment_variable(
+                                "debug",
+                            )
+                            .expect("infallible"),
+                    }
+                })
+            }
+        };
 
         let OpenCatalogResult {
             catalog,
@@ -576,10 +690,10 @@ impl Catalog {
                 remote_system_parameters: None,
                 availability_zones: vec![],
                 egress_addresses: vec![],
-                aws_principal_context: None,
+                aws_principal_context,
                 aws_privatelink_availability_zones: None,
                 http_host_name: None,
-                connection_context: ConnectionContext::for_tests(secrets_reader),
+                connection_context,
                 builtin_item_migration_config: BuiltinItemMigrationConfig {
                     persist_client: persist_client.clone(),
                     read_only,
@@ -1048,35 +1162,34 @@ impl Catalog {
         self.state.try_get_role_auth_by_id(id)
     }
 
-    /// Creates a new schema in the `Catalog` for temporary items
-    /// indicated by the TEMPORARY or TEMP keywords.
-    pub fn create_temporary_schema(
-        &mut self,
-        conn_id: &ConnectionId,
-        owner_id: RoleId,
-    ) -> Result<(), Error> {
-        self.state.create_temporary_schema(conn_id, owner_id)
+    /// Registers the connection's temporary namespace: the `uuid` <->
+    /// `conn_id` mapping used to stamp and apply durable temporary items
+    /// owned by the session. The `mz_temp` schema itself is created when
+    /// the first temporary item is applied.
+    ///
+    /// The coordinator calls this at a session's first temporary-item
+    /// creation, strictly before the transaction that persists the item, and
+    /// guards on [`CatalogState::has_temporary_namespace`], so registering
+    /// an already-registered namespace is a bug.
+    pub fn register_temporary_namespace(&mut self, conn_id: &ConnectionId, uuid: Uuid) {
+        self.state
+            .temporary_namespaces
+            .register(conn_id.clone(), uuid);
     }
 
     fn item_exists_in_temp_schemas(&self, conn_id: &ConnectionId, item_name: &str) -> bool {
-        // Temporary schemas are created lazily, so it's valid for one to not exist yet.
+        // A temporary namespace is registered at the connection's first
+        // temporary-item creation, so it's valid for one to not exist yet.
         self.state
-            .temporary_schemas
-            .get(conn_id)
+            .temporary_namespaces
+            .schema(conn_id)
             .map(|schema| schema.items.contains_key(item_name))
             .unwrap_or(false)
     }
 
-    /// Drops schema for connection if it exists. Returns an error if it exists and has items.
-    /// Returns Ok if conn_id's temp schema does not exist.
-    pub fn drop_temporary_schema(&mut self, conn_id: &ConnectionId) -> Result<(), Error> {
-        let Some(schema) = self.state.temporary_schemas.remove(conn_id) else {
-            return Ok(());
-        };
-        if !schema.items.is_empty() {
-            return Err(Error::new(ErrorKind::SchemaNotEmpty(MZ_TEMP_SCHEMA.into())));
-        }
-        Ok(())
+    /// Removes the connection's temporary namespace, if it has one.
+    pub fn drop_temporary_namespace(&mut self, conn_id: &ConnectionId) {
+        self.state.temporary_namespaces.unregister(conn_id)
     }
 
     pub(crate) fn object_dependents(
@@ -1921,7 +2034,7 @@ impl SessionCatalog for ConnCatalog<'_> {
                 self.state
                     .ambient_schemas_by_id
                     .values()
-                    .chain(self.state.temporary_schemas.values())
+                    .chain(self.state.temporary_namespaces.schemas())
                     .map(|schema| schema as &dyn CatalogSchema),
             )
             .collect()
@@ -2416,7 +2529,7 @@ mod tests {
     use mz_sql::session::vars::{SystemVars, VarInput};
 
     use crate::catalog::state::LocalExpressionCache;
-    use crate::catalog::{Catalog, Op};
+    use crate::catalog::{Catalog, DebugAwsContext, Op};
     use crate::optimize::dataflows::{EvalTime, ExprPrep, ExprPrepOneShot};
     use crate::session::Session;
 
@@ -2674,17 +2787,17 @@ mod tests {
                 conn_catalog.effective_search_path(true),
                 conn_catalog.search_path
             );
+            // Because we lazily initialize the `mz_temp` schema,
+            // an explicit `mz_temp` search path before the first
+            // temporary item creation gets filtered out in
+            // `effective_search_path`.
             assert_eq!(
                 conn_catalog.effective_search_path(false),
-                vec![
-                    mz_catalog_schema.clone(),
-                    pg_catalog_schema.clone(),
-                    mz_temp_schema.clone()
-                ]
+                vec![mz_catalog_schema.clone(), pg_catalog_schema.clone(),]
             );
             assert_eq!(
                 conn_catalog.effective_search_path(true),
-                vec![mz_catalog_schema, pg_catalog_schema, mz_temp_schema]
+                vec![mz_temp_schema, mz_catalog_schema, pg_catalog_schema]
             );
             catalog.expire().await;
         })
@@ -2845,7 +2958,20 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] //  unsupported operation: can't call foreign function `TLS_client_method` on OS `linux`
     async fn verify_builtin_descs() {
-        Catalog::with_debug(|catalog| async move {
+        // Provide a full AWS context so the builtin AWS connection views resolve
+        // as they do in a cloud environment. Without an account id,
+        // `mz_aws_privatelink_connections.principal` folds to NULL, its
+        // `WHERE principal IS NOT NULL` filter is statically unsatisfiable, and
+        // the optimizer infers an extra empty key that the declared desc, which
+        // describes the cloud shape, does not carry.
+        let aws_context = DebugAwsContext {
+            aws_account_id: Some("123456789000".to_string()),
+            aws_external_id_prefix: Some("eb5cb59b-e2fe-41f3-87ca-d2176a495345".to_string()),
+            aws_connection_role_arn: Some(
+                "arn:aws:iam::123456789000:role/MaterializeConnection".to_string(),
+            ),
+        };
+        Catalog::with_debug_aws_context(aws_context, |catalog| async move {
             let conn_catalog = catalog.for_system_session();
 
             for builtin in BUILTINS::iter() {

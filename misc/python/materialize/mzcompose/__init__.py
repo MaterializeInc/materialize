@@ -27,6 +27,7 @@ import psycopg
 
 from materialize import spawn, ui
 from materialize.mz_version import MzVersion
+from materialize.rustc_flags import Sanitizer
 from materialize.ui import UIError
 
 T = TypeVar("T")
@@ -49,6 +50,17 @@ DEFAULT_MZ_VOLUMES = [
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
 ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
+
+
+def sanitizer_enabled() -> bool:
+    """Whether the binaries under test were built with a sanitizer.
+
+    Sanitizer builds run several times slower and use several times as much
+    memory as ordinary ones, so tests that assert on timing, or that need
+    jemalloc (which sanitizer builds drop, as it clashes with the sanitizer
+    runtimes), have to account for them.
+    """
+    return Sanitizer[os.getenv("CI_SANITIZER", "none")] != Sanitizer.none
 
 
 def get_minimal_system_parameters(
@@ -97,14 +109,9 @@ def get_minimal_system_parameters(
         "enable_refresh_every_mvs": "true",
         "enable_replacement_materialized_views": "true",
         "enable_cluster_schedule_refresh": "true",
-        # The cluster controller and background ALTER CLUSTER dyncfgs default on
-        # in current versions. Pin them explicitly so runs against older versions
-        # (which predate the flags or defaulted them off) exercise the legacy
-        # paths while current versions exercise the controller owning the
-        # managed-cluster replica set.
-        "enable_cluster_controller": (
-            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
-        ),
+        # Pinned explicitly so runs against older versions (which predate the
+        # flag or defaulted it off) behave like current ones, where it defaults
+        # on.
         "enable_background_alter_cluster": (
             "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
         ),
@@ -126,6 +133,18 @@ def get_minimal_system_parameters(
 
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
+
+    if sanitizer_enabled():
+        config["with_0dt_deployment_max_wait"] = "18000s"
+
+    # The cluster controller's break-glass gate. Removed in v26.38, where the
+    # controller runs unconditionally. Older binaries still read it, and
+    # defaulted it off before v26.29, so pin it on for them to keep mixed-version
+    # runs exercising the same path as current versions.
+    if version < MzVersion.parse_mz("v26.38.0-dev"):
+        config["enable_cluster_controller"] = (
+            "true" if version >= MzVersion.parse_mz("v26.29.0-dev") else "false"
+        )
 
     return config
 
@@ -241,6 +260,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_adapter_frontend_occ_read_then_write",
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_cast_elimination",
             "true",
             ["true", "false"],
@@ -268,11 +292,6 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_frontend_subscribes",
             "true" if version >= MzVersion.parse_mz("v26.18.0-dev") else "false",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
-            "enable_scoped_system_parameters",
-            "false",
             ["true", "false"],
         ),
         VariableSystemParameter(
@@ -763,6 +782,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mcp_request_timeout",
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
+    "webhook_validation_memory_budget_bytes",
     "cluster_controller_tick_interval",
     "default_cluster_reconfiguration_timeout",
     "read_then_write_max_dependencies",

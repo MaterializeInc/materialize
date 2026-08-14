@@ -67,7 +67,7 @@ metrics:
   source: src/environmentd/src/http/metrics.rs
   visibility: internal
 - name: environmentd_needs_update
-  help: Count of organizations in this cluster which are running outdated pod templates
+  help: Count of organizations in this cluster which are running outdated pod templates. Only the operator replica holding the leadership lease reconciles, so the others report zero.
   source: src/orchestratord/src/metrics.rs
   visibility: internal
 - name: jemalloc_active
@@ -92,6 +92,12 @@ metrics:
   visibility: internal
 - name: mz_active_copy_tos
   help: The number of active COPY TO queries.
+  labels:
+  - session_type
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_active_internal_subscribes
+  help: The number of active internal subscribes, which serve frontend-sequenced read-then-write.
   labels:
   - session_type
   source: src/adapter/src/metrics.rs
@@ -452,28 +458,6 @@ metrics:
 - name: mz_catalog_transactions_started
   help: Total number of started transactions.
   source: src/catalog/src/durable/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_bucket
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - le
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_count
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_check_scheduling_policies_seconds_sum
-  help: The time each policy in `check_scheduling_policies` takes.
-  labels:
-  - policy
-  - thread
-  source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_cluster_handle_command_duration_seconds_bucket
   help: Time spent in handling commands.
@@ -971,25 +955,6 @@ metrics:
   help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
   source: src/adapter/src/metrics.rs
   visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_bucket
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
-  - le
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_count
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
-  source: src/adapter/src/metrics.rs
-  visibility: internal
-- name: mz_handle_scheduling_decisions_seconds_sum
-  help: The time `handle_scheduling_decisions` takes.
-  labels:
-  - altered_a_cluster
-  source: src/adapter/src/metrics.rs
-  visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_bucket
   help: Time setting up cursor and literal constraints.
   labels:
@@ -1032,6 +997,20 @@ metrics:
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_result_sort_rows_bucket
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_rows_count
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_result_sort_rows_sum
+  help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_result_sort_seconds_bucket
   help: Time sorting intermediate results during peek collection.
   labels:
@@ -1058,6 +1037,20 @@ metrics:
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_sum
   help: Time constructing RowCollection from peek results.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_bucket
+  help: Number of arrangement rows evaluated by the index peek result iterator.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_count
+  help: Number of arrangement rows evaluated by the index peek result iterator.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_row_iteration_rows_sum
+  help: Number of arrangement rows evaluated by the index peek result iterator.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
@@ -1466,6 +1459,20 @@ metrics:
   visibility: public
   tags:
   - environment
+- name: mz_occ_read_then_write_retry_count_bucket
+  help: Number of OCC retries per read-then-write operation.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_occ_read_then_write_retry_count_count
+  help: Number of OCC retries per read-then-write operation.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_occ_read_then_write_retry_count_sum
+  help: Number of OCC retries per read-then-write operation.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_optimization_notices
   help: Number of optimization notices per notice type.
   labels:
@@ -4278,6 +4285,10 @@ metrics:
   labels:
   - reason
   source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: orchestratord_is_leader
+  help: Whether this operator replica holds the controller leadership lease, and is therefore the replica reconciling. Summed across the replicas this should be 1. A sustained 0 means no replica can take the lease, for instance because the service account lacks permission on leases, and the operator is reconciling nothing.
+  source: src/orchestratord/src/metrics.rs
   visibility: internal
 - name: outer_join_lowering_cases
   help: How many times the different outer join lowering cases happened.

@@ -24,14 +24,12 @@ harness = false
 [dependencies]
 aho-corasick.workspace = true
 anyhow.workspace = true
-bytes.workspace = true
 bytesize.workspace = true
 chrono.workspace = true
 columnation.workspace = true
 chrono-tz.workspace = true
 crc32fast.workspace = true
 csv.workspace = true
-differential-dataflow.workspace = true
 dec.workspace = true
 derivative.workspace = true
 encoding.workspace = true

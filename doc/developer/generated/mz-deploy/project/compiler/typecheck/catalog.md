@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/compiler/typecheck/catalog.rs
-revision: a9e7b191b3
+revision: fd1dd6e62b
 ---
 
 # mz-deploy::project::compiler::typecheck::catalog

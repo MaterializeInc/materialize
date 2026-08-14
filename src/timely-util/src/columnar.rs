@@ -20,8 +20,10 @@
 pub mod batcher;
 pub mod builder;
 pub mod builder_input;
+pub mod chunk;
 pub mod consolidate;
 pub mod merge_batcher;
+pub mod unload;
 
 use std::hash::Hash;
 
@@ -174,26 +176,29 @@ where
 /// merger and chunks shipped from the builder are sized comparably.
 const SHIP_WORDS: usize = 1 << 18;
 
-/// Returns true once the serialized size of `borrow` is within 10% of the next
-/// `SHIP_WORDS` boundary.
+/// Returns true once the serialized size of `borrow` reaches 10% under
+/// `SHIP_WORDS`.
 ///
-/// Same heuristic as `ColumnBuilder::push_into`; lifted out so the merger and
-/// the `SizableContainer` impl agree on the ship signal.
+/// Monotone in size, deliberately not a window below the boundary. A single
+/// record wider than a window steps clear over it, and a ship signal that
+/// un-fires past the boundary lets a chunk grow until it exceeds the buffer
+/// pool's largest size class, past which a spilled body degrades to
+/// permanently resident. The same heuristic as [`builder::ColumnBuilder`]'s
+/// ship point, lifted out so the builder, the merger, and the
+/// `SizableContainer` impl agree on the signal.
 #[inline]
 pub(crate) fn at_serialized_capacity<'a, A>(borrow: &A) -> bool
 where
     A: columnar::AsBytes<'a>,
 {
-    let words = indexed::length_in_words(borrow);
-    let round = (words + (SHIP_WORDS - 1)) & !(SHIP_WORDS - 1);
-    round - words < round / 10
+    indexed::length_in_words(borrow) >= SHIP_WORDS - SHIP_WORDS / 10
 }
 
 impl<C: Columnar> SizableContainer for Column<C> {
     fn at_capacity(&self) -> bool {
-        // Match `ColumnBuilder`'s ship heuristic: serialized size within 10%
-        // of the next 2 MiB. Aligns chunk-size choices across the two paths
-        // and keeps recipients dealing with a single granularity.
+        // Match `ColumnBuilder`'s ship heuristic: serialized size at the
+        // 2 MiB ship threshold. Aligns chunk-size choices across the two
+        // paths and keeps recipients dealing with a single granularity.
         //
         // Serialized chunks (`Bytes` / `Align`) have no typed builder to push
         // into, so they're trivially "at capacity" — there's no further work
@@ -363,5 +368,26 @@ mod tests {
             column.borrow().into_index_iter().collect::<Vec<_>>(),
             vec![&1, &2, &3]
         );
+    }
+
+    /// The ship signal is monotone: once it fires it stays fired, even when
+    /// a single wide record steps far past the 2 MiB boundary in one push.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn ship_threshold_monotone() {
+        use columnar::Push;
+        let mut container = <Vec<u64> as Columnar>::Container::default();
+        // Wider than 10% of any boundary a 25 MiB run can reach.
+        let wide: Vec<u64> = vec![0u64; 50_000];
+        let mut fired = false;
+        for pushes in 1..=64 {
+            container.push(&wide);
+            let now = at_serialized_capacity(&container.borrow());
+            if fired {
+                assert!(now, "ship signal un-fired at {pushes} records");
+            }
+            fired = fired || now;
+        }
+        assert!(fired, "ship signal never fired");
     }
 }

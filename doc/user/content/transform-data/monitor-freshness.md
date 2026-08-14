@@ -1,0 +1,150 @@
+---
+title: "How to monitor freshness in Materialize"
+description: "How to monitor data freshness across your environment and for specific objects in Materialize."
+menu:
+  main:
+    name: "Monitor freshness"
+    identifier: monitor-freshness
+    parent: transform-data
+    weight: 84
+---
+
+[Freshness](/concepts/reaction-time/#freshness) measures the time from when a
+change occurs in an upstream system to when it becomes visible in the results of
+a query. This guide shows how to track freshness for an object over time and how
+to summarize a whole window of freshness observations with a CCDF.
+
+If freshness is worse than expected, see [Freshness
+troubleshooting](/transform-data/freshness-troubleshooting/) to diagnose and
+resolve the cause.
+
+## Track freshness over time
+
+To track freshness for a specific object over time, query its wallclock lag
+history. The following query returns the last 6 hours of wallclock lag for a
+materialized view (replace `<your_mv_name>` with the name of your object):
+
+```mzsql
+SELECT wl.occurred_at, wl.lag
+FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+WHERE o.name = '<your_mv_name>'
+  AND wl.occurred_at > now() - INTERVAL '6 hours'
+ORDER BY wl.occurred_at DESC;
+```
+
+For example, for a materialized view named `freshness_demo`, the query returns
+output like the following:
+
+```none
+      occurred_at       |   lag
+------------------------+----------
+ 2026-07-30 19:38:00+00 | 00:00:02
+ 2026-07-30 19:37:00+00 | 00:00:02
+ 2026-07-30 19:36:00+00 | 00:00:02
+ 2026-07-30 19:35:00+00 | 00:00:02
+ 2026-07-30 19:34:00+00 | 00:00:02
+(5 rows)
+```
+
+Each row is one minute-binned observation of the object's wallclock lag, most
+recent first. Here lag holds steady at about two seconds, which is the expected,
+healthy pattern for a lightly loaded object.
+
+{{< note >}}
+
+Materialize exposes wallclock lag history through two relations. Which one you
+query has a large impact on performance.
+
+- [`mz_internal.mz_wallclock_global_lag_recent_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_recent_history)
+  is indexed and holds only the past 24 hours of data. Querying it is fast, so
+  it is the right choice for frequent or interactive monitoring and for
+  dashboards. Use this relation by default, as in the query above.
+
+- [`mz_internal.mz_wallclock_global_lag_history`](/reference/system-catalog/mz_internal/#mz_wallclock_global_lag_history)
+  covers the full retention window (at least 30 days) but is unindexed, so it
+  can be slow to query. A single query can occupy `mz_catalog_server` for
+  several seconds. Reach for this
+  relation only when you specifically need data older than 24 hours, and avoid
+  querying it frequently.
+
+{{< /note >}}
+
+## Summarize freshness with a CCDF
+
+A raw time series is hard to summarize. A **complementary cumulative
+distribution function (CCDF)** compresses a whole window of freshness observations
+into a compact summary that answers one question: for a given threshold `X`,
+what fraction of the time was the object's freshness at or above `X`?
+
+This is the compact way to describe a freshness distribution. Instead of staring
+at a time series, you can make statements like "the p99 freshness was 1s".
+
+The following query builds a freshness CCDF across every object from the last 24
+hours of history. It reads the fast, indexed
+`mz_internal.mz_wallclock_global_lag_recent_history` and, for a fixed set of
+decade thresholds (1, 10, and 100 seconds), reports the fraction of observations
+whose freshness was at or above each threshold. The fixed thresholds mean every run
+returns all three rows, even when the larger thresholds have no observations:
+
+```mzsql
+WITH lags AS (
+    -- Convert each lag to seconds, dropping unhydrated (NULL) observations and
+    -- any non-positive lag.
+    SELECT extract(epoch FROM wl.lag) AS lag_seconds
+    FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+    WHERE wl.lag IS NOT NULL
+      AND wl.lag > INTERVAL '0'
+),
+thresholds AS (
+    -- Fixed decade thresholds, so the CCDF always reports 1s, 10s, and 100s.
+    SELECT unnest(ARRAY[1, 10, 100]) AS lag_threshold_seconds
+)
+SELECT
+    t.lag_threshold_seconds,
+    count(*) FILTER (WHERE l.lag_seconds >= t.lag_threshold_seconds)::float8
+        / count(*) AS fraction_of_time_at_or_above
+FROM thresholds t, lags l
+GROUP BY t.lag_threshold_seconds
+ORDER BY t.lag_threshold_seconds;
+```
+
+The query returns output like the following:
+
+```none
+ lag_threshold_seconds | fraction_of_time_at_or_above
+-----------------------+------------------------------
+                     1 |                            1
+                    10 |                            0
+                   100 |                            0
+(3 rows)
+```
+
+Read this as: freshness was at or above 1 second 100% of the time and never
+reached 10 seconds or 100 seconds (0% at or above each). This is the healthy
+pattern for a lightly loaded instance whose objects all sit at a low,
+near-constant lag, so the 10-second and 100-second thresholds are zero here. A
+busier instance under real load might show non-zero fractions at those higher
+thresholds.
+
+By default this query aggregates across every object. To scope the CCDF to a
+single object, add a join to `mz_catalog.mz_objects` and a name filter to the
+`lags` CTE (replace `<your_mv_name>` with the name of your object):
+
+```mzsql
+    FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+    JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
+    WHERE o.name = '<your_mv_name>'
+      AND wl.lag IS NOT NULL
+      AND wl.lag > INTERVAL '0'
+```
+
+To compare against an SLO, pick your target freshness (say 10 seconds) and read
+the fraction of time at or above it. That fraction is how often the object was
+violating the SLO over the window.
+
+Expect a few artifacts in the data. NULL lag rows are unhydrated observations,
+and the query above already filters them out. If a spurious shelf appears far
+out at roughly `1.76e9` seconds (about 56 years), it comes from unhydrated
+collections reported at the Unix epoch, so filter it out (for example with `AND
+wl.lag < INTERVAL '1 year'`) so it does not distort the fractions.

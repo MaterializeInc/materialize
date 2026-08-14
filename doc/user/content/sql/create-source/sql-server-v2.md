@@ -10,8 +10,6 @@ menu:
     weight: 30
 ---
 
-{{< public-preview />}}
-
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/sql-server/)" include_blurb=true >}}
 
@@ -54,6 +52,9 @@ changes without downtime.
 
 See [Guide: Handle upstream schema changes with zero downtime](/ingest-data/sql-server/source-versioning/) for details.
 
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
+
 #### Supported types
 
 With the new syntax, after a SQL Server source is created, you [`CREATE TABLE
@@ -93,6 +94,10 @@ FROM <src_name>_progress;
 The reported `lsn` should increase as Materialize consumes **new** CDC events
 from the upstream SQL Server database. For more details on monitoring source
 ingestion progress and debugging related issues, see [Troubleshooting](/ops/troubleshooting/).
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}
 
 ## Example
 

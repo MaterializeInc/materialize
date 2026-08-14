@@ -1,6 +1,6 @@
 ---
 source: src/frontegg-mock/src/server.rs
-revision: 88b6028c79
+revision: 253293ef87
 ---
 
 # frontegg-mock::server

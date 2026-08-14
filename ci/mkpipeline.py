@@ -13,7 +13,9 @@ This script takes pipeline.template.yml as input, possibly trims out jobs
 whose inputs have not changed relative to the code on main, and uploads the
 resulting pipeline to the Buildkite job that triggers this script.
 
-On main and tags, all jobs are always run.
+On tags, all jobs are always run. A push to main only builds and publishes
+images; its test suite runs in the scheduled builds of the test pipeline
+instead, which arrive with a BUILDKITE_SOURCE other than "webhook".
 
 For details about how steps are trimmed, see the comment at the top of
 pipeline.template.yml and the docstring on `trim_tests_pipeline` below.
@@ -291,6 +293,23 @@ so it is executed.""",
         # The build steps are exempt from this trim, so they still run.
         trim_test_selection_id(pipeline, set())
         fail_build_reason = "ci-no-test"
+    elif (
+        args.pipeline == "test"
+        and os.environ["BUILDKITE_BRANCH"] == "main"
+        and not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
+        and not os.environ["BUILDKITE_TAG"]
+        and os.getenv("BUILDKITE_SOURCE") == "webhook"
+        and not os.getenv("CI_TEST_IDS")
+        and not os.getenv("CI_TEST_SELECTION")
+        and not args.coverage
+        and args.sanitizer == Sanitizer.none
+        and fail_build_reason is None
+    ):
+        trim_test_selection_id(pipeline, set())
+        # Make the website always deploy
+        for step in steps(pipeline):
+            if step.get("id") == "lint-docs":
+                step.pop("skip", None)
 
     # Surface label-driven changes as a Buildkite annotation, since otherwise
     # they are only visible buried in this step's log. Skipped under --dry-run
@@ -362,9 +381,12 @@ so it is executed.""",
             )
     truncate_skip_length(pipeline)
     handle_sanitizer_skip(pipeline, args.sanitizer)
-    increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     prioritize_pipeline(pipeline, args.priority)
     switch_jobs_to_aws(pipeline, args.priority)
+    # After `switch_jobs_to_aws`, so that the queue a step ends up on is the one
+    # that gets sized up. The other order lets the aarch64 to x86_64 fallback
+    # land on a smaller machine than the size-up asked for.
+    increase_agents_timeouts(pipeline, args.sanitizer, args.coverage)
     permit_rerunning_successful_steps(pipeline)
     set_retry_on_agent_lost(pipeline)
     set_default_agents_queue(pipeline)
@@ -384,7 +406,6 @@ so it is executed.""",
         lto,
     )
     add_nightly_deploy_dependency(pipeline, args.pipeline)
-    remove_dependencies_on_prs(pipeline, args.pipeline, hash_check)
     remove_mz_specific_keys(pipeline)
 
     print("--- Uploading new pipeline:")
@@ -478,56 +499,55 @@ def handle_sanitizer_skip(pipeline: Any, sanitizer: Sanitizer) -> None:
                 step["skip"] = True
 
 
+# The next size up for each agent queue, used when a run needs more machine
+# than the pipeline asks for.
+NEXT_LARGER_AGENT = {
+    "linux-aarch64-small": "linux-aarch64",
+    "linux-aarch64": "linux-aarch64-medium",
+    "linux-aarch64-medium": "linux-aarch64-large",
+    "linux-aarch64-large": "builder-linux-aarch64-mem",
+    "linux-x86_64-small": "linux-x86_64",
+    "linux-x86_64": "linux-x86_64-medium",
+    "linux-x86_64-medium": "linux-x86_64-large",
+    "linux-x86_64-large": "builder-linux-x86_64",
+    "hetzner-aarch64-2cpu-4gb": "hetzner-aarch64-4cpu-8gb",
+    "hetzner-aarch64-4cpu-8gb": "hetzner-aarch64-8cpu-16gb",
+    "hetzner-aarch64-8cpu-16gb": "hetzner-aarch64-16cpu-32gb",
+    "hetzner-x86-64-2cpu-4gb": "hetzner-x86-64-4cpu-8gb",
+    "hetzner-x86-64-4cpu-8gb": "hetzner-x86-64-8cpu-16gb",
+    "hetzner-x86-64-8cpu-16gb": "hetzner-x86-64-16cpu-32gb",
+    "hetzner-x86-64-12cpu-24gb": "hetzner-x86-64-dedi-16cpu-64gb",
+    "hetzner-x86-64-16cpu-32gb": "hetzner-x86-64-dedi-16cpu-64gb",
+    "hetzner-x86-64-16cpu-64gb": "hetzner-x86-64-dedi-32cpu-128gb",
+    "hetzner-x86-64-dedi-8cpu-32gb": "hetzner-x86-64-dedi-16cpu-64gb",
+    "hetzner-x86-64-dedi-16cpu-64gb": "hetzner-x86-64-dedi-32cpu-128gb",
+    "hetzner-x86-64-dedi-32cpu-128gb": "hetzner-x86-64-dedi-48cpu-192gb",
+}
+
+
 def increase_agents_timeouts(
     pipeline: Any, sanitizer: Sanitizer, coverage: bool
 ) -> None:
-    if sanitizer != Sanitizer.none or os.getenv("CI_SYSTEM_PARAMETERS", "") == "random":
+    # Most sanitizer runs, as well as random permutations of system parameters,
+    # are slower and need more memory. The default system parameters in CI are
+    # chosen to be efficient for execution, while a random permutation might
+    # take way longer and use more memory.
+    if sanitizer != Sanitizer.none:
+        sizes_up = 2
+    elif os.getenv("CI_SYSTEM_PARAMETERS", "") == "random":
+        sizes_up = 1
+    else:
+        sizes_up = 0
+
+    if sizes_up:
         for step in steps(pipeline):
-            # Most sanitizer runs, as well as random permutations of system
-            # parameters, are slower and need more memory. The default system
-            # parameters in CI are chosen to be efficient for execution, while
-            # a random permutation might take way longer and use more memory.
             if "timeout_in_minutes" in step:
                 step["timeout_in_minutes"] *= 10
 
             if "agents" in step:
                 agent = step["agents"].get("queue", None)
-                if agent == "linux-aarch64-small":
-                    agent = "linux-aarch64"
-                elif agent == "linux-aarch64":
-                    agent = "linux-aarch64-medium"
-                elif agent == "linux-aarch64-medium":
-                    agent = "linux-aarch64-large"
-                elif agent == "linux-aarch64-large":
-                    agent = "builder-linux-aarch64-mem"
-                elif agent == "linux-x86_64-small":
-                    agent = "linux-x86_64"
-                elif agent == "linux-x86_64":
-                    agent = "linux-x86_64-medium"
-                elif agent == "linux-x86_64-medium":
-                    agent = "linux-x86_64-large"
-                elif agent == "linux-x86_64-large":
-                    agent = "builder-linux-x86_64"
-                elif agent == "hetzner-aarch64-2cpu-4gb":
-                    agent = "hetzner-aarch64-4cpu-8gb"
-                elif agent == "hetzner-aarch64-4cpu-8gb":
-                    agent = "hetzner-aarch64-8cpu-16gb"
-                elif agent == "hetzner-aarch64-8cpu-16gb":
-                    agent = "hetzner-aarch64-16cpu-32gb"
-                elif agent == "hetzner-x86-64-2cpu-4gb":
-                    agent = "hetzner-x86-64-4cpu-8gb"
-                elif agent == "hetzner-x86-64-4cpu-8gb":
-                    agent = "hetzner-x86-64-8cpu-16gb"
-                elif agent == "hetzner-x86-64-8cpu-16gb":
-                    agent = "hetzner-x86-64-16cpu-32gb"
-                elif agent == "hetzner-x86-64-12cpu-24gb":
-                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
-                elif agent == "hetzner-x86-64-16cpu-32gb":
-                    agent = "hetzner-x86-64-dedi-16cpu-64gb"
-                elif agent == "hetzner-x86-64-16cpu-64gb":
-                    agent = "hetzner-x86-64-dedi-32cpu-128gb"
-                elif agent == "hetzner-x86-64-dedi-32cpu-128gb":
-                    agent = "hetzner-x86-64-dedi-48cpu-192gb"
+                for _ in range(sizes_up):
+                    agent = NEXT_LARGER_AGENT.get(agent, agent)
                 step["agents"] = {"queue": agent}
 
     if coverage:
@@ -546,7 +566,7 @@ def increase_agents_timeouts(
                 step["name"] = "Build aarch64 with coverage"
             if step.get("id") == "cargo-test":
                 step["agents"]["queue"] = "hetzner-x86-64-dedi-32cpu-128gb"
-                del step["parallelism"]
+                step.pop("parallelism", None)
     else:
         for step in steps(pipeline):
             if step.get("coverage") == "only":
@@ -743,7 +763,8 @@ def set_retry_on_agent_lost(pipeline: Any) -> None:
         retry.setdefault("automatic", []).extend(
             [
                 {
-                    "exit_status": -1,  # Agent lost or job timed out during checkout/setup
+                    "exit_status": -1,
+                    "signal_reason": "none",
                     "limit": 2,
                 },
                 {
@@ -1220,58 +1241,10 @@ def add_cargo_test_dependency(
         return
 
     for step in steps(pipeline):
-        if step.get("id") in ("cargo-test", "miri-test"):
+        if step.get("id") == "cargo-test":
             step["depends_on"] = (
                 "build-x86_64" if "x86" in step["agents"]["queue"] else "build-aarch64"
             )
-
-
-def remove_dependencies_on_prs(
-    pipeline: Any,
-    pipeline_name: str,
-    hash_check: dict[Arch, tuple[str, bool]],
-) -> None:
-    """On test-pipeline PRs, let single-architecture consumers retry for their image instead of waiting for its build."""
-    if pipeline_name != "test":
-        return
-    if (
-        not ui.env_is_truthy("BUILDKITE_PULL_REQUEST")
-        or os.environ["BUILDKITE_TAG"]
-        or ui.env_is_truthy("CI_RELEASE_LTO_BUILD")
-        or os.environ["BUILDKITE_BRANCH"].startswith("dependabot/")
-    ):
-        return
-    build_image_exists = {
-        "build-x86_64": hash_check[Arch.X86_64][1],
-        "build-aarch64": hash_check[Arch.AARCH64][1],
-    }
-    for step in steps(pipeline):
-        if step.get("id") in (
-            "upload-debug-symbols-x86_64",
-            "upload-debug-symbols-aarch64",
-        ):
-            continue
-        d = step.get("depends_on")
-        if d is None:
-            continue
-        deps = [d] if isinstance(d, str) else list(d)
-        build_deps = [dep for dep in deps if dep in build_image_exists]
-        # CI_WAITING_FOR_BUILD tracks one build's status. A multi-architecture
-        # consumer needs every build, so it cannot safely use that contract.
-        if len(build_deps) > 1:
-            continue
-        # Drop the build dependency whose image isn't published yet, so the
-        # consumer starts immediately and keeps retrying for the Docker image.
-        missing_build_deps = [dep for dep in build_deps if not build_image_exists[dep]]
-        if not missing_build_deps:
-            continue
-        waiting_for_build = missing_build_deps[0]
-        step.setdefault("env", {})["CI_WAITING_FOR_BUILD"] = waiting_for_build
-        remaining = [dep for dep in deps if dep != waiting_for_build]
-        if remaining:
-            step["depends_on"] = remaining
-        else:
-            del step["depends_on"]
 
 
 def move_build_to_lto(pipeline: Any, lto: bool) -> None:

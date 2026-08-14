@@ -35,5 +35,3 @@ uuid.workspace = true
 [features]
 default = []
 snappy = ["byteorder", "crc32fast", "snap"]
-
-[package.metadata.cargo-udeps.ignore]

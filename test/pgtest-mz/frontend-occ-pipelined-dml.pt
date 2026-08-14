@@ -1,0 +1,56 @@
+# Test that a read-then-write pipelined behind a write in the same
+# extended-protocol implicit transaction is rejected.
+#
+# An extended-protocol pipeline keeps the transaction in the `Started` state
+# until `Sync`, accumulating the earlier statement's write ops. A DELETE cannot
+# see those ops, so running it would commit durably against a snapshot that
+# lacks them. That reorders the DELETE before the INSERT, and the DELETE would
+# survive the rollback that the failing pipeline performs on the INSERT.
+
+send
+Query {"query": "DROP TABLE IF EXISTS t"}
+Query {"query": "CREATE TABLE t (a int)"}
+----
+
+until ignore=NoticeResponse
+ReadyForQuery
+ReadyForQuery
+----
+CommandComplete {"tag":"DROP TABLE"}
+ReadyForQuery {"status":"I"}
+CommandComplete {"tag":"CREATE TABLE"}
+ReadyForQuery {"status":"I"}
+
+send
+Parse {"query": "INSERT INTO t VALUES (1)"}
+Bind
+Execute
+Parse {"query": "DELETE FROM t WHERE a = 1"}
+Bind
+Execute
+Sync
+----
+
+until
+ReadyForQuery
+----
+ParseComplete
+BindComplete
+CommandComplete {"tag":"INSERT 0 1"}
+ParseComplete
+BindComplete
+ErrorResponse {"fields":[{"typ":"S","value":"ERROR"},{"typ":"C","value":"25001"},{"typ":"M","value":"DELETE FROM t WHERE a = 1 cannot be run inside a transaction block"}]}
+ReadyForQuery {"status":"I"}
+
+# The pipeline failed, so the INSERT rolled back too and the table is empty.
+send
+Query {"query": "SELECT count(*) FROM t"}
+----
+
+until
+ReadyForQuery
+----
+RowDescription {"fields":[{"name":"count"}]}
+DataRow {"fields":["0"]}
+CommandComplete {"tag":"SELECT 1"}
+ReadyForQuery {"status":"I"}

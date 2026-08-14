@@ -355,18 +355,6 @@ kubectl get nodes -l karpenter.sh/nodepool=materialize
 {{< /tabs >}}
 
 {{< /tab >}}
-{{< tab "Legacy Terraform" >}}
-
-The legacy Terraform modules
-([terraform-aws-materialize](https://github.com/MaterializeInc/terraform-aws-materialize),
-[terraform-google-materialize](https://github.com/MaterializeInc/terraform-google-materialize),
-and
-[terraform-azurerm-materialize](https://github.com/MaterializeInc/terraform-azurerm-materialize))
-are no longer supported. Migrate to the [new Terraform
-modules](https://github.com/MaterializeInc/materialize-terraform-self-managed)
-first, then follow the steps in the **Terraform** tab.
-
-{{< /tab >}}
 {{< tab "Manual" >}}
 
 If you manage your infrastructure without the Materialize Terraform modules:

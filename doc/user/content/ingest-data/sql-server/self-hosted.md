@@ -271,3 +271,7 @@ example="schema-changes" %}}
 ## Considerations
 
 {{% include-headless "/headless/sql-server-considerations" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}

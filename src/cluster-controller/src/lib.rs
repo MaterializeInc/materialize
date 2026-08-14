@@ -46,7 +46,7 @@ use mz_ore::soft_panic_or_log;
 use crate::ctx::{
     ApplyOutcome, ClusterControllerCtx, ClusterState, CreateReason, Decision, ObservedReplica,
     ReconfigurationAudit, ReconfigurationRecord, ReconfigurationStatus, ReconfigurationWrite,
-    ReplicaShape, StateWrite,
+    RefreshWindowInputs, ReplicaShape, StateWrite,
 };
 use crate::strategy::{
     BaselineStrategy, ConfigSignals, DesiredReplica, GracefulReconfigurationStrategy,
@@ -131,7 +131,10 @@ impl ClusterController {
         // that is probably about to go stale.
         let mut rejected = BTreeSet::new();
         for state in &states {
-            let write = self.merge_state_writes(state, &signals[&state.cluster_id], &config, now);
+            let Some(signals) = signals.get(&state.cluster_id) else {
+                continue;
+            };
+            let write = self.merge_state_writes(state, signals, &config, now);
             if write.is_empty() {
                 continue;
             }
@@ -166,8 +169,10 @@ impl ClusterController {
             if rejected.contains(&state.cluster_id) {
                 continue;
             }
-            let decisions =
-                self.collect_replica_decisions(state, &signals[&state.cluster_id], &config, now);
+            let Some(signals) = signals.get(&state.cluster_id) else {
+                continue;
+            };
+            let decisions = self.collect_replica_decisions(state, signals, &config, now);
             if decisions.is_empty() {
                 continue;
             }
@@ -325,10 +330,12 @@ impl ClusterController {
     ///
     /// Each strategy names its needs as a pure function of the durable state
     /// and the tick's config signals ([`Strategy::signal_request`]), so the
-    /// kernel stays ignorant of when a strategy engages. Signals are fetched per
-    /// cluster and only where requested: a steady cluster is never probed,
-    /// keeping the ctx seam pay-for-what-you-use. The returned map has an entry
-    /// for every state.
+    /// kernel stays ignorant of when a strategy engages. Signals are fetched
+    /// only where requested: a steady cluster is never probed, keeping the ctx
+    /// seam pay-for-what-you-use. Refresh-window inputs are fetched as one batch
+    /// so every scheduled cluster shares one oracle read per phase. The returned
+    /// map omits a state when one of its required inputs was unavailable, which
+    /// causes the reconciliation phase to skip that cluster.
     async fn fetch_signals(
         &self,
         ctx: &mut dyn ClusterControllerCtx,
@@ -336,6 +343,7 @@ impl ClusterController {
         config: &ConfigSignals,
     ) -> BTreeMap<ClusterId, LiveSignals> {
         let mut signals = BTreeMap::new();
+        let mut refresh_window_clusters = Vec::new();
         for state in states {
             let request = self
                 .strategies
@@ -360,9 +368,36 @@ impl ClusterController {
                 }
             }
             if request.refresh_window {
-                live.refresh_window = ctx.refresh_window_inputs(state.cluster_id).await;
+                refresh_window_clusters.push(state.cluster_id);
             }
             signals.insert(state.cluster_id, live);
+        }
+        if !refresh_window_clusters.is_empty() {
+            match ctx.refresh_window_inputs(&refresh_window_clusters).await {
+                Some(batch) => {
+                    let read_ts = batch.read_ts;
+                    let mut cluster_inputs = batch.cluster_inputs;
+                    for cluster_id in refresh_window_clusters {
+                        let Some(inputs) = cluster_inputs.remove(&cluster_id) else {
+                            signals.remove(&cluster_id);
+                            continue;
+                        };
+                        let live = signals
+                            .get_mut(&cluster_id)
+                            .expect("signal entry inserted for requested cluster");
+                        live.refresh_window = Some(RefreshWindowInputs {
+                            read_ts,
+                            compaction_estimate: inputs.compaction_estimate,
+                            refresh_mvs: inputs.refresh_mvs,
+                        });
+                    }
+                }
+                None => {
+                    for cluster_id in refresh_window_clusters {
+                        signals.remove(&cluster_id);
+                    }
+                }
+            }
         }
         signals
     }

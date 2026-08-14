@@ -18,6 +18,10 @@ workspace = true
 default = ["protobuf-src"]
 bazel = []
 
+[package.metadata.unused-deps]
+# which finds the system protoc, which is only needed without protobuf-src.
+ignore = ["which"]
+
 [package.metadata.cargo-gazelle.lib]
 features_override = ["default", "bazel"]
 extra_deps = ["@rules_rust//tools/runfiles"]

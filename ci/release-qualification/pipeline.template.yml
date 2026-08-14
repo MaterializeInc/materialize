@@ -189,7 +189,7 @@ steps:
       plugins:
         - ./ci/plugins/mzcompose:
             composition: zippy
-            # TODO(def-) Increase number of actions when database-issues#7257 is fixed
+            # TODO(def-) Increase number of actions when SS-422 is fixed
             args: [--scenario=KafkaParallelInsert, --transaction-isolation=serializable, --actions=50000, --max-execution-time=4h]
 
   - group: Benchmarks
@@ -892,7 +892,7 @@ steps:
       - id: upsert-large-scale
         topics: [kafka]
         label: Upsert large scale ingestion
-        depends_on: build-aarch64
+        depends_on: build-x86_64
         timeout_in_minutes: 3600
         plugins:
           - ./ci/plugins/mzcompose:

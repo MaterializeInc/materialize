@@ -1225,6 +1225,8 @@ impl SystemVars {
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
+            &MAX_CONCURRENT_OCC_WRITES,
+            &MAX_OCC_RETRIES,
             &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
             &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
             &upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
@@ -1309,7 +1311,6 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
-            &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
             &cluster_scheduling::CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -1319,6 +1320,7 @@ impl SystemVars {
             &STATEMENT_LOGGING_MAX_DATA_CREDIT,
             &ENABLE_INTERNAL_STATEMENT_LOGGING,
             &ENABLE_STATEMENT_ARRIVAL_LOGGING,
+            &ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION,
             &OPTIMIZER_STATS_TIMEOUT,
             &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
@@ -1431,14 +1433,6 @@ impl SystemVars {
             .expect("provided var type should matched stored var")
     }
 
-    /// Reset all the values to their defaults (preserving
-    /// defaults from `VarMut::set_default).
-    pub fn reset_all(&mut self) {
-        for (_, var) in &mut self.vars {
-            var.reset();
-        }
-    }
-
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
@@ -1545,7 +1539,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1588,7 +1581,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
-        self.notify_callbacks(name);
         Ok(())
     }
 
@@ -1615,7 +1607,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1633,10 +1624,24 @@ impl SystemVars {
             .collect()
     }
 
-    /// Registers a closure that will get called when the value for the
-    /// specified [`VarDefinition`] changes.
+    /// Registers a closure that mirrors the value of the given
+    /// [`VarDefinition`] into out-of-band state.
     ///
-    /// The callback is guaranteed to be called at least once.
+    /// The callback has to be an idempotent read of the passed [`SystemVars`],
+    /// because we don't promise to only call it when its var actually changed.
+    /// It runs once right now against the current values, and then again at
+    /// every catalog commit boundary whose transaction touched a system var
+    /// (see `Coordinator::apply_catalog_implications` and
+    /// [`SystemVars::notify_all_callbacks`]). Speculative mutations never
+    /// trigger it, so an aborted or dry-run transaction leaves the mirror
+    /// untouched.
+    ///
+    /// NOTE: a callback on a `feature_flags!` var won't observe the transient
+    /// flip that `CatalogState::with_enable_for_item_parsing` performs during
+    /// item parsing. That flip mutates the value and then restores the prior
+    /// `Arc` wholesale without re-notifying, so the mirror keeps tracking
+    /// committed state throughout, which is the contract here. Committed changes
+    /// to a feature flag (via `ALTER SYSTEM`) still notify like any other var.
     pub fn register_callback(
         &mut self,
         var: &VarDefinition,
@@ -1647,6 +1652,19 @@ impl SystemVars {
             .or_default()
             .push(callback);
         self.notify_callbacks(var.name());
+    }
+
+    /// Re-runs every registered callback against the current values.
+    ///
+    /// This fires all of them, even ones whose var didn't change, which is why
+    /// callbacks have to be idempotent reads of the passed [`SystemVars`]. See
+    /// [`SystemVars::register_callback`].
+    pub fn notify_all_callbacks(&self) {
+        for callbacks in self.callbacks.values() {
+            for callback in callbacks {
+                (callback)(self);
+            }
+        }
     }
 
     /// Notify any external components interested in this variable.
@@ -1777,6 +1795,16 @@ impl SystemVars {
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
+    }
+
+    /// Returns the value of the `max_concurrent_occ_writes` configuration parameter.
+    pub fn max_concurrent_occ_writes(&self) -> u32 {
+        *self.expect_value(&MAX_CONCURRENT_OCC_WRITES)
+    }
+
+    /// Returns the value of the `max_occ_retries` configuration parameter.
+    pub fn max_occ_retries(&self) -> u32 {
+        *self.expect_value(&MAX_OCC_RETRIES)
     }
 
     /// Returns the value of the `default_cluster_replication_factor` configuration parameter.
@@ -2052,6 +2080,10 @@ impl SystemVars {
         *self.expect_value(&SCRAM_ITERATIONS)
     }
 
+    /// Computes an update for every dyncfg from its configured value.
+    ///
+    /// This does not touch our own [`ConfigSet`]. Callers that need this
+    /// process's dyncfgs to reflect the result want [`Self::sync_dyncfgs`].
     pub fn dyncfg_updates(&self) -> ConfigUpdates {
         let mut updates = ConfigUpdates::default();
         for entry in self.dyncfgs.entries() {
@@ -2079,6 +2111,18 @@ impl SystemVars {
             };
             updates.add_dynamic(entry.name(), val);
         }
+        updates
+    }
+
+    /// Applies the configured dyncfg values to our own [`ConfigSet`], and
+    /// returns them.
+    ///
+    /// Two callers own keeping this process's dyncfgs in step with the
+    /// catalog: catalog open, and every durable system-config change. Everyone
+    /// else only forwards the updates elsewhere and wants
+    /// [`Self::dyncfg_updates`] instead.
+    pub fn sync_dyncfgs(&self) -> ConfigUpdates {
+        let updates = self.dyncfg_updates();
         updates.apply(&self.dyncfgs);
         updates
     }
@@ -2241,10 +2285,6 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
     }
 
-    pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
-        *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
-    }
-
     pub fn cluster_security_context_enabled(&self) -> bool {
         *self.expect_value(&cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED)
     }
@@ -2284,6 +2324,12 @@ impl SystemVars {
     /// Returns the `enable_statement_arrival_logging` configuration parameter.
     pub fn enable_statement_arrival_logging(&self) -> bool {
         *self.expect_value(&ENABLE_STATEMENT_ARRIVAL_LOGGING)
+    }
+
+    /// Returns the `enable_extended_protocol_implicit_transaction` configuration
+    /// parameter.
+    pub fn enable_extended_protocol_implicit_transaction(&self) -> bool {
+        *self.expect_value(&ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION)
     }
 
     /// Returns the `optimizer_stats_timeout` configuration parameter.

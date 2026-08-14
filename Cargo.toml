@@ -52,7 +52,6 @@ members = [
     "src/kafka-util",
     "src/license-keys",
     "src/materialized",
-    "src/materialized",
     "src/metabase",
     "src/metrics",
     "src/metrics-catalog",
@@ -269,7 +268,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.96.0"
+rust-version = "1.97.1"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }
@@ -336,7 +335,7 @@ crossterm = { version = "0.28.1", default-features = false }
 csv = "1.4.0"
 csv-async = { version = "1.3.1", features = ["tokio"] }
 csv-core = "0.1.13"
-ctor = "0.9.1"
+ctor = "1.0.10"
 custom-labels = "0.4.6"
 darling = "0.23.0"
 datadriven = "0.9.0"
@@ -398,8 +397,8 @@ itertools = "0.14.0"
 jemalloc_pprof = "0.8.2"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 junit-report = "0.8.3"
-k8s-controller = "0.11.0"
-k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
+k8s-controller = "0.12.0"
+k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_34"] }
 kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
 launchdarkly-server-sdk = { version = "3.1.1", default-features = false, features = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"] }
 launchdarkly-sdk-transport = "0.1.4"
@@ -515,7 +514,7 @@ static_assertions = "1.1"
 strsim = "0.11.1"
 subtle = "2.6.1"
 supports-color = "3.0.2"
-syn = { version = "2.0.117", features = ["extra-traits", "full", "parsing", "printing"] }
+syn = { version = "2.0.119", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
 sysinfo = "0.29.11"
 tabled = "0.20.0"

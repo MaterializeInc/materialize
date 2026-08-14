@@ -41,7 +41,7 @@ use uncased::UncasedStr;
 use crate::session::user::{SUPPORT_USER, SYSTEM_USER, User};
 use crate::session::vars::constraints::{
     BYTESIZE_AT_LEAST_1MB, DomainConstraint, NON_ZERO_DURATION, NUMERIC_BOUNDED_0_1_INCLUSIVE,
-    NUMERIC_NON_NEGATIVE, ValueConstraint,
+    NUMERIC_NON_NEGATIVE, U32_AT_LEAST_1, ValueConstraint,
 };
 use crate::session::vars::errors::VarError;
 use crate::session::vars::polyfill::{LazyValueFn, lazy_value, value};
@@ -643,6 +643,24 @@ pub static ALLOWED_CLUSTER_REPLICA_SIZES: VarDefinition = VarDefinition::new(
     value!(Vec<Ident>; Vec::new()),
     "The allowed sizes when creating a new cluster replica (Materialize).",
     true,
+);
+
+/// Sizes the OCC write semaphore at boot. Zero permits would block every
+/// read-then-write until its `statement_timeout`, so the value must be at
+/// least 1.
+pub static MAX_CONCURRENT_OCC_WRITES: VarDefinition = VarDefinition::new(
+    "max_concurrent_occ_writes",
+    value!(u32; 4),
+    "Maximum number of concurrent read-then-write (DELETE/UPDATE) operations using OCC. Read at startup; changes require an environmentd restart (Materialize).",
+    false,
+)
+.with_constraint(&U32_AT_LEAST_1);
+
+pub static MAX_OCC_RETRIES: VarDefinition = VarDefinition::new(
+    "max_occ_retries",
+    value!(u32; 1000),
+    "Maximum number of OCC retry attempts per read-then-write operation before giving up (Materialize).",
+    false,
 );
 
 pub static PERSIST_FAST_PATH_LIMIT: VarDefinition = VarDefinition::new(
@@ -1426,6 +1444,19 @@ pub static ENABLE_STATEMENT_ARRIVAL_LOGGING: VarDefinition = VarDefinition::new(
     false,
 );
 
+/// Off is the escape hatch for clients that pipeline statements Materialize
+/// cannot run in one transaction, for example a read or a DDL after a write.
+/// Those fail while this is on, rather than silently committing the writes
+/// staged before them.
+pub static ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION: VarDefinition = VarDefinition::new(
+    "enable_extended_protocol_implicit_transaction",
+    value!(bool; true),
+    "Whether an implicit write transaction started by the extended query \
+    protocol spans the whole pipeline up to the client's Sync, so that the \
+    pipeline commits or rolls back atomically as in PostgreSQL (Materialize).",
+    false,
+);
+
 pub static AUTO_ROUTE_CATALOG_QUERIES: VarDefinition = VarDefinition::new(
     "auto_route_catalog_queries",
     value!(bool; true),
@@ -1667,17 +1698,6 @@ pub mod cluster_scheduling {
         "How often to poll readiness checks for cluster alter",
         false,
     );
-
-    const DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL: Duration = Duration::from_secs(3);
-
-    pub static CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL: VarDefinition = VarDefinition::new(
-        "cluster_check_scheduling_policies_interval",
-        value!(Duration; DEFAULT_CHECK_SCHEDULING_POLICIES_INTERVAL),
-        "How often policies are invoked to automatically start/stop clusters, e.g., \
-            for REFRESH EVERY materialized views.",
-        false,
-    )
-    .with_constraint(&NON_ZERO_DURATION);
 
     pub static CLUSTER_SECURITY_CONTEXT_ENABLED: VarDefinition = VarDefinition::new(
         "cluster_security_context_enabled",

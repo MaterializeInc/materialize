@@ -246,7 +246,7 @@ where
 
 /// An adapter that implements [`tokio::io::AsyncWrite`] for a [`tokio_postgres::CopyInSink`].
 ///
-/// Note: [`tokio_util`] has a similar adapter which we largely derive this implementation from
+/// Note: `tokio_util` has a similar adapter which we largely derive this implementation from
 /// [1]. The reason we don't use it is because of a higher ranked lifetime error which this adapter
 /// works around lifetime issues by using an owned [`bytes::Bytes`] instead of a `&[u8]`.
 ///

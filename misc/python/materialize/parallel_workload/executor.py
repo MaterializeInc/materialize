@@ -53,10 +53,16 @@ class Executor:
     reconnect_next: bool
     rollback_next: bool
     last_log: str
+    # "running" exactly while this session waits on the server. Every path that
+    # makes a round trip has to set it, the end-of-run wedge check reads it to
+    # tell a server-side hang from a worker stuck in the workload's own code.
     last_status: str
     action_run_since_last_commit_rollback: bool
     autocommit: bool
     user: str
+    # The session's transaction isolation, as last set through set_isolation.
+    # Actions that set an isolation transiently restore this one afterwards.
+    isolation: str
 
     def __init__(
         self,
@@ -84,9 +90,17 @@ class Executor:
         self.use_ws = self.rng.choice([True, False]) if self.ws else False
         self.autocommit = cur.connection.autocommit
         self.mz_service = "materialized"
+        # Set while a non-default statement_timeout is configured on this
+        # session, statement timeouts are expected errors then. Cleared again
+        # on RESET and on reconnect, otherwise a hang in this worker stays
+        # invisible for the rest of the run.
+        self.statement_timeout_set = False
+        # Materialize's default, until the worker sets one on connect.
+        self.isolation = "STRICT SERIALIZABLE"
 
     def set_isolation(self, level: str) -> None:
         self.execute(f"SET TRANSACTION_ISOLATION TO '{level}'")
+        self.isolation = level
 
     def commit(self, http: Http = Http.RANDOM) -> None:
         self._end_transaction("commit", http)
@@ -97,6 +111,7 @@ class Executor:
     def _end_transaction(self, command: str, http: Http) -> None:
         self.insert_table = None
         self.log(command)
+        self.last_status = "running"
         ws_error = None
         try:
             # When this executor uses the WS session, statements executed with
@@ -118,6 +133,8 @@ class Executor:
             raise
         except Exception as e:
             raise QueryError(str(e), command)
+        finally:
+            self.last_status = "finished"
         if ws_error is not None:
             raise ws_error
         # TODO(def-): Enable when things are stable
@@ -182,12 +199,29 @@ class Executor:
     ) -> None:
         query += ";"
         self.log(f"{query} ({rows})")
+        self.last_status = "running"
 
         try:
             try:
                 with self.cur.copy(query.encode()) as copy:
                     for row in rows:
                         copy.write_row(row)
+            except Exception as e:
+                raise QueryError(str(e), query)
+
+            self.action_run_since_last_commit_rollback = True
+        finally:
+            self.last_status = "finished"
+
+    def copy_to_stdout(self, query: str) -> None:
+        query += ";"
+        self.log(query)
+        self.last_status = "running"
+        try:
+            try:
+                with self.cur.copy(query.encode()) as copy:
+                    for _ in copy:
+                        pass
             except Exception as e:
                 raise QueryError(str(e), query)
 
@@ -207,7 +241,37 @@ class Executor:
             http == Http.RANDOM and self.rng.choice([True, False])
         ) or http == Http.YES
         if explainable and self.rng.choice([True, False]):
-            query = f"EXPLAIN OPTIMIZED PLAN AS VERBOSE TEXT FOR {query}"
+            if self.rng.random() < 0.1:
+                as_json = " AS JSON" if self.rng.choice([True, False]) else ""
+                query = f"EXPLAIN TIMESTAMP{as_json} FOR {query}"
+            else:
+                stage = self.rng.choice(
+                    [
+                        "RAW PLAN",
+                        "DECORRELATED PLAN",
+                        "LOCALLY OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "OPTIMIZED PLAN",
+                        "PHYSICAL PLAN",
+                    ]
+                )
+                modifiers = ""
+                if stage == "OPTIMIZED PLAN" and self.rng.random() < 0.3:
+                    mods = self.rng.sample(
+                        [
+                            "arity",
+                            "join implementations",
+                            "keys",
+                            "types",
+                            "humanized expressions",
+                            "redacted",
+                        ],
+                        self.rng.randint(1, 3),
+                    )
+                    modifiers = f" WITH ({', '.join(mods)})"
+                format = self.rng.choice(["VERBOSE TEXT", "TEXT", "JSON"])
+                query = f"EXPLAIN {stage}{modifiers} AS {format} FOR {query}"
         query += ";"
         extra_info_str = f" ({extra_info})" if extra_info else ""
         use_ws = self.use_ws and http != Http.NO

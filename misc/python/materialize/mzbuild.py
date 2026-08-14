@@ -46,7 +46,7 @@ import requests
 import yaml
 from requests.auth import HTTPBasicAuth
 
-from materialize import MZ_ROOT, buildkite, cargo, git, rustc_flags, spawn, ui, xcompile
+from materialize import MZ_ROOT, cargo, git, rustc_flags, spawn, ui, xcompile
 from materialize.docker import image_registry
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch, target
@@ -55,17 +55,23 @@ GHCR_PREFIX = "ghcr.io/materializeinc/"
 
 
 class RustIncrementalBuildFailure(Exception):
-    pass
+    """A build failure that corrupted incremental artifacts explain. Recovering
+    requires clearing the cargo target directories before retrying."""
 
 
-def run_and_detect_rust_incremental_build_failure(
+class CargoRegistryFetchFailure(Exception):
+    """A crates.io fetch that failed for transport reasons. Retrying recovers,
+    and the target directories must be kept: nothing in them is corrupted."""
+
+
+def run_and_detect_retryable_build_failure(
     cmd: list[str],
     cwd: str | Path,
     env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
     """This function is complex since it prints out each line immediately to
     stdout/stderr, but still records them at the same time so that we can scan
-    for known incremental build failures."""
+    for known retryable build failures."""
     stdout_result = io.StringIO()
     stderr_result = io.StringIO()
     base_env = env if env is not None else os.environ
@@ -132,9 +138,14 @@ def run_and_detect_rust_incremental_build_failure(
             "ld.lld: error: undefined symbol",
             "signal: 11, SIGSEGV",
         ]
+        registry_fetch_failure_msgs = [
+            "unable to update registry",
+        ]
         combined = stdout_contents + stderr_contents
         if any(msg in combined for msg in incremental_build_failure_msgs):
             raise RustIncrementalBuildFailure()
+        if any(msg in combined for msg in registry_fetch_failure_msgs):
+            raise CargoRegistryFetchFailure()
 
         raise subprocess.CalledProcessError(
             retcode, p.args, output=stdout_contents, stderr=stderr_contents
@@ -663,10 +674,7 @@ class CargoBuild(CargoPreImage):
         cflags = (
             [
                 f"--target={target(rd.arch)}",
-                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
                 "-fuse-ld=lld",
-                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
-                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
             ]
             + rustc_flags.sanitizer_cflags[rd.sanitizer]
             if rd.sanitizer != Sanitizer.none
@@ -680,10 +688,10 @@ class CargoBuild(CargoPreImage):
                 "CXXSTDLIB": "stdc++",
                 "CC": "cc",
                 "CXX": "c++",
-                "CPP": "clang-cpp-18",
+                "CPP": "clang-cpp-19",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": "/sanshim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
             }
             if rd.sanitizer != Sanitizer.none
@@ -772,7 +780,7 @@ class CargoBuild(CargoPreImage):
             rd, list(bins), list(examples), list(features) if features else None
         )
 
-        run_and_detect_rust_incremental_build_failure(cargo_build, cwd=rd.root)
+        run_and_detect_retryable_build_failure(cargo_build, cwd=rd.root)
 
         # Re-run with JSON-formatted messages and capture the output so we can
         # later analyze the build artifacts in `run`. This should be nearly
@@ -865,7 +873,19 @@ class CargoBuild(CargoPreImage):
                 else:
                     package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
-                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
+                    # Sources are relative to the build script's `out` dir.
+                    # `$CARGO_TARGET_DIR` instead names the Cargo target root
+                    # (`cargo_target_dir` is the per-target directory below
+                    # it), for artifacts a build script caches outside of
+                    # `out`. Reaching the root with `..` does not work: how
+                    # deep `out` sits below it differs between Cargo versions.
+                    if src.startswith("$CARGO_TARGET_DIR/"):
+                        src_path = target_dir.parent / src.removeprefix(
+                            "$CARGO_TARGET_DIR/"
+                        )
+                    else:
+                        src_path = out_dir / src
+                    spawn.runv(["cp", "-R", src_path, self.path / dst])
 
         self.acquired = True
 
@@ -1188,30 +1208,9 @@ class ResolvedImage:
                         # happened based on error code
                         # (https://github.com/docker/cli/issues/538) and we
                         # want to print output directly to terminal.
-                        if build := os.getenv("CI_WAITING_FOR_BUILD"):
-                            for retry in range(max_retries):
-                                try:
-                                    build_status = buildkite.get_build_status(build)
-                                except subprocess.CalledProcessError:
-                                    time.sleep(sleep_time)
-                                    sleep_time = min(sleep_time * 2, 10)
-                                    break
-                                print(f"Build {build} status: {build_status}")
-                                if build_status == "failed":
-                                    print(
-                                        f"Build {build} has been marked as failed, exiting hard"
-                                    )
-                                    sys.exit(1)
-                                elif build_status == "success":
-                                    break
-                                assert (
-                                    build_status == "pending"
-                                ), f"Unknown build status {build_status}"
-                                time.sleep(1)
-                        else:
-                            print(f"Retrying in {sleep_time}s ...")
-                            time.sleep(sleep_time)
-                            sleep_time = min(sleep_time * 2, 10)
+                        print(f"Retrying in {sleep_time}s ...")
+                        time.sleep(sleep_time)
+                        sleep_time = min(sleep_time * 2, 10)
                         continue
                     else:
                         break
@@ -1416,14 +1415,10 @@ class DependencySet:
         # Only retry in CI runs since we struggle with flaky docker pulls there
         if not max_retries:
             max_retries = (
-                90
-                if os.getenv("CI_WAITING_FOR_BUILD")
-                else (
-                    5
-                    if ui.env_is_truthy("CI")
-                    and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
-                    else 1
-                )
+                5
+                if ui.env_is_truthy("CI")
+                and not ui.env_is_truthy("CI_ALLOW_LOCAL_BUILD")
+                else 1
             )
         assert max_retries > 0
 

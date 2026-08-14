@@ -69,8 +69,6 @@ skip = [
 
     { name = "hyper-tls", version = "0.5.0" },
 
-    { name = "hyper-timeout", version = "0.4.1" },
-
     { name = "memmap2", version = "0.5.4" },
 
     { name = "async-channel", version = "1.9.0" },
@@ -154,7 +152,6 @@ skip = [
     # Pulled by launchdarkly-server-sdk 3.x via launchdarkly-sdk-transport /
     # eventsource-client (proxy/timeout/rustls stack and the SDK's RNG path).
     # NB: tower 0.4.13 is already skipped above (mz-deploy).
-    { name = "rustls-native-certs", version = "0.7.3" },
     { name = "rand", version = "0.10.1" },
     { name = "rand_core", version = "0.10.1" },
     { name = "getrandom", version = "0.4.2" },
@@ -209,7 +206,6 @@ wrappers = [
     "buildid",
     "cookie_store",
     "deadpool-postgres",
-    "domain",
     "eventsource-client",
     "fail",
     "globset",
@@ -244,11 +240,9 @@ name = "lazy_static"
 wrappers = [
     "dynfmt",
     "findshlibs",
-    "launchdarkly-server-sdk",
     "launchdarkly-server-sdk-evaluation",
     "num-bigint-dig",
     "prometheus",
-    "rayon-core",
     "sharded-slab",
 ]
 
@@ -299,6 +293,10 @@ ignore = [
     # untrusted XML.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
+    # `bitmaps` is unmaintained
+    "RUSTSEC-2026-0247",
+    # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
+    "RUSTSEC-2026-0253",
 ]
 
 # Must be manually kept in sync with about.toml.

@@ -2775,7 +2775,7 @@ impl<'a, E> OutputDatumType<'a, E> for Vec<u8> {
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Bytes(temp_storage.push_bytes(self)))
+        Ok(Datum::Bytes(temp_storage.push_owned_bytes(self)))
     }
 }
 
@@ -3737,6 +3737,86 @@ impl SqlScalarType {
                         .any(|t| t.scalar_type.is_custom_type())
             }
             _ => false,
+        }
+    }
+
+    /// Computes the least upper bound of two SQL scalar types, or an error if
+    /// they are incompatible. Compatible types are equal, share a base type and
+    /// differ only in modifiers (which are then dropped), or are structured
+    /// types with pairwise compatible components.
+    ///
+    /// NOTE: Structured types must recurse rather than fall through to the
+    /// `base_eq` arm. `base_eq` ignores record field nullability, so returning
+    /// either side verbatim can declare a field non-nullable where the other
+    /// side puts a null.
+    pub fn sql_union(&self, other: &SqlScalarType) -> Result<SqlScalarType, anyhow::Error> {
+        use SqlScalarType::*;
+        match (self, other) {
+            (scalar_type, other_scalar_type) if scalar_type == other_scalar_type => {
+                Ok(scalar_type.clone())
+            }
+            (
+                Record { fields, custom_id },
+                Record {
+                    fields: other_fields,
+                    custom_id: other_custom_id,
+                },
+            ) if custom_id == other_custom_id && fields.len() == other_fields.len() => {
+                let mut union_fields = Vec::with_capacity(fields.len());
+                for ((name, typ), (other_name, other_typ)) in
+                    fields.iter().zip_eq(other_fields.iter())
+                {
+                    if name != other_name {
+                        bail!("Can't union types: {:?} and {:?}", self, other);
+                    }
+                    union_fields.push((name.clone(), typ.sql_union(other_typ)?));
+                }
+                Ok(Record {
+                    fields: union_fields.into(),
+                    custom_id: *custom_id,
+                })
+            }
+            (
+                List {
+                    element_type,
+                    custom_id,
+                },
+                List {
+                    element_type: other_element_type,
+                    custom_id: other_custom_id,
+                },
+            ) if custom_id == other_custom_id => Ok(List {
+                element_type: Box::new(element_type.sql_union(other_element_type)?),
+                custom_id: *custom_id,
+            }),
+            (
+                Map {
+                    value_type,
+                    custom_id,
+                },
+                Map {
+                    value_type: other_value_type,
+                    custom_id: other_custom_id,
+                },
+            ) if custom_id == other_custom_id => Ok(Map {
+                value_type: Box::new(value_type.sql_union(other_value_type)?),
+                custom_id: *custom_id,
+            }),
+            (Array(element_type), Array(other_element_type)) => {
+                Ok(Array(Box::new(element_type.sql_union(other_element_type)?)))
+            }
+            (
+                Range { element_type },
+                Range {
+                    element_type: other_element_type,
+                },
+            ) => Ok(Range {
+                element_type: Box::new(element_type.sql_union(other_element_type)?),
+            }),
+            (scalar_type, other_scalar_type) if scalar_type.base_eq(other_scalar_type) => {
+                Ok(scalar_type.without_modifiers())
+            }
+            _ => bail!("Can't union types: {:?} and {:?}", self, other),
         }
     }
 

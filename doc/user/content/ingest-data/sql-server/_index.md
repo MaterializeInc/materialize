@@ -42,4 +42,8 @@ Data Capture (CDC) support.
 
 ## Considerations
 
-{{% include-headless "/headless/sql-server-considerations" %}}
+{{% include-headless "/headless/sql-server-considerations-body" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="sql-server" %}}
