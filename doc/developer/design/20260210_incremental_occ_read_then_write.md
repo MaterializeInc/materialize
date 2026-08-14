@@ -20,6 +20,13 @@ shared across process boundaries. We need concurrent multi-process writes for:
 - **Physical isolation**: separate serving-layer processes (aka.
   `environmentd`) for different workloads
 
+The locks are also weaker than they look within a single process. They pin only
+the selection's direct dependency items, while the statement reads at one
+timestamp and commits at a later one, so a write to an input that is not itself
+a dependency item can change what the statement should have read. That admits
+non-serializable histories today. Moving to OCC fixes this as well, see the
+strengthening under Deliberate differences.
+
 This design doc proposes replacing the pessimistic locking approach with
 optimistic concurrency control (OCC) for read-then-write operations, backed by
 a subscribe that continually tracks the current state of the data.
@@ -28,23 +35,23 @@ a subscribe that continually tracks the current state of the data.
 
 - Make read-then-write operations correct with concurrent writers, including
   writers in different `environmentd` processes
-- Provide the same user-visible semantics as the current implementation: writes
-  are based on the latest committed state of the table at the time the write is
-  applied
+- Provide at least the same user-visible semantics as the current
+  implementation: writes are based on the latest committed state of the table at
+  the time the write is applied. The OCC path is in fact strictly stronger, see
+  the strengthening noted under Deliberate differences
 - Don't regress performance within reasonable bounds
 
 ## Non-Goals
 
 - High-performance writes under heavy contention. The current implementation
-  serializes writes behind a global lock; the new implementation serializes
-  them via OCC retries. Neither is designed for high write throughput.
+  serializes writes behind a global lock. The OCC implementation serializes
+  them via retries. Neither is designed for high write throughput.
 - Removing the in-process locks immediately. During rollout, the old lock-based
   path and the new OCC path coexist behind a feature flag. The locks can be
   removed once the OCC path is fully rolled out.
-- Multi-statement transactions. The OCC approach as described here applies to
-  single-statement implicit transactions. Explicit multi-statement write
-  transactions continue to use the existing path. And there are not plans to
-  support mixed read/write transactions.
+- Mixed read/write transactions. A write on this path commits at the frontier it
+  observed, which it cannot postpone until COMMIT, so it runs only as a single
+  statement.
 
 ## Overview
 
@@ -128,7 +135,7 @@ Session Task                         Coordinator
   |                                      |
   |-- acquire OCC semaphore              |
   |                                      |
-  |-- CreateReadThenWriteSubscribe ----> |
+  |-- CreateInternalSubscribe ---------> |
   | <------------ subscribe channel -----|
   |                                      |
   |   +-- OCC Loop ------------------+   |
@@ -141,14 +148,14 @@ Session Task                         Coordinator
   |   |   if Success: break          |   |
   |   +------------------------------+   |
   |                                      |
-  |-- DropReadThenWriteSubscribe ------> |
+  |-- DropInternalSubscribe -----------> |
   |                                      |
 ```
 
 ### Timestamped writes
 
 A timestamped write is a write that must be committed at a specific timestamp.
-The group commit machinery has to be extended to supports this by:
+The group commit machinery has to be extended to support this by:
 
 1. Checking if the target timestamp is still valid (hasn't been passed by the
    oracle)
@@ -190,10 +197,13 @@ subscribe.
 
 ### Internal subscribes
 
-The subscribes created for read-then-write are internal: they do not appear in
-`mz_subscriptions` or other introspection tables, and they don't increment the
-active subscribes metric. They are created and dropped via dedicated `Command`
-variants (`CreateReadThenWriteSubscribe`, `DropReadThenWriteSubscribe`).
+The subscribes created for read-then-write are internal: they write no
+`mz_subscriptions` row, and they move only the internal
+`mz_active_internal_subscribes` gauge rather than the public
+`mz_active_subscribes`. They do appear in replica introspection like any other
+dataflow, named `frontend-read-then-write-subscribe-<sink_id>`. They are
+created and dropped via dedicated `Command` variants (`CreateInternalSubscribe`,
+`DropInternalSubscribe`).
 
 ## Correctness
 
@@ -242,7 +252,7 @@ oracle read timestamp. However, actually applying the write bumps the oracle
 read timestamp to at least the write timestamp, so at write time it holds that
 `write_ts <= oracle_read_ts`. The linearization invariant is maintained.
 
-### Single timestamped write write per group commit round
+### Single timestamped write per group commit round
 
 Only one timestamped write is processed per group commit round. This is correct
 because:
@@ -257,15 +267,22 @@ because:
 
 ### Timeouts
 
-We have to be careful about bounding the lifetime of the occ loop, both in
-wallclock time and number of retries. With the old approach, a read-then-write
-could take arbitrarily long, and block the rest of the system. With the new
-approach, the occ loop might try arbitrarily long, without ever succeeding. It
-will not block the rest of the system, though, which is a big benefit.
+The lifetime of the OCC loop has to be bounded, both in wallclock time and in
+number of retries. With the lock-based approach, a read-then-write could take
+arbitrarily long and block the rest of the system. With OCC it can retry
+arbitrarily long without ever succeeding, but it does not block the rest of the
+system, which is a big benefit.
 
-As a safety net, we should bound the lifetime of the occ loop with our existing
-statement timeout, and potentially add a hard upper limit on the number of
-attempts per occ loop.
+`statement_timeout` provides the wallclock bound. It is enforced in the session
+task, around the whole operation rather than around the loop alone, so it also
+covers planning, OCC permit acquisition, timestamp determination, and read
+linearization. Any of those can park indefinitely, and a parked operation holds
+an OCC permit, so a bound on the loop alone would leave the permit pool
+starvable.
+
+`max_occ_retries` provides the retry bound. A statement that keeps losing the
+race for its write timestamp fails with a contention error instead of retrying
+forever.
 
 ### Comparison with the old approach
 
@@ -284,6 +301,57 @@ The new approach is arguably easier to reason about: there is no global lock
 state to consider, no deferred operations, no lock merging. The correctness
 argument is local to the OCC loop and the group commit mechanism.
 
+## Deliberate differences from the lock-based path
+
+A user must not be able to tell which path sequenced their statement. These are
+the places where the two paths do differ, on purpose. They are listed here so
+that the next reader does not take them for bugs.
+
+- **Serializability under a changing input (a strengthening).** The lock path
+  reads a consistent snapshot at the peek timestamp but commits at a later one,
+  and its locks pin only the selection's direct dependency items. For a
+  selection over a materialized view that means the view's own id, which no
+  writer ever takes, not the ids of its upstream tables. A write to such an
+  upstream table can commit into the gap and change what the statement should
+  have read, which admits non-serializable histories: a reader inside the gap
+  sees the upstream write but not the mutation, while the mutation did not see
+  the upstream write, so no serial order explains both. The OCC path closes this
+  by making the statement an atomic read-modify-write at a single timestamp.
+  When inputs are caught up the lock path's window is milliseconds wide and also
+  needs a materially conflicting write plus a reader inside it, which is
+  presumably why it went unnoticed.
+- **A lagging dependency blocks rather than waits.** This is the price of the
+  strengthening above. A selection dependency that persistently lags by more
+  than about one `default_timestamp_interval` makes every attempt conflict,
+  because the observed frontier is bounded by the lagging input while the write
+  timestamp keeps advancing with the oracle. The statement then burns retries
+  until `statement_timeout` instead of committing, where the lock path's peek
+  simply waited for the input to catch up.
+- **Statement lifecycle events.** The frontend path records an
+  `optimization-finished` event for a DML, the coordinator path does not,
+  because it hands the read-then-write's inner peek a trivial logging context
+  and so logs nothing for it. We keep the extra event, it is real information
+  about a statement the user did run.
+- **`max_result_size` accounting.** The coordinator sums one row length per diff
+  entry before consolidation. The frontend recomputes the total from the
+  consolidated set, which counts one row length per distinct row and ignores
+  multiplicity. So a `DELETE` of a million copies of one row can exceed the
+  limit on the coordinator path and succeed on the frontend path. We keep the
+  frontend's accounting: it matches what the write actually appends, one entry
+  with a large diff.
+- **The write-timeline throttle.** A timestamped write does not go through the
+  throttle that a blind write's group commit applies, because its timestamp
+  comes from an observed subscribe frontier rather than from the clock. See the
+  doc comment on `GroupCommitter::commit_timestamped` for the full list of what
+  that path skips and why.
+- **Zero-row `INSERT ... RETURNING`.** Both paths report `INSERT 0 0` with no
+  result set when no rows match, because the coordinator decides the response
+  kind from the evaluated RETURNING rows and there are none. Postgres returns an
+  empty result set here, with a row description. The frontend path is
+  deliberately bug-compatible with the coordinator rather than correct on its
+  own: fixing it changes the behavior of the path that ships today, which is a
+  separate decision from this change.
+
 ## Performance
 
 The goal is not to make writes faster, but to not regress significantly.
@@ -295,16 +363,77 @@ Benchmarking a PoC-level implementation of the OCC approach against `main` for
 The benchmark varies concurrency (number of workers) on the x-axis and shows
 throughput (left) and latency (right). Key observations:
 
-- At low concurrency (1-7 workers), the OCC approach is comparable or _better_
-  than `main`. This is because the OCC path begins preparing the write (opening
-  the subscribe, receiving the snapshot) before the write timestamp is claimed,
-  whereas the old path only starts the peek after acquiring the lock.
+- At low concurrency (1-7 workers), the result depends on write size. The PoC
+  measured a single large `UPDATE`/`DELETE` as comparable or _better_ than
+  `main`, because the subscribe streams the mutation diffs directly whereas the
+  old path peeks every matched row and then recomputes the diffs. Small writes,
+  however, _regress_: every operation installs a subscribe dataflow, waits for
+  its snapshot, and tears it down, where the old path uses a cheap fast-path
+  peek. This per-operation subscribe overhead makes tiny `UPDATE`s roughly
+  1.5-2x slower at low/no concurrency (observed in the nightly feature benchmark
+  `ManySmallUpdates` and the scalability `UpdateWorkload`).
 - At higher concurrency, performance degrades as expected due to the O(N^2)
   retry behavior: with more concurrent writers, more retries are needed. The
   concurrency semaphore (default 4 permits) bounds this in practice.
 - The benchmark is for a worst-case workload (all writers updating the same
-  table). Real workloads with writes to different tables won't experience the
-  contention.
+  table). Writers on different tables do not reprocess each other's data, since
+  a subscribe sees only progress from another table's write. They do still
+  contend, in three ways: the concurrency semaphore is process-global across
+  tables and clusters, the conflict predicate is the global oracle plus the
+  shared txns-shard upper, so two writers that observed the same frontier refuse
+  each other, and each timestamped write is its own committer round rather than
+  merging into a shared group commit. Every write benchmark is single-table, so
+  the cross-table case is unmeasured.
+
+The chart above is from the PoC, which benchmarked `UPDATE t SET x = x + 1` over
+a larger table (the regime where OCC wins). It does not capture the small-write
+regression noted above, which is an accepted cost: high write throughput is a
+non-goal (see Non-Goals).
+
+Measured on the full implementation, with the OCC path on for every mzcompose
+suite, the small-write regression is at the bad end of that range. Across nightly
+runs the feature benchmark `ManySmallUpdates` is about 3.5x slower (3.4-3.7x over
+three runs) and `Update` 1.4x slower (33-45%), and the scalability
+`UpdateWorkload` loses 24% throughput at concurrency 1 and about 22% at 8 and 32.
+
+`ManySmallUpdates` is the worst case for this design, and the reason is worth
+recording. Its statements set every matched row's `f1` to one shared random
+value, which merges a whole residue class, so the class count only shrinks and
+roughly 90% of its 100 updates end up matching no rows. A statement that matches
+nothing still has to linearize its read, and the oracle advances only when a
+group commit applies, so each of those statements needs a commit that has nothing
+to write. We ask for one rather than waiting for the periodic keepalive, which
+costs a commit round trip per statement instead of up to a full
+`default_timestamp_interval`. That is the difference between 3.5x and 157x, but
+it is not free, and a workload dominated by zero-row writes pays it on every
+statement. The residue is the price of the linearization guarantee rather than a
+defect: correctness requires the oracle to advance, and only a commit advances
+it.
+
+The PoC's large-write win does not survive here. `Update` is itself a large
+mutation, a full-table update over 10^6 rows, and it is 1.4x slower. An `UPDATE`
+ships both halves of every diff plus a per-row timestamp prefix, and the
+subscribe's data path runs through the coordinator loop, which merges and
+re-packs every row. That works against the loop relief this design argues for,
+and it works hardest against exactly the large mutations. No large-`DELETE`
+scenario is measured, so whether the PoC's win holds for `DELETE` is untested.
+
+`ManySmallUpdates` also steps `memory_clusterd` up by 57-73%, from about 54 MB
+to 85-93 MB. The mechanism is unidentified. The obvious candidate, the subscribe
+dataflow that each operation arranges on the cluster, does not account for it:
+`memory_clusterd` samples after the iteration's dataflows are dropped, so a
+transient arrangement cannot explain a persistent step. A single scale point
+also distinguishes neither a leak from a plateau.
+
+The performance suites run the OCC path, because that is the configuration we
+intend to ship. The write benchmarks therefore record a one-time step, which we
+accept for the reasons above. Registering it is a follow-up once the change has
+landed and has a commit hash: `ManySmallUpdates` and `Update` go in
+`get_ancestor_overrides_for_performance_regressions` and `UpdateWorkload` in
+`ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS`, both in
+`misc/python/materialize/version_ancestor_overrides.py`. That justification only
+applies when the comparison is against a released version, so until the step is
+inside the baseline these scenarios report a regression against `main`.
 
 ## Rollout
 
@@ -317,6 +446,19 @@ phases without the old path detecting it (since the OCC path doesn't acquire
 write locks). We therefore must make the flag sticky per `environmentd` process
 lifetime (check on bootstrap only) to avoid this, and keep the current
 `confirm_leadership` checks.
+
+The same reasoning carries across processes, which makes this a dependency for
+0dt v2. That design (`20251219_zero_downtime_upgrades_physical_isolation_high_availability.md`)
+runs both `environmentd` generations read-write concurrently, and two lock-path
+processes lose updates by design, since the in-memory locks do not cross
+processes. Full OCC rollout is therefore a prerequisite for enabling concurrent
+read-write upgrades.
+
+In CI the flag defaults to enabled for versions that carry it, so the mzcompose
+suites exercise the OCC path even though production keeps it off. The version
+gate leaves it disabled for the older versions an upgrade test runs, and
+`CI_SYSTEM_PARAMETERS=random` can pick either value, which is how both paths
+stay covered.
 
 Once the OCC path is fully rolled out and validated:
 

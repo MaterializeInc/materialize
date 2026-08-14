@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/open/builtin_schema_migration.rs
-revision: fd1dd6e62b
+revision: 57107078dc
 ---
 
 # adapter::catalog::open::builtin_schema_migration
@@ -16,6 +16,7 @@ A `Replacement` step at version `26.32.0-dev.0` covers `mz_internal.mz_comments`
 A `Replacement` step at version `26.33.0-dev.0` covers `mz_catalog.mz_audit_events`, reflecting its conversion from `BuiltinTable` to `BuiltinMaterializedView`.
 Three `Replacement` steps at version `26.34.0-dev.0` cover: `mz_catalog.mz_indexes` (because adding the `mz_cluster_reconfigurations_ind` and `mz_cluster_auto_scaling_strategies_ind` builtin indexes changes the VALUES set inlined by `make_mz_indexes`, altering the MV's SQL fingerprint); `mz_internal.mz_postgres_sources` (reflecting its conversion from `BuiltinTable` to `BuiltinMaterializedView`); and `mz_catalog.mz_kafka_sources` (reflecting the same conversion).
 Eight `Replacement` steps at version `26.37.0-dev.0` cover: `mz_internal.mz_postgres_source_tables`, `mz_internal.mz_mysql_source_tables`, `mz_internal.mz_sql_server_source_tables`, and `mz_internal.mz_kafka_source_tables` (reflecting their conversion from `BuiltinTable` to `BuiltinMaterializedView`); and `mz_catalog.mz_kafka_connections`, `mz_catalog.mz_ssh_tunnel_connections`, `mz_internal.mz_aws_connections`, and `mz_catalog.mz_aws_privatelink_connections` (reflecting their conversion from `BuiltinTable` to `BuiltinMaterializedView`, where each is now derived from its connection's persisted `create_sql` via `mz_catalog_raw`).
+Three `Replacement` steps at version `26.38.0-dev.0` cover: `mz_catalog.mz_sinks`, `mz_catalog.mz_kafka_sinks`, and `mz_catalog.mz_iceberg_sinks` (reflecting their conversion from `BuiltinTable` to `BuiltinMaterializedView`, now derived from each sink's persisted `create_sql` via `mz_catalog_raw`). The earlier `0.160.0` `mz_sinks` step that named the `Table` description was removed at the same time, because the `Table` description no longer resolves; the `26.38.0-dev.0` step covers all upgrade paths that the old step would have handled.
 When applying replacement migrations, `mz_storage_usage_by_shard` is excluded from data-destroying replacement plans to preserve billing data.
 When the source and target versions differ and the source version is a dev build, `Migration::run` forces evolution-mode migration even without an explicit `force_migration` config, avoiding version-based filter failures in dev environments.
 In forced dev-to-dev migrations, `migrate_evolve_one` skips builtins that do not yet have a shard registered. Brand-new builtins in a given version may not have their shards allocated until the leader completes bootstrap; excluding them avoids "missing shard ID" errors on read-only replicas.

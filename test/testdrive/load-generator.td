@@ -260,7 +260,7 @@ contains:invalid TICK INTERVAL: cannot convert negative interval to duration
 ! CREATE SOURCE counter5
   IN CLUSTER ${arg.single-replica-cluster}
   FROM LOAD GENERATOR COUNTER (TICK INTERVAL '2147483647d')
-contains: out of range integral type conversion
+contains: interval is too large to convert to duration
 
 # Query automatically generated progress topic
 $ set-regex match=\d+ replacement=<NUMBER>

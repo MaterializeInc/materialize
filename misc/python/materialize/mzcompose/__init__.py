@@ -27,6 +27,7 @@ import psycopg
 
 from materialize import spawn, ui
 from materialize.mz_version import MzVersion
+from materialize.rustc_flags import Sanitizer
 from materialize.ui import UIError
 
 T = TypeVar("T")
@@ -49,6 +50,17 @@ DEFAULT_MZ_VOLUMES = [
 # impact customers' experience and try to find a solution other than disabling
 # the feature here!
 ADDITIONAL_BENCHMARKING_SYSTEM_PARAMETERS = {}
+
+
+def sanitizer_enabled() -> bool:
+    """Whether the binaries under test were built with a sanitizer.
+
+    Sanitizer builds run several times slower and use several times as much
+    memory as ordinary ones, so tests that assert on timing, or that need
+    jemalloc (which sanitizer builds drop, as it clashes with the sanitizer
+    runtimes), have to account for them.
+    """
+    return Sanitizer[os.getenv("CI_SANITIZER", "none")] != Sanitizer.none
 
 
 def get_minimal_system_parameters(
@@ -121,6 +133,9 @@ def get_minimal_system_parameters(
 
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
+
+    if sanitizer_enabled():
+        config["with_0dt_deployment_max_wait"] = "18000s"
 
     # The cluster controller's break-glass gate. Removed in v26.38, where the
     # controller runs unconditionally. Older binaries still read it, and
@@ -242,6 +257,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "enable_coalesce_case_transform",
             "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_adapter_frontend_occ_read_then_write",
+            "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
             ["true", "false"],
         ),
         VariableSystemParameter(

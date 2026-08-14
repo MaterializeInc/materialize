@@ -141,7 +141,7 @@ RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-ge
     libc6-dbg \
     libclang-common-18-dev \
     libclang-dev \
-    libclang-rt-18-dev \
+    libclang-rt-19-dev \
     libpq-dev \
     libxml2 \
     lld \

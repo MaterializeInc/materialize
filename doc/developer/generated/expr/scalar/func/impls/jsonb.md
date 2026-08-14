@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/jsonb.rs
-revision: fd1dd6e62b
+revision: f4650d00b
 ---
 
 # mz-expr::scalar::func::impls::jsonb
