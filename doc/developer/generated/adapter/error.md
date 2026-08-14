@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/error.rs
-revision: 6f5533eaa0
+revision: f4650d00b
 ---
 
 # adapter::error

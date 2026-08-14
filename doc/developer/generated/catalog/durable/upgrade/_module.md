@@ -1,12 +1,12 @@
 ---
 source: src/catalog/src/durable/upgrade.rs
-revision: fca741734d
+revision: f3b4f3f
 ---
 
 # catalog::durable::upgrade
 
 Orchestrates catalog schema migrations by replaying version-specific upgrade functions over a sequence of protobuf snapshots.
-`CATALOG_VERSION` is the current schema version (90); `run_upgrade` chains individual `v{N}_to_v{N+1}` functions (v74 through v90) until the stored data matches the current version.
+`CATALOG_VERSION` is the current schema version (91); `run_upgrade` chains individual `v{N}_to_v{N+1}` functions (v74 through v91) until the stored data matches the current version.
 Each version-specific submodule operates entirely on frozen `objects_v{N}` types, ensuring that future code changes cannot retroactively break old migrations.
 The `objects!` macro generates per-version support code, handling both old protobuf-based snapshots (v74--v78) and newer serde-based snapshots (v79+).
 The `json_compatible` submodule provides helpers for reading old JSON-encoded state when proto types have changed.
@@ -18,3 +18,4 @@ The v86→v87 migration runs through `run_versioned_upgrade` and adds durable cl
 The v87→v88 migration runs through `run_versioned_upgrade` and is a no-op: new `CreateOrDropClusterReplicaReasonV1` reasons (`Reconfiguration`, `HydrationBurst`, `Retired`) and new `AlterClusterReconfigurationV1` / `ClusterHydrationBurstV1` event details are additive and confined to the append-only audit log; no existing record changes shape, so a v87-serialized record is already valid v88.
 The v88→v89 migration runs through `run_versioned_upgrade` and adds `ReconfigurationState::status`, backfilling any in-flight reconfiguration records as `InProgress`. All other v88→v89 changes (new `ReconfigurationLifecycleV1::ResourceExhausted` variant, `ClusterReplicaLoggingV1`, `BurstFinishCauseV1`, updated `AlterClusterReconfigurationV1` and `ClusterHydrationBurstV1` audit event fields) are additive and confined to the append-only audit log; no existing record changes shape beyond the reconfiguration status backfill.
 The v89→v90 migration runs through `run_versioned_upgrade` and adds the `arrangement_compression` flag to managed clusters and cluster replicas, backfilling it as `false`. Managed `Cluster` and `ClusterReplica` records are rewritten to include the new field; unmanaged clusters and all other records pass through unchanged. The flag also appears on a managed cluster's in-flight `reconfiguration` target, backfilled the same way.
+The v90→v91 migration runs through `run_versioned_upgrade` and adds `ephemeral_owner_session: Option<Uuid>` to `ItemValue`, backfilling it as `None` for every existing `Item` record. All other record types are unchanged. The explicit rewrite is required so that future retractions (which encode with the new field) match the stored records; without it, retraction and record would differ and leave negative multiplicity.
