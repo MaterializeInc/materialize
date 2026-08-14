@@ -11,10 +11,12 @@ from kubernetes.client import (
     V1Container,
     V1Deployment,
     V1DeploymentSpec,
+    V1HTTPGetAction,
     V1LabelSelector,
     V1ObjectMeta,
     V1PodSpec,
     V1PodTemplateSpec,
+    V1Probe,
     V1Service,
     V1ServicePort,
     V1ServiceSpec,
@@ -25,6 +27,8 @@ from materialize.cloudtest.k8s.api.k8s_deployment import K8sDeployment
 from materialize.cloudtest.k8s.api.k8s_resource import K8sResource
 from materialize.cloudtest.k8s.api.k8s_service import K8sService
 from materialize.mzcompose.services.redpanda import REDPANDA_VERSION
+
+REDPANDA_ADMIN_PORT = 9644
 
 
 class RedpandaDeployment(K8sDeployment):
@@ -65,6 +69,13 @@ class RedpandaDeployment(K8sDeployment):
                 "--advertise-kafka-addr",
                 f"redpanda.{namespace}:9092",
             ],
+            readiness_probe=V1Probe(
+                http_get=V1HTTPGetAction(
+                    path="/v1/status/ready", port=REDPANDA_ADMIN_PORT
+                ),
+                period_seconds=1,
+                failure_threshold=120,
+            ),
         )
 
         node_selector = None
