@@ -33,6 +33,8 @@ additional_system_parameter_defaults = {
     "max_network_policies": "1000000",
     "max_objects_per_schema": "1000000",
     "max_postgres_connections": "1000000",
+    "max_prepared_statements_per_session": "1000000",
+    "max_prepared_statements_size_per_session": "1GB",
     "max_replicas_per_cluster": "1000000",
     "max_roles": "1000000",
     "max_rules_per_network_policy": "1000000",

@@ -608,15 +608,18 @@ impl Coordinator {
                             catalog_revision: self.catalog().transient_revision(),
                             session_state_revision: ctx.session().state_revision(),
                         };
-                        ctx.session_mut().set_prepared_statement(
+                        let now = self.now();
+                        let system_config = self.catalog().system_config();
+                        let ret = ctx.session_mut().set_prepared_statement(
                             plan.name,
                             Some(plan.stmt),
                             plan.sql,
                             plan.desc,
                             state_revision,
-                            self.now(),
+                            now,
+                            system_config,
                         );
-                        ctx.retire(Ok(ExecuteResponse::Prepare));
+                        ctx.retire(ret.map(|()| ExecuteResponse::Prepare));
                     }
                 }
                 Plan::Execute(plan) => {

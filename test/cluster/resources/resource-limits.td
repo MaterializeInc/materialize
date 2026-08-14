@@ -483,5 +483,58 @@ contains:creating cluster replica would violate max_credit_consumption_rate limi
 
 > DROP CLUSTER c1 CASCADE
 
+
+# Test per-session prepared statement limits.
+#
+# NOTE: testdrive executes every statement as a driver-side prepared statement
+# that occupies a slot in the session while it runs, so the limit is reached
+# one PREPARE earlier than the named statements alone would suggest, and the
+# reported counts include that transient statement.
+
+> DEALLOCATE ALL
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_prepared_statements_per_session = 3
+
+> SHOW max_prepared_statements_per_session
+3
+
+> PREPARE ps1 AS SELECT 1
+
+> PREPARE ps2 AS SELECT 1
+
+! PREPARE ps3 AS SELECT 1
+contains:creating prepared statement would violate max_prepared_statements_per_session limit (desired: 4, limit: 3, current: 3)
+
+> DEALLOCATE ps1
+
+> PREPARE ps3 AS SELECT 1
+
+! PREPARE ps4 AS SELECT 1
+contains:creating prepared statement would violate max_prepared_statements_per_session limit (desired: 4, limit: 3, current: 3)
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET max_prepared_statements_per_session
+
+> PREPARE ps4 AS SELECT 1
+
+> DEALLOCATE ALL
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET max_prepared_statements_size_per_session = 1024
+
+! PREPARE ps_big AS SELECT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+contains:creating prepared statement would violate max_prepared_statements_size_per_session limit
+
+> PREPARE ps_small AS SELECT 'small'
+
+> EXECUTE ps_small
+small
+
+> DEALLOCATE ALL
+
+$ postgres-execute connection=mz_system
+ALTER SYSTEM RESET max_prepared_statements_size_per_session
+
 $ postgres-execute connection=mz_system
 ALTER SYSTEM RESET ALL

@@ -4258,3 +4258,88 @@ fn test_grant_all_on_view_suppresses_non_applicable_notice() {
         );
     }
 }
+
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_prepared_statement_limits() {
+    fn message(err: &postgres::Error) -> &str {
+        err.as_db_error().expect("expected db error").message()
+    }
+
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "max_prepared_statements_per_session".to_string(),
+            "4".to_string(),
+        )
+        .with_system_parameter_default(
+            "max_prepared_statements_size_per_session".to_string(),
+            "1024".to_string(),
+        )
+        .start_blocking();
+
+    // Count limit. `batch_execute` uses the simple protocol, so SQL-level
+    // `PREPARE` statements are the only prepared statements those calls
+    // create, while `Client::prepare` goes through the pgwire extended
+    // protocol (a `Parse` message).
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("PREPARE p1 AS SELECT 1").unwrap();
+    client.batch_execute("PREPARE p2 AS SELECT 1").unwrap();
+    let _s1 = client.prepare("SELECT 1").unwrap();
+    let _s2 = client.prepare("SELECT 2").unwrap();
+
+    let err = client.prepare("SELECT 3").unwrap_err();
+    assert_eq!(err.code(), Some(&SqlState::INSUFFICIENT_RESOURCES));
+    assert!(
+        message(&err).contains("max_prepared_statements_per_session"),
+        "unexpected error: {}",
+        message(&err)
+    );
+    assert_eq!(
+        err.as_db_error().expect("expected db error").hint(),
+        Some(
+            "Deallocate one or more prepared statements or contact support to request a limit \
+             increase."
+        )
+    );
+
+    let err = client.batch_execute("PREPARE p3 AS SELECT 1").unwrap_err();
+    assert_eq!(err.code(), Some(&SqlState::INSUFFICIENT_RESOURCES));
+    assert!(
+        message(&err).contains("max_prepared_statements_per_session"),
+        "unexpected error: {}",
+        message(&err)
+    );
+
+    // Deallocating frees up slots for both paths.
+    client.batch_execute("DEALLOCATE p1").unwrap();
+    client.batch_execute("PREPARE p3 AS SELECT 1").unwrap();
+    client.batch_execute("DEALLOCATE ALL").unwrap();
+    let _s3 = client.prepare("SELECT 4").unwrap();
+
+    // Size limit, on a fresh session.
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let big_select = format!("SELECT '{}'", "a".repeat(1200));
+
+    let err = client.prepare(&big_select).unwrap_err();
+    assert_eq!(err.code(), Some(&SqlState::INSUFFICIENT_RESOURCES));
+    assert!(
+        message(&err).contains("max_prepared_statements_size_per_session"),
+        "unexpected error: {}",
+        message(&err)
+    );
+
+    let err = client
+        .batch_execute(&format!("PREPARE big AS {big_select}"))
+        .unwrap_err();
+    assert_eq!(err.code(), Some(&SqlState::INSUFFICIENT_RESOURCES));
+    assert!(
+        message(&err).contains("max_prepared_statements_size_per_session"),
+        "unexpected error: {}",
+        message(&err)
+    );
+
+    // Small statements still fit, and a rejected statement was not registered.
+    let small = client.prepare("SELECT 'small'").unwrap();
+    let row = client.query_one(&small, &[]).unwrap();
+    assert_eq!(row.get::<_, String>(0), "small");
+}

@@ -301,6 +301,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     log_filter_defaults
     max_copy_from_row_size
     max_network_policies
+    max_prepared_statements_per_session
+    max_prepared_statements_size_per_session
     max_rules_per_network_policy
     max_sql_server_connections
     max_timestamp_interval
