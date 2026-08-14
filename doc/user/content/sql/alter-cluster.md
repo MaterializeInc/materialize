@@ -150,12 +150,14 @@ The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
-#### Resizing is graceful by default (v26.35 and later)
+#### Resizing is graceful by default
 
-In v26.35 and later, `ALTER CLUSTER <name> SET (SIZE = ...)` resizes the
-cluster gracefully and without downtime. This is the default: you do **not**
-need to specify `WAIT UNTIL READY`, or any other `WITH` option, to get a
-zero-downtime resize.
+`ALTER CLUSTER <name> SET (SIZE = ...)` resizes the cluster gracefully and
+without downtime. This is the default: you do **not** need to specify `WAIT
+UNTIL READY`, or any other `WITH` option, to get a zero-downtime resize.
+
+Graceful resizing became the default in **v26.35** on Materialize Cloud and in
+**v26.34.1** on Materialize Self-Managed.
 
 ```mzsql
 ALTER CLUSTER c1 SET (SIZE = '100cc');
