@@ -1102,21 +1102,37 @@ class S3Object(DBObject):
 # end-of-run check is guaranteed to find the table.
 READ_THEN_WRITE_COUNTER_NAME = "materialize.public.pw_rtw_counter"
 
+# The frontend read-then-write path gives up after its OCC retry budget when a
+# statement keeps losing the race for the write timestamp. That is a
+# user-visible consequence of contention, not a bug, so every action whose
+# statement is a read-then-write (DELETE, UPDATE, INSERT ... SELECT,
+# INSERT ... RETURNING) has to tolerate it. It is still counted in the error
+# statistics.
+OCC_CONTENTION_EXHAUSTED_ERROR = (
+    "read-then-write exceeded maximum retry attempts under contention"
+)
+
 # Error texts that prove an increment did not land.
+#
+# An exhausted retry budget is checked right after an attempt the group
+# committer rejected, so nothing was appended.
 #
 # A concurrently modified dependency is reported when the coordinator rejects a
 # statement whose dependency changed underneath it, before anything is appended:
 # a plan it revalidates before sequencing, or a staged write that group commit
 # drops because a concurrent ALTER TABLE left the rows stale against the table's
-# current schema. The other error is a cluster-resolution failure during planning,
-# which the workload provokes on purpose by pointing the default cluster at a
-# nonexistent one, so the statement never reaches a write path at all. The trailing
-# quote keeps it from matching "unknown cluster replica size" errors.
+# current schema. The frontend path reports it for a changed write target, also
+# before any write. The other error is a cluster-resolution failure during
+# planning, which the workload provokes on purpose by pointing the default
+# cluster at a nonexistent one, so the statement never reaches a write path at
+# all. The trailing quote keeps it from matching "unknown cluster replica size"
+# errors.
 #
 # Every other failure counts as unknown, a statement timeout and a cancellation
 # included, because either can race a commit that did happen. A wrong entry here
 # makes healthy runs fail, an unnecessary unknown only widens the upper bound.
 DEFINITELY_NOT_COMMITTED_ERRORS = (
+    OCC_CONTENTION_EXHAUSTED_ERROR,
     "was concurrently modified",
     "unknown cluster '",
 )
