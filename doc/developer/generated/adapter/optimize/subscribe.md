@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/subscribe.rs
-revision: 43a933b189
+revision: b9097f8a3d
 ---
 
 # adapter::optimize::subscribe

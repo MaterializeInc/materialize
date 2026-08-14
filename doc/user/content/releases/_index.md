@@ -42,6 +42,36 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - Fixed a query with a very large `LIMIT` crashing a cluster replica in a loop, which any user able to query an indexed relation could trigger with a single statement.
 - Fixed a persist command that retried for minutes committing a stale lease heartbeat, which could cost a read handle its lease.
 - Fixed Self-Managed deployments defaulting to an alternative materialized view sink implementation that could block cluster worker threads and cost readers their leases; it is now off by default, matching Materialize Cloud.
+## v26.36.0
+*Released to Materialize Cloud: 2026-08-07 on as-needs basis* <br>
+*Released to Materialize Self-Managed: 2026-08-07* <br>
+
+### Improvements {#v26.36-improvements}
+- **`dbt-materialize`: `AUTO SCALING STRATEGY` support**: The dbt adapter now supports the `AUTO SCALING STRATEGY` cluster option, so you can speed up cluster hydration from your dbt workflows. You can set, reset, and disable it on a cluster, and `deploy_init` will automatically copy strategy configuration during blue/green deploys.
+- **Updated timezone data**: The IANA timezone database has been updated from 2022g to 2025b, correcting timezone rules for Egypt, Kazakhstan, Paraguay, and Greenland that changed since 2023. Numeric timezone abbreviations (e.g., `+05`) now render correctly in `pg_timezone_names`.
+- **Self-Managed: Automatic rollouts on GKE node pool upgrades**: The Materialize operator can now detect GKE node pool upgrades and automatically trigger rollouts to move workloads onto the new nodes, preventing outages from automatic node evictions.
+
+### Bug Fixes {#v26.36-bug-fixes}
+- Fixed a coordinator panic when a client abandoned a connection attempt that had already failed, such as an HTTP request that disconnects or times out.
+- Fixed `EXTRACT(YEAR ...)` and `make_timestamp` returning incorrect results for BC dates, where year numbering was off by one.
+- Fixed interval range qualifiers incorrectly dropping fields above the range's high end, causing expressions like `INTERVAL '1 2:03' HOUR TO MINUTE` to lose the day component.
+- Fixed date parsing to honor the `DateStyle` MDY convention, so `date '01/02/03'` now correctly parses as `2003-01-02` instead of `0001-02-03`.
+- Fixed array and list text output not quoting elements matching `NULL` case-insensitively, causing values like `'null'` to round-trip incorrectly as `NULL`.
+- Fixed interval text output spelling the months field as `month(s)` instead of `mon(s)`, which caused psycopg to silently drop all components after the months field.
+- Fixed `CREATE VIEW` and `CREATE MATERIALIZED VIEW` silently accepting a column name list shorter than the number of output columns.
+- Fixed binary-protocol time parameters outside the valid range being accepted instead of rejected with an error.
+- Fixed `INTERSECT` queries with many branches exhausting environmentd memory during query planning.
+- Fixed `DISCARD ALL` not resetting session variables to their defaults when using the extended query protocol.
+- Fixed `SET extra_float_digits` being accepted but having no effect on query output. Zero and negative values now limit float precision as in PostgreSQL.
+- Fixed out-of-range `REFRESH AT` or `ALIGNED TO` times causing a coordinator panic that dropped all client connections.
+- Fixed queries larger than 2 MiB terminating the client's connection instead of returning a recoverable error.
+- Fixed `SHOW CLUSTER REPLICAS` and `SHOW OBJECTS` returning incorrect results or missing rows when a cluster replica and a catalog item shared the same internal ID.
+- Fixed `UNION ALL` of record types failing with an internal error when fields differed only in nullability.
+- Fixed SQL Server sources with `CHAR(N)` columns using multi-byte character encodings failing to replicate correctly.
+- Fixed MySQL sources where dropping a table during snapshotting could jam the entire source instead of erroring only the affected table.
+- Fixed an `ALTER CLUSTER` without a `WITH (WAIT ...)` clause resetting the deadline of an in-flight graceful cluster reconfiguration.
+- Fixed `mz-deploy apply-all` failing when a cluster file references a project-defined role, because the roles phase ran after the clusters phase.
+- Fixed `mz-deploy compile` and `mz-deploy stage` failing with `type "text[]" does not exist` for projects whose dependencies have array-typed columns.
 
 ## v26.35.0
 *Released to Materialize Cloud: 2026-07-29* <br>

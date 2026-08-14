@@ -219,7 +219,6 @@ class Insert(DML):
 
     def benchmark(self) -> MeasurementSource:
         return Td(f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 17179869184;
 
@@ -417,7 +416,6 @@ class InsertAndSelect(DML):
 
     def benchmark(self) -> MeasurementSource:
         return Td(f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_result_size = 17179869184;
 
@@ -970,7 +968,6 @@ class DifferentialJoinColumnPaged(Dataflow):
         return [
             self.view_ten(),
             TdAction(f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET enable_column_paged_batcher = true;
 
@@ -1033,7 +1030,6 @@ class DifferentialJoinHydration(Dataflow):
     def init(self) -> list[Action]:
         return [
             TdAction(f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 {self.dyncfgs()}
 """),
@@ -1826,7 +1822,6 @@ $ kafka-ingest format=avro topic=many-kafka-sources-{i} schema=${{schema}} repea
 
     def init(self) -> Action:
         return TdAction(f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_sources = {self.n() * 4};
 ALTER SYSTEM SET max_tables = {self.n() * 4};
@@ -2568,7 +2563,6 @@ $ kafka-ingest format=avro topic=startup-time schema=${schema} repeat=1
 """ for i in range(0, self.n()))
 
         return TdAction(f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_objects_per_schema = {self.n() * 10};
 ALTER SYSTEM SET max_materialized_views = {self.n() * 2};
@@ -2658,7 +2652,6 @@ class StartupTpch(Scenario):
 """ for q, query in enumerate(queries) for i in range(0, self.n()))
 
         return TdAction(f"""
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET max_objects_per_schema = {self.n() * 100};
 ALTER SYSTEM SET max_materialized_views = {self.n() * 100};

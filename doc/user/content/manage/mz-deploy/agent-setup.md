@@ -63,9 +63,10 @@ root, so no `sudo` is needed. Setup scripts have network access under the
 default **Trusted** network mode; if your environment uses **None**, the
 download will fail.
 
-To configure the language server in the sandbox as well, commit the
-`.claude/settings.json` from [Configuring for Claude Code](#configuring-for-claude-code)
-to your repository — it carries over to cloud sessions automatically.
+To configure the language server in the sandbox as well, set up the plugin as
+described in [Configuring for Claude Code](#configuring-for-claude-code) and
+commit your project's `.claude/settings.json` to your repository. It carries over
+to cloud sessions automatically.
 
 ## Agent-optimized help
 
@@ -88,16 +89,24 @@ column names and types from your `types.lock` rather than guessing.
 
 ### Configuring for Claude Code
 
-Add to your project's `.claude/settings.json`:
+Use the `mz-sql-lsp` plugin, published by the
+[MaterializeInc/agent-skills](https://github.com/MaterializeInc/agent-skills)
+repo, which also serves as a Claude Code plugin marketplace named `materialize`.
+The plugin registers the language server for `.sql` files and bundles a skill
+that tells Claude to use LSP navigation instead of grepping when it needs to
+resolve an object reference, inspect a view's columns, or find dependents before
+an edit.
 
-```json
-{
-  "lsp": {
-    "mz-deploy": {
-      "command": "mz-deploy",
-      "args": ["lsp", "-d", "."],
-      "filePatterns": ["*.sql"]
-    }
-  }
-}
+`mz-deploy` must be on Claude Code's `PATH`. Then:
+
 ```
+/plugin marketplace add MaterializeInc/agent-skills
+/plugin install mz-sql-lsp@materialize
+```
+
+On enable, Claude Code prompts for one required setting, **mz-deploy project
+directory**: the directory holding your `project.toml`, relative to the
+repository root. Use `.` when `project.toml` sits at the root, or a subdirectory
+name such as `mz` when the project is nested. The language server takes that
+directory as its project root. You can change the value later from `/plugin`, in
+the plugin's detail view.

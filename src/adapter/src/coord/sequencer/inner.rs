@@ -90,6 +90,7 @@ use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
+use mz_storage_types::sources::SourceConnection;
 use mz_transform::dataflow::DataflowMetainfo;
 use mz_transform::notice::{OptimizerNotice, RawOptimizerNotice};
 use smallvec::SmallVec;
@@ -126,7 +127,6 @@ use crate::{PeekResponseUnary, ReadHolds};
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
 
 mod cluster;
-pub(crate) use cluster::cancel_carried_reconfiguration;
 mod copy_from;
 mod create_index;
 mod create_materialized_view;
@@ -183,7 +183,7 @@ struct DropOps {
 // A bundle of values returned from create_source_inner
 struct CreateSourceInner {
     ops: Vec<catalog::Op>,
-    sources: Vec<(CatalogItemId, Source)>,
+    sources: Vec<(CatalogItemId, QualifiedItemName, Source)>,
     if_not_exists_ids: BTreeMap<CatalogItemId, QualifiedItemName>,
 }
 
@@ -362,11 +362,11 @@ impl Coordinator {
             let source = Source::new(plan, global_id, resolved_ids, None, false);
             ops.push(catalog::Op::CreateItem {
                 id: item_id,
-                name,
+                name: name.clone(),
                 item: CatalogItem::Source(source.clone()),
                 owner_id: *session.current_role_id(),
             });
-            sources.push((item_id, source));
+            sources.push((item_id, name, source));
             // These operations must be executed after the source is added to the catalog.
             ops.extend(reference_ops);
         }
@@ -625,7 +625,7 @@ impl Coordinator {
             .await;
 
         // Check if any sources are webhook sources and report them as created.
-        for (item_id, source) in &sources {
+        for (item_id, _name, source) in &sources {
             if matches!(source.data_source, DataSourceDesc::Webhook { .. }) {
                 if let Some(url) = self.catalog().state().try_get_webhook_url(item_id) {
                     ctx.session()
@@ -635,7 +635,25 @@ impl Coordinator {
         }
 
         match transact_result {
-            Ok(()) => Ok(ExecuteResponse::CreatedSource),
+            Ok(()) => {
+                // Warn about any new source that runs on only one replica but
+                // landed on a cluster that has more than one. The source's
+                // name is passed along explicitly: in a DDL transaction the
+                // creation is only staged at this point, so the source is not
+                // yet visible in the catalog.
+                for (_item_id, name, source) in &sources {
+                    let cluster_id = match &source.data_source {
+                        DataSourceDesc::Ingestion { desc, cluster_id }
+                        | DataSourceDesc::OldSyntaxIngestion {
+                            desc, cluster_id, ..
+                        } if desc.connection.prefers_single_replica() => cluster_id,
+                        _ => continue,
+                    };
+                    let cluster = self.catalog().get_cluster(*cluster_id);
+                    self.notify_single_replica_sources(ctx.session(), cluster, Some(name));
+                }
+                Ok(ExecuteResponse::CreatedSource)
+            }
             Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
                 kind: ErrorKind::Sql(CatalogError::ItemAlreadyExists(id, _)),
             })) if if_not_exists_ids.contains_key(&id) => {
@@ -2648,6 +2666,14 @@ impl Coordinator {
                 mz_ore::task::spawn(|| "coord::sequence_inner", async move {
                     let result =
                         Self::insert_constant(&catalog, ctx.session_mut(), plan.id, selection);
+
+                    // Test-only synchronization point: parks a blind INSERT once its rows are
+                    // packed against the table's current RelationDesc, but before retiring
+                    // triggers the implicit commit that stages them for group commit. Lets a
+                    // test land a concurrent ALTER TABLE ... ADD COLUMN in that window. Used by
+                    // test_insert_concurrent_alter_table.
+                    fail::fail_point!("insert_after_pack_before_commit");
+
                     ctx.retire(result);
                 });
             }
@@ -2710,6 +2736,17 @@ impl Coordinator {
             .is_bounded_staleness()
         {
             ctx.retire(Err(AdapterError::BoundedStalenessReadOnly));
+            return;
+        }
+
+        // The lock-based and OCC paths do not synchronize with each other, so
+        // reaching this path while frontend sequencing is enabled is a routing
+        // bug that could corrupt data.
+        if self.frontend_read_then_write_enabled {
+            ctx.retire(Err(AdapterError::Internal(
+                "coordinator read-then-write reached while frontend OCC sequencing is enabled"
+                    .into(),
+            )));
             return;
         }
 

@@ -17,9 +17,8 @@
 # wait for the source to hydrate on the target, but must still wait for the
 # target's processes to come online before cutting over.
 #
-# Both reconfiguration paths are exercised below, the legacy foreground path
-# and the controller-owned path. The path-selection flags are pinned
-# explicitly so the test does not depend on the harness defaults.
+# The background flag is pinned explicitly so the test does not depend on the
+# harness defaults.
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET enable_zero_downtime_cluster_reconfiguration = true
@@ -60,32 +59,30 @@ CREATE PUBLICATION mz_source FOR TABLE t1;
 2
 3
 
-# ----- Legacy foreground path -----
-
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_cluster_controller = false
-ALTER SYSTEM SET enable_background_alter_cluster = false
+ALTER SYSTEM SET enable_background_alter_cluster = true
 
-# The ALTER blocks until readiness passes. Before the fix it would block until
-# the deadline rolls the resize back, failing the test at the statement
-# timeout. The raised timeout only gives the success path headroom on slow CI.
-$ set-sql-timeout duration=120s
-
+# With the background flag on the ALTER returns immediately and the controller
+# drives readiness and cut-over. Before the fix the resize would roll back at
+# its deadline and the realized size below would never advance.
 > ALTER CLUSTER source_reconfig SET (SIZE 'scale=1,workers=2') WITH (WAIT UNTIL READY (TIMEOUT '300s', ON TIMEOUT 'ROLLBACK'))
 
-$ set-sql-timeout duration=default
+# The raised timeout covers replica boot plus the controller's tick cadence.
+$ set-sql-timeout duration=120s
 
 # The realized size advanced to the target: the cut-over happened.
 > SELECT size FROM mz_clusters WHERE name = 'source_reconfig'
 "scale=1,workers=2"
 
-# The source still serves its data after cut-over.
+$ set-sql-timeout duration=default
+
+# The source still serves its data after cut-over, and keeps ingesting on the
+# promoted replica.
 > SELECT * FROM t1
 1
 2
 3
 
-# And it keeps ingesting on the promoted replica.
 $ postgres-execute connection=postgres://postgres:postgres@postgres
 INSERT INTO t1 VALUES (4), (5);
 
@@ -95,37 +92,6 @@ INSERT INTO t1 VALUES (4), (5);
 3
 4
 5
-
-# ----- Controller-owned path -----
-
-$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-ALTER SYSTEM SET enable_cluster_controller = true
-ALTER SYSTEM SET enable_background_alter_cluster = true
-
-# With the background flag on the ALTER returns immediately and the controller
-# drives readiness and cut-over. Before the fix the resize would roll back at
-# its deadline and the realized size below would never advance.
-> ALTER CLUSTER source_reconfig SET (SIZE 'scale=1,workers=1') WITH (WAIT UNTIL READY (TIMEOUT '300s', ON TIMEOUT 'ROLLBACK'))
-
-# The raised timeout covers replica boot plus the controller's tick cadence.
-$ set-sql-timeout duration=120s
-
-> SELECT size FROM mz_clusters WHERE name = 'source_reconfig'
-"scale=1,workers=1"
-
-$ set-sql-timeout duration=default
-
-# The source keeps serving and ingesting after the controller-driven cut-over.
-$ postgres-execute connection=postgres://postgres:postgres@postgres
-INSERT INTO t1 VALUES (6);
-
-> SELECT * FROM t1
-1
-2
-3
-4
-5
-6
 
 > DROP SOURCE mz_source CASCADE
 > DROP CLUSTER source_reconfig

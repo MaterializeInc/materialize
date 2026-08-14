@@ -4757,6 +4757,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_iceberg_sinks";
+----
+mz_catalog.mz_iceberg_sinks:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2..=#4)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("iceberg" = (#1 ->> "sink_type")))
+  map=(parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#1{parsed} ->> "namespace"), (#1{parsed} ->> "table"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_indexes";
 ----
 mz_catalog.mz_indexes:
@@ -4930,6 +4945,21 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_kafka_sinks";
+----
+mz_catalog.mz_kafka_sinks:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#2, #3)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("kafka" = (#1 ->> "sink_type")))
+  map=(parse_catalog_create_sql(((((#0{data} -> "value") -> "definition") -> "V1") ->> "create_sql")), parse_catalog_id(((#0{data} -> "key") -> "gid")), (#1{parsed} ->> "topic"))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_kafka_sources";
 ----
 mz_catalog.mz_kafka_sources:
@@ -4981,7 +5011,7 @@ mz_catalog.mz_materialized_views:
           Project: #4, #0, #5, #1, #6, #2, #9, #8, #3, #7
           Map: {=r/s1, s1=r/s1}, "s1"
       →Arrange (#1{schema_name}, #2{name})
-        →Constant (37 rows)
+        →Constant (40 rows)
       →Arrange (empty key) (#0{schema_name}) (#0{schema_name}, #1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3, #5
@@ -5144,6 +5174,21 @@ Source mz_internal.mz_catalog_raw
   project=(#2..=#7)
   filter=(("Item" = (#0{data} ->> "kind")) AND ("secret" = (parse_catalog_create_sql((((#1 -> "definition") -> "V1") ->> "create_sql")) ->> "type")))
   map=((#0{data} -> "value"), parse_catalog_id(((#0{data} -> "key") -> "gid")), text_to_oid((#1 ->> "oid")), parse_catalog_id((#1 -> "schema_id")), (#1 ->> "name"), parse_catalog_id((#1 -> "owner_id")), parse_catalog_privileges((#1 -> "privileges")))
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
+EXPLAIN MATERIALIZED VIEW "mz_catalog"."mz_sinks";
+----
+mz_catalog.mz_sinks:
+  →Read mz_internal.mz_catalog_raw
+
+Source mz_internal.mz_catalog_raw
+  project=(#4..=#9, #17, #10..=#15, #2, #16)
+  filter=(("Item" = (#0{data} ->> "kind")) AND ("sink" = (#3 ->> "type")))
+  map=((#0{data} -> "value"), (((#1 -> "definition") -> "V1") ->> "create_sql"), parse_catalog_create_sql(#2), parse_catalog_id(((#0{data} -> "key") -> "gid")), text_to_oid((#1 ->> "oid")), parse_catalog_id((#1 -> "schema_id")), (#1 ->> "name"), (#3{parsed} ->> "sink_type"), (#3{parsed} ->> "connection_id"), (#3{parsed} ->> "envelope_type"), (#3{parsed} ->> "format"), (#3{parsed} ->> "key_format"), (#3{parsed} ->> "value_format"), (#3{parsed} ->> "cluster_id"), parse_catalog_id((#1 -> "owner_id")), redact_sql(#2), null)
 
 Target cluster: mz_catalog_server
 
@@ -7946,7 +7991,7 @@ query T multiline
 EXPLAIN SELECT * FROM "mz_internal"."mz_builtin_materialized_views";
 ----
 Explained Query (fast path):
-  →Constant (37 rows)
+  →Constant (40 rows)
 
 Target cluster: mz_catalog_server
 

@@ -13,10 +13,12 @@ workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
 itertools.workspace = true
-mz-ore = { path = "../ore", features = ["test"], default-features = false }
 phf.workspace = true
 serde.workspace = true
 uncased.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"], default-features = false }
 
 [build-dependencies]
 anyhow.workspace = true

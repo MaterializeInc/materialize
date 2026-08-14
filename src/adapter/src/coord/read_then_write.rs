@@ -8,14 +8,31 @@
 // by the Apache License, Version 2.0.
 
 //! Coordinator-side support machinery for (frontend) read-then write.
+//!
+//! TODO(aljoscha): Write submission still goes through the coordinator. In the
+//! long run we want a group-commit task that runs independently, so that
+//! session tasks can submit write requests to it directly.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_catalog::memory::objects::CatalogItem;
 use mz_repr::CatalogItemId;
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogItemType;
+use mz_sql::plan::SubscribeOutput;
+use mz_storage_client::client::TableData;
+use smallvec::smallvec;
+use tokio::sync::mpsc;
+use tracing::Span;
 
+use crate::PeekResponseUnary;
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::catalog::Catalog;
+use crate::coord::Coordinator;
+use crate::coord::appends::{
+    InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
+    UserWriteResponder, WriteResult, WriteTarget,
+};
 use crate::error::AdapterError;
 
 /// Adds `id` to the worklist the first time it is seen, enforcing the
@@ -39,6 +56,173 @@ fn enqueue(
         stack.push(id);
     }
     Ok(())
+}
+
+impl Coordinator {
+    /// Creates a subscribe that writes no `mz_subscriptions` row.
+    ///
+    /// The dataflow is otherwise ordinary and shows up in replica
+    /// introspection like any other.
+    ///
+    /// Takes ownership of `read_holds` and drops them only once the dataflow is
+    /// shipped, so the `since` cannot advance past `as_of` in between.
+    ///
+    /// Answers through `response_tx`, with an error if the connection went away
+    /// or if a dependency was dropped since the plan was optimized.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn handle_create_internal_subscribe(
+        &mut self,
+        df_desc: crate::optimize::LirDataflowDescription,
+        cluster_id: mz_compute_types::ComputeInstanceId,
+        replica_id: Option<mz_cluster_client::ReplicaId>,
+        depends_on: BTreeSet<GlobalId>,
+        as_of: Timestamp,
+        arity: usize,
+        sink_id: GlobalId,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        session_uuid: uuid::Uuid,
+        start_time: mz_ore::now::EpochMillis,
+        read_holds: crate::ReadHolds,
+        response_tx: tokio::sync::oneshot::Sender<
+            Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>,
+        >,
+    ) {
+        // Client disconnected while waiting for the semaphore.
+        if !self.active_conns.contains_key(&conn_id) {
+            let _ = response_tx.send(Err(AdapterError::Canceled));
+            return;
+        }
+
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        let active_subscribe = ActiveSubscribe {
+            conn_id: conn_id.clone(),
+            session_uuid,
+            channel: tx,
+            emit_progress: true, // We need progress updates for OCC
+            as_of,
+            arity,
+            cluster_id,
+            depends_on,
+            start_time,
+            output: SubscribeOutput::Diffs,
+            internal: true, // no mz_subscriptions row and no active-subscribes metric
+        };
+        active_subscribe.initialize();
+
+        // Ship the dataflow before registering the sink, so a failure has
+        // nothing to unwind.
+        //
+        // Creation can fail here: the plan was optimized against a catalog
+        // snapshot taken off the coordinator loop, so a dependency can be
+        // dropped before this message is handled. That makes it a conflict to
+        // report rather than an invariant violation, hence `try_ship_dataflow`.
+        if let Err(err) = self
+            .try_ship_dataflow(df_desc, cluster_id, replica_id)
+            .await
+        {
+            let _ = response_tx.send(Err(
+                AdapterError::concurrent_dependency_drop_from_dataflow_creation_error(err),
+            ));
+            return;
+        }
+
+        self.add_active_compute_sink(sink_id, ActiveComputeSink::Subscribe(active_subscribe))
+            .await;
+
+        if response_tx.send(Ok(rx)).is_err() {
+            // The receiver is gone, so cancellation or a statement timeout
+            // dropped the caller's future between the command being sent and
+            // this handler running. Retire the sink here, rather than leave a
+            // dataflow running against a closed channel. The cancel path
+            // retires it too, but only because its command is queued behind
+            // ours, and that ordering is not ours to depend on.
+            self.drop_internal_subscribe(sink_id).await;
+            return;
+        }
+
+        // Drop read holds only after `ship_dataflow` returns, so the since
+        // can't advance past `as_of` before the dataflow is running.
+        drop(read_holds);
+    }
+
+    /// Enqueues a write attempt, answering through `result_tx`.
+    ///
+    /// `write_ts` picks the path. `Some` names a timestamp the diffs are only
+    /// valid at and goes straight to the committer, pinned to the `GlobalId`
+    /// validated here. `None` is a blind write that rides the next group
+    /// commit, whose staging re-checks the target generation.
+    pub(crate) fn handle_attempt_write(
+        &mut self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        target_id: mz_repr::CatalogItemId,
+        target_global_id: GlobalId,
+        diffs: Vec<(Row, Diff)>,
+        write_ts: Option<Timestamp>,
+        result_tx: tokio::sync::oneshot::Sender<WriteResult>,
+    ) {
+        let result = InternalWriteResponder::new(result_tx);
+        if !self.active_conns.contains_key(&conn_id) {
+            result.send(WriteResult::Canceled);
+            return;
+        }
+        if self.controller.read_only() {
+            result.send(WriteResult::ReadOnly);
+            return;
+        }
+
+        let current_global_id = self
+            .catalog()
+            .try_get_entry(&target_id)
+            .map(|entry| entry.latest_global_id());
+        if current_global_id != Some(target_global_id) {
+            result.send(WriteResult::TargetChanged);
+            return;
+        }
+
+        let table_data = TableData::Rows(diffs);
+        match write_ts {
+            Some(target_timestamp) => {
+                let request = TimestampedWriteRequest {
+                    appends: vec![(target_global_id, vec![table_data])],
+                    target_timestamp,
+                    result,
+                    span: Span::current(),
+                };
+                if self
+                    .group_committer_tx
+                    .send(TableWriteCmd::TimestampedWrite(request))
+                    .is_err()
+                {
+                    tracing::warn!("group committer task gone, dropping timestamped write");
+                }
+            }
+            None => {
+                let writes = BTreeMap::from([(target_id, smallvec![table_data])]);
+                self.pending_writes.push(PendingWriteTxn::User {
+                    span: Span::current(),
+                    writes,
+                    write_locks: None,
+                    responder: UserWriteResponder::Internal {
+                        conn_id,
+                        target: WriteTarget {
+                            item_id: target_id,
+                            global_id: target_global_id,
+                        },
+                        result,
+                    },
+                });
+                self.trigger_group_commit();
+            }
+        }
+    }
+
+    /// Drop an internal subscribe.
+    pub(crate) async fn drop_internal_subscribe(&mut self, sink_id: GlobalId) {
+        // Use drop_compute_sink instead of remove_active_compute_sink to also
+        // cancel the dataflow on the compute side, not just remove bookkeeping.
+        let _ = self.drop_compute_sink(sink_id).await;
+    }
 }
 
 /// Validates that all dependencies are valid for read-then-write operations.

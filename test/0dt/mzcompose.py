@@ -24,7 +24,7 @@ from psycopg.errors import OperationalError
 from psycopg.sql import SQL, Identifier
 
 from materialize import buildkite
-from materialize.mzcompose import get_default_system_parameters
+from materialize.mzcompose import get_default_system_parameters, sanitizer_enabled
 from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.services.kafka import Kafka
 from materialize.mzcompose.services.materialized import (
@@ -44,6 +44,13 @@ from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import CommandFailureCausedUIError
 
 DEFAULT_TIMEOUT = "300s"
+
+# Sanitized builds run the whole read path several times slower, so the bounds
+# on "this SELECT is fast, hence the source is hydrated" have to move with them.
+# NOTE: that weakens those assertions under a sanitizer, where a read that is
+# slow because the source is only partly hydrated can still come in under the
+# scaled bound. The unscaled bound guards the non-sanitizer runs.
+HYDRATED_SELECT_FACTOR = 10 if sanitizer_enabled() else 1
 
 SYSTEM_PARAMETER_DEFAULTS = get_default_system_parameters()
 
@@ -1113,7 +1120,7 @@ def workflow_kafka_source_rehydration(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 3
+            elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()
@@ -1227,7 +1234,7 @@ def workflow_kafka_source_rehydration_large_initial(c: Composition) -> None:
         result = c.sql_query("SELECT count(*) FROM kafka_source_tbl", service="mz_new")
         assert result[0][0] == count * repeats, f"Wrong result: {result}"
         assert (
-            elapsed < 3
+            elapsed < 3 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Kafka source after 0dt upgrade, is it hydrated?"
 
         start_time = time.time()
@@ -1347,7 +1354,7 @@ def workflow_pg_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on Postgres source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1470,7 +1477,7 @@ def workflow_mysql_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on MySQL source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(
@@ -1600,7 +1607,7 @@ def workflow_sql_server_source_rehydration(c: Composition) -> None:
         print(f"final check took {elapsed} seconds")
         assert result[0][0] == total, f"Wrong result: {result}"
         assert (
-            elapsed < 4
+            elapsed < 4 * HYDRATED_SELECT_FACTOR
         ), f"Took {elapsed}s to SELECT on SQL Server source after 0dt upgrade, is it hydrated?"
 
         result = c.sql_query(

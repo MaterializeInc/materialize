@@ -10,9 +10,11 @@ publish = false
 workspace = true
 
 [dependencies]
-mz-ore = { path = "../ore", features = ["test"] }
 prometheus.workspace = true
 protobuf.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["test"] }
 
 [features]
 default = []

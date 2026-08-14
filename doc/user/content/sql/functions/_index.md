@@ -113,7 +113,9 @@ Operator | Computes
 The regular expression syntax supported by Materialize is documented by the
 [Rust `regex` crate](https://docs.rs/regex/*/#syntax).
 The maximum length of a regular expression is 1 MiB in its raw form, and 10 MiB
-after compiling it.
+after compiling it. A regular expression may also contain at most 2000 character
+classes, counting each Unicode, Perl, or POSIX class such as `\p{L}`, `\d`, or
+`[[:alpha:]]`, and each range such as `a-z`.
 
 {{< warning >}}
 Materialize regular expressions are similar to, but not identical to, PostgreSQL

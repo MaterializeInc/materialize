@@ -668,6 +668,7 @@ mod columnation {
                         | e @ EvalError::InvalidTimezoneInterval
                         | e @ EvalError::InvalidTimezoneConversion
                         | e @ EvalError::LengthTooLarge
+                        | e @ EvalError::TempStorageBudgetExceeded
                         | e @ EvalError::AclArrayNullElement
                         | e @ EvalError::MzAclArrayNullElement => e.clone(),
                         EvalError::Unsupported {

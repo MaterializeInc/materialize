@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/optimize/view.rs
-revision: 1189146e6e
+revision: b9097f8a3d
 ---
 
 # adapter::optimize::view

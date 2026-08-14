@@ -94,7 +94,6 @@ use crate::util::ClientTransmitter;
 //   big refactoring after the old peek sequencing is removed.
 
 mod inner;
-pub(crate) use inner::cancel_carried_reconfiguration;
 
 impl Coordinator {
     /// BOXED FUTURE: As of Nov 2023 the returned Future from this function was 34KB. This would
@@ -911,6 +910,14 @@ impl Coordinator {
                 // Consolidate rows. This is useful e.g. for an UPDATE where the row
                 // doesn't change, and we need to reflect that in the number of
                 // affected rows.
+                //
+                // NOTE: This differs from PostgreSQL, where `UPDATE t SET x = x`
+                // reports the number of rows matching the WHERE clause even when
+                // no value changes. Because Materialize works in differential
+                // dataflow, the +1 and -1 diffs for an unchanged row cancel out
+                // during consolidation, so it reports 0 affected rows. This is
+                // longstanding behavior and both read-then-write paths agree on
+                // it.
                 differential_dataflow::consolidation::consolidate(&mut plan.updates);
 
                 affected_rows = Diff::ZERO;

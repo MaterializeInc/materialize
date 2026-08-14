@@ -33,19 +33,19 @@ If possible, dedicate a cluster just for sources.
 
 ## Snapshotting
 
-When a new source is created, Materialize performs a sync of all data available
-in the external system before it starts ingesting new data — an operation known
-as _snapshotting_. Because the initial snapshot is persisted in the storage
-layer atomically (i.e., at the same ingestion timestamp), you are **not able to
-query the source until snapshotting is complete**.
+{{% include-headless "/headless/ingestion/snapshotting-definition" %}}
+
+### When snapshotting occurs
+
+{{% include-headless "/headless/ingestion/snapshotting-occurrence" %}}
 
 ### Duration
 
-The duration of the snapshotting operation depends on the volume of data in the
-initial snapshot and the size of the cluster where the source is hosted. To
-reduce the operational burden of snapshotting on the upstream system and ensure
-you are only bringing in the volume of data that you need in Materialize, we
-recommend:
+{{% include-headless "/headless/ingestion/snapshotting-duration" %}}
+
+To reduce the operational burden of snapshotting on the upstream system and
+ensure you are only bringing in the volume of data that you need in Materialize,
+we recommend:
 
 - If possible, running source creation operations during **off-peak hours** to
   minimize operational risk in both the upstream system and Materialize.
@@ -76,16 +76,14 @@ exhaustion, you may need to [resize the cluster](#use-a-larger-cluster-for-upser
 
 ### Queries during snapshotting
 
-Because the initial snapshot is persisted atomically, you are **not able to
-query the source until snapshotting is complete**. This means that queries
-issued against (sub)sources undergoing snapshotting will hang until the
-operation completes. Once the initial snapshot has been ingested, you can start
-querying your (sub)sources and Materialize will continue ingesting any new data
-as it arrives, in real time.
+{{% include-headless "/headless/ingestion/snapshotting-queries" %}}
 
 ### Modifying an existing source
 
-{{% include-headless "/headless/alter-source-snapshot-blocking-behavior" %}}
+{{% include-headless "/headless/ingestion/snapshotting-ingestion" %}}
+
+If possible, resize the cluster to speed up the snapshot, then right-size it once
+snapshotting completes.
 
 ## Running/steady-state
 

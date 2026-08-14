@@ -855,5 +855,33 @@ HINT: No function matches the given name and argument types.  You might need to 
 statement error invalid regular expression: regex pattern too large \(62400000 bytes, max 1048576 bytes\)
 SELECT 'aaaaaaaaaaa' ~ repeat('vxx.0.0-rc.4 (5b079d80c)', '2600000');
 
+# A class-heavy pattern stays far under the byte limit while costing gigabytes to compile, so the
+# number of character classes is limited separately. Where the limit cuts off is left to the unit
+# tests, which derive it from the constant instead of restating one here.
+statement error invalid regular expression: regex pattern has too many character classes \(\d+, max \d+\)
+SELECT 'x' ~* repeat(chr(92) || 'p{L}', 209715);
+
+# Case folding walks a range's whole span, so `[a-\x{2FFF}]` buys as many Unicode ranges as a
+# `\p{...}` class does, and counts as one.
+statement error invalid regular expression: regex pattern has too many character classes \(\d+, max \d+\)
+SELECT 'x' ~* repeat('[a-' || chr(92) || 'x{2FFF}]', 87381);
+
+# An inline `(?i)` reaches the same folding path, so a case-sensitive operator is guarded too.
+statement error invalid regular expression: regex pattern has too many character classes \(\d+, max \d+\)
+SELECT 'x' ~ ('(?i)' || repeat('[a-' || chr(92) || 'x{2FFF}]', 50000));
+
+# Plain literals carry no classes, so a pattern of the same length must keep working. Kept below
+# 12000 branches, past which the NFA runs into the separate 10 MiB size limit instead.
+query B
+SELECT 'abcdefgh' ~* (repeat('abcdefgh|', 12000) || 'x');
+----
+true
+
+# Ranges count as classes however narrow, so ordinary use has to stay well inside the limit.
+query B
+SELECT repeat('a', 5000) ~* repeat('[a-z]', 1500);
+----
+true
+
 statement ok
 DROP CLUSTER multiprocess;

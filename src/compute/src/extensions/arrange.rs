@@ -288,6 +288,13 @@ where
                     output.session(&time).give_container(data);
                 });
                 let Some(trace) = trace.upgrade() else {
+                    // Invariant: `batches` holds no entries once the trace is gone. Each entry's
+                    // `Weak` keeps its batch's `RcBox` allocation reserved, and the `retain` below
+                    // that would drop it is unreachable on this path, so the entries have to go
+                    // here. The upgrade cannot start succeeding again, hence clearing on every
+                    // activation that takes this path also covers batches that arrive on the
+                    // input afterwards.
+                    batches.clear();
                     return;
                 };
 

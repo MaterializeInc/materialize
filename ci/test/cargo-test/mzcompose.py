@@ -86,10 +86,6 @@ SERVICES = [
 ]
 
 
-def flatten(xss):
-    return [x for xs in xss for x in xs]
-
-
 def pull_image(image: str) -> None:
     # Check if image exists locally before pulling
     image_exists = subprocess.run(
@@ -122,6 +118,19 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     )
     if os.path.exists(junit_path):
         os.remove(junit_path)
+
+    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
+
+    # Miri excludes the network-based tests, so it needs none of the services
+    # below and pulls none of their mzbuild images. Dispatch before `c.up()` so
+    # the Buildkite step has nothing to depend on the build for.
+    if not coverage:
+        if args.miri_full:
+            run_miri_slow(dict(os.environ))
+            return
+        if args.miri_fast:
+            run_miri_fast(dict(os.environ))
+            return
 
     c.up(
         "kafka",
@@ -168,7 +177,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         FDB_CLUSTER_FILE=fdb_cluster_file.name,
     )
 
-    coverage = ui.env_is_truthy("CI_COVERAGE_ENABLED")
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
     metadata = json.loads(
@@ -179,10 +187,6 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
 
     if coverage:
         run_coverage_test(args, env)
-    elif args.miri_full:
-        run_miri_slow(env)
-    elif args.miri_fast:
-        run_miri_fast(env)
     elif sanitizer != Sanitizer.none:
         run_sanitizer(args, env, metadata, sanitizer)
     else:
@@ -272,12 +276,9 @@ def run_sanitizer(
 ):
     cflags = [
         f"--target={target(Arch.host())}",
-        f"--gcc-toolchain=/opt/x-tools/{target(Arch.host())}/",
-        f"--sysroot=/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/sysroot",
     ] + rustc_flags.sanitizer_cflags[sanitizer]
     ldflags = cflags + [
         "-fuse-ld=lld",
-        f"-L/opt/x-tools/{target(Arch.host())}/{target(Arch.host())}/lib64",
     ]
     extra_env = {
         "CFLAGS": " ".join(cflags),
@@ -286,21 +287,26 @@ def run_sanitizer(
         "CXXSTDLIB": "stdc++",
         "CC": "cc",
         "CXX": "c++",
-        "CPP": "clang-cpp-18",
+        "CPP": "clang-cpp-19",
         "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
         "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-        "PATH": f"/sanshim:/opt/x-tools/{target(Arch.host())}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "PATH": "/sanshim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
         "RUSTFLAGS": (
             env.get("RUSTFLAGS", "") + " " + " ".join(rustc_flags.sanitizer[sanitizer])
         ),
         "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
     }
+    # `bin/ci-builder run` forwards only an allowlist of host variables, so the
+    # sanitizer environment has to be set inside the container. `env` also
+    # resolves `cargo` through the `PATH` it just set, which is what puts the
+    # `/sanshim` compiler wrappers ahead of the real ones.
+    env_prefix = ["env", *(f"{key}={val}" for key, val in extra_env.items())]
     spawn.runv(
         [
             "bin/ci-builder",
             "run",
             "nightly",
-            *flatten([["--env", f"{key}={val}"] for key, val in extra_env.items()]),
+            *env_prefix,
             "cargo",
             "build",
             "--workspace",
@@ -322,9 +328,7 @@ def run_sanitizer(
                     "bin/ci-builder",
                     "run",
                     "nightly",
-                    *flatten(
-                        [["--env", f"{key}={val}"] for key, val in extra_env.items()]
-                    ),
+                    *env_prefix,
                     "cargo",
                     "nextest",
                     "run",

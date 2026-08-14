@@ -245,14 +245,6 @@ impl Coordinator {
                     );
                 }
             }
-            Message::CheckSchedulingPolicies => {
-                self.check_scheduling_policies().boxed_local().await;
-            }
-            Message::SchedulingDecisions(decisions) => {
-                self.handle_scheduling_decisions(decisions)
-                    .boxed_local()
-                    .await;
-            }
             Message::ClusterControllerRequest(request) => {
                 self.handle_cluster_controller_request(request)
                     .boxed_local()
