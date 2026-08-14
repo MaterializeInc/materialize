@@ -125,6 +125,8 @@ pub struct Config {
     pub backoff_factor: f64,
     /// Should we skip coordinator and catalog consistency checks.
     pub consistency_checks: consistency::Level,
+    /// How long a single consistency check may take before the test file fails.
+    pub consistency_check_timeout: Duration,
     /// Whether to run statement logging consistency checks (adds a few seconds at the end of every
     /// test file).
     pub check_statement_logging: bool,
@@ -246,6 +248,7 @@ pub struct State {
     initial_backoff: Duration,
     backoff_factor: f64,
     consistency_checks: consistency::Level,
+    consistency_check_timeout: Duration,
     check_statement_logging: bool,
     consistency_checks_adhoc_skip: bool,
     regex: Option<Regex>,
@@ -1249,6 +1252,7 @@ pub async fn create_state(
         initial_backoff: config.initial_backoff,
         backoff_factor: config.backoff_factor,
         consistency_checks: config.consistency_checks,
+        consistency_check_timeout: config.consistency_check_timeout,
         check_statement_logging: config.check_statement_logging,
         consistency_checks_adhoc_skip: false,
         regex: None,
