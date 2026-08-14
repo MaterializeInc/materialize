@@ -15,6 +15,7 @@ import {
   PopoverContent,
   PopoverTrigger,
   Skeleton,
+  SystemStyleObject,
   Table,
   Tbody,
   Td,
@@ -210,6 +211,7 @@ const BodyRow = <TData,>({
   // caret column, kept empty on rows that cannot expand so every row lines up.
   isGroupTable?: boolean;
 }) => {
+  const { colors, space } = useTheme<MaterializeTheme>();
   // NOTE: an expandable row is assumed to be a group heading from
   // getSubRows. A row-detail expander via getRowCanExpand on flat data
   // would need its own treatment.
@@ -219,6 +221,32 @@ const BodyRow = <TData,>({
     : onRowClick
       ? () => onRowClick(row.original)
       : undefined;
+
+  // Ledger look: compact borderless rows, each account group opened by
+  // a taller top-bordered row, a bordered total row closing the table.
+  const defaultRowSx: SystemStyleObject = isGroupTable
+    ? {
+        td: {
+          borderBottomWidth: 0,
+          height: "auto",
+          paddingBottom: space[3],
+          verticalAlign: "top",
+        },
+        "&[data-parent-row] td": {
+          height: "auto",
+          borderTopWidth: "1px",
+          borderTopStyle: "solid",
+          borderTopColor: colors.border.secondary,
+          paddingTop: space[3],
+          textStyle: "heading-xs",
+          verticalAlign: "middle",
+        },
+        // hide top border of first row because header has a bottom border
+        "&[data-parent-row]:first-child td": {
+          borderTopWidth: "0",
+        },
+      }
+    : {};
 
   return (
     <Tr
@@ -231,7 +259,7 @@ const BodyRow = <TData,>({
       data-parent-row={isParentRow ? "" : undefined}
       sx={{
         cursor: handleClick ? "pointer" : undefined,
-        ...(isParentRow && { td: { textStyle: "heading-xs" } }),
+        ...defaultRowSx,
         ...rowSx,
       }}
     >

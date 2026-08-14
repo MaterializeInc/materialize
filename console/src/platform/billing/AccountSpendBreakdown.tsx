@@ -566,17 +566,6 @@ const UnifiedLedger = ({
             : undefined
         }
         footerTestId="account-total-row"
-        // Ledger look: compact borderless rows, each account group opened by
-        // a taller top-bordered row, a bordered total row closing the table.
-        rowSx={{
-          td: { borderBottomWidth: 0, height: "8" },
-          "&[data-parent-row] td": {
-            height: "16",
-            borderTopWidth: "1px",
-            borderTopStyle: "solid",
-            borderTopColor: colors.border.secondary,
-          },
-        }}
         footerSx={{
           td: {
             textStyle: "text-ui-med",
