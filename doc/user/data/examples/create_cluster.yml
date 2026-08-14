@@ -70,7 +70,7 @@
         | `LINGER DURATION` | Optional. How long the burst replica lingers after a steady-size replica catches up, before it is removed. Default: `0s`. |
     - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
       description: |
-        {{< warn-if-unreleased-inline "v26.37" >}}
+        {{< warn-if-unreleased-inline "v26.38" >}}
 
         Optional. Whether to enable [dictionary
         compression](#dictionary-compression) for the arrangements maintained by

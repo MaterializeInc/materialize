@@ -1,9 +1,9 @@
 ---
 headless: true
 ---
-{{< warn-if-unreleased "v26.37" >}}
+{{< warn-if-unreleased "v26.38" >}}
 
-Starting in v26.37, dictionary compression is available for managed clusters.
+Starting in v26.38, dictionary compression is available for managed clusters.
 Dictionary compression reduces the memory that
 [arrangements](/get-started/arrangements/#arrangements) use when a column holds
 the same values repeatedly. Instead of storing a repeated column value each time

@@ -73,7 +73,7 @@
 
     - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
       description: |
-        {{< warn-if-unreleased-inline "v26.37" >}}
+        {{< warn-if-unreleased-inline "v26.38" >}}
 
         Optional. Whether to enable [dictionary
         compression](#dictionary-compression) for the arrangements maintained by
@@ -131,7 +131,7 @@
         Default: no autoscaling strategy.
     - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
       description: |
-        {{< warn-if-unreleased-inline "v26.37" >}}
+        {{< warn-if-unreleased-inline "v26.38" >}}
 
         Optional. Resetting turns [dictionary
         compression](#dictionary-compression) off for the cluster. Because this
