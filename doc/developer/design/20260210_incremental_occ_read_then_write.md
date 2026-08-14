@@ -392,9 +392,23 @@ non-goal (see Non-Goals).
 
 Measured on the full implementation, with the OCC path on for every mzcompose
 suite, the small-write regression is at the bad end of that range. Across nightly
-runs the feature benchmark `ManySmallUpdates` is 1.7-1.9x slower and `Update`
-1.4x slower, and the scalability `UpdateWorkload` loses 36-39% throughput at
-concurrency 1 and about 22% at 8 and 32.
+runs the feature benchmark `ManySmallUpdates` is about 3.5x slower (3.4-3.7x over
+three runs) and `Update` 1.4x slower (33-45%), and the scalability
+`UpdateWorkload` loses 24% throughput at concurrency 1 and about 22% at 8 and 32.
+
+`ManySmallUpdates` is the worst case for this design, and the reason is worth
+recording. Its statements set every matched row's `f1` to one shared random
+value, which merges a whole residue class, so the class count only shrinks and
+roughly 90% of its 100 updates end up matching no rows. A statement that matches
+nothing still has to linearize its read, and the oracle advances only when a
+group commit applies, so each of those statements needs a commit that has nothing
+to write. We ask for one rather than waiting for the periodic keepalive, which
+costs a commit round trip per statement instead of up to a full
+`default_timestamp_interval`. That is the difference between 3.5x and 157x, but
+it is not free, and a workload dominated by zero-row writes pays it on every
+statement. The residue is the price of the linearization guarantee rather than a
+defect: correctness requires the oracle to advance, and only a commit advances
+it.
 
 The PoC's large-write win does not survive here. `Update` is itself a large
 mutation, a full-table update over 10^6 rows, and it is 1.4x slower. An `UPDATE`
@@ -404,8 +418,8 @@ re-packs every row. That works against the loop relief this design argues for,
 and it works hardest against exactly the large mutations. No large-`DELETE`
 scenario is measured, so whether the PoC's win holds for `DELETE` is untested.
 
-`ManySmallUpdates` also steps `memory_clusterd` up by about 56%, from 56.8 MB to
-88.5 MB. The mechanism is unidentified. The obvious candidate, the subscribe
+`ManySmallUpdates` also steps `memory_clusterd` up by 57-73%, from about 54 MB
+to 85-93 MB. The mechanism is unidentified. The obvious candidate, the subscribe
 dataflow that each operation arranges on the cluster, does not account for it:
 `memory_clusterd` samples after the iteration's dataflows are dropped, so a
 transient arrangement cannot explain a persistent step. A single scale point
