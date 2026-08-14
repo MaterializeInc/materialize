@@ -569,7 +569,7 @@ const UnifiedLedger = ({
         // a taller top-bordered row, a bordered total row closing the table.
         rowSx={{
           td: { borderBottomWidth: 0, height: "8" },
-          "&[data-group-row] td": {
+          "&[data-parent-row] td": {
             height: "16",
             borderTopWidth: "1px",
             borderTopStyle: "solid",

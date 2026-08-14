@@ -156,7 +156,7 @@ const CARET_SIZE = 8;
 /** Fallback caret name when the table supplies no `expandLabel`. */
 const DEFAULT_EXPAND_LABEL = "Display child rows";
 
-const GroupRowCaret = ({
+const ParentRowCaret = ({
   isOpen,
   label,
   onToggle,
@@ -210,9 +210,9 @@ const BodyRow = <TData,>({
   // NOTE: an expandable row is assumed to be a group heading from
   // getSubRows. A row-detail expander via getRowCanExpand on flat data
   // would need its own treatment.
-  const isGroupRow = row.getCanExpand();
-  const needsIndent = isGroupRow || row.depth > 0;
-  const handleClick = isGroupRow
+  const isParentRow = row.getCanExpand();
+  const needsIndent = isParentRow || row.depth > 0;
+  const handleClick = isParentRow
     ? row.getToggleExpandedHandler()
     : onRowClick
       ? () => onRowClick(row.original)
@@ -225,11 +225,11 @@ const BodyRow = <TData,>({
       // form `&.my-class` match on the compound of the two.
       className={getRowClassName?.(row)}
       data-testid={rowTestId?.(row)}
-      // A styling hook for `rowSx` selectors that need to target group rows.
-      data-group-row={isGroupRow ? "" : undefined}
+      // A styling hook for `rowSx` selectors that need to target parent rows.
+      data-parent-row={isParentRow ? "" : undefined}
       sx={{
         cursor: handleClick ? "pointer" : undefined,
-        ...(isGroupRow && { td: { textStyle: "heading-xs" } }),
+        ...(isParentRow && { td: { textStyle: "heading-xs" } }),
         ...rowSx,
       }}
     >
@@ -252,8 +252,8 @@ const BodyRow = <TData,>({
                 alignItems="center"
                 paddingLeft={row.depth * CHILD_ROW_INDENT}
               >
-                {isGroupRow && (
-                  <GroupRowCaret
+                {isParentRow && (
+                  <ParentRowCaret
                     isOpen={row.getIsExpanded()}
                     label={expandLabel?.(row) ?? DEFAULT_EXPAND_LABEL}
                     onToggle={row.getToggleExpandedHandler()}
