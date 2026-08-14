@@ -38,53 +38,13 @@ Once installed, you can update installed skills by running `npx skills update`.
 
 ## Claude Code plugins
 
-The same repository also doubles as a [Claude Code plugin
+The same repository also serves as a [Claude Code plugin
 marketplace](https://code.claude.com/docs/en/plugin-marketplaces) named
-`materialize`. Plugins cover capabilities a portable skill can't express, such
-as registering a language server.
-
-The marketplace publishes one plugin, **`mz-sql-lsp`**. It registers the
-`mz-deploy` language server for `.sql` files, which gives Claude Code's LSP tool
-go-to-definition across your project, hover with column names and types,
-document and workspace symbols, and parse error diagnostics. Instead of grepping
-for an object reference, Claude resolves it. The plugin bundles a skill that
-teaches Claude when to reach for the LSP tool.
-
-The plugin only helps inside an [`mz-deploy`](/manage/mz-deploy/) project, and
-`mz-deploy` must be on your `PATH`:
-
-```bash
-which mz-deploy
-```
-
-Add the marketplace and install the plugin:
-
-```
-/plugin marketplace add MaterializeInc/agent-skills
-/plugin install mz-sql-lsp@materialize
-```
-
-### Setting the project directory
-
-`mz-sql-lsp` requires one setting, **mz-deploy project directory**: the
-directory holding your `project.toml`, relative to the repository root. Use `.`
-when `project.toml` sits at the root, or a subdirectory name such as `mz` when
-the project is nested. Claude Code prompts for this value when you enable the
-plugin.
-
-The setting has no working fallback:
-
-- If you dismiss the prompt without entering a value, the language server never
-  loads and Claude Code reports `Plugin option "project_dir" isn't set`.
-- If the value points somewhere other than the directory holding
-  `project.toml`, the server looks healthy but every navigation request returns
-  "No definition found".
-
-Run `/plugin`, open the plugin's detail view, and set or correct the value.
-
-If another enabled plugin also registers a language server for `.sql`, the first
-one registered wins and the other never starts. The `/plugin` interface names
-the plugin whose server is active.
+`materialize`. Its `mz-sql-lsp` plugin registers the
+[`mz-deploy`](/manage/mz-deploy/) language server for `.sql` files, so Claude
+Code navigates your project instead of grepping it. See [AI agent
+setup](/manage/mz-deploy/agent-setup/#configuring-for-claude-code) for
+installation and configuration.
 
 ## Reduce permission prompts (Claude Code)
 
@@ -114,5 +74,5 @@ all tools rather than just this directory.
 ## Related Pages
 
 - [MCP Server](/integrations/mcp-server/)
-- [mz-deploy editor setup](/manage/mz-deploy/editor-setup/)
+- [mz-deploy AI agent setup](/manage/mz-deploy/agent-setup/)
 - [GitHub: Materialize Agent Skills](https://github.com/MaterializeInc/agent-skills)

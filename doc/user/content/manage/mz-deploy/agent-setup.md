@@ -107,14 +107,8 @@ On enable, Claude Code prompts for one required setting, **mz-deploy project
 directory**: the directory holding your `project.toml`, relative to the
 repository root. Use `.` when `project.toml` sits at the root, or a subdirectory
 name such as `mz` when the project is nested. The language server takes that
-directory as its project root, so the value is load-bearing:
-
-- Dismissing the prompt without entering a value leaves the server unloaded,
-  reported as `Plugin option "project_dir" isn't set`.
-- A value pointing at the wrong directory leaves the server looking healthy
-  while every navigation request returns "No definition found".
-
-Run `/plugin`, open the plugin's detail view, and set or correct the value.
+directory as its project root. You can change the value later from `/plugin`, in
+the plugin's detail view.
 
 #### Manual configuration
 
