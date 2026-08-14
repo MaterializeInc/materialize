@@ -2503,6 +2503,104 @@ def workflow_autoscaling(c: Composition, parser: WorkflowArgumentParser) -> None
         assert live_strategy("scaled") is None, "expected the policy to be reset"
 
 
+def workflow_cluster_options(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """Generic cluster option reconciliation over the ``cluster-options/*``
+    projects.
+
+    Reconciliation compares the definition against the `SHOW CREATE CLUSTER`
+    statement the server renders, which spells out every option including the
+    ones the definition left to their defaults. These cases pin the two halves
+    of that comparison: a default the definition omits is not drift, and a value
+    the definition declares is."""
+    setup_base(c)
+
+    def live_config(cluster: str) -> tuple[str, int]:
+        """The (size, replication factor) of a live cluster."""
+        rows = c.sql_query(
+            "SELECT size, replication_factor FROM mz_clusters "
+            f"WHERE name = '{cluster}'"
+        )
+        assert len(rows) == 1, f"expected one row for cluster {cluster}, got {rows}"
+        return (rows[0][0], int(rows[0][1]))
+
+    def await_config(cluster: str, expected: tuple[str, int]) -> None:
+        """Wait for a cluster to reach a (size, replication factor).
+
+        An `ALTER CLUSTER` that changes SIZE reconfigures gracefully: the
+        controller runs the realized and target replica sets side by side, and
+        `mz_clusters` keeps reporting the realized shape until cut-over. Reading
+        it the instant `apply` returns can still show the old size."""
+        deadline = time.time() + 60
+        config = live_config(cluster)
+        while config != expected and time.time() < deadline:
+            time.sleep(1)
+            config = live_config(cluster)
+        assert config == expected, f"expected {expected}, got {config}"
+
+    def clusters_phase(project: str) -> dict:
+        """The clusters phase of a dry-run apply."""
+        result = run_mz_deploy(c, project, "apply", "--dry-run", "--output", "json")
+        dry_run = parse_dry_run_json(result)
+        phase = find_phase(dry_run["phases"], "clusters")
+        assert phase is not None, f"no clusters phase in {dry_run}"
+        return phase
+
+    with c.test_case("cluster-options-create"):
+        result = run_mz_deploy(c, "cluster-options/v1", "apply")
+        assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+        await_config("sized", ("scale=1,workers=1", 1))
+
+    with c.test_case("cluster-options-defaults-are-not-drift"):
+        # The definition names only SIZE, so every other option the server
+        # renders holds its default. This case fails the day Materialize renders
+        # a new always-present option whose default reconciliation lacks.
+        phase = clusters_phase("cluster-options/v1")
+        assert (
+            len(phase_actions(phase, "altered")) == 0
+        ), f"expected no altered clusters on re-apply, got {phase}"
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-replication-factor"):
+        # Declaring REPLICATION FACTOR where the live value is the default is
+        # drift.
+        phase = clusters_phase("cluster-options/v2")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = " ".join(altered[0].get("statements", []))
+        assert (
+            "SET (REPLICATION FACTOR = 2)" in statements
+        ), f"expected a REPLICATION FACTOR alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+        await_config("sized", ("scale=1,workers=1", 2))
+
+        # A declared value that matches the live one is not drift either.
+        phase = clusters_phase("cluster-options/v2")
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 1
+        ), f"expected the cluster to be up-to-date, got {phase}"
+
+    with c.test_case("cluster-options-reset-and-resize"):
+        # Dropping REPLICATION FACTOR reverts it to the server default.
+        phase = clusters_phase("cluster-options/v3")
+        altered = phase_actions(phase, "altered")
+        assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
+        statements = altered[0].get("statements", [])
+        assert any(
+            "RESET (REPLICATION FACTOR)" in s for s in statements
+        ), f"expected a REPLICATION FACTOR reset, got {statements}"
+        assert any(
+            "SET (SIZE = 'scale=1,workers=2')" in s for s in statements
+        ), f"expected a SIZE alter, got {statements}"
+
+        result = run_mz_deploy(c, "cluster-options/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+        await_config("sized", ("scale=1,workers=2", 1))
+
+
 def workflow_apply_all_role_ordering(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:

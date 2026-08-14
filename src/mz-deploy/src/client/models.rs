@@ -97,6 +97,8 @@ pub struct Cluster {
     pub id: String,
     /// Cluster name (e.g., "quickstart")
     pub name: String,
+    /// Whether the cluster is managed
+    pub managed: bool,
     /// Cluster size (e.g., "M.1-large"), None for unmanaged clusters
     pub size: Option<String>,
     /// Number of replicas for fault tolerance (stored as i64 to handle postgres uint4 type)
@@ -464,6 +466,7 @@ mod tests {
         let cluster = Cluster {
             id: "u1".to_string(),
             name: "quickstart".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(2),
             auto_scaling_strategy: None,
@@ -479,6 +482,7 @@ mod tests {
         let cluster = Cluster {
             id: "u1".to_string(),
             name: "quickstart".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: None, // Should default to 1
             auto_scaling_strategy: None,
@@ -494,6 +498,7 @@ mod tests {
         let cluster = Cluster {
             id: "u1".to_string(),
             name: "unmanaged".to_string(),
+            managed: false,
             size: None, // Unmanaged cluster
             replication_factor: Some(1),
             auto_scaling_strategy: None,
@@ -511,6 +516,7 @@ mod tests {
         let cluster = Cluster {
             id: "u1".to_string(),
             name: "test".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(-1), // Invalid negative value
             auto_scaling_strategy: None,
@@ -526,6 +532,7 @@ mod tests {
         let cluster1 = Cluster {
             id: "u1".to_string(),
             name: "test".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
             auto_scaling_strategy: None,
@@ -534,6 +541,7 @@ mod tests {
         let cluster2 = Cluster {
             id: "u1".to_string(),
             name: "test".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
             auto_scaling_strategy: None,
@@ -542,6 +550,7 @@ mod tests {
         let cluster3 = Cluster {
             id: "u2".to_string(), // Different ID
             name: "test".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
             auto_scaling_strategy: None,

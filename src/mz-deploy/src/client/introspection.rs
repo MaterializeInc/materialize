@@ -121,6 +121,7 @@ pub(super) async fn get_cluster(
         SELECT
             c.id,
             c.name,
+            c.managed,
             c.size,
             c.replication_factor::bigint AS replication_factor,
             {strategy_col}
@@ -140,10 +141,24 @@ pub(super) async fn get_cluster(
     Ok(Some(Cluster {
         id: row.get("id"),
         name: row.get("name"),
+        managed: row.get("managed"),
         size: row.get("size"),
         replication_factor: row.get("replication_factor"),
         auto_scaling_strategy: parse_auto_scaling_strategy(row, name)?,
     }))
+}
+
+/// The canonical `CREATE CLUSTER` statement for a cluster, as the server renders
+/// it from the catalog. Returns `None` if the cluster does not exist.
+///
+/// Errors on unmanaged clusters.
+pub(super) async fn get_cluster_create_sql(
+    client: &Client,
+    name: &str,
+) -> Result<Option<String>, ConnectionError> {
+    let query = format!("SHOW CREATE CLUSTER {}", quote_identifier(name));
+    let rows = client.query(&query, &[]).await?;
+    Ok(rows.first().map(|row| row.get("create_sql")))
 }
 
 /// List all clusters.
@@ -154,6 +169,7 @@ pub(super) async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, Conne
         SELECT
             c.id,
             c.name,
+            c.managed,
             c.size,
             c.replication_factor::bigint AS replication_factor,
             {strategy_col}
@@ -172,6 +188,7 @@ pub(super) async fn list_clusters(client: &Client) -> Result<Vec<Cluster>, Conne
             Ok(Cluster {
                 id: row.get("id"),
                 name,
+                managed: row.get("managed"),
                 size: row.get("size"),
                 replication_factor: row.get("replication_factor"),
                 auto_scaling_strategy,
@@ -1346,6 +1363,14 @@ impl IntrospectionClient<'_> {
     /// Get a cluster by name.
     pub async fn get_cluster(&self, name: &str) -> Result<Option<Cluster>, ConnectionError> {
         get_cluster(self.client, name).await
+    }
+
+    /// Get the canonical `CREATE CLUSTER` SQL for an existing managed cluster.
+    pub async fn get_cluster_create_sql(
+        &self,
+        name: &str,
+    ) -> Result<Option<String>, ConnectionError> {
+        get_cluster_create_sql(self.client, name).await
     }
 
     /// List all clusters.

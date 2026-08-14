@@ -14,47 +14,18 @@
 //!
 //! - The SQL option in a `CREATE CLUSTER` / `ALTER CLUSTER` statement
 //!   (`ClusterAutoScalingStrategyOptionValue` AST).
-//! - The structured policy (`mz_sql::plan::AutoScalingStrategy`), used for
-//!   drift comparison.
+//! - The structured policy (`mz_sql::plan::AutoScalingStrategy`), which is what
+//!   a cloned cluster configuration carries.
 //! - The `strategy` jsonb column of
 //!   `mz_internal.mz_cluster_auto_scaling_strategies`, whose serde shape
 //!   matches the plan type.
 
 use mz_repr::adt::interval::Interval;
-use mz_sql::plan::{AutoScalingStrategy, OnHydration, TryFromValue};
+use mz_sql::plan::AutoScalingStrategy;
 use mz_sql_parser::ast::{
     ClusterAutoScalingStrategyOptionValue, ClusterOption, ClusterOptionName,
     OnHydrationOptionValue, Raw, Value, WithOptionValue,
 };
-use std::time::Duration;
-
-/// Convert the AST option value into a structured policy. An empty block
-/// `AUTO SCALING STRATEGY = ()` maps to `None` (autoscaling disabled), the
-/// same normalization the server planner applies.
-pub(crate) fn strategy_from_option_value(
-    value: &ClusterAutoScalingStrategyOptionValue,
-) -> Result<Option<AutoScalingStrategy>, String> {
-    let Some(on_hydration) = &value.on_hydration else {
-        return Ok(None);
-    };
-
-    let hydration_size = String::try_from_value(on_hydration.hydration_size.clone())
-        .map_err(|e| format!("invalid HYDRATION SIZE: {}", e))?;
-
-    let linger_duration = on_hydration
-        .linger_duration
-        .clone()
-        .map(Duration::try_from_value)
-        .transpose()
-        .map_err(|e| format!("invalid LINGER DURATION: {}", e))?;
-
-    Ok(Some(AutoScalingStrategy {
-        on_hydration: Some(OnHydration {
-            hydration_size,
-            linger_duration,
-        }),
-    }))
-}
 
 /// Render a structured policy back into a `CREATE CLUSTER` / `ALTER CLUSTER
 /// ... SET` option, e.g.
@@ -66,10 +37,9 @@ pub(crate) fn strategy_to_cluster_option(strategy: &AutoScalingStrategy) -> Clus
         .map(|on_hydration| OnHydrationOptionValue {
             hydration_size: Value::String(on_hydration.hydration_size.clone()),
             linger_duration: on_hydration.linger_duration.map(|d| {
-                // Every linger duration we see was planned from an interval
-                // (either by the server, for values read back from the
-                // catalog, or by `strategy_from_option_value`, which enforces
-                // interval range), so the conversion back cannot fail.
+                // Every linger duration we see was planned from an interval by
+                // the server before being read back from the catalog, so the
+                // conversion back cannot fail.
                 let interval = Interval::from_duration(&d)
                     .expect("linger duration is convertible back to an interval");
                 Value::String(interval.to_string())
@@ -98,8 +68,10 @@ pub(crate) fn strategy_from_catalog_json(
 mod tests {
     use super::*;
     use mz_ore::assert_none;
+    use mz_sql::plan::OnHydration;
     use mz_sql_parser::ast::display::AstDisplay;
     use mz_sql_parser::parser::parse_statements;
+    use std::time::Duration;
 
     fn strategy(hydration_size: &str, linger: Option<Duration>) -> AutoScalingStrategy {
         AutoScalingStrategy {
@@ -110,8 +82,8 @@ mod tests {
         }
     }
 
-    /// Extract the AUTO SCALING STRATEGY option value from a CREATE CLUSTER.
-    fn option_value_of(sql: &str) -> Option<ClusterAutoScalingStrategyOptionValue> {
+    /// Extract the AUTO SCALING STRATEGY option from a CREATE CLUSTER.
+    fn option_of(sql: &str) -> Option<ClusterOption<Raw>> {
         let stmts = parse_statements(sql).unwrap();
         let create = match &stmts[0].ast {
             mz_sql_parser::ast::Statement::CreateCluster(c) => c.clone(),
@@ -120,67 +92,39 @@ mod tests {
         create
             .options
             .into_iter()
-            .find_map(|opt| match (opt.name, opt.value) {
-                (
-                    ClusterOptionName::AutoScalingStrategy,
-                    Some(WithOptionValue::ClusterAutoScalingStrategyOptionValue(v)),
-                ) => Some(v),
-                _ => None,
-            })
+            .find(|opt| opt.name == ClusterOptionName::AutoScalingStrategy)
     }
 
     #[mz_ore::test]
-    fn test_strategy_from_option_value() {
-        let value = option_value_of(
-            "CREATE CLUSTER c (SIZE = '25cc', AUTO SCALING STRATEGY = \
-             (ON HYDRATION (HYDRATION SIZE = '100cc', LINGER DURATION = '600s')))",
-        )
-        .unwrap();
+    fn test_strategy_to_cluster_option_rendering() {
+        // A linger duration is stored as a `Duration` and must render as an
+        // interval literal.
         assert_eq!(
-            strategy_from_option_value(&value).unwrap(),
-            Some(strategy("100cc", Some(Duration::from_secs(600))))
+            strategy_to_cluster_option(&strategy("100cc", Some(Duration::from_secs(600))))
+                .to_ast_string_simple(),
+            "AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '100cc', \
+             LINGER DURATION = '00:10:00'))"
         );
-
-        let value = option_value_of(
-            "CREATE CLUSTER c (SIZE = '25cc', AUTO SCALING STRATEGY = \
-             (ON HYDRATION (HYDRATION SIZE = '100cc')))",
-        )
-        .unwrap();
         assert_eq!(
-            strategy_from_option_value(&value).unwrap(),
-            Some(strategy("100cc", None))
+            strategy_to_cluster_option(&strategy("100cc", None)).to_ast_string_simple(),
+            "AUTO SCALING STRATEGY = (ON HYDRATION (HYDRATION SIZE = '100cc'))"
         );
-
-        // An empty block disables autoscaling.
-        let value = option_value_of("CREATE CLUSTER c (SIZE = '25cc', AUTO SCALING STRATEGY = ())")
-            .unwrap();
-        assert_none!(strategy_from_option_value(&value).unwrap());
-
-        // A non-interval linger duration is a conversion error.
-        let value = option_value_of(
-            "CREATE CLUSTER c (SIZE = '25cc', AUTO SCALING STRATEGY = \
-             (ON HYDRATION (HYDRATION SIZE = '100cc', LINGER DURATION = 'bogus')))",
-        )
-        .unwrap();
-        assert!(strategy_from_option_value(&value).is_err());
     }
 
     #[mz_ore::test]
     fn test_strategy_option_round_trips_through_parser() {
+        // `stage` sends the rendered option back to the server, so it must
+        // parse unchanged.
         for strategy in [
             strategy("100cc", Some(Duration::from_secs(600))),
             strategy("100cc", None),
         ] {
-            let rendered = strategy_to_cluster_option(&strategy).to_ast_string_simple();
+            let option = strategy_to_cluster_option(&strategy);
+            let rendered = option.to_ast_string_simple();
             let sql = format!("CREATE CLUSTER c (SIZE = '25cc', {})", rendered);
-            let value = option_value_of(&sql)
-                .unwrap_or_else(|| panic!("rendered option did not parse: {}", sql));
-            assert_eq!(
-                strategy_from_option_value(&value).unwrap(),
-                Some(strategy),
-                "round trip through {}",
-                rendered
-            );
+            let reparsed =
+                option_of(&sql).unwrap_or_else(|| panic!("rendered option did not parse: {}", sql));
+            assert_eq!(reparsed, option, "round trip through {}", rendered);
         }
     }
 
