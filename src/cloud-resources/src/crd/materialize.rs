@@ -275,6 +275,12 @@ pub mod v1alpha1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
+        /// Each top-level key sets a parameter for the whole environment, except
+        /// for the two reserved keys `clusters` and `replicas`. Those hold
+        /// per-cluster and per-replica overrides for the parameters that support
+        /// them, keyed by cluster name, and by cluster name then replica name.
+        /// Names that match no live cluster or replica are ignored.
+        ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
         /// Example ConfigMap:
@@ -282,7 +288,13 @@ pub mod v1alpha1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000
+        ///       "max_connections": 1000,
+        ///       "clusters": {
+        ///         "analytics": {"enable_eager_delta_joins": true}
+        ///       },
+        ///       "replicas": {
+        ///         "analytics": {"r1": {"enable_lgalloc": false}}
+        ///       }
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,
@@ -1546,6 +1558,12 @@ pub mod v1 {
         /// The ConfigMap must contain a `system-params.json` key whose value
         /// is a valid JSON object containing valid system parameters.
         ///
+        /// Each top-level key sets a parameter for the whole environment, except
+        /// for the two reserved keys `clusters` and `replicas`. Those hold
+        /// per-cluster and per-replica overrides for the parameters that support
+        /// them, keyed by cluster name, and by cluster name then replica name.
+        /// Names that match no live cluster or replica are ignored.
+        ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
         /// Example ConfigMap:
@@ -1553,7 +1571,13 @@ pub mod v1 {
         /// data:
         ///   system-params.json: |
         ///     {
-        ///       "max_connections": 1000
+        ///       "max_connections": 1000,
+        ///       "clusters": {
+        ///         "analytics": {"enable_eager_delta_joins": true}
+        ///       },
+        ///       "replicas": {
+        ///         "analytics": {"r1": {"enable_lgalloc": false}}
+        ///       }
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,

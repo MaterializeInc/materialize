@@ -56,6 +56,10 @@ data:
     }
 ```
 
+Each top-level key sets a parameter for the whole environment. To set a
+parameter for a single cluster or replica instead, see [Scoping Parameters to a
+Cluster or Replica](#scoping-parameters-to-a-cluster-or-replica).
+
 Apply the ConfigMap to your cluster:
 
 ```shell
@@ -195,6 +199,79 @@ spec:
 Even after the ConfigMap is synced, some system parameters may require a restart to
 take effect.
 {{< /note >}}
+
+## Scoping Parameters to a Cluster or Replica
+
+Every top-level key in `system-params.json` sets a parameter for the whole
+environment, with two exceptions: `clusters` and `replicas` are reserved keys
+that hold per-cluster and per-replica overrides.
+
+- `clusters` is keyed by cluster name.
+- `replicas` is keyed by cluster name, then by replica name. The nesting is
+  required because a replica name is only unique within its cluster, and because
+  both names may themselves contain a `.`.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mz-system-params
+  namespace: materialize-environment
+data:
+  system-params.json: |
+    {
+      "max_connections": 1000,
+      "enable_lgalloc": true,
+      "clusters": {
+        "analytics": {
+          "enable_eager_delta_joins": true
+        }
+      },
+      "replicas": {
+        "analytics": {
+          "r1": {
+            "enable_lgalloc": false
+          }
+        }
+      }
+    }
+```
+
+In this example `max_connections` and `enable_lgalloc` apply environment-wide,
+the `analytics` cluster additionally enables `enable_eager_delta_joins`, and the
+`r1` replica of `analytics` turns `enable_lgalloc` back off for itself.
+
+A ConfigMap that uses neither reserved key is a plain environment-wide parameter
+map. No system parameter is named `clusters` or `replicas`, so a flat ConfigMap
+can never be reinterpreted as a scoped one.
+
+Behavior worth knowing:
+
+- **Not every parameter can be scoped.** Only parameters whose scope is
+  `cluster` or `replica` are resolved per object. An entry for any other
+  parameter is ignored, so set it as a top-level key instead.
+- **Unknown names are ignored, not rejected.** A section naming a cluster or
+  replica that does not exist has no effect and logs no error. If you later
+  create an object with that name, the override applies to it.
+- **A value that matches the environment-wide value records no override.**
+  Overrides are only stored where they actually differ.
+- **An unparseable value is dropped, not rejected.** The rest of the file still
+  applies and `environmentd` logs a warning naming the parameter and the object.
+- **Removing a name or an entry removes the override**, returning the object to
+  the environment-wide value.
+
+To see which overrides are currently in effect, query:
+
+```sql
+SELECT c.name AS cluster, p.name, p.value
+FROM mz_internal.mz_cluster_system_parameters p
+JOIN mz_clusters c ON c.id = p.cluster_id;
+
+SELECT c.name AS cluster, r.name AS replica, p.name, p.value
+FROM mz_internal.mz_replica_system_parameters p
+JOIN mz_cluster_replicas r ON r.id = p.replica_id
+JOIN mz_clusters c ON c.id = r.cluster_id;
+```
 
 ## Available System Parameters
 

@@ -221,7 +221,7 @@
       {
         "name": "systemParameterConfigmapName",
         "type": "String",
-        "description": "The name of a ConfigMap containing system parameters in JSON format.\nThe ConfigMap must contain a `system-params.json` key whose value\nis a valid JSON object containing valid system parameters.\n\nRun `SHOW ALL` in SQL to see a subset of configurable system parameters.\n\nExample ConfigMap:\n```yaml\ndata:\n  system-params.json: |\n    {\n      \"max_connections\": 1000\n    }\n```",
+        "description": "The name of a ConfigMap containing system parameters in JSON format.\nThe ConfigMap must contain a `system-params.json` key whose value\nis a valid JSON object containing valid system parameters.\n\nEach top-level key sets a parameter for the whole environment, except\nfor the two reserved keys `clusters` and `replicas`. Those hold\nper-cluster and per-replica overrides for the parameters that support\nthem, keyed by cluster name, and by cluster name then replica name.\nNames that match no live cluster or replica are ignored.\n\nRun `SHOW ALL` in SQL to see a subset of configurable system parameters.\n\nExample ConfigMap:\n```yaml\ndata:\n  system-params.json: |\n    {\n      \"max_connections\": 1000,\n      \"clusters\": {\n        \"analytics\": {\"enable_eager_delta_joins\": true}\n      },\n      \"replicas\": {\n        \"analytics\": {\"r1\": {\"enable_lgalloc\": false}}\n      }\n    }\n```",
         "default": null,
         "required": false,
         "deprecated": false

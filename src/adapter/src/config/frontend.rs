@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -69,6 +69,215 @@ pub enum SystemParameterFrontendClient {
 
 impl SystemParameterFrontendClient {}
 
+/// Reserved top-level key of the config-sync file holding the cluster-coherent
+/// overrides, keyed by cluster name.
+const CLUSTERS_SECTION: &str = "clusters";
+/// Reserved top-level key of the config-sync file holding the replica-local
+/// overrides, keyed by cluster name then replica name.
+const REPLICAS_SECTION: &str = "replicas";
+
+/// The parsed contents of the config-sync file.
+///
+/// The file is a JSON object whose keys are parameter names, except for the two
+/// reserved section keys [`CLUSTERS_SECTION`] and [`REPLICAS_SECTION`]. A file
+/// carrying neither reserved key is therefore a flat, wholly environment-wide
+/// parameter map.
+///
+/// No synced system parameter may be named `clusters` or `replicas`, or the
+/// reserved section would shadow it.
+/// `test_no_synced_parameter_shadows_a_reserved_section` enforces that.
+#[derive(Debug, Default, PartialEq)]
+struct ConfigFile {
+    /// Environment-wide values, keyed by the parameter's external name.
+    environment: BTreeMap<String, JsonValue>,
+    /// Cluster-coherent overrides, keyed by cluster name then external name.
+    clusters: BTreeMap<String, BTreeMap<String, JsonValue>>,
+    /// Replica-local overrides, keyed by cluster name, then replica name, then
+    /// external name.
+    ///
+    /// Nested rather than keyed by a composite `"cluster.replica"` string
+    /// because cluster and replica names are SQL identifiers that may themselves
+    /// contain a `.`, which would make a composite key ambiguous.
+    replicas: BTreeMap<String, BTreeMap<String, BTreeMap<String, JsonValue>>>,
+}
+
+impl ConfigFile {
+    /// Reads and parses the file at `path`.
+    ///
+    /// An unreadable or malformed file yields an empty [`ConfigFile`], which
+    /// expresses no opinion on any parameter and so leaves every value alone.
+    ///
+    /// NOTE: One sync tick reads the file once per pass, so up to three times: the
+    /// environment-wide pass plus the cluster and replica passes. A rewrite landing
+    /// between two of those reads leaves that tick's view mixed. Self-correcting,
+    /// since the next tick reconciles the full desired state from its own reads.
+    fn read(path: &Path) -> Self {
+        match fs::read_to_string(path) {
+            Ok(contents) => Self::parse(&contents),
+            Err(e) => {
+                warn!(
+                    "could not read system parameter sync file {}: {e}",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// Parses the config-sync file's contents.
+    ///
+    /// Lenient throughout: a section, object entry, or value of the wrong shape
+    /// is dropped with a warning rather than failing the parse, so one bad
+    /// scoped entry cannot strand the rest of the file. Only a document that is
+    /// not a JSON object at all yields nothing.
+    fn parse(contents: &str) -> Self {
+        let mut file = Self::default();
+
+        let values: BTreeMap<String, JsonValue> = match serde_json::from_str(contents) {
+            Ok(values) => values,
+            Err(e) => {
+                warn!("could not parse system parameter sync file: {e}");
+                return file;
+            }
+        };
+
+        for (key, value) in values {
+            match key.as_str() {
+                CLUSTERS_SECTION => {
+                    file.clusters =
+                        as_sections(CLUSTERS_SECTION, |name| format!("cluster {name:?}"), value);
+                }
+                REPLICAS_SECTION => {
+                    file.replicas = as_object(REPLICAS_SECTION, value)
+                        .into_iter()
+                        .map(|(cluster, replicas)| {
+                            let sections = as_sections(
+                                &format!("cluster {cluster:?}"),
+                                |name| format!("replica {cluster:?}.{name:?}"),
+                                replicas,
+                            );
+                            (cluster, sections)
+                        })
+                        .collect();
+                }
+                _ => {
+                    file.environment.insert(key, value);
+                }
+            }
+        }
+
+        file
+    }
+}
+
+/// Interprets `value` as a map from object name to that object's parameter map.
+///
+/// `context` names the section for the warning, `entry_context` names one of its
+/// entries by object name.
+fn as_sections(
+    context: &str,
+    entry_context: impl Fn(&str) -> String,
+    value: JsonValue,
+) -> BTreeMap<String, BTreeMap<String, JsonValue>> {
+    as_object(context, value)
+        .into_iter()
+        .map(|(name, params)| {
+            let params = as_object(&entry_context(name.as_str()), params);
+            (name, params)
+        })
+        .collect()
+}
+
+/// Interprets `value` as a JSON object, or warns and yields an empty map.
+///
+/// `context` names the position in the file for the warning.
+fn as_object(context: &str, value: JsonValue) -> BTreeMap<String, JsonValue> {
+    match value {
+        JsonValue::Object(map) => map.into_iter().collect(),
+        other => {
+            warn!(
+                "ignoring {context} in system parameter sync file: expected a JSON object, found {}",
+                json_type_name(&other)
+            );
+            BTreeMap::new()
+        }
+    }
+}
+
+fn json_type_name(value: &JsonValue) -> &'static str {
+    match value {
+        JsonValue::Null => "null",
+        JsonValue::Bool(_) => "boolean",
+        JsonValue::Number(_) => "number",
+        JsonValue::String(_) => "string",
+        JsonValue::Array(_) => "array",
+        JsonValue::Object(_) => "object",
+    }
+}
+
+/// Renders a JSON value as the raw parameter string the backend parses.
+///
+/// `null` yields `None`, meaning the file expresses no opinion for this
+/// parameter, so its current value stands.
+fn json_param_value(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(v) => Some(v.clone()),
+        JsonValue::Number(v) => Some(v.to_string()),
+        JsonValue::Bool(v) => Some(v.to_string()),
+        JsonValue::Object(_) | JsonValue::Array(_) => Some(value.to_string()),
+        JsonValue::Null => None,
+    }
+}
+
+/// The verdict on a value a scoped source served for a parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScopedValue {
+    /// Parses, and differs from the environment-wide value, so it is recorded as
+    /// an override.
+    Override,
+    /// Parses, but matches the environment-wide value, so there is no override
+    /// to record.
+    MatchesEnvironment,
+    /// Does not parse for the parameter's type, so it is dropped.
+    Unparseable,
+}
+
+/// Classifies `value` as the scoped value of `param_name` against the
+/// environment-wide `base`, the var-formatted value held in `params`.
+///
+/// Recording is keyed on *differing* from the environment-wide value. For
+/// LaunchDarkly the `variation_detail` reason is the wrong signal: it cannot say
+/// which context kind's clause matched (an env-level rule and a cluster-specific
+/// rule both report `RuleMatch`), and `Fallthrough` serves the env-wide value to
+/// every object. Comparing against the env-wide baseline is the only signal that
+/// means "this scope changed the answer", which is what must beat a manual
+/// `FEATURES` pin and what keeps the durable collections sparse. See the scoped
+/// feature flags design, §Resolution.
+///
+/// The comparison runs in the parameter's canonical encoding. `base` is
+/// var-formatted (a `bool` is `"on"`/`"off"`), whereas a raw source value spells
+/// a boolean `"true"`/`"false"`, so a direct string compare would treat every
+/// boolean parameter as differing, even when the source served the env-wide
+/// value. Callers still *store* the raw value, since downstream consumers parse
+/// `"true"`/`"false"`. Only the decision is canonical.
+///
+/// [`ScopedValue::Unparseable`] must never be recorded: a stored unparseable
+/// value would poison resolution. The optimizer's `bool` decode, for one, panics
+/// on every plan for a cluster-coherent override it cannot parse. It means "no
+/// scoped opinion", falling back to the environment-wide value.
+fn classify_scoped_value(
+    params: &SynchronizedParameters,
+    param_name: &str,
+    base: &str,
+    value: &str,
+) -> ScopedValue {
+    match params.canonicalize(param_name, value) {
+        Some(canonical) if canonical != base => ScopedValue::Override,
+        Some(_) => ScopedValue::MatchesEnvironment,
+        None => ScopedValue::Unparseable,
+    }
+}
+
 impl SystemParameterFrontend {
     /// Create a new [SystemParameterFrontend] initialize.
     ///
@@ -109,13 +318,18 @@ impl SystemParameterFrontend {
     /// [SystemParameterFrontend] and return `true` iff at least one parameter
     /// value was modified.
     pub fn pull(&self, params: &mut SynchronizedParameters) -> bool {
+        // Read the file once per pull, not once per parameter: re-reading it for
+        // every synced parameter would also let a rewrite land mid-loop and be
+        // observed as a torn read. Left empty, and never consulted, for the
+        // LaunchDarkly client.
+        let file = match &self.client {
+            SystemParameterFrontendClient::File { path } => ConfigFile::read(path),
+            SystemParameterFrontendClient::LaunchDarkly { .. } => ConfigFile::default(),
+        };
+
         let mut changed = false;
         for param_name in params.synchronized().into_iter() {
-            let flag_name = self
-                .key_map
-                .get(param_name)
-                .map(|flag_name| flag_name.as_str())
-                .unwrap_or(param_name);
+            let flag_name = self.external_name(param_name);
 
             let flag_str = match self.client {
                 SystemParameterFrontendClient::LaunchDarkly {
@@ -130,25 +344,11 @@ impl SystemParameterFrontend {
                         ld::FlagValue::Json(v) => v.to_string(),
                     }
                 }
-                SystemParameterFrontendClient::File { ref path } => {
-                    let file_contents = fs::read_to_string(path)
-                        .inspect_err(|e| warn!("Could not open system paraemter sync file {}", e))
-                        .unwrap_or_default();
-                    let values: BTreeMap<String, JsonValue> = serde_json::from_str(&file_contents)
-                        .inspect_err(|e| warn!("Could not open system paraemter sync file {:?}", e))
-                        .unwrap_or_default();
-                    values
-                        .get(flag_name)
-                        .and_then(|o| match o {
-                            serde_json::Value::String(v) => Some(v.to_string()),
-                            serde_json::Value::Number(v) => Some(v.to_string()),
-                            serde_json::Value::Bool(v) => Some(v.to_string()),
-                            serde_json::Value::Object(_) => Some(o.to_string()),
-                            serde_json::Value::Array(_) => Some(o.to_string()),
-                            serde_json::Value::Null => None,
-                        })
-                        .unwrap_or_else(|| params.get(param_name))
-                }
+                SystemParameterFrontendClient::File { .. } => file
+                    .environment
+                    .get(flag_name)
+                    .and_then(json_param_value)
+                    .unwrap_or_else(|| params.get(param_name)),
             };
 
             let old = params.get(param_name);
@@ -166,14 +366,22 @@ impl SystemParameterFrontend {
         changed
     }
 
+    /// The name this parameter is keyed by in the backing source: its key-map
+    /// entry when it has one (a LaunchDarkly flag key), otherwise the parameter
+    /// name itself.
+    fn external_name<'a>(&'a self, param_name: &'a str) -> &'a str {
+        self.key_map
+            .get(param_name)
+            .map_or(param_name, String::as_str)
+    }
+
     /// Evaluates the replica-local scoped parameters for each given replica and
-    /// returns, per cluster and replica, the parameter values that differ from
-    /// the environment-wide value held in `params`.
+    /// returns, per replica, the parameter values that differ from the
+    /// environment-wide value held in `params`.
     ///
-    /// Only the LaunchDarkly client performs scoped evaluation. The file
-    /// client returns an empty map (replicas fall back to the environment-wide value).
-    /// The returned map is sparse: replicas (and clusters) with no overriding
-    /// value are omitted.
+    /// The returned map is sparse: replicas with no overriding value are
+    /// omitted. Replicas absent from `replicas` are never evaluated, so a name
+    /// the config-sync file mentions that is not live is ignored.
     pub fn pull_replica_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -182,14 +390,21 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
         let mut out: BTreeMap<ReplicaId, BTreeMap<String, String>> = BTreeMap::new();
 
-        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
-            // The file client has no notion of scoped evaluation.
-            return out;
-        };
-
         if param_names.is_empty() {
             return out;
         }
+
+        let client = match &self.client {
+            SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
+            SystemParameterFrontendClient::File { path } => {
+                return self.file_replica_overrides(
+                    &ConfigFile::read(path),
+                    params,
+                    param_names,
+                    replicas,
+                );
+            }
+        };
 
         for replica in replicas {
             let ctx = match ld_ctx(
@@ -219,11 +434,12 @@ impl SystemParameterFrontend {
 
     /// Evaluates the cluster-coherent scoped parameters for each given cluster
     /// and returns, per cluster, the parameter values that differ from the
-    /// environment-wide value held in `params`. Evaluated replica-free (the
-    /// `cluster` context kind), so the value cannot vary by replica.
+    /// environment-wide value held in `params`. Resolved replica-free, so the
+    /// value cannot vary by replica.
     ///
-    /// Only the LaunchDarkly client performs scoped evaluation. The file
-    /// client returns an empty map. The returned map is sparse.
+    /// The returned map is sparse: clusters with no overriding value are
+    /// omitted. Clusters absent from `clusters` are never evaluated, so a name
+    /// the config-sync file mentions that is not live is ignored.
     pub fn pull_cluster_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -232,14 +448,21 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
         let mut out: BTreeMap<ClusterId, BTreeMap<String, String>> = BTreeMap::new();
 
-        let SystemParameterFrontendClient::LaunchDarkly { client, .. } = &self.client else {
-            // The file client has no notion of scoped evaluation.
-            return out;
-        };
-
         if param_names.is_empty() {
             return out;
         }
+
+        let client = match &self.client {
+            SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
+            SystemParameterFrontendClient::File { path } => {
+                return self.file_cluster_overrides(
+                    &ConfigFile::read(path),
+                    params,
+                    param_names,
+                    clusters,
+                );
+            }
+        };
 
         for cluster in clusters {
             let ctx = match ld_ctx(&self.env_id, self.build_info, Some(&cluster.cluster), None) {
@@ -266,8 +489,8 @@ impl SystemParameterFrontend {
     /// that differ from the environment-wide value held in `params`. Shared by
     /// the cluster and replica passes, so the returned map is sparse.
     ///
-    /// We record on the differs-from-env test, not the `variation_detail`
-    /// reason. The inline comment at the recording decision explains why.
+    /// See [`classify_scoped_value`] for why recording keys on the
+    /// differs-from-environment test rather than the `variation_detail` reason.
     fn evaluate_scoped_overrides(
         &self,
         client: &ld::Client,
@@ -277,17 +500,11 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<String, String> {
         let mut overrides = BTreeMap::new();
         for &param_name in param_names {
-            let flag_name = self
-                .key_map
-                .get(param_name)
-                .map(|flag_name| flag_name.as_str())
-                .unwrap_or(param_name);
-
             let base = params.get(param_name);
             // Evaluate with `base` as the default, so a silent LD (flag absent,
             // off, error, failed prerequisite) resolves back to the env-wide
             // value and is dropped by the difference test below.
-            let flag_var = client.variation(ctx, flag_name, base.clone());
+            let flag_var = client.variation(ctx, self.external_name(param_name), base.clone());
             let value = match flag_var {
                 ld::FlagValue::Bool(v) => v.to_string(),
                 ld::FlagValue::Str(v) => v,
@@ -295,35 +512,119 @@ impl SystemParameterFrontend {
                 ld::FlagValue::Json(v) => v.to_string(),
             };
 
-            // Record iff the scoped evaluation *differs* from the env-wide value.
-            // The `variation_detail` reason is the wrong signal: it cannot say
-            // which context kind's clause matched (an env-level rule and a
-            // cluster-specific rule both report `RuleMatch`), and `Fallthrough`
-            // serves the env-wide value to every object. Comparing against the
-            // env-wide baseline is the only signal that means "this scope context
-            // changed the answer", which is what must beat a manual `FEATURES`
-            // pin and what keeps the durable collections sparse. See the scoped
-            // feature flags design, §Resolution.
-            //
-            // Compare in the parameter's canonical encoding. `base` is the
-            // var-formatted env-wide value (a `bool` is `"on"`/`"off"`), whereas
-            // the raw LaunchDarkly value spells a boolean `"true"`/`"false"`, so a
-            // direct string compare would treat every boolean flag as differing,
-            // even on `Fallthrough`. We still *store* the raw `value` (downstream
-            // consumers parse `"true"`/`"false"`). Only the decision is canonical.
-            let differs = match params.canonicalize(param_name, &value) {
-                Some(canonical) => canonical != base,
-                // LaunchDarkly served a value that does not parse for this
-                // parameter's type (e.g. a malformed boolean like `"maybe"`).
-                // Never record it: storing an unparseable value would poison
-                // resolution. The optimizer's `bool` decode, for one, panics on
-                // every plan for a cluster-coherent override it cannot parse.
-                // Treat it as "no scoped opinion" and fall back to the env-wide
-                // value.
-                None => false,
-            };
-            if differs {
+            // An unparseable value is dropped silently: LaunchDarkly targeting
+            // is not authored per environment, so a warning here would repeat
+            // every tick for something the environment's operator cannot fix.
+            if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Override {
                 overrides.insert(param_name.to_string(), value);
+            }
+        }
+        overrides
+    }
+
+    /// Resolves the cluster-coherent overrides `file` declares for each of
+    /// `clusters`, matching a cluster to its file section by name.
+    ///
+    /// The live clusters drive the lookup, so a section naming a cluster that
+    /// does not exist is simply never consulted.
+    fn file_cluster_overrides(
+        &self,
+        file: &ConfigFile,
+        params: &SynchronizedParameters,
+        param_names: &[&'static str],
+        clusters: &[ClusterEvalContext],
+    ) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
+        let mut out = BTreeMap::new();
+        for cluster in clusters {
+            let name = &cluster.cluster.name;
+            let Some(section) = file.clusters.get(name) else {
+                continue;
+            };
+            let overrides = self.file_section_overrides(
+                section,
+                params,
+                param_names,
+                &format!("cluster {name:?}"),
+            );
+            if !overrides.is_empty() {
+                out.insert(cluster.cluster_id, overrides);
+            }
+        }
+        out
+    }
+
+    /// Resolves the replica-local overrides `file` declares for each of
+    /// `replicas`, matching a replica to its file section by owning cluster name
+    /// then replica name.
+    ///
+    /// The live replicas drive the lookup, so a section naming a cluster or
+    /// replica that does not exist is simply never consulted.
+    fn file_replica_overrides(
+        &self,
+        file: &ConfigFile,
+        params: &SynchronizedParameters,
+        param_names: &[&'static str],
+        replicas: &[ReplicaEvalContext],
+    ) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
+        let mut out = BTreeMap::new();
+        for replica in replicas {
+            let (cluster_name, replica_name) =
+                (&replica.replica.cluster_name, &replica.replica.name);
+            let Some(section) = file
+                .replicas
+                .get(cluster_name)
+                .and_then(|cluster| cluster.get(replica_name))
+            else {
+                continue;
+            };
+            let overrides = self.file_section_overrides(
+                section,
+                params,
+                param_names,
+                &format!("replica {cluster_name:?}.{replica_name:?}"),
+            );
+            if !overrides.is_empty() {
+                out.insert(replica.replica_id, overrides);
+            }
+        }
+        out
+    }
+
+    /// Resolves one object's config-sync file section into its scoped overrides,
+    /// applying the same parseability and differs-from-environment rules as the
+    /// LaunchDarkly path. `object` names the section in warnings.
+    ///
+    /// A parameter the section omits carries no scoped opinion, so it is absent
+    /// from the result and resolves to the environment-wide value.
+    fn file_section_overrides(
+        &self,
+        section: &BTreeMap<String, JsonValue>,
+        params: &SynchronizedParameters,
+        param_names: &[&'static str],
+        object: &str,
+    ) -> BTreeMap<String, String> {
+        let mut overrides = BTreeMap::new();
+        for &param_name in param_names {
+            let Some(value) = section
+                .get(self.external_name(param_name))
+                .and_then(json_param_value)
+            else {
+                continue;
+            };
+
+            let base = params.get(param_name);
+            match classify_scoped_value(params, param_name, &base, &value) {
+                ScopedValue::Override => {
+                    overrides.insert(param_name.to_string(), value);
+                }
+                ScopedValue::MatchesEnvironment => {}
+                // Unlike LaunchDarkly targeting, the file is authored by this
+                // environment's operator, so a typo is theirs to fix and worth
+                // surfacing.
+                ScopedValue::Unparseable => warn!(
+                    "ignoring unparseable value {value:?} for system parameter \
+                     {param_name} on {object} in the system parameter sync file"
+                ),
             }
         }
         overrides
@@ -669,6 +970,297 @@ mod tests {
 
     fn env_id() -> EnvironmentId {
         EnvironmentId::for_tests()
+    }
+
+    /// A cluster-coherent `bool` parameter whose environment-wide default is
+    /// `off`.
+    const CLUSTER_PARAM: &str = "enable_eager_delta_joins";
+    /// A replica-local `bool` parameter whose environment-wide default is `on`.
+    const REPLICA_PARAM: &str = "enable_lgalloc";
+
+    /// A file-backed frontend. The scoped tests below drive resolution from a
+    /// pre-parsed [`ConfigFile`], so the path is never read.
+    fn file_frontend() -> SystemParameterFrontend {
+        SystemParameterFrontend {
+            client: SystemParameterFrontendClient::File {
+                path: PathBuf::from("/nonexistent/system-params.json"),
+            },
+            key_map: BTreeMap::new(),
+            env_id: env_id(),
+            build_info: &DUMMY_BUILD_INFO,
+            metrics: Metrics::register_into(&MetricsRegistry::new()),
+        }
+    }
+
+    fn cluster_ctx(id: u64, name: &str) -> ClusterEvalContext {
+        ClusterEvalContext {
+            cluster_id: ClusterId::User(id),
+            cluster: ClusterScopeContext {
+                id: format!("u{id}"),
+                name: name.into(),
+                is_builtin: false,
+            },
+        }
+    }
+
+    fn replica_ctx(
+        cluster_id: u64,
+        cluster_name: &str,
+        replica_id: u64,
+        replica_name: &str,
+    ) -> ReplicaEvalContext {
+        ReplicaEvalContext {
+            cluster_id: ClusterId::User(cluster_id),
+            replica_id: ReplicaId::User(replica_id),
+            cluster: ClusterScopeContext {
+                id: format!("u{cluster_id}"),
+                name: cluster_name.into(),
+                is_builtin: false,
+            },
+            replica: ReplicaScopeContext {
+                id: format!("u{replica_id}"),
+                name: replica_name.into(),
+                is_builtin: false,
+                size: "D.1-xsmall".into(),
+                size_family: "D".into(),
+                cluster_id: format!("u{cluster_id}"),
+                cluster_name: cluster_name.into(),
+            },
+        }
+    }
+
+    fn overrides(param_name: &str, value: &str) -> BTreeMap<String, String> {
+        BTreeMap::from([(param_name.to_string(), value.to_string())])
+    }
+
+    /// A file with no reserved section is a plain environment-wide parameter
+    /// map, the flat form a config map without scoped sections takes.
+    #[mz_ore::test]
+    fn test_parse_flat_file_is_environment_wide() {
+        let file = ConfigFile::parse(
+            r#"{
+                "max_connections": 1000,
+                "allowed_cluster_replica_sizes": "'25cc', '50cc'",
+                "enable_lgalloc": false
+            }"#,
+        );
+
+        assert_eq!(
+            file.environment.keys().collect::<Vec<_>>(),
+            vec![
+                "allowed_cluster_replica_sizes",
+                "enable_lgalloc",
+                "max_connections"
+            ]
+        );
+        assert!(file.clusters.is_empty());
+        assert!(file.replicas.is_empty());
+
+        // Every JSON scalar renders to the raw string the backend parses.
+        assert_eq!(
+            json_param_value(&file.environment["max_connections"]).as_deref(),
+            Some("1000")
+        );
+        assert_eq!(
+            json_param_value(&file.environment["enable_lgalloc"]).as_deref(),
+            Some("false")
+        );
+        // An explicit `null` expresses no opinion, leaving the value alone.
+        let null = ConfigFile::parse(r#"{"max_connections": null}"#);
+        assert_eq!(json_param_value(&null.environment["max_connections"]), None);
+    }
+
+    #[mz_ore::test]
+    fn test_parse_scoped_sections() {
+        let file = ConfigFile::parse(
+            r#"{
+                "enable_lgalloc": false,
+                "clusters": {"prod": {"enable_eager_delta_joins": true}},
+                "replicas": {"prod": {"r1": {"enable_lgalloc": true}}}
+            }"#,
+        );
+
+        // The reserved keys are sections, every other key is environment-wide.
+        assert_eq!(
+            file.environment.keys().collect::<Vec<_>>(),
+            vec!["enable_lgalloc"]
+        );
+        assert_eq!(
+            file.clusters["prod"][CLUSTER_PARAM],
+            JsonValue::Bool(true),
+            "cluster section parsed"
+        );
+        assert_eq!(
+            file.replicas["prod"]["r1"][REPLICA_PARAM],
+            JsonValue::Bool(true),
+            "replica section parsed, nested cluster then replica"
+        );
+    }
+
+    /// One malformed section, or one malformed entry inside a section, must not
+    /// strand the rest of the file.
+    #[mz_ore::test]
+    fn test_parse_ignores_malformed_sections() {
+        let file = ConfigFile::parse(
+            r#"{
+                "max_connections": 1000,
+                "clusters": 7,
+                "replicas": {"prod": {"r1": "not-an-object"}}
+            }"#,
+        );
+
+        assert_eq!(
+            file.environment.keys().collect::<Vec<_>>(),
+            vec!["max_connections"]
+        );
+        assert!(file.clusters.is_empty(), "non-object section dropped");
+        assert!(
+            file.replicas["prod"]["r1"].is_empty(),
+            "non-object entry dropped, its position retained"
+        );
+    }
+
+    /// A document that is not a JSON object at all yields nothing, leaving every
+    /// parameter at its current value.
+    #[mz_ore::test]
+    fn test_parse_rejects_non_object_document() {
+        assert_eq!(ConfigFile::parse("[]"), ConfigFile::default());
+        assert_eq!(ConfigFile::parse("not json"), ConfigFile::default());
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_file_cluster_section_applied() {
+        let params = SynchronizedParameters::default();
+        let file =
+            ConfigFile::parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
+
+        let out = file_frontend().file_cluster_overrides(
+            &file,
+            &params,
+            &[CLUSTER_PARAM],
+            &[cluster_ctx(1, "prod"), cluster_ctx(2, "staging")],
+        );
+
+        // Sparse: only the named cluster gets a row.
+        assert_eq!(
+            out,
+            BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_file_replica_section_applied() {
+        let params = SynchronizedParameters::default();
+        let file =
+            ConfigFile::parse(r#"{"replicas": {"prod": {"r1": {"enable_lgalloc": false}}}}"#);
+
+        let out = file_frontend().file_replica_overrides(
+            &file,
+            &params,
+            &[REPLICA_PARAM],
+            &[
+                replica_ctx(1, "prod", 1, "r1"),
+                // Same cluster, different replica name.
+                replica_ctx(1, "prod", 2, "r2"),
+                // Same replica name in a different cluster: a replica name is
+                // unique only within its cluster, so the nesting must keep the
+                // two apart.
+                replica_ctx(2, "staging", 3, "r1"),
+            ],
+        );
+
+        assert_eq!(
+            out,
+            BTreeMap::from([(ReplicaId::User(1), overrides(REPLICA_PARAM, "false"))])
+        );
+    }
+
+    /// A section naming an object that is not live is ignored, not an error: the
+    /// live objects drive the lookup, so the file is never a second source of
+    /// truth for what exists.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_file_unknown_object_names_ignored() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+        let file = ConfigFile::parse(
+            r#"{
+                "clusters": {"gone": {"enable_eager_delta_joins": true}},
+                "replicas": {"gone": {"r1": {"enable_lgalloc": false}}}
+            }"#,
+        );
+
+        assert!(
+            frontend
+                .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")])
+                .is_empty()
+        );
+        assert!(
+            frontend
+                .file_replica_overrides(
+                    &file,
+                    &params,
+                    &[REPLICA_PARAM],
+                    &[replica_ctx(1, "prod", 1, "r1")]
+                )
+                .is_empty()
+        );
+    }
+
+    /// An unparseable scoped value is dropped rather than rejected or stored.
+    /// Storing it would poison resolution: the optimizer's `bool` decode panics
+    /// on every plan for a cluster-coherent override it cannot parse.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_file_unparseable_value_dropped() {
+        let params = SynchronizedParameters::default();
+        let file = ConfigFile::parse(
+            r#"{"clusters": {"prod": {
+                "enable_eager_delta_joins": "maybe"
+            }}}"#,
+        );
+
+        assert!(
+            file_frontend()
+                .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")])
+                .is_empty()
+        );
+    }
+
+    /// A scoped value that agrees with the environment-wide value records no
+    /// override, keeping the durable collections sparse. The comparison is in
+    /// the parameter's canonical encoding, so the file's `false` matches the
+    /// var-formatted `off`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_file_value_matching_environment_dropped() {
+        let params = SynchronizedParameters::default();
+        assert_eq!(params.get(CLUSTER_PARAM), "off");
+        let file =
+            ConfigFile::parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": false}}}"#);
+
+        assert!(
+            file_frontend()
+                .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")])
+                .is_empty()
+        );
+    }
+
+    /// The reserved section names shadow any synced parameter of the same name,
+    /// so no such parameter may exist. Renaming the parameter is the fix.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_no_synced_parameter_shadows_a_reserved_section() {
+        let params = SynchronizedParameters::default();
+        for section in [CLUSTERS_SECTION, REPLICAS_SECTION] {
+            assert!(
+                !params.is_synchronized(section),
+                "synced system parameter {section:?} is shadowed by the config-sync \
+                 file section of the same name; rename the parameter"
+            );
+        }
     }
 
     #[mz_ore::test]
