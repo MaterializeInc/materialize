@@ -29,13 +29,19 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
 /// information a consumer reads. Left uncollapsed, a shared collection contributes its errors once
 /// per plan path that reads it, and because those factors apply again at each level of sharing they
 /// compound multiplicatively until the `Diff` overflows.
+/// NOTE: Environment-scoped deliberately. Rendering reads this once, when a dataflow is built, and
+/// an errored materialized view's error multiplicity is durable state: the sink writes
+/// `desired - persist` into a shard every replica of the cluster shares. Two replicas that rendered
+/// under different values therefore each see the other's writes as an error to correct, and correct
+/// each other forever with no input activity. Per-replica and per-cluster overrides would make that
+/// divergence a supported operation, so neither is offered until the sink normalizes error
+/// multiplicity before writing.
 pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     "enable_compute_error_distinct",
     false,
     "Whether compute rendering should collapse error multiplicities to one where it arranges \
      errors.",
-)
-.scoped(ParameterScope::Replica);
+);
 
 /// Use the column-paged merge batcher code path at arrange sites. When
 /// `true`, arrange operators use `Col2ValPagedBatcher` (in
