@@ -7,9 +7,8 @@
 -- the Business Source License, use of this software will be governed
 -- by the Apache License, Version 2.0.
 
--- Two options no part of mz-deploy names by hand. INTROSPECTION INTERVAL is
--- also written in a non-canonical spelling, which the server renders back as
--- INTERVAL '00:00:05'.
+-- Two options no part of mz-deploy names by hand, one of them written in a
+-- non-canonical spelling.
 CREATE CLUSTER sized (
     SIZE = 'scale=1,workers=2',
     EXPERIMENTAL ARRANGEMENT COMPRESSION = true,

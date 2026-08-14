@@ -82,9 +82,6 @@ impl ProvisioningClient<'_> {
                 create_stmt,
                 grants,
             } => {
-                // Replaying the production cluster's own `CREATE CLUSTER` under a
-                // new name carries every option, including any this code has no
-                // knowledge of, so a staging cluster matches production.
                 let mut create_stmt = create_stmt.clone();
                 create_stmt.name =
                     Ident::new(name).map_err(|e| ConnectionError::ClusterCreationFailed {

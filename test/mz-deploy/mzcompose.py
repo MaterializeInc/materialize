@@ -2607,9 +2607,7 @@ def workflow_cluster_options(c: Composition, parser: WorkflowArgumentParser) -> 
         )
 
     with c.test_case("cluster-options-unnamed-options"):
-        # EXPERIMENTAL ARRANGEMENT COMPRESSION and INTROSPECTION INTERVAL appear
-        # nowhere in the reconciler. They reconcile because the diff is over
-        # option names.
+        # Neither option appears anywhere in the reconciler.
         phase = clusters_phase("cluster-options/v4")
         altered = phase_actions(phase, "altered")
         assert len(altered) == 1, f"expected 1 altered cluster, got {phase}"
@@ -2627,19 +2625,14 @@ def workflow_cluster_options(c: Composition, parser: WorkflowArgumentParser) -> 
             "INTROSPECTION INTERVAL = INTERVAL '00:00:05'",
         )
 
-        # The definition writes '5s' where the server renders INTERVAL
-        # '00:00:05'. Both denote the same duration, so this is not drift.
+        # The definition writes '5s' where the server renders INTERVAL '00:00:05'.
         phase = clusters_phase("cluster-options/v4")
         assert (
             len(phase_actions(phase, "up_to_date")) == 1
         ), f"expected the cluster to be up-to-date, got {phase}"
 
     with c.test_case("cluster-options-stage-clones-every-option"):
-        # Staging replays production's own CREATE CLUSTER under the staging
-        # name, so the clone is identical option for option. A staging cluster
-        # that dropped, say, arrangement compression would not carry
-        # production's memory behavior, which is the thing blue/green exists to
-        # derisk.
+        # The clone is identical option for option.
         result = run_mz_deploy(
             c, "cluster-options/v4", "stage", "--deploy-id", "co1", "--allow-dirty"
         )

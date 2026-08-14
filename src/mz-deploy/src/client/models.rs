@@ -132,8 +132,7 @@ pub struct ObjectGrant {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClusterConfig {
     /// Managed cluster, captured as the canonical `CREATE CLUSTER` statement the
-    /// server renders for it. Cloning replays that statement under a new name, so
-    /// every option is carried, including ones mz-deploy has no knowledge of.
+    /// server renders for it. Cloning replays it under a new name.
     Managed {
         /// The production cluster's `CREATE CLUSTER` statement
         create_stmt: CreateClusterStatement<Raw>,
