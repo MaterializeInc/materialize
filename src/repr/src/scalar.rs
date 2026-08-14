@@ -2775,7 +2775,7 @@ impl<'a, E> OutputDatumType<'a, E> for Vec<u8> {
     }
 
     fn into_result(self, temp_storage: &'a RowArena) -> Result<Datum<'a>, E> {
-        Ok(Datum::Bytes(temp_storage.push_bytes(self)))
+        Ok(Datum::Bytes(temp_storage.push_owned_bytes(self)))
     }
 }
 

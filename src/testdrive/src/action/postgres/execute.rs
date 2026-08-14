@@ -15,6 +15,24 @@ use crate::action::{BackgroundTask, ControlFlow, State};
 use crate::parser::BuiltinCommand;
 use crate::util::postgres::postgres_client;
 
+/// URLs for built-in connection names that resolve without a prior
+/// `postgres-connect` registration. An explicit `postgres-connect` with the
+/// same name takes precedence, since `state.postgres_clients` is consulted
+/// first.
+fn builtin_connection_url(state: &State, name: &str) -> Option<String> {
+    match name {
+        "mz_system" => Some(format!(
+            "postgres://mz_system:materialize@{}",
+            state.materialize.internal_sql_addr
+        )),
+        "materialize" => Some(format!(
+            "postgres://materialize:materialize@{}",
+            state.materialize.sql_addr
+        )),
+        _ => None,
+    }
+}
+
 async fn execute_input(cmd: BuiltinCommand, client: &Client) -> Result<(), anyhow::Error> {
     for query in cmd.input {
         println!(">> {}", query);
@@ -63,6 +81,12 @@ pub async fn run_execute(
             execute_input(cmd, &client_inner).await?;
         }
         (false, false) => {
+            if !state.postgres_clients.contains_key(&connection)
+                && let Some(url) = builtin_connection_url(state, &connection)
+            {
+                let (client, _) = postgres_client(&url, state.default_timeout).await?;
+                state.postgres_clients.insert(connection.clone(), client);
+            }
             let client = state
                 .postgres_clients
                 .get(&connection)

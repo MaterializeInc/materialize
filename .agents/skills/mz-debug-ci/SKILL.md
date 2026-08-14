@@ -71,8 +71,10 @@ Extract from the URL:
 **Before diving into logs**, fetch the build annotations. They contain pre-extracted error messages, stack traces, and links to known flaky test issues — this saves significant time compared to grepping through raw logs.
 
 ```bash
-bk api /pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/annotations --no-pager 2>&1
+bk api /pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/annotations --no-pager 2>/dev/null
 ```
+
+Note that `bk` can't be piped through `2>&1`.
 
 The response is JSON. Each annotation has:
 - `style`: `"error"` for failures
@@ -97,12 +99,12 @@ Only fetch full logs when annotations don't provide enough detail. Triage in thi
 
 To fetch a job's log:
 ```bash
-bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2>&1 | tail -100
+bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2>/dev/null | tail -100
 ```
 
 For large logs, first grep for errors to find the relevant section:
 ```bash
-bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2>&1 | grep -B2 -A5 'error\|FAIL\|panicked'
+bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2>/dev/null | grep -B2 -A5 'error\|FAIL\|panicked'
 ```
 
 Fetch multiple job logs in parallel when they are independent (e.g., clippy + lint at the same time).
@@ -114,9 +116,9 @@ Jobs upload artifacts (junit XML, service logs, coredumps, ...). Use the
 
 ```bash
 # All artifacts of a build (each entry has id, job_id, path)
-bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --no-pager 2>&1
+bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --no-pager 2>/dev/null
 # Artifacts of a single job
-bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --job-uuid <JOB_ID> --no-pager 2>&1
+bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --job-uuid <JOB_ID> --no-pager 2>/dev/null
 # Download one artifact into the current directory
 bk artifacts download <ARTIFACT_ID> --build <BUILD_NUMBER> -p <PIPELINE>
 ```

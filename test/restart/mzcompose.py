@@ -294,8 +294,6 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent("""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
             # We can create a cluster with sizes 'scale=1,workers=1' and 'scale=1,workers=2'
             > CREATE CLUSTER test REPLICAS (r1 (SIZE 'scale=1,workers=1'), r2 (SIZE 'scale=1,workers=2'))
 
@@ -319,8 +317,6 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
     c.testdrive(
         service="testdrive_no_reset",
         input=dedent("""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
-
             # Cluster replica of disallowed sizes still exist
             > SHOW CLUSTER REPLICAS WHERE cluster = 'test'
             test r1 scale=1,workers=1 true ""
@@ -353,8 +349,6 @@ def workflow_allowed_cluster_replica_sizes(c: Composition) -> None:
         input=dedent("""
             > SHOW allowed_cluster_replica_sizes
             "\\"scale=1,workers=1\\", \\"scale=1,workers=2\\""
-
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 
             # Reset for following tests
             $ postgres-execute connection=mz_system

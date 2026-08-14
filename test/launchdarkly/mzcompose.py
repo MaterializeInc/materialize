@@ -223,7 +223,6 @@ def workflow_default(c: Composition) -> None:
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         command,
                     ]
@@ -390,7 +389,6 @@ def run_scoped_feature_flag_cases(
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         "CREATE CLUSTER ld_legacy SIZE 'scale=1,workers=1,legacy'",
                         "CREATE CLUSTER ld_role SIZE 'scale=1,workers=1,legacy'",
@@ -436,7 +434,6 @@ def run_scoped_feature_flag_cases(
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         "DROP CLUSTER ld_role",
                         "CREATE CLUSTER ld_role SIZE 'scale=1,workers=1,legacy'",
@@ -562,7 +559,6 @@ def run_scoped_feature_flag_cases(
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         "CREATE CLUSTER ld_sync SIZE 'scale=1,workers=1,legacy'",
                     ]

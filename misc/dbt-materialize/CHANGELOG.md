@@ -10,7 +10,8 @@
 * Fix `deploy_init` when the `CI_TAG` environment variable is set. The
   deployment schema was tagged without passing the schema name, so the
   operation failed with `COMMENT ON SCHEMA ""`. The deployment schema is
-  now also created with a quoted name, matching how it is dropped.
+  now also created with a quoted name, matching how it is dropped and how its
+  grants and default privileges are copied.
 
 ## 1.9.11 - 2026-07-26
 

@@ -53,7 +53,7 @@ import TutorialInsertionWidget from "./TutorialInsertionWidget";
 import TutorialSchemaWidget from "./TutorialSchemaWidget";
 
 /* Semantic version number used for instrumentation */
-const QUICKSTART_VERSION = "2.0.0";
+const QUICKSTART_VERSION = "2.1.0";
 
 type RunnableProps = {
   runCommand: (value: string) => void;
@@ -826,7 +826,7 @@ WHERE w2.amount > w1.amount
                 runCommand={runCommand}
                 value="CREATE INDEX wins_by_item_seller ON winning_bids (item, seller);
 CREATE INDEX wins_by_item_buyer ON winning_bids (item, buyer);"
-                title="View a sample row in flip_activities"
+                title="Create indexes on the winning_bids join keys"
               />
             </RunnableContainer>
             <TextContainer>

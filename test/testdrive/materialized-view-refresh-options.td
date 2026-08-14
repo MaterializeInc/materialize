@@ -500,7 +500,6 @@ true
 
 # Creating an unbilled replica on a `SCHEDULE = ON REFRESH` cluster shouldn't blow things up.
 
-$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 $ postgres-execute connection=mz_system
 CREATE CLUSTER REPLICA scheduled_cluster.unbilled SIZE 'scale=2,workers=2', BILLED AS 'free', INTERNAL;
 
