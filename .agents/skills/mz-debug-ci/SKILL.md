@@ -1,7 +1,7 @@
 ---
 name: mz-debug-ci
 description: >
-  Investigate CI failures on PR via gh + bk CLI. Trigger: failing checks,
+  Investigate CI failures on PR via gh + Buildkite MCP or bk CLI. Trigger: failing checks,
   Buildkite failures, CI issues — "why is CI red", "build broken",
   "checks failing", "what went wrong in CI", "nightly broke",
   "tests failing on this PR", or pasted Buildkite URL. Also PR number +
@@ -9,62 +9,105 @@ description: >
 argument-hint: <PR number, GitHub PR URL, or Buildkite build URL>
 ---
 
-Investigate CI failures for a Materialize PR.
+Investigate CI failures for a Materialize PR or Buildkite build.
 
 If the input is a Buildkite build URL rather than a PR (a scheduled nightly on
-main, a release-qualification build), skip Steps 1-2 and start at "Listing a
+main, a release-qualification build), start directly at "Listing a
 build's failed jobs directly", taking `<PIPELINE>` and `<BUILD_NUMBER>`
 straight from the URL:
-`https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER>`.
+`https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER>`,
+then continue from Step 2.
 
 ## Prerequisites
 
-This skill requires both `gh` (GitHub CLI) and `bk` (Buildkite CLI) to be installed *and authenticated*. Before doing anything else, verify both:
+This skill requires `gh` (GitHub CLI), installed *and authenticated*, plus one
+of two ways to reach Buildkite: the Buildkite MCP server's tools (preferred,
+next section) or `bk` (Buildkite CLI), installed *and authenticated*. Before
+doing anything else, verify what is available:
 
 ```bash
 which gh && gh auth status
-which bk && bk auth status
+which bk && bk auth status   # only needed when the Buildkite MCP is absent
 ```
 
-If either tool is missing or unauthenticated, **stop immediately** and tell the user what to fix (`bk configure` or `bk auth login` for Buildkite). Do not attempt to use the REST API directly or any other workaround — this workflow only works with these CLI tools.
+If `gh` is missing or unauthenticated, or neither Buildkite path works,
+**stop immediately** and tell the user what to fix (`bk configure` or
+`bk auth login` for the Buildkite CLI, or the MCP setup below). Do not attempt
+to use the REST API directly or any other workaround.
 
-Both `gh` and `bk` make network requests that are blocked by the default sandbox. All Bash commands in this workflow must use `dangerouslyDisableSandbox: true`.
+Network commands (`gh`, `bk`, `bin/ci-failures`, `bin/ci-shards`) are blocked
+by the default sandbox and need `dangerouslyDisableSandbox: true`. Local
+`git`/`grep` work over the checkout does not.
+
+`bk` writes warnings to stderr, including a benign `BUILDKITE_API_TOKEN is
+overriding the credential stored for this organization` on healthy setups.
+Pipe `bk` output with `2>/dev/null`, never `2>&1`, or the noise corrupts the
+JSON.
+
+## Buildkite MCP: preferred when available
+
+When the Buildkite MCP server's tools are available in the session (tools
+named `get_build_failure_summary`, `search_logs`, ..., usually under an
+`mcp__buildkite__` prefix, though the prefix depends on what the user named
+the server), prefer them over `bk` everywhere below: structured JSON with the
+job-state semantics already applied, and no log cleanup needed. The server documents its
+own tools; this section adds only what it does not know:
+
+- `org_slug` is `materialize`. `get_build_failure_summary` replaces "Listing
+  a build's failed jobs directly", Step 2, and often Step 3;
+  `search_logs`/`read_logs`/`tail_logs` replace the `bk job log` pipelines;
+  the artifact and annotation tools replace the corresponding `bk` commands.
+  Everything Materialize-specific (annotation contents, `bin/ci-failures`,
+  `bin/ci-shards`, Steps 4-5) applies unchanged.
+- The summary's job list is bounded by the response's `job_limit` (10 on the
+  hosted server, where a larger `max_jobs` is silently clamped), with terminal
+  problem jobs sorted before downstream broken ones. On `jobs_truncated:
+  true`, get the definitive failed-job list from `list_jobs` with
+  `state: "failed,timed_out"` and `include_retried_jobs: false`. That last
+  parameter is what preserves triage semantics: the server defaults it to
+  true, which counts every failed attempt of a retried job separately,
+  including jobs that passed on retry. The default summary detail level has
+  no `soft_failed` field, which is currently harmless: no Materialize CI
+  step sets `soft_fail`, and `detail_level: "full"` exposes it (with
+  `retried`) if that changes. The summary bounds annotation content too: on
+  `content_truncated: true`, fetch the full set with `list_annotations`.
+
+If the MCP is absent, continue with `bk` and, at the end, recommend to the
+user that they set the server up (hosted read-only endpoint:
+`claude mcp add --scope user --transport http buildkite https://mcp.buildkite.com/mcp/readonly`).
 
 ## Search existing failures by pattern
 
-Search for already recorded failures in CI with a short, stable error substring:
+Search for already recorded failures in CI with a short, stable error
+substring. The output is JSON whose `content` blobs are huge, so project it
+down, and read the total from `.meta.totalRowCount`, which ignores the row
+cap and is the "how chronic is this?" number:
 
 ```bash
-bin/ci-failures 'foobar'
+bin/ci-failures 'foobar' 2>/dev/null | jq -r '.meta.totalRowCount,
+  (.data[] | [.build_date[0:10], .build_identifier, .test_suite, .issue] | @tsv)'
 ```
 
-Use `--search` for the global search. Narrow results with `--branch main`,
-`--version`, `--issue`, `--test`, `--build`, `--start-date`, or `--end-date`.
-The command explains how to create a token when needed.
+The positional pattern matches failure content. `--search <text>` replaces
+the positional pattern and matches across build, test, issue, content, and
+branch at once. Narrow results with `--branch main`, `--version`, `--issue`,
+`--test` (the Buildkite job name), `--build`, `--start-date`, or
+`--end-date`; `--size` raises the row cap (default 31, max 100). The command
+explains how to create a token when needed.
 
-## Step 1: Extract PR number
+## Step 1: Find the build
 
-Parse `$ARGUMENTS` to get the PR number. Handle both formats:
-- Plain number: `35192`
-- Full URL: `https://github.com/MaterializeInc/materialize/pull/35192`
+Parse `$ARGUMENTS` to get the PR number (a plain number or a
+`https://github.com/MaterializeInc/materialize/pull/<PR_NUMBER>` URL), then
+list the failing checks:
 
-## Step 2: Find the build
-
-Use `gh` to get the PR's branch name and then find the Buildkite build:
-
-```bash
-# Get the branch name for the PR
-gh pr view <PR_NUMBER> --json headRefName --jq .headRefName
-```
-
-Alternatively, list failing checks directly:
 ```bash
 gh pr checks <PR_NUMBER> 2>&1
 ```
 
 Lines containing `fail` have tab-separated fields:
 ```
-name	fail	0	https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD>#<JOB_ID>	description
+name	fail	0	https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER>#<JOB_ID>	description
 ```
 
 Extract from the URL:
@@ -83,8 +126,11 @@ from before the latest push), list the genuinely failed jobs via the API:
 
 ```bash
 bk api "/pipelines/<PIPELINE>/builds/<BUILD_NUMBER>" --no-pager 2>/dev/null \
-  | jq -r '.jobs[] | select(.state=="failed" or .state=="timed_out") | select(.soft_failed != true) | .name'
+  | jq -r '.jobs[] | select(.state=="failed" or .state=="timed_out") | select(.soft_failed != true) | [.state, .id, .name] | @tsv'
 ```
+
+The same response carries the build's `.commit` and `.branch`, which the
+known-vs-new checks in Step 5 need, so grab them here.
 
 Job-state semantics matter here:
 - The failure states are `failed` and `timed_out`, the same set as
@@ -97,53 +143,61 @@ Job-state semantics matter here:
   them massively over-counts failures.
 - Jobs with `soft_failed: true` are allowed to fail without making the build
   red, so exclude them from failure counts.
-- Auto-retried jobs appear only as their latest attempt, so a job that failed
-  and then passed on retry counts as passed. That is the right verdict for
-  build triage. Add `?include_retried_jobs=true` to the build endpoint only
-  when an in-depth investigation needs the earlier attempts.
+- `waiting_failed` is not a failure either: the job's dependency (usually a
+  build step) failed, so it never started. Its presence is informative,
+  though. A PR build full of `waiting_failed` jobs ran no tests at all, so
+  report that fixing the visible failures is necessary but no proof the
+  build then goes green.
+- Retried jobs (automatic or manual) appear only as their latest attempt, so
+  a job that failed and then passed on retry counts as passed. That is the
+  right verdict for build triage. Add `?include_retried_jobs=true` to the
+  build endpoint only when an in-depth investigation needs the earlier
+  attempts. A manual retry that failed again is itself a signal: someone
+  already tried to shake the failure off and it reproduced.
 
-## Step 3: Check annotations first
+To find a PR's builds that are not on its current head in the first place (an
+older nightly, a pre-push run), get the branch with
+`gh pr view <PR_NUMBER> --json headRefName` and filter Buildkite builds by
+branch; the MCP's `list_builds` takes a `branch:` filter, and fork branches
+are named `<owner>:<branch>` on Buildkite.
 
-**Before diving into logs**, fetch the build annotations. They contain pre-extracted error messages, stack traces, and links to known flaky test issues — this saves significant time compared to grepping through raw logs.
+## Step 2: Check annotations first
+
+**Before diving into logs**, fetch the build annotations. They contain pre-extracted error messages, stack traces, and links to known flaky test issues — this saves significant time compared to grepping through raw logs:
 
 ```bash
-bk api /pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/annotations --no-pager 2>/dev/null
+bk api /pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/annotations --no-pager 2>/dev/null \
+  | jq -r '.[] | select(.style=="error") | "=== \(.context)\n\(.body_html)"' \
+  | sed -e 's/<[^>]*>//g' | grep -v '^$'
 ```
 
-Note that `bk` can't be piped through `2>&1`.
-
-The response is JSON. Each annotation has:
-- `style`: `"error"` for failures
-- `body_html`: HTML containing the error summary, including:
-  - The specific test/job that failed
-  - The actual error message or stack trace in `<pre><code>` blocks
-  - Links to known flaky test issues (Linear keys like `CPU-170`, or legacy GitHub links like `database-issues/#NNNN`)
-  - Main branch history showing if this test passes on main (flaky test indicator)
+The response is JSON: `style` is `"error"` for failures, and `body_html`
+holds the error summary — the failing test/job, the error or stack trace,
+known-issue links (Linear keys like `CPU-170`, or legacy
+`database-issues/#NNNN`), and the job's main-branch history (a flaky-test
+indicator).
 
 Parse the error annotations to get a quick overview of all failures before fetching any logs.
 
 Two things to know when reconciling annotations against jobs:
 
 - Error annotations persist from failed attempts even when a retry later
-  passed, so a build can have more error annotations than failed jobs. An
-  annotation's `context` field is `<JOB_ID>-error`, and that job id can belong
-  to a retried attempt that the default job listing does not contain.
+  passed, so a build can have more error annotations than failed jobs. A
+  `bin/ci-annotate-errors` annotation's `context` field is `<JOB_ID>-error`,
+  and that job id can belong to a retried attempt that the default job
+  listing does not contain. (Other producers use other contexts, e.g.
+  `images-not-public` from the build step.)
 - Only jobs running through the mzcompose/cloudtest plugins get annotations
   and `bin/ci-failures` rows (both come from `bin/ci-annotate-errors`). Plain
   shell steps (lint, Security advisories, and similar checks) produce neither,
   so a real failure there has no annotation at all. Go straight to its job
   log.
 
-## Step 4: Fetch logs when needed
+## Step 3: Fetch logs when needed
 
-Only fetch full logs when annotations don't provide enough detail. Triage in this order:
-
-1. **clippy** — compilation/lint errors that often explain everything
-2. **lint-and-rustfmt** — formatting and lint-check failures
-3. **cargo-test** — unit/integration test failures
-4. **fast-sql-logic-tests** — SLT failures
-5. **testdrive** — integration test failures (often cascading)
-6. **Everything else** (checks-parallel, cluster-tests, dbt, etc.)
+Only fetch full logs when annotations don't provide enough detail. On PR test
+builds, read compile and lint job logs first (clippy, lint-and-rustfmt): they
+often explain every downstream failure.
 
 To fetch a job's log:
 ```bash
@@ -158,14 +212,15 @@ bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2
 The log tail can be a red herring: some jobs print long non-error output after
 the actual error (cargo deny's dependency tree runs hundreds of lines past the
 advisory), so when the tail shows no error, switch to the grep form instead of
-tailing more. Buildkite logs are also full of ANSI escapes and embedded
-carriage returns. Normalize before grepping context:
+tailing more. Buildkite logs are also full of ANSI escapes (colors, plus
+cursor-movement and OSC sequences from docker pulls) and embedded carriage
+returns that leave doubled blank lines, halving grep's `-A`/`-B` reach.
+Normalize before grepping context:
 
 ```bash
-bk job log ... 2>/dev/null | tr '\r' '\n' | sed -e 's/\x1b\[[0-9;]*m//g' | grep ...
+bk job log ... 2>/dev/null | tr '\r' '\n' \
+  | sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' -e 's/\x1b\][^\x07]*\x07//g' | grep -v '^$' | grep ...
 ```
-
-Fetch multiple job logs in parallel when they are independent (e.g., clippy + lint at the same time).
 
 NOTE: for mzcompose-based jobs (testdrive, SQLsmith/SQLancer, platform checks,
 ...) the job console log holds only the harness's output. The services' own
@@ -175,7 +230,11 @@ similar files inside the job's log artifacts. A panic that is absent from
 happen in this run" from the console log alone. Check the annotations or
 `bin/ci-failures` instead, both are fed by `bin/ci-annotate-errors`, which
 scans the uploaded log artifacts (`services.log`, `run.log`, junit XML, ...)
-at the end of each job. Or download the log artifacts and grep them directly.
+at the end of each job. The same scan can fail a job whose own workflow
+passed: the console log then reads `Test succeeded, but unknown errors found
+in logs, marking as failed`, and the cause is whatever the scan found in the
+artifacts, not a test failure. Alternatively, download the log artifacts and
+grep them directly.
 
 ### Artifacts
 
@@ -191,9 +250,10 @@ bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --job-uuid <JOB_ID> --no-pager 2>
 bk artifacts download <ARTIFACT_ID> --build <BUILD_NUMBER> -p <PIPELINE>
 ```
 
-NOTE: if bk rejects one of these flags as unknown, the installed bk predates
-the April 2026 artifacts rework. Check `bk artifacts <subcommand> --help` for
-the local spelling, and recommend to the user that they upgrade bk.
+NOTE: if `bk` rejects one of these flags as unknown, the installed `bk`
+predates the April 2026 artifacts rework. Check
+`bk artifacts <subcommand> --help` for the local spelling, and recommend to
+the user that they upgrade `bk`.
 
 Do not use `bk api` for artifacts. The plural
 `/pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/artifacts` endpoint works but
@@ -219,7 +279,7 @@ bin/ci-shards 'https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER
 bin/ci-shards https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER> numeric.td
 ```
 
-## Step 5: Categorize failures
+## Step 4: Categorize failures
 
 Use these Materialize-specific patterns to diagnose:
 
@@ -253,28 +313,78 @@ job was canceled (nextest prints `SLOW [>1200.000s]` lines naming the stuck
 tests). Compare against the wall-clock of the same job's last passing run to
 tell a newly hung test from a budget the job has gradually outgrown.
 
-## Step 6: Summarize
+### Feature-benchmark regressions
+
+A `New regression against <version>` annotation shows one comparison table,
+but the harness re-runs every flagged scenario and annotates only the last
+run. Grep the console log for `Run [0-9] with scenarios` and `!!YES!!`:
+scenarios that drop out across runs were noise the harness filtered out, one
+that survives every run reproduces on that agent. Even that does not prove a
+code cause, because agent-level speed offsets are stable within a job. The
+decisive control is the same scenario in neighboring builds of the same
+pipeline; on release qualification, the rc build of the released version is
+an identical-code control (the tag differs only by the version bump), so an
+opposite verdict there proves noise. Compare absolute THIS/OTHER values, not
+percentages, since agents differ several-fold in baseline speed. Get the
+signature's base rate with `bin/ci-failures '<ScenarioName>'`.
+
+### cargo-fuzz crashes
+
+The fuzz target's own panic text goes to `target/fuzz-logs/<target>.log`,
+which is never uploaded, so neither the console log nor the artifacts
+contain it. Take the `reproduce:` command from the annotation and run it
+locally. For known-vs-new use `bin/ci-failures '<target name>'`; cargo-fuzz
+runs only in release qualification, so that is its entire history.
+
+### `ImagesNotPublicError`
+
+A PR adding a new publishable mzbuild image fails `:rust: Build x86_64` with
+the `images-not-public` annotation until someone makes the image's
+DockerHub/GHCR repos public. The check runs only on the x86_64 build, so
+aarch64 passing while x86_64 fails is expected, not an arch bug. The fix is
+a process step (the annotation names whom to ask), or `publish: false` in
+the image's `mzbuild.yml` if it is not meant to be published.
+
+## Step 5: Summarize
 
 Group failures by **root cause**, not by job name. Typically many failing jobs share just 1-2 root causes. Present the summary as:
 
 1. **Root cause A** — description, which jobs it affects, what to fix
 2. **Root cause B** — description, which jobs it affects, what to fix
 
-Distinguish between issues that are clearly caused by the PR's changes vs. pre-existing flaky tests. The annotations often link to known flaky test issues — use these to identify pre-existing flakes vs. regressions introduced by the PR.
+Distinguish between issues that are clearly caused by the change under test vs. pre-existing flaky tests. The annotations often link to known flaky test issues — use these to identify pre-existing flakes vs. new regressions.
 
 More ways to establish known vs new:
 
 - Check whether main already fixed it. Any build can run code that is behind
-  main: a nightly investigated the morning after (often already triaged and
-  fixed by a "ci: Nightly fixes" PR), but also a fresh PR based on an older
-  main. From an up-to-date main checkout run
+  main: a nightly investigated the morning after, but also a fresh PR based
+  on an older main. From an up-to-date main checkout run
   `git log <BUILD_COMMIT>..HEAD -- <suspect-file>` or
-  `git log -S '<error token>'`.
+  `git log -S '<error token>'`. A fix can also sit in a not-yet-merged PR,
+  invisible to git log. Recent nightly reds often have a dedicated fix PR
+  whose body cites "Based on <build URL>", typically titled "ci: Nightly
+  fixes (<date>)", though fixes land in other PRs too:
+  `gh pr list --search "Nightly fixes in:title" --state all` finds the
+  dedicated ones, and the PR's file list shows which of the build's root
+  causes it covers. When citing a later build as evidence of a fix, confirm
+  the specific job's state there is `passed`: a build can be green because
+  the job was `broken` and never ran.
 - Known-issue tracking lives in Linear. Annotations and `bin/ci-failures`
   cite issue keys like `CPU-170` or `SS-361`, which resolve to
   `https://linear.app/materializeinc/issue/<KEY>`. Legacy references point at
   GitHub `MaterializeInc/database-issues` instead. The
   `MaterializeInc/materialize` repo itself has issues disabled, so `gh issue`
   commands against it error out.
-- In `bin/ci-failures` output, `"issue": "UNKNOWN ERROR"` means the failure
-  matched no tracked issue.
+- Annotations and `bin/ci-failures` classify a failure three ways; for the
+  latter two, check the signature's history with `bin/ci-failures` before
+  treating the failure as new. A known-issue link means it matched an open
+  tracked issue. `"UNKNOWN ERROR"` means it matched no tracked issue, not
+  that the failure is new: a long streak under that label is a chronic
+  untracked flake worth filing. An issue reference tagged
+  `(POTENTIAL REGRESSION)` means it matched a tracked issue that is now
+  closed: a known signature with stale tracking, not by itself evidence of
+  a new regression; suggest to the user that the closed issue may need
+  reopening. The issue matching is a content heuristic and often wrong, so
+  verify that the matched issue actually describes the problem: search the
+  tracker for the error text, since the right issue may already exist open,
+  or the problem may need a totally new one.
