@@ -16,16 +16,14 @@ use crate::cli::commands::grants;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
-use crate::client::{Client, quote_identifier};
+use crate::client::{Client, parse_create_cluster, quote_identifier};
 use crate::config::Settings;
 use crate::project::clusters::{self, ClusterDefinition};
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::VisitMut;
 use mz_sql_parser::ast::{
-    ClusterOption, ClusterOptionName, CreateClusterStatement, Raw, Statement, Value,
-    WithOptionValue,
+    ClusterOption, ClusterOptionName, CreateClusterStatement, Raw, Value, WithOptionValue,
 };
-use mz_sql_parser::parser::parse_statements;
 
 /// Plan cluster changes without executing or printing.
 pub async fn plan(
@@ -189,28 +187,8 @@ async fn live_cluster(
         .get_cluster_create_sql(name)
         .await
         .map_err(CliError::Connection)?
-        .map(|sql| parse_create_cluster(&sql))
+        .map(|sql| parse_create_cluster(&sql).map_err(CliError::Message))
         .transpose()
-}
-
-/// Parse the `create_sql` column of `SHOW CREATE CLUSTER`.
-fn parse_create_cluster(sql: &str) -> Result<CreateClusterStatement<Raw>, CliError> {
-    let statements = parse_statements(sql).map_err(|e| {
-        CliError::Message(format!(
-            "failed to parse SHOW CREATE CLUSTER output: {}",
-            e.error
-        ))
-    })?;
-    match statements.into_iter().next().map(|statement| statement.ast) {
-        Some(Statement::CreateCluster(create)) => Ok(create),
-        Some(other) => Err(CliError::Message(format!(
-            "expected CREATE CLUSTER, got: {}",
-            other
-        ))),
-        None => Err(CliError::Message(
-            "SHOW CREATE CLUSTER returned empty SQL".to_string(),
-        )),
-    }
 }
 
 /// The options `SHOW CREATE CLUSTER` renders for every managed cluster, paired
