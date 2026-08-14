@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/appends.rs
-revision: b5624d20bb
+revision: 6f5533eaa0
 ---
 
 # adapter::coord::appends
@@ -12,3 +12,4 @@ Implements all append operations executed by the coordinator: group-commit of us
 `UserWriteResponder` is an enum with two variants: `Session(PendingTxn)` wraps the per-session `PendingTxn` for coordinator-sequenced writes, and `Internal` carries a `WriteTarget` (item id plus the `GlobalId` generation current at planning time) and an `InternalWriteResponder` for frontend-sequenced blind writes. The write timestamp for `Session` writes is picked by the oracle during group commit; the write lock is either handed off from the submitting session (`write_locks: Some(..)`) or acquired during group commit (`write_locks: None`).
 `TableWriteCmd` has a `TimestampedWrite` variant (in addition to `GroupCommit`, `Register`, and `Forget`) that carries a caller-chosen timestamp; the group committer accepts or refuses it based on oracle eligibility and reports the outcome via `WriteResult`. `WriteResult` is an enum whose variants are `Success { timestamp }`, `TimestampPassed { target_timestamp, next_eligible_timestamp }`, `Canceled`, `ReadOnly`, `TargetChanged`, and `Indeterminate`. `InternalWriteResponder` wraps the `oneshot::Sender<WriteResult>`; its `Drop` impl sends `WriteResult::Indeterminate` so the waiting session task never hangs on coordinator shutdown. `WriteTarget` pairs a `CatalogItemId` with the `GlobalId` generation current at planning time; the group committer refuses the write if the table's latest generation has moved on.
 `GroupCommitter` serializes runtime txns-shard writes off the coordinator loop via `TableWriteCmd` variants. `DeferredOp` represents an operation awaiting a resource; `DeferredOp::Plan` wraps a `DeferredPlan` that must uniquely hold write locks (e.g. UPDATE), while `DeferredOp::Write` wraps a `DeferredWrite` for blind inserts that can be optimistically retried. `GroupCommitRequest` accumulates appends, responses, statement-logging IDs, notifies, write locks, and permits for a single commit batch.
+Before merging writes across sessions, `stage_group_commit` calls `stale_write_target` to detect any `TableData::Rows` write whose rows were packed against a `RelationDesc` that a concurrent `ALTER TABLE` has since replaced. A mismatch fails the transaction with `AdapterError::ConcurrentDependencyMutation`, carrying a hint to retry. `TableData::Batches` writes are exempt because they carry their own schema and Persist migrates older parts on read.

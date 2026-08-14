@@ -40,6 +40,7 @@ use mz_dyncfg::ConfigUpdates;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
+use mz_ore::cast::CastLossy;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -1910,4 +1911,27 @@ impl Ca {
         fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
         Ok((cert_path, key_path))
     }
+}
+
+/// Sums the counter series named `name` whose labels include all of `labels`.
+///
+/// Returns 0 when no series matches, which is how a labelled counter reads
+/// before its first increment.
+pub fn get_counter_value(registry: &MetricsRegistry, name: &str, labels: &[(&str, &str)]) -> u64 {
+    let Some(family) = registry.gather().into_iter().find(|m| m.name() == name) else {
+        return 0;
+    };
+    family
+        .get_metric()
+        .iter()
+        .filter(|metric| {
+            labels.iter().all(|(name, value)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == *name && label.value() == *value)
+            })
+        })
+        .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+        .sum()
 }

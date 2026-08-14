@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/strconv.rs
-revision: 38293e9a93
+revision: 32c1e1d39
 ---
 
 # mz-repr::strconv
@@ -10,3 +10,4 @@ Functions deliberately operate on intermediate types (not `Datum` directly) so t
 Deviations from PostgreSQL string format are considered bugs.
 `parse_oid` accepts the full `u32` range directly (plus negative `i32` values reinterpreted as `u32`).
 `parse_oid_legacy` accepts only the `i32` range (the historical behavior) and is used for persisted PostgreSQL source cast expressions that must remain evaluation-stable.
+`parse_timestamp` and `parse_timestamptz` roll over a parsed `:60` leap second into the next minute, matching PostgreSQL behavior and ensuring the resulting `CheckedTimestamp` sorts correctly. The `_legacy` variants used for frozen storage source casts keep chrono's internal leap-second representation instead, to preserve evaluation stability for existing data.

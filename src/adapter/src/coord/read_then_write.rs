@@ -13,19 +13,26 @@
 //! long run we want a group-commit task that runs independently, so that
 //! session tasks can submit write requests to it directly.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use mz_catalog::memory::objects::CatalogItem;
 use mz_repr::CatalogItemId;
-use mz_repr::{GlobalId, Timestamp};
+use mz_repr::{Diff, GlobalId, Row, Timestamp};
 use mz_sql::catalog::CatalogItemType;
 use mz_sql::plan::SubscribeOutput;
+use mz_storage_client::client::TableData;
+use smallvec::smallvec;
 use tokio::sync::mpsc;
+use tracing::Span;
 
 use crate::PeekResponseUnary;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
 use crate::catalog::Catalog;
 use crate::coord::Coordinator;
+use crate::coord::appends::{
+    InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
+    UserWriteResponder, WriteResult, WriteTarget,
+};
 use crate::error::AdapterError;
 
 /// Adds `id` to the worklist the first time it is seen, enforcing the
@@ -51,11 +58,11 @@ fn enqueue(
     Ok(())
 }
 
-// Every handler here is driven by the read-then-write path, which lands later
-// in this stack. This attribute goes away with it.
-#[allow(dead_code)]
 impl Coordinator {
-    /// Creates a subscribe that introspection does not see.
+    /// Creates a subscribe that writes no `mz_subscriptions` row.
+    ///
+    /// The dataflow is otherwise ordinary and shows up in replica
+    /// introspection like any other.
     ///
     /// Takes ownership of `read_holds` and drops them only once the dataflow is
     /// shipped, so the `since` cannot advance past `as_of` in between.
@@ -137,6 +144,77 @@ impl Coordinator {
         // Drop read holds only after `ship_dataflow` returns, so the since
         // can't advance past `as_of` before the dataflow is running.
         drop(read_holds);
+    }
+
+    /// Enqueues a write attempt, answering through `result_tx`.
+    ///
+    /// `write_ts` picks the path. `Some` names a timestamp the diffs are only
+    /// valid at and goes straight to the committer, pinned to the `GlobalId`
+    /// validated here. `None` is a blind write that rides the next group
+    /// commit, whose staging re-checks the target generation.
+    pub(crate) fn handle_attempt_write(
+        &mut self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        target_id: mz_repr::CatalogItemId,
+        target_global_id: GlobalId,
+        diffs: Vec<(Row, Diff)>,
+        write_ts: Option<Timestamp>,
+        result_tx: tokio::sync::oneshot::Sender<WriteResult>,
+    ) {
+        let result = InternalWriteResponder::new(result_tx);
+        if !self.active_conns.contains_key(&conn_id) {
+            result.send(WriteResult::Canceled);
+            return;
+        }
+        if self.controller.read_only() {
+            result.send(WriteResult::ReadOnly);
+            return;
+        }
+
+        let current_global_id = self
+            .catalog()
+            .try_get_entry(&target_id)
+            .map(|entry| entry.latest_global_id());
+        if current_global_id != Some(target_global_id) {
+            result.send(WriteResult::TargetChanged);
+            return;
+        }
+
+        let table_data = TableData::Rows(diffs);
+        match write_ts {
+            Some(target_timestamp) => {
+                let request = TimestampedWriteRequest {
+                    appends: vec![(target_global_id, vec![table_data])],
+                    target_timestamp,
+                    result,
+                    span: Span::current(),
+                };
+                if self
+                    .group_committer_tx
+                    .send(TableWriteCmd::TimestampedWrite(request))
+                    .is_err()
+                {
+                    tracing::warn!("group committer task gone, dropping timestamped write");
+                }
+            }
+            None => {
+                let writes = BTreeMap::from([(target_id, smallvec![table_data])]);
+                self.pending_writes.push(PendingWriteTxn::User {
+                    span: Span::current(),
+                    writes,
+                    write_locks: None,
+                    responder: UserWriteResponder::Internal {
+                        conn_id,
+                        target: WriteTarget {
+                            item_id: target_id,
+                            global_id: target_global_id,
+                        },
+                        result,
+                    },
+                });
+                self.trigger_group_commit();
+            }
+        }
     }
 
     /// Drop an internal subscribe.
