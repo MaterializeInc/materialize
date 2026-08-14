@@ -35,6 +35,7 @@ import DeleteObjectMenuItem from "~/components/DeleteObjectMenuItem";
 import ErrorBox from "~/components/ErrorBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import OverflowMenu, { OVERFLOW_BUTTON_WIDTH } from "~/components/OverflowMenu";
+import PercentBar from "~/components/PercentBar";
 import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
 import { TablePagination } from "~/components/Table/TablePagination";
 import { TableSearch } from "~/components/Table/TableSearch";
@@ -126,7 +127,9 @@ const ReplicaCpuCell = ({ cpuPercent }: { cpuPercent: number | null }) => {
   if (cpuPercent === null) {
     return <>-</>;
   }
-  return `${cpuPercent.toFixed(1)}%`;
+  return (
+    <PercentBar value={cpuPercent.toFixed(1)} />
+  );
 };
 
 /** Formats a status-change timestamp for display, or "-" when there is none. */
