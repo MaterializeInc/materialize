@@ -275,11 +275,6 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_scoped_system_parameters",
-            "false",
-            ["true", "false"],
-        ),
-        VariableSystemParameter(
             "enable_simplify_from_less_existence",
             "true",
             ["true", "false"],

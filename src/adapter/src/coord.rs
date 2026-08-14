@@ -92,8 +92,7 @@ use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterC
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_SCOPED_SYSTEM_PARAMETERS, USER_ID_POOL_BATCH_SIZE,
-    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
@@ -2196,7 +2195,7 @@ impl Coordinator {
     pub(crate) async fn reconcile_scoped_system_parameters(
         &mut self,
         scoped: ScopedParameters,
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
     ) {
         // Nothing changed: skip the durable write. This is the common case on
         // most sync ticks.
@@ -2238,10 +2237,10 @@ impl Coordinator {
     /// arrangement-build time) make a later push too late, which is why this
     /// happens in the create transaction rather than the next sync tick.
     ///
-    /// Returns `None` when the feature is gated off, the shared frontend is not
-    /// yet installed (e.g. before LaunchDarkly connects), or no override
-    /// applies. The new objects then resolve to the environment-wide value, and
-    /// the periodic sync loop remains the authoritative full-state reconciler.
+    /// Returns `None` when the shared frontend is not yet installed (e.g. before
+    /// LaunchDarkly connects), or when no override applies. The new objects then
+    /// resolve to the environment-wide value, and the periodic sync loop remains
+    /// the authoritative full-state reconciler.
     ///
     /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
     fn scoped_overrides_create_op(
@@ -2252,9 +2251,6 @@ impl Coordinator {
         let frontend = self.scoped_frontend.clone()?;
         let catalog = self.catalog();
         let system_config = catalog.system_config();
-        if !ENABLE_SCOPED_SYSTEM_PARAMETERS.get(system_config.dyncfgs()) {
-            return None;
-        }
 
         // Partition the synced parameters by scope class, as the sync loop does,
         // so we evaluate exactly the flags in use at each scope.
@@ -2292,7 +2288,7 @@ impl Coordinator {
         };
         Some(crate::catalog::Op::UpdateScopedSystemParameters {
             scoped: evaluated,
-            prune_scope: Some(prune_scope),
+            prune_scope,
         })
     }
 

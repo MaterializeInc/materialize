@@ -183,7 +183,7 @@ pub enum Command {
         overrides: ScopedParameters,
         /// Bounds which objects' durable rows the reconcile may prune. See
         /// [`crate::catalog::Op::UpdateScopedSystemParameters`].
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
         tx: oneshot::Sender<()>,
     },
 

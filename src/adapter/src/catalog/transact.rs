@@ -270,14 +270,13 @@ pub enum Op {
     /// the update no longer serves.
     ///
     /// `prune_scope` bounds removals to the objects the update was evaluated
-    /// for. `Some(scope)` removes a row only when its owning object is in
-    /// `scope`, so an object created after the update's evaluation snapshot, and
-    /// the override it folded into its own create transaction, survives a
-    /// concurrent full-state reconcile. `None` is an unscoped full replace, used
-    /// only by the disabled-feature clear path where no create-time writes race.
+    /// for: a row is removed only when its owning object is in `prune_scope`, so
+    /// an object created after the update's evaluation snapshot, and the override
+    /// it folded into its own create transaction, survives a concurrent
+    /// full-state reconcile.
     UpdateScopedSystemParameters {
         scoped: ScopedParameters,
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
     },
     /// Injects audit events into the catalog.
     ///
@@ -3085,28 +3084,16 @@ impl Catalog {
                 // bounded by `prune_scope` so this update does not delete a row
                 // for an object it was not evaluated for (e.g. one created after
                 // the update's snapshot, whose override rode its own create
-                // transaction). `None` prunes unconditionally (the
-                // disabled-feature clear path). Rows whose owning object is no
-                // longer live are always pruned regardless of `prune_scope`,
-                // because nothing else garbage collects them and ids are never
-                // reused, so this lazily reclaims orphans left by dropped
-                // objects.
+                // transaction). Rows whose owning object is no longer live are
+                // always pruned regardless of `prune_scope`, because nothing else
+                // garbage collects them and ids are never reused, so this lazily
+                // reclaims orphans left by dropped objects.
                 let live_clusters: BTreeSet<ClusterId> =
                     tx.get_clusters().map(|cluster| cluster.id).collect();
                 let live_replicas: BTreeSet<ReplicaId> = tx
                     .get_cluster_replicas()
                     .map(|replica| replica.replica_id)
                     .collect();
-                let prune_cluster = |id: &ClusterId| {
-                    prune_scope
-                        .as_ref()
-                        .map_or(true, |s| s.clusters.contains(id))
-                };
-                let prune_replica = |id: &ReplicaId| {
-                    prune_scope
-                        .as_ref()
-                        .map_or(true, |s| s.replicas.contains(id))
-                };
 
                 // Cluster-coherent scope.
                 let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
@@ -3126,7 +3113,8 @@ impl Catalog {
                     }
                 }
                 for (cluster_id, name) in existing_cluster.into_keys() {
-                    if (!live_clusters.contains(&cluster_id) || prune_cluster(&cluster_id))
+                    if (!live_clusters.contains(&cluster_id)
+                        || prune_scope.clusters.contains(&cluster_id))
                         && !desired_cluster.contains(&(cluster_id, name.clone()))
                     {
                         tx.remove_cluster_system_config(cluster_id, &name);
@@ -3151,7 +3139,8 @@ impl Catalog {
                     }
                 }
                 for (replica_id, name) in existing_replica.into_keys() {
-                    if (!live_replicas.contains(&replica_id) || prune_replica(&replica_id))
+                    if (!live_replicas.contains(&replica_id)
+                        || prune_scope.replicas.contains(&replica_id))
                         && !desired_replica.contains(&(replica_id, name.clone()))
                     {
                         tx.remove_replica_system_config(replica_id, &name);
@@ -4364,7 +4353,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_a),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4386,7 +4375,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_b),
-                        prune_scope: Some(scope_with(&[cluster_b])),
+                        prune_scope: scope_with(&[cluster_b]),
                     }],
                 )
                 .await
@@ -4409,7 +4398,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: empty_scoped(),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4431,7 +4420,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: empty_scoped(),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4456,7 +4445,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_a),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4489,7 +4478,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_b),
-                        prune_scope: Some(scope_with(&[cluster_b])),
+                        prune_scope: scope_with(&[cluster_b]),
                     }],
                 )
                 .await
