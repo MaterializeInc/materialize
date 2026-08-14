@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 9c2b3951fe
+revision: 4868442183
 ---
 
 # mz-sql::plan::statement::ddl
@@ -18,6 +18,7 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `TOPIC METADATA REFRESH INTERVAL` for Kafka sources and sinks is validated to be between 1 second and 1 hour (inclusive); intervals outside this range produce a planning error (enforcing librdkafka runtime constraints at plan time for the upper bound, and preventing excessive refreshes or zero/negative durations for the lower bound).
 `SourceExportStatementDetails::Postgres` carries a `cast_oid_full_range: bool` field; `plan_create_subsource` passes it through to `generate_column_casts` to control whether OID-based casts cover the full range.
 `plan_alter_cluster` rejects `ALTER CLUSTER ... WITH (...)` on unmanaged clusters: when the cluster is not managed, any non-empty `with_options` list produces the error `"ALTER... WITH not supported for unmanaged clusters"`.
+`plan_alter_network_policy` and the `resolve_network_policy` helper call `normalize::ident_ref(&name)` to extract the bare identifier string before passing it to `catalog.resolve_network_policy`, preventing quoted identifiers (e.g. `"hyphenated-name"`) from being looked up with surrounding quote characters. `fold_network_policy_name` in `NameResolver` applies the same pattern.
 `plan_alter_cluster` rejects a `WAIT` clause when no shape dimension (`SIZE`, `AVAILABILITY ZONES`, or `INTROSPECTION`) is being changed: there is no hydrate-overlap to wait on, so accepting it would silently be a no-op.
 `plan_auto_scaling_strategy` converts a `ClusterAutoScalingStrategyOptionValue` into an `Option<AutoScalingStrategy>`: an empty block (no sub-policies) maps to `None` (autoscaling disabled). `validate_auto_scaling_strategy` checks cross-config invariants: it rejects a `HYDRATION SIZE` equal to the cluster `SIZE` (producing `PlanError::HydrationSizeEqualsClusterSize`), and rejects combining `AUTO SCALING STRATEGY` with a non-`MANUAL` `SCHEDULE`. `unplan_auto_scaling_strategy` is the reverse, converting an `AutoScalingStrategy` back to a `ClusterAutoScalingStrategyOptionValue` for `SHOW CREATE CLUSTER`. `AUTO SCALING STRATEGY` is gated by the `ENABLE_AUTO_SCALING_STRATEGY` feature flag for new DDL, but `RESET (AUTO SCALING STRATEGY)` is intentionally not gated so a cluster can shed an autoscaling policy after a flag rollback. `AUTO SCALING STRATEGY` is rejected for unmanaged clusters.
 `plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` that is identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected. The refactored path reconstructs the original `CREATE SINK` statement and applies all edits before re-planning, for both `ChangeRelation` and option-edit paths.

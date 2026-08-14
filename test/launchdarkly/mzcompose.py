@@ -53,16 +53,10 @@ LD_FEATURE_FLAG_KEY = f"ci-test-{BUILDKITE_JOB_ID}"
 # Unique feature flag keys for the scoped (per-cluster / per-replica) cases.
 LD_OPTIMIZER_FLAG_KEY = f"ci-test-optimizer-{BUILDKITE_JOB_ID}"
 LD_LGALLOC_FLAG_KEY = f"ci-test-lgalloc-{BUILDKITE_JOB_ID}"
-# Gate flag for the scoped feature. The gate is itself an LD-synced parameter,
-# so the sync loop is authoritative: a boot-time default is overwritten on the
-# first tick by LD's value. Enable it through LD instead, so the gate sticks.
-LD_SCOPED_GATE_FLAG_KEY = f"ci-test-scoped-gate-{BUILDKITE_JOB_ID}"
 # A cluster-coherent (optimizer) parameter and a replica-local parameter, both
 # declared scoped in their definitions.
 OPTIMIZER_PARAM = "enable_eager_delta_joins"
 LGALLOC_PARAM = "enable_lgalloc"
-# The feature gate that turns on scoped evaluation.
-SCOPED_GATE_PARAM = "enable_scoped_system_parameters"
 
 
 def context_rule(
@@ -223,7 +217,6 @@ def workflow_default(c: Composition) -> None:
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         command,
                     ]
@@ -310,7 +303,6 @@ def run_scoped_feature_flag_cases(
             f"max_result_size={LD_FEATURE_FLAG_KEY}",
             f"{OPTIMIZER_PARAM}={LD_OPTIMIZER_FLAG_KEY}",
             f"{LGALLOC_PARAM}={LD_LGALLOC_FLAG_KEY}",
-            f"{SCOPED_GATE_PARAM}={LD_SCOPED_GATE_FLAG_KEY}",
         ]
     )
     scoped_mz = Materialized(
@@ -368,19 +360,6 @@ def run_scoped_feature_flag_cases(
             rules=[context_rule("replica", "replica_size_family", ["legacy"], 0)],
         )
 
-        # The scoped feature gate. Off by default, so opt in by serving `true`
-        # env-wide. Enabled through LD rather than a boot-time default because
-        # the gate is itself synced: the sync loop would clobber a boot default
-        # with LD's value on the first tick.
-        ld_client.create_flag(
-            LD_SCOPED_GATE_FLAG_KEY,
-            tags=["ci-test"],
-            variations=BOOL_VARIATIONS,
-            off_variation=0,
-            on_variation=1,
-        )
-        ld_client.update_targeting(LD_SCOPED_GATE_FLAG_KEY, on=True)
-
         with c.override(scoped_mz):
             c.up("materialized")
 
@@ -390,7 +369,6 @@ def run_scoped_feature_flag_cases(
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         "CREATE CLUSTER ld_legacy SIZE 'scale=1,workers=1,legacy'",
                         "CREATE CLUSTER ld_role SIZE 'scale=1,workers=1,legacy'",
@@ -436,7 +414,6 @@ def run_scoped_feature_flag_cases(
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         "DROP CLUSTER ld_role",
                         "CREATE CLUSTER ld_role SIZE 'scale=1,workers=1,legacy'",
@@ -483,38 +460,6 @@ def run_scoped_feature_flag_cases(
                 )
             )
 
-            # Feature gate. Turning `enable_scoped_system_parameters` off makes
-            # the sync loop evaluate no scoped contexts and clear what it
-            # previously persisted, so both collections empty out and resolution
-            # reverts to env-wide. Turning it back on re-evaluates and restores.
-            # Toggle through LD, not `ALTER SYSTEM`: the gate is itself a synced
-            # parameter, so the sync loop is authoritative and would revert a
-            # local override on the next tick.
-            ld_client.update_targeting(LD_SCOPED_GATE_FLAG_KEY, on=False)
-            sleep(5)
-            c.testdrive(
-                "\n".join(
-                    [
-                        "> SELECT count(*) FROM mz_internal.mz_cluster_system_parameters",
-                        "0",
-                        "> SELECT count(*) FROM mz_internal.mz_replica_system_parameters",
-                        "0",
-                    ]
-                )
-            )
-            ld_client.update_targeting(LD_SCOPED_GATE_FLAG_KEY, on=True)
-            sleep(5)
-            c.testdrive(
-                "\n".join(
-                    [
-                        f"> SELECT c.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE p.name = '{OPTIMIZER_PARAM}' AND c.name IN ('mz_catalog_server', 'ld_role') ORDER BY c.name",
-                        "ld_role true",
-                        "mz_catalog_server true",
-                        f"> SELECT cr.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_legacy'",
-                        "r1 false",
-                    ]
-                )
-            )
             c.stop("materialized")
 
         # Durability: restart without the sync loop and assert the scoped values
@@ -552,9 +497,6 @@ def run_scoped_feature_flag_cases(
                 f"MZ_LAUNCHDARKLY_KEY_MAP={key_map}",
                 "MZ_CONFIG_SYNC_LOOP_INTERVAL=3600s",
             ],
-            additional_system_parameter_defaults={
-                "enable_scoped_system_parameters": "true",
-            },
             external_metadata_store=True,
         )
         with c.override(slow_mz):
@@ -562,7 +504,6 @@ def run_scoped_feature_flag_cases(
             c.testdrive(
                 "\n".join(
                     [
-                        "$ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}",
                         "$ postgres-execute connection=mz_system",
                         "CREATE CLUSTER ld_sync SIZE 'scale=1,workers=1,legacy'",
                     ]
@@ -597,7 +538,6 @@ def run_scoped_feature_flag_cases(
         for flag in (
             LD_OPTIMIZER_FLAG_KEY,
             LD_LGALLOC_FLAG_KEY,
-            LD_SCOPED_GATE_FLAG_KEY,
         ):
             try:
                 ld_client.delete_flag(flag)

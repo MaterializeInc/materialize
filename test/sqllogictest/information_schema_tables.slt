@@ -150,7 +150,7 @@ BASE TABLE
 materialize
 mz_catalog
 mz_iceberg_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_index_columns
@@ -166,7 +166,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_kafka_sources
@@ -230,7 +230,7 @@ MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sinks
-BASE TABLE
+MATERIALIZED VIEW
 materialize
 mz_catalog
 mz_sources

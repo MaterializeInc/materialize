@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/iter.rs
-revision: 2982634c0d
+revision: 26305d8cb0
 ---
 
 # mz-ore::iter

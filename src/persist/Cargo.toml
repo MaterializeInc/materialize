@@ -42,17 +42,14 @@ fail.workspace = true
 futures-util.workspace = true
 mz-foundationdb = { path = "../foundationdb", default-features = false, optional = true }
 itertools.workspace = true
-md-5.workspace = true
 mz-aws-util = { path = "../aws-util", features = ["s3"] }
 mz-dyncfg = { path = "../dyncfg" }
 mz-ore = { path = "../ore", default-features = false, features = ["metrics", "async", "bytes", "region", "parquet"] }
 mz-persist-types = { path = "../persist-types" }
 mz-postgres-client = { path = "../postgres-client" }
 mz-proto = { path = "../proto" }
-openssl.workspace = true
 openssl-sys.workspace = true
 parquet.workspace = true
-postgres-openssl.workspace = true
 postgres-protocol.workspace = true
 prometheus.workspace = true
 proptest.workspace = true
@@ -92,4 +89,7 @@ default = ["mz-build-tools/default"]
 foundationdb = ["mz-foundationdb"]
 turmoil = ["dep:serde_json", "dep:turmoil"]
 
-[package.metadata.cargo-udeps.ignore]
+[package.metadata.unused-deps]
+# Depended on for its `asm` feature rather than its API, see the comment on the
+# `[dependencies.sha2]` section above.
+ignore = ["sha2"]

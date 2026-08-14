@@ -2592,70 +2592,6 @@ fn test_github_20262() {
     }
 }
 
-// Test that the server properly handles cancellation requests of read-then-write queries.
-// See database-issues#6134.
-#[mz_ore::test]
-#[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `epoll_wait` on OS `linux`
-#[allow(clippy::disallowed_methods)]
-fn test_cancel_read_then_write() {
-    let server = test_util::TestHarness::default()
-        .unsafe_mode()
-        .start_blocking();
-    server.enable_feature_flags(&["unsafe_enable_unsafe_functions"]);
-
-    let mut client = server.connect(postgres::NoTls).unwrap();
-    client
-        .batch_execute("CREATE TABLE foo (a TEXT, ts INT)")
-        .unwrap();
-
-    // Lots of races here, so try this whole thing in a loop.
-    Retry::default()
-        .clamp_backoff(Duration::ZERO)
-        .retry(|_state| {
-            let mut client1 = server.connect(postgres::NoTls).unwrap();
-            let mut client2 = server.connect(postgres::NoTls).unwrap();
-            let cancel_token = client2.cancel_token();
-
-            client1.batch_execute("DELETE FROM foo").unwrap();
-            client1.batch_execute("SET statement_timeout = '5s'").unwrap();
-            client1
-                .batch_execute("INSERT INTO foo VALUES ('hello', 10)")
-                .unwrap();
-
-            let handle1 = thread::spawn(move || {
-                let err =  client1
-                    .batch_execute("insert into foo select a, case when mz_unsafe.mz_sleep(ts) > 0 then 0 end as ts from foo")
-                    .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "statement timeout"
-                );
-                client1
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            let handle2 = thread::spawn(move || {
-                let err = client2
-                .batch_execute("insert into foo values ('blah', 1);")
-                .unwrap_err();
-                assert_contains!(
-                    err.to_string_with_causes(),
-                    "canceling statement"
-                );
-            });
-            std::thread::sleep(Duration::from_millis(100));
-            cancel_token.cancel_query(postgres::NoTls)?;
-            let mut client1 = handle1.join().unwrap();
-            handle2.join().unwrap();
-            let rows:i64 = client1.query_one ("SELECT count(*) FROM foo", &[]).unwrap().get(0);
-            // We ran 3 inserts. First succeeded. Second timedout. Third cancelled.
-            if rows !=1 {
-                anyhow::bail!("unexpected row count: {rows}");
-            }
-            Ok::<_, anyhow::Error>(())
-        })
-        .unwrap();
-}
-
 #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
 #[cfg_attr(miri, ignore)] // too slow
 async fn test_http_metrics() {
@@ -3191,6 +3127,108 @@ fn webhook_max_request_size() {
             }
         })
         .expect("2 KiB body rejected after lowering the limit to 1 KiB");
+}
+
+/// A `CHECK` expression that allocates a multiple of the request body must be refused rather than
+/// allowed to hold the memory (SQL-431).
+///
+/// `environmentd` evaluates one `CHECK` per in-flight request, so before the budget existed 150
+/// concurrent 5 MB posts to a source checking `length(repeat(body, 20)) >= 0` took the process from
+/// 355 MiB to 8.7 GiB, growing with the number of clients. Every request returned 200. Nothing
+/// refused the work, so the memory was just held.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn webhook_validation_memory_budget() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+
+    let mut mz_client = server
+        .pg_config_internal()
+        .user(&SYSTEM_USER.name)
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client
+        .execute(
+            "CREATE CLUSTER webhook_cluster (SIZE 'scale=1,workers=1');",
+            &[],
+        )
+        .expect("failed to create cluster");
+    client
+        .execute(
+            "CREATE SOURCE webhook_amplify IN CLUSTER webhook_cluster \
+             FROM WEBHOOK BODY FORMAT TEXT \
+             CHECK (WITH (BODY) length(repeat(body, 20)) >= 0)",
+            &[],
+        )
+        .expect("failed to create source");
+
+    let http_client = reqwest::Client::new();
+    let webhook_url = format!(
+        "http://{}/api/webhook/materialize/public/webhook_amplify",
+        server.http_local_addr(),
+    );
+
+    let post = |len: usize| {
+        let body = vec![b'a'; len];
+        server.runtime().block_on(async {
+            http_client
+                .post(&webhook_url)
+                .body(body)
+                .send()
+                .await
+                .expect("request failed")
+                .status()
+        })
+    };
+
+    // The default budget is 20 MiB. A 2 MiB body amplifies to 40 MiB, so the `CHECK` is refused
+    // with 400 rather than allocating. Note that nothing else rejects this: 40 MiB is comfortably
+    // under the 100 MiB per-call ceiling that applies in a cluster, and 2 MiB is under the 5 MiB
+    // request-size limit.
+    assert_eq!(post(2 * 1024 * 1024).as_u16(), 400);
+
+    // A body whose amplified size fits the budget still succeeds through the same source, so the
+    // rejection above is the budget and not the `CHECK` or the source being broken.
+    assert!(post(512 * 1024).is_success());
+
+    // Raising the budget above the amplified size accepts the body that was just rejected. This is
+    // what pins the test to the budget: with enforcement removed the 2 MiB case would already have
+    // succeeded and the first assertion would fail.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET webhook_validation_memory_budget_bytes = 67108864")
+        .unwrap();
+    // The dyncfg propagates to the shared persist ConfigSet asynchronously, so retry briefly.
+    Retry::default()
+        .max_duration(std::time::Duration::from_secs(30))
+        .retry(|_| {
+            if post(2 * 1024 * 1024).is_success() {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .expect("2 MiB body accepted after raising the budget to 64 MiB");
+
+    // And lowering it below what the smaller body needs rejects that too, confirming the knob is
+    // live in both directions rather than the first result being a fixed threshold.
+    mz_client
+        .batch_execute("ALTER SYSTEM SET webhook_validation_memory_budget_bytes = 1024")
+        .unwrap();
+    Retry::default()
+        .max_duration(std::time::Duration::from_secs(30))
+        .retry(|_| {
+            if post(512 * 1024).as_u16() == 400 {
+                Ok(())
+            } else {
+                Err(())
+            }
+        })
+        .expect("512 KiB body rejected after lowering the budget to 1 KiB");
 }
 
 #[mz_ore::test]

@@ -71,7 +71,6 @@ strsim.workspace = true
 timely.workspace = true
 tokio-postgres.workspace = true
 tracing-core.workspace = true
-url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }

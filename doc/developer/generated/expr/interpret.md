@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/interpret.rs
-revision: d08f8f74a0
+revision: 32c1e1d39
 ---
 
 # mz-expr::interpret
@@ -12,7 +12,7 @@ Several timestamp/date/interval binary functions (`add_timestamp_interval`, `add
 `Values::union` for two `Nested` specs keeps only keys present in both sides (with per-key specs unioned); keys missing from one side are dropped because the absent side contributes `anything` and `x ∪ anything = anything`.
 `Values::intersect` of a `Nested` spec and a `Within` range returns the `Nested` side as a sound over-approximation rather than `Empty`.
 `ColumnSpecs` overrides `mfp_filter` and `mfp_plan_filter` to propagate the `fallible` flag from MFP expressions that are not referenced by any predicate or temporal bound. The runtime MFP evaluator runs every expression once predicates pass, so an expression that errors on the actual data turns the whole row into an `Err` regardless of whether a predicate references it; without this override, persist filter pushdown could wrongly discard parts that produce error rows.
-`ResultSpec` provides `is_single_value()` and `may_be_infinite()` accessors. `datum_is_nan` and `datum_is_infinite` are helper functions used during monotone range narrowing.
+`ResultSpec` provides `is_single_value()` and `may_be_infinite()` accessors. `datum_is_nan` and `datum_is_infinite` are helper functions used during monotone range narrowing. `ResultSpec::value_between` widens to `ResultSpec::value_all` when bounds are unordered (`min > max`) rather than collapsing to `ResultSpec::nothing`: unordered bounds mean the bounds are unusable (e.g., persist float stats encoded in IEEE-754 total order where `-NaN` sorts below `-Infinity` but `Datum` order ranks every NaN above every finite value), not that the column holds nothing.
 `flat_map` monotone narrowing skips ranges whose bounds include `NaN` (NaN is a fixed point of monotone functions but sorts as max, breaking endpoint soundness). The monotone arm treats value, null, and error as orthogonal channels: the output range is bounded by the value endpoints, but null and error channels from the endpoints are carried through independently.
 `ColumnSpecs::unary`, `ColumnSpecs::binary`, and `ColumnSpecs::variadic` force `fallible=true` for a `could_error` function over a multi-valued input range, because endpoint sampling cannot prove a function infallible over an interior value. `ColumnSpecs::binary` falls back to `Values::All` for functions that are not `is_infinity_monotone` when an operand may be infinite (e.g. `Mul`/`Div`). `ColumnSpecs::if_then_else` maps a null condition to the `els` branch, matching `MirScalarExpr::eval` behavior.
 This module drives filter-pushdown decisions in the explain and optimization pipelines.

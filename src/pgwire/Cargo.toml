@@ -15,7 +15,6 @@ async-trait.workspace = true
 base64.workspace = true
 byteorder.workspace = true
 bytes.workspace = true
-bytesize.workspace = true
 csv-core.workspace = true
 enum-kinds.workspace = true
 futures.workspace = true

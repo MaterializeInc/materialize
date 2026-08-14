@@ -19,6 +19,29 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.37.0
+*Released to Materialize Cloud: 2026-08-12* <br>
+*Released to Materialize Self-Managed: 2026-08-13* <br>
+
+### Improvements {#v26.37-improvements}
+- **Self-Managed: Highly available operator**: The Materialize operator now runs two replicas by default, so rolling out an operator update no longer interrupts the CRD conversion webhook. Installations that manage their own RBAC must grant the operator `get`, `create`, and `update` on `leases` in `coordination.k8s.io`, because the two replicas coordinate through lease-based leader election.
+- **`IF NOT EXISTS` for clusters and replicas**: `CREATE CLUSTER` and `CREATE CLUSTER REPLICA` now accept an `IF NOT EXISTS` clause, so an existing cluster returns an `already exists, skipping` notice instead of an error. Provisioning scripts can now run idempotently, without a pre-flight existence check.
+
+### Bug Fixes {#v26.37-bug-fixes}
+- Fixed a prepared statement with a parameterized `LIMIT` failing with `Top-level LIMIT must be a constant expression` whenever the bound parameter's type was not `bigint`.
+- Fixed `ALTER CLUSTER ... SET (REPLICATION FACTOR ...)` on a built-in cluster such as `mz_system` or `mz_support` being undone on the next restart, which could also wedge later replication-factor changes.
+- Fixed session parameter changes that an implicit transaction reverts not being announced to the client, so drivers that cache `ParameterStatus` such as pgjdbc and psycopg kept reporting a value the server had already discarded.
+- Fixed extended-protocol `Parse` and `Bind` messages carrying more than 32767 parameters, parameter types, or format codes being misdecoded, which left the rest of the message misaligned.
+- Fixed Avro object container file decoding reading a previous block's bytes into values, and bounded a block's declared object count so that a malformed file of a few dozen bytes can no longer cost minutes of decoding work.
+- Fixed a bare `map` in an option value failing to parse, which broke statements such as a Kafka sink with `TOPIC = "map"` and a materialized view's `PARTITION BY`.
+- Fixed the binary wire format accepting `Infinity` and `-Infinity` as a `numeric` parameter, a value no SQL literal can name.
+- Fixed a stalled catalog snapshot in the MCP server hanging a request indefinitely instead of failing it at the configured request timeout.
+- Fixed `balancerd` panicking at startup when the target `environmentd` service's DNS name was not yet resolvable, which could happen during an upgrade; startup now retries with backoff for a configurable 30 seconds.
+- Fixed Iceberg sinks counting every row twice in `messages_staged`, which drew the Console's Staged line at double the committed rate, and fixed the Console's sink statistics charts rendering a failed subscribe as an empty chart pinned at 0.
+- Fixed `ALTER NETWORK POLICY`, `GRANT`/`REVOKE USAGE ON NETWORK POLICY`, and `ALTER NETWORK POLICY ... OWNER TO` failing to resolve a quoted identifier such as `"hyphenated-name"`.
+- Fixed a query with a very large `LIMIT` crashing a cluster replica in a loop, which any user able to query an indexed relation could trigger with a single statement.
+- Fixed a persist command that retried for minutes committing a stale lease heartbeat, which could cost a read handle its lease.
+- Fixed Self-Managed deployments defaulting to an alternative materialized view sink implementation that could block cluster worker threads and cost readers their leases; it is now off by default, matching Materialize Cloud.
 ## v26.36.0
 *Released to Materialize Cloud: 2026-08-07 on as-needs basis* <br>
 *Released to Materialize Self-Managed: 2026-08-07* <br>
@@ -49,7 +72,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - Fixed an `ALTER CLUSTER` without a `WITH (WAIT ...)` clause resetting the deadline of an in-flight graceful cluster reconfiguration.
 - Fixed `mz-deploy apply-all` failing when a cluster file references a project-defined role, because the roles phase ran after the clusters phase.
 - Fixed `mz-deploy compile` and `mz-deploy stage` failing with `type "text[]" does not exist` for projects whose dependencies have array-typed columns.
-
 
 ## v26.35.0
 *Released to Materialize Cloud: 2026-07-29* <br>

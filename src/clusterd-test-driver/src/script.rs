@@ -29,8 +29,10 @@
 //! deterministic regardless of how the dataflows interleave.
 //!
 //! Shards are referenced by a string alias; the first command naming an alias
-//! allocates a fresh [`ShardId`] for it. Object ids are raw `u64`s mapped to
-//! [`GlobalId::User`].
+//! allocates a fresh [`ShardId`] for it. Object ids follow [`GlobalId`]'s own
+//! text form: a bare number (`1000`) is the user namespace, or an explicit
+//! `s`/`si`/`u`/`t` prefix (`t7`, `u1000`, `s42`) selects the namespace
+//! directly.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -100,7 +102,7 @@ pub enum ImportSpec {
     /// Import a persist-backed storage collection, as `define_index` does.
     Source {
         /// The imported source's global id.
-        id: u64,
+        id: GlobalId,
         /// Shard alias to import; allocated on first use.
         shard: String,
         /// Schema name; defaults to the built-in sample schema.
@@ -113,7 +115,7 @@ pub enum ImportSpec {
     /// and type are taken from the registry, so it must have been defined first.
     Index {
         /// The index's global id.
-        index_id: u64,
+        index_id: GlobalId,
     },
 }
 
@@ -121,7 +123,7 @@ pub enum ImportSpec {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildSpec {
     /// The built object's global id.
-    pub id: u64,
+    pub id: GlobalId,
     /// The computation, as a pretty-form MIR spec parsed by `mz-expr-parser`
     /// (e.g. `Reduce aggregates=[count(*)]` over `Get u1000`). It references
     /// imported or previously-built objects by their global-id name (`u<n>`); the
@@ -138,9 +140,9 @@ pub enum ExportSpec {
     /// An arrangement, peekable as an index and importable by later dataflows.
     Index {
         /// The exported index's global id.
-        index_id: u64,
+        index_id: GlobalId,
         /// The imported or built id the index arranges.
-        on_id: u64,
+        on_id: GlobalId,
         /// Columns to arrange by.
         key: Vec<usize>,
     },
@@ -148,9 +150,9 @@ pub enum ExportSpec {
     /// verified by reading the shard back with a persist `peek` of the sink id.
     MaterializedView {
         /// The sink's global id (scheduled and frontier-tracked under this id).
-        sink_id: u64,
+        sink_id: GlobalId,
         /// The imported or built id the sink writes.
-        on_id: u64,
+        on_id: GlobalId,
         /// Target shard alias; allocated on first use.
         shard: String,
         /// Output schema; defaults to the sample schema. Must match `on_id`'s type.
@@ -160,9 +162,9 @@ pub enum ExportSpec {
     /// `await-subscribe`.
     Subscribe {
         /// The sink's global id.
-        sink_id: u64,
+        sink_id: GlobalId,
         /// The imported or built id the sink streams.
-        on_id: u64,
+        on_id: GlobalId,
         /// Output schema; defaults to the sample schema. Must match `on_id`'s type.
         schema: Option<String>,
         /// Exclusive upper at which the subscribe completes; unbounded if absent.
@@ -398,9 +400,9 @@ pub enum Command {
     /// Submit (without scheduling) an index dataflow over `shard`.
     DefineIndex {
         /// The imported source's global id.
-        source_id: u64,
+        source_id: GlobalId,
         /// The exported index's global id.
-        index_id: u64,
+        index_id: GlobalId,
         /// Shard alias to import; must already exist.
         shard: String,
         /// Schema name; defaults to the built-in sample schema. Must match what was
@@ -417,12 +419,12 @@ pub enum Command {
     /// Schedule a previously-submitted collection so it makes progress.
     Schedule {
         /// The collection's global id.
-        id: u64,
+        id: GlobalId,
     },
     /// Advance an index's read frontier (`since`) via `AllowCompaction`.
     AllowCompaction {
         /// The index's global id.
-        id: u64,
+        id: GlobalId,
         /// The new read frontier.
         frontier: u64,
     },
@@ -432,12 +434,12 @@ pub enum Command {
     /// all persist writes until this is sent for its sink id.
     AllowWrites {
         /// The sink's global id.
-        id: u64,
+        id: GlobalId,
     },
     /// Wait until `id`'s output frontier reaches `ts`, or fail after the timeout.
     AwaitFrontier {
         /// The collection's global id.
-        id: u64,
+        id: GlobalId,
         /// The target output-frontier timestamp.
         ts: u64,
         /// Timeout in seconds; defaults to `DEFAULT_TIMEOUT_SECS`.
@@ -458,7 +460,7 @@ pub enum Command {
     /// export). The golden output is the count; the script's `----` block asserts it.
     Count {
         /// The index's global id.
-        id: u64,
+        id: GlobalId,
         /// The timestamp to count at.
         ts: u64,
     },
@@ -496,7 +498,7 @@ pub enum Command {
     /// generic output assertion: the script's `----` block holds the expected rows.
     Peek {
         /// The index's global id.
-        id: u64,
+        id: GlobalId,
         /// Schema name describing the peek's output; defaults to the sample schema.
         #[serde(default)]
         schema: Option<String>,
@@ -508,7 +510,7 @@ pub enum Command {
     /// The output assertion for a subscribe sink.
     AwaitSubscribe {
         /// The subscribe sink's global id.
-        id: u64,
+        id: GlobalId,
         /// The exclusive upper to wait for (typically the sink's `up_to`).
         up_to: u64,
         /// Timeout in seconds; defaults to `DEFAULT_TIMEOUT_SECS`.
@@ -553,7 +555,7 @@ pub enum Command {
 /// import or count assertion can reconstruct the import without re-declaring it.
 struct IndexEntry {
     /// The id of the collection the index arranges.
-    on_id: u64,
+    on_id: GlobalId,
     /// The columns the index is arranged by.
     key: Vec<usize>,
     /// The arranged collection's relation type (for `import_index`).
@@ -574,10 +576,10 @@ pub struct ScriptState {
     /// Alias-to-shard map; aliases are allocated lazily on first use.
     shards: BTreeMap<String, ShardId>,
     /// Exported indexes, by global id, for later import / count assertions.
-    indexes: BTreeMap<u64, IndexEntry>,
+    indexes: BTreeMap<GlobalId, IndexEntry>,
     /// Materialized-view sink outputs, by sink global id: the target shard's
     /// metadata, so a `peek` of the sink id reads its shard via a persist peek.
-    mv_outputs: BTreeMap<u64, CollectionMetadata>,
+    mv_outputs: BTreeMap<GlobalId, CollectionMetadata>,
     /// Next ephemeral id for the count sugar's dataflows.
     next_internal: u64,
 }
@@ -618,7 +620,7 @@ impl ScriptState {
     /// `Reduce` over it: build an ephemeral dataflow that index-imports `index_id`,
     /// schedule and hydrate it, then peek its single-row output. An empty result
     /// (the reduce emits no row over empty input) reads as a count of `0`.
-    async fn count_via_reduce(&mut self, index_id: u64, ts: u64) -> anyhow::Result<u64> {
+    async fn count_via_reduce(&mut self, index_id: GlobalId, ts: u64) -> anyhow::Result<u64> {
         let entry = self.indexes.get(&index_id).ok_or_else(|| {
             anyhow::anyhow!("unknown index {index_id}; define it with define_index first")
         })?;
@@ -629,8 +631,8 @@ impl ScriptState {
         let reduce_id = self.alloc_internal();
         let out_index_id = self.alloc_internal();
         let df = count_over_index(
-            GlobalId::User(index_id),
-            GlobalId::User(on_id),
+            index_id,
+            on_id,
             on_type,
             key,
             reduce_id,
@@ -696,10 +698,10 @@ impl ScriptState {
     fn check_sink_schema(
         &self,
         builder: &DataflowBuilder,
-        on_id: u64,
+        on_id: GlobalId,
         desc: &RelationDesc,
     ) -> anyhow::Result<()> {
-        let on_type = builder.get(GlobalId::User(on_id))?.typ();
+        let on_type = builder.get(on_id)?.typ();
         let want = ReprRelationType::from(desc.typ());
         anyhow::ensure!(
             on_type.column_types == want.column_types,
@@ -787,8 +789,8 @@ impl ScriptState {
                 let shard = self.shard_id(&shard);
                 let on_type = ReprRelationType::from(desc.typ());
                 let df = index_dataflow(
-                    GlobalId::User(source_id),
-                    GlobalId::User(index_id),
+                    source_id,
+                    index_id,
                     shard,
                     self.loc.clone(),
                     desc,
@@ -810,19 +812,18 @@ impl ScriptState {
                 Ok("ok".to_string())
             }
             Command::Schedule { id } => {
-                self.driver.schedule(GlobalId::User(id))?;
+                self.driver.schedule(id)?;
                 Ok("ok".to_string())
             }
             Command::AllowCompaction { id, frontier } => {
                 self.driver.send(ComputeCommand::AllowCompaction {
-                    id: GlobalId::User(id),
+                    id,
                     frontier: Antichain::from_elem(Timestamp::from(frontier)),
                 })?;
                 Ok("ok".to_string())
             }
             Command::AllowWrites { id } => {
-                self.driver
-                    .send(ComputeCommand::AllowWrites(GlobalId::User(id)))?;
+                self.driver.send(ComputeCommand::AllowWrites(id))?;
                 Ok("ok".to_string())
             }
             Command::AwaitFrontier {
@@ -834,7 +835,7 @@ impl ScriptState {
                 let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
                 let result = self
                     .driver
-                    .expect_frontier(GlobalId::User(id), Timestamp::from(ts), timeout)
+                    .expect_frontier(id, Timestamp::from(ts), timeout)
                     .await;
                 if allow_timeout {
                     // The outcome is intentionally unobserved: emit a fixed token so
@@ -879,7 +880,6 @@ impl ScriptState {
                             upper,
                         } => {
                             let desc = self.resolve_schema(&schema)?;
-                            let id = GlobalId::User(id);
                             register_catalog_object(
                                 &mut catalog,
                                 &mut name_to_id,
@@ -903,7 +903,7 @@ impl ScriptState {
                                     "unknown index {index_id}; define it before importing it"
                                 )
                             })?;
-                            let on_id = GlobalId::User(entry.on_id);
+                            let on_id = entry.on_id;
                             let key = entry.key.clone();
                             let on_type = entry.on_type.clone();
                             register_catalog_object(
@@ -912,13 +912,7 @@ impl ScriptState {
                                 on_id,
                                 SqlRelationType::from_repr(&on_type),
                             )?;
-                            builder.import_index(
-                                GlobalId::User(index_id),
-                                on_id,
-                                key,
-                                on_type,
-                                false,
-                            );
+                            builder.import_index(index_id, on_id, key, on_type, false);
                         }
                     }
                 }
@@ -928,7 +922,7 @@ impl ScriptState {
                     let mut expr = try_parse_mir(&catalog, &build.expr)
                         .map_err(|e| anyhow::anyhow!("parsing MIR for object {}: {e}", build.id))?;
                     remap_gets(&mut expr, &catalog, &name_to_id)?;
-                    let id = GlobalId::User(build.id);
+                    let id = build.id;
                     // Register the built object so later builds can `get` it.
                     register_catalog_object(
                         &mut catalog,
@@ -953,12 +947,8 @@ impl ScriptState {
                             on_id,
                             key,
                         } => {
-                            let on_type = builder.get(GlobalId::User(on_id))?.typ();
-                            builder.export_index(
-                                GlobalId::User(index_id),
-                                GlobalId::User(on_id),
-                                key.clone(),
-                            );
+                            let on_type = builder.get(on_id)?.typ();
+                            builder.export_index(index_id, on_id, key.clone());
                             new_indexes.push((index_id, on_id, key, on_type));
                         }
                         ExportSpec::MaterializedView {
@@ -972,8 +962,8 @@ impl ScriptState {
                             let shard = self.shard_id(&shard);
                             let location = self.loc.clone();
                             builder.export_materialized_view(
-                                GlobalId::User(sink_id),
-                                GlobalId::User(on_id),
+                                sink_id,
+                                on_id,
                                 desc.clone(),
                                 PersistSink {
                                     shard,
@@ -1001,12 +991,7 @@ impl ScriptState {
                         } => {
                             let desc = self.resolve_schema(&schema)?;
                             self.check_sink_schema(&builder, on_id, &desc)?;
-                            builder.export_subscribe(
-                                GlobalId::User(sink_id),
-                                GlobalId::User(on_id),
-                                desc,
-                                up_to_antichain(up_to),
-                            );
+                            builder.export_subscribe(sink_id, on_id, desc, up_to_antichain(up_to));
                             new_subscribes.push(sink_id);
                         }
                     }
@@ -1027,7 +1012,7 @@ impl ScriptState {
                     );
                 }
                 for sink_id in new_subscribes {
-                    self.driver.register_subscribe(GlobalId::User(sink_id));
+                    self.driver.register_subscribe(sink_id);
                 }
                 for (sink_id, metadata) in new_mv_outputs {
                     self.mv_outputs.insert(sink_id, metadata);
@@ -1042,12 +1027,10 @@ impl ScriptState {
                 // for the writing sink to catch up.
                 let target = match self.mv_outputs.get(&id) {
                     Some(metadata) => PeekTarget::Persist {
-                        id: GlobalId::User(id),
+                        id,
                         metadata: metadata.clone(),
                     },
-                    None => PeekTarget::Index {
-                        id: GlobalId::User(id),
-                    },
+                    None => PeekTarget::Index { id },
                 };
                 let rows = self.driver.peek(target, desc, Timestamp::from(ts)).await?;
                 Ok(render_rows(&rows))
@@ -1060,7 +1043,7 @@ impl ScriptState {
                 let timeout = Duration::from_secs(timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
                 let updates = self
                     .driver
-                    .await_subscribe(GlobalId::User(id), Timestamp::from(up_to), timeout)
+                    .await_subscribe(id, Timestamp::from(up_to), timeout)
                     .await?;
                 Ok(render_updates(&updates))
             }

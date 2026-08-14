@@ -379,26 +379,42 @@ fn test_parse_timestamptz_offset_overflow() {
 
 #[mz_ore::test]
 fn test_parse_timestamptz_leap_second_offset_fold() {
-    // A parsed `:60` becomes chrono's leap-second representation (sub-second
-    // >= 1s), which is only representable at a second-of-minute of 59. An offset
-    // that is not a whole number of minutes shifts it off `:59`, and the
-    // resulting value used to panic in `Row` encoding. Fold it into the next
-    // regular second instead, which is also what PostgreSQL does with `:60`.
+    // A parsed `:60` rolls over into the next minute before the offset is
+    // applied, so every offset lands on a regular second.
+    for (input, expected) in [
+        ("1970-01-01 00:00:60+00:00:30", "1970-01-01 00:00:30+00"),
+        ("1970-01-01 12:00:60-00:00:30", "1970-01-01 12:01:30+00"),
+        ("1970-01-01 00:00:60+01", "1969-12-31 23:01:00+00"),
+    ] {
+        let ts = strconv::parse_timestamptz(input).unwrap();
+        assert_eq!(ts.nanosecond(), 0, "leap-second nanos survived parsing");
+        let mut buf = String::new();
+        strconv::format_timestamptz(&mut buf, &ts);
+        assert_eq!(buf, expected);
+    }
+
+    // The frozen legacy parse keeps chrono's leap-second representation
+    // (sub-second >= 1s), which is only representable at a second-of-minute of
+    // 59. An offset that is not a whole number of minutes shifts it off `:59`,
+    // and the resulting value used to panic in `Row` encoding. Fold it into the
+    // next regular second instead, which is also what PostgreSQL does with
+    // `:60`. The folded values render the same as the rolled-over ones above.
     for (input, expected) in [
         ("1970-01-01 00:00:60+00:00:30", "1970-01-01 00:00:30+00"),
         ("1970-01-01 12:00:60-00:00:30", "1970-01-01 12:01:30+00"),
     ] {
-        let ts = strconv::parse_timestamptz(input).unwrap();
+        let ts = strconv::parse_timestamptz_legacy(input).unwrap();
         assert_eq!(ts.nanosecond(), 0, "leap-second nanos survived the fold");
         let mut buf = String::new();
         strconv::format_timestamptz(&mut buf, &ts);
         assert_eq!(buf, expected);
     }
 
-    // A whole-minute offset keeps the value on `:59`, where the leap-second
-    // representation is legal, so it is preserved rather than folded.
+    // A whole-minute offset keeps the legacy value on `:59`, where the
+    // leap-second representation is legal, so it is preserved rather than
+    // folded.
     for input in ["1970-01-01 00:00:60+01", "1970-01-01 12:00:60-05:30"] {
-        let ts = strconv::parse_timestamptz(input).unwrap();
+        let ts = strconv::parse_timestamptz_legacy(input).unwrap();
         assert_eq!(ts.nanosecond(), 1_000_000_000);
     }
 }
@@ -790,11 +806,10 @@ fn test_format_subsecond_carry() {
         ("2020-01-01 00:00:59.9999999", "2020-01-01 00:01:00"),
         ("2020-01-31 23:59:59.9999999", "2020-02-01 00:00:00"),
         ("2020-12-31 23:59:59.9999999", "2021-01-01 00:00:00"),
-        // A leap second is already in the seconds field, where chrono's `%S`
-        // renders it as `60`, so only the part below one second is a fraction.
-        // The parser rejects a *fractional* leap second, so `.5` past `:60` is
-        // covered below by constructing the value directly.
-        ("2020-01-01 23:59:60", "2020-01-01 23:59:60"),
+        // A `:60` rolls over into the next minute at parse, crossing the day
+        // boundary here. The renderer's own leap-second handling is covered
+        // below by constructing the value directly.
+        ("2020-01-01 23:59:60", "2020-01-02 00:00:00"),
         // `HIGH_DATE` is exactly `chrono::NaiveDate::MAX`, so the carry has
         // nowhere to go and the fraction saturates instead.
         (
@@ -814,10 +829,14 @@ fn test_format_subsecond_carry() {
         assert_eq!(buf, format!("{expected}+00"), "formatting {input} as tz");
     }
 
-    // The renderer takes a bare `NaiveDateTime`, so it also has to hold up on a
-    // leap second carrying a fraction, which the parser rejects but chrono can
-    // represent. The second after `23:59:60` is `00:00:00` of the next minute.
+    // The renderer takes a bare `NaiveDateTime`, so it also has to hold up on
+    // chrono's leap-second representation, which the SQL parser no longer
+    // produces but persisted data and the frozen storage source casts still
+    // do. A whole-second leap renders as `:60` via chrono's `%S`; a fractional
+    // one carries, and the second after `23:59:60` is `00:00:00` of the next
+    // minute.
     for (nanos, expected) in [
+        (1_000_000_000, "2020-01-01 23:59:60"),
         (1_500_000_000, "2020-01-01 23:59:60.5"),
         (1_999_999_999, "2020-01-02 00:00:00"),
     ] {

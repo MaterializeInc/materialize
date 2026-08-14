@@ -362,10 +362,10 @@ derive_unary!(
     CastStringToFloat32,
     CastStringToFloat64,
     CastStringToDate,
-    CastStringToArray,
-    CastStringToList,
-    CastStringToMap,
-    CastStringToRange,
+    CastStringToArray(E),
+    CastStringToList(E),
+    CastStringToMap(E),
+    CastStringToRange(E),
     CastStringToTime,
     CastStringToTimestamp,
     CastStringToTimestampTz,
@@ -411,13 +411,13 @@ derive_unary!(
     CastJsonbToBool,
     CastUuidToString,
     CastRecordToString,
-    CastRecord1ToRecord2,
-    CastArrayToArray,
-    CastArrayToJsonb,
+    CastRecord1ToRecord2(E),
+    CastArrayToArray(E),
+    CastArrayToJsonb(E),
     CastArrayToString,
     CastListToString,
-    CastListToJsonb,
-    CastList1ToList2,
+    CastListToJsonb(E),
+    CastList1ToList2(E),
     CastArrayToListOneDim,
     CastMapToString,
     CastInt2VectorToString,
@@ -546,7 +546,7 @@ derive_unary!(
     Reverse
 );
 
-impl UnaryFunc {
+impl<E> UnaryFunc<E> {
     /// If the unary_func represents "IS X", return X.
     ///
     /// A helper method for being able to print Not(IsX) as IS NOT X.
@@ -571,12 +571,13 @@ mod test {
 
     #[mz_ore::test]
     fn test_could_error() {
-        for func in [
+        let funcs: [UnaryFunc; 4] = [
             UnaryFunc::IsNull(IsNull),
             UnaryFunc::CastVarCharToString(CastVarCharToString),
             UnaryFunc::Not(Not),
             UnaryFunc::IsLikeMatch(IsLikeMatch(like_pattern::compile("%hi%", false).unwrap())),
-        ] {
+        ];
+        for func in funcs {
             assert!(!func.could_error())
         }
     }

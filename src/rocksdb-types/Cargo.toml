@@ -11,9 +11,11 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 serde.workspace = true
 uncased.workspace = true
+
+[dev-dependencies]
+mz-ore = { path = "../ore", features = ["async", "metrics", "test"] }
 
 [features]
 default = []

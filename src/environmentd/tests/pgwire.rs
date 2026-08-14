@@ -796,10 +796,12 @@ fn test_record_types() {
 }
 
 fn pg_test_inner(path: &Path, mz_flags: bool) {
+    pg_test_harness(path, mz_flags, test_util::TestHarness::default)
+}
+
+fn pg_test_harness(path: &Path, mz_flags: bool, harness: fn() -> test_util::TestHarness) {
     datadriven::walk(path.to_str().unwrap(), |tf| {
-        let server = test_util::TestHarness::default()
-            .unsafe_mode()
-            .start_blocking();
+        let server = harness().unsafe_mode().start_blocking();
         if mz_flags {
             server.enable_feature_flags(&[
                 "enable_create_table_from_source",
@@ -1273,4 +1275,20 @@ fn test_many_bind_params() {
 
     let row = client.query_one("SELECT a FROM many_params", &[]).unwrap();
     assert_eq!(row.get::<_, i32>(0), LAST_VALUE);
+}
+
+/// The frontend OCC read-then-write path must refuse DML that is pipelined
+/// behind a write in the same extended-protocol implicit transaction.
+#[mz_ore::test]
+fn test_pgtest_mz_frontend_occ_pipelined_dml() {
+    pg_test_harness(
+        Path::new("../../test/pgtest-mz/frontend-occ-pipelined-dml.pt"),
+        true,
+        || {
+            test_util::TestHarness::default().with_system_parameter_default(
+                "enable_adapter_frontend_occ_read_then_write".to_string(),
+                "true".to_string(),
+            )
+        },
+    );
 }

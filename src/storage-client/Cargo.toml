@@ -50,6 +50,3 @@ mz-secrets = { path = "../secrets" }
 
 [features]
 default = []
-
-[package.metadata.cargo-udeps.ignore]
-# only used on linux

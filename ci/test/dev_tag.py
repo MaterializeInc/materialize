@@ -12,13 +12,12 @@
 import os
 from pathlib import Path
 
-from materialize import ci_util, git, mzbuild
+from materialize import ci_util, mzbuild
 from materialize.rustc_flags import Sanitizer
 from materialize.xcompile import Arch
 
 
 def main() -> None:
-    mz_version = ci_util.get_mz_version()
     sanitizer = Sanitizer[os.getenv("CI_SANITIZER", "none")]
 
     repos = [
@@ -42,12 +41,7 @@ def main() -> None:
         repo.resolve_dependencies(image for image in repo if image.publish)
         for repo in repos
     ]
-    # Ideally we'd use SemVer metadata (e.g., `v1.0.0+metadata`), but `+` is not
-    # a valid character in Docker tags, so we use `--` instead.
-    suffix = "pr" if sanitizer == Sanitizer.none else f"pr-{sanitizer}"
-    mzbuild.publish_multiarch_images(
-        f'v{mz_version}--{suffix}.g{git.rev_parse("HEAD")}', deps
-    )
+    mzbuild.publish_multiarch_images(ci_util.dev_docker_tag(), deps)
 
 
 if __name__ == "__main__":

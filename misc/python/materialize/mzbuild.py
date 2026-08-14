@@ -674,10 +674,7 @@ class CargoBuild(CargoPreImage):
         cflags = (
             [
                 f"--target={target(rd.arch)}",
-                f"--gcc-toolchain=/opt/x-tools/{target(rd.arch)}/",
                 "-fuse-ld=lld",
-                f"--sysroot=/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/sysroot",
-                f"-L/opt/x-tools/{target(rd.arch)}/{target(rd.arch)}/lib64",
             ]
             + rustc_flags.sanitizer_cflags[rd.sanitizer]
             if rd.sanitizer != Sanitizer.none
@@ -691,10 +688,10 @@ class CargoBuild(CargoPreImage):
                 "CXXSTDLIB": "stdc++",
                 "CC": "cc",
                 "CXX": "c++",
-                "CPP": "clang-cpp-18",
+                "CPP": "clang-cpp-19",
                 "CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER": "cc",
                 "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER": "cc",
-                "PATH": f"/sanshim:/opt/x-tools/{target(rd.arch)}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "PATH": "/sanshim:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
                 "TSAN_OPTIONS": "report_bugs=0",  # build-scripts fail
             }
             if rd.sanitizer != Sanitizer.none
@@ -876,7 +873,19 @@ class CargoBuild(CargoPreImage):
                 else:
                     package = message["package_id"].split("#")[0].split("/")[-1]
                 for src, dst in self.extract.get(package, {}).items():
-                    spawn.runv(["cp", "-R", out_dir / src, self.path / dst])
+                    # Sources are relative to the build script's `out` dir.
+                    # `$CARGO_TARGET_DIR` instead names the Cargo target root
+                    # (`cargo_target_dir` is the per-target directory below
+                    # it), for artifacts a build script caches outside of
+                    # `out`. Reaching the root with `..` does not work: how
+                    # deep `out` sits below it differs between Cargo versions.
+                    if src.startswith("$CARGO_TARGET_DIR/"):
+                        src_path = target_dir.parent / src.removeprefix(
+                            "$CARGO_TARGET_DIR/"
+                        )
+                    else:
+                        src_path = out_dir / src
+                    spawn.runv(["cp", "-R", src_path, self.path / dst])
 
         self.acquired = True
 

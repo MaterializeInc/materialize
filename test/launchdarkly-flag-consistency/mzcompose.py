@@ -233,6 +233,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
+    enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
     enable_auto_scaling_strategy
     enable_background_alter_cluster
@@ -299,8 +300,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     keep_n_sink_status_history_entries
     keep_n_source_status_history_entries
     log_filter_defaults
+    max_concurrent_occ_writes
     max_copy_from_row_size
     max_network_policies
+    max_occ_retries
     max_rules_per_network_policy
     max_sql_server_connections
     max_timestamp_interval
@@ -499,7 +502,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
-    "enable_scoped_system_parameters",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
     "enable_zero_downtime_cluster_reconfiguration",

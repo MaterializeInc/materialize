@@ -14,7 +14,6 @@ workspace = true
 anyhow.workspace = true
 backtrace.workspace = true
 flate2.workspace = true
-itertools.workspace = true
 jemalloc_pprof = { workspace = true, optional = true }
 pprof_util.workspace = true
 mz-ore = { path = "../ore", default-features = false, features = ["async"] }
@@ -33,6 +32,3 @@ prost-build.workspace = true
 default = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["tikv-jemalloc-ctl", "jemalloc_pprof"]
-
-[package.metadata.cargo-udeps.ignore]
-# "bytesize" not used on linux

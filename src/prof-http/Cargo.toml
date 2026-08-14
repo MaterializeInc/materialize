@@ -48,6 +48,3 @@ default = []
 dev-web = []
 # Whether to enable profiling features that depend on jemalloc.
 jemalloc = ["mz-prof/jemalloc", "jemalloc_pprof"]
-
-[package.metadata.cargo-udeps.ignore]
-# "bytesize" not used on linux

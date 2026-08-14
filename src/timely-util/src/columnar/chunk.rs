@@ -1632,9 +1632,10 @@ mod tests {
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // too slow
     fn settle_carry_commits_at_target() {
-        // ~1.5 MiB per chunk: inside the dead zone of the periodic window
-        // check (see `at_commit_size`).
-        let chunk_rows = u64::cast_from(1_500_000usize / 24);
+        // ~1.5 MiB per chunk (a row serializes to 32 bytes): under
+        // `at_commit_size`, so the carry has to coalesce, and a coalesced
+        // pair lands in the dead zone of the periodic window check.
+        let chunk_rows = u64::cast_from(1_500_000usize / 32);
         let mut input: VecDeque<TestChunk> = (0..4u64)
             .map(|c| {
                 let data: Vec<Tuple> = (0..chunk_rows)
@@ -1645,6 +1646,9 @@ mod tests {
             .collect();
         let mut out = VecDeque::new();
         TestChunk::settle(&mut input, true, &mut out);
+        // Catches the fixture drifting above `at_commit_size`, where settle
+        // commits each chunk as-is and the size cap below holds vacuously.
+        assert!(out.len() < 4, "nothing coalesced");
         for chunk in &out {
             let col = chunk.clone().into_column();
             assert!(
