@@ -148,7 +148,44 @@ def workflow_default(c: Composition) -> None:
                 """),
             )
 
-            # Dropping the sections removes the overrides, returning both objects
+            # Create-time resolution: a cluster created while a section already
+            # names it folds the overrides into its create transaction, so its
+            # replica's first configuration carries them. This exercises that path,
+            # which the cluster above never reaches. Asserted without a sleep, but
+            # the sync loop also reconciles every 100ms here, so what this pins down
+            # is that the create path resolves and commits the overrides rather than
+            # their exact ordering against the replica's first configuration.
+            #
+            # The fold resolves from the file as of the last sync tick, hence the
+            # sleep after the write.
+            system_params_4 = {
+                **system_params_3,
+                "clusters": {
+                    **system_params_3["clusters"],
+                    "dyncfg_scoped_2": {CLUSTER_PARAM: True},
+                },
+                "replicas": {
+                    **system_params_3["replicas"],
+                    "dyncfg_scoped_2": {"r1": {REPLICA_PARAM: False}},
+                },
+            }
+
+            write_config(config_file, system_params_4)
+            c.sleep(2)
+            c.testdrive(
+                input=dedent(f"""
+                    $ postgres-execute connection=mz_system
+                    CREATE CLUSTER dyncfg_scoped_2 SIZE 'scale=1,workers=1'
+
+                    > SELECT p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE c.name = 'dyncfg_scoped_2'
+                    {CLUSTER_PARAM} true
+
+                    > SELECT r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'dyncfg_scoped_2'
+                    r1 {REPLICA_PARAM} false
+                """),
+            )
+
+            # Dropping the sections removes the overrides, returning every object
             # to the environment-wide value.
             write_config(config_file, system_params_2)
             c.sleep(2)

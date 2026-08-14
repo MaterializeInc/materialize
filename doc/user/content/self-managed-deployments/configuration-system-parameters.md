@@ -252,7 +252,9 @@ Behavior worth knowing:
 
 - **Not every parameter can be scoped.** Only parameters whose scope is
   `cluster` or `replica` are resolved per object. An entry for any other
-  parameter is ignored, so set it as a top-level key instead.
+  parameter is ignored, so set it as a top-level key instead. `environmentd` logs
+  a warning naming the entry and the object it was written for, which also catches
+  a misspelled parameter name.
 - **Unknown names are ignored, not rejected.** A section naming a cluster or
   replica that does not exist has no effect and logs no error. If you later
   create an object with that name, the override applies to it.
@@ -262,6 +264,11 @@ Behavior worth knowing:
   applies and `environmentd` logs a warning naming the parameter and the object.
 - **Removing a name or an entry removes the override**, returning the object to
   the environment-wide value.
+- **A ConfigMap that cannot be read or parsed leaves the existing overrides in
+  place.** A malformed JSON document, or a deleted ConfigMap, carries no
+  information rather than an empty set of overrides, so nothing is removed until a
+  readable ConfigMap says so. Removing an override means editing the file, not
+  breaking it.
 
 To see which overrides are currently in effect, query:
 

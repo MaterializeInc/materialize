@@ -8,8 +8,11 @@
 // by the Apache License, Version 2.0.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -21,6 +24,7 @@ use mz_build_info::BuildInfo;
 use mz_cloud_provider::CloudProvider;
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
+use mz_dyncfg::ParameterScope;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
@@ -49,6 +53,9 @@ pub struct SystemParameterFrontend {
     build_info: &'static BuildInfo,
     /// Frontend metrics.
     metrics: Metrics,
+    /// The config-sync file as of the last [`SystemParameterFrontend::pull`], or
+    /// `None` before the first one. Never populated for the LaunchDarkly client.
+    config_file: Mutex<Option<CachedConfigFile>>,
 }
 
 #[derive(Derivative)]
@@ -102,61 +109,58 @@ struct ConfigFile {
 }
 
 impl ConfigFile {
-    /// Reads and parses the file at `path`.
+    /// Parses the config-sync file's contents, or `None` if the document is not a
+    /// JSON object.
     ///
-    /// An unreadable or malformed file yields an empty [`ConfigFile`], which
-    /// expresses no opinion on any parameter and so leaves every value alone.
+    /// Individual sections are parsed leniently: a section, object entry, or
+    /// value of the wrong shape is dropped with a warning rather than failing the
+    /// parse, so one bad scoped entry cannot strand the rest of the file.
     ///
-    /// NOTE: One sync tick reads the file once per pass, so up to three times: the
-    /// environment-wide pass plus the cluster and replica passes. A rewrite landing
-    /// between two of those reads leaves that tick's view mixed. Self-correcting,
-    /// since the next tick reconciles the full desired state from its own reads.
-    fn read(path: &Path) -> Self {
-        match fs::read_to_string(path) {
-            Ok(contents) => Self::parse(&contents),
-            Err(e) => {
-                warn!(
-                    "could not read system parameter sync file {}: {e}",
-                    path.display()
-                );
-                Self::default()
-            }
-        }
-    }
-
-    /// Parses the config-sync file's contents.
-    ///
-    /// Lenient throughout: a section, object entry, or value of the wrong shape
-    /// is dropped with a warning rather than failing the parse, so one bad
-    /// scoped entry cannot strand the rest of the file. Only a document that is
-    /// not a JSON object at all yields nothing.
-    fn parse(contents: &str) -> Self {
-        let mut file = Self::default();
-
+    /// A `None` return is "no information about any parameter", which callers must
+    /// keep distinct from a valid but empty document. An empty document is a
+    /// complete desired state of "no scoped overrides", which the reconcile
+    /// applies by durably pruning every override. See
+    /// [`SystemParameterFrontend::has_scoped_desired_state`].
+    fn parse(contents: &str) -> Option<Self> {
         let values: BTreeMap<String, JsonValue> = match serde_json::from_str(contents) {
             Ok(values) => values,
             Err(e) => {
                 warn!("could not parse system parameter sync file: {e}");
-                return file;
+                return None;
             }
         };
 
+        let mut file = Self::default();
         for (key, value) in values {
             match key.as_str() {
                 CLUSTERS_SECTION => {
-                    file.clusters =
-                        as_sections(CLUSTERS_SECTION, |name| format!("cluster {name:?}"), value);
+                    file.clusters = as_object(FilePosition::Section(CLUSTERS_SECTION), value)
+                        .into_iter()
+                        .map(|(cluster, params)| {
+                            let params = as_object(FilePosition::Cluster(&cluster), params);
+                            (cluster, params)
+                        })
+                        .collect();
                 }
                 REPLICAS_SECTION => {
-                    file.replicas = as_object(REPLICAS_SECTION, value)
+                    file.replicas = as_object(FilePosition::Section(REPLICAS_SECTION), value)
                         .into_iter()
                         .map(|(cluster, replicas)| {
-                            let sections = as_sections(
-                                &format!("cluster {cluster:?}"),
-                                |name| format!("replica {cluster:?}.{name:?}"),
-                                replicas,
-                            );
-                            (cluster, sections)
+                            let replicas =
+                                as_object(FilePosition::ClusterReplicas(&cluster), replicas)
+                                    .into_iter()
+                                    .map(|(replica, params)| {
+                                        let params = as_object(
+                                            FilePosition::Replica {
+                                                cluster: &cluster,
+                                                replica: &replica,
+                                            },
+                                            params,
+                                        );
+                                        (replica, params)
+                                    })
+                                    .collect();
+                            (cluster, replicas)
                         })
                         .collect();
                 }
@@ -166,37 +170,64 @@ impl ConfigFile {
             }
         }
 
-        file
+        Some(file)
     }
 }
 
-/// Interprets `value` as a map from object name to that object's parameter map.
+/// The frontend's cached view of the config-sync file.
 ///
-/// `context` names the section for the warning, `entry_context` names one of its
-/// entries by object name.
-fn as_sections(
-    context: &str,
-    entry_context: impl Fn(&str) -> String,
-    value: JsonValue,
-) -> BTreeMap<String, BTreeMap<String, JsonValue>> {
-    as_object(context, value)
-        .into_iter()
-        .map(|(name, params)| {
-            let params = as_object(&entry_context(name.as_str()), params);
-            (name, params)
-        })
-        .collect()
+/// Caching keeps the file off the coordinator loop: create-time scoped resolution
+/// runs the scoped passes inline on the loop that serializes all DDL and query
+/// sequencing, where a synchronous read has no business. That path is
+/// best-effort and re-reconciled by the next sync tick, so a value up to one tick
+/// old is fine there.
+#[derive(Debug)]
+struct CachedConfigFile {
+    /// The contents the cache was built from, or `None` if that read failed.
+    ///
+    /// Compared against the next read so that re-parsing, and every warning the
+    /// file provokes, happen once per change rather than once per tick.
+    contents: Option<String>,
+    /// The parse of [`Self::contents`], or `None` if the read failed or the
+    /// document was not a JSON object.
+    file: Option<Arc<ConfigFile>>,
+}
+
+/// A position in the config-sync file, naming it in a warning about a value of
+/// the wrong shape there.
+enum FilePosition<'a> {
+    /// A reserved top-level section.
+    Section(&'a str),
+    /// One cluster's entry in the `clusters` section.
+    Cluster(&'a str),
+    /// One cluster's entry in the `replicas` section, holding its replicas.
+    ClusterReplicas(&'a str),
+    /// One replica's entry within a cluster's entry in the `replicas` section.
+    Replica { cluster: &'a str, replica: &'a str },
+}
+
+impl fmt::Display for FilePosition<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FilePosition::Section(name) => write!(f, "the {name} section"),
+            FilePosition::Cluster(cluster) => write!(f, "cluster {cluster:?}"),
+            FilePosition::ClusterReplicas(cluster) => {
+                write!(f, "the {REPLICAS_SECTION} entry for cluster {cluster:?}")
+            }
+            FilePosition::Replica { cluster, replica } => {
+                write!(f, "replica {cluster:?}.{replica:?}")
+            }
+        }
+    }
 }
 
 /// Interprets `value` as a JSON object, or warns and yields an empty map.
-///
-/// `context` names the position in the file for the warning.
-fn as_object(context: &str, value: JsonValue) -> BTreeMap<String, JsonValue> {
+fn as_object(position: FilePosition<'_>, value: JsonValue) -> BTreeMap<String, JsonValue> {
     match value {
         JsonValue::Object(map) => map.into_iter().collect(),
         other => {
             warn!(
-                "ignoring {context} in system parameter sync file: expected a JSON object, found {}",
+                "ignoring {position} in system parameter sync file: expected a JSON object, found {}",
                 json_type_name(&other)
             );
             BTreeMap::new()
@@ -292,6 +323,7 @@ impl SystemParameterFrontend {
                 env_id: sync_config.env_id.clone(),
                 build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
+                config_file: Mutex::new(None),
             }),
             SystemParameterSyncClientConfig::LaunchDarkly {
                 sdk_key,
@@ -310,6 +342,7 @@ impl SystemParameterFrontend {
                 build_info: sync_config.build_info,
                 metrics: sync_config.metrics.clone(),
                 key_map: sync_config.key_map.clone(),
+                config_file: Mutex::new(None),
             }),
         }
     }
@@ -318,13 +351,16 @@ impl SystemParameterFrontend {
     /// [SystemParameterFrontend] and return `true` iff at least one parameter
     /// value was modified.
     pub fn pull(&self, params: &mut SynchronizedParameters) -> bool {
-        // Read the file once per pull, not once per parameter: re-reading it for
-        // every synced parameter would also let a rewrite land mid-loop and be
-        // observed as a torn read. Left empty, and never consulted, for the
-        // LaunchDarkly client.
+        // The file is read exactly once per tick, here, and the scoped passes read
+        // the cache this refreshes. Reading it per parameter would let a rewrite
+        // land mid-loop and be observed as a torn read, and reading it in the
+        // scoped passes would put a synchronous read on the coordinator loop,
+        // which resolves a new object's overrides at create time.
         let file = match &self.client {
-            SystemParameterFrontendClient::File { path } => ConfigFile::read(path),
-            SystemParameterFrontendClient::LaunchDarkly { .. } => ConfigFile::default(),
+            SystemParameterFrontendClient::File { path } => {
+                self.refresh_config_file(path, fs::read_to_string(path), params)
+            }
+            SystemParameterFrontendClient::LaunchDarkly { .. } => None,
         };
 
         let mut changed = false;
@@ -344,9 +380,11 @@ impl SystemParameterFrontend {
                         ld::FlagValue::Json(v) => v.to_string(),
                     }
                 }
+                // A parameter the file does not mention, and every parameter when
+                // the file could not be read or parsed, keeps its current value.
                 SystemParameterFrontendClient::File { .. } => file
-                    .environment
-                    .get(flag_name)
+                    .as_ref()
+                    .and_then(|file| file.environment.get(flag_name))
                     .and_then(json_param_value)
                     .unwrap_or_else(|| params.get(param_name)),
             };
@@ -375,6 +413,145 @@ impl SystemParameterFrontend {
             .map_or(param_name, String::as_str)
     }
 
+    /// Refreshes the cached config-sync file from `read`, the outcome of reading
+    /// it at `path`, and returns the new parse.
+    ///
+    /// Everything the file is diagnosed for, both the shape warnings the parse
+    /// emits and the scoped-section diagnostics, is reported here and only when
+    /// the contents changed. A standing mistake in the file would otherwise be
+    /// logged on every tick, and the sync loop ticks once a second.
+    fn refresh_config_file(
+        &self,
+        path: &Path,
+        read: io::Result<String>,
+        params: &SynchronizedParameters,
+    ) -> Option<Arc<ConfigFile>> {
+        let mut cache = self
+            .config_file
+            .lock()
+            .expect("config file cache lock poisoned");
+
+        if let Some(cached) = &*cache {
+            if cached.contents.as_deref() == read.as_deref().ok() {
+                return cached.file.clone();
+            }
+        }
+
+        let contents = match read {
+            Ok(contents) => Some(contents),
+            Err(e) => {
+                warn!(
+                    "could not read system parameter sync file {}: {e}",
+                    path.display()
+                );
+                None
+            }
+        };
+        let file = contents
+            .as_deref()
+            .and_then(ConfigFile::parse)
+            .map(Arc::new);
+        if let Some(file) = &file {
+            for diagnostic in self.scoped_section_diagnostics(file, params) {
+                warn!("{diagnostic}");
+            }
+        }
+        *cache = Some(CachedConfigFile {
+            contents,
+            file: file.clone(),
+        });
+
+        file
+    }
+
+    /// The config-sync file as of the last [`Self::pull`], or `None` if no read
+    /// of it has succeeded.
+    fn cached_config_file(&self) -> Option<Arc<ConfigFile>> {
+        self.config_file
+            .lock()
+            .expect("config file cache lock poisoned")
+            .as_ref()
+            .and_then(|cached| cached.file.clone())
+    }
+
+    /// Whether the frontend knows the desired state of the scoped parameters.
+    ///
+    /// `false` when the config-sync file has never been read and parsed
+    /// successfully, which includes a file that is missing (the ConfigMap volume
+    /// is mounted optional, so it can disappear), unreadable, or not a JSON
+    /// object.
+    ///
+    /// The scoped desired state is complete: the reconcile prunes every override
+    /// absent from it. A caller must therefore skip the reconcile while this is
+    /// `false` rather than treat "no information" as "no overrides", which would
+    /// durably drop every scoped override on a typo and restore it once the file
+    /// is fixed. Always `true` for LaunchDarkly, whose evaluation falls back to
+    /// the environment-wide value when it has nothing to say.
+    pub fn has_scoped_desired_state(&self) -> bool {
+        match &self.client {
+            SystemParameterFrontendClient::LaunchDarkly { .. } => true,
+            SystemParameterFrontendClient::File { .. } => self.cached_config_file().is_some(),
+        }
+    }
+
+    /// The problems with `file`'s scoped sections that an operator can act on: a
+    /// key that is not a parameter scopable at that position, and a value that
+    /// does not parse for its parameter's type. Resolution drops both silently,
+    /// and nothing surfaces a parameter's scope from SQL, so without this an
+    /// operator has nothing to debug against.
+    ///
+    /// Returned rather than logged so that [`Self::refresh_config_file`] can log
+    /// them only when the file changes.
+    fn scoped_section_diagnostics(
+        &self,
+        file: &ConfigFile,
+        params: &SynchronizedParameters,
+    ) -> Vec<String> {
+        let mut diagnostics = Vec::new();
+
+        let cluster_params = self.scopable_params(params, ParameterScope::Cluster);
+        for (cluster, section) in &file.clusters {
+            section_diagnostics(
+                section,
+                params,
+                &cluster_params,
+                "cluster-scoped",
+                FilePosition::Cluster(cluster),
+                &mut diagnostics,
+            );
+        }
+
+        let replica_params = self.scopable_params(params, ParameterScope::Replica);
+        for (cluster, replicas) in &file.replicas {
+            for (replica, section) in replicas {
+                section_diagnostics(
+                    section,
+                    params,
+                    &replica_params,
+                    "replica-scoped",
+                    FilePosition::Replica { cluster, replica },
+                    &mut diagnostics,
+                );
+            }
+        }
+
+        diagnostics
+    }
+
+    /// The synced parameters that declare `scope`, keyed by the name a config-sync
+    /// file section spells them with.
+    fn scopable_params<'a>(
+        &'a self,
+        params: &SynchronizedParameters,
+        scope: ParameterScope,
+    ) -> BTreeMap<&'a str, &'static str> {
+        params
+            .synchronized_with_scope(scope)
+            .into_iter()
+            .map(|param_name| (self.external_name(param_name), param_name))
+            .collect()
+    }
+
     /// Evaluates the replica-local scoped parameters for each given replica and
     /// returns, per replica, the parameter values that differ from the
     /// environment-wide value held in `params`.
@@ -396,13 +573,15 @@ impl SystemParameterFrontend {
 
         let client = match &self.client {
             SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
-            SystemParameterFrontendClient::File { path } => {
-                return self.file_replica_overrides(
-                    &ConfigFile::read(path),
-                    params,
-                    param_names,
-                    replicas,
-                );
+            // Resolved from the cache `pull` refreshes, so this does no I/O: the
+            // create path calls it on the coordinator loop. An empty result here
+            // means "no overrides", so a caller reconciling the full desired state
+            // must first check `has_scoped_desired_state`.
+            SystemParameterFrontendClient::File { .. } => {
+                let Some(file) = self.cached_config_file() else {
+                    return out;
+                };
+                return self.file_replica_overrides(&file, params, param_names, replicas);
             }
         };
 
@@ -454,13 +633,12 @@ impl SystemParameterFrontend {
 
         let client = match &self.client {
             SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
-            SystemParameterFrontendClient::File { path } => {
-                return self.file_cluster_overrides(
-                    &ConfigFile::read(path),
-                    params,
-                    param_names,
-                    clusters,
-                );
+            // See the file arm of `pull_replica_overrides`.
+            SystemParameterFrontendClient::File { .. } => {
+                let Some(file) = self.cached_config_file() else {
+                    return out;
+                };
+                return self.file_cluster_overrides(&file, params, param_names, clusters);
             }
         };
 
@@ -540,12 +718,7 @@ impl SystemParameterFrontend {
             let Some(section) = file.clusters.get(name) else {
                 continue;
             };
-            let overrides = self.file_section_overrides(
-                section,
-                params,
-                param_names,
-                &format!("cluster {name:?}"),
-            );
+            let overrides = self.file_section_overrides(section, params, param_names);
             if !overrides.is_empty() {
                 out.insert(cluster.cluster_id, overrides);
             }
@@ -577,12 +750,7 @@ impl SystemParameterFrontend {
             else {
                 continue;
             };
-            let overrides = self.file_section_overrides(
-                section,
-                params,
-                param_names,
-                &format!("replica {cluster_name:?}.{replica_name:?}"),
-            );
+            let overrides = self.file_section_overrides(section, params, param_names);
             if !overrides.is_empty() {
                 out.insert(replica.replica_id, overrides);
             }
@@ -592,16 +760,18 @@ impl SystemParameterFrontend {
 
     /// Resolves one object's config-sync file section into its scoped overrides,
     /// applying the same parseability and differs-from-environment rules as the
-    /// LaunchDarkly path. `object` names the section in warnings.
+    /// LaunchDarkly path.
     ///
     /// A parameter the section omits carries no scoped opinion, so it is absent
-    /// from the result and resolves to the environment-wide value.
+    /// from the result and resolves to the environment-wide value. Silent, as this
+    /// runs on every tick and for every create: the operator-facing diagnostics
+    /// are [`Self::scoped_section_diagnostics`], reported once per change to the
+    /// file.
     fn file_section_overrides(
         &self,
         section: &BTreeMap<String, JsonValue>,
         params: &SynchronizedParameters,
         param_names: &[&'static str],
-        object: &str,
     ) -> BTreeMap<String, String> {
         let mut overrides = BTreeMap::new();
         for &param_name in param_names {
@@ -613,21 +783,49 @@ impl SystemParameterFrontend {
             };
 
             let base = params.get(param_name);
-            match classify_scoped_value(params, param_name, &base, &value) {
-                ScopedValue::Override => {
-                    overrides.insert(param_name.to_string(), value);
-                }
-                ScopedValue::MatchesEnvironment => {}
-                // Unlike LaunchDarkly targeting, the file is authored by this
-                // environment's operator, so a typo is theirs to fix and worth
-                // surfacing.
-                ScopedValue::Unparseable => warn!(
-                    "ignoring unparseable value {value:?} for system parameter \
-                     {param_name} on {object} in the system parameter sync file"
-                ),
+            if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Override {
+                overrides.insert(param_name.to_string(), value);
             }
         }
         overrides
+    }
+}
+
+/// Appends the diagnostics for one object's config-sync file section to
+/// `diagnostics`.
+///
+/// `scopable` holds the parameters that accept a value at this position, keyed by
+/// the name the file spells them with, and `scope` names that scope for the
+/// message. A key outside `scopable` is a parameter of another scope, or a
+/// misspelling: either way resolution never consults it.
+fn section_diagnostics(
+    section: &BTreeMap<String, JsonValue>,
+    params: &SynchronizedParameters,
+    scopable: &BTreeMap<&str, &'static str>,
+    scope: &str,
+    position: FilePosition<'_>,
+    diagnostics: &mut Vec<String>,
+) {
+    for (name, value) in section {
+        let Some(&param_name) = scopable.get(name.as_str()) else {
+            diagnostics.push(format!(
+                "ignoring {name} for {position} in the system parameter sync file: \
+                 not a {scope} system parameter"
+            ));
+            continue;
+        };
+        // `null` expresses no opinion rather than a value, so there is nothing to
+        // parse.
+        let Some(value) = json_param_value(value) else {
+            continue;
+        };
+        let base = params.get(param_name);
+        if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Unparseable {
+            diagnostics.push(format!(
+                "ignoring unparseable value {value:?} for system parameter {param_name} \
+                 on {position} in the system parameter sync file"
+            ));
+        }
     }
 }
 
@@ -958,7 +1156,6 @@ fn ld_ctx(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use futures::StreamExt;
@@ -978,18 +1175,27 @@ mod tests {
     /// A replica-local `bool` parameter whose environment-wide default is `on`.
     const REPLICA_PARAM: &str = "enable_lgalloc";
 
-    /// A file-backed frontend. The scoped tests below drive resolution from a
-    /// pre-parsed [`ConfigFile`], so the path is never read.
+    /// A file-backed frontend. The tests below drive it from contents they pass
+    /// in, so its path is never read.
     fn file_frontend() -> SystemParameterFrontend {
         SystemParameterFrontend {
             client: SystemParameterFrontendClient::File {
-                path: PathBuf::from("/nonexistent/system-params.json"),
+                path: CONFIG_PATH.into(),
             },
             key_map: BTreeMap::new(),
             env_id: env_id(),
             build_info: &DUMMY_BUILD_INFO,
             metrics: Metrics::register_into(&MetricsRegistry::new()),
+            config_file: Mutex::new(None),
         }
+    }
+
+    /// The path a [`file_frontend`] reports in its warnings. Never opened.
+    const CONFIG_PATH: &str = "/nonexistent/system-params.json";
+
+    /// Parses a document the test knows to be a JSON object.
+    fn parse(contents: &str) -> ConfigFile {
+        ConfigFile::parse(contents).expect("document is a JSON object")
     }
 
     fn cluster_ctx(id: u64, name: &str) -> ClusterEvalContext {
@@ -1037,7 +1243,7 @@ mod tests {
     /// map, the flat form a config map without scoped sections takes.
     #[mz_ore::test]
     fn test_parse_flat_file_is_environment_wide() {
-        let file = ConfigFile::parse(
+        let file = parse(
             r#"{
                 "max_connections": 1000,
                 "allowed_cluster_replica_sizes": "'25cc', '50cc'",
@@ -1066,13 +1272,13 @@ mod tests {
             Some("false")
         );
         // An explicit `null` expresses no opinion, leaving the value alone.
-        let null = ConfigFile::parse(r#"{"max_connections": null}"#);
+        let null = parse(r#"{"max_connections": null}"#);
         assert_eq!(json_param_value(&null.environment["max_connections"]), None);
     }
 
     #[mz_ore::test]
     fn test_parse_scoped_sections() {
-        let file = ConfigFile::parse(
+        let file = parse(
             r#"{
                 "enable_lgalloc": false,
                 "clusters": {"prod": {"enable_eager_delta_joins": true}},
@@ -1101,7 +1307,7 @@ mod tests {
     /// strand the rest of the file.
     #[mz_ore::test]
     fn test_parse_ignores_malformed_sections() {
-        let file = ConfigFile::parse(
+        let file = parse(
             r#"{
                 "max_connections": 1000,
                 "clusters": 7,
@@ -1120,20 +1326,21 @@ mod tests {
         );
     }
 
-    /// A document that is not a JSON object at all yields nothing, leaving every
-    /// parameter at its current value.
+    /// A document that is not a JSON object at all carries no information, which
+    /// is distinct from an empty document. See
+    /// `test_read_failure_keeps_scoped_overrides`.
     #[mz_ore::test]
     fn test_parse_rejects_non_object_document() {
-        assert_eq!(ConfigFile::parse("[]"), ConfigFile::default());
-        assert_eq!(ConfigFile::parse("not json"), ConfigFile::default());
+        assert_eq!(ConfigFile::parse("[]"), None);
+        assert_eq!(ConfigFile::parse("not json"), None);
+        assert_eq!(ConfigFile::parse("{}"), Some(ConfigFile::default()));
     }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_file_cluster_section_applied() {
         let params = SynchronizedParameters::default();
-        let file =
-            ConfigFile::parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
+        let file = parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
 
         let out = file_frontend().file_cluster_overrides(
             &file,
@@ -1153,8 +1360,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_file_replica_section_applied() {
         let params = SynchronizedParameters::default();
-        let file =
-            ConfigFile::parse(r#"{"replicas": {"prod": {"r1": {"enable_lgalloc": false}}}}"#);
+        let file = parse(r#"{"replicas": {"prod": {"r1": {"enable_lgalloc": false}}}}"#);
 
         let out = file_frontend().file_replica_overrides(
             &file,
@@ -1185,7 +1391,7 @@ mod tests {
     fn test_file_unknown_object_names_ignored() {
         let params = SynchronizedParameters::default();
         let frontend = file_frontend();
-        let file = ConfigFile::parse(
+        let file = parse(
             r#"{
                 "clusters": {"gone": {"enable_eager_delta_joins": true}},
                 "replicas": {"gone": {"r1": {"enable_lgalloc": false}}}
@@ -1216,7 +1422,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_file_unparseable_value_dropped() {
         let params = SynchronizedParameters::default();
-        let file = ConfigFile::parse(
+        let file = parse(
             r#"{"clusters": {"prod": {
                 "enable_eager_delta_joins": "maybe"
             }}}"#,
@@ -1238,13 +1444,136 @@ mod tests {
     fn test_file_value_matching_environment_dropped() {
         let params = SynchronizedParameters::default();
         assert_eq!(params.get(CLUSTER_PARAM), "off");
-        let file =
-            ConfigFile::parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": false}}}"#);
+        let file = parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": false}}}"#);
 
         assert!(
             file_frontend()
                 .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")])
                 .is_empty()
+        );
+    }
+
+    /// A whole-document failure, an unreadable file or a document that is not a
+    /// JSON object, must express "no information", not "no overrides": the scoped
+    /// desired state is complete, so treating a failure as an empty state would
+    /// durably prune every scoped override and restore it once the file is fixed.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_read_failure_keeps_scoped_overrides() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+        let clusters = [cluster_ctx(1, "prod")];
+        let scoped_file = r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#;
+
+        // A readable file establishes the override.
+        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(scoped_file.to_string()), &params);
+        assert!(frontend.has_scoped_desired_state());
+        assert_eq!(
+            frontend.pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters),
+            BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
+        );
+
+        for failure in [
+            Err(io::Error::from(io::ErrorKind::NotFound)),
+            Ok("}not json{".to_string()),
+        ] {
+            frontend.refresh_config_file(Path::new(CONFIG_PATH), failure, &params);
+            // The reconcile is skipped wholesale on this signal, which is what
+            // leaves the existing overrides in place. The empty resolution below
+            // would prune them if it were reconciled.
+            assert!(!frontend.has_scoped_desired_state());
+            assert!(
+                frontend
+                    .pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters)
+                    .is_empty()
+            );
+
+            // A readable file again resolves as before.
+            frontend.refresh_config_file(
+                Path::new(CONFIG_PATH),
+                Ok(scoped_file.to_string()),
+                &params,
+            );
+            assert!(frontend.has_scoped_desired_state());
+        }
+
+        // An empty document, on the other hand, is a complete desired state of
+        // "no overrides", so it does prune.
+        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok("{}".to_string()), &params);
+        assert!(frontend.has_scoped_desired_state());
+        assert!(
+            frontend
+                .pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters)
+                .is_empty()
+        );
+    }
+
+    /// Unchanged contents reuse the cached parse, so the scoped passes do no I/O
+    /// and nothing the file is diagnosed for is reported twice.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_config_file_cached_until_it_changes() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+        let read = |contents: &str| {
+            frontend
+                .refresh_config_file(Path::new(CONFIG_PATH), Ok(contents.to_string()), &params)
+                .expect("document is a JSON object")
+        };
+
+        let first = read(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
+        let again = read(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
+        assert!(Arc::ptr_eq(&first, &again), "unchanged file was re-parsed");
+
+        let changed = read(r#"{"clusters": {"prod": {"enable_eager_delta_joins": false}}}"#);
+        assert!(
+            !Arc::ptr_eq(&first, &changed),
+            "changed file was not parsed"
+        );
+    }
+
+    /// A section key that is not a parameter scopable there is dropped by
+    /// resolution, so it is diagnosed instead. Nothing surfaces a parameter's
+    /// scope from SQL, which leaves an operator nothing else to debug against.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_diagnoses_unscopable_section_keys() {
+        let params = SynchronizedParameters::default();
+        let file = parse(&format!(
+            r#"{{
+                "clusters": {{"prod": {{
+                    "{REPLICA_PARAM}": false,
+                    "enabel_eager_delta_joins": true,
+                    "{CLUSTER_PARAM}": "maybe"
+                }}}},
+                "replicas": {{"prod": {{"r1": {{"{CLUSTER_PARAM}": true}}}}}}
+            }}"#
+        ));
+
+        assert_eq!(
+            file_frontend().scoped_section_diagnostics(&file, &params),
+            // Ordered by section, then by key within a section.
+            vec![
+                // A misspelled parameter name.
+                "ignoring enabel_eager_delta_joins for cluster \"prod\" in the system \
+                 parameter sync file: not a cluster-scoped system parameter"
+                    .to_string(),
+                // A value that does not parse for the parameter's type.
+                format!(
+                    "ignoring unparseable value \"maybe\" for system parameter {CLUSTER_PARAM} \
+                     on cluster \"prod\" in the system parameter sync file"
+                ),
+                // A replica-scoped parameter in a `clusters` section.
+                format!(
+                    "ignoring {REPLICA_PARAM} for cluster \"prod\" in the system parameter \
+                     sync file: not a cluster-scoped system parameter"
+                ),
+                // A cluster-scoped parameter in a `replicas` section.
+                format!(
+                    "ignoring {CLUSTER_PARAM} for replica \"prod\".\"r1\" in the system \
+                     parameter sync file: not a replica-scoped system parameter"
+                ),
+            ]
         );
     }
 

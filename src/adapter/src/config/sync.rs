@@ -108,6 +108,16 @@ async fn sync_scoped_params(
     frontend: &SystemParameterFrontend,
     params: &SynchronizedParameters,
 ) {
+    // The desired state below is complete: every override absent from it is
+    // pruned. A frontend with no information about the scoped parameters (a
+    // config-sync file that is missing, unreadable, or not a JSON object) would
+    // therefore have this reconcile durably drop every override, and restore it
+    // once the file is readable again. Skip instead, leaving the current overrides
+    // in place.
+    if !frontend.has_scoped_desired_state() {
+        return;
+    }
+
     let catalog = client.catalog_snapshot_expensive().await;
 
     // Push the desired state to the coordinator, which holds the working copy
