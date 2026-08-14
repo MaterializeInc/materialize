@@ -234,7 +234,7 @@ class Indexes(Generator):
 
 
 class IndexedViews(Generator):
-    MAX_COUNT = 1000  # TODO: Bump when https://github.com/MaterializeInc/database-issues/issues/9307 is fixed
+    MAX_COUNT = 1000  # TODO: Bump when DB-196 is fixed
 
     @classmethod
     def body(cls) -> None:
