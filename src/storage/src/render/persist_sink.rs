@@ -958,7 +958,16 @@ fn write_batches<'scope>(
                     //
                     // The builder is opened on the first surviving update rather than up front,
                     // because every stashed timestamp can consolidate to nothing and a batch with
-                    // no updates has no data bounds to register.
+                    // no updates has no largest timestamp to register.
+                    //
+                    // Its lower is this description's own lower, not `operator_batch_lower`. Every
+                    // timestamp staged here passed `covered`, so the description's lower is at or
+                    // below all of them. `operator_batch_lower` is only safe for a builder opened
+                    // before the covering description is known: several descriptions can be ready
+                    // in one pass, they are processed in `in_flight_batches` order rather than by
+                    // lower, and each one processed advances `operator_batch_lower` to its own
+                    // upper. A description handled after a later sibling would otherwise build
+                    // with a lower already past the updates it owns.
                     let stashed_timestamps: Vec<_> =
                         raw_stash.keys().copied().filter(covered).collect();
                     let mut coalesced: Option<SourceBatchBuilder> = None;
@@ -967,9 +976,7 @@ fn write_batches<'scope>(
                         raw_stash_bytes -= entry.bytes;
                         for (row, diff) in entry.drain() {
                             let builder = coalesced.get_or_insert_with(|| {
-                                BatchBuilderAndMetadata::new(
-                                    write.builder(operator_batch_lower.clone()),
-                                )
+                                BatchBuilderAndMetadata::new(write.builder(batch_lower.clone()))
                             });
                             stage_update(builder, row, ts, diff).await;
                         }
@@ -1826,18 +1833,47 @@ mod tests {
     }
 
     /// Appends every emitted batch in one `compare_and_append` over `[lower, upper)`, then reads
-    /// the shard back and returns the summed diffs.
+    /// the shard back as of `as_of` and returns the summed diffs.
+    ///
+    /// Each entry in `appends` is one `compare_and_append` over `[lower, upper)`, applied in order.
+    /// Batches written for different descriptions need separate calls, because persist rejects a
+    /// batch whose upper is below the append upper. A `lower` above a batch's own lower registers
+    /// it truncated, which is what the sink relies on when a concurrent writer has already claimed
+    /// part of the range.
     ///
     /// This is where a batch whose parts reach outside their registered bounds is caught, so the
-    /// tests append for real rather than stopping at what `write_batches` emitted. A `lower` above
-    /// the batches' own lower registers them truncated, which is what the sink relies on when a
-    /// concurrent writer has already claimed part of the range.
-    async fn append_and_read_back(
-        target: &CollectionMetadata,
-        persist_clients: &PersistClientCache,
+    /// tests append for real rather than stopping at what `write_batches` emitted.
+    /// A single `compare_and_append` over `[lower, upper)` carrying every emitted batch.
+    fn one_append(
         emitted: Vec<(EmittedBatch, ProtoBatch)>,
         lower: u64,
         upper: u64,
+    ) -> Vec<(u64, u64, Vec<ProtoBatch>)> {
+        vec![(lower, upper, emitted.into_iter().map(|(_, p)| p).collect())]
+    }
+
+    /// One `compare_and_append` per description the batches were written for, ascending by lower.
+    fn append_per_description(
+        emitted: Vec<(EmittedBatch, ProtoBatch)>,
+    ) -> Vec<(u64, u64, Vec<ProtoBatch>)> {
+        let mut by_desc: BTreeMap<(u64, u64), Vec<ProtoBatch>> = BTreeMap::new();
+        for (batch, proto) in emitted {
+            by_desc
+                .entry((batch.lower, batch.upper))
+                .or_default()
+                .push(proto);
+        }
+        by_desc
+            .into_iter()
+            .map(|((lower, upper), protos)| (lower, upper, protos))
+            .collect()
+    }
+
+    async fn append_and_read_back(
+        target: &CollectionMetadata,
+        persist_clients: &PersistClientCache,
+        appends: Vec<(u64, u64, Vec<ProtoBatch>)>,
+        as_of: u64,
     ) -> i64 {
         let persist_client = persist_clients
             .open(target.persist_location.clone())
@@ -1858,18 +1894,25 @@ mod tests {
             "part bounds validation is off, so this append proves nothing about batch bounds"
         );
 
-        let mut batches: Vec<_> = emitted
-            .into_iter()
-            .map(|(_, proto)| write.batch_from_transmittable_batch(proto))
-            .collect();
-        let mut to_append: Vec<_> = batches.iter_mut().collect();
-        write
-            .compare_and_append_batch(&mut to_append[..], frontier(lower), frontier(upper), true)
-            .await
-            .expect("invalid usage")
-            .expect("upper mismatch");
+        for (lower, upper, protos) in appends {
+            let mut batches: Vec<_> = protos
+                .into_iter()
+                .map(|proto| write.batch_from_transmittable_batch(proto))
+                .collect();
+            let mut to_append: Vec<_> = batches.iter_mut().collect();
+            write
+                .compare_and_append_batch(
+                    &mut to_append[..],
+                    frontier(lower),
+                    frontier(upper),
+                    true,
+                )
+                .await
+                .expect("invalid usage")
+                .expect("upper mismatch");
 
-        assert_eq!(write.fetch_recent_upper().await, &frontier(upper));
+            assert_eq!(write.fetch_recent_upper().await, &frontier(upper));
+        }
 
         let mut read = persist_client
             .open_leased_reader::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
@@ -1882,11 +1925,73 @@ mod tests {
             .await
             .expect("invalid usage");
         let contents = read
-            .snapshot_and_fetch(frontier(upper - 1))
+            .snapshot_and_fetch(frontier(as_of))
             .await
             .expect("since <= as_of");
 
         contents.iter().map(|(_, _, d)| *d).sum()
+    }
+
+    /// Several descriptions can become ready in the same pass, and they are processed in
+    /// `in_flight_batches` order rather than by lower. Each one processed advances
+    /// `operator_batch_lower` to its own upper, so a description handled after a later sibling must
+    /// still build from its own lower to take the updates it owns.
+    ///
+    /// NOTE: `in_flight_batches` is a `HashMap`, so this only lands on the bad order some of the
+    /// time. Enough descriptions are used here that an all-ascending pass is unlikely, and the fix
+    /// makes correctness independent of the order either way.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_handles_descriptions_ready_in_one_pass() {
+        const DESCRIPTIONS: u64 = 6;
+        const DONE: u64 = DESCRIPTIONS * 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // One update inside each of the tiling descriptions [0,2), [2,4), ... None of them is ready
+        // until the frontier passes every upper, so they all come due together.
+        let mut script = vec![];
+        for i in 0..DESCRIPTIONS {
+            script.push(Step::Updates(i * 2 + 1, 1));
+        }
+        for i in 0..DESCRIPTIONS {
+            script.push(Step::Description(i * 2, i * 2 + 2));
+        }
+        script.push(Step::AdvanceTo(DONE));
+
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            1 << 20,
+            script,
+        );
+
+        assert_eq!(
+            emitted.len(),
+            usize::cast_from(DESCRIPTIONS),
+            "one batch per description, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        for (batch, _) in &emitted {
+            assert!(
+                batch.lower <= batch.data_max_ts && batch.data_max_ts < batch.upper,
+                "batch {batch:?} holds data outside the description it was written for"
+            );
+        }
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            append_per_description(emitted),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(DESCRIPTIONS).expect("small"),
+            "every update should be readable exactly once"
+        );
     }
 
     /// Advances the shard upper to `upper` without writing data, standing in for a concurrent
@@ -1920,6 +2025,9 @@ mod tests {
             .await
             .expect("invalid usage")
             .expect("upper mismatch");
+
+        // Otherwise the handle's heartbeat task outlives the test and nextest reports a leak.
+        write.expire().await;
     }
 
     /// A batch spanning many timestamps stays usable when a concurrent writer has raised the shard
@@ -1966,8 +2074,13 @@ mod tests {
 
         // Append the straddling batch under the raised lower, as the sink does after an
         // `UpperMismatch` cuts the description down.
-        let total =
-            append_and_read_back(&target, &persist_clients, emitted, RAISED_LOWER, DONE).await;
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, RAISED_LOWER, DONE),
+            DONE - 1,
+        )
+        .await;
 
         assert_eq!(
             total,
@@ -2021,7 +2134,13 @@ mod tests {
             "only the surviving row should reach the batch"
         );
 
-        let total = append_and_read_back(&target, &persist_clients, emitted, 0, DONE).await;
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
         assert_eq!(total, 1, "the shard should hold exactly the surviving row");
     }
 
@@ -2110,7 +2229,13 @@ mod tests {
             }
         );
 
-        let total = append_and_read_back(&target, &persist_clients, emitted, 0, DONE).await;
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
         assert_eq!(
             total,
             i64::try_from(SNAPSHOT_ROWS).expect("small")
@@ -2158,7 +2283,13 @@ mod tests {
         let data_times: Vec<_> = emitted.iter().map(|(b, _)| b.data_max_ts).collect();
         assert_eq!(data_times, (1..=STALL_TIMES + 1).collect::<Vec<_>>());
 
-        let total = append_and_read_back(&target, &persist_clients, emitted, 0, DONE).await;
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
         assert_eq!(
             total,
             i64::try_from(SNAPSHOT_ROWS).expect("small")
