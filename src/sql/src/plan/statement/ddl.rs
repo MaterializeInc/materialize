@@ -4254,8 +4254,11 @@ generate_extracted_config!(CreateMetricSinkOption, (Prefix, String));
 ///
 /// The sink prepends this to every name it publishes, so `prefix + name` must stay a legal
 /// family name (`[a-zA-Z_:][a-zA-Z0-9_:]*`, the same grammar the runtime checks each row's
-/// `metric_name` against).
+/// `metric_name` against). The prefix must therefore be at least one character long.
 fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
+    if prefix.is_empty() {
+        return Err(sql_err!("metric sink prefix must not be empty"));
+    }
     let mut chars = prefix.chars();
     let valid = match chars.next() {
         Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {

@@ -114,7 +114,7 @@ CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = '9bad')
 statement error metric sink prefix "has-a-dash" is not a valid start of a Prometheus metric name
 CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = 'has-a-dash')
 
-statement error metric sink prefix "" is not a valid start of a Prometheus metric name
+statement error metric sink prefix must not be empty
 CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = '')
 
 # Prefixes on one cluster have to be prefix-free, not merely distinct: `app_`
@@ -284,6 +284,47 @@ CREATE METRIC SINK ms FROM raw WITH (PREFIX = 'ms_')
 
 statement ok
 DROP METRIC SINK ms
+
+# A metric sink is never the subject of a rename, but it is a bystander of every
+# rename of the relation it reads or of the schema it lives in. Both rewrite its
+# stored `create_sql` so the SQL still resolves on boot, and both run
+# synchronously during the ALTER.
+
+statement ok
+CREATE VIEW ms_rename_src AS SELECT * FROM raw
+
+statement ok
+CREATE SCHEMA ms_rename_schema
+
+statement ok
+CREATE METRIC SINK ms_rename_schema.rsink FROM ms_rename_src WITH (PREFIX = 'ren_')
+
+statement ok
+ALTER VIEW ms_rename_src RENAME TO ms_rename_src2
+
+statement ok
+ALTER SCHEMA ms_rename_schema RENAME TO ms_rename_schema2
+
+# Both rewrites landed in the stored SQL, which is what boot re-parses.
+
+simple conn=mz_system,user=mz_system
+SELECT data->'value'->'definition'->'V1'->>'create_sql' LIKE '%"ms_rename_schema2"."rsink"%FROM%"ms_rename_src2"%'
+FROM mz_internal.mz_catalog_raw
+WHERE data->>'kind' = 'Item' AND data->'value'->>'name' = 'rsink';
+----
+t
+COMPLETE 1
+
+# And the FROM edge is still tracked under the new names.
+
+statement error cannot drop view "ms_rename_src2": still depended upon by metric sink "ms_rename_schema2.rsink"
+DROP VIEW ms_rename_src2
+
+statement ok
+DROP SCHEMA ms_rename_schema2 CASCADE
+
+statement ok
+DROP VIEW ms_rename_src2
 
 # A metric sink republishes the FROM relation's rows, so it takes read
 # privileges on the source like `CREATE SINK`, not ownership of it like

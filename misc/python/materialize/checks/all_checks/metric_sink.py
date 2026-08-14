@@ -20,7 +20,7 @@ class MetricSink(Check):
     and rebuild the dependency edge to the relation it reads."""
 
     def _can_run(self, e: Executor) -> bool:
-        return self.base_version >= MzVersion.parse_mz("v26.38.0-dev")
+        return self.base_version >= MzVersion.parse_mz("v26.39.0-dev")
 
     def initialize(self) -> Testdrive:
         return Testdrive(dedent("""
@@ -30,7 +30,9 @@ class MetricSink(Check):
 
                 > CREATE VIEW metric_sink_view AS SELECT * FROM metric_sink_table
 
-                > CREATE METRIC SINK metric_sink_one FROM metric_sink_view WITH (PREFIX = 'one_')
+                > CREATE SCHEMA metric_sink_schema
+
+                > CREATE METRIC SINK metric_sink_schema.metric_sink_one FROM metric_sink_view WITH (PREFIX = 'one_')
                 """))
 
     def manipulate(self) -> list[Testdrive]:
@@ -46,6 +48,13 @@ class MetricSink(Check):
                 > INSERT INTO metric_sink_table VALUES ('c', 'gauge', '{}', 3, 'help c')
 
                 > CREATE METRIC SINK IF NOT EXISTS metric_sink_three FROM metric_sink_view WITH (PREFIX = 'three_')
+
+                # A sink is never the subject of a rename, but it is a bystander of every
+                # rename of the relation it reads or of the schema it lives in, and both
+                # rewrite its `create_sql`. Boot has to re-parse what the rewrite produced.
+                > ALTER VIEW metric_sink_view RENAME TO metric_sink_view_renamed
+
+                > ALTER SCHEMA metric_sink_schema RENAME TO metric_sink_schema_renamed
                 """,
             ]
         ]
@@ -61,19 +70,20 @@ class MetricSink(Check):
         # current probe is a proxy: it confirms the catalog item was re-parsed on
         # boot without needing a system connection.
         return Testdrive(dedent("""
-                ! CREATE METRIC SINK metric_sink_one FROM metric_sink_view WITH (PREFIX = 'one_')
-                contains:metric sink "materialize.public.metric_sink_one" already exists
+                ! CREATE METRIC SINK metric_sink_schema_renamed.metric_sink_one FROM metric_sink_view_renamed WITH (PREFIX = 'one_')
+                contains:metric sink "materialize.metric_sink_schema_renamed.metric_sink_one" already exists
 
-                ! CREATE METRIC SINK metric_sink_two FROM metric_sink_view WITH (PREFIX = 'two_')
+                ! CREATE METRIC SINK metric_sink_two FROM metric_sink_view_renamed WITH (PREFIX = 'two_')
                 contains:metric sink "materialize.public.metric_sink_two" already exists
 
-                ! CREATE METRIC SINK metric_sink_three FROM metric_sink_view WITH (PREFIX = 'three_')
+                ! CREATE METRIC SINK metric_sink_three FROM metric_sink_view_renamed WITH (PREFIX = 'three_')
                 contains:metric sink "materialize.public.metric_sink_three" already exists
 
-                # The FROM edge came back too, so the view is still pinned.
-                ! DROP VIEW metric_sink_view
+                # The FROM edge came back too, so the view is still pinned, under the
+                # name the rename gave it.
+                ! DROP VIEW metric_sink_view_renamed
                 contains:still depended upon by metric sink
 
-                > SELECT count(*) FROM metric_sink_view
+                > SELECT count(*) FROM metric_sink_view_renamed
                 3
                 """))
