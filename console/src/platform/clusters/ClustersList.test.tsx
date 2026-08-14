@@ -125,12 +125,14 @@ const expandCluster = async (
  * hard-coding an index that shifts whenever a column is added.
  */
 const COLUMN = {
-  name: 0,
-  replicaCount: 1,
-  size: 2,
-  cpu: 3,
-  lastStatusChange: 4,
-  actions: 5,
+  /** Grouped tables lead with a caret column, empty on child rows. */
+  caret: 0,
+  name: 1,
+  replicaCount: 2,
+  size: 3,
+  cpu: 4,
+  lastStatusChange: 5,
+  actions: 6,
 } as const;
 
 /** Text of every visible cell in the row containing `rowLabel`. */
@@ -159,6 +161,7 @@ describe("ClustersList replica rows", () => {
     // The replica count and actions columns only apply to clusters, hence the
     // dashes.
     expect(cellsForRow("r1")).toEqual([
+      "",
       "r1",
       "-",
       "50cc",
@@ -285,7 +288,7 @@ describe("ClustersList replica rows", () => {
     await renderClustersList([buildCluster({ replicas: [] })]);
 
     expect(caretFor("compute")).not.toBeInTheDocument();
-    expect(cellsForRow("compute")[1]).toBe("0");
+    expect(cellsForRow("compute")[COLUMN.replicaCount]).toBe("0");
   });
 
   it("makes a cluster with a single replica expandable", async () => {
@@ -293,10 +296,10 @@ describe("ClustersList replica rows", () => {
     await renderClustersList([buildCluster({ replicas: [buildReplica()] })]);
 
     expect(caretFor("compute")).toHaveAttribute("aria-expanded", "false");
-    expect(cellsForRow("compute")[1]).toBe("1");
+    expect(cellsForRow("compute")[COLUMN.replicaCount]).toBe("1");
 
     await expandCluster(user, "compute");
-    expect(cellsForRow("r1")[2]).toBe("50cc");
+    expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
   });
 
   it("leaves cluster rows showing their own aggregates", async () => {

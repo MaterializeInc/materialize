@@ -148,12 +148,12 @@ const ColumnHeader = <TData,>({
   );
 };
 
-// Caret width (4) + caret/label gap (2), so an indented child row's label
-// lines up just past its parent row's caret.
-const CHILD_ROW_INDENT = 6;
+// The caret column exists only to hold the toggle, so it is sized to the button.
+// Child rows leave it empty so that data in the first columns is aligned.
 const CARET_SIZE = 8;
+const CARET_COLUMN_WIDTH = CARET_SIZE;
 
-/** Fallback caret name when the table supplies no `expandLabel`. */
+// Fallback caret name when the table supplies no `expandLabel`.
 const DEFAULT_EXPAND_LABEL = "Display child rows";
 
 const ParentRowCaret = ({
@@ -173,7 +173,6 @@ const ParentRowCaret = ({
     h={CARET_SIZE}
     minW={CARET_SIZE}
     p={0}
-    mr={2}
     onClick={(event) => {
       // The enclosing row toggles expansion as well. Without this the row's
       // handler fires next and immediately undoes the caret's toggle.
@@ -197,6 +196,7 @@ const BodyRow = <TData,>({
   getRowClassName,
   rowTestId,
   expandLabel,
+  isGroupTable,
 }: {
   row: Row<TData>;
   onRowClick?: (row: TData) => void;
@@ -206,12 +206,14 @@ const BodyRow = <TData,>({
   getRowClassName?: UniversalTableProps<TData>["getRowClassName"];
   rowTestId?: UniversalTableProps<TData>["rowTestId"];
   expandLabel?: UniversalTableProps<TData>["expandLabel"];
+  // True when the table defines `getSubRows`. Such tables carry a leading
+  // caret column, kept empty on rows that cannot expand so every row lines up.
+  isGroupTable?: boolean;
 }) => {
   // NOTE: an expandable row is assumed to be a group heading from
   // getSubRows. A row-detail expander via getRowCanExpand on flat data
   // would need its own treatment.
   const isParentRow = row.getCanExpand();
-  const needsIndent = isParentRow || row.depth > 0;
   const handleClick = isParentRow
     ? row.getToggleExpandedHandler()
     : onRowClick
@@ -233,40 +235,26 @@ const BodyRow = <TData,>({
         ...rowSx,
       }}
     >
-      {row.getVisibleCells().map((cell, cellIndex) => {
-        const content = flexRender(
-          cell.column.columnDef.cell,
-          cell.getContext(),
-        );
-        return (
-          <Td
-            key={cell.id}
-            textAlign={
-              cell.column.columnDef.meta?.isNumeric ? "end" : undefined
-            }
-            {...cell.column.columnDef.meta?.cellProps}
-          >
-            {cellIndex === 0 && needsIndent ? (
-              <Box
-                display="flex"
-                alignItems="center"
-                paddingLeft={row.depth * CHILD_ROW_INDENT}
-              >
-                {isParentRow && (
-                  <ParentRowCaret
-                    isOpen={row.getIsExpanded()}
-                    label={expandLabel?.(row) ?? DEFAULT_EXPAND_LABEL}
-                    onToggle={row.getToggleExpandedHandler()}
-                  />
-                )}
-                {content}
-              </Box>
-            ) : (
-              content
-            )}
-          </Td>
-        );
-      })}
+      {isGroupTable && (
+        <Td width={CARET_COLUMN_WIDTH}>
+          {isParentRow && (
+            <ParentRowCaret
+              isOpen={row.getIsExpanded()}
+              label={expandLabel?.(row) ?? DEFAULT_EXPAND_LABEL}
+              onToggle={row.getToggleExpandedHandler()}
+            />
+          )}
+        </Td>
+      )}
+      {row.getVisibleCells().map((cell) => (
+        <Td
+          key={cell.id}
+          textAlign={cell.column.columnDef.meta?.isNumeric ? "end" : undefined}
+          {...cell.column.columnDef.meta?.cellProps}
+        >
+          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+        </Td>
+      ))}
     </Tr>
   );
 };
@@ -307,7 +295,8 @@ export const UniversalTable = <TData,>({
 }: UniversalTableProps<TData>) => {
   const headerGroups = table.getHeaderGroups();
   const rows = table.getRowModel().rows;
-  const columnCount = table.getAllColumns().length;
+  const isGroupTable = Boolean(table.options.getSubRows);
+  const columnCount = table.getAllColumns().length + (isGroupTable ? 1 : 0);
   const hasFooter = table
     .getAllLeafColumns()
     .some((column) => column.columnDef.footer);
@@ -317,6 +306,7 @@ export const UniversalTable = <TData,>({
       <Thead>
         {headerGroups.map((headerGroup) => (
           <Tr key={headerGroup.id}>
+            {isGroupTable && <Th width={CARET_COLUMN_WIDTH} />}
             {headerGroup.headers.map((header) => (
               <ColumnHeader key={header.id} header={header} />
             ))}
@@ -336,6 +326,7 @@ export const UniversalTable = <TData,>({
               getRowClassName={getRowClassName}
               rowTestId={rowTestId}
               expandLabel={expandLabel}
+              isGroupTable={isGroupTable}
             />
           ))
         )}
@@ -344,6 +335,7 @@ export const UniversalTable = <TData,>({
         <Tfoot>
           {table.getFooterGroups().map((footerGroup) => (
             <Tr key={footerGroup.id} sx={footerSx} data-testid={footerTestId}>
+              {isGroupTable && <Td width={CARET_COLUMN_WIDTH} />}
               {footerGroup.headers.map((header) => (
                 <Td
                   key={header.id}

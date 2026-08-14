@@ -434,19 +434,20 @@ const ledgerColumns = [
       const r = row.original;
       if (r.kind === "cluster") return clusterLabel(r.cluster);
       return (
-        <>
+        <HStack>
           <Box
             width="2"
             height="2"
             borderRadius="sm"
             backgroundColor={r.color}
-            marginRight="2"
             flexShrink={0}
           />
           <Tooltip label={r.account.external_customer_id}>
-            <Text whiteSpace="nowrap">{accountLabel(r.account)}</Text>
+            <Text as="span" whiteSpace="nowrap">
+              {accountLabel(r.account)}
+            </Text>
           </Tooltip>
-        </>
+        </HStack>
       );
     },
     footer: () => "Total",

@@ -494,6 +494,51 @@ describe("UniversalTable", () => {
     });
   });
 
+  describe("Caret column", () => {
+    // The caret sits in its own leading column so that a child row's cells line
+    // up with its parent's instead of being pushed over by indentation.
+    const cellTextsOfRow = (label: string) => {
+      const row = screen.getByText(label).closest("tr");
+      if (!row) throw new Error(`no row for "${label}"`);
+      return within(row)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent);
+    };
+
+    it("is absent from tables without getSubRows", async () => {
+      await renderComponent(<BasicTable />);
+
+      // Three columns declared, three header cells rendered.
+      expect(screen.getAllByRole("columnheader")).toHaveLength(columns.length);
+      expect(cellTextsOfRow("analytics")).toHaveLength(columns.length);
+    });
+
+    it("adds one leading column to grouped tables", async () => {
+      await renderComponent(<GroupedTable initialExpanded />);
+
+      expect(screen.getAllByRole("columnheader")).toHaveLength(
+        groupColumns.length + 1,
+      );
+    });
+
+    it("holds the caret on group rows and stays empty on child rows", async () => {
+      await renderComponent(<GroupedTable initialExpanded />);
+
+      const groupCells = cellTextsOfRow("account-a");
+      const childCells = cellTextsOfRow("cluster-a1");
+
+      // Same cell count, so every column aligns across the two tiers.
+      expect(childCells).toHaveLength(groupCells.length);
+      // The caret is a button, contributing no text of its own.
+      expect(childCells[0]).toBe("");
+      expect(
+        within(
+          screen.getByText("account-a").closest("tr") as HTMLElement,
+        ).getAllByRole("cell")[0],
+      ).toContainElement(caretFor("account-a"));
+    });
+  });
+
   describe("Group Rows", () => {
     it("renders groups collapsed by default", async () => {
       await renderComponent(<GroupedTable />);
