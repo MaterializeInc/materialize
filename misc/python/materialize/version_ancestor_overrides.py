@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name in ("ManySmallUpdates", "Update"):
+        # PR#37923 (adapter: sequence read-then-write from the session task with OCC) increases wallclock for writes, and clusterd memory for ManySmallUpdates
+        min_ancestor_mz_version_per_commit[
+            "4f0805a4d8d8e398f2fdfe10d5bdbe70b16924a4"
+        ] = MzVersion.parse_mz("v26.39.0")
+
     if scenario_class_name == "ParallelDataflows":
         # PR#32095 (Dictionary compressed arrangements) increased wallclock by ~10%
         min_ancestor_mz_version_per_commit[
@@ -242,6 +248,8 @@ _MIN_ANCESTOR_MZ_VERSION_PER_COMMIT_TO_ACCOUNT_FOR_SCALABILITY_REGRESSIONS: dict
     str, MzVersion
 ] = {
     # insert newer commits at the top
+    # PR#37923 (adapter: sequence read-then-write from the session task with OCC) reduces write throughput
+    "4f0805a4d8d8e398f2fdfe10d5bdbe70b16924a4": MzVersion.parse_mz("v26.39.0"),
     # PR#31309 ([adapter] don't block on builtin table write in Session creation) increases latency for inserts
     "e8c42c65afb7acd55eb7e530a92c89a9165f2e33": MzVersion.parse_mz("v0.133.0"),
     # PR#30238 (adapter: Remove the global write lock) introduces regressions against v0.123.0
