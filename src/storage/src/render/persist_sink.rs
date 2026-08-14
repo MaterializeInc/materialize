@@ -170,14 +170,13 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     builder: BatchBuilder<K, V, T, D>,
-    /// Inclusive bounds of the update timestamps staged so far, `None` while empty.
+    /// Largest update timestamp staged so far, `None` while empty.
     ///
-    /// `append_batches` needs these to decide, after an `UpperMismatch`, whether a batch sits
-    /// entirely at or above a raised append lower. A batch that spans the raised lower cannot be
-    /// kept, because persist filters reads by `as_of` rather than by the registered description,
-    /// so the updates below the lower would be readable on top of whatever the concurrent writer
-    /// already committed.
-    data_bounds: Option<(T, T)>,
+    /// `append_batches` needs this to decide, after an `UpperMismatch`, whether a batch lies
+    /// entirely below a raised append lower and so holds nothing this sink still owes. Such a
+    /// batch is deleted rather than appended, which keeps parts that would be truncated away in
+    /// their entirety out of shard state.
+    data_max_ts: Option<T>,
     metrics: BatchMetrics,
 }
 
@@ -193,16 +192,16 @@ where
     fn new(builder: BatchBuilder<K, V, T, D>) -> Self {
         BatchBuilderAndMetadata {
             builder,
-            data_bounds: None,
+            data_max_ts: None,
             metrics: Default::default(),
         }
     }
 
     /// Adds an update to the batch.
     async fn add(&mut self, k: &K, v: &V, t: &T, d: &D) {
-        self.data_bounds = Some(match self.data_bounds.take() {
-            Some((min, max)) => (min.meet(t), max.join(t)),
-            None => (t.clone(), t.clone()),
+        self.data_max_ts = Some(match self.data_max_ts.take() {
+            Some(max) => max.join(t),
+            None => t.clone(),
         });
 
         self.builder.add(k, v, t, d).await.expect("invalid usage");
@@ -210,9 +209,10 @@ where
 
     /// Finishes the batch, registering it under `lower` and `upper`.
     ///
-    /// Panics if no update was ever added, since an empty batch carries no data bounds.
+    /// Panics if no update was ever added, since an empty batch has no largest timestamp. Callers
+    /// open a builder on the first update rather than up front, so reaching this is a bug.
     async fn finish(self, lower: Antichain<T>, upper: Antichain<T>) -> HollowBatchAndMetadata<T> {
-        let (data_min_ts, data_max_ts) = self.data_bounds.expect("finishing an empty builder");
+        let data_max_ts = self.data_max_ts.expect("finishing an empty builder");
         // `BatchBuilder::finish` rejects an update at or beyond `upper`, so a builder that was
         // handed updates outside the description it is being finished under fails here rather
         // than producing a batch whose parts reach past their registered bounds.
@@ -224,7 +224,6 @@ where
         HollowBatchAndMetadata {
             lower,
             upper,
-            data_min_ts,
             data_max_ts,
             batch: batch.into_transmittable_batch(),
             metrics: self.metrics,
@@ -241,7 +240,6 @@ where
 struct HollowBatchAndMetadata<T> {
     lower: Antichain<T>,
     upper: Antichain<T>,
-    data_min_ts: T,
     data_max_ts: T,
     batch: ProtoBatch,
     metrics: BatchMetrics,
@@ -257,7 +255,6 @@ struct BatchSet {
 #[derive(Debug)]
 struct FinishedBatch {
     batch: Batch<SourceData, (), mz_repr::Timestamp, StorageDiff>,
-    data_min_ts: mz_repr::Timestamp,
     data_max_ts: mz_repr::Timestamp,
 }
 
@@ -324,40 +321,6 @@ fn stashed_bytes(row: &Result<Row, DataflowError>) -> usize {
         Err(_) => size_of::<DataflowError>(),
     };
     payload + size_of::<Diff>()
-}
-
-/// What to do with a written batch when a concurrent writer has raised the shard upper into the
-/// middle of the description the batch was written for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Salvage {
-    /// All of the batch's data is at or above the raised lower, so it can be appended as is.
-    Keep,
-    /// All of the batch's data is below the raised lower, so it is already durable and the batch
-    /// can be dropped.
-    Drop,
-    /// The batch holds data on both sides of the raised lower and cannot be used either way.
-    Straddles,
-}
-
-/// Classifies a batch against a raised append lower.
-///
-/// A straddling batch cannot be kept, because persist filters reads by `as_of` rather than by the
-/// registered description, so its updates below the lower would be readable on top of what the
-/// concurrent writer committed. It cannot be dropped either, because that would lose the updates
-/// at or above the lower that this sink still owes.
-fn classify_salvage(
-    new_lower: &Antichain<mz_repr::Timestamp>,
-    data_min_ts: &mz_repr::Timestamp,
-    data_max_ts: &mz_repr::Timestamp,
-) -> Salvage {
-    match (
-        new_lower.less_equal(data_min_ts),
-        new_lower.less_equal(data_max_ts),
-    ) {
-        (true, _) => Salvage::Keep,
-        (false, false) => Salvage::Drop,
-        (false, true) => Salvage::Straddles,
-    }
 }
 
 /// Adds one update to `builder`, keeping the batch metrics in step.
@@ -1290,7 +1253,6 @@ fn append_batches<'scope>(
 
                                 batches.finished.push(FinishedBatch {
                                     batch: write.batch_from_transmittable_batch(batch.batch),
-                                    data_min_ts: batch.data_min_ts,
                                     data_max_ts: batch.data_max_ts,
                                 });
                                 batches.batch_metrics += &batch.metrics;
@@ -1591,45 +1553,21 @@ fn append_batches<'scope>(
                             let new_done_batch_metadata =
                                 (new_batch_lower.clone(), batch_upper.clone());
 
-                            // Keep the batches whose data is entirely at or above the new lower
-                            // and delete the ones entirely below it. A batch spanning the new
-                            // lower can be used neither way, so it costs a restart.
+                            // Re-append every batch that still holds something we owe, under the
+                            // narrowed description. A batch may hold data on both sides of the new
+                            // lower: persist registers it truncated and filters the updates
+                            // outside the registered bounds on read, so the ones the concurrent
+                            // writer already committed do not come back. A batch entirely below
+                            // the new lower owes nothing and is deleted instead, to keep parts
+                            // that would be truncated away in full out of shard state.
                             let mut batch_delete_futures = vec![];
                             let mut new_batch_set = BatchSet::default();
-                            let mut straddled = false;
                             for batch in batches {
-                                match classify_salvage(
-                                    &new_batch_lower,
-                                    &batch.data_min_ts,
-                                    &batch.data_max_ts,
-                                ) {
-                                    Salvage::Keep => new_batch_set.finished.push(batch),
-                                    Salvage::Drop => {
-                                        batch_delete_futures.push(batch.batch.delete())
-                                    }
-                                    Salvage::Straddles => {
-                                        straddled = true;
-                                        batch_delete_futures.push(batch.batch.delete());
-                                    }
+                                if new_batch_lower.less_equal(&batch.data_max_ts) {
+                                    new_batch_set.finished.push(batch);
+                                } else {
+                                    batch_delete_futures.push(batch.batch.delete());
                                 }
-                            }
-
-                            if straddled {
-                                batch_delete_futures.extend(
-                                    new_batch_set.finished.into_iter().map(|b| b.batch.delete()),
-                                );
-                                future::join_all(batch_delete_futures).await;
-
-                                tracing::warn!(
-                                    "persist_sink({}): shard upper advanced to {:?}, inside a \
-                                        batch written for ({:?} -> {:?}) that holds data on both \
-                                        sides of it. Restarting the dataflow to rebuild from the \
-                                        new upper.",
-                                    collection_id, mismatch.current, batch_lower, batch_upper,
-                                );
-                                anyhow::bail!(
-                                    "collection concurrently modified. Ingestion dataflow will be restarted"
-                                );
                             }
 
                             // Re-add the new batch to the list of batches to process.
@@ -1711,7 +1649,6 @@ mod tests {
     struct EmittedBatch {
         lower: u64,
         upper: u64,
-        data_min_ts: u64,
         data_max_ts: u64,
         inserts: u64,
     }
@@ -1770,7 +1707,6 @@ mod tests {
                                     EmittedBatch {
                                         lower: b.lower.as_option().expect("single lower").into(),
                                         upper: b.upper.as_option().expect("single upper").into(),
-                                        data_min_ts: b.data_min_ts.into(),
                                         data_max_ts: b.data_max_ts.into(),
                                         inserts: b.metrics.inserts,
                                     },
@@ -1875,15 +1811,18 @@ mod tests {
         ))
     }
 
-    /// Appends every emitted batch in one `compare_and_append` over `[0, upper)`, then reads the
-    /// shard back and returns the summed diffs.
+    /// Appends every emitted batch in one `compare_and_append` over `[lower, upper)`, then reads
+    /// the shard back and returns the summed diffs.
     ///
     /// This is where a batch whose parts reach outside their registered bounds is caught, so the
-    /// tests append for real rather than stopping at what `write_batches` emitted.
+    /// tests append for real rather than stopping at what `write_batches` emitted. A `lower` above
+    /// the batches' own lower registers them truncated, which is what the sink relies on when a
+    /// concurrent writer has already claimed part of the range.
     async fn append_and_read_back(
         target: &CollectionMetadata,
         persist_clients: &PersistClientCache,
         emitted: Vec<(EmittedBatch, ProtoBatch)>,
+        lower: u64,
         upper: u64,
     ) -> i64 {
         let persist_client = persist_clients
@@ -1911,12 +1850,7 @@ mod tests {
             .collect();
         let mut to_append: Vec<_> = batches.iter_mut().collect();
         write
-            .compare_and_append_batch(
-                &mut to_append[..],
-                Antichain::from_elem(Timestamp::minimum()),
-                frontier(upper),
-                true,
-            )
+            .compare_and_append_batch(&mut to_append[..], frontier(lower), frontier(upper), true)
             .await
             .expect("invalid usage")
             .expect("upper mismatch");
@@ -1939,6 +1873,93 @@ mod tests {
             .expect("since <= as_of");
 
         contents.iter().map(|(_, _, d)| *d).sum()
+    }
+
+    /// Advances the shard upper to `upper` without writing data, standing in for a concurrent
+    /// writer that reached part of the range first.
+    async fn advance_shard_upper(
+        target: &CollectionMetadata,
+        persist_clients: &PersistClientCache,
+        upper: u64,
+    ) {
+        let persist_client = persist_clients
+            .open(target.persist_location.clone())
+            .await
+            .expect("could not open persist client");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                target.data_shard,
+                Arc::new(target.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("could not open persist shard");
+
+        let empty: Vec<((SourceData, ()), mz_repr::Timestamp, StorageDiff)> = Vec::new();
+        write
+            .compare_and_append(
+                &empty,
+                Antichain::from_elem(Timestamp::minimum()),
+                frontier(upper),
+            )
+            .await
+            .expect("invalid usage")
+            .expect("upper mismatch");
+    }
+
+    /// A batch spanning many timestamps stays usable when a concurrent writer has raised the shard
+    /// upper into the middle of it. Persist registers the batch under the narrowed description and
+    /// filters the updates outside those bounds on read, so the sink can hand a straddling batch
+    /// over as is rather than discarding it and rebuilding from the new upper.
+    ///
+    /// This is the property that lets `write_batches` coalesce a stalled frontier into one batch
+    /// without giving up the ability to recover from a concurrent append.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn a_straddling_batch_is_usable_under_a_raised_lower() {
+        const TIMES: u64 = 10;
+        const DONE: u64 = TIMES + 1;
+        // Inside the batch's data range, so the batch holds updates on both sides of it.
+        const RAISED_LOWER: u64 = 5;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // One update at each of times 1..=TIMES, all covered by a single description, so the
+        // stash coalesces them into one batch whose data spans the whole range.
+        let mut script = vec![];
+        for at in 1..=TIMES {
+            script.push(Step::Updates(at, 1));
+        }
+        script.push(Step::Description(0, DONE));
+        script.push(Step::AdvanceTo(DONE));
+
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            1 << 20,
+            script,
+        );
+        assert_eq!(
+            emitted.len(),
+            1,
+            "expected one coalesced batch, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+
+        advance_shard_upper(&target, &persist_clients, RAISED_LOWER).await;
+
+        // Append the straddling batch under the raised lower, as the sink does after an
+        // `UpperMismatch` cuts the description down.
+        let total =
+            append_and_read_back(&target, &persist_clients, emitted, RAISED_LOWER, DONE).await;
+
+        assert_eq!(
+            total,
+            i64::try_from(TIMES - RAISED_LOWER + 1).expect("small"),
+            "only the updates at or above the raised lower should be readable, and all of them"
+        );
     }
 
     /// The rewind mechanism retracts the snapshot's copy of every row the replication stream
@@ -1986,7 +2007,7 @@ mod tests {
             "only the surviving row should reach the batch"
         );
 
-        let total = append_and_read_back(&target, &persist_clients, emitted, DONE).await;
+        let total = append_and_read_back(&target, &persist_clients, emitted, 0, DONE).await;
         assert_eq!(total, 1, "the shard should hold exactly the surviving row");
     }
 
@@ -2021,46 +2042,6 @@ mod tests {
                 emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
             );
         }
-    }
-
-    #[mz_ore::test]
-    fn salvage_keeps_only_batches_wholly_on_one_side_of_a_raised_lower() {
-        // Wholly at or above the raised lower.
-        assert_eq!(
-            classify_salvage(&frontier(5), &ts(5), &ts(9)),
-            Salvage::Keep
-        );
-        assert_eq!(
-            classify_salvage(&frontier(5), &ts(6), &ts(6)),
-            Salvage::Keep
-        );
-
-        // Wholly below it, so already durable via the concurrent writer.
-        assert_eq!(
-            classify_salvage(&frontier(5), &ts(1), &ts(4)),
-            Salvage::Drop
-        );
-        assert_eq!(
-            classify_salvage(&frontier(5), &ts(4), &ts(4)),
-            Salvage::Drop
-        );
-
-        // Spanning it. This is the case a single-timestamp batch could never hit, and the reason
-        // coalescing costs a restart here.
-        assert_eq!(
-            classify_salvage(&frontier(5), &ts(4), &ts(5)),
-            Salvage::Straddles
-        );
-        assert_eq!(
-            classify_salvage(&frontier(5), &ts(1), &ts(9)),
-            Salvage::Straddles
-        );
-
-        // A lower that has not moved keeps everything.
-        assert_eq!(
-            classify_salvage(&frontier(0), &ts(0), &ts(9)),
-            Salvage::Keep
-        );
     }
 
     /// A snapshot at time 1 pinning the frontier while replication delivers one update at each of
@@ -2110,13 +2091,12 @@ mod tests {
             EmittedBatch {
                 lower: 0,
                 upper: DONE,
-                data_min_ts: 1,
                 data_max_ts: STALL_TIMES + 1,
                 inserts: u64::cast_from(SNAPSHOT_ROWS) + STALL_TIMES,
             }
         );
 
-        let total = append_and_read_back(&target, &persist_clients, emitted, DONE).await;
+        let total = append_and_read_back(&target, &persist_clients, emitted, 0, DONE).await;
         assert_eq!(
             total,
             i64::try_from(SNAPSHOT_ROWS).expect("small")
@@ -2158,16 +2138,13 @@ mod tests {
                 (0, DONE),
                 "an evicted batch still carries the description bounds"
             );
-            assert_eq!(
-                batch.data_min_ts, batch.data_max_ts,
-                "an evicted batch holds exactly one timestamp, which is what makes it safe to \
-                write before its description is known"
-            );
         }
-        let data_times: Vec<_> = emitted.iter().map(|(b, _)| b.data_min_ts).collect();
+        // One batch per staged timestamp. That is what makes evicting safe before the covering
+        // description is known, since a single-timestamp batch cannot span a description boundary.
+        let data_times: Vec<_> = emitted.iter().map(|(b, _)| b.data_max_ts).collect();
         assert_eq!(data_times, (1..=STALL_TIMES + 1).collect::<Vec<_>>());
 
-        let total = append_and_read_back(&target, &persist_clients, emitted, DONE).await;
+        let total = append_and_read_back(&target, &persist_clients, emitted, 0, DONE).await;
         assert_eq!(
             total,
             i64::try_from(SNAPSHOT_ROWS).expect("small")
