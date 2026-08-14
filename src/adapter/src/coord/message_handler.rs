@@ -64,6 +64,14 @@ impl Coordinator {
     /// (i.e. Box it).
     #[instrument]
     pub(crate) async fn handle_message(&mut self, msg: Message) -> () {
+        // Every group commit retires at least one client response.
+        if let Message::GroupCommitApplied { responses, .. } = &msg {
+            soft_assert_or_log!(
+                responses.is_empty(),
+                "group commit applied with responses to retire"
+            );
+        }
+
         match msg {
             Message::Command(otel_ctx, cmd) => {
                 // TODO: We need a Span that is not none for the otel_ctx to attach the parent
