@@ -89,9 +89,8 @@ guide for your cloud: [AWS](/self-managed-deployments/upgrading/upgrade-on-aws/)
 
 ## Step 1. Enable observability
 
-The `simple` and `enterprise` examples for each cloud take an
-`enable_observability` variable, which defaults to `false` in `simple` and
-`true` in `enterprise`.
+The `simple` example for each cloud takes an `enable_observability` variable,
+which defaults to `false`.
 
 1. In your `terraform.tfvars`, set:
 
