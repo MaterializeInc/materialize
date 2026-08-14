@@ -34,6 +34,7 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, anyhow, bail, ensure};
+use mz_repr::GlobalId;
 
 use crate::script::{BuildSpec, ColumnSpec, Command, ConfigSetting, ExportSpec, ImportSpec};
 
@@ -274,6 +275,22 @@ fn opt_usize(args: &BTreeMap<String, String>, key: &str) -> anyhow::Result<Optio
         .transpose()
 }
 
+/// Parse a global id argument: a bare `u64` (e.g. `1001`) is the user namespace,
+/// matching [`mz_repr::GlobalId`]'s `Display`/`FromStr` prefixes (`s`/`si`/`u`/`t`)
+/// for the other namespaces, e.g. `t7` is `GlobalId::Transient(7)`.
+fn parse_id(s: &str) -> anyhow::Result<GlobalId> {
+    if s.bytes().all(|b| b.is_ascii_digit()) {
+        let id: u64 = s.parse().with_context(|| format!("bad id `{s}`"))?;
+        Ok(GlobalId::User(id))
+    } else {
+        s.parse().with_context(|| format!("bad id `{s}`"))
+    }
+}
+
+fn req_id(args: &BTreeMap<String, String>, key: &str) -> anyhow::Result<GlobalId> {
+    parse_id(req(args, key)?)
+}
+
 fn opt_string(args: &BTreeMap<String, String>, key: &str) -> Option<String> {
     args.get(key).cloned()
 }
@@ -300,22 +317,22 @@ fn parse_usize_list(s: &str) -> anyhow::Result<Vec<usize>> {
 /// Parse an `export` sub-command into an [`ExportSpec`]. The `kind=` argument
 /// selects the variant (defaulting to `index`); each kind takes its own arguments.
 fn parse_export(args: &BTreeMap<String, String>) -> anyhow::Result<ExportSpec> {
-    let on_id = req_u64(args, "on")?;
+    let on_id = req_id(args, "on")?;
     Ok(
         match args.get("kind").map(String::as_str).unwrap_or("index") {
             "index" => ExportSpec::Index {
-                index_id: req_u64(args, "index")?,
+                index_id: req_id(args, "index")?,
                 on_id,
                 key: parse_usize_list(req(args, "key")?)?,
             },
             "materialized-view" => ExportSpec::MaterializedView {
-                sink_id: req_u64(args, "sink")?,
+                sink_id: req_id(args, "sink")?,
                 on_id,
                 shard: req(args, "shard")?.to_string(),
                 schema: opt_string(args, "schema"),
             },
             "subscribe" => ExportSpec::Subscribe {
-                sink_id: req_u64(args, "sink")?,
+                sink_id: req_id(args, "sink")?,
                 on_id,
                 schema: opt_string(args, "schema"),
                 up_to: opt_u64(args, "up-to")?,
@@ -389,13 +406,12 @@ fn parse_create_dataflow(
             "import" => {
                 if let Some(index_id) = args.get("index") {
                     imports.push(ImportSpec::Index {
-                        index_id: index_id
-                            .parse()
+                        index_id: parse_id(index_id)
                             .with_context(|| format!("bad index id `{index_id}`"))?,
                     });
                 } else {
                     imports.push(ImportSpec::Source {
-                        id: req_u64(&args, "source")?,
+                        id: req_id(&args, "source")?,
                         shard: req(&args, "shard")?.to_string(),
                         schema: opt_string(&args, "schema"),
                         upper: req_u64(&args, "upper")?,
@@ -405,7 +421,7 @@ fn parse_create_dataflow(
             "build" => {
                 ensure!(!sub_body.is_empty(), "`build` needs a MIR body");
                 builds.push(BuildSpec {
-                    id: req_u64(&args, "id")?,
+                    id: req_id(&args, "id")?,
                     expr: body_text(sub_body),
                 });
             }
@@ -457,8 +473,8 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             rows: rows_from_body(body)?,
         },
         "define-index" => Command::DefineIndex {
-            source_id: req_u64(&args, "source")?,
-            index_id: req_u64(&args, "index")?,
+            source_id: req_id(&args, "source")?,
+            index_id: req_id(&args, "index")?,
             shard: req(&args, "shard")?.to_string(),
             schema: opt_string(&args, "schema"),
             key: parse_usize_list(req(&args, "key")?)?,
@@ -466,32 +482,32 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
             upper: req_u64(&args, "upper")?,
         },
         "schedule" => Command::Schedule {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
         },
         "allow-compaction" => Command::AllowCompaction {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             frontier: req_u64(&args, "frontier")?,
         },
         "allow-writes" => Command::AllowWrites {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
         },
         "await-frontier" => Command::AwaitFrontier {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             ts: req_u64(&args, "ts")?,
             timeout_secs: opt_u64(&args, "timeout-secs")?,
             allow_timeout: flags.iter().any(|f| f == "allow-timeout"),
         },
         "count" => Command::Count {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             ts: req_u64(&args, "ts")?,
         },
         "peek" => Command::Peek {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             schema: opt_string(&args, "schema"),
             ts: req_u64(&args, "ts")?,
         },
         "await-subscribe" => Command::AwaitSubscribe {
-            id: req_u64(&args, "id")?,
+            id: req_id(&args, "id")?,
             up_to: req_u64(&args, "up-to")?,
             timeout_secs: opt_u64(&args, "timeout-secs")?,
         },
@@ -546,7 +562,7 @@ mod tests {
         assert_eq!(
             cmd,
             Command::AwaitFrontier {
-                id: 1001,
+                id: GlobalId::User(1001),
                 ts: 1,
                 timeout_secs: Some(3),
                 allow_timeout: true,
@@ -558,8 +574,8 @@ mod tests {
         assert_eq!(
             cmd,
             Command::DefineIndex {
-                source_id: 1000,
-                index_id: 1001,
+                source_id: GlobalId::User(1000),
+                index_id: GlobalId::User(1001),
                 shard: "d".to_string(),
                 schema: None,
                 key: vec![0],
@@ -567,6 +583,37 @@ mod tests {
                 upper: 1,
             }
         );
+    }
+
+    /// An id argument accepts a bare number (user namespace) or an explicit
+    /// `s`/`si`/`u`/`t` prefix selecting the namespace directly.
+    #[mz_ore::test]
+    fn parses_prefixed_ids() {
+        assert_eq!(
+            parse_command("schedule id=1001").unwrap(),
+            Command::Schedule {
+                id: GlobalId::User(1001)
+            }
+        );
+        assert_eq!(
+            parse_command("schedule id=u1001").unwrap(),
+            Command::Schedule {
+                id: GlobalId::User(1001)
+            }
+        );
+        assert_eq!(
+            parse_command("schedule id=t7").unwrap(),
+            Command::Schedule {
+                id: GlobalId::Transient(7)
+            }
+        );
+        assert_eq!(
+            parse_command("schedule id=s42").unwrap(),
+            Command::Schedule {
+                id: GlobalId::System(42)
+            }
+        );
+        assert!(parse_command("schedule id=bogus").is_err());
     }
 
     /// `define-schema` and `write-rows` parse their indented bodies, typing values.
@@ -629,14 +676,16 @@ mod tests {
             cmd,
             Command::CreateDataflow {
                 name: Some("count".to_string()),
-                imports: vec![ImportSpec::Index { index_id: 1001 }],
+                imports: vec![ImportSpec::Index {
+                    index_id: GlobalId::User(1001)
+                }],
                 builds: vec![BuildSpec {
-                    id: 2000,
+                    id: GlobalId::User(2000),
                     expr: "Reduce aggregates=[count(*)]\n  Get u1000".to_string(),
                 }],
                 exports: vec![ExportSpec::Index {
-                    index_id: 2001,
-                    on_id: 2000,
+                    index_id: GlobalId::User(2001),
+                    on_id: GlobalId::User(2000),
                     key: vec![0]
                 }],
                 as_of: 0,
@@ -666,8 +715,8 @@ mod tests {
         assert_eq!(
             exports,
             vec![ExportSpec::MaterializedView {
-                sink_id: 2001,
-                on_id: 2000,
+                sink_id: GlobalId::User(2001),
+                on_id: GlobalId::User(2000),
                 shard: "out".to_string(),
                 schema: Some("kv".to_string()),
             }]
@@ -680,8 +729,8 @@ mod tests {
         assert_eq!(
             exports,
             vec![ExportSpec::Subscribe {
-                sink_id: 2001,
-                on_id: 2000,
+                sink_id: GlobalId::User(2001),
+                on_id: GlobalId::User(2000),
                 schema: None,
                 up_to: Some(2),
             }]
@@ -760,7 +809,7 @@ mod tests {
         assert_eq!(
             cmd,
             Command::AwaitSubscribe {
-                id: 2001,
+                id: GlobalId::User(2001),
                 up_to: 2,
                 timeout_secs: Some(5),
             }
@@ -782,7 +831,12 @@ mod tests {
             })
             .collect();
         assert_eq!(stanzas.len(), 2);
-        assert_eq!(stanzas[0].command, Command::Schedule { id: 1001 });
+        assert_eq!(
+            stanzas[0].command,
+            Command::Schedule {
+                id: GlobalId::User(1001)
+            }
+        );
         assert_eq!(stanzas[0].expected, "ok");
         assert_eq!(stanzas[1].expected, "10000");
 
