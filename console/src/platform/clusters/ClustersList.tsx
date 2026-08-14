@@ -86,6 +86,8 @@ type ClusterRow =
   | ({ rowType: "cluster" } & ClusterWithOwnership)
   | ({ rowType: "replica" } & Replica);
 
+const CLUSTER_ROW_CLASS = "cluster-row";
+
 /**
  * Shared data threaded into cell components via TanStack's table `meta`.
  * Read from `info.table.options.meta` and cast to this shape inside cells.
@@ -116,29 +118,15 @@ const ClusterNameCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
   </HStack>
 );
 
-const ReplicaNameCell = ({ replica }: { replica: Replica }) => (
-  <Text textStyle="text-ui-med" noOfLines={1}>
-    {replica.name}
-  </Text>
-);
+const ReplicaNameCell = ({ replica }: { replica: Replica }) => replica.name;
 
 const ReplicaCpuCell = ({ cpuPercent }: { cpuPercent: number | null }) => {
-  const { colors } = useTheme<MaterializeTheme>();
-
   // NOTE: an idle replica reports 0, which must render as "0.0%" rather than
   // being treated as "no reading". Only a missing sample is a dash.
   if (cpuPercent === null) {
     return <>-</>;
   }
-
-  return (
-    <>
-      {cpuPercent.toFixed(1)}
-      <Text as="span" color={colors.foreground.secondary}>
-        %
-      </Text>
-    </>
-  );
+  return `${cpuPercent.toFixed(1)}%`;
 };
 
 /** Formats a status-change timestamp for display, or "-" when there is none. */
@@ -153,30 +141,28 @@ const ReplicaLastStatusChangeCell = ({
   offlineStatus: LatestOfflineReplicaInfo | undefined;
 }) => (
   <HStack>
-    <Text noOfLines={1} paddingRight="6" position="relative">
+    <Text as="span" noOfLines={1}>
       {formatStatusChange(updatedAt)}
-      {offlineStatus?.shouldSurfaceOom && (
-        <Tooltip
-          px={3}
-          py={2}
-          minWidth="fit-content"
-          rounded="md"
-          label={`This replica ran out of memory on ${formatDate(
-            offlineStatus.lastOfflineAt,
-            FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-          )}`}
-        >
-          <WarningIcon
-            position="absolute"
-            right="0"
-            // The tooltip text is only reachable on hover, so the icon needs a
-            // name of its own to mean anything to a screen reader.
-            role="img"
-            aria-label="Ran out of memory"
-          />
-        </Tooltip>
-      )}
     </Text>
+    {offlineStatus?.shouldSurfaceOom && (
+      <Tooltip
+        px={3}
+        py={2}
+        minWidth="fit-content"
+        rounded="md"
+        label={`This replica ran out of memory on ${formatDate(
+          offlineStatus.lastOfflineAt,
+          FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+        )}`}
+      >
+        <WarningIcon
+          // The tooltip text is only reachable on hover, so the icon needs a
+          // name of its own to mean anything to a screen reader.
+          role="img"
+          aria-label="Ran out of memory"
+        />
+      </Tooltip>
+    )}
   </HStack>
 );
 
@@ -222,27 +208,17 @@ const columns = [
     },
   }),
   columnHelper.accessor(
-    (row) => (row.rowType === "cluster" ? row.replicas.length : null),
-    {
-      id: "replicaCount",
-      header: "Replicas",
-      sortingFn: "basic",
-      cell: (info) => info.getValue() ?? "-",
-    },
-  ),
-  columnHelper.accessor(
-    (row) => {
-      if (row.rowType === "replica") {
-        return row.size;
-      }
-      const sizes = new Set(row.replicas.map((r) => r.size));
-      return sizes.size > 0 ? Array.from(sizes).join(", ") : null;
-    },
+    (row) => (row.rowType === "replica" ? row.size : null),
     {
       id: "sizes",
       header: "Size",
       sortingFn: sortingFunctions.nullsLast,
-      cell: (info) => info.getValue() ?? "-",
+      // A cluster row is a heading, so it stays blank. Only a replica that
+      // genuinely reports no size gets a dash.
+      cell: (info) =>
+        info.row.original.rowType === "cluster"
+          ? null
+          : (info.getValue() ?? "-"),
     },
   ),
   columnHelper.accessor(
@@ -283,16 +259,16 @@ const columns = [
       sortingFn: sortingFunctions.nullsLast,
       cell: (info) => {
         const row = info.row.original;
-        if (row.rowType === "replica") {
-          const meta = info.table.options.meta as ClusterTableMeta;
-          return (
-            <ReplicaLastStatusChangeCell
-              updatedAt={info.getValue()}
-              offlineStatus={meta.offlineReplicaMap?.get(row.id)}
-            />
-          );
+        if (row.rowType === "cluster") {
+          return null;
         }
-        return <Text noOfLines={1}>{formatStatusChange(info.getValue())}</Text>;
+        const meta = info.table.options.meta as ClusterTableMeta;
+        return (
+          <ReplicaLastStatusChangeCell
+            updatedAt={info.getValue()}
+            offlineStatus={meta.offlineReplicaMap?.get(row.id)}
+          />
+        );
       },
     },
   ),
@@ -389,6 +365,7 @@ interface ClusterTableProps {
 const ClusterTable = ({ clusters }: ClusterTableProps) => {
   const { data: offlineReplicaMap, error: offlineReplicaError } =
     useLatestOfflineReplica();
+  const { colors, space } = useTheme<MaterializeTheme>();
 
   const meta: ClusterTableMeta = { offlineReplicaMap };
   const flags = useFlags();
@@ -398,6 +375,9 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
     columns,
     initialSorting: [{ id: "name", desc: false }],
     pageSize: 20,
+    // Replicas carry the data in this table, so show them without requiring a
+    // click. Cluster rows act as headings.
+    initialExpanded: true,
     getSubRows: (row) =>
       flags["usage-metrics-in-cluster-list-CNS121"] &&
       row.rowType === "cluster" &&
@@ -420,13 +400,23 @@ const ClusterTable = ({ clusters }: ClusterTableProps) => {
       />
       <UniversalTable
         table={table}
-        variant="linkable"
+        variant="borderless"
         data-testid="cluster-table"
         expandLabel={(row) => `Show replicas of ${row.original.name}`}
-        // UniversalTable styles expandable rows as group headings. Cluster rows
-        // are ordinary rows that happen to expand, so keep them at the default
-        // cell text style, matching their replica rows.
-        rowSx={{ td: { textStyle: "text-ui-reg" } }}
+        // Keyed off the class rather than `[data-parent-row]` so a cluster with
+        // no replicas — which has nothing to expand, and so is not a group row
+        // — still reads as a heading.
+        rowSx={{
+          [`&.${CLUSTER_ROW_CLASS} td`]: {
+            borderTopWidth: "1px",
+            borderTopStyle: "solid",
+            borderTopColor: colors.border.secondary,
+            paddingTop: space[3],
+          },
+        }}
+        getRowClassName={(row) =>
+          row.original.rowType === "cluster" ? CLUSTER_ROW_CLASS : undefined
+        }
       />
       <TablePagination table={table} itemLabel="clusters" />
     </VStack>

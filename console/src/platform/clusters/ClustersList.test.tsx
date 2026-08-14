@@ -123,7 +123,8 @@ const renderClustersList = async (clusters: Cluster[]) => {
 const caretFor = (clusterName: string) =>
   screen.queryByRole("button", { name: `Show replicas of ${clusterName}` });
 
-const expandCluster = async (
+/** Rows start expanded, so clicking the caret collapses rather than expands. */
+const toggleCluster = async (
   user: ReturnType<typeof userEvent.setup>,
   clusterName: string,
 ) => {
@@ -137,45 +138,54 @@ const expandCluster = async (
  * hard-coding an index that shifts whenever a column is added.
  */
 const COLUMN = {
-  /** Grouped tables lead with a caret column, empty on child rows. */
+  /** Grouped tables lead with a caret column, empty on replica rows. */
   caret: 0,
   name: 1,
-  replicaCount: 2,
-  size: 3,
-  cpu: 4,
-  lastStatusChange: 5,
-  actions: 6,
+  size: 2,
+  cpu: 3,
+  lastStatusChange: 4,
+  actions: 5,
 } as const;
 
-/** Text of every visible cell in the row containing `rowLabel`. */
-const cellsForRow = (rowLabel: string) => {
+const rowFor = (rowLabel: string) => {
   const row = screen.getByText(rowLabel).closest("tr");
   if (!row) throw new Error(`no row found containing "${rowLabel}"`);
-  return within(row)
-    .getAllByRole("cell")
-    .map((cell) => cell.textContent);
+  return row;
 };
 
+/** Text of every visible cell in the row containing `rowLabel`. */
+const cellsForRow = (rowLabel: string) =>
+  within(rowFor(rowLabel))
+    .getAllByRole("cell")
+    .map((cell) => cell.textContent);
+
 describe("ClustersList replica rows", () => {
-  it("hides replica rows until the cluster is expanded", async () => {
+  it("renders replica rows without requiring a click", async () => {
     await renderClustersList([buildCluster()]);
 
     expect(screen.getByText("compute")).toBeInTheDocument();
-    expect(screen.queryByText("r1")).not.toBeInTheDocument();
+    expect(screen.getByText("r1")).toBeInTheDocument();
+    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "true");
   });
 
-  it("renders a replica's name, size and last status change once expanded", async () => {
+  it("collapses a cluster's replicas when its caret is clicked", async () => {
     const user = userEvent.setup();
     await renderClustersList([buildCluster()]);
 
-    await expandCluster(user, "compute");
+    await toggleCluster(user, "compute");
 
-    // The replica count and actions columns only apply to clusters, hence the
-    // dashes.
+    expect(screen.queryByText("r1")).not.toBeInTheDocument();
+    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("renders a replica's name, size, CPU and last status change", async () => {
+    await renderClustersList([buildCluster()]);
+
+    // The caret column is empty on a replica row, and actions are
+    // cluster-scoped, so that cell stays blank too.
     expect(cellsForRow("r1")).toEqual([
       "",
       "r1",
-      "-",
       "50cc",
       "12.5%",
       formatted(STATUS_UPDATED_AT),
@@ -184,17 +194,13 @@ describe("ClustersList replica rows", () => {
   });
 
   it("renders every replica of a cluster", async () => {
-    const user = userEvent.setup();
     await renderClustersList([buildCluster()]);
-
-    await expandCluster(user, "compute");
 
     expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
     expect(cellsForRow("r2")[COLUMN.size]).toBe("100cc");
   });
 
   it("renders the most recent status when a replica has several processes", async () => {
-    const user = userEvent.setup();
     const newest = "2024-03-07T09:00:00.000Z";
     await renderClustersList([
       buildCluster({
@@ -231,20 +237,15 @@ describe("ClustersList replica rows", () => {
       }),
     ]);
 
-    await expandCluster(user, "compute");
-
     expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe(formatted(newest));
   });
 
   it("renders zero CPU as a percentage rather than blank", async () => {
-    const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         replicas: [buildReplica({ cpuPercent: 0 }), SECOND_REPLICA],
       }),
     ]);
-
-    await expandCluster(user, "compute");
 
     // An idle replica genuinely reports 0. Treating that as "no reading" would
     // leave the cell empty and imply the metric is unavailable.
@@ -252,14 +253,11 @@ describe("ClustersList replica rows", () => {
   });
 
   it("renders a dash when the replica has no CPU sample", async () => {
-    const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         replicas: [buildReplica({ cpuPercent: null }), SECOND_REPLICA],
       }),
     ]);
-
-    await expandCluster(user, "compute");
 
     expect(cellsForRow("r1")[COLUMN.cpu]).toBe("-");
   });
@@ -271,45 +269,36 @@ describe("ClustersList replica rows", () => {
   });
 
   it("renders a dash when the replica has no size", async () => {
-    const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         replicas: [buildReplica({ size: null }), SECOND_REPLICA],
       }),
     ]);
 
-    await expandCluster(user, "compute");
-
     expect(cellsForRow("r1")[COLUMN.size]).toBe("-");
   });
 
   it("renders a dash when the replica has no statuses", async () => {
-    const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         replicas: [buildReplica({ statuses: [] }), SECOND_REPLICA],
       }),
     ]);
 
-    await expandCluster(user, "compute");
-
     expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe("-");
   });
 
   it("warns on the replica that ran out of memory, not its siblings", async () => {
-    const user = userEvent.setup();
     // Keyed by replica id: r1 is u10, r2 is u11.
     offlineReplicas.set("u10", {
       shouldSurfaceOom: true,
       lastOfflineAt: new Date(STATUS_UPDATED_AT),
     });
     await renderClustersList([buildCluster()]);
-    await expandCluster(user, "compute");
 
-    const warnings = screen.queryAllByRole("img", {
-      name: "Ran out of memory",
-    });
-    expect(warnings).toHaveLength(1);
+    const warning = () =>
+      screen.queryAllByRole("img", { name: "Ran out of memory" });
+    expect(warning()).toHaveLength(1);
 
     const r1Row = screen.getByText("r1").closest("tr");
     if (!r1Row) throw new Error("no row for r1");
@@ -319,44 +308,72 @@ describe("ClustersList replica rows", () => {
   });
 
   it("does not warn when the replica's outage was not an OOM", async () => {
-    const user = userEvent.setup();
     offlineReplicas.set("u10", {
       shouldSurfaceOom: false,
       lastOfflineAt: new Date(STATUS_UPDATED_AT),
     });
     await renderClustersList([buildCluster()]);
-    await expandCluster(user, "compute");
 
     expect(
       screen.queryByRole("img", { name: "Ran out of memory" }),
     ).not.toBeInTheDocument();
   });
 
+  // The heading styling hangs off this class rather than off `[data-group-row]`,
+  // which only marks rows that can expand. jsdom does not apply emotion's
+  // stylesheet, so these assert which rows carry the class, not how it looks.
+  describe("cluster row class", () => {
+    it("marks cluster rows and not replica rows", async () => {
+      await renderClustersList([buildCluster()]);
+
+      expect(rowFor("compute")).toHaveClass("cluster-row");
+      expect(rowFor("r1")).not.toHaveClass("cluster-row");
+      expect(rowFor("r2")).not.toHaveClass("cluster-row");
+    });
+
+    it("marks a cluster with no replicas, which is not a group row", async () => {
+      await renderClustersList([buildCluster({ replicas: [] })]);
+
+      // No caret, so `[data-group-row]` is absent. The class still applies.
+      expect(caretFor("compute")).not.toBeInTheDocument();
+      expect(rowFor("compute")).not.toHaveAttribute("data-group-row");
+      expect(rowFor("compute")).toHaveClass("cluster-row");
+    });
+
+    it("keeps Chakra's generated class alongside it", async () => {
+      await renderClustersList([buildCluster()]);
+
+      // `&.cluster-row td` compiles to a compound of both classes, so losing
+      // either one silently drops the styling.
+      const classes = rowFor("compute").className.split(/\s+/);
+      expect(classes).toContain("cluster-row");
+      expect(classes.some((name) => name.startsWith("css-"))).toBe(true);
+    });
+  });
+
   it("does not make a cluster without replicas expandable", async () => {
     await renderClustersList([buildCluster({ replicas: [] })]);
 
     expect(caretFor("compute")).not.toBeInTheDocument();
-    expect(cellsForRow("compute")[COLUMN.replicaCount]).toBe("0");
   });
 
-  it("makes a cluster with a single replica expandable", async () => {
-    const user = userEvent.setup();
+  it("shows a single replica's row without a click", async () => {
     await renderClustersList([buildCluster({ replicas: [buildReplica()] })]);
 
-    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "false");
-    expect(cellsForRow("compute")[COLUMN.replicaCount]).toBe("1");
-
-    await expandCluster(user, "compute");
+    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "true");
     expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
   });
 
-  it("leaves cluster rows showing their own aggregates", async () => {
+  it("shows nothing but the name on a cluster row", async () => {
     await renderClustersList([buildCluster()]);
 
+    // A cluster row is a heading: its replicas carry the data. Only the name
+    // and the actions menu belong to it.
     const cells = cellsForRow("compute");
-    expect(cells[COLUMN.replicaCount]).toBe("2");
-    expect(cells[COLUMN.size]).toBe("50cc, 100cc");
-    expect(cells[COLUMN.lastStatusChange]).toBe(formatted(STATUS_UPDATED_AT));
+    expect(cells[COLUMN.name]).toContain("compute");
+    expect(cells[COLUMN.size]).toBe("");
+    expect(cells[COLUMN.cpu]).toBe("");
+    expect(cells[COLUMN.lastStatusChange]).toBe("");
   });
 });
 
