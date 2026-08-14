@@ -22,7 +22,7 @@ We run five benchmarks spanning the lifecycle of a typical Materialize installat
 
 - **Test:** How long the initial [snapshot](/ingest-data/#snapshotting) of a newly connected source takes to complete.
 - **Method:** We create a source and snapshot 1 to 4 tables (topics for Kafka), each holding 100 million records (about 10 GB), using a 400cc Materialize cluster.
-- **Results:** Snapshotting four tables takes about 5 to 26 minutes depending on the source. Snapshot time depends on cluster size and the upstream system, with [upsert sources like Kafka](/ingest-data/#upsert-sources) being more resource intensive.
+- **Results:** Snapshotting four tables takes about 5 to 26 minutes depending on the source. Snapshot time depends on cluster size and the upstream system, with [Kafka upsert sources](/ingest-data/#upsert-sources) being more resource intensive.
 
 {{< tabs >}}
 {{< tab "Chart" >}}
