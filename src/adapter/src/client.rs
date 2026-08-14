@@ -305,6 +305,7 @@ impl Client {
             superuser_attribute,
             occ_write_semaphore,
             frontend_read_then_write_enabled,
+            group_commit_notifier,
             read_only,
         } = response;
 
@@ -318,6 +319,7 @@ impl Client {
             statement_logging_frontend,
             occ_write_semaphore,
             frontend_read_then_write_enabled,
+            group_commit_notifier,
             read_only,
         );
 

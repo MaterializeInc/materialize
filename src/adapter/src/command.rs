@@ -586,6 +586,9 @@ pub struct StartupResponse {
     /// Whether frontend OCC read-then-write is enabled (determined once at
     /// process startup).
     pub frontend_read_then_write_enabled: bool,
+    /// Requests a group commit, which is how the frontend asks for the write
+    /// timeline to advance without having anything to write.
+    pub group_commit_notifier: crate::coord::appends::GroupCommitNotifier,
     /// Whether the coordinator is in read-only mode (e.g. during 0dt upgrades).
     /// The frontend path must reject mutations when this is true.
     pub read_only: bool,

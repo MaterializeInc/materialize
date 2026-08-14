@@ -983,12 +983,34 @@ impl PeekClient {
             None => return Ok(()),
         };
 
+        // Cloned before `ensure_oracle` borrows `self` for the rest of this
+        // function. The handle is an `Arc` internally, so this is cheap.
+        let group_commit_notifier = self.group_commit_notifier.clone();
         let oracle = self.ensure_oracle(tl).await?;
+
+        // The oracle advances only when a group commit applies, and an empty
+        // group commit is already the periodic keepalive. So when we have
+        // nothing to write ourselves, waiting for the next tick costs up to a
+        // full `default_timestamp_interval`. We ask for that commit instead of
+        // waiting for it, which also spares the oracle the ~1ms poll below
+        // running for the whole interval.
+        //
+        // Once per wait rather than once per poll. The committer never
+        // allocates a write timestamp above wall clock, so a far-future `as_of`
+        // cannot be reached by asking, and nudging per iteration would spin for
+        // as long as such a statement legitimately parks. That case pays one
+        // empty commit, which is what the keepalive would have done anyway.
+        let mut nudged = false;
 
         loop {
             let oracle_ts = oracle.read_ts().await;
             if as_of <= oracle_ts {
                 return Ok(());
+            }
+
+            if !nudged {
+                group_commit_notifier.notify();
+                nudged = true;
             }
 
             // Sleep for roughly the difference between as_of and the current

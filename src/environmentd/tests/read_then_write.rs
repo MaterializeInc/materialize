@@ -1683,3 +1683,41 @@ fn test_dependency_dropped_under_running_mutation() {
         "expected a concurrent dependency drop, got {code:?}: {message:?}"
     );
 }
+
+/// A read-then-write that matches no rows still has to linearize its read, and
+/// the oracle only advances when a group commit applies. Without asking for
+/// that commit the statement waits for the periodic keepalive, so it costs a
+/// full `default_timestamp_interval` where it should cost milliseconds.
+///
+/// The assertion is deliberately loose. It only needs to separate "we waited
+/// for a keepalive" from "we asked for one", so it stays well clear of both the
+/// 1s interval and CI load.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_zero_row_write_does_not_wait_for_keepalive() {
+    const STATEMENTS: usize = 10;
+
+    let server = frontend_occ_harness().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE t (a INT)").unwrap();
+    client.batch_execute("INSERT INTO t VALUES (1)").unwrap();
+
+    // Every statement matches nothing, so each one takes the zero-row
+    // linearization path.
+    let start = Instant::now();
+    for _ in 0..STATEMENTS {
+        let rows = client
+            .execute("UPDATE t SET a = 2 WHERE a = 999", &[])
+            .unwrap();
+        assert_eq!(rows, 0, "the predicate must match no rows");
+    }
+    let elapsed = start.elapsed();
+
+    let per_statement = elapsed / u32::try_from(STATEMENTS).unwrap();
+    assert!(
+        per_statement < Duration::from_millis(500),
+        "zero-row writes averaged {per_statement:?} each, which is the keepalive \
+         interval rather than a nudged group commit (total {elapsed:?})"
+    );
+}

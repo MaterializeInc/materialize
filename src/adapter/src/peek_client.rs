@@ -40,6 +40,7 @@ use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
+use crate::coord::appends::GroupCommitNotifier;
 use crate::coord::peek::FastPathPlan;
 use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard};
 use crate::session::{LifecycleTimestamps, Session};
@@ -83,6 +84,9 @@ pub struct PeekClient {
     pub occ_write_semaphore: Arc<Semaphore>,
     /// Whether frontend OCC read-then-write is enabled (determined once at process startup).
     pub frontend_read_then_write_enabled: bool,
+    /// Requests a group commit. Used to advance the write timeline when we
+    /// need the oracle to move but have nothing to write ourselves.
+    pub(crate) group_commit_notifier: GroupCommitNotifier,
     /// Whether the coordinator is in read-only mode. Mutations must be rejected.
     pub read_only: bool,
 }
@@ -102,6 +106,7 @@ impl PeekClient {
         statement_logging_frontend: StatementLoggingFrontend,
         occ_write_semaphore: Arc<Semaphore>,
         frontend_read_then_write_enabled: bool,
+        group_commit_notifier: GroupCommitNotifier,
         read_only: bool,
     ) -> Self {
         Self {
@@ -116,6 +121,7 @@ impl PeekClient {
             persist_client,
             occ_write_semaphore,
             frontend_read_then_write_enabled,
+            group_commit_notifier,
             read_only,
         }
     }

@@ -970,6 +970,7 @@ impl Coordinator {
                     superuser_attribute,
                     occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
                     frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
+                    group_commit_notifier: self.group_commit_tx.clone(),
                     read_only: self.controller.read_only(),
                 });
                 if tx.send(resp).is_err() {
