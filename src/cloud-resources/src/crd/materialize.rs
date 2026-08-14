@@ -276,10 +276,11 @@ pub mod v1alpha1 {
         /// is a valid JSON object containing valid system parameters.
         ///
         /// Each top-level key sets a parameter for the whole environment, except
-        /// for the two reserved keys `clusters` and `replicas`. Those hold
-        /// per-cluster and per-replica overrides for the parameters that support
-        /// them, keyed by cluster name, and by cluster name then replica name.
-        /// Names that match no live cluster or replica are ignored.
+        /// for the two reserved keys `segments` and `rules`. A segment is a named
+        /// predicate over the attributes of a cluster or replica, and a rule
+        /// attaches parameters to a segment. For each parameter the first
+        /// matching rule wins. A segment matching no live cluster or replica has
+        /// no effect.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -289,12 +290,15 @@ pub mod v1alpha1 {
         ///   system-params.json: |
         ///     {
         ///       "max_connections": 1000,
-        ///       "clusters": {
-        ///         "analytics": {"enable_eager_delta_joins": true}
+        ///       "segments": {
+        ///         "analytics": {"cluster_name": ["analytics"]}
         ///       },
-        ///       "replicas": {
-        ///         "analytics": {"r1": {"enable_lgalloc": false}}
-        ///       }
+        ///       "rules": [
+        ///         {
+        ///           "segment": "analytics",
+        ///           "parameters": {"enable_eager_delta_joins": true}
+        ///         }
+        ///       ]
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,
@@ -1559,10 +1563,11 @@ pub mod v1 {
         /// is a valid JSON object containing valid system parameters.
         ///
         /// Each top-level key sets a parameter for the whole environment, except
-        /// for the two reserved keys `clusters` and `replicas`. Those hold
-        /// per-cluster and per-replica overrides for the parameters that support
-        /// them, keyed by cluster name, and by cluster name then replica name.
-        /// Names that match no live cluster or replica are ignored.
+        /// for the two reserved keys `segments` and `rules`. A segment is a named
+        /// predicate over the attributes of a cluster or replica, and a rule
+        /// attaches parameters to a segment. For each parameter the first
+        /// matching rule wins. A segment matching no live cluster or replica has
+        /// no effect.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -1572,12 +1577,15 @@ pub mod v1 {
         ///   system-params.json: |
         ///     {
         ///       "max_connections": 1000,
-        ///       "clusters": {
-        ///         "analytics": {"enable_eager_delta_joins": true}
+        ///       "segments": {
+        ///         "analytics": {"cluster_name": ["analytics"]}
         ///       },
-        ///       "replicas": {
-        ///         "analytics": {"r1": {"enable_lgalloc": false}}
-        ///       }
+        ///       "rules": [
+        ///         {
+        ///           "segment": "analytics",
+        ///           "parameters": {"enable_eager_delta_joins": true}
+        ///         }
+        ///       ]
         ///     }
         /// ```
         pub system_parameter_configmap_name: Option<String>,

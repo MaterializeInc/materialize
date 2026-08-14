@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs;
 use std::io;
@@ -76,45 +76,46 @@ pub enum SystemParameterFrontendClient {
 
 impl SystemParameterFrontendClient {}
 
-/// Reserved top-level key of the config-sync file holding the cluster-coherent
-/// overrides, keyed by cluster name.
-const CLUSTERS_SECTION: &str = "clusters";
-/// Reserved top-level key of the config-sync file holding the replica-local
-/// overrides, keyed by cluster name then replica name.
-const REPLICAS_SECTION: &str = "replicas";
+/// Reserved top-level key of the config-sync file holding the segment
+/// definitions, keyed by segment name.
+const SEGMENTS_SECTION: &str = "segments";
+/// Reserved top-level key of the config-sync file holding the ordered rules.
+const RULES_SECTION: &str = "rules";
+/// Key of a `rules` element naming the segment whose objects it applies to.
+const RULE_SEGMENT: &str = "segment";
+/// Key of a `rules` element holding the parameters it supplies.
+const RULE_PARAMETERS: &str = "parameters";
 
 /// The parsed contents of the config-sync file.
 ///
 /// The file is a JSON object whose keys are parameter names, except for the two
-/// reserved section keys [`CLUSTERS_SECTION`] and [`REPLICAS_SECTION`]. A file
+/// reserved section keys [`SEGMENTS_SECTION`] and [`RULES_SECTION`]. A file
 /// carrying neither reserved key is therefore a flat, wholly environment-wide
 /// parameter map.
 ///
-/// No synced system parameter may be named `clusters` or `replicas`, or the
+/// No synced system parameter may be named `segments` or `rules`, or the
 /// reserved section would shadow it.
 /// `test_no_synced_parameter_shadows_a_reserved_section` enforces that.
 #[derive(Debug, Default, PartialEq)]
 struct ConfigFile {
     /// Environment-wide values, keyed by the parameter's external name.
     environment: BTreeMap<String, JsonValue>,
-    /// Cluster-coherent overrides, keyed by cluster name then external name.
-    clusters: BTreeMap<String, BTreeMap<String, JsonValue>>,
-    /// Replica-local overrides, keyed by cluster name, then replica name, then
-    /// external name.
-    ///
-    /// Nested rather than keyed by a composite `"cluster.replica"` string
-    /// because cluster and replica names are SQL identifiers that may themselves
-    /// contain a `.`, which would make a composite key ambiguous.
-    replicas: BTreeMap<String, BTreeMap<String, BTreeMap<String, JsonValue>>>,
+    /// The predicates rules select objects with, keyed by segment name.
+    segments: BTreeMap<String, Segment>,
+    /// The rules, in the document order the file lists them in. The first rule
+    /// whose segment matches an object decides each parameter it supplies, so the
+    /// order is load-bearing and an array is the only shape that carries it: a
+    /// JSON object's key order is lost on parse.
+    rules: Vec<Rule>,
 }
 
 impl ConfigFile {
     /// Parses the config-sync file's contents, or `None` if the document is not a
     /// JSON object.
     ///
-    /// Individual sections are parsed leniently: a section, object entry, or
+    /// Individual sections are parsed leniently: a section, segment, rule, or
     /// value of the wrong shape is dropped with a warning rather than failing the
-    /// parse, so one bad scoped entry cannot strand the rest of the file.
+    /// parse, so one bad entry cannot strand the rest of the file.
     ///
     /// A `None` return is "no information about any parameter", which callers must
     /// keep distinct from a valid but empty document. An empty document is a
@@ -133,35 +134,20 @@ impl ConfigFile {
         let mut file = Self::default();
         for (key, value) in values {
             match key.as_str() {
-                CLUSTERS_SECTION => {
-                    file.clusters = as_object(FilePosition::Section(CLUSTERS_SECTION), value)
+                SEGMENTS_SECTION => {
+                    file.segments = as_object(FilePosition::Section(SEGMENTS_SECTION), value)
                         .into_iter()
-                        .map(|(cluster, params)| {
-                            let params = as_object(FilePosition::Cluster(&cluster), params);
-                            (cluster, params)
+                        .filter_map(|(name, predicate)| {
+                            let segment = Segment::parse(FilePosition::Segment(&name), predicate)?;
+                            Some((name, segment))
                         })
                         .collect();
                 }
-                REPLICAS_SECTION => {
-                    file.replicas = as_object(FilePosition::Section(REPLICAS_SECTION), value)
+                RULES_SECTION => {
+                    file.rules = as_array(FilePosition::Section(RULES_SECTION), value)
                         .into_iter()
-                        .map(|(cluster, replicas)| {
-                            let replicas =
-                                as_object(FilePosition::ClusterReplicas(&cluster), replicas)
-                                    .into_iter()
-                                    .map(|(replica, params)| {
-                                        let params = as_object(
-                                            FilePosition::Replica {
-                                                cluster: &cluster,
-                                                replica: &replica,
-                                            },
-                                            params,
-                                        );
-                                        (replica, params)
-                                    })
-                                    .collect();
-                            (cluster, replicas)
-                        })
+                        .enumerate()
+                        .filter_map(|(index, rule)| Rule::parse(index + 1, rule))
                         .collect();
                 }
                 _ => {
@@ -171,6 +157,280 @@ impl ConfigFile {
         }
 
         Some(file)
+    }
+}
+
+/// An attribute of a cluster or replica that a [`Segment`] predicate matches on.
+///
+/// The vocabulary is closed, and is the same one the LaunchDarkly `cluster` and
+/// `replica` context kinds carry (see [`cluster_context`] and
+/// [`replica_context`]), so that a segment expresses what a LaunchDarkly rule
+/// expresses and the file can stand in for LaunchDarkly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ScopeAttribute {
+    ClusterId,
+    ClusterName,
+    /// Whether the object is, or belongs to, a builtin (system) cluster.
+    IsBuiltin,
+    ReplicaId,
+    ReplicaName,
+    ReplicaSize,
+    ReplicaSizeFamily,
+}
+
+impl ScopeAttribute {
+    /// The attribute of this name, or `None` if the name is outside the
+    /// vocabulary.
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "cluster_id" => Some(Self::ClusterId),
+            "cluster_name" => Some(Self::ClusterName),
+            "is_builtin" => Some(Self::IsBuiltin),
+            "replica_id" => Some(Self::ReplicaId),
+            "replica_name" => Some(Self::ReplicaName),
+            "replica_size" => Some(Self::ReplicaSize),
+            "replica_size_family" => Some(Self::ReplicaSizeFamily),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::ClusterId => "cluster_id",
+            Self::ClusterName => "cluster_name",
+            Self::IsBuiltin => "is_builtin",
+            Self::ReplicaId => "replica_id",
+            Self::ReplicaName => "replica_name",
+            Self::ReplicaSize => "replica_size",
+            Self::ReplicaSizeFamily => "replica_size_family",
+        }
+    }
+
+    /// Whether the attribute can distinguish two replicas of one cluster.
+    ///
+    /// A [`ParameterScope::Cluster`] parameter may not be supplied through a
+    /// segment matching on one. See
+    /// [`SystemParameterFrontend::file_rule_overrides`].
+    fn is_replica_attribute(&self) -> bool {
+        match self {
+            Self::ClusterId | Self::ClusterName | Self::IsBuiltin => false,
+            Self::ReplicaId | Self::ReplicaName | Self::ReplicaSize | Self::ReplicaSizeFamily => {
+                true
+            }
+        }
+    }
+}
+
+/// The attributes a cluster is matched against, mirroring [`cluster_context`].
+///
+/// Deliberately replica-free: a cluster-coherent parameter must resolve
+/// identically across the cluster's replicas.
+fn cluster_attributes(cluster: &ClusterScopeContext) -> BTreeMap<ScopeAttribute, String> {
+    BTreeMap::from([
+        (ScopeAttribute::ClusterId, cluster.id.clone()),
+        (ScopeAttribute::ClusterName, cluster.name.clone()),
+        (ScopeAttribute::IsBuiltin, cluster.is_builtin.to_string()),
+    ])
+}
+
+/// The attributes a replica is matched against, mirroring [`replica_context`].
+///
+/// Carries the owning cluster's attributes too, so a replica-local parameter can
+/// be targeted by cluster alone.
+fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute, String> {
+    BTreeMap::from([
+        (ScopeAttribute::ClusterId, replica.cluster_id.clone()),
+        (ScopeAttribute::ClusterName, replica.cluster_name.clone()),
+        (ScopeAttribute::IsBuiltin, replica.is_builtin.to_string()),
+        (ScopeAttribute::ReplicaId, replica.id.clone()),
+        (ScopeAttribute::ReplicaName, replica.name.clone()),
+        (ScopeAttribute::ReplicaSize, replica.size.clone()),
+        (
+            ScopeAttribute::ReplicaSizeFamily,
+            replica.size_family.clone(),
+        ),
+    ])
+}
+
+/// A named predicate over a cluster's or replica's scope attributes.
+///
+/// Attributes are ANDed, the allowed values of one attribute are ORed, and
+/// matching is exact. That is LaunchDarkly's `in` operator and nothing more:
+/// there is no prefix, regex, or negation operator.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Segment {
+    /// The values allowed for each attribute the predicate constrains. An empty
+    /// predicate constrains nothing, so it matches every object.
+    attributes: BTreeMap<ScopeAttribute, BTreeSet<String>>,
+    /// The predicate entries this binary cannot evaluate, keyed by the attribute
+    /// name the file spells and reported by
+    /// [`SystemParameterFrontend::scoped_rule_diagnostics`].
+    ///
+    /// A segment with any such entry matches nothing, so the rules naming it
+    /// never apply. Fail-safe on purpose: dropping the entry instead would leave
+    /// the surviving ANDed attributes matching a *wider* set of objects than the
+    /// operator wrote, and a predicate whose every entry was dropped would match
+    /// everything.
+    rejected: BTreeMap<String, RejectedAttribute>,
+}
+
+/// Why a [`Segment`] predicate entry cannot be evaluated.
+#[derive(Debug, PartialEq, Eq)]
+enum RejectedAttribute {
+    /// The name is outside the [`ScopeAttribute`] vocabulary.
+    UnknownAttribute,
+    /// The value is not an array of JSON scalars. Only that shape is accepted, so
+    /// that a value spelled as some other shape, for instance an operator this
+    /// binary predates, is rejected rather than misread.
+    UnsupportedValues,
+}
+
+impl fmt::Display for RejectedAttribute {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            RejectedAttribute::UnknownAttribute => {
+                write!(f, "is not a cluster or replica attribute")
+            }
+            RejectedAttribute::UnsupportedValues => {
+                write!(f, "expects an array of strings, numbers or booleans")
+            }
+        }
+    }
+}
+
+impl Segment {
+    /// Parses one entry of the `segments` section, or `None` if its value is not
+    /// a JSON object.
+    ///
+    /// A predicate entry that cannot be evaluated is kept as a
+    /// [`RejectedAttribute`] rather than dropped, so that the segment matches
+    /// nothing and the diagnostics can name it.
+    fn parse(position: FilePosition<'_>, value: JsonValue) -> Option<Self> {
+        let predicate = match value {
+            JsonValue::Object(predicate) => predicate,
+            other => {
+                warn!(
+                    "ignoring {position} in system parameter sync file: expected a JSON object, found {}",
+                    json_type_name(&other)
+                );
+                return None;
+            }
+        };
+
+        let mut segment = Self::default();
+        for (name, value) in predicate {
+            let Some(attribute) = ScopeAttribute::parse(&name) else {
+                segment
+                    .rejected
+                    .insert(name, RejectedAttribute::UnknownAttribute);
+                continue;
+            };
+            match predicate_values(&value) {
+                Some(values) => {
+                    segment.attributes.insert(attribute, values);
+                }
+                None => {
+                    segment
+                        .rejected
+                        .insert(name, RejectedAttribute::UnsupportedValues);
+                }
+            }
+        }
+        Some(segment)
+    }
+
+    /// Whether the predicate holds for an object carrying `attributes`.
+    ///
+    /// An attribute the object does not carry never matches, so a predicate
+    /// constraining a replica attribute holds for no cluster: a cluster's
+    /// attributes are replica-free.
+    fn matches(&self, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
+        self.rejected.is_empty()
+            && self.attributes.iter().all(|(attribute, allowed)| {
+                attributes
+                    .get(attribute)
+                    .is_some_and(|value| allowed.contains(value))
+            })
+    }
+
+    /// A replica attribute the predicate constrains, if any.
+    fn replica_attribute(&self) -> Option<ScopeAttribute> {
+        self.attributes
+            .keys()
+            .copied()
+            .find(|attribute| attribute.is_replica_attribute())
+    }
+}
+
+/// One element of the `rules` array: the parameters to apply to the objects a
+/// segment matches.
+#[derive(Debug, PartialEq)]
+struct Rule {
+    /// The rule's 1-based position in the `rules` array, named in diagnostics.
+    /// Recorded rather than derived from the parsed order so that a malformed
+    /// element, which is dropped, does not renumber the rules after it.
+    ordinal: usize,
+    /// The name of the [`Segment`] selecting the objects this rule applies to.
+    segment: String,
+    /// The values this rule supplies, keyed by the parameter's external name.
+    parameters: BTreeMap<String, JsonValue>,
+}
+
+impl Rule {
+    /// Parses the `ordinal`th element of the `rules` array, or `None` if it is
+    /// not an object carrying a segment name and a parameter object.
+    fn parse(ordinal: usize, value: JsonValue) -> Option<Self> {
+        let position = FilePosition::Rule {
+            ordinal,
+            segment: None,
+        };
+        let mut rule = match value {
+            JsonValue::Object(rule) => rule,
+            other => {
+                warn!(
+                    "ignoring {position} in system parameter sync file: expected a JSON object, found {}",
+                    json_type_name(&other)
+                );
+                return None;
+            }
+        };
+
+        let segment = match rule.remove(RULE_SEGMENT) {
+            Some(JsonValue::String(segment)) => segment,
+            other => {
+                warn!(
+                    "ignoring {position} in system parameter sync file: expected a {RULE_SEGMENT:?} \
+                     name, found {}",
+                    other.as_ref().map_or("nothing", json_type_name)
+                );
+                return None;
+            }
+        };
+        let parameters = match rule.remove(RULE_PARAMETERS) {
+            Some(JsonValue::Object(parameters)) => parameters.into_iter().collect(),
+            other => {
+                warn!(
+                    "ignoring {position} in system parameter sync file: expected a \
+                     {RULE_PARAMETERS:?} object, found {}",
+                    other.as_ref().map_or("nothing", json_type_name)
+                );
+                return None;
+            }
+        };
+
+        Some(Self {
+            ordinal,
+            segment,
+            parameters,
+        })
+    }
+
+    /// The rule's position, for a diagnostic about it.
+    fn position(&self) -> FilePosition<'_> {
+        FilePosition::Rule {
+            ordinal: self.ordinal,
+            segment: Some(&self.segment),
+        }
     }
 }
 
@@ -193,30 +453,34 @@ struct CachedConfigFile {
     file: Option<Arc<ConfigFile>>,
 }
 
-/// A position in the config-sync file, naming it in a warning about a value of
-/// the wrong shape there.
+/// A position in the config-sync file, naming it in a diagnostic about what is
+/// written there.
 enum FilePosition<'a> {
     /// A reserved top-level section.
     Section(&'a str),
-    /// One cluster's entry in the `clusters` section.
-    Cluster(&'a str),
-    /// One cluster's entry in the `replicas` section, holding its replicas.
-    ClusterReplicas(&'a str),
-    /// One replica's entry within a cluster's entry in the `replicas` section.
-    Replica { cluster: &'a str, replica: &'a str },
+    /// One entry of the `segments` section.
+    Segment(&'a str),
+    /// One element of the `rules` array, by its 1-based position and, once
+    /// parsed, the segment it names.
+    Rule {
+        ordinal: usize,
+        segment: Option<&'a str>,
+    },
 }
 
 impl fmt::Display for FilePosition<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             FilePosition::Section(name) => write!(f, "the {name} section"),
-            FilePosition::Cluster(cluster) => write!(f, "cluster {cluster:?}"),
-            FilePosition::ClusterReplicas(cluster) => {
-                write!(f, "the {REPLICAS_SECTION} entry for cluster {cluster:?}")
-            }
-            FilePosition::Replica { cluster, replica } => {
-                write!(f, "replica {cluster:?}.{replica:?}")
-            }
+            FilePosition::Segment(name) => write!(f, "segment {name:?}"),
+            FilePosition::Rule {
+                ordinal,
+                segment: None,
+            } => write!(f, "rule {ordinal}"),
+            FilePosition::Rule {
+                ordinal,
+                segment: Some(segment),
+            } => write!(f, "rule {ordinal} (segment {segment:?})"),
         }
     }
 }
@@ -232,6 +496,43 @@ fn as_object(position: FilePosition<'_>, value: JsonValue) -> BTreeMap<String, J
             );
             BTreeMap::new()
         }
+    }
+}
+
+/// Interprets `value` as a JSON array, or warns and yields an empty vector.
+fn as_array(position: FilePosition<'_>, value: JsonValue) -> Vec<JsonValue> {
+    match value {
+        JsonValue::Array(values) => values,
+        other => {
+            warn!(
+                "ignoring {position} in system parameter sync file: expected a JSON array, found {}",
+                json_type_name(&other)
+            );
+            Vec::new()
+        }
+    }
+}
+
+/// The values a [`Segment`] predicate entry allows, or `None` if `value` is not
+/// an array of JSON scalars.
+///
+/// Rendered to strings because that is how scope attributes are spelled, so a
+/// boolean attribute may be written either as `true` or as `"true"`.
+fn predicate_values(value: &JsonValue) -> Option<BTreeSet<String>> {
+    let JsonValue::Array(values) = value else {
+        return None;
+    };
+    values.iter().map(scalar_string).collect()
+}
+
+/// Renders a JSON scalar as the string a scope attribute is compared against, or
+/// `None` for a composite value or `null`.
+fn scalar_string(value: &JsonValue) -> Option<String> {
+    match value {
+        JsonValue::String(v) => Some(v.clone()),
+        JsonValue::Number(v) => Some(v.to_string()),
+        JsonValue::Bool(v) => Some(v.to_string()),
+        JsonValue::Object(_) | JsonValue::Array(_) | JsonValue::Null => None,
     }
 }
 
@@ -452,7 +753,7 @@ impl SystemParameterFrontend {
             .and_then(ConfigFile::parse)
             .map(Arc::new);
         if let Some(file) = &file {
-            for diagnostic in self.scoped_section_diagnostics(file, params) {
+            for diagnostic in self.scoped_rule_diagnostics(file, params) {
                 warn!("{diagnostic}");
             }
         }
@@ -494,62 +795,98 @@ impl SystemParameterFrontend {
         }
     }
 
-    /// The problems with `file`'s scoped sections that an operator can act on: a
-    /// key that is not a parameter scopable at that position, and a value that
-    /// does not parse for its parameter's type. Resolution drops both silently,
-    /// and nothing surfaces a parameter's scope from SQL, so without this an
-    /// operator has nothing to debug against.
+    /// The problems with `file`'s segments and rules that an operator can act on:
+    /// a predicate entry that cannot be evaluated, a rule naming a segment that
+    /// does not exist, a parameter that is not scopable at all, a cluster-scoped
+    /// parameter supplied through a replica-discriminating segment, and a value
+    /// that does not parse for its parameter's type. Resolution drops each of
+    /// these silently, and nothing surfaces a parameter's scope from SQL, so
+    /// without this an operator has nothing to debug against.
     ///
     /// Returned rather than logged so that [`Self::refresh_config_file`] can log
     /// them only when the file changes.
-    fn scoped_section_diagnostics(
+    fn scoped_rule_diagnostics(
         &self,
         file: &ConfigFile,
         params: &SynchronizedParameters,
     ) -> Vec<String> {
         let mut diagnostics = Vec::new();
 
-        let cluster_params = self.scopable_params(params, ParameterScope::Cluster);
-        for (cluster, section) in &file.clusters {
-            section_diagnostics(
-                section,
-                params,
-                &cluster_params,
-                "cluster-scoped",
-                FilePosition::Cluster(cluster),
-                &mut diagnostics,
-            );
+        for (name, segment) in &file.segments {
+            for (attribute, rejected) in &segment.rejected {
+                diagnostics.push(format!(
+                    "{} in the system parameter sync file matches no cluster or replica: \
+                     attribute {attribute:?} {rejected}",
+                    FilePosition::Segment(name)
+                ));
+            }
         }
 
-        let replica_params = self.scopable_params(params, ParameterScope::Replica);
-        for (cluster, replicas) in &file.replicas {
-            for (replica, section) in replicas {
-                section_diagnostics(
-                    section,
-                    params,
-                    &replica_params,
-                    "replica-scoped",
-                    FilePosition::Replica { cluster, replica },
-                    &mut diagnostics,
-                );
+        let scopable = self.scopable_params(params);
+        for rule in &file.rules {
+            let Some(segment) = file.segments.get(&rule.segment) else {
+                diagnostics.push(format!(
+                    "ignoring rule {} in the system parameter sync file: no segment named {:?}",
+                    rule.ordinal, rule.segment
+                ));
+                continue;
+            };
+            let position = rule.position();
+            let replica_attribute = segment.replica_attribute();
+
+            for (name, value) in &rule.parameters {
+                let Some(&(param_name, scope)) = scopable.get(name.as_str()) else {
+                    diagnostics.push(format!(
+                        "ignoring {name} for {position} in the system parameter sync file: \
+                         not a cluster-scoped or replica-scoped system parameter"
+                    ));
+                    continue;
+                };
+                // The coherence guard, see [`Self::file_rule_overrides`].
+                if scope == ParameterScope::Cluster {
+                    if let Some(attribute) = replica_attribute {
+                        diagnostics.push(format!(
+                            "ignoring {param_name} for {position} in the system parameter sync \
+                             file: {param_name} is cluster-scoped, so it cannot be supplied \
+                             through a segment matching on the replica attribute {}",
+                            attribute.as_str()
+                        ));
+                        continue;
+                    }
+                }
+                // `null` expresses no opinion rather than a value, so there is
+                // nothing to parse.
+                let Some(value) = json_param_value(value) else {
+                    continue;
+                };
+                let base = params.get(param_name);
+                if classify_scoped_value(params, param_name, &base, &value)
+                    == ScopedValue::Unparseable
+                {
+                    diagnostics.push(format!(
+                        "ignoring unparseable value {value:?} for system parameter {param_name} \
+                         on {position} in the system parameter sync file"
+                    ));
+                }
             }
         }
 
         diagnostics
     }
 
-    /// The synced parameters that declare `scope`, keyed by the name a config-sync
-    /// file section spells them with.
+    /// The synced parameters that declare a scope, keyed by the name a rule spells
+    /// them with and carrying the scope they declare.
     fn scopable_params<'a>(
         &'a self,
         params: &SynchronizedParameters,
-        scope: ParameterScope,
-    ) -> BTreeMap<&'a str, &'static str> {
-        params
-            .synchronized_with_scope(scope)
-            .into_iter()
-            .map(|param_name| (self.external_name(param_name), param_name))
-            .collect()
+    ) -> BTreeMap<&'a str, (&'static str, ParameterScope)> {
+        let mut scopable = BTreeMap::new();
+        for scope in [ParameterScope::Cluster, ParameterScope::Replica] {
+            for param_name in params.synchronized_with_scope(scope) {
+                scopable.insert(self.external_name(param_name), (param_name, scope));
+            }
+        }
+        scopable
     }
 
     /// Evaluates the replica-local scoped parameters for each given replica and
@@ -557,8 +894,8 @@ impl SystemParameterFrontend {
     /// environment-wide value held in `params`.
     ///
     /// The returned map is sparse: replicas with no overriding value are
-    /// omitted. Replicas absent from `replicas` are never evaluated, so a name
-    /// the config-sync file mentions that is not live is ignored.
+    /// omitted. Replicas absent from `replicas` are never evaluated, so a
+    /// config-sync file segment that matches nothing live has no effect.
     pub fn pull_replica_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -617,8 +954,8 @@ impl SystemParameterFrontend {
     /// value cannot vary by replica.
     ///
     /// The returned map is sparse: clusters with no overriding value are
-    /// omitted. Clusters absent from `clusters` are never evaluated, so a name
-    /// the config-sync file mentions that is not live is ignored.
+    /// omitted. Clusters absent from `clusters` are never evaluated, so a
+    /// config-sync file segment that matches nothing live has no effect.
     pub fn pull_cluster_overrides(
         &self,
         params: &SynchronizedParameters,
@@ -700,11 +1037,11 @@ impl SystemParameterFrontend {
         overrides
     }
 
-    /// Resolves the cluster-coherent overrides `file` declares for each of
-    /// `clusters`, matching a cluster to its file section by name.
+    /// Resolves the cluster-coherent overrides `file`'s rules declare for each of
+    /// `clusters`.
     ///
-    /// The live clusters drive the lookup, so a section naming a cluster that
-    /// does not exist is simply never consulted.
+    /// The live clusters drive the resolution, so a segment that matches nothing
+    /// live simply never applies.
     fn file_cluster_overrides(
         &self,
         file: &ConfigFile,
@@ -714,11 +1051,13 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<ClusterId, BTreeMap<String, String>> {
         let mut out = BTreeMap::new();
         for cluster in clusters {
-            let name = &cluster.cluster.name;
-            let Some(section) = file.clusters.get(name) else {
-                continue;
-            };
-            let overrides = self.file_section_overrides(section, params, param_names);
+            let overrides = self.file_rule_overrides(
+                file,
+                params,
+                param_names,
+                ParameterScope::Cluster,
+                &cluster_attributes(&cluster.cluster),
+            );
             if !overrides.is_empty() {
                 out.insert(cluster.cluster_id, overrides);
             }
@@ -726,12 +1065,11 @@ impl SystemParameterFrontend {
         out
     }
 
-    /// Resolves the replica-local overrides `file` declares for each of
-    /// `replicas`, matching a replica to its file section by owning cluster name
-    /// then replica name.
+    /// Resolves the replica-local overrides `file`'s rules declare for each of
+    /// `replicas`.
     ///
-    /// The live replicas drive the lookup, so a section naming a cluster or
-    /// replica that does not exist is simply never consulted.
+    /// The live replicas drive the resolution, so a segment that matches nothing
+    /// live simply never applies.
     fn file_replica_overrides(
         &self,
         file: &ConfigFile,
@@ -741,16 +1079,13 @@ impl SystemParameterFrontend {
     ) -> BTreeMap<ReplicaId, BTreeMap<String, String>> {
         let mut out = BTreeMap::new();
         for replica in replicas {
-            let (cluster_name, replica_name) =
-                (&replica.replica.cluster_name, &replica.replica.name);
-            let Some(section) = file
-                .replicas
-                .get(cluster_name)
-                .and_then(|cluster| cluster.get(replica_name))
-            else {
-                continue;
-            };
-            let overrides = self.file_section_overrides(section, params, param_names);
+            let overrides = self.file_rule_overrides(
+                file,
+                params,
+                param_names,
+                ParameterScope::Replica,
+                &replica_attributes(&replica.replica),
+            );
             if !overrides.is_empty() {
                 out.insert(replica.replica_id, overrides);
             }
@@ -758,74 +1093,80 @@ impl SystemParameterFrontend {
         out
     }
 
-    /// Resolves one object's config-sync file section into its scoped overrides,
-    /// applying the same parseability and differs-from-environment rules as the
-    /// LaunchDarkly path.
+    /// Resolves one object's scoped overrides from `file`'s rules, given the
+    /// object's scope `attributes` and the `scope` that every parameter in
+    /// `param_names` declares.
     ///
-    /// A parameter the section omits carries no scoped opinion, so it is absent
-    /// from the result and resolves to the environment-wide value. Silent, as this
-    /// runs on every tick and for every create: the operator-facing diagnostics
-    /// are [`Self::scoped_section_diagnostics`], reported once per change to the
-    /// file.
-    fn file_section_overrides(
+    /// The first rule whose segment matches the object and that mentions a
+    /// parameter decides that parameter. A parameter no matching rule mentions
+    /// carries no scoped opinion, so it is absent from the result and resolves to
+    /// the environment-wide value, as does one whose deciding value matches the
+    /// environment-wide value or does not parse. The parseability and
+    /// differs-from-environment rules are the LaunchDarkly path's.
+    ///
+    /// Silent, as this runs on every tick and for every create: the
+    /// operator-facing diagnostics are [`Self::scoped_rule_diagnostics`], reported
+    /// once per change to the file.
+    fn file_rule_overrides(
         &self,
-        section: &BTreeMap<String, JsonValue>,
+        file: &ConfigFile,
         params: &SynchronizedParameters,
         param_names: &[&'static str],
+        scope: ParameterScope,
+        attributes: &BTreeMap<ScopeAttribute, String>,
     ) -> BTreeMap<String, String> {
-        let mut overrides = BTreeMap::new();
-        for &param_name in param_names {
-            let Some(value) = section
-                .get(self.external_name(param_name))
-                .and_then(json_param_value)
-            else {
+        let requested: BTreeMap<&str, &'static str> = param_names
+            .iter()
+            .map(|&param_name| (self.external_name(param_name), param_name))
+            .collect();
+
+        let mut decided: BTreeMap<&'static str, String> = BTreeMap::new();
+        for rule in &file.rules {
+            let Some(segment) = file.segments.get(&rule.segment) else {
                 continue;
             };
+            if !segment.matches(attributes) {
+                continue;
+            }
+            // The coherence guard. A cluster-coherent parameter must resolve
+            // identically across a cluster's replicas, which a segment matching on
+            // a replica attribute cannot promise, so such a rule supplies no
+            // cluster-scoped parameter. The match above already fails for such a
+            // segment, since a cluster carries no replica attributes, but the
+            // guard is explicit so that the invariant does not rest on
+            // `cluster_attributes` staying replica-free. Its operator-facing half
+            // is the matching diagnostic.
+            if scope == ParameterScope::Cluster && segment.replica_attribute().is_some() {
+                continue;
+            }
 
+            for (name, value) in &rule.parameters {
+                let Some(&param_name) = requested.get(name.as_str()) else {
+                    continue;
+                };
+                // First match wins, and it wins before the value is judged:
+                // whether an override lands must not depend on a fallthrough that
+                // only a malformed value could trigger.
+                if decided.contains_key(param_name) {
+                    continue;
+                }
+                // `null` expresses no opinion rather than a value, exactly as at
+                // the top level, so it leaves the parameter to a later rule.
+                let Some(value) = json_param_value(value) else {
+                    continue;
+                };
+                decided.insert(param_name, value);
+            }
+        }
+
+        let mut overrides = BTreeMap::new();
+        for (param_name, value) in decided {
             let base = params.get(param_name);
             if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Override {
                 overrides.insert(param_name.to_string(), value);
             }
         }
         overrides
-    }
-}
-
-/// Appends the diagnostics for one object's config-sync file section to
-/// `diagnostics`.
-///
-/// `scopable` holds the parameters that accept a value at this position, keyed by
-/// the name the file spells them with, and `scope` names that scope for the
-/// message. A key outside `scopable` is a parameter of another scope, or a
-/// misspelling: either way resolution never consults it.
-fn section_diagnostics(
-    section: &BTreeMap<String, JsonValue>,
-    params: &SynchronizedParameters,
-    scopable: &BTreeMap<&str, &'static str>,
-    scope: &str,
-    position: FilePosition<'_>,
-    diagnostics: &mut Vec<String>,
-) {
-    for (name, value) in section {
-        let Some(&param_name) = scopable.get(name.as_str()) else {
-            diagnostics.push(format!(
-                "ignoring {name} for {position} in the system parameter sync file: \
-                 not a {scope} system parameter"
-            ));
-            continue;
-        };
-        // `null` expresses no opinion rather than a value, so there is nothing to
-        // parse.
-        let Some(value) = json_param_value(value) else {
-            continue;
-        };
-        let base = params.get(param_name);
-        if classify_scoped_value(params, param_name, &base, &value) == ScopedValue::Unparseable {
-            diagnostics.push(format!(
-                "ignoring unparseable value {value:?} for system parameter {param_name} \
-                 on {position} in the system parameter sync file"
-            ));
-        }
     }
 }
 
@@ -1172,6 +1513,9 @@ mod tests {
     /// A cluster-coherent `bool` parameter whose environment-wide default is
     /// `off`.
     const CLUSTER_PARAM: &str = "enable_eager_delta_joins";
+    /// A second cluster-coherent `bool` parameter, also `off` environment-wide,
+    /// for the tests that need two parameters to observe rule ordering.
+    const CLUSTER_PARAM_2: &str = "enable_join_prioritize_arranged";
     /// A replica-local `bool` parameter whose environment-wide default is `on`.
     const REPLICA_PARAM: &str = "enable_lgalloc";
 
@@ -1235,12 +1579,39 @@ mod tests {
         }
     }
 
+    /// A replica of a legacy size family, the coarse targeting axis a segment
+    /// matching on `replica_size_family` selects.
+    fn legacy_replica_ctx(
+        cluster_id: u64,
+        cluster_name: &str,
+        replica_id: u64,
+        replica_name: &str,
+    ) -> ReplicaEvalContext {
+        let mut ctx = replica_ctx(cluster_id, cluster_name, replica_id, replica_name);
+        ctx.replica.size = "xsmall".into();
+        ctx.replica.size_family = "legacy".into();
+        ctx
+    }
+
     fn overrides(param_name: &str, value: &str) -> BTreeMap<String, String> {
         BTreeMap::from([(param_name.to_string(), value.to_string())])
     }
 
+    /// A document whose single rule gives the `analytics` cluster `value` for
+    /// [`CLUSTER_PARAM`].
+    fn scoped_file(value: bool) -> String {
+        format!(
+            r#"{{
+                "segments": {{"analytics": {{"cluster_name": ["analytics"]}}}},
+                "rules": [
+                    {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": {value}}}}}
+                ]
+            }}"#
+        )
+    }
+
     /// A file with no reserved section is a plain environment-wide parameter
-    /// map, the flat form a config map without scoped sections takes.
+    /// map, the flat form a config map without segments and rules takes.
     #[mz_ore::test]
     fn test_parse_flat_file_is_environment_wide() {
         let file = parse(
@@ -1259,8 +1630,8 @@ mod tests {
                 "max_connections"
             ]
         );
-        assert!(file.clusters.is_empty());
-        assert!(file.replicas.is_empty());
+        assert!(file.segments.is_empty());
+        assert!(file.rules.is_empty());
 
         // Every JSON scalar renders to the raw string the backend parses.
         assert_eq!(
@@ -1277,12 +1648,18 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_parse_scoped_sections() {
+    fn test_parse_segments_and_rules() {
         let file = parse(
             r#"{
                 "enable_lgalloc": false,
-                "clusters": {"prod": {"enable_eager_delta_joins": true}},
-                "replicas": {"prod": {"r1": {"enable_lgalloc": true}}}
+                "segments": {
+                    "analytics": {"cluster_name": ["analytics", "analytics_2"]},
+                    "legacy-replicas": {"replica_size_family": ["legacy"], "is_builtin": [false]}
+                },
+                "rules": [
+                    {"segment": "analytics", "parameters": {"enable_eager_delta_joins": true}},
+                    {"segment": "legacy-replicas", "parameters": {"enable_lgalloc": true}}
+                ]
             }"#,
         );
 
@@ -1291,27 +1668,57 @@ mod tests {
             file.environment.keys().collect::<Vec<_>>(),
             vec!["enable_lgalloc"]
         );
+
+        // A boolean attribute may be written as a JSON boolean or as its string:
+        // both render to the string the attribute is compared against.
         assert_eq!(
-            file.clusters["prod"][CLUSTER_PARAM],
-            JsonValue::Bool(true),
-            "cluster section parsed"
+            file.segments["analytics"].attributes,
+            BTreeMap::from([(
+                ScopeAttribute::ClusterName,
+                BTreeSet::from(["analytics".to_string(), "analytics_2".to_string()])
+            )])
         );
         assert_eq!(
-            file.replicas["prod"]["r1"][REPLICA_PARAM],
-            JsonValue::Bool(true),
-            "replica section parsed, nested cluster then replica"
+            file.segments["legacy-replicas"].attributes,
+            BTreeMap::from([
+                (
+                    ScopeAttribute::IsBuiltin,
+                    BTreeSet::from(["false".to_string()])
+                ),
+                (
+                    ScopeAttribute::ReplicaSizeFamily,
+                    BTreeSet::from(["legacy".to_string()])
+                ),
+            ])
+        );
+
+        // Rules keep the document order that decides which of them wins.
+        assert_eq!(
+            file.rules
+                .iter()
+                .map(|rule| (rule.ordinal, rule.segment.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "analytics"), (2, "legacy-replicas")]
+        );
+        assert_eq!(
+            file.rules[0].parameters[CLUSTER_PARAM],
+            JsonValue::Bool(true)
         );
     }
 
-    /// One malformed section, or one malformed entry inside a section, must not
-    /// strand the rest of the file.
+    /// One malformed segment or rule must not strand the rest of the file, and
+    /// dropping a rule must not renumber the rules after it.
     #[mz_ore::test]
-    fn test_parse_ignores_malformed_sections() {
+    fn test_parse_ignores_malformed_segments_and_rules() {
         let file = parse(
             r#"{
                 "max_connections": 1000,
-                "clusters": 7,
-                "replicas": {"prod": {"r1": "not-an-object"}}
+                "segments": {"broken": 7, "prod": {"cluster_name": ["prod"]}},
+                "rules": [
+                    "not-a-rule",
+                    {"parameters": {"enable_lgalloc": true}},
+                    {"segment": "prod", "parameters": {"enable_lgalloc": true}}
+                ]
             }"#,
         );
 
@@ -1319,10 +1726,24 @@ mod tests {
             file.environment.keys().collect::<Vec<_>>(),
             vec!["max_connections"]
         );
-        assert!(file.clusters.is_empty(), "non-object section dropped");
-        assert!(
-            file.replicas["prod"]["r1"].is_empty(),
-            "non-object entry dropped, its position retained"
+        assert_eq!(
+            file.segments.keys().collect::<Vec<_>>(),
+            vec!["prod"],
+            "non-object segment dropped"
+        );
+        assert_eq!(file.rules.len(), 1);
+        assert_eq!(
+            file.rules[0].ordinal, 3,
+            "surviving rule keeps its position in the file"
+        );
+
+        // A section of the wrong shape drops that section only.
+        let sections = parse(r#"{"max_connections": 1000, "segments": 7, "rules": {}}"#);
+        assert!(sections.segments.is_empty());
+        assert!(sections.rules.is_empty());
+        assert_eq!(
+            sections.environment.keys().collect::<Vec<_>>(),
+            vec!["max_connections"]
         );
     }
 
@@ -1338,42 +1759,52 @@ mod tests {
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_file_cluster_section_applied() {
+    fn test_file_cluster_rule_applied() {
         let params = SynchronizedParameters::default();
-        let file = parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
+        let file = parse(&scoped_file(true));
 
         let out = file_frontend().file_cluster_overrides(
             &file,
             &params,
             &[CLUSTER_PARAM],
-            &[cluster_ctx(1, "prod"), cluster_ctx(2, "staging")],
+            &[cluster_ctx(1, "analytics"), cluster_ctx(2, "staging")],
         );
 
-        // Sparse: only the named cluster gets a row.
+        // Sparse: only the cluster the segment matches gets a row.
         assert_eq!(
             out,
             BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
         );
     }
 
+    /// The attributes of one segment are ANDed, and a replica may be matched on
+    /// its own attributes as well as its owning cluster's.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_file_replica_section_applied() {
+    fn test_file_replica_rule_applied() {
         let params = SynchronizedParameters::default();
-        let file = parse(r#"{"replicas": {"prod": {"r1": {"enable_lgalloc": false}}}}"#);
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{"legacy-in-prod": {{
+                    "replica_size_family": ["legacy"],
+                    "cluster_name": ["prod"]
+                }}}},
+                "rules": [
+                    {{"segment": "legacy-in-prod", "parameters": {{"{REPLICA_PARAM}": false}}}}
+                ]
+            }}"#
+        ));
 
         let out = file_frontend().file_replica_overrides(
             &file,
             &params,
             &[REPLICA_PARAM],
             &[
-                replica_ctx(1, "prod", 1, "r1"),
-                // Same cluster, different replica name.
+                legacy_replica_ctx(1, "prod", 1, "r1"),
+                // Right cluster, wrong size family.
                 replica_ctx(1, "prod", 2, "r2"),
-                // Same replica name in a different cluster: a replica name is
-                // unique only within its cluster, so the nesting must keep the
-                // two apart.
-                replica_ctx(2, "staging", 3, "r1"),
+                // Right size family, wrong cluster.
+                legacy_replica_ctx(2, "staging", 3, "r1"),
             ],
         );
 
@@ -1383,20 +1814,225 @@ mod tests {
         );
     }
 
-    /// A section naming an object that is not live is ignored, not an error: the
-    /// live objects drive the lookup, so the file is never a second source of
-    /// truth for what exists.
+    /// A replica-local parameter may be supplied through a segment matching on
+    /// cluster attributes alone, which targets every replica of that cluster.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_file_unknown_object_names_ignored() {
+    fn test_file_replica_rule_targeted_by_cluster() {
+        let params = SynchronizedParameters::default();
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{"prod": {{"cluster_name": ["prod"]}}}},
+                "rules": [{{"segment": "prod", "parameters": {{"{REPLICA_PARAM}": false}}}}]
+            }}"#
+        ));
+
+        let out = file_frontend().file_replica_overrides(
+            &file,
+            &params,
+            &[REPLICA_PARAM],
+            &[
+                replica_ctx(1, "prod", 1, "r1"),
+                replica_ctx(1, "prod", 2, "r2"),
+                replica_ctx(2, "staging", 3, "r1"),
+            ],
+        );
+
+        assert_eq!(
+            out,
+            BTreeMap::from([
+                (ReplicaId::User(1), overrides(REPLICA_PARAM, "false")),
+                (ReplicaId::User(2), overrides(REPLICA_PARAM, "false")),
+            ])
+        );
+    }
+
+    /// The first rule whose segment matches decides a parameter, and it decides it
+    /// before the value is judged, so a value agreeing with the environment-wide
+    /// one still shadows a later rule. A rule that does not mention a parameter
+    /// leaves it to a later one, and a segment with an empty predicate matches
+    /// every object.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_first_matching_rule_wins() {
+        let params = SynchronizedParameters::default();
+        // Both parameters are off environment-wide, so `true` is an override for
+        // either. Asserted so that a default flip fails here rather than quietly
+        // weakening the test.
+        assert_eq!(params.get(CLUSTER_PARAM), "off");
+        assert_eq!(params.get(CLUSTER_PARAM_2), "off");
+
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{
+                    "analytics": {{"cluster_name": ["analytics"]}},
+                    "everything": {{}}
+                }},
+                "rules": [
+                    {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": false}}}},
+                    {{"segment": "everything", "parameters": {{
+                        "{CLUSTER_PARAM}": true,
+                        "{CLUSTER_PARAM_2}": true
+                    }}}}
+                ]
+            }}"#
+        ));
+
+        let out = file_frontend().file_cluster_overrides(
+            &file,
+            &params,
+            &[CLUSTER_PARAM, CLUSTER_PARAM_2],
+            &[cluster_ctx(1, "analytics"), cluster_ctx(2, "staging")],
+        );
+
+        assert_eq!(
+            out,
+            BTreeMap::from([
+                // The first rule pinned `CLUSTER_PARAM` to the environment-wide
+                // value, so the catch-all rule does not raise it, but it does
+                // still decide the parameter the first rule left alone.
+                (ClusterId::User(1), overrides(CLUSTER_PARAM_2, "true")),
+                (
+                    ClusterId::User(2),
+                    BTreeMap::from([
+                        (CLUSTER_PARAM.to_string(), "true".to_string()),
+                        (CLUSTER_PARAM_2.to_string(), "true".to_string()),
+                    ])
+                ),
+            ])
+        );
+    }
+
+    /// A cluster-coherent parameter may not be supplied through a segment that
+    /// matches on a replica attribute: honouring that would let the parameter
+    /// resolve differently across one cluster's replicas. The parameter is
+    /// dropped from that rule, leaving it to a later one, while a replica-local
+    /// parameter in the same rule is unaffected.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_cluster_coherence_guard() {
         let params = SynchronizedParameters::default();
         let frontend = file_frontend();
-        let file = parse(
-            r#"{
-                "clusters": {"gone": {"enable_eager_delta_joins": true}},
-                "replicas": {"gone": {"r1": {"enable_lgalloc": false}}}
-            }"#,
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{
+                    "legacy-replicas": {{"replica_size_family": ["legacy"]}},
+                    "analytics": {{"cluster_name": ["analytics"]}}
+                }},
+                "rules": [
+                    {{"segment": "legacy-replicas", "parameters": {{
+                        "{CLUSTER_PARAM}": true,
+                        "{REPLICA_PARAM}": false
+                    }}}},
+                    {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": true}}}}
+                ]
+            }}"#
+        ));
+
+        assert_eq!(
+            frontend.file_cluster_overrides(
+                &file,
+                &params,
+                &[CLUSTER_PARAM],
+                &[cluster_ctx(1, "analytics")]
+            ),
+            BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
         );
+        assert_eq!(
+            frontend.file_replica_overrides(
+                &file,
+                &params,
+                &[REPLICA_PARAM],
+                &[legacy_replica_ctx(1, "analytics", 1, "r1")]
+            ),
+            BTreeMap::from([(ReplicaId::User(1), overrides(REPLICA_PARAM, "false"))])
+        );
+        assert_eq!(
+            frontend.scoped_rule_diagnostics(&file, &params),
+            vec![format!(
+                "ignoring {CLUSTER_PARAM} for rule 1 (segment \"legacy-replicas\") in the system \
+                 parameter sync file: {CLUSTER_PARAM} is cluster-scoped, so it cannot be supplied \
+                 through a segment matching on the replica attribute replica_size_family"
+            )]
+        );
+    }
+
+    /// A predicate entry this binary cannot evaluate makes its segment match
+    /// nothing. Dropping the entry instead would widen the segment, in the limit
+    /// to every cluster and replica.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_uninterpretable_predicate_matches_nothing() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{
+                    "typo": {{"cluster_nmae": ["analytics"]}},
+                    "unlisted": {{"cluster_name": "analytics"}}
+                }},
+                "rules": [
+                    {{"segment": "typo", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "unlisted", "parameters": {{"{CLUSTER_PARAM}": true}}}}
+                ]
+            }}"#
+        ));
+
+        assert_eq!(
+            file.segments["typo"].rejected,
+            BTreeMap::from([(
+                "cluster_nmae".to_string(),
+                RejectedAttribute::UnknownAttribute
+            )])
+        );
+        assert_eq!(
+            file.segments["unlisted"].rejected,
+            BTreeMap::from([(
+                "cluster_name".to_string(),
+                RejectedAttribute::UnsupportedValues
+            )])
+        );
+        assert!(
+            frontend
+                .file_cluster_overrides(
+                    &file,
+                    &params,
+                    &[CLUSTER_PARAM],
+                    &[cluster_ctx(1, "analytics")]
+                )
+                .is_empty()
+        );
+        assert_eq!(
+            frontend.scoped_rule_diagnostics(&file, &params),
+            vec![
+                "segment \"typo\" in the system parameter sync file matches no cluster or \
+                 replica: attribute \"cluster_nmae\" is not a cluster or replica attribute"
+                    .to_string(),
+                "segment \"unlisted\" in the system parameter sync file matches no cluster or \
+                 replica: attribute \"cluster_name\" expects an array of strings, numbers or \
+                 booleans"
+                    .to_string(),
+            ]
+        );
+    }
+
+    /// A segment that matches nothing live is ignored, not an error: the live
+    /// objects drive the resolution, so the file is never a second source of truth
+    /// for what exists.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_file_segment_matching_nothing_live_ignored() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{"gone": {{"cluster_name": ["gone"]}}}},
+                "rules": [{{"segment": "gone", "parameters": {{
+                    "{CLUSTER_PARAM}": true,
+                    "{REPLICA_PARAM}": false
+                }}}}]
+            }}"#
+        ));
 
         assert!(
             frontend
@@ -1422,15 +2058,23 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_file_unparseable_value_dropped() {
         let params = SynchronizedParameters::default();
-        let file = parse(
-            r#"{"clusters": {"prod": {
-                "enable_eager_delta_joins": "maybe"
-            }}}"#,
-        );
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{"analytics": {{"cluster_name": ["analytics"]}}}},
+                "rules": [{{"segment": "analytics", "parameters": {{
+                    "{CLUSTER_PARAM}": "maybe"
+                }}}}]
+            }}"#
+        ));
 
         assert!(
             file_frontend()
-                .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")])
+                .file_cluster_overrides(
+                    &file,
+                    &params,
+                    &[CLUSTER_PARAM],
+                    &[cluster_ctx(1, "analytics")]
+                )
                 .is_empty()
         );
     }
@@ -1444,11 +2088,16 @@ mod tests {
     fn test_file_value_matching_environment_dropped() {
         let params = SynchronizedParameters::default();
         assert_eq!(params.get(CLUSTER_PARAM), "off");
-        let file = parse(r#"{"clusters": {"prod": {"enable_eager_delta_joins": false}}}"#);
+        let file = parse(&scoped_file(false));
 
         assert!(
             file_frontend()
-                .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, "prod")])
+                .file_cluster_overrides(
+                    &file,
+                    &params,
+                    &[CLUSTER_PARAM],
+                    &[cluster_ctx(1, "analytics")]
+                )
                 .is_empty()
         );
     }
@@ -1462,11 +2111,10 @@ mod tests {
     fn test_read_failure_keeps_scoped_overrides() {
         let params = SynchronizedParameters::default();
         let frontend = file_frontend();
-        let clusters = [cluster_ctx(1, "prod")];
-        let scoped_file = r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#;
+        let clusters = [cluster_ctx(1, "analytics")];
 
         // A readable file establishes the override.
-        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(scoped_file.to_string()), &params);
+        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(scoped_file(true)), &params);
         assert!(frontend.has_scoped_desired_state());
         assert_eq!(
             frontend.pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters),
@@ -1489,11 +2137,7 @@ mod tests {
             );
 
             // A readable file again resolves as before.
-            frontend.refresh_config_file(
-                Path::new(CONFIG_PATH),
-                Ok(scoped_file.to_string()),
-                &params,
-            );
+            frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(scoped_file(true)), &params);
             assert!(frontend.has_scoped_desired_state());
         }
 
@@ -1515,64 +2159,68 @@ mod tests {
     fn test_config_file_cached_until_it_changes() {
         let params = SynchronizedParameters::default();
         let frontend = file_frontend();
-        let read = |contents: &str| {
+        let read = |contents: String| {
             frontend
-                .refresh_config_file(Path::new(CONFIG_PATH), Ok(contents.to_string()), &params)
+                .refresh_config_file(Path::new(CONFIG_PATH), Ok(contents), &params)
                 .expect("document is a JSON object")
         };
 
-        let first = read(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
-        let again = read(r#"{"clusters": {"prod": {"enable_eager_delta_joins": true}}}"#);
+        let first = read(scoped_file(true));
+        let again = read(scoped_file(true));
         assert!(Arc::ptr_eq(&first, &again), "unchanged file was re-parsed");
 
-        let changed = read(r#"{"clusters": {"prod": {"enable_eager_delta_joins": false}}}"#);
+        let changed = read(scoped_file(false));
         assert!(
             !Arc::ptr_eq(&first, &changed),
             "changed file was not parsed"
         );
     }
 
-    /// A section key that is not a parameter scopable there is dropped by
-    /// resolution, so it is diagnosed instead. Nothing surfaces a parameter's
-    /// scope from SQL, which leaves an operator nothing else to debug against.
+    /// The mistakes an operator can realistically make in a rule are diagnosed
+    /// rather than hard-failed. Resolution drops each of them, and nothing
+    /// surfaces a parameter's scope from SQL, which leaves an operator nothing
+    /// else to debug against.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_diagnoses_unscopable_section_keys() {
+    fn test_diagnoses_rule_mistakes() {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
-                "clusters": {{"prod": {{
-                    "{REPLICA_PARAM}": false,
-                    "enabel_eager_delta_joins": true,
-                    "{CLUSTER_PARAM}": "maybe"
-                }}}},
-                "replicas": {{"prod": {{"r1": {{"{CLUSTER_PARAM}": true}}}}}}
+                "segments": {{"analytics": {{"cluster_name": ["analytics"]}}}},
+                "rules": [
+                    {{"segment": "analytics", "parameters": {{
+                        "max_connections": 100,
+                        "enabel_eager_delta_joins": true,
+                        "{CLUSTER_PARAM}": "maybe"
+                    }}}},
+                    {{"segment": "analytics_2", "parameters": {{"{CLUSTER_PARAM}": true}}}}
+                ]
             }}"#
         ));
 
         assert_eq!(
-            file_frontend().scoped_section_diagnostics(&file, &params),
-            // Ordered by section, then by key within a section.
+            file_frontend().scoped_rule_diagnostics(&file, &params),
+            // Ordered by rule, then by parameter name within a rule.
             vec![
                 // A misspelled parameter name.
-                "ignoring enabel_eager_delta_joins for cluster \"prod\" in the system \
-                 parameter sync file: not a cluster-scoped system parameter"
+                "ignoring enabel_eager_delta_joins for rule 1 (segment \"analytics\") in the \
+                 system parameter sync file: not a cluster-scoped or replica-scoped system \
+                 parameter"
                     .to_string(),
                 // A value that does not parse for the parameter's type.
                 format!(
                     "ignoring unparseable value \"maybe\" for system parameter {CLUSTER_PARAM} \
-                     on cluster \"prod\" in the system parameter sync file"
+                     on rule 1 (segment \"analytics\") in the system parameter sync file"
                 ),
-                // A replica-scoped parameter in a `clusters` section.
-                format!(
-                    "ignoring {REPLICA_PARAM} for cluster \"prod\" in the system parameter \
-                     sync file: not a cluster-scoped system parameter"
-                ),
-                // A cluster-scoped parameter in a `replicas` section.
-                format!(
-                    "ignoring {CLUSTER_PARAM} for replica \"prod\".\"r1\" in the system \
-                     parameter sync file: not a replica-scoped system parameter"
-                ),
+                // A parameter that carries no scope at all, so it can only be set
+                // environment-wide.
+                "ignoring max_connections for rule 1 (segment \"analytics\") in the system \
+                 parameter sync file: not a cluster-scoped or replica-scoped system parameter"
+                    .to_string(),
+                // A rule naming a segment the file does not define.
+                "ignoring rule 2 in the system parameter sync file: no segment named \
+                 \"analytics_2\""
+                    .to_string(),
             ]
         );
     }
@@ -1583,7 +2231,7 @@ mod tests {
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_no_synced_parameter_shadows_a_reserved_section() {
         let params = SynchronizedParameters::default();
-        for section in [CLUSTERS_SECTION, REPLICAS_SECTION] {
+        for section in [SEGMENTS_SECTION, RULES_SECTION] {
             assert!(
                 !params.is_synchronized(section),
                 "synced system parameter {section:?} is shadowed by the config-sync \

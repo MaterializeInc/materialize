@@ -57,8 +57,9 @@ data:
 ```
 
 Each top-level key sets a parameter for the whole environment. To set a
-parameter for a single cluster or replica instead, see [Scoping Parameters to a
-Cluster or Replica](#scoping-parameters-to-a-cluster-or-replica).
+parameter for a subset of your clusters or replicas instead, see [Scoping
+Parameters to Clusters or
+Replicas](#scoping-parameters-to-clusters-or-replicas).
 
 Apply the ConfigMap to your cluster:
 
@@ -200,19 +201,19 @@ Even after the ConfigMap is synced, some system parameters may require a restart
 take effect.
 {{< /note >}}
 
-## Scoping Parameters to a Cluster or Replica
+## Scoping Parameters to Clusters or Replicas
 
 Every top-level key in `system-params.json` sets a parameter for the whole
-environment, with two exceptions: `clusters` and `replicas` are reserved keys
-that hold per-cluster and per-replica overrides.
+environment, with two exceptions: `segments` and `rules` are reserved keys that
+together scope parameters to a subset of your clusters and replicas.
 
-- `clusters` is keyed by cluster name.
-- `replicas` is keyed by cluster name, then by replica name. The nesting is
-  required because a replica name is only unique within its cluster, and because
-  both names may themselves contain a `.`.
+- A **segment** is a named predicate over the attributes of a cluster or replica,
+  for example "every replica of a legacy size family".
+- A **rule** attaches parameters to a segment. The rules are an ordered array,
+  and for each parameter the first matching rule wins.
 
 For example, the following configuration sets environment-wide parameters and
-overrides parameters for a specific cluster and replica:
+overrides parameters for one cluster and for a class of replicas:
 
 ```yaml
 apiVersion: v1
@@ -225,45 +226,135 @@ data:
     {
       "max_connections": 1000,
       "enable_lgalloc": true,
-      "clusters": {
-        "analytics": {
-          "enable_eager_delta_joins": true
-        }
+
+      "segments": {
+        "analytics-cluster": { "cluster_name": ["analytics"] },
+        "legacy-replicas": { "replica_size_family": ["legacy"] }
       },
-      "replicas": {
-        "analytics": {
-          "r1": {
-            "enable_lgalloc": false
-          }
+
+      "rules": [
+        {
+          "segment": "analytics-cluster",
+          "parameters": { "enable_eager_delta_joins": true }
+        },
+        {
+          "segment": "legacy-replicas",
+          "parameters": { "enable_lgalloc": false }
         }
-      }
+      ]
     }
 ```
 
 In this example, `max_connections` and `enable_lgalloc` apply environment-wide,
-the `analytics` cluster additionally enables `enable_eager_delta_joins`, and the
-`r1` replica of `analytics` turns `enable_lgalloc` back off for itself.
+the `analytics` cluster additionally enables `enable_eager_delta_joins`, and
+every replica of a legacy size family turns `enable_lgalloc` back off for itself.
 
 A ConfigMap that uses neither reserved key is a plain environment-wide parameter
-map. No system parameter is named `clusters` or `replicas`, so a flat ConfigMap
-can never be reinterpreted as a scoped one.
+map. No system parameter is named `segments` or `rules`, so a flat ConfigMap can
+never be reinterpreted as a scoped one.
 
-Behavior worth knowing:
+### Segments
+
+A segment maps an attribute name to the list of values it allows:
+
+```json
+"segments": {
+  "legacy-in-analytics": {
+    "cluster_name": ["analytics", "analytics_staging"],
+    "replica_size_family": ["legacy"]
+  }
+}
+```
+
+- Several values for one attribute are **ORed**: the cluster name may be either
+  `analytics` or `analytics_staging`.
+- Several attributes in one segment are **ANDed**: the replica must be in one of
+  those clusters *and* be of the `legacy` size family.
+- **Only exact matching is supported.** There is no prefix, wildcard, regular
+  expression, or negation operator. To target one cluster, write a segment with a
+  single `cluster_name` value.
+- A segment with an empty predicate, `{}`, matches every cluster and replica.
+  Combined with rule ordering, that makes it a catch-all.
+
+The available attributes are:
+
+| Attribute             | Applies to         | Example        |
+| --------------------- | ------------------ | -------------- |
+| `cluster_name`        | clusters, replicas | `"quickstart"` |
+| `cluster_id`          | clusters, replicas | `"u1"`         |
+| `is_builtin`          | clusters, replicas | `true`         |
+| `replica_name`        | replicas only      | `"r1"`         |
+| `replica_id`          | replicas only      | `"u2"`         |
+| `replica_size`        | replicas only      | `"25cc"`       |
+| `replica_size_family` | replicas only      | `"legacy"`     |
+
+`is_builtin` is `true` for a system cluster such as `mz_catalog_server`, and for
+its replicas.
+
+A replica carries its owning cluster's attributes, so a segment written with
+`cluster_name` alone selects every replica of that cluster. A cluster carries no
+replica attributes, so a segment mentioning any of them selects no cluster.
+
+Prefer the name attributes over the id ones. An id identifies one incarnation of
+an object: drop and recreate a cluster and its id changes, so a segment written
+against the old id stops matching. A segment written against a name re-applies to
+any cluster or replica later created with that name.
+
+Values may be written as JSON strings, numbers, or booleans: `"is_builtin":
+[true]` and `"is_builtin": ["true"]` are equivalent.
+
+### Rules
+
+Each element of `rules` names a segment and the parameters to apply to the
+objects that segment matches:
+
+```json
+"rules": [
+  { "segment": "legacy-in-analytics", "parameters": { "enable_lgalloc": false } },
+  { "segment": "everything", "parameters": { "enable_lgalloc": true } }
+]
+```
+
+- **The first matching rule wins**, per object and per parameter. Order the rules
+  from the most specific to the most general.
+- A rule that does not mention a parameter does not affect it, so a later rule
+  may still set it.
+- A parameter no matching rule sets falls back to the environment-wide value,
+  that is, to the top-level key or to the parameter's default.
+
+`rules` is an array rather than an object because the order is part of the
+configuration, and the order of an object's keys is not preserved.
+
+### Behavior worth knowing
 
 - **Not every parameter can be scoped.** Only parameters whose scope is
-  `cluster` or `replica` are resolved per object. An entry for any other
-  parameter is ignored, so set it as a top-level key instead. `environmentd` logs
-  a warning naming the entry and the object it was written for, which also catches
-  a misspelled parameter name.
-- **Unknown names are ignored, not rejected.** A section naming a cluster or
-  replica that does not exist has no effect and logs no error. If you later
-  create an object with that name, the override applies to it.
+  `cluster` or `replica` can be set in a rule. Any other parameter is ignored
+  there, so set it as a top-level key instead. `environmentd` logs a warning
+  naming the parameter and the rule, which also catches a misspelled parameter
+  name.
+- **A cluster-scoped parameter cannot be attached to a replica segment.** A
+  cluster-scoped parameter, for example an optimizer feature, is consumed once
+  per cluster when a dataflow is planned, so it must resolve identically for
+  every replica of that cluster. A rule that supplies one through a segment
+  matching on a replica attribute has that parameter dropped, with a warning
+  naming the segment, the parameter, and the offending attribute. Replica-scoped
+  parameters can be attached to either kind of segment.
+- **A segment that Materialize cannot fully interpret matches nothing.** An
+  unknown attribute name, or a value that is not a list of scalars, makes the
+  whole segment match no cluster and no replica, so the rules naming it do not
+  apply. This fails safe: ignoring the entry instead would widen the segment to
+  objects you did not target. `environmentd` logs a warning naming the segment
+  and the attribute.
+- **A rule naming a segment that does not exist is ignored**, with a warning
+  naming the segment.
+- **A segment matching nothing is not an error.** If you later create a cluster
+  or replica the segment matches, the rules apply to it.
 - **A value that matches the environment-wide value records no override.**
   Overrides are only stored where they actually differ.
 - **An unparseable value is dropped, not rejected.** The rest of the file still
-  applies and `environmentd` logs a warning naming the parameter and the object.
-- **Removing a name or an entry removes the override**, returning the object to
-  the environment-wide value.
+  applies and `environmentd` logs a warning naming the parameter and the rule.
+- **Removing a rule or segment removes the override**, returning the affected
+  objects to the environment-wide value.
 - **A ConfigMap that cannot be read or parsed leaves the existing overrides in
   place.** A malformed JSON document, or a deleted ConfigMap, carries no
   information rather than an empty set of overrides, so nothing is removed until a
