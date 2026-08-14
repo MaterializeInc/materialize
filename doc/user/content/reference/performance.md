@@ -8,7 +8,7 @@ menu:
     weight: 160
 ---
 
-This page provides an overview of ingestion performance from internal benchmarks, so you can assess Materialize against a specific workload, size a [cluster](/concepts/clusters/), and estimate cost. The results show that Materialize sustains high [freshness](/concepts/reaction-time/#freshness) and throughput with predictable load on upstream sources. For the full test methodology and results, see the [ingestion performance litepaper](https://materialize.com/ingestion-performance-litepaper/).
+This page provides an overview of ingestion performance from internal benchmarks, so you can assess Materialize against a specific workload, size a [cluster](/concepts/clusters/), and estimate cost. The results show that Materialize sustains [fresh data](/concepts/reaction-time/#freshness) with high throughput and predictable load on upstream systems. For the full test methodology and results, see the [ingestion performance litepaper](https://materialize.com/ingestion-performance-litepaper/).
 
 {{< note >}}
 These are indicative numbers from a controlled test bench. For numbers that reflect your workload, we advise testing against your own data and sources.
@@ -22,7 +22,7 @@ We run five benchmarks spanning the lifecycle of a typical Materialize installat
 
 - **Test:** How long the initial [snapshot](/ingest-data/#snapshotting) of a newly connected source takes to complete.
 - **Method:** We create a source and snapshot 1 to 4 tables (topics for Kafka), each holding 100 million records (about 10 GB), using a 400cc Materialize cluster.
-- **Results:** A single table snapshots in 2 to 7.1 minutes depending on the source. Snapshot time depends on cluster size (see [snapshotting](/ingest-data/#duration)).
+- **Results:** Snapshotting four tables takes about 5 to 26 minutes depending on the source. Snapshot time depends on cluster size and the upstream system, with [upsert sources like Kafka](/ingest-data/#upsert-sources) being more resource intensive.
 
 {{< tabs >}}
 {{< tab "Chart" >}}
@@ -32,7 +32,7 @@ We run five benchmarks spanning the lifecycle of a typical Materialize installat
 {{< /tab >}}
 {{< tab "Data" >}}
 
-Snapshot time (minutes) by number of tables (topics for Kafka).
+Snapshot time (minutes) by table count (topics for Kafka).
 
 | Source | 1 | 4 |
 |---|---|---|
@@ -48,7 +48,7 @@ Snapshot time (minutes) by number of tables (topics for Kafka).
 
 - **Test:** The load the snapshot places on the upstream system while it runs.
 - **Method:** We create a source and snapshot 1 to 4 tables (topics for Kafka), each holding 100 million records (about 10 GB), recording the upstream system's peak CPU, egress, and memory, using a 400cc Materialize cluster.
-- **Results:** Peak CPU stays between about 3% and 35% depending on the source, and the load is mostly CPU and egress rather than memory, which stays flat throughout.
+- **Results:** When snapshotting four tables, peak CPU stays between about 7% and 21% depending on the source, and the load is mostly CPU and egress.
 
 {{< tabs >}}
 {{< tab "Chart" >}}
@@ -58,7 +58,7 @@ Snapshot time (minutes) by number of tables (topics for Kafka).
 {{< /tab >}}
 {{< tab "Data" >}}
 
-Peak upstream load reading four tables (topics for Kafka).
+Peak upstream load at four tables (topics for Kafka).
 
 | Source | Peak CPU | Egress |
 |---|---|---|
@@ -73,8 +73,8 @@ Peak upstream load reading four tables (topics for Kafka).
 ### Sustained throughput
 
 - **Test:** How much data Materialize can ingest from a single source while keeping it fresh.
-- **Method:** We use a k6 load generator to write data to the source, increasing the number of parallel writers from 1 to 16, using a 400cc Materialize cluster.
-- **Results:** Throughput reaches 43,000 to 117,000 rows a second across all sources, with p99 freshness around 1 to 2 seconds apart from SQL Server, which lags as its poll-based CDC falls behind.
+- **Method:** We use a k6 load generator with 1 to 16 parallel writers, each writing as fast as the source accepts, using a 400cc Materialize cluster.
+- **Results:** Throughput reaches 43,000 to 117,000 rows a second across all sources (messages for Kafka), with p99 freshness around 1 to 2.5 seconds apart from SQL Server, which lags as its poll-based CDC falls behind.
 
 {{< tabs >}}
 {{< tab "Chart" >}}
@@ -84,13 +84,13 @@ Peak upstream load reading four tables (topics for Kafka).
 {{< /tab >}}
 {{< tab "Data" >}}
 
-Four parallel writers.
+Throughput and p99 freshness at four parallel writers.
 
 | Source | Throughput | p99 freshness |
 |---|---|---|
 | PostgreSQL | ~117,000 rows/s | 2.5 s |
-| SQL Server | ~96,000 rows/s | 308 s |
 | MySQL | ~43,000 rows/s | 1.2 s |
+| SQL Server | ~96,000 rows/s | 308 s |
 | Kafka | ~68,000 msgs/s | 1 s |
 
 {{< /tab >}}
@@ -99,7 +99,7 @@ Four parallel writers.
 ### Vertical scaling
 
 - **Test:** How many tables a single Materialize cluster keeps fresh at once.
-- **Method:** We use a k6 load generator to write data to the source, increasing the number of tables from 1 to 100, using a 400cc Materialize cluster.
+- **Method:** We use a k6 load generator with 16 writers, each writing as fast as the source accepts, increasing the number of tables from 1 to 100, using a 400cc Materialize cluster.
 - **Results:** Freshness holds around 1 to 2 seconds from 1 to 100 tables for most sources, apart from SQL Server, which lags as its poll-based CDC falls behind.
 
 {{< tabs >}}
@@ -110,7 +110,7 @@ Four parallel writers.
 {{< /tab >}}
 {{< tab "Data" >}}
 
-p99 freshness by table count.
+p99 freshness by table count (topics for Kafka).
 
 | Tables | PostgreSQL | MySQL | SQL Server | Kafka |
 |---|---|---|---|---|
@@ -126,8 +126,8 @@ p99 freshness by table count.
 ### Horizontal scaling
 
 - **Test:** How freshness holds as more Materialize clusters read from the same upstream system.
-- **Method:** We use a k6 load generator to write data to the source, increasing the number of 800cc Materialize clusters reading it from 1 to 32.
-- **Results:** Freshness holds steady out to 32 clusters for most sources, apart from Kafka, which rises to 5 seconds at the largest fan-out. Upstream load rises predictably with the number of clusters.
+- **Method:** We use a k6 load generator with a single writer writing as fast as the source accepts, increasing the number of 800cc Materialize clusters reading it from 1 to 32.
+- **Results:** Freshness holds steady out to 32 clusters for most sources, apart from Kafka, which rises to 5 seconds at the largest fan-out.
 
 {{< tabs >}}
 {{< tab "Chart" >}}
@@ -137,7 +137,7 @@ p99 freshness by table count.
 {{< /tab >}}
 {{< tab "Data" >}}
 
-p99 freshness at 10 tables per cluster, by cluster count.
+p99 freshness by cluster count, at 10 tables per cluster (topics for Kafka).
 
 | Clusters | PostgreSQL | MySQL | SQL Server | Kafka |
 |---|---|---|---|---|
@@ -167,7 +167,7 @@ We run these benchmarks on every release. The figures here are from Materialize 
 | PostgreSQL 18 | db.r6g.2xlarge |
 | MySQL 8.4 | db.r6g.2xlarge |
 | SQL Server 2022 | db.r6i.4xlarge |
-| Kafka (Amazon MSK 3.6) | kafka.m5.large & kafka.m5.4xlarge (3 brokers) |
+| Kafka (Amazon MSK 3.6) | kafka.m5.large (snapshot and throughput benchmarks), kafka.m5.4xlarge (scaling benchmarks); 3 brokers |
 
 ## See also
 
