@@ -180,10 +180,6 @@ on cluster resizing.
 
 ### Dictionary compression
 
-{{< public-preview >}}
-Arrangement dictionary compression
-{{< /public-preview >}}
-
 {{% include-headless "/headless/dictionary-compression/overview" %}}
 
 {{% include-headless "/headless/dictionary-compression/tradeoff-summary" %}}

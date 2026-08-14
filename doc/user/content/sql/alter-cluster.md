@@ -260,10 +260,6 @@ autoscaling](#configure-autoscaling) for the `ALTER CLUSTER` form.
 
 ### Dictionary compression
 
-{{< public-preview >}}
-Arrangement dictionary compression
-{{< /public-preview >}}
-
 {{% include-headless "/headless/dictionary-compression/overview" %}}
 
 Turn compression on for an existing cluster with `ALTER CLUSTER ... SET

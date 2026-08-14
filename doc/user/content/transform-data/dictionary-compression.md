@@ -9,10 +9,6 @@ menu:
     weight: 35
 ---
 
-{{< public-preview >}}
-Arrangement dictionary compression
-{{< /public-preview >}}
-
 {{% include-headless "/headless/dictionary-compression/overview" %}}
 
 Within a column, the values that repeat most often are the ones Materialize
