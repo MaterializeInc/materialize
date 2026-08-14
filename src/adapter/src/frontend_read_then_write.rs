@@ -43,20 +43,44 @@
 //! correspondingly stricter than the dynamic one, since it refuses a sealed-MV
 //! `INSERT ... SELECT` in a transaction that would technically be bufferable.
 //!
-//! The answer decides where the diffs go. Diffs from a selection that reads
-//! persisted state are only correct at the frontier they were observed at, so
-//! they commit inside the OCC loop. Diffs from a selection that reads nothing
-//! are frontier-independent, so the caller of the loop either submits them
-//! right after it or, inside a multi-statement transaction, buffers them as
-//! session write ops that land at COMMIT.
+//! The two answers are used for different things, and that separation matters.
+//!
+//! The syntactic answer decides whether the statement can belong to a
+//! transaction. A selection that reads nothing produces diffs that are valid at
+//! any timestamp, so they are staged as session write ops and land when the
+//! transaction commits, which is what makes the statement atomic with whatever
+//! surrounds it. A selection that reads persisted state cannot belong to a
+//! transaction, and we refuse it in an explicit one. An extended-protocol
+//! pipeline is an implicit transaction, so it must not quietly join one either:
+//! it ends its own transaction instead of spanning the rest of the pipeline,
+//! which is how PostgreSQL treats statements that cannot run in a transaction
+//! block. It is durable once it reports success, and a later failure in the
+//! pipeline does not undo it.
+//!
+//! The dynamic answer only decides how the write is submitted, a timestamped
+//! write from inside the loop or a blind submission after it. It cannot decide
+//! transaction membership, because it is a property of the inputs rather than
+//! of the statement. A sealed input closes the subscribe cleanly, so an
+//! `INSERT ... SELECT` over a `REFRESH AT` materialized view past its last
+//! refresh takes the blind exit while still reading persisted state. Its diffs
+//! really are frontier-independent and staging them would be safe, and we still
+//! do not stage them. Otherwise whether a statement's rows survive a failure
+//! later in the pipeline would depend on whether one of its inputs happened to
+//! pass its last refresh, which no one reading the statement could predict.
+//!
+//! Staging is also what earns the right to span a pipeline in the first place.
+//! `TransactionStatus::may_span_pipeline` lets an implicit transaction stay open
+//! only for writes, precisely because they are merely staged. A statement that
+//! committed on its own has no business claiming it.
 //!
 //! Disagreement is caught on both sides, and only one side can still refuse.
 //! `frontend_read_then_write` re-checks the syntactic predicate before running a
 //! dataflow, which catches a caller that skipped the gate. If the syntactic
-//! predicate were laxer than the dynamic one, that check would pass and the
-//! write would commit mid-transaction, so the loop's `Committed` arm soft-panics
-//! when it has a write timestamp to apply inside a transaction. By then the
-//! write is durable, so all that arm can do is make the disagreement loud.
+//! predicate were laxer than the dynamic one, that check would pass and a write
+//! meant for staging would commit on its own, so the loop's `Committed` arm
+//! soft-panics when it has a write timestamp for a statement we meant to stage.
+//! By then the write is durable, so all that arm can do is make the
+//! disagreement loud.
 //!
 //! ## Rollout note
 //!
@@ -265,6 +289,21 @@ fn classify_write_result(
         WriteResult::Indeterminate => WriteOutcome::Failed(AdapterError::Internal(
             "write outcome is indeterminate because the group committer shut down".into(),
         )),
+    }
+}
+
+/// Ends the implicit transaction that a statement which cannot run in a
+/// transaction block opened for itself.
+///
+/// A read-then-write that reads persisted state is refused inside a transaction,
+/// so it must not quietly become part of one. Clearing the ops it staged leaves
+/// [`crate::session::TransactionStatus::may_span_pipeline`] false, so pgwire
+/// commits the implicit transaction rather than letting the rest of an
+/// extended-protocol pipeline join it. The write is already durable at this
+/// point, and the caller has established there is nothing else staged to lose.
+fn end_own_transaction(session: &mut Session, stages_rows: bool) {
+    if !stages_rows {
+        session.clear_transaction_ops();
     }
 }
 
@@ -580,21 +619,29 @@ impl PeekClient {
             table_desc,
         } = validation_result;
 
-        // Mark this as a write transaction in the session state machine. For a
-        // single statement that lets auto-commit handle the write correctly.
-        // The rows are added later: either the coordinator's group commit
-        // applies them directly, or, in a transaction, they are buffered as
-        // write ops once we know them.
-        session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
+        // A write that reads no persisted state may join a surrounding
+        // transaction. Its rows do not come from a snapshot, so staging them
+        // and letting the transaction flush them keeps them atomic with
+        // everything else the transaction does.
+        //
+        // A write that does read persisted state may not. We refuse it in an
+        // explicit transaction, and an extended-protocol pipeline is an
+        // implicit transaction, so it must not silently span one either. It
+        // runs as its own transaction instead, which is how PostgreSQL treats
+        // statements that cannot run in a transaction block.
+        let stages_rows = depends_on.is_empty();
 
-        // Inside a transaction only a write that reads nothing gets here, see
-        // the module docs. The syntactic check lives in
-        // `SessionClient::try_frontend_read_then_write`.
-        let defer_write = session.transaction().is_in_multi_statement_transaction();
-        if defer_write && !depends_on.is_empty() {
-            // Defense in depth for the check named above. Rejecting here, before
-            // we run a dataflow, is the only place left where refusing is still
-            // possible: past the OCC loop the write may already be durable.
+        // Snapshot this before the marker op below, which makes `contains_ops`
+        // true unconditionally.
+        let in_transaction = session.transaction().is_in_multi_statement_transaction()
+            || session.transaction().contains_ops();
+
+        if !stages_rows && in_transaction {
+            // Defense in depth for the gate in
+            // `SessionClient::try_frontend_read_then_write`. Rejecting here,
+            // before we run a dataflow, is the last point where refusing is
+            // still possible: past the OCC loop the write may already be
+            // durable.
             soft_panic_or_log!(
                 "read-dependent read-then-write reached the OCC path inside a transaction"
             );
@@ -602,6 +649,11 @@ impl PeekClient {
                 "read-then-write cannot be run inside a transaction block".into(),
             ));
         }
+
+        // Mark this as a write transaction in the session state machine, so
+        // auto-commit treats the statement as a write. The rows follow once we
+        // know them.
+        session.add_transaction_ops(TransactionOps::Writes(vec![]))?;
 
         // Prepare expressions (resolve unmaterializable functions like
         // current_user())
@@ -809,17 +861,18 @@ impl PeekClient {
         let mut permit = Some(permit);
         let response = match result {
             Ok(OccOutcome::Committed { response, write_ts }) => {
-                // A committed write timestamp inside a transaction means the
-                // two predicates disagreed: the syntactic one let us defer,
-                // the subscribe then read persisted state. The write is
-                // already durable, so there is nothing to refuse, and
-                // `apply_write` still has to run to keep the session's read
-                // timestamps ahead of it.
+                // A committed write timestamp for a statement we meant to
+                // stage means the two predicates disagreed: the syntactic one
+                // said it reads nothing, the subscribe then read persisted
+                // state. The write is already durable, so there is nothing to
+                // refuse, and `apply_write` still has to run to keep the
+                // session's read timestamps ahead of it.
                 soft_assert_or_log!(
-                    !defer_write,
-                    "read-then-write committed a write inside a transaction"
+                    !stages_rows,
+                    "read-then-write committed a write it meant to stage"
                 );
                 session.apply_write(write_ts);
+                end_own_transaction(session, stages_rows);
                 Ok(response)
             }
             Ok(OccOutcome::NoRowsMatched {
@@ -832,6 +885,7 @@ impl PeekClient {
                 // selection from state a later strict-serializable read cannot
                 // see yet, and that read finds the rows we said were not
                 // there.
+                end_own_transaction(session, stages_rows);
                 match observed_ts {
                     Some(observed_ts) => {
                         // Nothing is left to write and `run_occ_loop` consumed
@@ -850,15 +904,19 @@ impl PeekClient {
                     None => Ok(response),
                 }
             }
-            Ok(OccOutcome::Blind { response, diffs }) if defer_write => {
-                // NOTE: A buffered session write carries no target-generation
-                // guard. The immediate path pins `target_global_id` and group
-                // commit re-validates it, but a `WriteOp` only names the
-                // `CatalogItemId` and commit staging resolves whatever global
-                // id is current then. So an `ALTER TABLE ... ADD COLUMN` that
-                // lands between here and COMMIT appends rows of the old arity
-                // under the new schema. This holds for every buffered write,
-                // not just ours.
+            Ok(OccOutcome::Blind { response, diffs }) if stages_rows => {
+                // Staging rather than writing here is what makes the statement
+                // atomic with its transaction. An extended-protocol pipeline is
+                // an implicit transaction, and it may still fail after us, so a
+                // write of our own would survive a rollback that discards
+                // everything around it.
+                //
+                // NOTE: A staged session write carries no target-generation
+                // guard. A `WriteOp` only names the `CatalogItemId`, and commit
+                // staging resolves whatever global id is current then. So an
+                // `ALTER TABLE ... ADD COLUMN` that lands between here and the
+                // commit appends rows of the old arity under the new schema.
+                // This holds for every staged write, not just ours.
                 session
                     .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
                         id: target_id,
@@ -867,6 +925,14 @@ impl PeekClient {
                     .map(|()| response)
             }
             Ok(OccOutcome::Blind { response, diffs }) => {
+                // The subscribe closed on its own even though the selection
+                // reads persisted state, so the input is sealed and the diffs
+                // are frontier-independent after all. Staging them would be
+                // safe for that reason, and we still do not, because it would
+                // make a statement's transaction semantics depend on whether an
+                // input happens to be past its last refresh. What the statement
+                // reads decides, so this commits as its own transaction like
+                // any other read-dependent write.
                 match self
                     .submit_blind_write(
                         conn_id,
@@ -880,6 +946,7 @@ impl PeekClient {
                 {
                     Ok(write_ts) => {
                         session.apply_write(write_ts);
+                        end_own_transaction(session, stages_rows);
                         Ok(response)
                     }
                     Err(err) => Err(err),
@@ -1055,6 +1122,55 @@ impl PeekClient {
             let wait_ms = u64::from(as_of.saturating_sub(oracle_ts));
             let wait = Duration::from_millis(wait_ms).min(Duration::from_secs(1));
             tokio::time::sleep(wait).await;
+        }
+    }
+
+    /// Submits frontier-independent diffs to group commit, which picks the
+    /// write timestamp, and returns the timestamp the write committed at.
+    ///
+    /// Only valid for diffs that do not depend on an observed read frontier:
+    /// the write lands at a timestamp this caller does not choose.
+    async fn submit_blind_write(
+        &self,
+        conn_id: mz_adapter_types::connection::ConnectionId,
+        target_id: CatalogItemId,
+        target_global_id: GlobalId,
+        diffs: Vec<(Row, Diff)>,
+        statement_logging_id: Option<StatementLoggingId>,
+        attempt_state: &FrontendWriteAttemptState,
+    ) -> Result<Timestamp, AdapterError> {
+        attempt_state.mark_write_submitted();
+        let result = self
+            .call_coordinator(|tx| Command::AttemptWrite {
+                conn_id,
+                target_id,
+                target_global_id,
+                diffs,
+                write_ts: None,
+                tx,
+            })
+            .await;
+
+        // Every outcome here terminates the attempt, so `write_submitted`
+        // stays set per its contract.
+        match classify_write_result(result, target_id, attempt_state) {
+            WriteOutcome::Committed(timestamp) => {
+                if let Some(id) = statement_logging_id {
+                    self.log_set_timestamp(id, timestamp);
+                }
+                Ok(timestamp)
+            }
+            WriteOutcome::Failed(err) => Err(err),
+            WriteOutcome::Conflict { .. } => {
+                // Unreachable: a write that requests no timestamp cannot have
+                // one pass. Group commit resolves it through
+                // `UserWriteResponder::Internal`, which only reports a conflict
+                // to a write that asked for a specific timestamp.
+                soft_panic_or_log!("blind read-then-write unexpectedly got TimestampPassed");
+                Err(AdapterError::Internal(
+                    "blind write unexpectedly got TimestampPassed".into(),
+                ))
+            }
         }
     }
 
@@ -1370,55 +1486,6 @@ impl PeekClient {
         };
 
         (state.retry_count, result)
-    }
-
-    /// Submits frontier-independent diffs to group commit, which picks the
-    /// write timestamp, and returns the timestamp the write committed at.
-    ///
-    /// Only valid for diffs that do not depend on an observed read frontier:
-    /// the write lands at a timestamp this caller does not choose.
-    async fn submit_blind_write(
-        &self,
-        conn_id: mz_adapter_types::connection::ConnectionId,
-        target_id: CatalogItemId,
-        target_global_id: GlobalId,
-        diffs: Vec<(Row, Diff)>,
-        statement_logging_id: Option<StatementLoggingId>,
-        attempt_state: &FrontendWriteAttemptState,
-    ) -> Result<Timestamp, AdapterError> {
-        attempt_state.mark_write_submitted();
-        let result = self
-            .call_coordinator(|tx| Command::AttemptWrite {
-                conn_id,
-                target_id,
-                target_global_id,
-                diffs,
-                write_ts: None,
-                tx,
-            })
-            .await;
-
-        // Every outcome here terminates the attempt, so `write_submitted`
-        // stays set per its contract.
-        match classify_write_result(result, target_id, attempt_state) {
-            WriteOutcome::Committed(timestamp) => {
-                if let Some(id) = statement_logging_id {
-                    self.log_set_timestamp(id, timestamp);
-                }
-                Ok(timestamp)
-            }
-            WriteOutcome::Failed(err) => Err(err),
-            WriteOutcome::Conflict { .. } => {
-                // Unreachable: a write that requests no timestamp cannot have
-                // one pass. Group commit resolves it through
-                // `UserWriteResponder::Internal`, which only reports a conflict
-                // to a write that asked for a specific timestamp.
-                soft_panic_or_log!("blind read-then-write unexpectedly got TimestampPassed");
-                Err(AdapterError::Internal(
-                    "blind write unexpectedly got TimestampPassed".into(),
-                ))
-            }
-        }
     }
 }
 
