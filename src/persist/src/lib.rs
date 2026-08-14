@@ -24,6 +24,7 @@ pub mod file;
 #[cfg(feature = "foundationdb")]
 pub mod foundationdb;
 pub mod generated;
+pub mod hedge;
 pub mod indexed;
 pub mod intercept;
 pub mod location;

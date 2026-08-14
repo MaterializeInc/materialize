@@ -2862,6 +2862,12 @@ class FlipFlagsAction(Action):
             "8",
             "16",
         ]
+        self.flags_with_values["persist_blob_hedged_get_enabled"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["persist_blob_hedged_get_delay"] = [
+            "'0s'",
+            "'10ms'",
+            "'2s'",
+        ]
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3082,6 +3088,9 @@ class FlipFlagsAction(Action):
         # behavior, you should add it. Feature flags which turn on/off
         # externally visible features should not be flipped.
         self.uninteresting_flags: list[str] = [
+            "persist_blob_hedged_get_budget_ratio",
+            "persist_blob_hedged_get_max_concurrent",
+            "persist_blob_hedged_get_warm_interval",
             "enable_compute_half_join2",
             "enable_mz_join_core",
             "enable_compute_correction_v2",
