@@ -961,6 +961,7 @@ async fn create_staging_clusters(
                     name: Ident::new_unchecked(""),
                     options: Vec::new(),
                     features: Vec::new(),
+                    if_not_exists: false,
                 },
                 grants: Vec::new(),
             };
