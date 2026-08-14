@@ -812,6 +812,20 @@ fn write_batches<'scope>(
 
                         for (row, ts, diff) in data {
                             if write.upper().less_equal(&ts) {
+                                // Every description this operator has emitted was covered by the
+                                // desired frontier at the time, so no update below
+                                // `operator_batch_lower` can still be in flight. An update that
+                                // arrives anyway belongs to a description that is already gone: it
+                                // matches no later description and would sit in the stash unwritten
+                                // and unnoticed. Not a `debug_assert!`, which compiles out of the
+                                // optimized and release profiles and would leave the loss silent
+                                // everywhere it matters.
+                                assert!(
+                                    operator_batch_lower.less_equal(&ts),
+                                    "persist_sink {collection_id}/{shard_id}: update at {ts:?} \
+                                    arrived below the emitted batch lower {operator_batch_lower:?}",
+                                );
+
                                 // Counted on arrival rather than when the update reaches a
                                 // builder, so a stalled frontier does not make the sink look
                                 // like it is receiving nothing.
