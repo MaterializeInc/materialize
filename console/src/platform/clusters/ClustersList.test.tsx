@@ -32,15 +32,27 @@ vi.mock("~/hooks/useFlags", () => ({
 
 // The list opens a websocket subscribe to surface out-of-memory warnings.
 // Stubbing it keeps these tests off the socket and, because it reports no
-// error, leaves the `lastStatusChange` column visible.
+// error, leaves the `lastStatusChange` column visible. Hoisted so tests can
+// seed entries: `vi.mock` factories run before module-level `const`s exist.
+const { offlineReplicas } = vi.hoisted(() => ({
+  offlineReplicas: new Map<
+    string,
+    { shouldSurfaceOom: boolean; lastOfflineAt: Date }
+  >(),
+}));
+
 vi.mock("~/api/materialize/cluster/useLatestOfflineReplica", async () => {
   const actual = await vi.importActual(
     "~/api/materialize/cluster/useLatestOfflineReplica",
   );
   return {
     ...actual,
-    default: vi.fn(() => ({ data: new Map(), error: undefined })),
+    default: vi.fn(() => ({ data: offlineReplicas, error: undefined })),
   };
+});
+
+beforeEach(() => {
+  offlineReplicas.clear();
 });
 
 // A row's actions menu renders only for clusters the user owns, and `useOwners`
@@ -282,6 +294,42 @@ describe("ClustersList replica rows", () => {
     await expandCluster(user, "compute");
 
     expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe("-");
+  });
+
+  it("warns on the replica that ran out of memory, not its siblings", async () => {
+    const user = userEvent.setup();
+    // Keyed by replica id: r1 is u10, r2 is u11.
+    offlineReplicas.set("u10", {
+      shouldSurfaceOom: true,
+      lastOfflineAt: new Date(STATUS_UPDATED_AT),
+    });
+    await renderClustersList([buildCluster()]);
+    await expandCluster(user, "compute");
+
+    const warnings = screen.queryAllByRole("img", {
+      name: "Ran out of memory",
+    });
+    expect(warnings).toHaveLength(1);
+
+    const r1Row = screen.getByText("r1").closest("tr");
+    if (!r1Row) throw new Error("no row for r1");
+    expect(
+      within(r1Row).getByRole("img", { name: "Ran out of memory" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not warn when the replica's outage was not an OOM", async () => {
+    const user = userEvent.setup();
+    offlineReplicas.set("u10", {
+      shouldSurfaceOom: false,
+      lastOfflineAt: new Date(STATUS_UPDATED_AT),
+    });
+    await renderClustersList([buildCluster()]);
+    await expandCluster(user, "compute");
+
+    expect(
+      screen.queryByRole("img", { name: "Ran out of memory" }),
+    ).not.toBeInTheDocument();
   });
 
   it("does not make a cluster without replicas expandable", async () => {

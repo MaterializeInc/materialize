@@ -26,6 +26,7 @@ import {
   Replica,
 } from "~/api/materialize/cluster/clusterList";
 import useLatestOfflineReplica, {
+  LatestOfflineReplicaInfo,
   LatestOfflineReplicaMap,
 } from "~/api/materialize/cluster/useLatestOfflineReplica";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
@@ -146,43 +147,38 @@ const formatStatusChange = (timestamp: string | null | undefined) =>
 
 const ReplicaLastStatusChangeCell = ({
   updatedAt,
+  offlineStatus,
 }: {
   updatedAt: string | null;
-}) => <Text noOfLines={1}>{formatStatusChange(updatedAt)}</Text>;
-
-const LastStatusChangeCell = ({
-  cluster,
-  offlineReplicaMap,
-}: {
-  cluster: ClusterWithOwnership;
-  offlineReplicaMap: LatestOfflineReplicaMap | undefined;
-}) => {
-  const offlineStatus = offlineReplicaMap?.get(cluster.id);
-
-  const lastStatusChangeString = formatStatusChange(cluster.latestStatusUpdate);
-
-  return (
-    <HStack>
-      <Text noOfLines={1} paddingRight="6" position="relative">
-        {lastStatusChangeString}
-        {offlineStatus?.shouldSurfaceOom && (
-          <Tooltip
-            px={3}
-            py={2}
-            minWidth="fit-content"
-            rounded="md"
-            label={`A replica ran out of memory on ${formatDate(
-              offlineStatus.lastOfflineAt,
-              FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-            )}`}
-          >
-            <WarningIcon position="absolute" right="0" />
-          </Tooltip>
-        )}
-      </Text>
-    </HStack>
-  );
-};
+  offlineStatus: LatestOfflineReplicaInfo | undefined;
+}) => (
+  <HStack>
+    <Text noOfLines={1} paddingRight="6" position="relative">
+      {formatStatusChange(updatedAt)}
+      {offlineStatus?.shouldSurfaceOom && (
+        <Tooltip
+          px={3}
+          py={2}
+          minWidth="fit-content"
+          rounded="md"
+          label={`This replica ran out of memory on ${formatDate(
+            offlineStatus.lastOfflineAt,
+            FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
+          )}`}
+        >
+          <WarningIcon
+            position="absolute"
+            right="0"
+            // The tooltip text is only reachable on hover, so the icon needs a
+            // name of its own to mean anything to a screen reader.
+            role="img"
+            aria-label="Ran out of memory"
+          />
+        </Tooltip>
+      )}
+    </Text>
+  </HStack>
+);
 
 const ClusterActionsCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
   <OverflowMenu
@@ -288,15 +284,15 @@ const columns = [
       cell: (info) => {
         const row = info.row.original;
         if (row.rowType === "replica") {
-          return <ReplicaLastStatusChangeCell updatedAt={info.getValue()} />;
+          const meta = info.table.options.meta as ClusterTableMeta;
+          return (
+            <ReplicaLastStatusChangeCell
+              updatedAt={info.getValue()}
+              offlineStatus={meta.offlineReplicaMap?.get(row.id)}
+            />
+          );
         }
-        const meta = info.table.options.meta as ClusterTableMeta;
-        return (
-          <LastStatusChangeCell
-            cluster={row}
-            offlineReplicaMap={meta.offlineReplicaMap}
-          />
-        );
+        return <Text noOfLines={1}>{formatStatusChange(info.getValue())}</Text>;
       },
     },
   ),
