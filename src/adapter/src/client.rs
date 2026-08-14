@@ -601,13 +601,12 @@ Issue a SQL query to get started. Need help?
     ///
     /// `prune_scope` bounds which objects' rows the reconcile may remove (the
     /// objects `overrides` was evaluated for). The sync loop passes the live
-    /// objects from its snapshot; `None` is a full replace, used by the
-    /// disabled-feature clear path. See
+    /// objects from its snapshot. See
     /// [`crate::catalog::Op::UpdateScopedSystemParameters`].
     pub async fn update_scoped_system_parameters(
         &self,
         overrides: ScopedParameters,
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
     ) {
         let (tx, rx) = oneshot::channel();
         self.send(Command::UpdateScopedSystemParameters {

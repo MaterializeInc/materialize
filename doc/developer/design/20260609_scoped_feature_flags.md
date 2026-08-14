@@ -118,15 +118,14 @@ Introduce **scoped system parameters**: a synced parameter can carry, in
 addition to its environment-wide value, overrides resolved per cluster and per
 replica. We keep the existing data-flow shape and extend it to be scope-aware.
 
-### Feature gate
+### No feature gate
 
-The entire scoped-parameter mechanism is gated behind a new `enable_scoped_system_parameters` dyncfg defined in `mz_adapter_types::dyncfgs`, default `false`.
-The default behavior is therefore exactly today's environment-wide-only resolution, and the feature is strictly opt-in.
-The gate is checked at the single sync-loop chokepoint, `sync_scoped_params`.
-When off, no cluster or replica contexts are evaluated, and any overrides a previously-enabled run persisted are cleared once, so resolution falls back to the environment-wide value everywhere.
-This clearing is conditional on the sync loop running with the gate off: if the frontend is disabled entirely (self-managed, or no LD), those persisted overrides are not actively cleared, so a one-time prune on the gate-off path (independent of LD reachability) is needed to make the guarantee unconditional.
-When on, evaluation begins with no deploy, since every dyncfg is mirrored as a LaunchDarkly-synced, `ALTER SYSTEM`-settable system var.
-It is a dyncfg rather than a `feature_flags!` entry because the latter carries the catalog item-parsing rehydration contract for SQL/syntax features, which this runtime subsystem toggle has no part in.
+The scoped-parameter mechanism is unconditional: the sync loop always evaluates
+the live cluster and replica contexts. An environment where no parameter declares
+a `Cluster` or `Replica` scope, or where the frontend is not LaunchDarkly-backed,
+evaluates nothing and resolves everything environment-wide, so the
+environment-wide-only behavior falls out of the scope declarations rather than
+from a separate switch.
 
 ### Two context kinds, because there are two scopes of coherence
 
@@ -525,7 +524,7 @@ Ordered to de-risk the cleaner boundary first:
    Annotate the parameters the two use cases need (the target optimizer features
    as `Cluster`; `lgalloc` / pager / LZ4 as `Replica`). This is a prerequisite
    for the evaluation steps below, since the sync loop keys off the class.
-   - **Kill-switch (step 0's companion).** Add the `enable_scoped_system_parameters` dyncfg (default `false`) and gate `sync_scoped_params` on it, so the mechanism ships dark and the default behavior stays environment-wide-only until it is turned on with no deploy.
+   - **Kill-switch (step 0's companion).** A dyncfg gating `sync_scoped_params`, so the mechanism ships dark and the default behavior stays environment-wide-only until it is turned on with no deploy. Rollout-only, and since removed: the mechanism is now unconditional.
 1. **Replica-local dyncfg push (use case 2), in-memory first.** Add the `replica`
    context kind and per-replica evaluation; compute per-replica/size override maps
    in `environmentd` (in-memory, not yet persisted); resolve at the controller's

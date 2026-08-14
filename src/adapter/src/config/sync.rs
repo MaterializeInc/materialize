@@ -57,13 +57,6 @@ pub async fn system_parameter_sync(
         tick_interval.as_secs()
     );
 
-    // Whether the scoped overrides may carry state that needs clearing once the
-    // feature is disabled. True at startup, since a prior run (this process or
-    // an earlier one) may have left overrides behind. While the feature stays
-    // disabled this lets the scoped reconcile do no per-tick work after the
-    // single clearing push.
-    let mut scoped_overrides_maybe_dirty = true;
-
     let mut params = SynchronizedParameters::default();
     loop {
         // Wait for the next sync period
@@ -103,13 +96,7 @@ pub async fn system_parameter_sync(
         // Reconcile the scoped (per-cluster and per-replica) parameters. We do
         // this every tick (independent of whether the environment-wide values
         // changed) so the overrides track the current set of live objects.
-        sync_scoped_params(
-            &scoped_client,
-            frontend,
-            &params,
-            &mut scoped_overrides_maybe_dirty,
-        )
-        .await;
+        sync_scoped_params(&scoped_client, frontend, &params).await;
     }
 }
 
@@ -120,31 +107,7 @@ async fn sync_scoped_params(
     client: &Client,
     frontend: &SystemParameterFrontend,
     params: &SynchronizedParameters,
-    maybe_dirty: &mut bool,
 ) {
-    // Read the feature gate from the working copy rather than a catalog
-    // snapshot. The gate is an environment-wide synced parameter, so `params`
-    // already carries its current value. This keeps a disabled environment, the
-    // default, from paying a coordinator round-trip every tick.
-    //
-    // Scoped (per-cluster and per-replica) overrides are off by default,
-    // leaving the environment-wide behavior unchanged. While disabled we
-    // evaluate no scoped contexts. If a prior run left overrides behind we clear
-    // them once so resolution falls back to the environment-wide value
-    // everywhere, then do no per-tick work until the feature is enabled again.
-    if !params.enable_scoped_system_parameters() {
-        if *maybe_dirty {
-            // Full replace with an empty desired state clears every override.
-            // No create-time write races here: it is gated off too.
-            client
-                .update_scoped_system_parameters(ScopedParameters::default(), None)
-                .await;
-            *maybe_dirty = false;
-        }
-        return;
-    }
-    *maybe_dirty = true;
-
     let catalog = client.catalog_snapshot_expensive().await;
 
     // Push the desired state to the coordinator, which holds the working copy
@@ -162,7 +125,7 @@ async fn sync_scoped_params(
     };
     let scoped = evaluate_scoped_parameters(frontend, params, &catalog, None, None);
     client
-        .update_scoped_system_parameters(scoped, Some(prune_scope))
+        .update_scoped_system_parameters(scoped, prune_scope)
         .await;
 }
 

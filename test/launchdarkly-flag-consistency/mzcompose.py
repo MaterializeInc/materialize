@@ -502,7 +502,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
-    "enable_scoped_system_parameters",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
     "enable_zero_downtime_cluster_reconfiguration",
