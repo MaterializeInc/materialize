@@ -63,9 +63,10 @@ root, so no `sudo` is needed. Setup scripts have network access under the
 default **Trusted** network mode; if your environment uses **None**, the
 download will fail.
 
-To configure the language server in the sandbox as well, commit the
-`.claude/settings.json` from [Manual configuration](#manual-configuration)
-to your repository — it carries over to cloud sessions automatically.
+To configure the language server in the sandbox as well, set up the plugin as
+described in [Configuring for Claude Code](#configuring-for-claude-code) and
+commit your project's `.claude/settings.json` to your repository. It carries over
+to cloud sessions automatically.
 
 ## Agent-optimized help
 
@@ -88,7 +89,7 @@ column names and types from your `types.lock` rather than guessing.
 
 ### Configuring for Claude Code
 
-The recommended way is the `mz-sql-lsp` plugin, published by the
+Use the `mz-sql-lsp` plugin, published by the
 [MaterializeInc/agent-skills](https://github.com/MaterializeInc/agent-skills)
 repo, which also serves as a Claude Code plugin marketplace named `materialize`.
 The plugin registers the language server for `.sql` files and bundles a skill
@@ -109,25 +110,3 @@ repository root. Use `.` when `project.toml` sits at the root, or a subdirectory
 name such as `mz` when the project is nested. The language server takes that
 directory as its project root. You can change the value later from `/plugin`, in
 the plugin's detail view.
-
-#### Manual configuration
-
-If you'd rather not install a plugin, configure the language server directly in
-your project's `.claude/settings.json`:
-
-```json
-{
-  "lsp": {
-    "mz-deploy": {
-      "command": "mz-deploy",
-      "args": ["lsp", "-d", "."],
-      "filePatterns": ["*.sql"]
-    }
-  }
-}
-```
-
-Here `-d .` points the server at the project root, so run Claude Code from the
-directory holding `project.toml`, or adjust the path to it. Use one approach or
-the other rather than both: only the first language server registered for `.sql`
-starts.
