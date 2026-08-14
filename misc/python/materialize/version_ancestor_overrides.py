@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "FastPathFilterNoIndex":
+        # PR#38151 (Sql-150: Temporary objects to the catalog) increased wallclock by ~10%
+        min_ancestor_mz_version_per_commit[
+            "f3b4f3f1becf6f56690360874e8aec111c38630d"
+        ] = MzVersion.parse_mz("v26.39.0")
+
     if scenario_class_name in ("ManySmallUpdates", "Update"):
         # PR#37923 (adapter: sequence read-then-write from the session task with OCC) increases wallclock for writes, and clusterd memory for ManySmallUpdates
         min_ancestor_mz_version_per_commit[
