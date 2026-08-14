@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/memory/objects.rs
-revision: 447da2b53e
+revision: f3b4f3f
 ---
 
 # catalog::memory::objects
@@ -14,7 +14,7 @@ Key types include `CatalogItem` (an enum over Table, Source, Log, View, Material
 `Cluster::try_to_plan` rebuilds the `CreateClusterPlan` that the original `CREATE CLUSTER` statement would have produced. Clusters are stored as a structured config rather than SQL text, so `SHOW CREATE CLUSTER` uses this method as the first half of the config-to-statement roundtrip; `unplan_create_cluster` then converts the plan back into a statement. The rebuilt plan always sets `if_not_exists: false` because `IF NOT EXISTS` is a property of the original statement, not of the cluster itself.
 `ClusterReplicaProcessStatus` records the process status, a cumulative `restart_count` mirrored from the orchestrator, and the time of the most recent change to either field.
 `Schema::has_items` returns true if any of `self.items`, `self.types`, or `self.functions` is non-empty, so DROP SCHEMA without CASCADE is rejected when the schema contains only types or functions.
-`StateUpdate` and `StateUpdateKind` represent in-memory deltas applied during catalog replay and incremental updates. `StateUpdateKind` includes `ClusterSystemConfiguration` and `ReplicaSystemConfiguration` variants carrying the corresponding durable objects. `BootstrapStateUpdateKind` mirrors `StateUpdateKind` for the bootstrap phase and includes the same two variants; it converts to/from `StateUpdateKind` via `From`/`TryFrom` implementations.
+`StateUpdate` and `StateUpdateKind` represent in-memory deltas applied during catalog replay and incremental updates. `StateUpdateKind` includes `ClusterSystemConfiguration` and `ReplicaSystemConfiguration` variants carrying the corresponding durable objects. Temporary items are represented as ordinary `Item` variants in `StateUpdateKind`, identified by `Item::ephemeral_owner_session`; there is no separate `TemporaryItem` variant.
 `DataSourceDesc` and `DataSource` describe how a source or table obtains its data (ingestion, introspection, webhook, progress, etc.).
 `Sink::envelope` returns `Some("append")` for the `SinkEnvelope::Append` variant in addition to `Some("debezium")` and `Some("upsert")`.
 `Cluster::auto_scaling_strategy` (implementing `CatalogCluster`) returns the `AutoScalingStrategy` from a managed cluster's config, or `None` for unmanaged clusters.

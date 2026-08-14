@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/catalog_implications.rs
-revision: efe0c63d45
+revision: f3b4f3f
 ---
 
 # adapter::coord::catalog_implications

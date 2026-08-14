@@ -1,6 +1,6 @@
 ---
 source: src/storage-operators/src/persist_source.rs
-revision: d08f8f74a0
+revision: 32c1e1d39
 ---
 
 # storage-operators::persist_source
@@ -11,4 +11,4 @@ It wraps the lower-level `shard_source` from `mz_persist_client`, adding storage
 Defines `Subtime`, an opaque sub-timestamp token that enables finer-grained frontier progress within a single timestamp, used for granular backpressure flow control.
 `Subtime` implements `differential_dataflow::lattice::Lattice` (join as max, meet as min), `Maximum` (returning `u64::MAX`), and `columnation::Columnation` (using `CopyRegion<Subtime>`), allowing it to participate in differential dataflow lattice operations and columnar arrangements.
 The `persist_source_core` function handles the inner scoped dataflow, wiring up `shard_source`, optional `txns_progress`, and the `decode_and_mfp` operator that deserializes `SourceData` and applies remaining MFP logic.
-A `filter_pushdown_audit` proptest module in the `#[cfg(test)]` block provides end-to-end soundness checks for persist filter pushdown: it builds a part from actual rows, computes the real production column statistics, then asserts that `filter_result` never returns `FilterResult::Discard` for a part whose MFP produces output on some actual row. This exercises the full path from stats derivation through `col_stats` to the interpreter, catching both interpreter bugs and stats-derivation bugs.
+A `filter_pushdown_audit` proptest module in the `#[cfg(test)]` block provides end-to-end soundness checks for persist filter pushdown: it builds a part from actual rows, computes the real production column statistics, then asserts that `filter_result` never returns `FilterResult::Discard` for a part whose MFP produces output on some actual row. This exercises the full path from stats derivation through `col_stats` to the interpreter, catching both interpreter bugs and stats-derivation bugs. The module also includes targeted regression tests via `assert_part_kept`, which verifies that a specific predicate keeps a part when real rows match it; one such test covers the case where a float column's `PrimitiveStats` bounds are unordered (e.g., `-NaN` as the lower bound in arrow total order, which sorts above finite values in `OrderedFloat` order), ensuring those bounds are not misread as an empty range and incorrectly discarding the part.
