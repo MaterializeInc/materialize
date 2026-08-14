@@ -194,12 +194,16 @@ const BodyRow = <TData,>({
   row,
   onRowClick,
   rowSx,
+  getRowClassName,
   rowTestId,
   expandLabel,
 }: {
   row: Row<TData>;
   onRowClick?: (row: TData) => void;
   rowSx?: UniversalTableProps<TData>["rowSx"];
+  // callers can pass in a callback that returns a class name for each row.
+  // This enables style attribute-level overrides of the defaults.
+  getRowClassName?: UniversalTableProps<TData>["getRowClassName"];
   rowTestId?: UniversalTableProps<TData>["rowTestId"];
   expandLabel?: UniversalTableProps<TData>["expandLabel"];
 }) => {
@@ -217,6 +221,9 @@ const BodyRow = <TData,>({
   return (
     <Tr
       onClick={handleClick}
+      // Chakra appends its own generated class, so `rowSx` selectors of the
+      // form `&.my-class` match on the compound of the two.
+      className={getRowClassName?.(row)}
       data-testid={rowTestId?.(row)}
       // A styling hook for `rowSx` selectors that need to target group rows.
       data-group-row={isGroupRow ? "" : undefined}
@@ -291,6 +298,7 @@ export const UniversalTable = <TData,>({
   isLoading = false,
   skeletonRowCount = SKELETON_ROW_COUNT,
   rowSx,
+  getRowClassName,
   rowTestId,
   expandLabel,
   footerSx,
@@ -325,6 +333,7 @@ export const UniversalTable = <TData,>({
               row={row}
               onRowClick={onRowClick}
               rowSx={rowSx}
+              getRowClassName={getRowClassName}
               rowTestId={rowTestId}
               expandLabel={expandLabel}
             />

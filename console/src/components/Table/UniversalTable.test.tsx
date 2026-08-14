@@ -56,9 +56,21 @@ const columns = [
   }),
 ];
 
-const BasicTable = ({ data = testData }: { data?: TestCluster[] }) => {
+const BasicTable = ({
+  data = testData,
+  getRowClassName,
+}: {
+  data?: TestCluster[];
+  getRowClassName?: (row: Row<TestCluster>) => string | undefined;
+}) => {
   const table = useUniversalTable({ data, columns });
-  return <UniversalTable table={table} data-testid="test-table" />;
+  return (
+    <UniversalTable
+      table={table}
+      data-testid="test-table"
+      getRowClassName={getRowClassName}
+    />
+  );
 };
 
 const SortableTable = ({
@@ -262,6 +274,24 @@ describe("UniversalTable", () => {
       expect(screen.getByText("analytics")).toBeInTheDocument();
       expect(screen.getByText("default")).toBeInTheDocument();
       expect(screen.getByText("prod")).toBeInTheDocument();
+    });
+
+    it("applies getRowClassName to the rows it matches", async () => {
+      // `prod` is the only row with a null size.
+      await renderComponent(
+        <BasicTable
+          getRowClassName={(row) =>
+            row.original.size === null ? "no-size" : undefined
+          }
+        />,
+      );
+
+      const rowFor = (name: string) => screen.getByText(name).closest("tr");
+      expect(rowFor("prod")).toHaveClass("no-size");
+      expect(rowFor("analytics")).not.toHaveClass("no-size");
+      // Chakra's own generated class has to survive alongside it, or `&.`
+      // selectors in `rowSx` would not match.
+      expect(rowFor("prod")?.className).toMatch(/\bcss-/);
     });
   });
 
