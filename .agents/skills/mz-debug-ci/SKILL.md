@@ -72,8 +72,9 @@ own tools; this section adds only what it does not know:
   `retried`) if that changes. The summary bounds annotation content too: on
   `content_truncated: true`, fetch the full set with `list_annotations`.
 
-If the MCP is absent, continue with `bk` and, at the end, recommend to the
-user that they set the server up (hosted read-only endpoint:
+If the MCP is absent, read `bk-fallback.md` in this skill's directory for
+the `bk` command recipes, continue with those, and, at the end, recommend to
+the user that they set the server up (hosted read-only endpoint:
 `claude mcp add --scope user --transport http buildkite https://mcp.buildkite.com/mcp/readonly`).
 
 ## Search existing failures by pattern
@@ -123,14 +124,10 @@ nothing), but `gh pr checks` reads the PR's current head commit only. A build
 therefore shows up there only if it ran on exactly that commit. For everything
 else (scheduled nightlies on main, release-qualification builds, a PR nightly
 from before the latest push), list the genuinely failed jobs via the API:
-
-```bash
-bk api "/pipelines/<PIPELINE>/builds/<BUILD_NUMBER>" --no-pager 2>/dev/null \
-  | jq -r '.jobs[] | select(.state=="failed" or .state=="timed_out") | select(.soft_failed != true) | [.state, .id, .name] | @tsv'
-```
-
-The same response carries the build's `.commit` and `.branch`, which the
-known-vs-new checks in Step 5 need, so grab them here.
+`list_jobs` as described in the MCP section, or with `bk` the listing recipe
+in `bk-fallback.md`. Either way, also grab the build's commit and branch:
+Step 5's known-vs-new checks need the commit, and neighboring-build lookups
+need the branch.
 
 Job-state semantics matter here:
 - The failure states are `failed` and `timed_out`, the same set as
@@ -150,10 +147,10 @@ Job-state semantics matter here:
   build then goes green.
 - Retried jobs (automatic or manual) appear only as their latest attempt, so
   a job that failed and then passed on retry counts as passed. That is the
-  right verdict for build triage. Add `?include_retried_jobs=true` to the
-  build endpoint only when an in-depth investigation needs the earlier
-  attempts. A manual retry that failed again is itself a signal: someone
-  already tried to shake the failure off and it reproduced.
+  right verdict for build triage; fetch the earlier attempts only when an
+  in-depth investigation needs them. A manual retry that failed again is
+  itself a signal: someone already tried to shake the failure off and it
+  reproduced.
 
 To find a PR's builds that are not on its current head in the first place (an
 older nightly, a pre-push run), get the branch with
@@ -163,16 +160,10 @@ are named `<owner>:<branch>` on Buildkite.
 
 ## Step 2: Check annotations first
 
-**Before diving into logs**, fetch the build annotations. They contain pre-extracted error messages, stack traces, and links to known flaky test issues — this saves significant time compared to grepping through raw logs:
+**Before diving into logs**, fetch the build annotations. They contain pre-extracted error messages, stack traces, and links to known flaky test issues — this saves significant time compared to grepping through raw logs. With the MCP they arrive in `get_build_failure_summary` (or `list_annotations`); with `bk`, use the annotations recipe in `bk-fallback.md`.
 
-```bash
-bk api /pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/annotations --no-pager 2>/dev/null \
-  | jq -r '.[] | select(.style=="error") | "=== \(.context)\n\(.body_html)"' \
-  | sed -e 's/<[^>]*>//g' | grep -v '^$'
-```
-
-The response is JSON: `style` is `"error"` for failures, and `body_html`
-holds the error summary — the failing test/job, the error or stack trace,
+Each annotation has a `style` (`"error"` for failures) and a `body_html`
+holding the error summary — the failing test/job, the error or stack trace,
 known-issue links (Linear keys like `CPU-170`, or legacy
 `database-issues/#NNNN`), and the job's main-branch history (a flaky-test
 indicator).
@@ -199,35 +190,19 @@ Only fetch full logs when annotations don't provide enough detail. On PR test
 builds, read compile and lint job logs first (clippy, lint-and-rustfmt): they
 often explain every downstream failure.
 
-To fetch a job's log:
-```bash
-bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2>/dev/null | tail -100
-```
-
-For large logs, first grep for errors to find the relevant section:
-```bash
-bk job log <JOB_ID> -p <PIPELINE> -b <BUILD_NUMBER> --no-timestamps --no-pager 2>/dev/null | grep -B2 -A5 'error\|FAIL\|panicked'
-```
-
-The log tail can be a red herring: some jobs print long non-error output after
-the actual error (cargo deny's dependency tree runs hundreds of lines past the
-advisory), so when the tail shows no error, switch to the grep form instead of
-tailing more. Buildkite logs are also full of ANSI escapes (colors, plus
-cursor-movement and OSC sequences from docker pulls) and embedded carriage
-returns that leave doubled blank lines, halving grep's `-A`/`-B` reach.
-Normalize before grepping context:
-
-```bash
-bk job log ... 2>/dev/null | tr '\r' '\n' \
-  | sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' -e 's/\x1b\][^\x07]*\x07//g' | grep -v '^$' | grep ...
-```
+Fetch and search logs with the MCP's `search_logs`/`read_logs`/`tail_logs`,
+or with `bk` use the job-log recipes in `bk-fallback.md`. The log tail can be a
+red herring: some jobs print long non-error output after the actual error
+(cargo deny's dependency tree runs hundreds of lines past the advisory), so
+when the tail shows no error, search or grep for the error instead of
+tailing more.
 
 NOTE: for mzcompose-based jobs (testdrive, SQLsmith/SQLancer, platform checks,
 ...) the job console log holds only the harness's output. The services' own
 output (environmentd/clusterd panics and errors) goes to `services.log` and
 similar files inside the job's log artifacts. A panic that is absent from
-`bk job log` can still be the failure, so never conclude "this error did not
-happen in this run" from the console log alone. Check the annotations or
+the job's console log can still be the failure, so never conclude "this
+error did not happen in this run" from it alone. Check the annotations or
 `bin/ci-failures` instead, both are fed by `bin/ci-annotate-errors`, which
 scans the uploaded log artifacts (`services.log`, `run.log`, junit XML, ...)
 at the end of each job. The same scan can fail a job whose own workflow
@@ -239,26 +214,8 @@ grep them directly.
 ### Artifacts
 
 Jobs upload artifacts (junit XML, service logs, coredumps, ...). Use the
-`bk artifacts` subcommands:
-
-```bash
-# All artifacts of a build (each entry has id, job_id, path)
-bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --no-pager 2>/dev/null
-# Artifacts of a single job
-bk artifacts list <BUILD_NUMBER> -p <PIPELINE> --job-uuid <JOB_ID> --no-pager 2>/dev/null
-# Download one artifact into the current directory
-bk artifacts download <ARTIFACT_ID> --build <BUILD_NUMBER> -p <PIPELINE>
-```
-
-NOTE: if `bk` rejects one of these flags as unknown, the installed `bk`
-predates the April 2026 artifacts rework. Check
-`bk artifacts <subcommand> --help` for the local spelling, and recommend to
-the user that they upgrade `bk`.
-
-Do not use `bk api` for artifacts. The plural
-`/pipelines/<PIPELINE>/builds/<BUILD_NUMBER>/artifacts` endpoint works but
-silently returns only the first 30 entries, and its `.../download` endpoint
-fails to parse.
+MCP's `list_artifacts_for_build`/`list_artifacts_for_job`/`get_artifact`,
+or with `bk` use the artifacts recipes in `bk-fallback.md`.
 
 ### Shard contents
 
@@ -268,7 +225,7 @@ shows it:
 
 ```bash
 # Mapping of every sharded job to what it ran, with a link per job whose
-# `#` fragment is the `<JOB_ID>` for `bk job log` (omit links with --no-url)
+# `#` fragment is the `<JOB_ID>` for fetching job logs (omit links with --no-url)
 bin/ci-shards https://buildkite.com/materialize/<PIPELINE>/builds/<BUILD_NUMBER>
 
 # What a single job ran (job link as copied from the Buildkite UI)
