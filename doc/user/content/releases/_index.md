@@ -25,7 +25,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 
 ### Improvements {#v26.37-improvements}
 - **Self-Managed: Highly available operator**: The Materialize operator now runs two replicas by default, so rolling out an operator update no longer interrupts the CRD conversion webhook. Installations that manage their own RBAC must grant the operator `get`, `create`, and `update` on `leases` in `coordination.k8s.io`, because the two replicas coordinate through lease-based leader election.
-- **`IF NOT EXISTS` for clusters and replicas**: `CREATE CLUSTER` and `CREATE CLUSTER REPLICA` now accept an `IF NOT EXISTS` clause, so an idempotent provisioning script gets an `already exists, skipping` notice instead of an error when the name is already taken.
+- **`IF NOT EXISTS` for clusters and replicas**: `CREATE CLUSTER` and `CREATE CLUSTER REPLICA` now accept an `IF NOT EXISTS` clause, so an existing cluster returns an `already exists, skipping` notice instead of an error. Provisioning scripts can now run idempotently, without a pre-flight existence check.
 
 ### Bug Fixes {#v26.37-bug-fixes}
 - Fixed a prepared statement with a parameterized `LIMIT` failing with `Top-level LIMIT must be a constant expression` whenever the bound parameter's type was not `bigint`.
