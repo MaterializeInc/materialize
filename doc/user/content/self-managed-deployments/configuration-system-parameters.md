@@ -211,6 +211,9 @@ that hold per-cluster and per-replica overrides.
   required because a replica name is only unique within its cluster, and because
   both names may themselves contain a `.`.
 
+For example, the following configuration sets environment-wide parameters and
+overrides parameters for a specific cluster and replica:
+
 ```yaml
 apiVersion: v1
 kind: ConfigMap
@@ -237,7 +240,7 @@ data:
     }
 ```
 
-In this example `max_connections` and `enable_lgalloc` apply environment-wide,
+In this example, `max_connections` and `enable_lgalloc` apply environment-wide,
 the `analytics` cluster additionally enables `enable_eager_delta_joins`, and the
 `r1` replica of `analytics` turns `enable_lgalloc` back off for itself.
 
