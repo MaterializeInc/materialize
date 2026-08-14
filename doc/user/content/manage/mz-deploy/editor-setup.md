@@ -1,6 +1,6 @@
 ---
 title: "Editor setup"
-description: "Configure VS Code, Neovim, or Helix with the mz-deploy language server."
+description: "Configure VS Code, Neovim, Helix, or Claude Code with the mz-deploy language server."
 menu:
   main:
     parent: manage-mz-deploy
@@ -92,6 +92,11 @@ language-servers = ["mz-deploy"]
 command = "mz-deploy"
 args = ["lsp", "-d", "."]
 ```
+
+## Claude Code
+
+For Claude Code, install the `mz-sql-lsp` plugin. See [AI agent
+setup](/manage/mz-deploy/agent-setup/#configuring-for-claude-code).
 
 ## How it works
 
