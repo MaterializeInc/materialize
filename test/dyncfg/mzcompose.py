@@ -310,8 +310,9 @@ def workflow_default(c: Composition) -> None:
             # exact list, which is the case an exact list cannot express: the
             # clause is authored before `dyncfg_scoped_2` exists and still selects
             # it. Both must go on matching `dyncfg_scoped` too, asserted below over
-            # both clusters and, for the replica half, by `r1` of `dyncfg_scoped`
-            # still being decided by the narrower `scoped-r1` rule.
+            # both clusters, and the replica half also pins that `r1` of
+            # `dyncfg_scoped` is still decided by the narrower `scoped-r1` rule
+            # ahead of the widened one.
             widened = [
                 {
                     "attribute": "cluster_name",
@@ -341,6 +342,16 @@ def workflow_default(c: Composition) -> None:
 
                     > SELECT r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'dyncfg_scoped_2'
                     r1 {REPLICA_PARAM} false
+
+                    # `scoped-replicas` now matches every replica of both
+                    # clusters, but `scoped-r1` still precedes it, so `r1` of
+                    # `dyncfg_scoped` is still decided at the environment-wide
+                    # value. Widening a later rule must not take a parameter away
+                    # from the narrower rule ahead of it.
+                    > SELECT c.name, r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name LIKE 'dyncfg_scoped%' ORDER BY c.name, r.name
+                    dyncfg_scoped r1 env-wide
+                    dyncfg_scoped r2 false
+                    dyncfg_scoped_2 r1 false
                 """),
             )
 
