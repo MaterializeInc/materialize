@@ -22,16 +22,37 @@ SERVICES = [
     Materialized(),
 ]
 
-# A cluster-coherent parameter, default off, and a replica-local one, default on.
-# Both declare a scope in their definitions, so both are resolved per object.
+# A cluster-coherent parameter and a replica-local one. Both declare a scope in
+# their definitions, so both are resolved per object.
 CLUSTER_PARAM = "enable_eager_delta_joins"
 REPLICA_PARAM = "enable_lgalloc"
-# A second cluster-coherent parameter, default off. Written by the rules that must
-# have no effect, so a leak shows up as a row that should not exist.
+# A second cluster-coherent parameter. Written by the rules that must have no
+# effect, so a leak shows up as a row that should not exist.
 CLUSTER_PARAM_2 = "enable_join_prioritize_arranged"
 # A third cluster-coherent parameter, used to check that an unparseable scoped
-# value is dropped rather than stored or fatal.
+# value is dropped rather than stored or fatal. Its environment-wide value does
+# not matter, since an unparseable value never becomes an override.
 UNPARSEABLE_PARAM = "enable_projection_pushdown_after_relation_cse"
+
+# The environment-wide values every expected scoped row below is derived from.
+#
+# A scoped value is recorded as an override only when it differs from the
+# environment-wide value, so the baseline decides which rows exist. It is pinned
+# here, as flat top-level keys in the config file, rather than inherited from the
+# parameters' compiled-in defaults, which are not what an object resolves against
+# under this harness: `Materialized` renders `MZ_SYSTEM_PARAMETER_DEFAULT` from
+# `get_default_system_parameters`, which supplies `CLUSTER_PARAM` and
+# `REPLICA_PARAM`, in both cases as the opposite of their compiled-in default.
+#
+# Flat keys are applied to the sync loop's parameter set in the same tick that
+# refreshes the file cache, before the scoped passes read it, and the create-time
+# fold resolves against the catalog's system config, so the reconcile and the
+# create path both see this baseline.
+ENV_WIDE_PARAMS: dict[str, bool] = {
+    CLUSTER_PARAM: False,
+    REPLICA_PARAM: True,
+    CLUSTER_PARAM_2: False,
+}
 
 
 def write_config(config_file: Path, params: dict[str, Any]) -> None:
@@ -44,13 +65,27 @@ def write_config(config_file: Path, params: dict[str, Any]) -> None:
         os.fsync(f.fileno())
 
 
+def assert_environment_wide_baseline(c: Composition) -> None:
+    """Check that the flat keys pinning `ENV_WIDE_PARAMS` took effect. Every
+    scoped assertion is derived from that baseline, so a stale one would surface
+    as an unexplained missing or extra row rather than as the premise it is.
+    Read as `mz_system`, since the parameters are not user-visible."""
+    for param, value in ENV_WIDE_PARAMS.items():
+        expected = "on" if value else "off"
+        actual = c.sql_query(f"SHOW {param}", port=6877, user="mz_system")[0][0]
+        assert (
+            actual == expected
+        ), f"environment-wide {param} is {actual}, expected {expected}"
+
+
 def workflow_default(c: Composition) -> None:
     # Create config file in MZ_ROOT directory
     mz_root = Path(os.environ.get("MZ_ROOT", Path(__file__).parent.parent.parent))
     config_file = mz_root / "dyncfg-test-config.json"
 
     try:
-        system_params_1 = {
+        system_params_1: dict[str, Any] = {
+            **ENV_WIDE_PARAMS,
             "max_connections": 1000,
         }
 
@@ -74,8 +109,10 @@ def workflow_default(c: Composition) -> None:
                     1000
                 """),
             )
+            assert_environment_wide_baseline(c)
 
-            system_params_2 = {
+            system_params_2: dict[str, Any] = {
+                **ENV_WIDE_PARAMS,
                 "max_connections": 67,
                 # This is a bit awkward, but it works.
                 "allowed_cluster_replica_sizes": "'25cc','50cc'",
@@ -112,9 +149,10 @@ def workflow_default(c: Composition) -> None:
                 """),
             )
 
-            system_params_3 = {
+            system_params_3: dict[str, Any] = {
                 # Flat keys keep their environment-wide meaning alongside the
                 # reserved segment and rule sections.
+                **ENV_WIDE_PARAMS,
                 "max_connections": 67,
                 "allowed_cluster_replica_sizes": "'25cc','50cc'",
                 "segments": {
@@ -133,10 +171,10 @@ def workflow_default(c: Composition) -> None:
                     {
                         "segment": "scoped-r1",
                         "parameters": {
-                            # First match wins: this pins `r1` to the
-                            # environment-wide value, so the cluster-wide rule
-                            # below cannot lower it, while `r2` does take that
-                            # rule's value.
+                            # First match wins: this repeats the environment-wide
+                            # value, so the cluster-wide rule below cannot lower
+                            # it for `r1` and `r1` records no override, while `r2`
+                            # reaches that rule and does take its value.
                             REPLICA_PARAM: True,
                             # A cluster-coherent parameter may not be supplied
                             # through a segment matching on a replica attribute, so
@@ -147,6 +185,8 @@ def workflow_default(c: Composition) -> None:
                     {
                         "segment": "scoped-cluster",
                         "parameters": {
+                            # Differs from the environment-wide value, so it is
+                            # recorded as the cluster's override.
                             CLUSTER_PARAM: True,
                             # A replica-local parameter may be targeted by cluster
                             # alone, which reaches every replica of the cluster.
@@ -177,6 +217,16 @@ def workflow_default(c: Composition) -> None:
 
                     > SELECT c.name, r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id ORDER BY c.name, r.name, p.name
                     dyncfg_scoped r2 {REPLICA_PARAM} false
+
+                    # First match wins, stated per replica rather than by the
+                    # absence of a row above: `r1` is decided by `scoped-r1` at
+                    # the environment-wide value and so records no override, `r2`
+                    # falls through to `scoped-cluster`. Reversing the two rules
+                    # makes `scoped-cluster` decide both, turning `r1` into
+                    # `false` and failing this.
+                    > SELECT r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name = 'dyncfg_scoped' ORDER BY r.name
+                    r1 env-wide
+                    r2 false
                 """),
             )
 
@@ -190,7 +240,7 @@ def workflow_default(c: Composition) -> None:
             #
             # The fold resolves from the file as of the last sync tick, hence the
             # sleep after the write.
-            system_params_4 = {
+            system_params_4: dict[str, Any] = {
                 **system_params_3,
                 "segments": {
                     **system_params_3["segments"],
