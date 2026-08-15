@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/open/builtin_schema_migration_tests.rs
-revision: 57107078dc
+revision: 0c76273b9f
 ---
 
 # adapter::catalog::open::builtin_schema_migration_tests

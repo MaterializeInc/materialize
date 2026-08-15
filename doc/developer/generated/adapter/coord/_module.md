@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord.rs
-revision: 9de9cddf5e
+revision: 8e2fe64727
 ---
 
 # adapter::coord
@@ -16,7 +16,7 @@ Bootstrap handles derived builtin storage collections (builtin MVs) separately: 
 The `clusters_caught_up_check` built during `serve` excludes both migrated MVs and new builtin MVs (and their transitive dependents) from the caught-up frontier check: migrated MV dataflows do not advance their write frontier in read-only mode, and new builtin MVs have no writer until the deployment promotes, so both sets would otherwise stall the check.
 The `Message` enum includes a `ClusterControllerRequest(cluster_controller::ClusterControllerRequest)` variant, carrying one pull/apply call from the cluster controller task to be answered on the main coordinator message loop.
 `Message::ArrangementSizesWrite(Vec<ArrangementSizeRecord>)` carries the records prepared by the off-thread arrangement sizes snapshot task back to the coordinator loop for stamping and appending to `mz_object_arrangement_size_history`.
-`ship_dataflow`, `try_ship_dataflow`, and `ship_dataflow_and_notice_builtin_table_updates` accept `DataflowDescription<LirRelationExpr>` (previously `DataflowDescription<Plan>`).
+`ship_dataflow`, `try_ship_dataflow`, and `ship_dataflow_and_notice_builtin_table_updates` accept `DataflowDescription<LirRelationExpr>`.
 `ExecuteContextInner` carries a `response_barriers: Vec<BuiltinTableAppendNotify>` field (Debug-ignored). `ExecuteContext::from_parts` is a convenience wrapper around `from_parts_with_response_barriers`, which accepts an explicit barrier list. `into_parts` returns the barrier list as a fifth element alongside `tx`, `internal_cmd_tx`, `session`, and `extra`; callers that repack an `ExecuteContext` must preserve and forward these barriers. `delay_response_until` appends a `BuiltinTableAppendCompletion` barrier; on retirement, the response is held until all barriers resolve. The parts returned by `into_parts` lose the `Drop` backstop that answers the client on shutdown, so they must not be held across an await point (a bare `ClientTransmitter` panics when dropped unsent). When `retire` must wait on response barriers, it keeps `self` intact across the wait so the `Drop` backstop remains active; the barriers are cleared before the recursive call so the recursion terminates.
 `ExplainTimestampStage` has four variants in order: `Optimize`, `RealTimeRecency`, `LinearizeTimestamp` (carries `ExplainTimestampLinearizeTimestamp`: validity, format, optimized_plan, cluster_id, source_ids, when, real_time_recency_ts), and `Finish` (carries `ExplainTimestampFinish`: validity, format, cluster_id, source_ids, when, real_time_recency_ts, timeline_context, oracle_read_ts). The `LinearizeTimestamp` stage reads the oracle timestamp off the coordinator loop and passes it forward as `oracle_read_ts` in `ExplainTimestampFinish`.
 `SubscribeStage` has five variants in order: `OptimizeMir`, `LinearizeTimestamp` (carries `SubscribeLinearizeTimestamp`: validity, plan, timeline, optimizer, global_mir_plan, dependency_ids, replica_id, explain_ctx), `TimestampOptimizeLir` (carries `SubscribeTimestampOptimizeLir`, which includes `oracle_read_ts: Option<Timestamp>`), `Finish`, and `Explain`. The `LinearizeTimestamp` stage reads the oracle timestamp off the coordinator loop before LIR optimization.
