@@ -276,11 +276,11 @@ pub mod v1alpha1 {
         /// is a valid JSON object containing valid system parameters.
         ///
         /// Each top-level key sets a parameter for the whole environment, except
-        /// for the two reserved keys `segments` and `rules`. A segment is a named
-        /// predicate over the attributes of a cluster or replica, and a rule
-        /// attaches parameters to a segment. For each parameter the first
-        /// matching rule wins. A segment matching no live cluster or replica has
-        /// no effect.
+        /// for the two reserved keys `segments` and `rules`. A segment names a
+        /// context kind, `cluster` or `replica`, and the clauses selecting the
+        /// objects it matches, and a rule attaches parameters to a segment. For
+        /// each parameter the first matching rule wins. A segment matching no
+        /// live object, or one this version cannot evaluate, has no effect.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -291,7 +291,12 @@ pub mod v1alpha1 {
         ///     {
         ///       "max_connections": 1000,
         ///       "segments": {
-        ///         "analytics": {"cluster_name": ["analytics"]}
+        ///         "analytics": {
+        ///           "contextKind": "cluster",
+        ///           "clauses": [
+        ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
+        ///           ]
+        ///         }
         ///       },
         ///       "rules": [
         ///         {
@@ -1563,11 +1568,11 @@ pub mod v1 {
         /// is a valid JSON object containing valid system parameters.
         ///
         /// Each top-level key sets a parameter for the whole environment, except
-        /// for the two reserved keys `segments` and `rules`. A segment is a named
-        /// predicate over the attributes of a cluster or replica, and a rule
-        /// attaches parameters to a segment. For each parameter the first
-        /// matching rule wins. A segment matching no live cluster or replica has
-        /// no effect.
+        /// for the two reserved keys `segments` and `rules`. A segment names a
+        /// context kind, `cluster` or `replica`, and the clauses selecting the
+        /// objects it matches, and a rule attaches parameters to a segment. For
+        /// each parameter the first matching rule wins. A segment matching no
+        /// live object, or one this version cannot evaluate, has no effect.
         ///
         /// Run `SHOW ALL` in SQL to see a subset of configurable system parameters.
         ///
@@ -1578,7 +1583,12 @@ pub mod v1 {
         ///     {
         ///       "max_connections": 1000,
         ///       "segments": {
-        ///         "analytics": {"cluster_name": ["analytics"]}
+        ///         "analytics": {
+        ///           "contextKind": "cluster",
+        ///           "clauses": [
+        ///             {"attribute": "cluster_name", "op": "in", "values": ["analytics"]}
+        ///           ]
+        ///         }
         ///       },
         ///       "rules": [
         ///         {
