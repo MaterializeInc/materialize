@@ -1074,6 +1074,21 @@ impl<'a> PartialOrd for DatumNested<'a> {
     }
 }
 
+/// Exclusive upper bound on the byte values the row encoding uses as datum tags.
+///
+/// Every datum begins with a `Tag` discriminant, so no byte at or above this value
+/// can begin a datum. That makes such bytes available to consumers that want to place
+/// their own markers in otherwise row-encoded data: `mz_row_spine`'s arrangement
+/// dictionary codec repurposes them as references to common values, and decodes a byte
+/// below the bound as a literal datum.
+///
+/// The bound is deliberately loose, leaving headroom for new tags without an
+/// accompanying change in every consumer. Adding tags is fine until one would reach
+/// this value; at that point raising the bound is *not* enough, since consumers have
+/// claimed the bytes above it. `tag_upper_bound_is_exclusive` proves the invariant
+/// exhaustively rather than by sampling datums.
+pub const TAG_UPPER_BOUND: u8 = 122;
+
 // Prefer adding new tags to the end of the enum. Certain behavior, like row ordering and EXPLAIN
 // PHYSICAL PLAN, rely on the ordering of this enum. Neither of these are breaking changes, but
 // it's annoying when they change.
@@ -3603,6 +3618,25 @@ mod tests {
     use crate::SqlScalarType;
 
     use super::*;
+
+    /// [`TAG_UPPER_BOUND`] must be exactly what it claims: no byte at or above it
+    /// decodes as a [`Tag`], and therefore none can begin a datum.
+    ///
+    /// This is checked over the whole byte range rather than by packing sample datums,
+    /// because sampling cannot reach every tag: `StringHuge`, `BytesHuge` and `ListHuge`
+    /// need values larger than 4GiB. Consumers repurpose the bytes above the bound as
+    /// their own markers in row-encoded data, so a tag crossing it would make their
+    /// decoding ambiguous.
+    #[mz_ore::test]
+    fn tag_upper_bound_is_exclusive() {
+        for byte in TAG_UPPER_BOUND..=u8::MAX {
+            assert_err!(
+                Tag::try_from_primitive(byte),
+                "byte {byte} decodes as a tag at or above TAG_UPPER_BOUND ({TAG_UPPER_BOUND}); \
+                 consumers have already claimed it for their own use",
+            );
+        }
+    }
 
     // Regression: comparing deeply nested list values must not overflow the
     // stack (STACK-7). `Datum` ordering recurses once per nesting level.
