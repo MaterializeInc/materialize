@@ -549,7 +549,7 @@ enum ClauseDefect {
     UnknownAttribute(String),
     /// `attribute` names an attribute that objects of the segment's context kind
     /// do not carry, so the clause could only ever evaluate false.
-    AttributeOutsideContext(String, ContextKind),
+    AttributeOutsideContext(ScopeAttribute, ContextKind),
     /// `op` is missing or is not a string.
     MissingOperator,
     /// `op` names a LaunchDarkly operator this format refuses, with the reason
@@ -587,7 +587,8 @@ impl fmt::Display for ClauseDefect {
             ),
             ClauseDefect::AttributeOutsideContext(attribute, kind) => write!(
                 f,
-                "names the {CLAUSE_ATTRIBUTE} {attribute:?}, which a {:?} does not carry",
+                "names the {CLAUSE_ATTRIBUTE} {:?}, which a {:?} does not carry",
+                attribute.as_str(),
                 kind.as_str()
             ),
             ClauseDefect::MissingOperator => write!(f, "names no {CLAUSE_OP:?}"),
@@ -855,7 +856,7 @@ impl Clause {
                 None => return Err(ClauseDefect::UnknownAttribute(name)),
                 Some(attribute) => match context_kind {
                     Some(kind) if !attribute.in_context(kind) => {
-                        return Err(ClauseDefect::AttributeOutsideContext(name, kind));
+                        return Err(ClauseDefect::AttributeOutsideContext(attribute, kind));
                     }
                     _ => attribute,
                 },
@@ -2595,7 +2596,7 @@ mod tests {
             vec![SegmentDefect::Clause(
                 2,
                 ClauseDefect::AttributeOutsideContext(
-                    "replica_size_family".to_string(),
+                    ScopeAttribute::ReplicaSizeFamily,
                     ContextKind::Cluster
                 )
             )]
