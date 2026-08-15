@@ -1832,12 +1832,13 @@ fn ld_ctx(
 ) -> Result<ld::Context, anyhow::Error> {
     // Register multiple contexts for this client.
     //
-    // NOTE: the order contexts are added in here does not decide which of two
-    // conflicting targeting rules wins. What the SDK does is evaluate individual
-    // targets first, then the flag's rules in their array order, first match
-    // winning. Which context kind a matching rule's clauses named is not part of
-    // that ordering, so a flag whose rules target both `cluster` and `replica`
-    // resolves by rule order in LaunchDarkly, not by anything expressible here.
+    // NOTE: the order these are added in does not affect evaluation. A clause or
+    // target names the context kind it applies to and the SDK resolves that kind
+    // by lookup over the multi-context (`Context::as_kind`), not by an ordered
+    // scan, so these calls can be reordered freely. Precedence within a flag is
+    // individual targets, then rules, then the fallthrough, and within each of
+    // those it is array order with the first match winning. Nothing about which
+    // of two conflicting rules wins is therefore expressible from here.
     let mut ctx_builder = ld::MultiContextBuilder::new();
 
     if env_id.cloud_provider() != &CloudProvider::Local {
