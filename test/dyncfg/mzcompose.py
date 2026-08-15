@@ -166,6 +166,13 @@ def workflow_default(c: Composition) -> None:
                     # A misspelled attribute makes the whole segment match nothing,
                     # rather than widening it to every object.
                     "typo": {"cluster_nmae": ["dyncfg_scoped"]},
+                    # An invalid pattern fails closed the same way, so this
+                    # matches nothing rather than widening to every non-builtin
+                    # cluster, which is what its surviving entry alone allows.
+                    "bad-pattern": {
+                        "cluster_name": {"matches": ["^dyncfg_["]},
+                        "is_builtin": [False],
+                    },
                 },
                 "rules": [
                     {
@@ -197,6 +204,7 @@ def workflow_default(c: Composition) -> None:
                     },
                     {"segment": "absent-cluster", "parameters": {CLUSTER_PARAM: True}},
                     {"segment": "typo", "parameters": {CLUSTER_PARAM_2: True}},
+                    {"segment": "bad-pattern", "parameters": {CLUSTER_PARAM_2: True}},
                     # No such segment, so this rule is ignored.
                     {
                         "segment": "no-such-segment",
@@ -240,13 +248,17 @@ def workflow_default(c: Composition) -> None:
             #
             # The fold resolves from the file as of the last sync tick, hence the
             # sleep after the write.
+            #
+            # The widened segment is written as a pattern rather than a longer
+            # exact list, which is the case an exact list cannot express: the
+            # pattern is authored before `dyncfg_scoped_2` exists and still
+            # selects it. It must go on matching `dyncfg_scoped` too, asserted
+            # below over both clusters.
             system_params_4: dict[str, Any] = {
                 **system_params_3,
                 "segments": {
                     **system_params_3["segments"],
-                    "scoped-cluster": {
-                        "cluster_name": ["dyncfg_scoped", "dyncfg_scoped_2"]
-                    },
+                    "scoped-cluster": {"cluster_name": {"matches": ["^dyncfg_scoped"]}},
                 },
             }
 
@@ -257,8 +269,9 @@ def workflow_default(c: Composition) -> None:
                     $ postgres-execute connection=mz_system
                     CREATE CLUSTER dyncfg_scoped_2 SIZE 'scale=1,workers=1'
 
-                    > SELECT p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id WHERE c.name = 'dyncfg_scoped_2'
-                    {CLUSTER_PARAM} true
+                    > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
+                    dyncfg_scoped {CLUSTER_PARAM} true
+                    dyncfg_scoped_2 {CLUSTER_PARAM} true
 
                     > SELECT r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'dyncfg_scoped_2'
                     r1 {REPLICA_PARAM} false

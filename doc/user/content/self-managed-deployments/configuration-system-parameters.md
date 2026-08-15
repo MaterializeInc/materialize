@@ -270,9 +270,9 @@ A segment maps an attribute name to the list of values it allows:
   `analytics` or `analytics_staging`.
 - Several attributes in one segment are **ANDed**: the replica must be in one of
   those clusters *and* be of the `legacy` size family.
-- **Only exact matching is supported.** There is no prefix, wildcard, regular
-  expression, or negation operator. To target one cluster, write a segment with a
-  single `cluster_name` value.
+- **Matching is exact** in this form. To target one cluster, write a segment with
+  a single `cluster_name` value. To match by prefix, suffix, or any other shape of
+  name, see [Matching by pattern](#matching-by-pattern).
 - A segment with an empty predicate, `{}`, matches every cluster and replica.
   Combined with rule ordering, that makes it a catch-all.
 
@@ -302,6 +302,49 @@ any cluster or replica later created with that name.
 
 Values may be written as JSON strings, numbers, or booleans: `"is_builtin":
 [true]` and `"is_builtin": ["true"]` are equivalent.
+
+### Matching by pattern
+
+Instead of a list of values, an attribute may be given an object with an `in`
+list of exact values and a `matches` list of regular expressions. Both keys are
+optional:
+
+```json
+"segments": {
+  "prod-clusters": {
+    "cluster_name": { "in": ["analytics"], "matches": ["^prod-", "-prod$"] }
+  }
+}
+```
+
+- A bare list is shorthand for `in` alone: `"cluster_name": ["analytics"]` and
+  `"cluster_name": { "in": ["analytics"] }` are the same segment.
+- `in` and `matches` are **ORed**, as are the entries within either. The segment
+  above matches a cluster named `analytics`, and any cluster whose name starts
+  with `prod-` or ends with `-prod`.
+- **Patterns are unanchored**, so a pattern matches anywhere in the value. The
+  pattern `prod` matches the cluster `staging-prod-1`. Write `^prod` to anchor at
+  the start of the name, `prod$` at the end, and `^prod$` to match the whole
+  name.
+- Patterns use RE2 syntax, as in Go's `regexp` package: character classes,
+  alternation, and repetition are supported, backreferences and lookaround are
+  not.
+- Patterns must be JSON strings. A backslash has to be escaped for JSON, so the
+  pattern `\d` is written `"\\d"`.
+- There is no negation operator: a segment states what it allows, never what it
+  excludes.
+
+Reach for a pattern when you are targeting clusters or replicas by name and the
+set is open-ended: a pattern also applies to a cluster or replica you create
+later, which a list of exact names cannot do. `is_builtin`, `replica_size`, and
+`replica_size_family` draw from a small fixed set of values, so an `in` list is
+usually clearer for those.
+
+**An invalid pattern makes the whole segment match nothing**, just as an unknown
+attribute name does, so the rules naming that segment do not apply. This fails
+safe rather than silently widening the segment. `environmentd` logs a warning
+naming the segment, the attribute, and the error in the pattern. A key other than
+`in` and `matches` inside the object is treated the same way.
 
 ### Rules
 
@@ -340,11 +383,12 @@ configuration, and the order of an object's keys is not preserved.
   naming the segment, the parameter, and the offending attribute. Replica-scoped
   parameters can be attached to either kind of segment.
 - **A segment that Materialize cannot fully interpret matches nothing.** An
-  unknown attribute name, or a value that is not a list of scalars, makes the
-  whole segment match no cluster and no replica, so the rules naming it do not
-  apply. This fails safe: ignoring the entry instead would widen the segment to
-  objects you did not target. `environmentd` logs a warning naming the segment
-  and the attribute.
+  unknown attribute name, a value that is neither a list of scalars nor an `in`
+  and `matches` object, an unknown key inside that object, or an invalid pattern
+  makes the whole segment match no cluster and no replica, so the rules naming it
+  do not apply. This fails safe: ignoring the entry instead would widen the
+  segment to objects you did not target. `environmentd` logs a warning naming the
+  segment and the attribute.
 - **A rule naming a segment that does not exist is ignored**, with a warning
   naming the segment.
 - **A segment matching nothing is not an error.** If you later create a cluster

@@ -28,6 +28,7 @@ use mz_dyncfg::ParameterScope;
 use mz_ore::metrics::UIntGauge;
 use mz_ore::now::NowFn;
 use mz_sql::catalog::EnvironmentId;
+use regex::Regex;
 use serde_json::Value as JsonValue;
 use tokio::time;
 use tracing::warn;
@@ -85,6 +86,12 @@ const RULES_SECTION: &str = "rules";
 const RULE_SEGMENT: &str = "segment";
 /// Key of a `rules` element holding the parameters it supplies.
 const RULE_PARAMETERS: &str = "parameters";
+/// Key of a [`Segment`] predicate entry listing the values the attribute may
+/// equal. LaunchDarkly's `in` operator.
+const IN_OPERATOR: &str = "in";
+/// Key of a [`Segment`] predicate entry listing the regular expressions the
+/// attribute's value may match. LaunchDarkly's `matches` operator.
+const MATCHES_OPERATOR: &str = "matches";
 
 /// The parsed contents of the config-sync file.
 ///
@@ -254,14 +261,14 @@ fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute,
 
 /// A named predicate over a cluster's or replica's scope attributes.
 ///
-/// Attributes are ANDed, the allowed values of one attribute are ORed, and
-/// matching is exact. That is LaunchDarkly's `in` operator and nothing more:
-/// there is no prefix, regex, or negation operator.
+/// Attributes are ANDed and what one attribute allows is ORed. That covers
+/// LaunchDarkly's `in` and `matches` operators and nothing more: there is no
+/// negation operator.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Segment {
-    /// The values allowed for each attribute the predicate constrains. An empty
-    /// predicate constrains nothing, so it matches every object.
-    attributes: BTreeMap<ScopeAttribute, BTreeSet<String>>,
+    /// What each attribute the predicate constrains allows. An empty predicate
+    /// constrains nothing, so it matches every object.
+    attributes: BTreeMap<ScopeAttribute, AttributePredicate>,
     /// The predicate entries this binary cannot evaluate, keyed by the attribute
     /// name the file spells and reported by
     /// [`SystemParameterFrontend::scoped_rule_diagnostics`].
@@ -274,15 +281,62 @@ struct Segment {
     rejected: BTreeMap<String, RejectedAttribute>,
 }
 
+/// What one attribute of a [`Segment`] predicate allows.
+///
+/// The two operators are ORed, as are the entries within either, so an
+/// attribute matches when its value equals one of [`Self::values`] or is
+/// matched by one of [`Self::patterns`]. An attribute allowing neither matches
+/// nothing.
+#[derive(Debug, Default)]
+struct AttributePredicate {
+    /// The values the attribute may equal, the `in` operator.
+    values: BTreeSet<String>,
+    /// The patterns the attribute's value may match, the `matches` operator.
+    ///
+    /// Compiled here, when the file is parsed, because evaluation runs per
+    /// object per sync tick and per object creation, while a parse happens only
+    /// when the file changes.
+    patterns: Vec<Regex>,
+}
+
+impl AttributePredicate {
+    /// Whether the attribute's `value` is allowed.
+    fn matches(&self, value: &str) -> bool {
+        self.values.contains(value) || self.patterns.iter().any(|pattern| pattern.is_match(value))
+    }
+}
+
+/// Compares the patterns by the source they were compiled from, a [`Regex`]
+/// being uncomparable itself. Two predicates equal under this decide the same
+/// values.
+impl PartialEq for AttributePredicate {
+    fn eq(&self, other: &Self) -> bool {
+        self.values == other.values
+            && self.patterns.len() == other.patterns.len()
+            && std::iter::zip(&self.patterns, &other.patterns)
+                .all(|(a, b)| a.as_str() == b.as_str())
+    }
+}
+
+impl Eq for AttributePredicate {}
+
 /// Why a [`Segment`] predicate entry cannot be evaluated.
 #[derive(Debug, PartialEq, Eq)]
 enum RejectedAttribute {
     /// The name is outside the [`ScopeAttribute`] vocabulary.
     UnknownAttribute,
-    /// The value is not an array of JSON scalars. Only that shape is accepted, so
-    /// that a value spelled as some other shape, for instance an operator this
-    /// binary predates, is rejected rather than misread.
+    /// The entry is neither an array of JSON scalars nor an operator object of
+    /// those, so it cannot be read as a predicate at all. Only those shapes are
+    /// accepted, so that a value spelled as some other shape, for instance an
+    /// operator this binary predates, is rejected rather than misread.
     UnsupportedValues,
+    /// The operator object carries a key that is not an operator this binary
+    /// knows, for the same reason an unknown attribute name is rejected: it
+    /// expresses a constraint that cannot be honoured.
+    UnknownOperator(String),
+    /// A `matches` entry is not a valid regular expression, so the constraint it
+    /// expresses is unknown.
+    InvalidPattern { pattern: String, error: String },
 }
 
 impl fmt::Display for RejectedAttribute {
@@ -292,7 +346,24 @@ impl fmt::Display for RejectedAttribute {
                 write!(f, "is not a cluster or replica attribute")
             }
             RejectedAttribute::UnsupportedValues => {
-                write!(f, "expects an array of strings, numbers or booleans")
+                write!(
+                    f,
+                    "expects an array of strings, numbers or booleans, or an object of an \
+                     {IN_OPERATOR:?} array and a {MATCHES_OPERATOR:?} array of patterns"
+                )
+            }
+            RejectedAttribute::UnknownOperator(operator) => {
+                write!(
+                    f,
+                    "names {operator:?}, which is not one of the {IN_OPERATOR:?} and \
+                     {MATCHES_OPERATOR:?} operators"
+                )
+            }
+            RejectedAttribute::InvalidPattern { pattern, error } => {
+                write!(
+                    f,
+                    "has the invalid {MATCHES_OPERATOR:?} pattern {pattern:?}: {error}"
+                )
             }
         }
     }
@@ -325,14 +396,12 @@ impl Segment {
                     .insert(name, RejectedAttribute::UnknownAttribute);
                 continue;
             };
-            match predicate_values(&value) {
-                Some(values) => {
-                    segment.attributes.insert(attribute, values);
+            match attribute_predicate(&value) {
+                Ok(predicate) => {
+                    segment.attributes.insert(attribute, predicate);
                 }
-                None => {
-                    segment
-                        .rejected
-                        .insert(name, RejectedAttribute::UnsupportedValues);
+                Err(rejected) => {
+                    segment.rejected.insert(name, rejected);
                 }
             }
         }
@@ -349,7 +418,7 @@ impl Segment {
             && self.attributes.iter().all(|(attribute, allowed)| {
                 attributes
                     .get(attribute)
-                    .is_some_and(|value| allowed.contains(value))
+                    .is_some_and(|value| allowed.matches(value))
             })
     }
 
@@ -513,16 +582,85 @@ fn as_array(position: FilePosition<'_>, value: JsonValue) -> Vec<JsonValue> {
     }
 }
 
-/// The values a [`Segment`] predicate entry allows, or `None` if `value` is not
-/// an array of JSON scalars.
+/// The predicate a [`Segment`] entry expresses, or why it cannot be evaluated.
+///
+/// The entry is written either as a bare array of the values the attribute may
+/// equal, or as an object of the [`IN_OPERATOR`] and [`MATCHES_OPERATOR`]
+/// operators, each optional. A bare array is the object carrying only `in`.
+///
+/// An attribute with more than one problem is reported for the first one found,
+/// which is enough to make its segment match nothing.
+fn attribute_predicate(value: &JsonValue) -> Result<AttributePredicate, RejectedAttribute> {
+    let operators: BTreeMap<&str, &JsonValue> = match value {
+        JsonValue::Array(_) => BTreeMap::from([(IN_OPERATOR, value)]),
+        JsonValue::Object(operators) => operators
+            .iter()
+            .map(|(operator, value)| (operator.as_str(), value))
+            .collect(),
+        _ => return Err(RejectedAttribute::UnsupportedValues),
+    };
+
+    let mut predicate = AttributePredicate::default();
+    for (operator, value) in operators {
+        match operator {
+            IN_OPERATOR => predicate.values = predicate_values(value)?,
+            MATCHES_OPERATOR => predicate.patterns = predicate_patterns(value)?,
+            operator => {
+                return Err(RejectedAttribute::UnknownOperator(operator.to_string()));
+            }
+        }
+    }
+    Ok(predicate)
+}
+
+/// The values an `in` operator allows, or a rejection if `value` is not an array
+/// of JSON scalars.
 ///
 /// Rendered to strings because that is how scope attributes are spelled, so a
 /// boolean attribute may be written either as `true` or as `"true"`.
-fn predicate_values(value: &JsonValue) -> Option<BTreeSet<String>> {
+fn predicate_values(value: &JsonValue) -> Result<BTreeSet<String>, RejectedAttribute> {
     let JsonValue::Array(values) = value else {
-        return None;
+        return Err(RejectedAttribute::UnsupportedValues);
     };
-    values.iter().map(scalar_string).collect()
+    values
+        .iter()
+        .map(scalar_string)
+        .collect::<Option<_>>()
+        .ok_or(RejectedAttribute::UnsupportedValues)
+}
+
+/// The patterns a `matches` operator allows, or a rejection if `value` is not an
+/// array of strings or one of them is not a valid regular expression.
+///
+/// A pattern is unanchored, as it is in LaunchDarkly and in the RE2 syntax
+/// LaunchDarkly's `matches` uses, so it matches anywhere in the attribute's
+/// value. `^` and `$` are how a whole-value match is asked for.
+///
+/// Only strings are accepted: a number or boolean spelled here is a value rather
+/// than a pattern, so accepting it would quietly read a typo as a regex.
+fn predicate_patterns(value: &JsonValue) -> Result<Vec<Regex>, RejectedAttribute> {
+    let JsonValue::Array(values) = value else {
+        return Err(RejectedAttribute::UnsupportedValues);
+    };
+    values
+        .iter()
+        .map(|value| {
+            let JsonValue::String(pattern) = value else {
+                return Err(RejectedAttribute::UnsupportedValues);
+            };
+            Regex::new(pattern).map_err(|e| RejectedAttribute::InvalidPattern {
+                pattern: pattern.clone(),
+                // The regex crate renders a parse error as a multi-line block
+                // that points at the offending character. Collapsed so that the
+                // warning this ends up in stays one log line.
+                error: e
+                    .to_string()
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            })
+        })
+        .collect()
 }
 
 /// Renders a JSON scalar as the string a scope attribute is compared against, or
@@ -1597,6 +1735,14 @@ mod tests {
         BTreeMap::from([(param_name.to_string(), value.to_string())])
     }
 
+    /// The predicate an exact-value entry parses to.
+    fn exact<const N: usize>(values: [&str; N]) -> AttributePredicate {
+        AttributePredicate {
+            values: values.into_iter().map(str::to_string).collect(),
+            patterns: Vec::new(),
+        }
+    }
+
     /// A document whose single rule gives the `analytics` cluster `value` for
     /// [`CLUSTER_PARAM`].
     fn scoped_file(value: bool) -> String {
@@ -1675,20 +1821,14 @@ mod tests {
             file.segments["analytics"].attributes,
             BTreeMap::from([(
                 ScopeAttribute::ClusterName,
-                BTreeSet::from(["analytics".to_string(), "analytics_2".to_string()])
+                exact(["analytics", "analytics_2"])
             )])
         );
         assert_eq!(
             file.segments["legacy-replicas"].attributes,
             BTreeMap::from([
-                (
-                    ScopeAttribute::IsBuiltin,
-                    BTreeSet::from(["false".to_string()])
-                ),
-                (
-                    ScopeAttribute::ReplicaSizeFamily,
-                    BTreeSet::from(["legacy".to_string()])
-                ),
+                (ScopeAttribute::IsBuiltin, exact(["false"])),
+                (ScopeAttribute::ReplicaSizeFamily, exact(["legacy"])),
             ])
         );
 
@@ -1969,11 +2109,13 @@ mod tests {
             r#"{{
                 "segments": {{
                     "typo": {{"cluster_nmae": ["analytics"]}},
-                    "unlisted": {{"cluster_name": "analytics"}}
+                    "unlisted": {{"cluster_name": "analytics"}},
+                    "unknown-operator": {{"cluster_name": {{"starts_with": ["analytics"]}}}}
                 }},
                 "rules": [
                     {{"segment": "typo", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "unlisted", "parameters": {{"{CLUSTER_PARAM}": true}}}}
+                    {{"segment": "unlisted", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "unknown-operator", "parameters": {{"{CLUSTER_PARAM}": true}}}}
                 ]
             }}"#
         ));
@@ -1992,6 +2134,13 @@ mod tests {
                 RejectedAttribute::UnsupportedValues
             )])
         );
+        assert_eq!(
+            file.segments["unknown-operator"].rejected,
+            BTreeMap::from([(
+                "cluster_name".to_string(),
+                RejectedAttribute::UnknownOperator("starts_with".to_string())
+            )])
+        );
         assert!(
             frontend
                 .file_cluster_overrides(
@@ -2008,11 +2157,166 @@ mod tests {
                 "segment \"typo\" in the system parameter sync file matches no cluster or \
                  replica: attribute \"cluster_nmae\" is not a cluster or replica attribute"
                     .to_string(),
+                "segment \"unknown-operator\" in the system parameter sync file matches no \
+                 cluster or replica: attribute \"cluster_name\" names \"starts_with\", which is \
+                 not one of the \"in\" and \"matches\" operators"
+                    .to_string(),
                 "segment \"unlisted\" in the system parameter sync file matches no cluster or \
                  replica: attribute \"cluster_name\" expects an array of strings, numbers or \
-                 booleans"
+                 booleans, or an object of an \"in\" array and a \"matches\" array of patterns"
                     .to_string(),
             ]
+        );
+    }
+
+    /// A `matches` pattern selects by name, which an exact list cannot do for a
+    /// cluster or replica that does not exist yet. The predicate object's two
+    /// operators are ORed, so a value hit by either is allowed.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_pattern_predicate() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{
+                    "prod": {{"cluster_name": {{"matches": ["^prod-"]}}}},
+                    "prod-or-analytics": {{"cluster_name": {{
+                        "in": ["analytics"],
+                        "matches": ["^prod-"]
+                    }}}}
+                }},
+                "rules": [
+                    {{"segment": "prod", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "prod-or-analytics", "parameters": {{
+                        "{CLUSTER_PARAM_2}": true
+                    }}}}
+                ]
+            }}"#
+        ));
+
+        // A bare array is the `in` operator alone, so it parses to what the
+        // object form spells.
+        assert_eq!(
+            parse(r#"{"segments": {"s": {"cluster_name": ["analytics"]}}}"#).segments["s"]
+                .attributes[&ScopeAttribute::ClusterName],
+            parse(r#"{"segments": {"s": {"cluster_name": {"in": ["analytics"]}}}}"#).segments["s"]
+                .attributes[&ScopeAttribute::ClusterName]
+        );
+
+        let out = frontend.file_cluster_overrides(
+            &file,
+            &params,
+            &[CLUSTER_PARAM, CLUSTER_PARAM_2],
+            &[
+                // The pattern is unanchored on the right, so a prefix matches.
+                cluster_ctx(1, "prod-ingest"),
+                // Only the `in` side hits.
+                cluster_ctx(2, "analytics"),
+                // The leading `^` is what keeps this out of both segments.
+                cluster_ctx(3, "staging-prod-ingest"),
+            ],
+        );
+
+        assert_eq!(
+            out,
+            BTreeMap::from([
+                (
+                    ClusterId::User(1),
+                    BTreeMap::from([
+                        (CLUSTER_PARAM.to_string(), "true".to_string()),
+                        (CLUSTER_PARAM_2.to_string(), "true".to_string()),
+                    ])
+                ),
+                (ClusterId::User(2), overrides(CLUSTER_PARAM_2, "true")),
+            ])
+        );
+    }
+
+    /// A pattern does not change which rule decides a parameter: the first rule
+    /// whose segment matches still wins, whichever operator made it match. Two
+    /// patterns of which one is the narrower is the shape that makes this the
+    /// natural way to write an exception.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_pattern_obeys_first_matching_rule() {
+        let params = SynchronizedParameters::default();
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{
+                    "prod-canary": {{"cluster_name": {{"matches": ["^prod-canary"]}}}},
+                    "prod": {{"cluster_name": {{"matches": ["^prod-"]}}}}
+                }},
+                "rules": [
+                    {{"segment": "prod-canary", "parameters": {{
+                        "{CLUSTER_PARAM}": false,
+                        "{CLUSTER_PARAM_2}": true
+                    }}}},
+                    {{"segment": "prod", "parameters": {{"{CLUSTER_PARAM}": true}}}}
+                ]
+            }}"#
+        ));
+
+        let out = file_frontend().file_cluster_overrides(
+            &file,
+            &params,
+            &[CLUSTER_PARAM, CLUSTER_PARAM_2],
+            &[cluster_ctx(1, "prod-canary-1"), cluster_ctx(2, "prod-main")],
+        );
+
+        assert_eq!(
+            out,
+            BTreeMap::from([
+                // Both patterns match the canary, and the narrower rule comes
+                // first, so it holds `CLUSTER_PARAM` at the environment-wide
+                // value against the broader rule below. It still decides the
+                // parameter the broader rule leaves alone.
+                (ClusterId::User(1), overrides(CLUSTER_PARAM_2, "true")),
+                (ClusterId::User(2), overrides(CLUSTER_PARAM, "true")),
+            ])
+        );
+    }
+
+    /// An invalid pattern makes its segment match nothing, exactly as an unknown
+    /// attribute name does. Dropping it instead would widen the segment to every
+    /// object the surviving entries allow.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_invalid_pattern_matches_nothing() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{"prod": {{
+                    "cluster_name": {{"matches": ["^prod-["]}},
+                    "is_builtin": [false]
+                }}}},
+                "rules": [{{"segment": "prod", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
+            }}"#
+        ));
+
+        assert!(
+            frontend
+                .file_cluster_overrides(
+                    &file,
+                    &params,
+                    &[CLUSTER_PARAM],
+                    &[cluster_ctx(1, "prod-ingest"), cluster_ctx(2, "analytics")]
+                )
+                .is_empty()
+        );
+
+        // The regex crate's error text is its own, so only the framing is pinned.
+        let diagnostics = frontend.scoped_rule_diagnostics(&file, &params);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert!(
+            diagnostics[0].starts_with(
+                "segment \"prod\" in the system parameter sync file matches no cluster or \
+                 replica: attribute \"cluster_name\" has the invalid \"matches\" pattern \
+                 \"^prod-[\": "
+            ),
+            "{}",
+            diagnostics[0]
         );
     }
 
