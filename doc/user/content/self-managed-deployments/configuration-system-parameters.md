@@ -208,7 +208,9 @@ environment, with two exceptions: `segments` and `rules` are reserved keys that
 together scope parameters to a subset of your clusters and replicas.
 
 - A **segment** is a named predicate over the attributes of a cluster or replica,
-  for example "every replica of a legacy size family".
+  for example "every replica of a legacy size family". Its shape follows the
+  targeting rules of LaunchDarkly, which Materialize Cloud uses for the same
+  purpose, so a predicate means the same thing in both places.
 - A **rule** attaches parameters to a segment. The rules are an ordered array,
   and for each parameter the first matching rule wins.
 
@@ -228,8 +230,18 @@ data:
       "enable_lgalloc": true,
 
       "segments": {
-        "analytics-cluster": { "cluster_name": ["analytics"] },
-        "legacy-replicas": { "replica_size_family": ["legacy"] }
+        "analytics-cluster": {
+          "contextKind": "cluster",
+          "clauses": [
+            { "attribute": "cluster_name", "op": "in", "values": ["analytics"] }
+          ]
+        },
+        "legacy-replicas": {
+          "contextKind": "replica",
+          "clauses": [
+            { "attribute": "replica_size_family", "op": "in", "values": ["legacy"] }
+          ]
+        }
       },
 
       "rules": [
@@ -255,96 +267,141 @@ never be reinterpreted as a scoped one.
 
 ### Segments
 
-A segment maps an attribute name to the list of values it allows:
+A segment names the kind of object it selects and lists the clauses that select
+it:
 
 ```json
 "segments": {
   "legacy-in-analytics": {
-    "cluster_name": ["analytics", "analytics_staging"],
-    "replica_size_family": ["legacy"]
+    "contextKind": "replica",
+    "clauses": [
+      {
+        "attribute": "cluster_name",
+        "op": "in",
+        "values": ["analytics", "analytics_staging"]
+      },
+      { "attribute": "replica_size_family", "op": "in", "values": ["legacy"] }
+    ]
   }
 }
 ```
 
-- Several values for one attribute are **ORed**: the cluster name may be either
-  `analytics` or `analytics_staging`.
-- Several attributes in one segment are **ANDed**: the replica must be in one of
-  those clusters *and* be of the `legacy` size family.
-- **Matching is exact** in this form. To target one cluster, write a segment with
-  a single `cluster_name` value. To match by prefix, suffix, or any other shape of
-  name, see [Matching by pattern](#matching-by-pattern).
-- A segment with an empty predicate, `{}`, matches every cluster and replica.
+- `contextKind` is required, and is either `cluster` or `replica`. It decides
+  which objects the segment selects: a `cluster` segment selects clusters and a
+  `replica` segment selects replicas. Neither ever selects the other.
+- **Clauses are ANDed**: the replica must be in one of those clusters *and* be of
+  the `legacy` size family.
+- **Values within a clause are ORed**: the cluster name may be either `analytics`
+  or `analytics_staging`.
+- A segment with an empty `clauses` list selects every object of its context kind.
   Combined with rule ordering, that makes it a catch-all.
+
+A `replica` segment may write clauses over cluster attributes alone, which selects
+every replica of the matching clusters. A `cluster` segment may not name a replica
+attribute at all, since a cluster does not have one; doing so makes the segment
+select nothing.
 
 The available attributes are:
 
-| Attribute             | Applies to         | Example        |
-| --------------------- | ------------------ | -------------- |
-| `cluster_name`        | clusters, replicas | `"quickstart"` |
-| `cluster_id`          | clusters, replicas | `"u1"`         |
-| `is_builtin`          | clusters, replicas | `true`         |
-| `replica_name`        | replicas only      | `"r1"`         |
-| `replica_id`          | replicas only      | `"u2"`         |
-| `replica_size`        | replicas only      | `"25cc"`       |
-| `replica_size_family` | replicas only      | `"legacy"`     |
+| Attribute             | Context kinds    | Example        |
+| --------------------- | ---------------- | -------------- |
+| `cluster_name`        | cluster, replica | `"quickstart"` |
+| `cluster_id`          | cluster, replica | `"u1"`         |
+| `is_builtin`          | cluster, replica | `true`         |
+| `replica_name`        | replica only     | `"r1"`         |
+| `replica_id`          | replica only     | `"u2"`         |
+| `replica_size`        | replica only     | `"25cc"`       |
+| `replica_size_family` | replica only     | `"legacy"`     |
 
 `is_builtin` is `true` for a system cluster such as `mz_catalog_server`, and for
 its replicas.
 
-A replica carries its owning cluster's attributes, so a segment written with
-`cluster_name` alone selects every replica of that cluster. A cluster carries no
-replica attributes, so a segment mentioning any of them selects no cluster.
-
 Prefer the name attributes over the id ones. An id identifies one incarnation of
-an object: drop and recreate a cluster and its id changes, so a segment written
-against the old id stops matching. A segment written against a name re-applies to
+an object: drop and recreate a cluster and its id changes, so a clause written
+against the old id stops matching. A clause written against a name re-applies to
 any cluster or replica later created with that name.
 
-Values may be written as JSON strings, numbers, or booleans: `"is_builtin":
-[true]` and `"is_builtin": ["true"]` are equivalent.
+Values may be written as JSON strings, numbers, or booleans, so `"values": [true]`
+and `"values": ["true"]` are equivalent.
 
-### Matching by pattern
+### Clause operators
 
-Instead of a list of values, an attribute may be given an object with an `in`
-list of exact values and a `matches` list of regular expressions. Both keys are
-optional:
+Every attribute above is a string, so the operators are the string ones:
+
+| `op`         | Holds when the attribute's value                      |
+| ------------ | ----------------------------------------------------- |
+| `in`         | equals one of `values`                                |
+| `startsWith` | starts with one of `values`                           |
+| `endsWith`   | ends with one of `values`                             |
+| `contains`   | contains one of `values`                              |
+| `matches`    | is matched by one of `values` as a regular expression |
 
 ```json
 "segments": {
   "prod-clusters": {
-    "cluster_name": { "in": ["analytics"], "matches": ["^prod-", "-prod$"] }
+    "contextKind": "cluster",
+    "clauses": [
+      { "attribute": "cluster_name", "op": "startsWith", "values": ["prod-"] }
+    ]
   }
 }
 ```
 
-- A bare list is shorthand for `in` alone: `"cluster_name": ["analytics"]` and
-  `"cluster_name": { "in": ["analytics"] }` are the same segment.
-- `in` and `matches` are **ORed**, as are the entries within either. The segment
-  above matches a cluster named `analytics`, and any cluster whose name starts
-  with `prod-` or ends with `-prod`.
+Reach for `startsWith`, `endsWith`, `contains`, or `matches` when you are
+targeting clusters or replicas by name and the set is open-ended: such a clause
+also selects a cluster or replica you create later, which a list of exact names
+cannot do. For `is_builtin`, `replica_size`, and `replica_size_family`, which draw
+from a small fixed set of values, `in` is usually clearer.
+
+Notes on `matches`:
+
 - **Patterns are unanchored**, so a pattern matches anywhere in the value. The
   pattern `prod` matches the cluster `staging-prod-1`. Write `^prod` to anchor at
-  the start of the name, `prod$` at the end, and `^prod$` to match the whole
-  name.
+  the start of the name, `prod$` at the end, and `^prod$` to match the whole name.
 - Patterns use RE2 syntax, as in Go's `regexp` package: character classes,
   alternation, and repetition are supported, backreferences and lookaround are
   not.
 - Patterns must be JSON strings. A backslash has to be escaped for JSON, so the
   pattern `\d` is written `"\\d"`.
-- There is no negation operator: a segment states what it allows, never what it
-  excludes.
+- **An invalid pattern makes the whole segment select nothing.** See [Behavior
+  worth knowing](#behavior-worth-knowing).
 
-Reach for a pattern when you are targeting clusters or replicas by name and the
-set is open-ended: a pattern also applies to a cluster or replica you create
-later, which a list of exact names cannot do. `is_builtin`, `replica_size`, and
-`replica_size_family` draw from a small fixed set of values, so an `in` list is
-usually clearer for those.
+LaunchDarkly defines ten further operators, for numbers, dates, semantic versions,
+and referencing another segment. Materialize rejects all of them here: every
+attribute above is a string, so a numeric, date, or version comparison could only
+ever be false, and a rule already names the segment it applies to. Writing one
+makes the segment select nothing, with a warning saying why.
 
-**An invalid pattern makes the whole segment match nothing**, just as an unknown
-attribute name does, so the rules naming that segment do not apply. This fails
-safe rather than silently widening the segment. `environmentd` logs a warning
-naming the segment, the attribute, and the error in the pattern. A key other than
-`in` and `matches` inside the object is treated the same way.
+### Negating a clause
+
+A clause may carry `"negate": true`, which inverts it:
+
+```json
+{
+  "attribute": "replica_name",
+  "op": "matches",
+  "values": ["^scratch-"],
+  "negate": true
+}
+```
+
+`negate` applies **after** the OR across `values`, which is what it does in
+LaunchDarkly too. So a negated `in` over two values means "neither of them", not
+"not the first one":
+
+```json
+{
+  "attribute": "cluster_name",
+  "op": "in",
+  "values": ["scratch", "sandbox"],
+  "negate": true
+}
+```
+
+selects every cluster except `scratch` and `sandbox`. `negate` defaults to `false`
+when absent. A clause on an attribute the object does not carry does not match
+whether or not it is negated, so negation is never a way to select objects of the
+other context kind.
 
 ### Rules
 
@@ -359,7 +416,9 @@ objects that segment matches:
 ```
 
 - **The first matching rule wins**, per object and per parameter. Order the rules
-  from the most specific to the most general.
+  from the most specific to the most general. Which operator made a segment match
+  makes no difference to this: a rule naming a narrow `matches` segment placed
+  before one naming a broad `startsWith` segment is how you write an exception.
 - A rule that does not mention a parameter does not affect it, so a later rule
   may still set it.
 - A parameter no matching rule sets falls back to the environment-wide value,
@@ -375,20 +434,28 @@ configuration, and the order of an object's keys is not preserved.
   there, so set it as a top-level key instead. `environmentd` logs a warning
   naming the parameter and the rule, which also catches a misspelled parameter
   name.
-- **A cluster-scoped parameter cannot be attached to a replica segment.** A
+- **A cluster-scoped parameter cannot be attached to a `replica` segment.** A
   cluster-scoped parameter, for example an optimizer feature, is consumed once
   per cluster when a dataflow is planned, so it must resolve identically for
-  every replica of that cluster. A rule that supplies one through a segment
-  matching on a replica attribute has that parameter dropped, with a warning
-  naming the segment, the parameter, and the offending attribute. Replica-scoped
-  parameters can be attached to either kind of segment.
-- **A segment that Materialize cannot fully interpret matches nothing.** An
-  unknown attribute name, a value that is neither a list of scalars nor an `in`
-  and `matches` object, an unknown key inside that object, or an invalid pattern
-  makes the whole segment match no cluster and no replica, so the rules naming it
-  do not apply. This fails safe: ignoring the entry instead would widen the
-  segment to objects you did not target. `environmentd` logs a warning naming the
-  segment and the attribute.
+  every replica of that cluster. A rule that supplies one through a `replica`
+  segment has that parameter dropped, with a warning naming the segment and the
+  parameter. Replica-scoped parameters can be attached to either kind of segment.
+- **A segment that Materialize cannot fully interpret selects nothing.** Any of
+  the following makes the whole segment select no cluster and no replica, so the
+  rules naming it do not apply:
+  - a missing or unrecognised `contextKind`, or a missing `clauses` list;
+  - an unknown `attribute`, or a replica attribute in a `cluster` segment;
+  - an `op` that is not one of the five string operators;
+  - `values` that is not a list of strings, numbers, or booleans;
+  - an invalid `matches` pattern, or a `negate` that is not a boolean;
+  - an unknown key in a segment or in a clause.
+
+  This fails safe: ignoring the offending clause instead would widen the segment
+  to objects you did not target, and a segment whose every clause was ignored
+  would select everything. `environmentd` logs a warning naming the segment and
+  what is wrong with it. LaunchDarkly's `_id` on a clause is the one key that is
+  ignored rather than rejected, so a clause copied out of the LaunchDarkly API
+  works as written.
 - **A rule naming a segment that does not exist is ignored**, with a warning
   naming the segment.
 - **A segment matching nothing is not an error.** If you later create a cluster

@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::io;
@@ -86,12 +86,22 @@ const RULES_SECTION: &str = "rules";
 const RULE_SEGMENT: &str = "segment";
 /// Key of a `rules` element holding the parameters it supplies.
 const RULE_PARAMETERS: &str = "parameters";
-/// Key of a [`Segment`] predicate entry listing the values the attribute may
-/// equal. LaunchDarkly's `in` operator.
-const IN_OPERATOR: &str = "in";
-/// Key of a [`Segment`] predicate entry listing the regular expressions the
-/// attribute's value may match. LaunchDarkly's `matches` operator.
-const MATCHES_OPERATOR: &str = "matches";
+/// Key of a `segments` entry naming the [`ContextKind`] its clauses match.
+const SEGMENT_CONTEXT_KIND: &str = "contextKind";
+/// Key of a `segments` entry holding its [`Clause`] array.
+const SEGMENT_CLAUSES: &str = "clauses";
+/// Key of a [`Clause`] naming the attribute it constrains.
+const CLAUSE_ATTRIBUTE: &str = "attribute";
+/// Key of a [`Clause`] naming its [`Operator`].
+const CLAUSE_OP: &str = "op";
+/// Key of a [`Clause`] holding the values its operator is applied against.
+const CLAUSE_VALUES: &str = "values";
+/// Key of a [`Clause`] inverting it.
+const CLAUSE_NEGATE: &str = "negate";
+/// Key LaunchDarkly's REST API stamps on a clause. Carried by a clause copied
+/// out of the LaunchDarkly API, meaningless in evaluation, so it is accepted and
+/// ignored rather than rejected as an unknown key.
+const CLAUSE_ID: &str = "_id";
 
 /// The parsed contents of the config-sync file.
 ///
@@ -167,7 +177,41 @@ impl ConfigFile {
     }
 }
 
-/// An attribute of a cluster or replica that a [`Segment`] predicate matches on.
+/// The kind of object a [`Segment`]'s clauses match, spelling the LaunchDarkly
+/// context kind of the same name (see [`cluster_context`] and
+/// [`replica_context`]).
+///
+/// A segment declares one, rather than each clause carrying its own as a
+/// LaunchDarkly clause does. That both spares the repetition and makes the
+/// cluster-coherence rule structural: a cluster-coherent parameter is supplied
+/// only through a `cluster` segment, which cannot name a replica attribute at
+/// all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContextKind {
+    Cluster,
+    Replica,
+}
+
+impl ContextKind {
+    /// The context kind of this name, or `None` if the name is outside the
+    /// vocabulary.
+    fn parse(name: &str) -> Option<Self> {
+        match name {
+            "cluster" => Some(Self::Cluster),
+            "replica" => Some(Self::Replica),
+            _ => None,
+        }
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Cluster => "cluster",
+            Self::Replica => "replica",
+        }
+    }
+}
+
+/// An attribute of a cluster or replica that a [`Clause`] matches on.
 ///
 /// The vocabulary is closed, and is the same one the LaunchDarkly `cluster` and
 /// `replica` context kinds carry (see [`cluster_context`] and
@@ -215,8 +259,8 @@ impl ScopeAttribute {
 
     /// Whether the attribute can distinguish two replicas of one cluster.
     ///
-    /// A [`ParameterScope::Cluster`] parameter may not be supplied through a
-    /// segment matching on one. See
+    /// Such an attribute is absent from the `cluster` context kind, so a
+    /// [`ParameterScope::Cluster`] parameter cannot be targeted by one. See
     /// [`SystemParameterFrontend::file_rule_overrides`].
     fn is_replica_attribute(&self) -> bool {
         match self {
@@ -224,6 +268,17 @@ impl ScopeAttribute {
             Self::ReplicaId | Self::ReplicaName | Self::ReplicaSize | Self::ReplicaSizeFamily => {
                 true
             }
+        }
+    }
+
+    /// Whether an object of `kind` carries this attribute.
+    ///
+    /// A replica carries its owning cluster's attributes too, so every attribute
+    /// is available in the `replica` context.
+    fn in_context(&self, kind: ContextKind) -> bool {
+        match kind {
+            ContextKind::Cluster => !self.is_replica_attribute(),
+            ContextKind::Replica => true,
         }
     }
 }
@@ -259,111 +314,303 @@ fn replica_attributes(replica: &ReplicaScopeContext) -> BTreeMap<ScopeAttribute,
     ])
 }
 
-/// A named predicate over a cluster's or replica's scope attributes.
+/// A named predicate selecting the clusters or replicas a rule applies to.
 ///
-/// Attributes are ANDed and what one attribute allows is ORed. That covers
-/// LaunchDarkly's `in` and `matches` operators and nothing more: there is no
-/// negation operator.
+/// Shaped after a LaunchDarkly targeting rule: a context kind and a list of
+/// clauses, ANDed, each ORing its own values. Keeping the clause vocabulary is
+/// what lets the file stand in for LaunchDarkly, since one clause here means what
+/// the same clause means there.
 #[derive(Debug, Default, PartialEq, Eq)]
 struct Segment {
-    /// What each attribute the predicate constrains allows. An empty predicate
-    /// constrains nothing, so it matches every object.
-    attributes: BTreeMap<ScopeAttribute, AttributePredicate>,
-    /// The predicate entries this binary cannot evaluate, keyed by the attribute
-    /// name the file spells and reported by
+    /// The kind of object the clauses match, or `None` when the entry's
+    /// `contextKind` is missing or outside the vocabulary.
+    ///
+    /// `None` makes the segment match nothing in either pass rather than
+    /// defaulting to a kind, since guessing would silently target a set of
+    /// objects the author never named.
+    context_kind: Option<ContextKind>,
+    /// The clauses, ANDed. An empty list constrains nothing, so it matches every
+    /// object of [`Self::context_kind`].
+    clauses: Vec<Clause>,
+    /// The defects that keep this segment from being evaluated, reported by
     /// [`SystemParameterFrontend::scoped_rule_diagnostics`].
     ///
-    /// A segment with any such entry matches nothing, so the rules naming it
-    /// never apply. Fail-safe on purpose: dropping the entry instead would leave
-    /// the surviving ANDed attributes matching a *wider* set of objects than the
-    /// operator wrote, and a predicate whose every entry was dropped would match
+    /// A segment with any defect matches nothing, so the rules naming it never
+    /// apply. Fail-safe on purpose: dropping the offending clause instead would
+    /// leave the surviving ANDed clauses matching a *wider* set of objects than
+    /// the author wrote, and a segment whose every clause was dropped would match
     /// everything.
-    rejected: BTreeMap<String, RejectedAttribute>,
+    rejected: Vec<SegmentDefect>,
 }
 
-/// What one attribute of a [`Segment`] predicate allows.
-///
-/// The two operators are ORed, as are the entries within either, so an
-/// attribute matches when its value equals one of [`Self::values`] or is
-/// matched by one of [`Self::patterns`]. An attribute allowing neither matches
-/// nothing.
-#[derive(Debug, Default)]
-struct AttributePredicate {
-    /// The values the attribute may equal, the `in` operator.
-    values: BTreeSet<String>,
-    /// The patterns the attribute's value may match, the `matches` operator.
+/// One clause of a [`Segment`]: an operator applied to one attribute's value
+/// against a list of values.
+#[derive(Debug)]
+struct Clause {
+    /// The attribute whose value the operator is applied to.
+    attribute: ScopeAttribute,
+    op: Operator,
+    /// The values the operator is applied against, ORed.
     ///
-    /// Compiled here, when the file is parsed, because evaluation runs per
-    /// object per sync tick and per object creation, while a parse happens only
-    /// when the file changes.
+    /// Rendered to strings because that is how scope attributes are spelled, so a
+    /// boolean attribute may be written either as `true` or as `"true"`. An empty
+    /// list satisfies nothing, so the clause holds for no object unless negated.
+    values: Vec<String>,
+    /// The compiled [`Operator::Matches`] patterns, one per entry of
+    /// [`Self::values`], and empty for every other operator.
+    ///
+    /// Compiled when the file is parsed rather than per evaluation: evaluation
+    /// runs per object per sync tick and per object creation, while the parse
+    /// cache makes a parse happen once per change to the file.
     patterns: Vec<Regex>,
+    /// Whether to invert the clause.
+    ///
+    /// Applied *after* the OR across [`Self::values`], as it is in LaunchDarkly,
+    /// so a negated `in` means "none of these" rather than "not this one".
+    negate: bool,
 }
 
-impl AttributePredicate {
-    /// Whether the attribute's `value` is allowed.
-    fn matches(&self, value: &str) -> bool {
-        self.values.contains(value) || self.patterns.iter().any(|pattern| pattern.is_match(value))
+/// A [`Clause`] operator.
+///
+/// Mirrors the operator vocabulary of `launchdarkly-server-sdk-evaluation`, whose
+/// own `Op` enum and `Clause` fields are `pub(crate)` and so can neither be
+/// imported nor constructed here. The two are therefore kept aligned by
+/// `test_operator_vocabulary_matches_launchdarkly` rather than by the compiler:
+/// changing the SDK's vocabulary will not fail this file to compile.
+///
+/// Only the string operators are here. See [`unsupported_operator`] for the ten
+/// LaunchDarkly operators this format recognises and refuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Operator {
+    In,
+    StartsWith,
+    EndsWith,
+    Contains,
+    Matches,
+}
+
+impl Operator {
+    /// Every supported operator. The vocabulary
+    /// `test_operator_vocabulary_matches_launchdarkly` checks against.
+    const ALL: [Self; 5] = [
+        Self::In,
+        Self::StartsWith,
+        Self::EndsWith,
+        Self::Contains,
+        Self::Matches,
+    ];
+
+    /// The operator of this name, or `None` if it is not one of the supported
+    /// ones. Resolved through [`Self::as_str`] so that the name this accepts and
+    /// the name a diagnostic prints cannot drift apart.
+    fn parse(op: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == op)
+    }
+
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::In => "in",
+            Self::StartsWith => "startsWith",
+            Self::EndsWith => "endsWith",
+            Self::Contains => "contains",
+            Self::Matches => "matches",
+        }
     }
 }
 
-/// Compares the patterns by the source they were compiled from, a [`Regex`]
-/// being uncomparable itself. Two predicates equal under this decide the same
-/// values.
-impl PartialEq for AttributePredicate {
+/// Why the LaunchDarkly operator `op` is refused, or `None` if it is not a
+/// LaunchDarkly operator at all.
+///
+/// Every scope attribute is string-valued, so a numeric, date or semantic-version
+/// comparison over one could only ever evaluate false. Recognising these and
+/// saying so is the point: refusing them as if they were typos would send an
+/// author looking for a misspelling that is not there.
+fn unsupported_operator(op: &str) -> Option<&'static str> {
+    match op {
+        "lessThan" | "lessThanOrEqual" | "greaterThan" | "greaterThanOrEqual" => {
+            Some("compares numbers, and every cluster and replica attribute is a string")
+        }
+        "before" | "after" => {
+            Some("compares dates, and every cluster and replica attribute is a string")
+        }
+        "semVerEqual" | "semVerGreaterThan" | "semVerLessThan" => {
+            Some("compares semantic versions, and every cluster and replica attribute is a string")
+        }
+        // A clause-level segment reference would be a second way to name a
+        // segment, the `rules` array already being the first.
+        "segmentMatch" => Some(
+            "references another segment, which this file expresses through the segment a rule \
+             names",
+        ),
+        _ => None,
+    }
+}
+
+/// Compares the patterns by the source they were compiled from, a [`Regex`] being
+/// uncomparable itself. Two clauses equal under this decide the same objects.
+impl PartialEq for Clause {
     fn eq(&self, other: &Self) -> bool {
-        self.values == other.values
+        self.attribute == other.attribute
+            && self.op == other.op
+            && self.values == other.values
+            && self.negate == other.negate
             && self.patterns.len() == other.patterns.len()
             && std::iter::zip(&self.patterns, &other.patterns)
                 .all(|(a, b)| a.as_str() == b.as_str())
     }
 }
 
-impl Eq for AttributePredicate {}
+impl Eq for Clause {}
 
-/// Why a [`Segment`] predicate entry cannot be evaluated.
-#[derive(Debug, PartialEq, Eq)]
-enum RejectedAttribute {
-    /// The name is outside the [`ScopeAttribute`] vocabulary.
-    UnknownAttribute,
-    /// The entry is neither an array of JSON scalars nor an operator object of
-    /// those, so it cannot be read as a predicate at all. Only those shapes are
-    /// accepted, so that a value spelled as some other shape, for instance an
-    /// operator this binary predates, is rejected rather than misread.
-    UnsupportedValues,
-    /// The operator object carries a key that is not an operator this binary
-    /// knows, for the same reason an unknown attribute name is rejected: it
-    /// expresses a constraint that cannot be honoured.
-    UnknownOperator(String),
-    /// A `matches` entry is not a valid regular expression, so the constraint it
-    /// expresses is unknown.
-    InvalidPattern { pattern: String, error: String },
+impl Clause {
+    /// Whether the clause holds for an object carrying `attributes`.
+    fn matches(&self, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
+        let Some(value) = attributes.get(&self.attribute) else {
+            // Unreachable: the parse refuses an attribute absent from the
+            // segment's context kind, and both attribute maps are complete for
+            // their kind. `false` regardless of `negate` is what the SDK does
+            // too, a clause stating something about a value and there being no
+            // value.
+            return false;
+        };
+        self.holds(value) != self.negate
+    }
+
+    /// Whether the operator holds for `value`, before [`Self::negate`].
+    fn holds(&self, value: &str) -> bool {
+        match self.op {
+            Operator::In => self.values.iter().any(|allowed| allowed == value),
+            Operator::StartsWith => self.values.iter().any(|prefix| value.starts_with(prefix)),
+            Operator::EndsWith => self.values.iter().any(|suffix| value.ends_with(suffix)),
+            Operator::Contains => self.values.iter().any(|needle| value.contains(needle)),
+            // Unanchored, which is both the `regex` crate's default and what
+            // LaunchDarkly's `matches` does, it being the same crate. `^` and `$`
+            // are how a whole-value match is asked for.
+            Operator::Matches => self.patterns.iter().any(|pattern| pattern.is_match(value)),
+        }
+    }
 }
 
-impl fmt::Display for RejectedAttribute {
+/// Why a [`Segment`] cannot be evaluated: a defect in the entry itself, or in one
+/// of its clauses.
+#[derive(Debug, PartialEq, Eq)]
+enum SegmentDefect {
+    /// `contextKind` is a string outside the [`ContextKind`] vocabulary.
+    UnknownContextKind(String),
+    /// `contextKind` is absent, or is not a string at all.
+    MissingContextKind,
+    /// `clauses` is missing or is not a JSON array.
+    Clauses,
+    /// The clause at this 1-based position in `clauses` cannot be evaluated.
+    Clause(usize, ClauseDefect),
+    /// The entry carries a key other than `contextKind` and `clauses`, refused for
+    /// the same reason an unknown clause key is.
+    UnknownKey(String),
+}
+
+impl fmt::Display for SegmentDefect {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RejectedAttribute::UnknownAttribute => {
-                write!(f, "is not a cluster or replica attribute")
+            SegmentDefect::MissingContextKind => write!(
+                f,
+                "it declares no {SEGMENT_CONTEXT_KIND:?}, which must be {:?} or {:?}",
+                ContextKind::Cluster.as_str(),
+                ContextKind::Replica.as_str()
+            ),
+            SegmentDefect::UnknownContextKind(kind) => write!(
+                f,
+                "its {SEGMENT_CONTEXT_KIND} {kind:?} is neither {:?} nor {:?}",
+                ContextKind::Cluster.as_str(),
+                ContextKind::Replica.as_str()
+            ),
+            SegmentDefect::Clauses => {
+                write!(f, "its {SEGMENT_CLAUSES:?} is not an array of clauses")
             }
-            RejectedAttribute::UnsupportedValues => {
-                write!(
-                    f,
-                    "expects an array of strings, numbers or booleans, or an object of an \
-                     {IN_OPERATOR:?} array and a {MATCHES_OPERATOR:?} array of patterns"
-                )
+            SegmentDefect::Clause(ordinal, defect) => {
+                write!(f, "clause {ordinal} {defect}")
             }
-            RejectedAttribute::UnknownOperator(operator) => {
-                write!(
-                    f,
-                    "names {operator:?}, which is not one of the {IN_OPERATOR:?} and \
-                     {MATCHES_OPERATOR:?} operators"
-                )
+            SegmentDefect::UnknownKey(key) => {
+                write!(f, "carries the unknown key {key:?}")
             }
-            RejectedAttribute::InvalidPattern { pattern, error } => {
-                write!(
-                    f,
-                    "has the invalid {MATCHES_OPERATOR:?} pattern {pattern:?}: {error}"
-                )
+        }
+    }
+}
+
+/// Why one [`Clause`] cannot be evaluated.
+#[derive(Debug, PartialEq, Eq)]
+enum ClauseDefect {
+    /// The clause is not a JSON object.
+    NotAnObject,
+    /// `attribute` is missing or is not a string.
+    MissingAttribute,
+    /// `attribute` is outside the [`ScopeAttribute`] vocabulary.
+    UnknownAttribute(String),
+    /// `attribute` names an attribute that objects of the segment's context kind
+    /// do not carry, so the clause could only ever evaluate false.
+    AttributeOutsideContext(String, ContextKind),
+    /// `op` is missing or is not a string.
+    MissingOperator,
+    /// `op` names a LaunchDarkly operator this format refuses, with the reason
+    /// from [`unsupported_operator`].
+    UnsupportedOperator(String, &'static str),
+    /// `op` is not a LaunchDarkly operator. Refused loudly rather than treated as
+    /// an operator that never matches, which is what the SDK does, because an
+    /// author of this file can fix a typo and a warning is how they learn of it.
+    UnknownOperator(String),
+    /// `values` is missing, is not an array, or holds something other than a
+    /// string, number or boolean.
+    UnsupportedValues,
+    /// A `matches` value is not a valid regular expression.
+    InvalidPattern { pattern: String, error: String },
+    /// `negate` is present but is not a boolean.
+    UnsupportedNegate,
+    /// The clause carries a key this binary does not know. Refused for the same
+    /// reason an unknown attribute is: it states a constraint that cannot be
+    /// honoured. A per-clause `contextKind` lands here, the segment declaring the
+    /// context kind for all of its clauses.
+    UnknownKey(String),
+}
+
+impl fmt::Display for ClauseDefect {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ClauseDefect::NotAnObject => write!(f, "is not a JSON object"),
+            ClauseDefect::MissingAttribute => {
+                write!(f, "names no {CLAUSE_ATTRIBUTE:?}")
+            }
+            ClauseDefect::UnknownAttribute(attribute) => write!(
+                f,
+                "names the {CLAUSE_ATTRIBUTE} {attribute:?}, which is not a cluster or replica \
+                 attribute"
+            ),
+            ClauseDefect::AttributeOutsideContext(attribute, kind) => write!(
+                f,
+                "names the {CLAUSE_ATTRIBUTE} {attribute:?}, which a {:?} does not carry",
+                kind.as_str()
+            ),
+            ClauseDefect::MissingOperator => write!(f, "names no {CLAUSE_OP:?}"),
+            ClauseDefect::UnsupportedOperator(op, reason) => {
+                write!(f, "uses the {CLAUSE_OP} {op:?}, which {reason}")
+            }
+            ClauseDefect::UnknownOperator(op) => {
+                write!(f, "uses the {CLAUSE_OP} {op:?}, which is not an operator")
+            }
+            ClauseDefect::UnsupportedValues => write!(
+                f,
+                "expects {CLAUSE_VALUES:?} to be an array of strings, numbers or booleans"
+            ),
+            ClauseDefect::InvalidPattern { pattern, error } => write!(
+                f,
+                "has the invalid {:?} pattern {pattern:?}: {error}",
+                Operator::Matches.as_str()
+            ),
+            ClauseDefect::UnsupportedNegate => {
+                write!(f, "expects {CLAUSE_NEGATE:?} to be a boolean")
+            }
+            ClauseDefect::UnknownKey(key) => {
+                write!(f, "carries the unknown key {key:?}")
             }
         }
     }
@@ -373,12 +620,11 @@ impl Segment {
     /// Parses one entry of the `segments` section, or `None` if its value is not
     /// a JSON object.
     ///
-    /// A predicate entry that cannot be evaluated is kept as a
-    /// [`RejectedAttribute`] rather than dropped, so that the segment matches
-    /// nothing and the diagnostics can name it.
+    /// A defect is kept as a [`SegmentDefect`] rather than dropped, so that the
+    /// segment matches nothing and the diagnostics can name it.
     fn parse(position: FilePosition<'_>, value: JsonValue) -> Option<Self> {
-        let predicate = match value {
-            JsonValue::Object(predicate) => predicate,
+        let mut entry = match value {
+            JsonValue::Object(entry) => entry,
             other => {
                 warn!(
                     "ignoring {position} in system parameter sync file: expected a JSON object, found {}",
@@ -389,45 +635,51 @@ impl Segment {
         };
 
         let mut segment = Self::default();
-        for (name, value) in predicate {
-            let Some(attribute) = ScopeAttribute::parse(&name) else {
-                segment
+        match entry.remove(SEGMENT_CONTEXT_KIND) {
+            Some(JsonValue::String(name)) => match ContextKind::parse(&name) {
+                Some(kind) => segment.context_kind = Some(kind),
+                None => segment
                     .rejected
-                    .insert(name, RejectedAttribute::UnknownAttribute);
-                continue;
-            };
-            match attribute_predicate(&value) {
-                Ok(predicate) => {
-                    segment.attributes.insert(attribute, predicate);
-                }
-                Err(rejected) => {
-                    segment.rejected.insert(name, rejected);
+                    .push(SegmentDefect::UnknownContextKind(name)),
+            },
+            _ => segment.rejected.push(SegmentDefect::MissingContextKind),
+        }
+
+        // Clauses are still parsed when the context kind is unusable, so that
+        // every defect in the segment is reported at once rather than one per
+        // edit of the file. Only the attribute-in-context check needs the kind,
+        // and it is skipped rather than guessed.
+        match entry.remove(SEGMENT_CLAUSES) {
+            Some(JsonValue::Array(clauses)) => {
+                for (index, clause) in clauses.into_iter().enumerate() {
+                    match Clause::parse(clause, segment.context_kind) {
+                        Ok(clause) => segment.clauses.push(clause),
+                        Err(defect) => segment
+                            .rejected
+                            .push(SegmentDefect::Clause(index + 1, defect)),
+                    }
                 }
             }
+            _ => segment.rejected.push(SegmentDefect::Clauses),
         }
+
+        for (key, _) in entry {
+            segment.rejected.push(SegmentDefect::UnknownKey(key));
+        }
+
         Some(segment)
     }
 
-    /// Whether the predicate holds for an object carrying `attributes`.
+    /// Whether the segment selects an object of `kind` carrying `attributes`.
     ///
-    /// An attribute the object does not carry never matches, so a predicate
-    /// constraining a replica attribute holds for no cluster: a cluster's
-    /// attributes are replica-free.
-    fn matches(&self, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
+    /// A segment of any other context kind selects nothing here. That is what
+    /// keeps a cluster-coherent parameter from being targeted by replica
+    /// attributes: only a `cluster` segment is consulted for a cluster, and a
+    /// `cluster` segment cannot name a replica attribute.
+    fn matches(&self, kind: ContextKind, attributes: &BTreeMap<ScopeAttribute, String>) -> bool {
         self.rejected.is_empty()
-            && self.attributes.iter().all(|(attribute, allowed)| {
-                attributes
-                    .get(attribute)
-                    .is_some_and(|value| allowed.matches(value))
-            })
-    }
-
-    /// A replica attribute the predicate constrains, if any.
-    fn replica_attribute(&self) -> Option<ScopeAttribute> {
-        self.attributes
-            .keys()
-            .copied()
-            .find(|attribute| attribute.is_replica_attribute())
+            && self.context_kind == Some(kind)
+            && self.clauses.iter().all(|clause| clause.matches(attributes))
     }
 }
 
@@ -582,85 +834,98 @@ fn as_array(position: FilePosition<'_>, value: JsonValue) -> Vec<JsonValue> {
     }
 }
 
-/// The predicate a [`Segment`] entry expresses, or why it cannot be evaluated.
-///
-/// The entry is written either as a bare array of the values the attribute may
-/// equal, or as an object of the [`IN_OPERATOR`] and [`MATCHES_OPERATOR`]
-/// operators, each optional. A bare array is the object carrying only `in`.
-///
-/// An attribute with more than one problem is reported for the first one found,
-/// which is enough to make its segment match nothing.
-fn attribute_predicate(value: &JsonValue) -> Result<AttributePredicate, RejectedAttribute> {
-    let operators: BTreeMap<&str, &JsonValue> = match value {
-        JsonValue::Array(_) => BTreeMap::from([(IN_OPERATOR, value)]),
-        JsonValue::Object(operators) => operators
-            .iter()
-            .map(|(operator, value)| (operator.as_str(), value))
-            .collect(),
-        _ => return Err(RejectedAttribute::UnsupportedValues),
-    };
+impl Clause {
+    /// Parses one element of a segment's `clauses` array, or why it cannot be
+    /// evaluated.
+    ///
+    /// `context_kind` is the segment's, used to refuse an attribute that objects
+    /// of that kind do not carry. `None` means the segment's own context kind was
+    /// unusable, in which case that check is skipped rather than guessed: the
+    /// segment already matches nothing on the strength of that defect.
+    ///
+    /// A clause with more than one defect is reported for the first one found,
+    /// which is enough to make its segment match nothing.
+    fn parse(value: JsonValue, context_kind: Option<ContextKind>) -> Result<Self, ClauseDefect> {
+        let JsonValue::Object(mut clause) = value else {
+            return Err(ClauseDefect::NotAnObject);
+        };
 
-    let mut predicate = AttributePredicate::default();
-    for (operator, value) in operators {
-        match operator {
-            IN_OPERATOR => predicate.values = predicate_values(value)?,
-            MATCHES_OPERATOR => predicate.patterns = predicate_patterns(value)?,
-            operator => {
-                return Err(RejectedAttribute::UnknownOperator(operator.to_string()));
+        let attribute = match clause.remove(CLAUSE_ATTRIBUTE) {
+            Some(JsonValue::String(name)) => match ScopeAttribute::parse(&name) {
+                None => return Err(ClauseDefect::UnknownAttribute(name)),
+                Some(attribute) => match context_kind {
+                    Some(kind) if !attribute.in_context(kind) => {
+                        return Err(ClauseDefect::AttributeOutsideContext(name, kind));
+                    }
+                    _ => attribute,
+                },
+            },
+            _ => return Err(ClauseDefect::MissingAttribute),
+        };
+
+        let op = match clause.remove(CLAUSE_OP) {
+            Some(JsonValue::String(op)) => match Operator::parse(&op) {
+                Some(op) => op,
+                None => {
+                    return Err(match unsupported_operator(&op) {
+                        Some(reason) => ClauseDefect::UnsupportedOperator(op, reason),
+                        None => ClauseDefect::UnknownOperator(op),
+                    });
+                }
+            },
+            _ => return Err(ClauseDefect::MissingOperator),
+        };
+
+        let values = match clause.remove(CLAUSE_VALUES) {
+            Some(JsonValue::Array(values)) => values
+                .iter()
+                .map(scalar_string)
+                .collect::<Option<Vec<_>>>()
+                .ok_or(ClauseDefect::UnsupportedValues)?,
+            _ => return Err(ClauseDefect::UnsupportedValues),
+        };
+
+        let negate = match clause.remove(CLAUSE_NEGATE) {
+            // Absent means false. More lenient than the SDK, which requires the
+            // key, because this file is hand-authored.
+            None | Some(JsonValue::Null) => false,
+            Some(JsonValue::Bool(negate)) => negate,
+            Some(_) => return Err(ClauseDefect::UnsupportedNegate),
+        };
+
+        // Compiled once, here, rather than per evaluation. Empty for every other
+        // operator, whose values are compared as plain strings.
+        let mut patterns = Vec::new();
+        if op == Operator::Matches {
+            for pattern in &values {
+                let compiled = Regex::new(pattern).map_err(|e| ClauseDefect::InvalidPattern {
+                    pattern: pattern.clone(),
+                    // The regex crate renders a parse error as a multi-line block
+                    // that points at the offending character. Collapsed so that
+                    // the warning this ends up in stays one log line.
+                    error: e
+                        .to_string()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                })?;
+                patterns.push(compiled);
             }
         }
-    }
-    Ok(predicate)
-}
 
-/// The values an `in` operator allows, or a rejection if `value` is not an array
-/// of JSON scalars.
-///
-/// Rendered to strings because that is how scope attributes are spelled, so a
-/// boolean attribute may be written either as `true` or as `"true"`.
-fn predicate_values(value: &JsonValue) -> Result<BTreeSet<String>, RejectedAttribute> {
-    let JsonValue::Array(values) = value else {
-        return Err(RejectedAttribute::UnsupportedValues);
-    };
-    values
-        .iter()
-        .map(scalar_string)
-        .collect::<Option<_>>()
-        .ok_or(RejectedAttribute::UnsupportedValues)
-}
+        clause.remove(CLAUSE_ID);
+        if let Some((key, _)) = clause.into_iter().next() {
+            return Err(ClauseDefect::UnknownKey(key));
+        }
 
-/// The patterns a `matches` operator allows, or a rejection if `value` is not an
-/// array of strings or one of them is not a valid regular expression.
-///
-/// A pattern is unanchored, as it is in LaunchDarkly and in the RE2 syntax
-/// LaunchDarkly's `matches` uses, so it matches anywhere in the attribute's
-/// value. `^` and `$` are how a whole-value match is asked for.
-///
-/// Only strings are accepted: a number or boolean spelled here is a value rather
-/// than a pattern, so accepting it would quietly read a typo as a regex.
-fn predicate_patterns(value: &JsonValue) -> Result<Vec<Regex>, RejectedAttribute> {
-    let JsonValue::Array(values) = value else {
-        return Err(RejectedAttribute::UnsupportedValues);
-    };
-    values
-        .iter()
-        .map(|value| {
-            let JsonValue::String(pattern) = value else {
-                return Err(RejectedAttribute::UnsupportedValues);
-            };
-            Regex::new(pattern).map_err(|e| RejectedAttribute::InvalidPattern {
-                pattern: pattern.clone(),
-                // The regex crate renders a parse error as a multi-line block
-                // that points at the offending character. Collapsed so that the
-                // warning this ends up in stays one log line.
-                error: e
-                    .to_string()
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            })
+        Ok(Self {
+            attribute,
+            op,
+            values,
+            patterns,
+            negate,
         })
-        .collect()
+    }
 }
 
 /// Renders a JSON scalar as the string a scope attribute is compared against, or
@@ -934,12 +1199,12 @@ impl SystemParameterFrontend {
     }
 
     /// The problems with `file`'s segments and rules that an operator can act on:
-    /// a predicate entry that cannot be evaluated, a rule naming a segment that
+    /// a segment or clause that cannot be evaluated, a rule naming a segment that
     /// does not exist, a parameter that is not scopable at all, a cluster-scoped
-    /// parameter supplied through a replica-discriminating segment, and a value
-    /// that does not parse for its parameter's type. Resolution drops each of
-    /// these silently, and nothing surfaces a parameter's scope from SQL, so
-    /// without this an operator has nothing to debug against.
+    /// parameter supplied through a `replica` segment, and a value that does not
+    /// parse for its parameter's type. Resolution drops each of these silently,
+    /// and nothing surfaces a parameter's scope from SQL, so without this an
+    /// operator has nothing to debug against.
     ///
     /// Returned rather than logged so that [`Self::refresh_config_file`] can log
     /// them only when the file changes.
@@ -951,10 +1216,9 @@ impl SystemParameterFrontend {
         let mut diagnostics = Vec::new();
 
         for (name, segment) in &file.segments {
-            for (attribute, rejected) in &segment.rejected {
+            for defect in &segment.rejected {
                 diagnostics.push(format!(
-                    "{} in the system parameter sync file matches no cluster or replica: \
-                     attribute {attribute:?} {rejected}",
+                    "{} in the system parameter sync file matches no cluster or replica: {defect}",
                     FilePosition::Segment(name)
                 ));
             }
@@ -970,7 +1234,6 @@ impl SystemParameterFrontend {
                 continue;
             };
             let position = rule.position();
-            let replica_attribute = segment.replica_attribute();
 
             for (name, value) in &rule.parameters {
                 let Some(&(param_name, scope)) = scopable.get(name.as_str()) else {
@@ -981,16 +1244,16 @@ impl SystemParameterFrontend {
                     continue;
                 };
                 // The coherence guard, see [`Self::file_rule_overrides`].
-                if scope == ParameterScope::Cluster {
-                    if let Some(attribute) = replica_attribute {
-                        diagnostics.push(format!(
-                            "ignoring {param_name} for {position} in the system parameter sync \
-                             file: {param_name} is cluster-scoped, so it cannot be supplied \
-                             through a segment matching on the replica attribute {}",
-                            attribute.as_str()
-                        ));
-                        continue;
-                    }
+                if scope == ParameterScope::Cluster
+                    && segment.context_kind == Some(ContextKind::Replica)
+                {
+                    diagnostics.push(format!(
+                        "ignoring {param_name} for {position} in the system parameter sync file: \
+                         {param_name} is cluster-scoped, so it cannot be supplied through a \
+                         segment of context kind {:?}",
+                        ContextKind::Replica.as_str()
+                    ));
+                    continue;
                 }
                 // `null` expresses no opinion rather than a value, so there is
                 // nothing to parse.
@@ -1194,6 +1457,7 @@ impl SystemParameterFrontend {
                 params,
                 param_names,
                 ParameterScope::Cluster,
+                ContextKind::Cluster,
                 &cluster_attributes(&cluster.cluster),
             );
             if !overrides.is_empty() {
@@ -1222,6 +1486,7 @@ impl SystemParameterFrontend {
                 params,
                 param_names,
                 ParameterScope::Replica,
+                ContextKind::Replica,
                 &replica_attributes(&replica.replica),
             );
             if !overrides.is_empty() {
@@ -1232,8 +1497,8 @@ impl SystemParameterFrontend {
     }
 
     /// Resolves one object's scoped overrides from `file`'s rules, given the
-    /// object's scope `attributes` and the `scope` that every parameter in
-    /// `param_names` declares.
+    /// object's context `kind` and scope `attributes`, and the `scope` that every
+    /// parameter in `param_names` declares.
     ///
     /// The first rule whose segment matches the object and that mentions a
     /// parameter decides that parameter. A parameter no matching rule mentions
@@ -1251,6 +1516,7 @@ impl SystemParameterFrontend {
         params: &SynchronizedParameters,
         param_names: &[&'static str],
         scope: ParameterScope,
+        kind: ContextKind,
         attributes: &BTreeMap<ScopeAttribute, String>,
     ) -> BTreeMap<String, String> {
         let requested: BTreeMap<&str, &'static str> = param_names
@@ -1263,18 +1529,19 @@ impl SystemParameterFrontend {
             let Some(segment) = file.segments.get(&rule.segment) else {
                 continue;
             };
-            if !segment.matches(attributes) {
+            if !segment.matches(kind, attributes) {
                 continue;
             }
             // The coherence guard. A cluster-coherent parameter must resolve
-            // identically across a cluster's replicas, which a segment matching on
-            // a replica attribute cannot promise, so such a rule supplies no
-            // cluster-scoped parameter. The match above already fails for such a
-            // segment, since a cluster carries no replica attributes, but the
-            // guard is explicit so that the invariant does not rest on
-            // `cluster_attributes` staying replica-free. Its operator-facing half
-            // is the matching diagnostic.
-            if scope == ParameterScope::Cluster && segment.replica_attribute().is_some() {
+            // identically across a cluster's replicas, which a `replica` segment
+            // cannot promise, so such a rule supplies no cluster-scoped parameter.
+            // The match above already fails for such a segment when `kind` is
+            // `Cluster`, but the guard is explicit so that the invariant does not
+            // rest on the callers pairing `scope` and `kind` correctly. Its
+            // operator-facing half is the matching diagnostic.
+            if scope == ParameterScope::Cluster
+                && segment.context_kind != Some(ContextKind::Cluster)
+            {
                 continue;
             }
 
@@ -1564,10 +1831,12 @@ fn ld_ctx(
 ) -> Result<ld::Context, anyhow::Error> {
     // Register multiple contexts for this client.
     //
-    // Unfortunately, it seems that the order in which conflicting targeting
-    // rules are applied depends on the definition order of feature flag
-    // variations rather than on the order in which context are registered with
-    // the multi-context builder.
+    // NOTE: the order contexts are added in here does not decide which of two
+    // conflicting targeting rules wins. What the SDK does is evaluate individual
+    // targets first, then the flag's rules in their array order, first match
+    // winning. Which context kind a matching rule's clauses named is not part of
+    // that ordering, so a flag whose rules target both `cluster` and `replica`
+    // resolves by rule order in LaunchDarkly, not by anything expressible here.
     let mut ctx_builder = ld::MultiContextBuilder::new();
 
     if env_id.cloud_provider() != &CloudProvider::Local {
@@ -1735,11 +2004,20 @@ mod tests {
         BTreeMap::from([(param_name.to_string(), value.to_string())])
     }
 
-    /// The predicate an exact-value entry parses to.
-    fn exact<const N: usize>(values: [&str; N]) -> AttributePredicate {
-        AttributePredicate {
-            values: values.into_iter().map(str::to_string).collect(),
-            patterns: Vec::new(),
+    /// The clause a parse assertion expects.
+    fn clause(attribute: ScopeAttribute, op: Operator, values: &[&str], negate: bool) -> Clause {
+        Clause {
+            attribute,
+            op,
+            values: values.iter().map(|value| value.to_string()).collect(),
+            patterns: match op {
+                Operator::Matches => values
+                    .iter()
+                    .map(|value| Regex::new(value).expect("test pattern compiles"))
+                    .collect(),
+                _ => Vec::new(),
+            },
+            negate,
         }
     }
 
@@ -1748,7 +2026,12 @@ mod tests {
     fn scoped_file(value: bool) -> String {
         format!(
             r#"{{
-                "segments": {{"analytics": {{"cluster_name": ["analytics"]}}}},
+                "segments": {{"analytics": {{
+                    "contextKind": "cluster",
+                    "clauses": [
+                        {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
+                    ]
+                }}}},
                 "rules": [
                     {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": {value}}}}}
                 ]
@@ -1799,8 +2082,32 @@ mod tests {
             r#"{
                 "enable_lgalloc": false,
                 "segments": {
-                    "analytics": {"cluster_name": ["analytics", "analytics_2"]},
-                    "legacy-replicas": {"replica_size_family": ["legacy"], "is_builtin": [false]}
+                    "analytics": {
+                        "contextKind": "cluster",
+                        "clauses": [{
+                            "attribute": "cluster_name",
+                            "op": "in",
+                            "values": ["analytics", "analytics_2"]
+                        }]
+                    },
+                    "legacy-replicas": {
+                        "contextKind": "replica",
+                        "clauses": [
+                            {
+                                "attribute": "replica_size_family",
+                                "op": "in",
+                                "values": ["legacy"]
+                            },
+                            {"attribute": "is_builtin", "op": "in", "values": [false]},
+                            {
+                                "attribute": "replica_name",
+                                "op": "matches",
+                                "values": ["^scratch-"],
+                                "negate": true,
+                                "_id": "carried over from the LaunchDarkly API"
+                            }
+                        ]
+                    }
                 },
                 "rules": [
                     {"segment": "analytics", "parameters": {"enable_eager_delta_joins": true}},
@@ -1815,22 +2122,46 @@ mod tests {
             vec!["enable_lgalloc"]
         );
 
-        // A boolean attribute may be written as a JSON boolean or as its string:
-        // both render to the string the attribute is compared against.
         assert_eq!(
-            file.segments["analytics"].attributes,
-            BTreeMap::from([(
+            file.segments["analytics"].context_kind,
+            Some(ContextKind::Cluster)
+        );
+        assert_eq!(
+            file.segments["analytics"].clauses,
+            vec![clause(
                 ScopeAttribute::ClusterName,
-                exact(["analytics", "analytics_2"])
-            )])
+                Operator::In,
+                &["analytics", "analytics_2"],
+                false
+            )]
+        );
+
+        // Clauses keep their array order, `negate` defaults to false, a boolean
+        // value may be written as a JSON boolean or as its string, and the
+        // LaunchDarkly REST API's `_id` is ignored rather than rejected.
+        assert_eq!(
+            file.segments["legacy-replicas"].context_kind,
+            Some(ContextKind::Replica)
         );
         assert_eq!(
-            file.segments["legacy-replicas"].attributes,
-            BTreeMap::from([
-                (ScopeAttribute::IsBuiltin, exact(["false"])),
-                (ScopeAttribute::ReplicaSizeFamily, exact(["legacy"])),
-            ])
+            file.segments["legacy-replicas"].clauses,
+            vec![
+                clause(
+                    ScopeAttribute::ReplicaSizeFamily,
+                    Operator::In,
+                    &["legacy"],
+                    false
+                ),
+                clause(ScopeAttribute::IsBuiltin, Operator::In, &["false"], false),
+                clause(
+                    ScopeAttribute::ReplicaName,
+                    Operator::Matches,
+                    &["^scratch-"],
+                    true
+                ),
+            ]
         );
+        assert!(file.segments.values().all(|s| s.rejected.is_empty()));
 
         // Rules keep the document order that decides which of them wins.
         assert_eq!(
@@ -1853,7 +2184,15 @@ mod tests {
         let file = parse(
             r#"{
                 "max_connections": 1000,
-                "segments": {"broken": 7, "prod": {"cluster_name": ["prod"]}},
+                "segments": {
+                    "broken": 7,
+                    "prod": {
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {"attribute": "cluster_name", "op": "in", "values": ["prod"]}
+                        ]
+                    }
+                },
                 "rules": [
                     "not-a-rule",
                     {"parameters": {"enable_lgalloc": true}},
@@ -1917,8 +2256,8 @@ mod tests {
         );
     }
 
-    /// The attributes of one segment are ANDed, and a replica may be matched on
-    /// its own attributes as well as its owning cluster's.
+    /// The clauses of one segment are ANDed, and a replica may be matched on its
+    /// own attributes as well as its owning cluster's.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_file_replica_rule_applied() {
@@ -1926,8 +2265,15 @@ mod tests {
         let file = parse(&format!(
             r#"{{
                 "segments": {{"legacy-in-prod": {{
-                    "replica_size_family": ["legacy"],
-                    "cluster_name": ["prod"]
+                    "contextKind": "replica",
+                    "clauses": [
+                        {{
+                            "attribute": "replica_size_family",
+                            "op": "in",
+                            "values": ["legacy"]
+                        }},
+                        {{"attribute": "cluster_name", "op": "in", "values": ["prod"]}}
+                    ]
                 }}}},
                 "rules": [
                     {{"segment": "legacy-in-prod", "parameters": {{"{REPLICA_PARAM}": false}}}}
@@ -1954,15 +2300,21 @@ mod tests {
         );
     }
 
-    /// A replica-local parameter may be supplied through a segment matching on
-    /// cluster attributes alone, which targets every replica of that cluster.
+    /// A replica-local parameter may be supplied through a `replica` segment whose
+    /// clauses name cluster attributes alone, which targets every replica of that
+    /// cluster.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_file_replica_rule_targeted_by_cluster() {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
-                "segments": {{"prod": {{"cluster_name": ["prod"]}}}},
+                "segments": {{"prod": {{
+                    "contextKind": "replica",
+                    "clauses": [
+                        {{"attribute": "cluster_name", "op": "in", "values": ["prod"]}}
+                    ]
+                }}}},
                 "rules": [{{"segment": "prod", "parameters": {{"{REPLICA_PARAM}": false}}}}]
             }}"#
         ));
@@ -1990,8 +2342,8 @@ mod tests {
     /// The first rule whose segment matches decides a parameter, and it decides it
     /// before the value is judged, so a value agreeing with the environment-wide
     /// one still shadows a later rule. A rule that does not mention a parameter
-    /// leaves it to a later one, and a segment with an empty predicate matches
-    /// every object.
+    /// leaves it to a later one, and a segment with no clauses matches every
+    /// object of its context kind.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_first_matching_rule_wins() {
@@ -2005,12 +2357,17 @@ mod tests {
         let file = parse(&format!(
             r#"{{
                 "segments": {{
-                    "analytics": {{"cluster_name": ["analytics"]}},
-                    "everything": {{}}
+                    "analytics": {{
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
+                        ]
+                    }},
+                    "every-cluster": {{"contextKind": "cluster", "clauses": []}}
                 }},
                 "rules": [
                     {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": false}}}},
-                    {{"segment": "everything", "parameters": {{
+                    {{"segment": "every-cluster", "parameters": {{
                         "{CLUSTER_PARAM}": true,
                         "{CLUSTER_PARAM_2}": true
                     }}}}
@@ -2043,11 +2400,109 @@ mod tests {
         );
     }
 
-    /// A cluster-coherent parameter may not be supplied through a segment that
-    /// matches on a replica attribute: honouring that would let the parameter
-    /// resolve differently across one cluster's replicas. The parameter is
-    /// dropped from that rule, leaving it to a later one, while a replica-local
-    /// parameter in the same rule is unaffected.
+    /// Each of the five supported operators, over the one attribute every context
+    /// kind carries. Values within a clause are ORed.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_clause_operators() {
+        let params = SynchronizedParameters::default();
+        let frontend = file_frontend();
+
+        // Every rule supplies the same parameter, and each segment is tested on
+        // its own file, so a hit is unambiguous.
+        let hits = |op: &str, values: &str, name: &str| {
+            let file = parse(&format!(
+                r#"{{
+                    "segments": {{"s": {{
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {{"attribute": "cluster_name", "op": "{op}", "values": {values}}}
+                        ]
+                    }}}},
+                    "rules": [{{"segment": "s", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
+                }}"#
+            ));
+            !frontend
+                .file_cluster_overrides(&file, &params, &[CLUSTER_PARAM], &[cluster_ctx(1, name)])
+                .is_empty()
+        };
+
+        assert!(hits("in", r#"["prod"]"#, "prod"));
+        assert!(!hits("in", r#"["prod"]"#, "prod-1"));
+        // Values are ORed.
+        assert!(hits("in", r#"["staging", "prod"]"#, "prod"));
+
+        assert!(hits("startsWith", r#"["prod-"]"#, "prod-ingest"));
+        assert!(!hits("startsWith", r#"["prod-"]"#, "staging-prod-ingest"));
+
+        assert!(hits("endsWith", r#"["-prod"]"#, "ingest-prod"));
+        assert!(!hits("endsWith", r#"["-prod"]"#, "prod-ingest"));
+
+        assert!(hits("contains", r#"["prod"]"#, "staging-prod-1"));
+        assert!(!hits("contains", r#"["prod"]"#, "staging-1"));
+
+        // Unanchored, as the `regex` crate and so LaunchDarkly's `matches` are.
+        assert!(hits("matches", r#"["prod"]"#, "staging-prod-1"));
+        assert!(hits("matches", r#"["^prod-"]"#, "prod-ingest"));
+        assert!(!hits("matches", r#"["^prod-"]"#, "staging-prod-ingest"));
+        assert!(hits("matches", r#"["^prod$"]"#, "prod"));
+        assert!(!hits("matches", r#"["^prod$"]"#, "prod-1"));
+        // Patterns within a clause are ORed too.
+        assert!(hits("matches", r#"["^prod-", "^stage-"]"#, "stage-1"));
+
+        // An empty value list satisfies no operator.
+        assert!(!hits("in", "[]", "prod"));
+        assert!(!hits("matches", "[]", "prod"));
+    }
+
+    /// `negate` inverts the clause *after* the OR across its values, as it does in
+    /// LaunchDarkly, so a negated `in` means "none of these" rather than "not this
+    /// one".
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_clause_negate() {
+        let params = SynchronizedParameters::default();
+        let file = parse(&format!(
+            r#"{{
+                "segments": {{"not-scratch": {{
+                    "contextKind": "cluster",
+                    "clauses": [{{
+                        "attribute": "cluster_name",
+                        "op": "in",
+                        "values": ["scratch", "sandbox"],
+                        "negate": true
+                    }}]
+                }}}},
+                "rules": [
+                    {{"segment": "not-scratch", "parameters": {{"{CLUSTER_PARAM}": true}}}}
+                ]
+            }}"#
+        ));
+
+        let out = file_frontend().file_cluster_overrides(
+            &file,
+            &params,
+            &[CLUSTER_PARAM],
+            &[
+                cluster_ctx(1, "prod"),
+                // Both listed values are excluded, which is what makes this "none
+                // of these" rather than "not the first one".
+                cluster_ctx(2, "scratch"),
+                cluster_ctx(3, "sandbox"),
+            ],
+        );
+
+        assert_eq!(
+            out,
+            BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
+        );
+    }
+
+    /// A cluster-coherent parameter may not be supplied through a `replica`
+    /// segment: honouring that would let the parameter resolve differently across
+    /// one cluster's replicas. The parameter is dropped from that rule, leaving it
+    /// to a later one, while a replica-local parameter in the same rule is
+    /// unaffected.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_cluster_coherence_guard() {
@@ -2056,8 +2511,20 @@ mod tests {
         let file = parse(&format!(
             r#"{{
                 "segments": {{
-                    "legacy-replicas": {{"replica_size_family": ["legacy"]}},
-                    "analytics": {{"cluster_name": ["analytics"]}}
+                    "legacy-replicas": {{
+                        "contextKind": "replica",
+                        "clauses": [{{
+                            "attribute": "replica_size_family",
+                            "op": "in",
+                            "values": ["legacy"]
+                        }}]
+                    }},
+                    "analytics": {{
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
+                        ]
+                    }}
                 }},
                 "rules": [
                     {{"segment": "legacy-replicas", "parameters": {{
@@ -2092,55 +2559,48 @@ mod tests {
             vec![format!(
                 "ignoring {CLUSTER_PARAM} for rule 1 (segment \"legacy-replicas\") in the system \
                  parameter sync file: {CLUSTER_PARAM} is cluster-scoped, so it cannot be supplied \
-                 through a segment matching on the replica attribute replica_size_family"
+                 through a segment of context kind \"replica\""
             )]
         );
     }
 
-    /// A predicate entry this binary cannot evaluate makes its segment match
-    /// nothing. Dropping the entry instead would widen the segment, in the limit
-    /// to every cluster and replica.
+    /// A `cluster` segment cannot name a replica attribute: a cluster carries
+    /// none, so the clause could only ever be false. Refused at parse time, which
+    /// is what makes the cluster-coherence rule structural rather than a property
+    /// of `cluster_attributes` staying replica-free.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_uninterpretable_predicate_matches_nothing() {
+    fn test_replica_attribute_in_cluster_segment_rejected() {
         let params = SynchronizedParameters::default();
         let frontend = file_frontend();
         let file = parse(&format!(
             r#"{{
-                "segments": {{
-                    "typo": {{"cluster_nmae": ["analytics"]}},
-                    "unlisted": {{"cluster_name": "analytics"}},
-                    "unknown-operator": {{"cluster_name": {{"starts_with": ["analytics"]}}}}
-                }},
-                "rules": [
-                    {{"segment": "typo", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "unlisted", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "unknown-operator", "parameters": {{"{CLUSTER_PARAM}": true}}}}
-                ]
+                "segments": {{"legacy": {{
+                    "contextKind": "cluster",
+                    "clauses": [
+                        {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}},
+                        {{
+                            "attribute": "replica_size_family",
+                            "op": "in",
+                            "values": ["legacy"]
+                        }}
+                    ]
+                }}}},
+                "rules": [{{"segment": "legacy", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
             }}"#
         ));
 
         assert_eq!(
-            file.segments["typo"].rejected,
-            BTreeMap::from([(
-                "cluster_nmae".to_string(),
-                RejectedAttribute::UnknownAttribute
-            )])
+            file.segments["legacy"].rejected,
+            vec![SegmentDefect::Clause(
+                2,
+                ClauseDefect::AttributeOutsideContext(
+                    "replica_size_family".to_string(),
+                    ContextKind::Cluster
+                )
+            )]
         );
-        assert_eq!(
-            file.segments["unlisted"].rejected,
-            BTreeMap::from([(
-                "cluster_name".to_string(),
-                RejectedAttribute::UnsupportedValues
-            )])
-        );
-        assert_eq!(
-            file.segments["unknown-operator"].rejected,
-            BTreeMap::from([(
-                "cluster_name".to_string(),
-                RejectedAttribute::UnknownOperator("starts_with".to_string())
-            )])
-        );
+        // Not widened to what the surviving clause allows.
         assert!(
             frontend
                 .file_cluster_overrides(
@@ -2154,89 +2614,301 @@ mod tests {
         assert_eq!(
             frontend.scoped_rule_diagnostics(&file, &params),
             vec![
-                "segment \"typo\" in the system parameter sync file matches no cluster or \
-                 replica: attribute \"cluster_nmae\" is not a cluster or replica attribute"
-                    .to_string(),
-                "segment \"unknown-operator\" in the system parameter sync file matches no \
-                 cluster or replica: attribute \"cluster_name\" names \"starts_with\", which is \
-                 not one of the \"in\" and \"matches\" operators"
-                    .to_string(),
-                "segment \"unlisted\" in the system parameter sync file matches no cluster or \
-                 replica: attribute \"cluster_name\" expects an array of strings, numbers or \
-                 booleans, or an object of an \"in\" array and a \"matches\" array of patterns"
-                    .to_string(),
+                "segment \"legacy\" in the system parameter sync file matches no cluster or \
+                 replica: clause 2 names the attribute \"replica_size_family\", which a \
+                 \"cluster\" does not carry"
+                    .to_string()
             ]
         );
     }
 
-    /// A `matches` pattern selects by name, which an exact list cannot do for a
-    /// cluster or replica that does not exist yet. The predicate object's two
-    /// operators are ORed, so a value hit by either is allowed.
+    /// A segment this binary cannot fully evaluate matches nothing. Dropping the
+    /// offending clause instead would widen the segment, in the limit to every
+    /// cluster and replica.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
-    fn test_pattern_predicate() {
+    fn test_uninterpretable_segment_matches_nothing() {
         let params = SynchronizedParameters::default();
         let frontend = file_frontend();
         let file = parse(&format!(
             r#"{{
                 "segments": {{
-                    "prod": {{"cluster_name": {{"matches": ["^prod-"]}}}},
-                    "prod-or-analytics": {{"cluster_name": {{
-                        "in": ["analytics"],
-                        "matches": ["^prod-"]
-                    }}}}
+                    "attribute-typo": {{
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {{"attribute": "cluster_nmae", "op": "in", "values": ["analytics"]}}
+                        ]
+                    }},
+                    "no-context-kind": {{
+                        "clauses": [
+                            {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
+                        ]
+                    }},
+                    "wrong-context-kind": {{
+                        "contextKind": "environment",
+                        "clauses": []
+                    }},
+                    "clause-typo": {{
+                        "contextKind": "cluster",
+                        "clauses": [{{
+                            "attribute": "cluster_name",
+                            "op": "in",
+                            "values": ["analytics"],
+                            "contextKind": "cluster"
+                        }}]
+                    }},
+                    "no-clauses": {{"contextKind": "cluster"}}
                 }},
                 "rules": [
-                    {{"segment": "prod", "parameters": {{"{CLUSTER_PARAM}": true}}}},
-                    {{"segment": "prod-or-analytics", "parameters": {{
-                        "{CLUSTER_PARAM_2}": true
-                    }}}}
+                    {{"segment": "attribute-typo", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "no-context-kind", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "wrong-context-kind", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "clause-typo", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "no-clauses", "parameters": {{"{CLUSTER_PARAM}": true}}}}
                 ]
             }}"#
         ));
 
-        // A bare array is the `in` operator alone, so it parses to what the
-        // object form spells.
         assert_eq!(
-            parse(r#"{"segments": {"s": {"cluster_name": ["analytics"]}}}"#).segments["s"]
-                .attributes[&ScopeAttribute::ClusterName],
-            parse(r#"{"segments": {"s": {"cluster_name": {"in": ["analytics"]}}}}"#).segments["s"]
-                .attributes[&ScopeAttribute::ClusterName]
+            file.segments["attribute-typo"].rejected,
+            vec![SegmentDefect::Clause(
+                1,
+                ClauseDefect::UnknownAttribute("cluster_nmae".to_string())
+            )]
+        );
+        assert_eq!(
+            file.segments["no-context-kind"].rejected,
+            vec![SegmentDefect::MissingContextKind]
+        );
+        assert_eq!(
+            file.segments["wrong-context-kind"].rejected,
+            vec![SegmentDefect::UnknownContextKind("environment".to_string())]
+        );
+        // A per-clause `contextKind` is an unknown clause key: the segment
+        // declares the context kind for all of its clauses.
+        assert_eq!(
+            file.segments["clause-typo"].rejected,
+            vec![SegmentDefect::Clause(
+                1,
+                ClauseDefect::UnknownKey("contextKind".to_string())
+            )]
+        );
+        assert_eq!(
+            file.segments["no-clauses"].rejected,
+            vec![SegmentDefect::Clauses]
         );
 
-        let out = frontend.file_cluster_overrides(
-            &file,
-            &params,
-            &[CLUSTER_PARAM, CLUSTER_PARAM_2],
-            &[
-                // The pattern is unanchored on the right, so a prefix matches.
-                cluster_ctx(1, "prod-ingest"),
-                // Only the `in` side hits.
-                cluster_ctx(2, "analytics"),
-                // The leading `^` is what keeps this out of both segments.
-                cluster_ctx(3, "staging-prod-ingest"),
-            ],
+        // Every one of them resolves to nothing, rather than to everything.
+        assert!(
+            frontend
+                .file_cluster_overrides(
+                    &file,
+                    &params,
+                    &[CLUSTER_PARAM],
+                    &[cluster_ctx(1, "analytics")]
+                )
+                .is_empty()
         );
-
         assert_eq!(
-            out,
-            BTreeMap::from([
-                (
-                    ClusterId::User(1),
-                    BTreeMap::from([
-                        (CLUSTER_PARAM.to_string(), "true".to_string()),
-                        (CLUSTER_PARAM_2.to_string(), "true".to_string()),
-                    ])
-                ),
-                (ClusterId::User(2), overrides(CLUSTER_PARAM_2, "true")),
-            ])
+            frontend.scoped_rule_diagnostics(&file, &params),
+            // Ordered by segment name.
+            vec![
+                "segment \"attribute-typo\" in the system parameter sync file matches no cluster \
+                 or replica: clause 1 names the attribute \"cluster_nmae\", which is not a \
+                 cluster or replica attribute"
+                    .to_string(),
+                "segment \"clause-typo\" in the system parameter sync file matches no cluster or \
+                 replica: clause 1 carries the unknown key \"contextKind\""
+                    .to_string(),
+                "segment \"no-clauses\" in the system parameter sync file matches no cluster or \
+                 replica: its \"clauses\" is not an array of clauses"
+                    .to_string(),
+                "segment \"no-context-kind\" in the system parameter sync file matches no cluster \
+                 or replica: it declares no \"contextKind\", which must be \"cluster\" or \
+                 \"replica\""
+                    .to_string(),
+                "segment \"wrong-context-kind\" in the system parameter sync file matches no \
+                 cluster or replica: its contextKind \"environment\" is neither \"cluster\" nor \
+                 \"replica\""
+                    .to_string(),
+            ]
         );
     }
 
+    /// A malformed clause fails closed, each with its own reason so that an author
+    /// is told what to fix rather than that something is wrong.
+    #[mz_ore::test]
+    fn test_malformed_clauses_rejected() {
+        let malformed = [
+            ("7", ClauseDefect::NotAnObject),
+            (
+                r#"{"op": "in", "values": []}"#,
+                ClauseDefect::MissingAttribute,
+            ),
+            (
+                r#"{"attribute": 7, "op": "in", "values": []}"#,
+                ClauseDefect::MissingAttribute,
+            ),
+            (
+                r#"{"attribute": "cluster_name", "values": []}"#,
+                ClauseDefect::MissingOperator,
+            ),
+            (
+                r#"{"attribute": "cluster_name", "op": "in"}"#,
+                ClauseDefect::UnsupportedValues,
+            ),
+            (
+                r#"{"attribute": "cluster_name", "op": "in", "values": "prod"}"#,
+                ClauseDefect::UnsupportedValues,
+            ),
+            (
+                r#"{"attribute": "cluster_name", "op": "in", "values": [["prod"]]}"#,
+                ClauseDefect::UnsupportedValues,
+            ),
+            (
+                r#"{"attribute": "cluster_name", "op": "in", "values": [], "negate": "yes"}"#,
+                ClauseDefect::UnsupportedNegate,
+            ),
+            (
+                r#"{"attribute": "cluster_name", "op": "in", "values": [], "nope": 1}"#,
+                ClauseDefect::UnknownKey("nope".to_string()),
+            ),
+        ];
+
+        for (clause, expected) in malformed {
+            let file = parse(&format!(
+                r#"{{"segments": {{"s": {{"contextKind": "cluster", "clauses": [{clause}]}}}}}}"#
+            ));
+            assert_eq!(
+                file.segments["s"].rejected,
+                vec![SegmentDefect::Clause(1, expected)],
+                "{clause}"
+            );
+        }
+    }
+
+    /// The ten LaunchDarkly operators this format refuses are recognised and
+    /// refused with their own reason, rather than lumped in with a typo. An
+    /// operator that is not LaunchDarkly's at all is refused as unknown.
+    #[mz_ore::test]
+    fn test_unsupported_operators_rejected() {
+        let rejected = |op: &str| {
+            let file = parse(&format!(
+                r#"{{"segments": {{"s": {{"contextKind": "cluster", "clauses": [
+                    {{"attribute": "cluster_name", "op": "{op}", "values": ["1"]}}
+                ]}}}}}}"#
+            ));
+            let defects = &file.segments["s"].rejected;
+            assert_eq!(defects.len(), 1, "{op}");
+            match &defects[0] {
+                SegmentDefect::Clause(1, defect) => defect.to_string(),
+                other => panic!("{op}: unexpected {other:?}"),
+            }
+        };
+
+        for op in [
+            "lessThan",
+            "lessThanOrEqual",
+            "greaterThan",
+            "greaterThanOrEqual",
+        ] {
+            assert_eq!(
+                rejected(op),
+                format!(
+                    "uses the op {op:?}, which compares numbers, and every cluster and replica \
+                     attribute is a string"
+                )
+            );
+        }
+        for op in ["before", "after"] {
+            assert_eq!(
+                rejected(op),
+                format!(
+                    "uses the op {op:?}, which compares dates, and every cluster and replica \
+                     attribute is a string"
+                )
+            );
+        }
+        for op in ["semVerEqual", "semVerGreaterThan", "semVerLessThan"] {
+            assert_eq!(
+                rejected(op),
+                format!(
+                    "uses the op {op:?}, which compares semantic versions, and every cluster and \
+                     replica attribute is a string"
+                )
+            );
+        }
+        assert_eq!(
+            rejected("segmentMatch"),
+            "uses the op \"segmentMatch\", which references another segment, which this file \
+             expresses through the segment a rule names"
+        );
+
+        // Not a LaunchDarkly operator at all, including the casing a hand-author
+        // is most likely to reach for.
+        assert_eq!(
+            rejected("starts_with"),
+            "uses the op \"starts_with\", which is not an operator"
+        );
+        assert_eq!(
+            rejected("IN"),
+            "uses the op \"IN\", which is not an operator"
+        );
+    }
+
+    /// The operator vocabulary this file mirrors from
+    /// `launchdarkly-server-sdk-evaluation`.
+    ///
+    /// The SDK's own `Op` enum is `pub(crate)`, so nothing here can be checked
+    /// against it by the compiler. This pins our copy instead: all fifteen
+    /// LaunchDarkly operator strings are accounted for, each exactly once, as
+    /// either supported or refused with a reason. An operator added to the SDK
+    /// will not fail this, which is the limit of what is possible; what it does
+    /// catch is our own list drifting, for instance a supported operator quietly
+    /// becoming unrecognised.
+    #[mz_ore::test]
+    fn test_operator_vocabulary_matches_launchdarkly() {
+        let launchdarkly = [
+            "in",
+            "startsWith",
+            "endsWith",
+            "contains",
+            "matches",
+            "lessThan",
+            "lessThanOrEqual",
+            "greaterThan",
+            "greaterThanOrEqual",
+            "before",
+            "after",
+            "segmentMatch",
+            "semVerEqual",
+            "semVerGreaterThan",
+            "semVerLessThan",
+        ];
+        let supported = Operator::ALL.map(|op| op.as_str());
+
+        for op in launchdarkly {
+            assert_eq!(
+                Operator::parse(op).is_some(),
+                unsupported_operator(op).is_none(),
+                "{op:?} must be either supported or refused with a reason, not both or neither"
+            );
+        }
+        for op in supported {
+            assert!(launchdarkly.contains(&op), "{op:?} is not a LD operator");
+            // The name a diagnostic prints round-trips through the parse.
+            assert_eq!(Operator::parse(op).map(|op| op.as_str()), Some(op));
+        }
+        assert_eq!(supported.len(), 5);
+        assert_eq!(launchdarkly.len(), 15);
+        // Nothing outside the vocabulary is silently accepted as refusable.
+        assert_eq!(unsupported_operator("starts_with"), None);
+        assert_eq!(Operator::parse("starts_with"), None);
+    }
+
     /// A pattern does not change which rule decides a parameter: the first rule
-    /// whose segment matches still wins, whichever operator made it match. Two
-    /// patterns of which one is the narrower is the shape that makes this the
-    /// natural way to write an exception.
+    /// whose segment matches still wins. Two patterns of which one is the narrower
+    /// is the shape that makes this the natural way to write an exception.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_pattern_obeys_first_matching_rule() {
@@ -2244,8 +2916,22 @@ mod tests {
         let file = parse(&format!(
             r#"{{
                 "segments": {{
-                    "prod-canary": {{"cluster_name": {{"matches": ["^prod-canary"]}}}},
-                    "prod": {{"cluster_name": {{"matches": ["^prod-"]}}}}
+                    "prod-canary": {{
+                        "contextKind": "cluster",
+                        "clauses": [{{
+                            "attribute": "cluster_name",
+                            "op": "matches",
+                            "values": ["^prod-canary"]
+                        }}]
+                    }},
+                    "prod": {{
+                        "contextKind": "cluster",
+                        "clauses": [{{
+                            "attribute": "cluster_name",
+                            "op": "matches",
+                            "values": ["^prod-"]
+                        }}]
+                    }}
                 }},
                 "rules": [
                     {{"segment": "prod-canary", "parameters": {{
@@ -2278,8 +2964,8 @@ mod tests {
     }
 
     /// An invalid pattern makes its segment match nothing, exactly as an unknown
-    /// attribute name does. Dropping it instead would widen the segment to every
-    /// object the surviving entries allow.
+    /// attribute does. Dropping the clause instead would widen the segment to
+    /// every object the surviving clauses allow.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_invalid_pattern_matches_nothing() {
@@ -2288,8 +2974,15 @@ mod tests {
         let file = parse(&format!(
             r#"{{
                 "segments": {{"prod": {{
-                    "cluster_name": {{"matches": ["^prod-["]}},
-                    "is_builtin": [false]
+                    "contextKind": "cluster",
+                    "clauses": [
+                        {{"attribute": "is_builtin", "op": "in", "values": [false]}},
+                        {{
+                            "attribute": "cluster_name",
+                            "op": "matches",
+                            "values": ["^prod-["]
+                        }}
+                    ]
                 }}}},
                 "rules": [{{"segment": "prod", "parameters": {{"{CLUSTER_PARAM}": true}}}}]
             }}"#
@@ -2312,8 +3005,7 @@ mod tests {
         assert!(
             diagnostics[0].starts_with(
                 "segment \"prod\" in the system parameter sync file matches no cluster or \
-                 replica: attribute \"cluster_name\" has the invalid \"matches\" pattern \
-                 \"^prod-[\": "
+                 replica: clause 2 has the invalid \"matches\" pattern \"^prod-[\": "
             ),
             "{}",
             diagnostics[0]
@@ -2330,11 +3022,24 @@ mod tests {
         let frontend = file_frontend();
         let file = parse(&format!(
             r#"{{
-                "segments": {{"gone": {{"cluster_name": ["gone"]}}}},
-                "rules": [{{"segment": "gone", "parameters": {{
-                    "{CLUSTER_PARAM}": true,
-                    "{REPLICA_PARAM}": false
-                }}}}]
+                "segments": {{
+                    "gone-cluster": {{
+                        "contextKind": "cluster",
+                        "clauses": [
+                            {{"attribute": "cluster_name", "op": "in", "values": ["gone"]}}
+                        ]
+                    }},
+                    "gone-replicas": {{
+                        "contextKind": "replica",
+                        "clauses": [
+                            {{"attribute": "cluster_name", "op": "in", "values": ["gone"]}}
+                        ]
+                    }}
+                }},
+                "rules": [
+                    {{"segment": "gone-cluster", "parameters": {{"{CLUSTER_PARAM}": true}}}},
+                    {{"segment": "gone-replicas", "parameters": {{"{REPLICA_PARAM}": false}}}}
+                ]
             }}"#
         ));
 
@@ -2364,7 +3069,12 @@ mod tests {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
-                "segments": {{"analytics": {{"cluster_name": ["analytics"]}}}},
+                "segments": {{"analytics": {{
+                    "contextKind": "cluster",
+                    "clauses": [
+                        {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
+                    ]
+                }}}},
                 "rules": [{{"segment": "analytics", "parameters": {{
                     "{CLUSTER_PARAM}": "maybe"
                 }}}}]
@@ -2490,7 +3200,12 @@ mod tests {
         let params = SynchronizedParameters::default();
         let file = parse(&format!(
             r#"{{
-                "segments": {{"analytics": {{"cluster_name": ["analytics"]}}}},
+                "segments": {{"analytics": {{
+                    "contextKind": "cluster",
+                    "clauses": [
+                        {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
+                    ]
+                }}}},
                 "rules": [
                     {{"segment": "analytics", "parameters": {{
                         "max_connections": 100,
