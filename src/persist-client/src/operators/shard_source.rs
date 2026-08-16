@@ -8,8 +8,124 @@
 // by the Apache License, Version 2.0.
 
 //! A source that reads from a persist shard.
+//!
+//! # For consumers
+//!
+//! [shard_source] renders a set of timely operators that continuously read a
+//! persist shard and emit its contents as a stream of [FetchedBlob]s: parts
+//! that have been downloaded from blob storage but not yet decoded. Callers
+//! decode them (e.g. via [FetchedBlob::parse]) downstream, typically on the
+//! same worker, so that decode cost scales with the number of workers.
+//!
+//! The source observes the following contract:
+//!
+//! * **Times**: all emitted times are advanced by the given `as_of`. With
+//!   [SnapshotMode::Include] the shard contents as of `as_of` are emitted at
+//!   the `as_of`; with [SnapshotMode::Exclude] only subsequent updates are.
+//! * **Frontier**: the output frontier tracks the shard's `upper`, eagerly
+//!   downgraded to the `as_of` before the snapshot is available so downstream
+//!   consumers (e.g. `persist_sink`) can rely on close frontier tracking. When
+//!   `until` is non-empty, parts lying entirely at or beyond `until` are
+//!   dropped and the source eventually completes; fine-grained filtering of
+//!   individual updates against `until` is the caller's responsibility.
+//! * **Distribution**: parts are distributed across all workers, regardless of
+//!   which worker coordinates the read.
+//! * **Filter pushdown**: `filter_fn` is consulted with each part's stats and
+//!   may keep the part, discard it without fetching, or replace its contents
+//!   with a single-row constant ([FilterResult]). A random sample of discarded
+//!   parts is fetched anyway to audit the decision.
+//! * **Errors**: conditions that are neither data-plane errors nor bugs (an
+//!   unserveable `as_of`, a missing blob after a lease timeout) are reported to
+//!   the given [ErrorHandler]. The source then freezes: it stops doing work but
+//!   retains its capabilities, so the frontier never advances past unproduced
+//!   data while a halt or dataflow restart is pending.
+//! * **Shutdown**: dropping the returned [PressOnDropButton] tokens shuts the
+//!   source down, dropping all held capabilities and abandoning in-flight work.
+//!
+//! # For implementors
+//!
+//! The source is split into two synchronous timely operators, each paired with
+//! a tokio task that owns all async persist work. Operators and tasks
+//! communicate over channels; tasks wake their operator through a
+//! [SyncActivator]-backed [ArcActivator], which also unparks a parked worker.
+//!
+//! ```text
+//!  tokio: listen task ──(parts+leases, progress, mpsc)──> [shard_source_descs]
+//!  (chosen worker only)                                        │ exchange by assigned worker
+//!         ▲ oneshot: drop listen                               ▼
+//!         └──────────────────────────────────────────── [shard_source_fetch] (per worker)
+//!                            completed_fetches feedback        │ ▲
+//!                                                       desc   │ │ FetchedBlob
+//!                                                       (mpsc) ▼ │ (mpsc)
+//!                                                    tokio: fetch task (per worker)
+//! ```
+//!
+//! **`shard_source_descs`** runs on all workers, but only the chosen worker
+//! (hash of the name) spawns a listen task and holds capabilities. The task
+//! opens a leased reader, waits for the `start_signal`, resolves the `as_of`,
+//! and walks snapshot + listen, applying `filter_fn` and the audit budget. It
+//! splits each [LeasedBatchPart] into an [ExchangeableBatchPart] plus its
+//! [Lease] and sends both to the operator, along with progress updates that
+//! drive the operator's capability downgrades. The operator emits
+//! `(worker_idx, part)` pairs — exchanged by index — and parks each lease in a
+//! `LeaseManager` keyed by the part's time. The lease-return input (formerly
+//! the separate `shard_source_descs_return` operator) is merged in as a
+//! disconnected `completed_fetches` input.
+//!
+//! **`shard_source_fetch`** forwards each incoming desc to its fetch task,
+//! tagged with the time it was minted at, and retains a capability pair (data
+//! output + `completed_fetches` output) per time, counting how many fetches at
+//! that time are outstanding. The task echoes the time back with each result;
+//! the operator emits the [FetchedBlob] at that time's data capability and,
+//! when a time's outstanding count reaches zero, drops both of its capabilities
+//! — advancing the data frontier and releasing that time's leases. Keying by
+//! time rather than arrival order makes the operator independent of the order
+//! results come back in.
+//!
+//! **Lease lifecycle**: dropping the completed-fetches capability advances a
+//! feedback loop back into `shard_source_descs`, whose frontier advances the
+//! `LeaseManager` and drops the leases for fetched parts. The listen task — and
+//! with it the reader and its SeqNo hold, which is what actually protects
+//! unfetched parts' blobs from GC — must outlive all in-flight fetches: the
+//! operator releases it through a oneshot only once the completed-fetches
+//! frontier is empty. If the dataflow is dropped instead, the tasks are aborted
+//! via their [AbortOnDropHandle]s.
+//!
+//! **Two-phase shutdown**: both operators return a [PressOnDropButton] and so
+//! participate in `builder_async`'s coordinated shutdown. Their schedule
+//! closures use `build_reschedule` and only drop capabilities / drain inputs
+//! once *all* workers have pressed (`all_pressed`). Dropping capabilities on a
+//! local-only press would let the downstream frontier advance past times that
+//! other workers' instances still feed (cross-worker teardown skew).
+//!
+//! Subtleties worth knowing before changing this code:
+//!
+//! * [LeasedBatchPart]s panic on drop while leased; only the lease-split
+//!   [ExchangeableBatchPart] representation may cross channels, where it can be
+//!   dropped harmlessly on shutdown.
+//! * Each result carries its own time, so the operator does not depend on the
+//!   order the task returns them. Once a fetch fails the operator freezes and
+//!   must STOP draining results — a later, good result would otherwise release
+//!   a capability and advance the
+//!   frontier past data never emitted.
+//! * The fetch task's result channel is bounded: the task downloads ahead of
+//!   the operator, so an unbounded channel would let fetched blobs pile up
+//!   without limit while Timely is busy. The bound makes the task block in
+//!   `send` once the operator falls behind, restoring the implicit limit the
+//!   async operator had (its future only advanced when Timely scheduled it).
+//! * The `completed_fetches` feedback edge carries no data (`Infallible`); it
+//!   exists for its frontier, which signals cross-process fetch completion,
+//!   wakes the descs operator, and keeps that operator alive (and thus the
+//!   listen task's SeqNo hold) until all fetches finish.
+//! * Tests that step workers manually must not park indefinitely while polling
+//!   state that does not activate the worker: with the listen in a task, a
+//!   caught-up source with no listen retry timer produces no activations.
+//!
+//! [SyncActivator]: timely::scheduling::SyncActivator
+//! [ArcActivator]: mz_timely_util::activator::ArcActivator
+//! [LeasedBatchPart]: crate::fetch::LeasedBatchPart
+//! [AbortOnDropHandle]: mz_ore::task::AbortOnDropHandle
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::collections::hash_map::DefaultHasher;
@@ -30,20 +146,20 @@ use differential_dataflow::lattice::Lattice;
 use futures::stream::FuturesUnordered;
 use futures_util::StreamExt;
 use mz_ore::cast::CastFrom;
-use mz_ore::collections::CollectionExt;
 use mz_persist_types::stats::PartStats;
 use mz_persist_types::{Codec, Codec64};
-use mz_timely_util::builder_async::{
-    Event, OperatorBuilder as AsyncOperatorBuilder, PressOnDropButton,
-};
+use mz_timely_util::activator::ArcActivator;
+use mz_timely_util::builder_async::{PressOnDropButton, button};
 use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{Exchange, Pipeline};
+use timely::dataflow::operators::generic::OutputBuilder;
+use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::{Capability, CapabilitySet, ConnectLoop, Enter, Feedback, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::AntichainRef;
 use timely::progress::{Antichain, Timestamp, timestamp::Refines};
+use tokio::sync::mpsc::error::TryRecvError;
 use tracing::{debug, trace};
 
 use crate::batch::BLOB_TARGET_SIZE;
@@ -52,6 +168,7 @@ use crate::cfg::{
     USE_CRITICAL_SINCE_SOURCE,
 };
 use crate::fetch::{ExchangeableBatchPart, FetchedBlob, Lease};
+use crate::internal::paths::BlobKey;
 use crate::internal::state::BatchPart;
 use crate::stats::{STATS_AUDIT_PERCENT, STATS_FILTER_ENABLED};
 use crate::{Diagnostics, PersistClient, ShardId};
@@ -114,6 +231,19 @@ impl ErrorHandler {
         Self::Signal(Rc::new(signal_fn))
     }
 
+    /// Signal an error to an error handler from a synchronous operator. For [ErrorHandler::Halt]
+    /// this never returns; for [ErrorHandler::Signal] it returns after invoking the callback, and
+    /// the caller is responsible for "freezing": retaining its capabilities and doing no further
+    /// work, so that no spurious progress is observable while a restart is pending.
+    pub fn report_and_freeze(&self, error: anyhow::Error) {
+        match self {
+            ErrorHandler::Halt(name) => {
+                mz_ore::halt!("unhandled error in {name}: {error:#}")
+            }
+            ErrorHandler::Signal(callback) => callback(error),
+        }
+    }
+
     /// Signal an error to an error handler. This function never returns: logically it blocks until
     /// restart, though that restart might be sooner (if halting) or later (if triggering a dataflow
     /// restart, for example).
@@ -155,10 +285,10 @@ pub fn shard_source<'inner, 'outer, K, V, T, D, DT, TOuter, C>(
     desc_transformer: Option<DT>,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + 'static,
+    filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + Send + 'static,
     // If Some, an override for the default listen sleep retry parameters.
-    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
-    start_signal: impl Future<Output = ()> + 'static,
+    listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
     StreamVec<'inner, T, FetchedBlob<K, V, TOuter, D>>,
@@ -185,16 +315,11 @@ where
     // [`LeasedBatchPart`] and [`Subscribe`] or will likely run into intentional
     // panics.
     //
-    // This source is split as such:
-    // 1. Sets up `async_stream`, which only yields data (parts) on one chosen
-    //    worker. Generating also generates SeqNo leases on the chosen worker,
-    //    ensuring `part`s do not get GCed while in flight.
-    // 2. Part distribution: A timely source operator which continuously reads
-    //    from that stream, and distributes the data among workers.
-    // 3. Part fetcher: A timely operator which downloads the part's contents
-    //    from S3, and outputs them to a timely stream. Additionally, the
-    //    operator returns the `LeasedBatchPart` to the original worker, so it
-    //    can release the SeqNo lease.
+    // See the module documentation for the structure of this source: a descs
+    // operator (with a listen task minting parts and leases on one chosen
+    // worker) distributing parts to a fetch operator (with a fetch task
+    // downloading their contents) on each worker, with a feedback loop of
+    // completed fetches that releases the leases.
 
     let chosen_worker = usize::cast_from(name.hashed()) % scope.peers();
 
@@ -296,6 +421,22 @@ impl<T: Timestamp + Codec64> LeaseManager<T> {
     }
 }
 
+/// A message from the listen task to the [shard_source_descs] operator.
+enum ListenMessage<T> {
+    /// The resolved `as_of`; the operator downgrades its capabilities to it.
+    AsOf(Antichain<T>),
+    /// Parts minted at `ts`, each with the lease that protects it from GC.
+    Parts {
+        ts: T,
+        parts: Vec<(usize, ExchangeableBatchPart<T>, Lease)>,
+    },
+    /// Listen progress; the operator downgrades its capabilities. The empty
+    /// antichain indicates the listen is complete (`until` was reached).
+    Progress(Antichain<T>),
+    /// A fatal error; the operator reports it and freezes.
+    Error(anyhow::Error),
+}
+
 pub(crate) fn shard_source_descs<'outer, K, V, D, TOuter>(
     scope: Scope<'outer, TOuter>,
     name: &str,
@@ -308,10 +449,10 @@ pub(crate) fn shard_source_descs<'outer, K, V, D, TOuter>(
     chosen_worker: usize,
     key_schema: Arc<K::Schema>,
     val_schema: Arc<V::Schema>,
-    mut filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + 'static,
+    mut filter_fn: impl FnMut(&PartStats, AntichainRef<TOuter>) -> FilterResult + Send + 'static,
     // If Some, an override for the default listen sleep retry parameters.
-    listen_sleep: Option<impl Fn() -> RetryParameters + 'static>,
-    start_signal: impl Future<Output = ()> + 'static,
+    listen_sleep: Option<impl Fn() -> RetryParameters + Send + 'static>,
+    start_signal: impl Future<Output = ()> + Send + 'static,
     error_handler: ErrorHandler,
 ) -> (
     StreamVec<'outer, TOuter, (usize, ExchangeableBatchPart<TOuter>)>,
@@ -326,74 +467,53 @@ where
 {
     let worker_index = scope.index();
     let num_workers = scope.peers();
-
-    // This is a generator that sets up an async `Stream` that can be continuously polled to get the
-    // values that are `yield`-ed from it's body.
     let name_owned = name.to_owned();
 
-    // Create a shared slot between the operator to store the listen handle
-    let listen_handle = Rc::new(RefCell::new(None));
-    let return_listen_handle = Rc::clone(&listen_handle);
-
-    // Create a oneshot channel to give the part returner a SubscriptionLeaseReturner
-    let (tx, rx) = tokio::sync::oneshot::channel::<Rc<RefCell<LeaseManager<TOuter>>>>();
-    let mut builder = AsyncOperatorBuilder::new(
-        format!("shard_source_descs_return({})", name),
-        scope.clone(),
-    );
-    let mut completed_fetches = builder.new_disconnected_input(completed_fetches_stream, Pipeline);
-    // This operator doesn't need to use a token because it naturally exits when its input
-    // frontier reaches the empty antichain.
-    builder.build(move |_caps| async move {
-        let Ok(leases) = rx.await else {
-            // Either we're not the chosen worker or the dataflow was shutdown before the
-            // subscriber was even created.
-            return;
-        };
-        while let Some(event) = completed_fetches.next().await {
-            let Event::Progress(frontier) = event else {
-                continue;
-            };
-            leases.borrow_mut().advance_to(frontier.borrow());
-        }
-        // Make it explicit that the subscriber is kept alive until we have finished returning parts
-        drop(return_listen_handle);
-    });
-
     let mut builder =
-        AsyncOperatorBuilder::new(format!("shard_source_descs({})", name), scope.clone());
-    let (descs_output, descs_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
+        OperatorBuilderRc::new(format!("shard_source_descs({})", name), scope.clone());
+    let info = builder.operator_info();
+    // NB: create the output before the input, so that the input's explicit
+    // empty connection below disconnects it from the right output port.
+    let (descs_output, descs_stream) =
+        builder.new_output::<Vec<(usize, ExchangeableBatchPart<TOuter>)>>();
+    let mut descs_output = OutputBuilder::from(descs_output);
+    // The completed fetches input is disconnected from the output: it only
+    // drives lease returns (merging in what used to be the separate
+    // `shard_source_descs_return` operator), not output progress.
+    let mut completed_fetches =
+        builder.new_input_connection(completed_fetches_stream, Pipeline, []);
 
-    #[allow(clippy::await_holding_refcell_ref)]
-    let shutdown_button = builder.build(move |caps| async move {
-        let mut cap_set = CapabilitySet::from_elem(caps.into_element());
+    // Only the chosen worker produces parts. It spawns a listen task that owns
+    // all async work (reader, snapshot, listen loop, stats-based filtering) and
+    // communicates with the operator over a channel. The other workers build
+    // the same operator shape but hold no capabilities.
+    let chosen_state = (worker_index == chosen_worker).then(|| {
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::unbounded_channel::<ListenMessage<TOuter>>();
+        // Fired by the operator once the completed-fetches frontier is empty,
+        // i.e. all fetches are done. The task holds the listen handle (and with
+        // it the reader's seqno hold) until then.
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let (activator, activation_ack) = ArcActivator::new(scope.clone(), &info);
 
-        // Only one worker is responsible for distributing parts
-        if worker_index != chosen_worker {
-            trace!(
-                "We are not the chosen worker ({}), exiting...",
-                chosen_worker
-            );
-            return;
-        }
-
-        // Internally, the `open_leased_reader` call registers a new LeasedReaderId and then fires
-        // up a background tokio task to heartbeat it. It is possible that we might get a
-        // particularly adversarial scheduling where the CRDB query to register the id is sent and
-        // then our Future is not polled again for a long time, resulting is us never spawning the
-        // heartbeat task. Run reader creation in a task to attempt to defend against this.
-        //
-        // TODO: Really we likely need to swap the inners of all persist operators to be
-        // communicating with a tokio task over a channel, but that's much much harder, so for now
-        // we whack the moles as we see them.
-        let mut read = mz_ore::task::spawn(|| format!("shard_source_reader({})", name_owned), {
-            let diagnostics = Diagnostics {
-                handle_purpose: format!("shard_source({})", name_owned),
-                shard_name: name_owned.clone(),
+        let task = mz_ore::task::spawn(|| format!("shard_source_descs({})", name_owned), {
+            let name = name_owned.clone();
+            // Report a fatal error to the operator and stop the task.
+            let error = |e: anyhow::Error,
+                         msg_tx: &tokio::sync::mpsc::UnboundedSender<ListenMessage<TOuter>>,
+                         activator: &ArcActivator| {
+                let _ = msg_tx.send(ListenMessage::Error(e));
+                activator.activate();
             };
             async move {
+                // Internally, the `open_leased_reader` call registers a new LeasedReaderId and
+                // then fires up a background tokio task to heartbeat it. Since we are already
+                // running inside a task here, the heartbeat task is spawned promptly.
                 let client = client.await;
-                client
+                let diagnostics = Diagnostics {
+                    handle_purpose: format!("shard_source({})", name),
+                    shard_name: name.clone(),
+                };
+                let mut read = client
                     .open_leased_reader::<K, V, TOuter, D>(
                         shard_id,
                         key_schema,
@@ -402,223 +522,374 @@ where
                         USE_CRITICAL_SINCE_SOURCE.get(client.dyncfgs()),
                     )
                     .await
-            }
-        })
-        .await
-        .expect("could not open persist shard");
+                    .expect("could not open persist shard");
 
-        // Wait for the start signal only after we have obtained a read handle. This makes "cannot
-        // serve requested as_of" panics caused by (database-issues#8729) significantly less
-        // likely.
-        let () = start_signal.await;
+                // Wait for the start signal only after we have obtained a read handle. This
+                // makes "cannot serve requested as_of" panics caused by (database-issues#8729)
+                // significantly less likely.
+                let () = start_signal.await;
 
-        let cfg = read.cfg.clone();
-        let metrics = Arc::clone(&read.metrics);
+                let cfg = read.cfg.clone();
+                let metrics = Arc::clone(&read.metrics);
 
-        let as_of = as_of.unwrap_or_else(|| read.since().clone());
+                let as_of = as_of.unwrap_or_else(|| read.since().clone());
 
-        // Eagerly downgrade our frontier to the initial as_of. This makes sure
-        // that the output frontier of the `persist_source` closely tracks the
-        // `upper` frontier of the persist shard. It might be that the snapshot
-        // for `as_of` is not initially available yet, but this makes sure we
-        // already downgrade to it.
-        //
-        // Downstream consumers might rely on close frontier tracking for making
-        // progress. For example, the `persist_sink` needs to know the
-        // up-to-date upper of the output shard to make progress because it will
-        // only write out new data once it knows that earlier writes went
-        // through, including the initial downgrade of the shard upper to the
-        // `as_of`.
-        //
-        // NOTE: We have to do this before our `snapshot()` call because that
-        // will block when there is no data yet available in the shard.
-        cap_set.downgrade(as_of.clone());
+                // Eagerly downgrade our frontier to the initial as_of. This makes sure
+                // that the output frontier of the `persist_source` closely tracks the
+                // `upper` frontier of the persist shard. It might be that the snapshot
+                // for `as_of` is not initially available yet, but this makes sure we
+                // already downgrade to it.
+                //
+                // Downstream consumers might rely on close frontier tracking for making
+                // progress. For example, the `persist_sink` needs to know the
+                // up-to-date upper of the output shard to make progress because it will
+                // only write out new data once it knows that earlier writes went
+                // through, including the initial downgrade of the shard upper to the
+                // `as_of`.
+                //
+                // NOTE: We have to do this before our `snapshot()` call because that
+                // will block when there is no data yet available in the shard.
+                if msg_tx.send(ListenMessage::AsOf(as_of.clone())).is_err() {
+                    return;
+                }
+                activator.activate();
 
-        let mut snapshot_parts =
-            match snapshot_mode {
-                SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
-                    Ok(parts) => parts,
-                    Err(e) => error_handler
-                        .report_and_stop(anyhow!(
-                            "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
-                        ))
-                        .await,
-                },
-                SnapshotMode::Exclude => vec![],
-            };
-
-        // We're about to start producing parts to be fetched whose leases will be returned by the
-        // `shard_source_descs_return` operator above. In order for that operator to successfully
-        // return the leases we send it the lease returner associated with our shared subscriber.
-        let leases = Rc::new(RefCell::new(LeaseManager::new()));
-        tx.send(Rc::clone(&leases))
-            .expect("lease returner exited before desc producer");
-
-        // Recent shard upper observed at hydration time. While the source is still
-        // catching up to it we coalesce frontier downgrades (see the loop below); once
-        // `current_frontier` reaches it the source is live and we forward every batch's
-        // progress so steady-state frontier tracking stays tight. Read before `listen`
-        // consumes `read`.
-        let replay_upper = read.shared_upper();
-
-        // Store the listen handle in the shared slot so that it stays alive until both operators
-        // exit
-        let mut listen = listen_handle.borrow_mut();
-        let listen = match read.listen(as_of.clone()).await {
-            Ok(handle) => listen.insert(handle),
-            Err(e) => {
-                error_handler
-                    .report_and_stop(anyhow!(
-                        "{name_owned}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
-                    ))
-                    .await
-            }
-        };
-
-        let listen_retry = listen_sleep.as_ref().map(|retry| retry());
-
-        // The head of the stream is enriched with the snapshot parts if they exist
-        let listen_head = if !snapshot_parts.is_empty() {
-            let (mut parts, progress) = listen.next(listen_retry).await;
-            snapshot_parts.append(&mut parts);
-            futures::stream::iter(Some((snapshot_parts, progress)))
-        } else {
-            futures::stream::iter(None)
-        };
-
-        // The tail of the stream is all subsequent parts
-        let listen_tail = futures::stream::unfold(listen, |listen| async move {
-            Some((listen.next(listen_retry).await, listen))
-        });
-
-        let mut shard_stream = pin!(listen_head.chain(listen_tail));
-
-        // Ideally, we'd like our audit overhead to be proportional to the actual amount of "real"
-        // work we're doing in the source. So: start with a small, constant budget; add to the
-        // budget when we do real work; and skip auditing a part if we don't have the budget for it.
-        let mut audit_budget_bytes = u64::cast_from(BLOB_TARGET_SIZE.get(&cfg).saturating_mul(2));
-
-        // All future updates will be timestamped after this frontier.
-        let mut current_frontier = as_of.clone();
-
-        // While catching up to `replay_upper`, coalesce frontier downgrades until at
-        // least this many encoded bytes have been emitted at the held capability. This
-        // turns a long historical replay (one persist batch ~ one write ~ 1/s) from one
-        // progress round per batch into a handful of larger steps, which is what bounds
-        // the number of downstream arrangement-maintenance passes. `0` disables it. The
-        // budget caps how much the downstream batcher stages before it can seal, so we
-        // never trade the per-batch storm for an unbounded single batch.
-        let coalesce_target = u64::cast_from(SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES.get(&cfg));
-        // Encoded bytes emitted since the last forwarded progress.
-        let mut coalesced_bytes: u64 = 0;
-
-        // If `until.less_equal(current_frontier)`, it means that all subsequent batches will contain only
-        // times greater or equal to `until`, which means they can be dropped in their entirety.
-        while !PartialOrder::less_equal(&until, &current_frontier) {
-            let (parts, progress) = shard_stream.next().await.expect("infinite stream");
-
-            let mut batch_bytes: u64 = 0;
-
-            // Emit the part at the `(ts, 0)` time. The `granular_backpressure`
-            // operator will refine this further, if its enabled.
-            let current_ts = current_frontier
-                .as_option()
-                .expect("until should always be <= the empty frontier");
-            let session_cap = cap_set.delayed(current_ts);
-
-            for mut part_desc in parts {
-                // TODO: Push more of this logic into LeasedBatchPart like we've
-                // done for project?
-                if STATS_FILTER_ENABLED.get(&cfg) {
-                    let filter_result = match &part_desc.part {
-                        BatchPart::Hollow(x) => {
-                            let should_fetch =
-                                x.stats.as_ref().map_or(FilterResult::Keep, |stats| {
-                                    filter_fn(&stats.decode(), current_frontier.borrow())
-                                });
-                            should_fetch
+                let mut snapshot_parts = match snapshot_mode {
+                    SnapshotMode::Include => match read.snapshot(as_of.clone()).await {
+                        Ok(parts) => parts,
+                        Err(e) => {
+                            error(
+                                anyhow!(
+                                    "{name}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
+                                ),
+                                &msg_tx,
+                                &activator,
+                            );
+                            return;
                         }
-                        BatchPart::Inline { .. } => FilterResult::Keep,
-                    };
-                    // Apply the filter: discard or substitute the part if required.
-                    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
-                    match filter_result {
-                        FilterResult::Keep => {
-                            audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
-                        }
-                        FilterResult::Discard => {
-                            metrics.pushdown.parts_filtered_count.inc();
-                            metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
-                            let should_audit = match &part_desc.part {
+                    },
+                    SnapshotMode::Exclude => vec![],
+                };
+
+                // Recent shard upper observed at hydration time. While the source is
+                // still catching up to it we coalesce frontier downgrades (see the loop
+                // below); once `current_frontier` reaches it the source is live and we
+                // forward every batch's progress so steady-state frontier tracking stays
+                // tight. Read before `listen` consumes `read`.
+                let replay_upper = read.shared_upper();
+
+                let mut listen = match read.listen(as_of.clone()).await {
+                    Ok(handle) => handle,
+                    Err(e) => {
+                        error(
+                            anyhow!(
+                                "{name}: {shard_id} cannot serve requested as_of {as_of:?}: {e:?}"
+                            ),
+                            &msg_tx,
+                            &activator,
+                        );
+                        return;
+                    }
+                };
+
+                let listen_retry = listen_sleep.as_ref().map(|retry| retry());
+
+                // The head of the stream is enriched with the snapshot parts if they exist
+                let listen_head = if !snapshot_parts.is_empty() {
+                    let (mut parts, progress) = listen.next(listen_retry).await;
+                    snapshot_parts.append(&mut parts);
+                    futures::stream::iter(Some((snapshot_parts, progress)))
+                } else {
+                    futures::stream::iter(None)
+                };
+
+                // The tail of the stream is all subsequent parts
+                let listen_tail = futures::stream::unfold(&mut listen, |listen| async move {
+                    Some((listen.next(listen_retry).await, listen))
+                });
+
+                let mut shard_stream = pin!(listen_head.chain(listen_tail));
+
+                // Ideally, we'd like our audit overhead to be proportional to the actual amount
+                // of "real" work we're doing in the source. So: start with a small, constant
+                // budget; add to the budget when we do real work; and skip auditing a part if we
+                // don't have the budget for it.
+                let mut audit_budget_bytes =
+                    u64::cast_from(BLOB_TARGET_SIZE.get(&cfg).saturating_mul(2));
+
+                // All future updates will be timestamped after this frontier.
+                let mut current_frontier = as_of.clone();
+
+                // While catching up to `replay_upper`, coalesce frontier downgrades until
+                // at least this many encoded bytes have been emitted at the held
+                // capability. This turns a long historical replay (one persist batch ~ one
+                // write ~ 1/s) from one progress round per batch into a handful of larger
+                // steps, which is what bounds the number of downstream
+                // arrangement-maintenance passes. `0` disables it. The budget caps how much
+                // the downstream batcher stages before it can seal, so we never trade the
+                // per-batch storm for an unbounded single batch.
+                let coalesce_target =
+                    u64::cast_from(SOURCE_HYDRATION_FRONTIER_COALESCE_BYTES.get(&cfg));
+                // Encoded bytes emitted since the last forwarded progress.
+                let mut coalesced_bytes: u64 = 0;
+
+                // If `until.less_equal(current_frontier)`, it means that all subsequent batches
+                // will contain only times greater or equal to `until`, which means they can be
+                // dropped in their entirety.
+                while !PartialOrder::less_equal(&until, &current_frontier) {
+                    let (parts, progress) = shard_stream.next().await.expect("infinite stream");
+
+                    let current_ts = current_frontier
+                        .as_option()
+                        .expect("until should always be <= the empty frontier");
+
+                    let mut out = Vec::with_capacity(parts.len());
+                    let mut batch_bytes: u64 = 0;
+                    for mut part_desc in parts {
+                        // TODO: Push more of this logic into LeasedBatchPart like we've
+                        // done for project?
+                        if STATS_FILTER_ENABLED.get(&cfg) {
+                            let filter_result = match &part_desc.part {
                                 BatchPart::Hollow(x) => {
-                                    let mut h = DefaultHasher::new();
-                                    x.key.hash(&mut h);
-                                    usize::cast_from(h.finish()) % 100
-                                        < STATS_AUDIT_PERCENT.get(&cfg)
+                                    let should_fetch =
+                                        x.stats.as_ref().map_or(FilterResult::Keep, |stats| {
+                                            filter_fn(&stats.decode(), current_frontier.borrow())
+                                        });
+                                    should_fetch
                                 }
-                                BatchPart::Inline { .. } => false,
+                                BatchPart::Inline { .. } => FilterResult::Keep,
                             };
-                            if should_audit && bytes < audit_budget_bytes {
-                                audit_budget_bytes -= bytes;
-                                metrics.pushdown.parts_audited_count.inc();
-                                metrics.pushdown.parts_audited_bytes.inc_by(bytes);
-                                part_desc.request_filter_pushdown_audit();
+                            // Apply the filter: discard or substitute the part if required.
+                            let bytes = u64::cast_from(part_desc.encoded_size_bytes());
+                            match filter_result {
+                                FilterResult::Keep => {
+                                    audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
+                                }
+                                FilterResult::Discard => {
+                                    metrics.pushdown.parts_filtered_count.inc();
+                                    metrics.pushdown.parts_filtered_bytes.inc_by(bytes);
+                                    let should_audit = match &part_desc.part {
+                                        BatchPart::Hollow(x) => {
+                                            let mut h = DefaultHasher::new();
+                                            x.key.hash(&mut h);
+                                            usize::cast_from(h.finish()) % 100
+                                                < STATS_AUDIT_PERCENT.get(&cfg)
+                                        }
+                                        BatchPart::Inline { .. } => false,
+                                    };
+                                    if should_audit && bytes < audit_budget_bytes {
+                                        audit_budget_bytes -= bytes;
+                                        metrics.pushdown.parts_audited_count.inc();
+                                        metrics.pushdown.parts_audited_bytes.inc_by(bytes);
+                                        part_desc.request_filter_pushdown_audit();
+                                    } else {
+                                        debug!(
+                                            "skipping part because of stats filter {:?}",
+                                            part_desc.part.stats()
+                                        );
+                                        continue;
+                                    }
+                                }
+                                FilterResult::ReplaceWith { key, val } => {
+                                    part_desc.maybe_optimize(&cfg, key, val);
+                                    audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
+                                }
+                            }
+                            let bytes = u64::cast_from(part_desc.encoded_size_bytes());
+                            if part_desc.part.is_inline() {
+                                metrics.pushdown.parts_inline_count.inc();
+                                metrics.pushdown.parts_inline_bytes.inc_by(bytes);
                             } else {
-                                debug!(
-                                    "skipping part because of stats filter {:?}",
-                                    part_desc.part.stats()
-                                );
-                                continue;
+                                metrics.pushdown.parts_fetched_count.inc();
+                                metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
                             }
                         }
-                        FilterResult::ReplaceWith { key, val } => {
-                            part_desc.maybe_optimize(&cfg, key, val);
-                            audit_budget_bytes = audit_budget_bytes.saturating_add(bytes);
+
+                        // Give the part to a random worker. This isn't round robin in an attempt
+                        // to avoid skew issues: if your parts alternate size large, small, then
+                        // you'll end up only using half of your workers.
+                        //
+                        // There's certainly some other things we could be doing instead here, but
+                        // this has seemed to work okay so far. Continue to revisit as necessary.
+                        let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
+                        batch_bytes = batch_bytes
+                            .saturating_add(u64::cast_from(part_desc.encoded_size_bytes()));
+                        let (part, lease) = part_desc.into_exchangeable_part();
+                        out.push((worker_idx, part, lease));
+                    }
+
+                    if !out.is_empty() {
+                        let msg = ListenMessage::Parts {
+                            ts: current_ts.clone(),
+                            parts: out,
+                        };
+                        if msg_tx.send(msg).is_err() {
+                            return;
                         }
                     }
-                    let bytes = u64::cast_from(part_desc.encoded_size_bytes());
-                    if part_desc.part.is_inline() {
-                        metrics.pushdown.parts_inline_count.inc();
-                        metrics.pushdown.parts_inline_bytes.inc_by(bytes);
-                    } else {
-                        metrics.pushdown.parts_fetched_count.inc();
-                        metrics.pushdown.parts_fetched_bytes.inc_by(bytes);
+
+                    current_frontier.join_assign(&progress);
+                    coalesced_bytes = coalesced_bytes.saturating_add(batch_bytes);
+
+                    // Coalesce the frontier downgrade while still catching up to
+                    // `replay_upper` and below the byte budget. Parts carry their real
+                    // timestamps regardless (they were already sent above), so holding the
+                    // frontier back only batches downstream progress rounds. Once live
+                    // (caught up to `replay_upper`) or with coalescing disabled we forward
+                    // every batch, keeping steady-state tracking tight for consumers like
+                    // `persist_sink`.
+                    let caught_up = PartialOrder::less_equal(&replay_upper, &current_frontier);
+                    let coalesce =
+                        coalesce_target > 0 && !caught_up && coalesced_bytes < coalesce_target;
+                    if !coalesce {
+                        coalesced_bytes = 0;
+                        if msg_tx
+                            .send(ListenMessage::Progress(current_frontier.clone()))
+                            .is_err()
+                        {
+                            return;
+                        }
                     }
+
+                    // Activate every iteration so the operator drains and emits parts even
+                    // while a progress downgrade is being withheld.
+                    activator.activate();
                 }
 
-                // Give the part to a random worker. This isn't round robin in an attempt to avoid
-                // skew issues: if your parts alternate size large, small, then you'll end up only
-                // using half of your workers.
-                //
-                // There's certainly some other things we could be doing instead here, but this has
-                // seemed to work okay so far. Continue to revisit as necessary.
-                let worker_idx = usize::cast_from(Instant::now().hashed()) % num_workers;
-                batch_bytes =
-                    batch_bytes.saturating_add(u64::cast_from(part_desc.encoded_size_bytes()));
-                let (part, lease) = part_desc.into_exchangeable_part();
-                leases.borrow_mut().push_at(current_ts.clone(), lease);
-                descs_output.give(&session_cap, (worker_idx, part));
+                // Signal completion: all subsequent parts would be filtered by `until`.
+                let _ = msg_tx.send(ListenMessage::Progress(Antichain::new()));
+                activator.activate();
+
+                // Keep the listen handle (and with it the reader's seqno hold, which protects
+                // the leased parts from GC) alive until the operator signals that all fetches
+                // have completed; `listen` only drops when this task exits. If the operator is
+                // dropped instead, this task is aborted and the handles are dropped with it.
+                let _ = shutdown_rx.await;
+            }
+        })
+        .abort_on_drop();
+
+        (msg_rx, Some(shutdown_tx), activation_ack, task)
+    });
+
+    let (mut shutdown_handle, shutdown_button) = button(scope, info.address);
+
+    builder.build_reschedule(move |capabilities| {
+        let [cap]: [_; 1] = capabilities.try_into().expect("one capability per output");
+        // Only the chosen worker produces parts; the others hold no
+        // capabilities.
+        let mut cap_set = if worker_index == chosen_worker {
+            CapabilitySet::from_elem(cap)
+        } else {
+            trace!(
+                "We are not the chosen worker ({}), exiting...",
+                chosen_worker
+            );
+            CapabilitySet::new()
+        };
+        // Leases for parts that have been emitted but whose fetch has not yet
+        // completed, keyed by the timestamp they were emitted at. Advanced by
+        // the completed fetches frontier.
+        let mut leases = LeaseManager::new();
+        let mut chosen_state = chosen_state;
+        // Set once `error_handler` has been notified: the operator stops doing
+        // work but retains its capabilities so the frontier does not advance.
+        let mut failed = false;
+
+        move |frontiers| {
+            // Two-phase shutdown, mirroring `builder_async`: only once *all*
+            // workers have pressed do we drop capabilities and drain inputs.
+            // Dropping caps on a local-only press would let the downstream
+            // frontier advance past times other workers' instances still feed.
+            if shutdown_handle.local_pressed() {
+                return if shutdown_handle.all_pressed() {
+                    cap_set = CapabilitySet::new();
+                    chosen_state = None;
+                    completed_fetches.for_each(|_cap, _data| {});
+                    false
+                } else {
+                    // Local press only: wedge. Keep capabilities and leave the
+                    // input undrained so its pending messages hold the frontier.
+                    true
+                };
             }
 
-            current_frontier.join_assign(&progress);
-            coalesced_bytes = coalesced_bytes.saturating_add(batch_bytes);
+            // Drain the completed fetches input. It carries no data
+            // (`Infallible`); only its frontier matters.
+            completed_fetches.for_each(|_cap, _data| {});
 
-            // Coalesce the frontier downgrade while still catching up to `replay_upper`
-            // and below the byte budget. Parts carry their real timestamps regardless, so
-            // holding the frontier back only batches downstream progress rounds. Once live
-            // (caught up to `replay_upper`) or with coalescing disabled we forward every
-            // batch, keeping steady-state tracking tight for consumers like `persist_sink`.
-            let caught_up = PartialOrder::less_equal(&replay_upper, &current_frontier);
-            let coalesce = coalesce_target > 0 && !caught_up && coalesced_bytes < coalesce_target;
-            if !coalesce {
-                coalesced_bytes = 0;
-                cap_set.downgrade(current_frontier.iter());
+            let Some((msg_rx, shutdown_tx, activation_ack, task)) = chosen_state.as_mut() else {
+                // Non-chosen workers have nothing to do.
+                return true;
+            };
+            // Keep the listen task alive for as long as the operator runs.
+            let _ = &task;
+            activation_ack.ack();
+
+            // Apply the completed fetches frontier to the leases.
+            let completed_frontier = frontiers[0].frontier();
+            leases.advance_to(completed_frontier);
+            if completed_frontier.is_empty() {
+                // All fetches have completed; allow the listen task to drop the
+                // listen handle and exit.
+                if let Some(tx) = shutdown_tx.take() {
+                    let _ = tx.send(());
+                }
             }
+
+            if failed {
+                // Frozen: retain capabilities so the frontier does not advance.
+                // Every error path in the listen task sends `Error` as its final
+                // message and returns, so `msg_rx` is empty forever once we get
+                // here; no need to keep draining it.
+                return true;
+            }
+
+            // Drain messages from the listen task.
+            loop {
+                match msg_rx.try_recv() {
+                    Ok(ListenMessage::AsOf(as_of)) => {
+                        cap_set.downgrade(as_of.iter());
+                    }
+                    Ok(ListenMessage::Parts { ts, parts }) => {
+                        let session_cap = cap_set.delayed(&ts);
+                        let mut output = descs_output.activate();
+                        let mut session = output.session(&session_cap);
+                        for (worker_idx, part, lease) in parts {
+                            leases.push_at(ts.clone(), lease);
+                            session.give((worker_idx, part));
+                        }
+                    }
+                    Ok(ListenMessage::Progress(progress)) => {
+                        cap_set.downgrade(progress.iter());
+                    }
+                    Ok(ListenMessage::Error(e)) => {
+                        // Report the error and freeze: capabilities are retained
+                        // so that no spurious progress is observable while a
+                        // restart is pending.
+                        error_handler.report_and_freeze(e);
+                        failed = true;
+                        break;
+                    }
+                    Err(TryRecvError::Empty) => break,
+                    Err(TryRecvError::Disconnected) => break,
+                }
+            }
+
+            // Keep the operator alive; it is torn down via the shutdown button.
+            true
         }
     });
 
     (descs_stream, shutdown_button.press_on_drop())
 }
+
+/// Capacity of the bounded channel carrying fetch results from the fetch task
+/// back to [shard_source_fetch]. This is only a hand-off buffer between the
+/// task and the operator. The number of parts held resident is bounded
+/// separately by `max_concurrency` (see the fetch loop), so this can stay
+/// small.
+const FETCH_RESULT_CHANNEL_CAPACITY: usize = 4;
 
 pub(crate) fn shard_source_fetch<'inner, K, V, T, D, TInner>(
     descs: StreamVec<'inner, TInner, (usize, ExchangeableBatchPart<T>)>,
@@ -641,149 +912,292 @@ where
     D: Monoid + Codec64 + Send + Sync,
     TInner: Timestamp + Refines<T>,
 {
+    let scope = descs.scope();
     let mut builder =
-        AsyncOperatorBuilder::new(format!("shard_source_fetch({})", name), descs.scope());
-    let (fetched_output, fetched_stream) = builder.new_output::<CapacityContainerBuilder<_>>();
-    let (completed_fetches_output, completed_fetches_stream) =
-        builder.new_output::<CapacityContainerBuilder<Vec<Infallible>>>();
-    let mut descs_input = builder.new_input_for_many(
+        OperatorBuilderRc::new(format!("shard_source_fetch({})", name), scope.clone());
+    let info = builder.operator_info();
+    // NB: create the outputs before the input, so that the input's default
+    // connection covers both outputs.
+    let (fetched_output, fetched_stream) = builder.new_output::<Vec<FetchedBlob<K, V, T, D>>>();
+    let mut fetched_output = OutputBuilder::from(fetched_output);
+    let (_completed_fetches_output, completed_fetches_stream) =
+        builder.new_output::<Vec<Infallible>>();
+    let mut descs_input = builder.new_input(
         descs,
         Exchange::new(|&(i, _): &(usize, _)| u64::cast_from(i)),
-        [&fetched_output, &completed_fetches_output],
     );
     let name_owned = name.to_owned();
 
-    let shutdown_button = builder.build(move |_capabilities| async move {
-        // Open the fetcher in a task to defend against an adversarial schedule
-        // delaying its background work, and read the concurrency dyncfg while we
-        // hold the client. See the equivalent reasoning in `shard_source_descs`.
-        let (fetcher, max_concurrency) =
-            mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
-                let diagnostics = Diagnostics {
-                    shard_name: name_owned.clone(),
-                    handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
-                };
-                async move {
-                    let client = client.await;
-                    // Up to this many part fetches run concurrently to amortize
-                    // the blob-store round-trip, which dominates when there are
-                    // many small parts. Results are keyed by time below, so
-                    // completions in any order are fine; total in-flight bytes
-                    // stay bounded by the fetch semaphore inside
-                    // `fetch_leased_part`.
-                    let max_concurrency = SOURCE_FETCH_CONCURRENCY.get(client.dyncfgs()).max(1);
-                    let fetcher = client
-                        .create_batch_fetcher::<K, V, T, D>(
-                            shard_id,
-                            key_schema,
-                            val_schema,
-                            is_transient,
-                            diagnostics,
-                        )
-                        .await
-                        .expect("shard codecs should not change");
-                    (fetcher, max_concurrency)
-                }
-            })
-            .await;
+    // Channels between the operator and the fetch task: descs flow to the task,
+    // fetch results flow back. On a missing blob the task attaches the minting
+    // reader's lease diagnostics so the operator can distinguish a lease expiry
+    // from a GC bug. The task wakes the operator through the activator after
+    // each result.
+    //
+    // Each desc is tagged with the time it was minted at; the task echoes that
+    // time back with the result so the operator can emit at the right
+    // capability without relying on the order results come back in.
+    //
+    // The result channel is *bounded*: the fetch task downloads parts ahead of
+    // the operator (which only drains when Timely schedules it), so an unbounded
+    // channel would let fetched blobs, the memory-heavy payloads, pile up
+    // without limit whenever Timely is busy and Tokio keeps fetching. The fetch
+    // task never blocks the loop on a full channel (see the fetch loop for why);
+    // the number of resident parts is instead bounded by `max_concurrency`. (The
+    // persist fetch semaphore bounds total in-flight *bytes*; this is the coarser
+    // per-operator count bound.)
+    let (desc_tx, mut desc_rx) =
+        tokio::sync::mpsc::unbounded_channel::<(TInner, ExchangeableBatchPart<T>)>();
+    let (blob_tx, blob_rx) = tokio::sync::mpsc::channel::<(
+        TInner,
+        Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>,
+    )>(FETCH_RESULT_CHANNEL_CAPACITY);
+    let (activator, activation_ack) = ArcActivator::new(scope.clone(), &info);
 
-        // Fetch one part on a per-call clone of the fetcher (cheap: shares the
-        // schema cache), carrying the part's input capabilities through so they
-        // come back with the result. The missing-blob diagnostics round-trip
-        // happens inside the future, so the error surfaces only after the fetch
-        // has truly failed.
-        let fetch_one = |caps: [Capability<TInner>; 2], part: ExchangeableBatchPart<T>| {
-            let mut fetcher = fetcher.clone();
-            async move {
-                let reader_id = part.reader_id().clone();
-                let fetched = fetcher
-                    .fetch_leased_part(part)
-                    .await
-                    .expect("shard_id should match across all workers");
-                let fetched = match fetched {
-                    Ok(fetched) => Ok(fetched),
-                    Err(blob_key) => {
-                        // Ideally, readers should never encounter a missing blob. They place a
-                        // seqno hold as they consume their snapshot/listen, preventing any blobs
-                        // they need from being deleted by garbage collection, and all blob
-                        // implementations are linearizable so there should be no possibility of
-                        // stale reads.
-                        //
-                        // However, it is possible for a lease to expire given a sustained period
-                        // of downtime, which could allow parts we expect to exist to be
-                        // deleted... at which point our best option is to request a restart.
-                        // Check the state of the minting reader's lease to tell the two cases
-                        // apart.
-                        let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
-                        Err(anyhow!(
-                            "batch fetcher could not fetch batch part {}: {}",
-                            blob_key,
-                            diagnostics
-                        ))
-                    }
-                };
-                (caps, fetched)
-            }
+    // The fetch task owns the `BatchFetcher` and performs all async work:
+    // fetcher creation and the per-part downloads.
+    let task = mz_ore::task::spawn(|| format!("shard_source_fetch({})", name_owned), {
+        let diagnostics = Diagnostics {
+            shard_name: name_owned.clone(),
+            handle_purpose: format!("shard_source_fetch batch fetcher {}", name_owned),
         };
+        async move {
+            let client = client.await;
+            // How many part fetches to run at once so blob-store round-trips
+            // overlap. `1` restores the serial behavior. Read once at startup;
+            // changing it takes effect on the next restart.
+            let max_concurrency = SOURCE_FETCH_CONCURRENCY.get(client.dyncfgs()).max(1);
+            let fetcher = client
+                .create_batch_fetcher::<K, V, T, D>(
+                    shard_id,
+                    key_schema,
+                    val_schema,
+                    is_transient,
+                    diagnostics,
+                )
+                .await
+                .expect("shard codecs should not change");
 
-        // Descs accepted from the input but not yet handed to a fetch, FIFO.
-        // Each carries its input capabilities (data + completed-fetches), so
-        // buffering here holds no progress hostage; it only bounds how many
-        // fetches run at once (and thus how many parts are resident in memory).
-        // Timely tracks the frontier through these capabilities: it advances
-        // past a time only once every fetch minted at that time has completed
-        // and dropped its clones, releasing the parts' leases on the chosen
-        // worker via the completed-fetches feedback. Carrying capabilities
-        // rather than a separate time-keyed map makes correctness independent of
-        // the order results come back in.
-        let mut pending: VecDeque<([Capability<TInner>; 2], ExchangeableBatchPart<T>)> =
-            VecDeque::new();
-        let mut in_flight = FuturesUnordered::new();
-        let mut input_done = false;
+            // Fetch one part on its own `BatchFetcher` clone (cheap: the clone
+            // shares the schema cache). Echoes the minting time back with the
+            // result so the operator emits at the right capability regardless of
+            // completion order.
+            let fetch_one = |time: TInner, part: ExchangeableBatchPart<T>| {
+                let mut fetcher = fetcher.clone();
+                async move {
+                    let reader_id = part.reader_id().clone();
+                    let fetched = fetcher
+                        .fetch_leased_part(part)
+                        .await
+                        .expect("shard_id should match across all workers");
+                    let fetched = match fetched {
+                        Ok(fetched) => Ok(fetched),
+                        Err(blob_key) => {
+                            // Ideally, readers should never encounter a missing blob. They place a
+                            // seqno hold as they consume their snapshot/listen, preventing any blobs
+                            // they need from being deleted by garbage collection, and all blob
+                            // implementations are linearizable so there should be no possibility of
+                            // stale reads.
+                            //
+                            // However, it is possible for a lease to expire given a sustained period
+                            // of downtime, which could allow parts we expect to exist to be
+                            // deleted... at which point our best option is to request a restart.
+                            // Check the state of the minting reader's lease to tell the two cases
+                            // apart.
+                            let diagnostics = fetcher.missing_blob_diagnostics(&reader_id).await;
+                            Err((blob_key, diagnostics))
+                        }
+                    };
+                    (time, fetched)
+                }
+            };
 
-        loop {
-            // Start fetches up to the concurrency cap.
-            while in_flight.len() < max_concurrency {
-                let Some((caps, part)) = pending.pop_front() else {
-                    break;
-                };
-                in_flight.push(fetch_one(caps, part));
-            }
-
-            tokio::select! {
-                // Emit completed fetches first, so `in_flight` drains and we do
-                // not hold more than `max_concurrency` parts in memory.
-                biased;
-                Some(([cap, _], fetched)) = in_flight.next(), if !in_flight.is_empty() => {
-                    match fetched {
-                        Ok(fetched) => fetched_output.give(&cap, fetched),
-                        Err(e) => {
-                            // `report_and_stop` never returns, freezing the
-                            // operator: `cap` (and every other in-flight and
-                            // pending capability) stays held, so the data frontier
-                            // never advances past the part we failed to emit.
-                            error_handler.report_and_stop(e).await;
+            // Up to `max_concurrency` fetches run at once. The operator's
+            // time-keyed bookkeeping tolerates results completing out of order.
+            // In-flight *bytes* stay bounded by the persist fetch semaphore
+            // inside `fetch_leased_part`.
+            let mut in_flight = FuturesUnordered::new();
+            // Completed downloads waiting for room in the result channel. A
+            // download that finished must be moved out of `in_flight` and parked
+            // here rather than forwarded inline: a `send().await` on a full
+            // channel would stop polling `in_flight`, and since a
+            // `FuturesUnordered` only advances the futures inside it while it is
+            // polled, that would freeze every other in-flight fetch. Draining
+            // into `ready` and forwarding via a reserved permit keeps
+            // `in_flight` polled whenever there is spare concurrency, so the
+            // downloads actually overlap. `ready` never exceeds `max_concurrency`
+            // because we stop starting new fetches once `in_flight.len() +
+            // ready.len()` reaches the cap.
+            let mut ready: VecDeque<(TInner, Result<FetchedBlob<K, V, T, D>, (BlobKey, String)>)> =
+                VecDeque::new();
+            let mut input_done = false;
+            loop {
+                // Downloading plus downloaded-but-not-yet-forwarded. This, not
+                // the result channel capacity, is what bounds resident parts.
+                let outstanding = in_flight.len() + ready.len();
+                tokio::select! {
+                    biased;
+                    // Forward a completed fetch once the channel has room.
+                    // `reserve` leaves this arm pending (rather than blocking the
+                    // loop) when the channel is full, so `in_flight` keeps being
+                    // polled and the other downloads keep making progress.
+                    permit = blob_tx.reserve(), if !ready.is_empty() => {
+                        match permit {
+                            Ok(permit) => {
+                                permit.send(ready.pop_front().expect("ready is non-empty"));
+                                activator.activate();
+                            }
+                            // The operator is gone; stop fetching.
+                            Err(_) => return,
                         }
                     }
+                    // Move a completed download into `ready`. Buffering it here
+                    // rather than forwarding inline is what keeps a full result
+                    // channel from freezing the poll of `in_flight`.
+                    Some((time, fetched)) = in_flight.next(), if !in_flight.is_empty() => {
+                        ready.push_back((time, fetched));
+                    }
+                    // Start another fetch while there is spare concurrency and
+                    // the desc channel is still open.
+                    maybe = desc_rx.recv(), if !input_done && outstanding < max_concurrency => {
+                        match maybe {
+                            Some((time, part)) => in_flight.push(fetch_one(time, part)),
+                            None => input_done = true,
+                        }
+                    }
+                    // Input closed and nothing left to fetch or forward: done.
+                    else => return,
                 }
-                // Accept new descs while the input is live. Their fetches are
-                // throttled by the `pending` queue above, not here.
-                event = descs_input.next(), if !input_done => {
-                    match event {
-                        Some(Event::Data(caps, data)) => {
-                            // `LeasedBatchPart`es cannot be dropped at this point
-                            // w/o panicking, so swap them to an owned version.
-                            for (_idx, part) in data {
-                                pending.push_back((caps.clone(), part));
+            }
+        }
+    })
+    .abort_on_drop();
+
+    let (mut shutdown_handle, shutdown_button) = button(scope, info.address);
+
+    builder.build_reschedule(move |_capabilities| {
+        // Outstanding fetches, keyed by the time the part was minted at. For
+        // each time we retain a capability on each output (data and
+        // completed-fetches) and count how many fetches at that time are in
+        // flight. When the count reaches zero we drop both capabilities,
+        // advancing the data and completed-fetches frontiers past that time;
+        // the latter releases the parts' leases on the chosen worker (whose
+        // `LeaseManager` is likewise keyed by time). Keying by time rather than
+        // by arrival order makes the operator robust to the task returning
+        // results in any order — e.g. if it ever fetches concurrently.
+        let mut outstanding: BTreeMap<TInner, (Capability<TInner>, Capability<TInner>, usize)> =
+            BTreeMap::new();
+        // Wrapped in `Option` so we can drop the sender to signal the task that
+        // no more descs are coming.
+        let mut desc_tx = Some(desc_tx);
+        let mut blob_rx = Some(blob_rx);
+        // Set once `error_handler` has been notified of a missing blob: the
+        // operator stops doing work but retains its capabilities so the frontier
+        // does not advance past data we did not emit.
+        let mut failed = false;
+
+        move |frontiers| {
+            // Keep the fetch task alive for as long as the operator runs.
+            let _ = &task;
+
+            // Two-phase shutdown, mirroring `builder_async`: only once *all*
+            // workers have pressed do we drop capabilities and drain the input.
+            if shutdown_handle.local_pressed() {
+                return if shutdown_handle.all_pressed() {
+                    outstanding.clear();
+                    desc_tx = None;
+                    blob_rx = None;
+                    descs_input.for_each(|_cap, _data| {});
+                    false
+                } else {
+                    // Local press only: wedge. Keep capabilities and leave the
+                    // input undrained so its pending messages hold the frontier.
+                    true
+                };
+            }
+
+            activation_ack.ack();
+
+            if failed {
+                // Frozen: retain every outstanding capability so the frontier
+                // stays at the missing part and never advances past data we did
+                // not emit. Crucially we must NOT keep draining `blob_rx`: a
+                // later, successfully fetched part would otherwise release a
+                // capability and let the frontier advance past the missing part.
+                // Still drain the input to avoid stalling the dataflow.
+                descs_input.for_each(|_cap, _data| {});
+                return true;
+            }
+
+            // Forward incoming descs to the fetch task, retaining a capability
+            // pair per time and counting the fetch as outstanding.
+            descs_input.for_each(|cap, data| {
+                for (_idx, part) in data.drain(..) {
+                    let entry = outstanding.entry(cap.time().clone()).or_insert_with(|| {
+                        (cap.delayed(cap.time(), 0), cap.delayed(cap.time(), 1), 0)
+                    });
+                    entry.2 += 1;
+                    desc_tx
+                        .as_ref()
+                        .expect("desc_tx alive while operator is running")
+                        .send((cap.time().clone(), part))
+                        .expect("fetch task unexpectedly gone");
+                }
+            });
+
+            // Drain completed fetches, emitting each at the capability for its
+            // time.
+            if let Some(rx) = blob_rx.as_mut() {
+                loop {
+                    match rx.try_recv() {
+                        Ok((time, Ok(fetched))) => {
+                            let entry = outstanding
+                                .get_mut(&time)
+                                .expect("capability for every in-flight fetch time");
+                            fetched_output.activate().session(&entry.0).give(fetched);
+                            entry.2 -= 1;
+                            if entry.2 == 0 {
+                                // Drops both capabilities, advancing the data and
+                                // completed-fetches frontiers past `time`.
+                                outstanding.remove(&time);
                             }
                         }
-                        Some(Event::Progress(_)) => {}
-                        None => input_done = true,
+                        Ok((_time, Err((blob_key, diagnostics)))) => {
+                            // Report the missing blob and freeze: capabilities are
+                            // retained (including this failed part's) so the
+                            // frontier cannot advance past the missing part.
+                            error_handler.report_and_freeze(anyhow!(
+                                "batch fetcher could not fetch batch part {}: {}",
+                                blob_key,
+                                diagnostics
+                            ));
+                            failed = true;
+                            break;
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => {
+                            // The task exits only after the desc channel closes
+                            // (which we haven't done) or a panic; with fetches
+                            // outstanding this is unexpected.
+                            assert!(
+                                outstanding.is_empty(),
+                                "fetch task unexpectedly gone with {} outstanding fetch times",
+                                outstanding.len()
+                            );
+                            break;
+                        }
                     }
                 }
-                // Input is exhausted and no fetches remain: we're done.
-                else => break,
             }
+
+            // Once the input is closed and nothing is in flight, disconnect from
+            // the task so it can exit.
+            if frontiers[0].frontier().is_empty() && outstanding.is_empty() {
+                desc_tx = None;
+            }
+
+            // Keep the operator alive; it is torn down via the shutdown button.
+            true
         }
     });
 
@@ -1133,7 +1547,8 @@ mod tests {
 
     /// Verifies that the source fetches and emits actual data: a batch written
     /// before the dataflow starts comes out as at least one `FetchedBlob`, and
-    /// the output frontier reaches the shard's upper.
+    /// the output frontier reaches the shard's upper. Exercises the listen task
+    /// -> descs operator -> fetch task -> fetch operator pipeline end-to-end.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // too slow
     async fn test_shard_source_fetches_data() {
@@ -1269,7 +1684,7 @@ mod tests {
             });
 
             // Step until the source has made progress, so shutdown happens while
-            // the fetch machinery is live.
+            // the listen and fetch machinery is live.
             let deadline = Instant::now() + std::time::Duration::from_secs(60);
             while probe.less_than(&1) {
                 assert!(Instant::now() < deadline, "timed out waiting for progress");
@@ -1383,7 +1798,8 @@ mod tests {
     /// `as_of = 0`. Its fetch fails; the later batches (t=1, t=2) fetch fine. We
     /// step until the dataflow quiesces (with brief parks so the tokio fetch
     /// task finishes), so the later results are produced, then assert the error
-    /// fired and the frontier stayed at the missing part.
+    /// fired and the frontier stayed at the missing part — the failed time's
+    /// capability is held regardless of what other times complete.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // too slow
     async fn test_shard_source_fetch_error_freeze() {
