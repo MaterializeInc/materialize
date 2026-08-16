@@ -112,6 +112,7 @@ async = [
     "futures",
     "metrics",
     "openssl",
+    "rand",
     "tokio/tracing",
     "tokio-openssl",
     "tokio",

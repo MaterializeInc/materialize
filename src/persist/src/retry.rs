@@ -83,21 +83,24 @@ impl RetryStream {
         self.attempt
     }
 
-    /// The next sleep (without jitter for easy printing in logs).
+    /// The next sleep (nominal value, without jitter, for easy printing in
+    /// logs). The actual sleep performed by [Self::sleep] is this value
+    /// adjusted by a random jitter factor.
     pub fn next_sleep(&self) -> Duration {
         self.backoff.unwrap_or(self.cfg.fixed_sleep)
     }
 
-    /// Executes the next sleep in the series.
+    /// Executes the next sleep in the series, returning the advanced stream
+    /// along with the actual (jittered) duration that was slept.
     ///
     /// This isn't cancel-safe, so it consumes and returns self, to prevent
     /// accidental mis-use.
-    pub async fn sleep(mut self) -> Self {
+    pub async fn sleep(mut self) -> (Self, Duration) {
         // Should the jitter be configurable?
         let jitter = self.rng.random_range(0.9..=1.1);
         let sleep = self.next_sleep().mul_f64(jitter);
         tokio::time::sleep(sleep).await;
-        self.advance()
+        (self.advance(), sleep)
     }
 
     // Only exposed for testing.

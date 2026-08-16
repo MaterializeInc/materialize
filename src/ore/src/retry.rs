@@ -107,6 +107,7 @@ pub struct Retry {
     clamp_backoff: Duration,
     max_duration: Duration,
     max_tries: usize,
+    jitter: f64,
 }
 
 impl Retry {
@@ -133,6 +134,33 @@ impl Retry {
     /// default factor is two.
     pub fn factor(mut self, factor: f64) -> Self {
         self.factor = factor;
+        self
+    }
+
+    /// Sets the amount of jitter to apply to each backoff.
+    ///
+    /// Jitter randomly shortens each backoff so that many operations that fail
+    /// and begin retrying at the same time do not all wake up to retry at
+    /// exactly the same moment (the "thundering herd" problem). The `jitter`
+    /// argument is a fraction in the range `[0.0, 1.0]`: each backoff is
+    /// independently reduced by a random amount of up to `jitter` times its
+    /// value. For example, with the default jitter of `0.1`, a nominal backoff
+    /// of 100ms will actually wait for a uniformly random duration between 90ms
+    /// and 100ms. A jitter of `0.0` disables jitter entirely, restoring fully
+    /// deterministic backoffs.
+    ///
+    /// The jitter only ever decreases a backoff, so it never causes a backoff
+    /// to exceed the maximum configured via [`Retry::clamp_backoff`] nor causes
+    /// the operation to run past its [`Retry::max_duration`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `jitter` is not in the range `[0.0, 1.0]`.
+    pub fn jitter(mut self, jitter: f64) -> Self {
+        if !(0.0..=1.0).contains(&jitter) {
+            panic!("jitter must be in the range [0.0, 1.0], got {jitter}");
+        }
+        self.jitter = jitter;
         self
     }
 
@@ -165,6 +193,20 @@ impl Retry {
     pub fn max_duration(mut self, duration: Duration) -> Self {
         self.max_duration = duration;
         self
+    }
+
+    /// Applies the configured jitter to a nominal `backoff`, returning the
+    /// actual duration to sleep.
+    ///
+    /// The returned duration is always less than or equal to `backoff`, so
+    /// jitter never violates the [`Retry::clamp_backoff`] or
+    /// [`Retry::max_duration`] invariants.
+    fn jittered_backoff(&self, backoff: Duration) -> Duration {
+        if self.jitter == 0.0 {
+            return backoff;
+        }
+        let factor = 1.0 - self.jitter * rand::random::<f64>();
+        backoff.mul_f64(factor)
     }
 
     /// Retries the fallible operation `f` according to the configured policy.
@@ -208,14 +250,24 @@ impl Retry {
             } else if elapsed + next_backoff.unwrap() > self.max_duration {
                 next_backoff = Some(self.max_duration - elapsed);
             }
-            let state = RetryState { i, next_backoff };
+            // `next_backoff` tracks the nominal, un-jittered backoff so that the
+            // exponential schedule grows cleanly; jitter is applied only to the
+            // duration we actually sleep for (and report).
+            let state = RetryState {
+                i,
+                next_backoff: next_backoff.map(|b| self.jittered_backoff(b)),
+            };
             match f(state).into() {
                 RetryResult::Ok(t) => return Ok(t),
                 RetryResult::FatalErr(e) => return Err(e),
                 RetryResult::RetryableErr(e) => match &mut next_backoff {
                     None => return Err(e),
                     Some(next_backoff) => {
-                        thread::sleep(*next_backoff);
+                        thread::sleep(
+                            state
+                                .next_backoff
+                                .expect("next_backoff is Some when base backoff is Some"),
+                        );
                         *next_backoff =
                             cmp::min(next_backoff.mul_f64(self.factor), self.clamp_backoff);
                     }
@@ -374,6 +426,7 @@ impl Default for Retry {
             clamp_backoff: Duration::MAX,
             max_tries: usize::MAX,
             max_duration: Duration::MAX,
+            jitter: 0.1,
         }
     }
 }
@@ -424,11 +477,16 @@ impl Stream for RetryStream {
             *this.next_backoff = Some(retry.max_duration - elapsed);
         }
 
+        // `this.next_backoff` holds the nominal, un-jittered backoff that drives
+        // the exponential schedule; jitter is applied only to the duration we
+        // actually sleep for (and report), so concurrent retriers don't all wake
+        // at the same instant.
+        let jittered_backoff = this.next_backoff.map(|d| retry.jittered_backoff(d));
         let state = RetryState {
             i: *this.i,
-            next_backoff: *this.next_backoff,
+            next_backoff: jittered_backoff,
         };
-        if let Some(d) = *this.next_backoff {
+        if let Some(d) = jittered_backoff {
             this.sleep.reset(Instant::now() + d);
         }
         *this.i += 1;
@@ -555,6 +613,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .retry(|state| {
                 states.push(state);
                 if state.i == 2 {
@@ -589,6 +648,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .retry_async(|state| {
                 states.push(state);
                 async move {
@@ -625,6 +685,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .retry(|state| {
                 states.push(state);
                 if state.i == 0 {
@@ -655,6 +716,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .retry_async(|state| {
                 states.push(state);
                 async move {
@@ -688,6 +750,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .max_tries(3)
             .retry(|state| {
                 states.push(state);
@@ -719,6 +782,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .max_tries(3)
             .retry_async(|state| {
                 states.push(state);
@@ -751,6 +815,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(10))
+            .jitter(0.0)
             .max_duration(Duration::from_millis(20))
             .retry(|state| {
                 states.push(state);
@@ -794,6 +859,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(10))
+            .jitter(0.0)
             .max_duration(Duration::from_millis(20))
             .retry_async(|state| {
                 states.push(state);
@@ -838,6 +904,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .clamp_backoff(Duration::from_millis(1))
             .max_tries(4)
             .retry(|state| {
@@ -874,6 +941,7 @@ mod tests {
         let mut states = vec![];
         let res = Retry::default()
             .initial_backoff(Duration::from_millis(1))
+            .jitter(0.0)
             .clamp_backoff(Duration::from_millis(1))
             .max_tries(4)
             .retry_async(|state| {
@@ -1028,5 +1096,74 @@ mod tests {
             })
             .await;
         assert_eq!(res, Ok(11));
+    }
+
+    #[crate::test]
+    fn test_jitter_disabled_is_identity() {
+        let retry = Retry::default().jitter(0.0);
+        let backoff = Duration::from_millis(125);
+        for _ in 0..100 {
+            assert_eq!(retry.jittered_backoff(backoff), backoff);
+        }
+    }
+
+    #[crate::test]
+    fn test_jitter_within_bounds_and_varies() {
+        let jitter = 0.5;
+        let retry = Retry::default().jitter(jitter);
+        let backoff = Duration::from_secs(1);
+        let lower = backoff.mul_f64(1.0 - jitter);
+
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..1000 {
+            let jittered = retry.jittered_backoff(backoff);
+            // Jitter only ever shortens the backoff, and never by more than the
+            // configured fraction.
+            assert!(
+                jittered > lower && jittered <= backoff,
+                "jittered backoff {jittered:?} not in ({lower:?}, {backoff:?}]"
+            );
+            seen.insert(jittered);
+        }
+        // With a non-zero jitter we expect the actual backoffs to vary, which is
+        // the whole point: concurrent retriers should not all wake at once.
+        assert!(
+            seen.len() > 1,
+            "expected jitter to produce varying backoffs"
+        );
+    }
+
+    #[crate::test]
+    #[should_panic(expected = "jitter must be in the range")]
+    fn test_jitter_rejects_out_of_range() {
+        let _ = Retry::default().jitter(1.5);
+    }
+
+    /// Even with jitter enabled, the reported (and slept) backoff must never
+    /// exceed the nominal exponential schedule, so `max_duration` and
+    /// `clamp_backoff` invariants are preserved.
+    #[crate::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: cannot write to event
+    fn test_jitter_respects_clamp() {
+        let clamp = Duration::from_millis(2);
+        let mut states = vec![];
+        let res = Retry::default()
+            .initial_backoff(Duration::from_millis(1))
+            .clamp_backoff(clamp)
+            .jitter(0.5)
+            .max_tries(5)
+            .retry(|state| {
+                states.push(state);
+                Err::<(), _>("injected")
+            });
+        assert_eq!(res, Err("injected"));
+        for state in &states {
+            if let Some(backoff) = state.next_backoff {
+                assert!(
+                    backoff <= clamp,
+                    "jittered backoff {backoff:?} exceeded clamp {clamp:?}"
+                );
+            }
+        }
     }
 }
