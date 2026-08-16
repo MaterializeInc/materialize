@@ -45,3 +45,14 @@ choosing which framework to use, start with **mz-test**.
 | Skill | When to use | What it does |
 |---|---|---|
 | **mz-adapter-guide** | Working on or asking about the adapter layer | Correctness invariants and architectural notes for the coordinator, pgwire, peek paths, timestamp oracle, and related crates |
+
+## Demos
+
+| Skill | When to use | What it does |
+|---|---|---|
+| **mz-demo-data** | Standing up live, realistic data to show Materialize off | Builds continuously-updating synthetic data entirely in SQL, no Kafka or external load generator. Ships six domains (auctions, ecommerce, banking, IoT, clickstream, zoo) and a rubric for designing new ones |
+
+Unlike the skills above, `mz-demo-data` is aimed at people evaluating
+Materialize rather than developing it. Its assets live in `misc/demo-data/`,
+with `.agents/skills/mz-demo-data` as a symlink, so the directory can be
+lifted out on its own.
