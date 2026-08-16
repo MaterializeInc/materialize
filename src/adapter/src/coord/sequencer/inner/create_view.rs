@@ -392,6 +392,7 @@ impl Coordinator {
                             column_names,
                             temporary,
                         },
+                    replace,
                     drop_ids,
                     if_not_exists,
                     ..
@@ -401,6 +402,11 @@ impl Coordinator {
             ..
         }: CreateViewFinish,
     ) -> Result<StageResult<Box<CreateViewStage>>, AdapterError> {
+        // For `CREATE OR REPLACE`, re-validate the plan-time drop set. A statement not
+        // subject to the DDL lock (e.g. `CREATE SINK`) can have added a dependent on the
+        // item being replaced while the off-thread stages ran.
+        self.validate_or_replace_drop_ids(session, "view", &name, replace, &drop_ids)?;
+
         let typ = infer_sql_type_for_catalog(&raw_expr, &optimized_expr);
         let ops = vec![
             catalog::Op::DropObjects(
