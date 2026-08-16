@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/usage.rs
-revision: 1671bbe147
+revision: f0cdedca04
 ---
 
 # persist-client::usage

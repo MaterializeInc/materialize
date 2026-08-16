@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/pool/extent.rs
-revision: f2082d0163
+revision: f0cdedca04
 ---
 
 # mz-ore::pool::extent
