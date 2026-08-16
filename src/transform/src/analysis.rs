@@ -859,7 +859,7 @@ mod non_negative {
                             let _negate = children.next().unwrap();
                             let base_id = children.next().unwrap();
                             let extra = children.next();
-                            debug_assert_eq!(extra, None);
+                            mz_ore::soft_assert_none_no_log!(extra);
                             if results[base_id] && is_superset_of(&*base, &*input) {
                                 return true;
                             }
@@ -1724,7 +1724,7 @@ mod cardinality {
             let mut estimate = input;
             for expr in predicates {
                 let selectivity = self.predicate(expr, &unique_columns);
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     OrderedFloat(0.0) <= selectivity && selectivity <= OrderedFloat(1.0),
                     "predicate selectivity {selectivity} should be in the range [0,1]"
                 );

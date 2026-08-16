@@ -974,7 +974,9 @@ impl MultipartConfig {
     }
 
     fn part_iter(&self, blob_len: usize) -> MultipartChunkIter {
-        debug_assert!(self.multipart_chunk_size >= MultipartConfig::MIN_UPLOAD_CHUNK_SIZE);
+        mz_ore::soft_assert_no_log!(
+            self.multipart_chunk_size >= MultipartConfig::MIN_UPLOAD_CHUNK_SIZE
+        );
         MultipartChunkIter::new(self.multipart_chunk_size, blob_len)
     }
 }

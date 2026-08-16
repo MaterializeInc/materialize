@@ -2172,7 +2172,7 @@ impl Drop for ChunkHandle {
             }
             Residency::Evicted => {
                 // Eviction already released the slot.
-                debug_assert!(state.slot.is_none(), "evicted chunk holds no slot");
+                crate::soft_assert_no_log!(state.slot.is_none(), "evicted chunk holds no slot");
                 if let Some(extent) = &state.extent {
                     pool.note_extent_released(extent);
                 }
