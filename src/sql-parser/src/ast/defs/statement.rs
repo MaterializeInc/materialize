@@ -2430,6 +2430,7 @@ pub enum ClusterFeatureName {
     EnableLetrecFixpointAnalysis,
     EnableJoinPrioritizeArranged,
     EnableProjectionPushdownAfterRelationCse,
+    EnableUnionCancellationAfterRelationCse,
 }
 
 impl WithOptionName for ClusterFeatureName {
@@ -2446,7 +2447,8 @@ impl WithOptionName for ClusterFeatureName {
             | Self::EnableVariadicLeftJoinLowering
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableJoinPrioritizeArranged
-            | Self::EnableProjectionPushdownAfterRelationCse => false,
+            | Self::EnableProjectionPushdownAfterRelationCse
+            | Self::EnableUnionCancellationAfterRelationCse => false,
         }
     }
 }
@@ -4115,6 +4117,7 @@ pub enum ExplainPlanOptionName {
     EnableJoinPrioritizeArranged,
     EnableProjectionPushdownAfterRelationCse,
     EnableFixedCorrelatedCteLowering,
+    EnableUnionCancellationAfterRelationCse,
 }
 
 impl WithOptionName for ExplainPlanOptionName {
@@ -4152,7 +4155,8 @@ impl WithOptionName for ExplainPlanOptionName {
             | Self::EnableLetrecFixpointAnalysis
             | Self::EnableJoinPrioritizeArranged
             | Self::EnableProjectionPushdownAfterRelationCse
-            | Self::EnableFixedCorrelatedCteLowering => false,
+            | Self::EnableFixedCorrelatedCteLowering
+            | Self::EnableUnionCancellationAfterRelationCse => false,
         }
     }
 }
