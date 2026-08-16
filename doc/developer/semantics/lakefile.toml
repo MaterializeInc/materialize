@@ -1,0 +1,10 @@
+name = "mz-semantics"
+defaultTargets = ["Mz"]
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+rev = "v4.29.1"
+
+[[lean_lib]]
+name = "Mz"
