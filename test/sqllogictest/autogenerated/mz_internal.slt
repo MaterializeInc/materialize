@@ -353,6 +353,12 @@ object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠
 referenced_object_id  text  The␠ID␠of␠the␠referenced␠object.␠Corresponds␠to␠`mz_objects.id`.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_graph_edges' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠`mz_objects.id`.
+dependency_id  text  The␠ID␠of␠the␠object␠it␠depends␠on.␠Corresponds␠to␠`mz_objects.id`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_fully_qualified_names' ORDER BY position
 ----
 id  text  Materialize's␠unique␠ID␠for␠the␠object.
@@ -829,6 +835,7 @@ mz_object_arrangement_sizes
 mz_object_dependencies
 mz_object_fully_qualified_names
 mz_object_global_ids
+mz_object_graph_edges
 mz_object_history
 mz_object_lifetimes
 mz_object_oid_alias

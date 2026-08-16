@@ -199,3 +199,42 @@ snk_cleanup t1
   LEFT JOIN mz_objects object ON dep.object_id = object.id
   LEFT JOIN mz_objects import ON dep.dependency_id = import.id
   WHERE object_id LIKE 'u%'
+
+# Test `mz_internal.mz_object_graph_edges`, the console workflow-graph edge set:
+# the dependencies between maintained objects, plus the edges that stitch a
+# source to the subsources/tables carrying its data. Like the relations above it
+# is updated asynchronously, so these rely on testdrive's retry feature.
+
+> CREATE TABLE base (a int)
+> CREATE VIEW unmaintained AS SELECT * FROM base
+> CREATE MATERIALIZED VIEW mvg AS SELECT * FROM unmaintained
+> CREATE DEFAULT INDEX ON mvg
+
+# The intermediate view is not a maintained object, so it carries no edge: the
+# chain is index -> mvg -> base.
+> SELECT object.name, dependency.name
+  FROM mz_internal.mz_object_graph_edges e
+  JOIN mz_objects object ON e.object_id = object.id
+  JOIN mz_objects dependency ON e.dependency_id = dependency.id
+  WHERE object.name IN ('mvg', 'mvg_primary_idx')
+  ORDER BY object.name, dependency.name
+mvg             base
+mvg_primary_idx mvg
+
+> CREATE SOURCE src IN CLUSTER ${arg.single-replica-cluster} FROM LOAD GENERATOR AUCTION FOR ALL TABLES
+> CREATE MATERIALIZED VIEW mv_bids AS SELECT count(*) FROM bids
+
+# The source's table is stitched to the source (bids -> src), an edge that
+# mz_materialization_dependencies does not carry, alongside the maintained
+# dependency mv_bids -> bids.
+> SELECT object.name, dependency.name
+  FROM mz_internal.mz_object_graph_edges e
+  JOIN mz_objects object ON e.object_id = object.id
+  JOIN mz_objects dependency ON e.dependency_id = dependency.id
+  WHERE object.name IN ('bids', 'mv_bids')
+  ORDER BY object.name, dependency.name
+bids    src
+mv_bids bids
+
+> DROP SOURCE src CASCADE
+> DROP TABLE base CASCADE
