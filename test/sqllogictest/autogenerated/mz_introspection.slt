@@ -43,6 +43,15 @@ object_id  text  The␠ID␠of␠the␠collection␠the␠peek␠is␠targeting.
 type  text  The␠type␠of␠the␠corresponding␠peek:␠`index`␠if␠targeting␠an␠index␠or␠temporary␠dataflow;␠`persist`␠for␠a␠source,␠materialized␠view,␠or␠table.
 time  mz_timestamp  The␠timestamp␠the␠peek␠has␠requested.
 
+query TT
+SELECT name, type FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_active_peeks_per_worker' ORDER BY name
+----
+id  uuid
+object_id  text
+time  mz_timestamp
+type  text
+worker_id  uint8
+
 query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_introspection' AND object = 'mz_arrangement_sharing' ORDER BY position
 ----

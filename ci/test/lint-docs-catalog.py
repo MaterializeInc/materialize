@@ -10,9 +10,12 @@
 # by the Apache License, Version 2.0.
 
 import fileinput
+import os
 import re
 import sys
 from enum import Enum
+
+import yaml
 
 
 class ParserState(Enum):
@@ -73,6 +76,94 @@ CREATE INDEX objects_idx ON objects(schema, object)
 """
 
 
+# Cache of loaded data files keyed by schema name.
+_DATA_CACHE: dict[str, dict] = {}
+
+
+def load_relation(schema: str, object_name: str) -> dict:
+    """Return the data entry for `schema.object_name` from doc/user/data/<schema>.yml.
+
+    Raises if the file or the relation is missing, so a stale FROM_YAML marker
+    fails loudly rather than silently documenting nothing.
+    """
+    if schema not in _DATA_CACHE:
+        path = os.path.join("doc", "user", "data", f"{schema}.yml")
+        with open(path, encoding="utf-8") as f:
+            _DATA_CACHE[schema] = yaml.safe_load(f)
+    for relation in _DATA_CACHE[schema].get("relations", []):
+        if relation["name"] == object_name:
+            return relation
+    raise ValueError(f"no data entry for {schema}.{object_name} in {schema}.yml")
+
+
+def format_meaning(text: str) -> str:
+    """Strip doc links to their text and escape spaces, matching the catalog
+    comment form the generated sqllogictest compares against."""
+    text = DOC_LINK_TYPE1_RE.sub(r"\1", text)
+    text = DOC_LINK_TYPE2_RE.sub(r"\1", text)
+    return text.replace(" ", "␠")
+
+
+def normalize_type(type_name: str) -> str:
+    """Match the inline path's type normalization for list/array types."""
+    if type_name == "mz_aclitem array":
+        return "mz_aclitem[]"
+    if type_name == "text array":
+        return "text[]"
+    if "list" in type_name:
+        return "list"
+    if "array" in type_name:
+        return "array"
+    return type_name.replace(" ", "␠")
+
+
+def emit_from_yaml(schema: str, object_name: str, objects: list, schemas: set) -> None:
+    """Emit sqllogictest checks for a FROM_YAML relation and its variants, and
+    record every emitted relation name for the completeness query."""
+    relation = load_relation(schema, object_name)
+    schemas.add(f"'{schema}'")
+
+    # Base table: full check with comments, position-ordered (identical to the
+    # inline-table output it replaces).
+    objects.append(object_name)
+    print("query TTT")
+    print(
+        f"SELECT name, type, comment FROM objects WHERE schema = '{schema}' AND object = '{object_name}' ORDER BY position"
+    )
+    print("----")
+    for column in relation["columns"]:
+        print(
+            "  ".join(
+                [
+                    column["name"],
+                    normalize_type(column["type"]),
+                    format_meaning(column["meaning"]),
+                ]
+            )
+        )
+    print()
+
+    for variant in relation.get("variants", []):
+        objects.append(variant["name"])
+        if variant.get("kind") == "raw":
+            # Existence only: no column table to check, the relation is recorded
+            # above so the completeness query still covers it.
+            continue
+        # per_worker (and any future non-raw variant): base columns plus the
+        # variant's extra columns, checked columns-and-types only. Ordered by
+        # name because the catalog column position of worker_id is not fixed.
+        columns = list(relation["columns"]) + list(variant.get("columns", []))
+        columns.sort(key=lambda c: c["name"])
+        print("query TT")
+        print(
+            f"SELECT name, type FROM objects WHERE schema = '{schema}' AND object = '{variant['name']}' ORDER BY name"
+        )
+        print("----")
+        for column in columns:
+            print("  ".join([column["name"], normalize_type(column["type"])]))
+        print()
+
+
 def main() -> None:
     print(HEADER)
 
@@ -92,9 +183,12 @@ def main() -> None:
             match = RELATION_MARKER_RE.search(line)
             if match:
                 modifiers = match.group(3)
-                include_comments = "NO_COMMENTS" not in modifiers
                 schema = match.group(1)
                 object_name = match.group(2)
+                if "FROM_YAML" in modifiers:
+                    emit_from_yaml(schema, object_name, objects, schemas)
+                    continue
+                include_comments = "NO_COMMENTS" not in modifiers
                 if include_comments:
                     print("query TTT")
                     print(
@@ -135,9 +229,7 @@ def main() -> None:
                     type_name = "array"
                 type_name = type_name.replace(" ", "␠")
                 if include_comments:
-                    documentation = DOC_LINK_TYPE1_RE.sub(r"\1", fields[2])
-                    documentation = DOC_LINK_TYPE2_RE.sub(r"\1", documentation)
-                    documentation = documentation.replace(" ", "␠")
+                    documentation = format_meaning(fields[2])
                     print("  ".join([field, type_name, documentation]))
                 else:
                     print("  ".join([field, type_name]))
