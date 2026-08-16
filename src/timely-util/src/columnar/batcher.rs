@@ -238,7 +238,7 @@ where
             }
         }
 
-        if self.target.borrow().len() > 0 {
+        if !self.target.is_empty() {
             let chunk = std::mem::replace(&mut self.target, Column::Typed(Default::default()));
             self.ready.push_back(chunk);
         }

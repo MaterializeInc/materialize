@@ -322,7 +322,7 @@ impl DemuxHandler<'_, '_, '_> {
         let ts = self.ts();
         let operator_id = event.operator;
         let diff = Diff::cast_from(event.diff);
-        debug_assert_ne!(diff, Diff::ZERO);
+        mz_ore::soft_assert_ne_no_log!(diff, Diff::ZERO);
         self.output.sharing.give(((operator_id, ()), ts, diff));
 
         let sharing = self.state.sharing.entry(operator_id).or_default();

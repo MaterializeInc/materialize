@@ -1035,7 +1035,7 @@ impl Catalog {
                 }
             }
             TransactInnerMode::DryRun => {
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     storage_collections.is_none(),
                     "dry-run mode must not prepare storage state"
                 );

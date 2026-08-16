@@ -642,7 +642,7 @@ impl Name {
                 _ => out.push('_'),
             }
         }
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             Name::is_valid(&out),
             "make_valid({name}) produced invalid name: {out}"
         );
