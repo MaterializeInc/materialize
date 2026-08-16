@@ -30,7 +30,7 @@ use mz_ore::instrument;
 use mz_persist::indexed::encoding::{BatchColumnarFormat, BlobTraceBatchPart, BlobTraceUpdates};
 use mz_persist::location::Blob;
 use mz_persist_types::arrow::{ArrayBound, ArrayOrd};
-use mz_persist_types::columnar::{ColumnDecoder, Schema};
+use mz_persist_types::columnar::{ColumnDecoder, Schema, data_type};
 use mz_persist_types::parquet::{CompressionFormat, EncodingConfig};
 use mz_persist_types::part::{Part, PartBuilder};
 use mz_persist_types::schema::SchemaId;
@@ -526,7 +526,8 @@ where
     inline_desc: Description<T>,
     inclusive_upper: Antichain<Reverse<T>>,
 
-    records_builder: PartBuilder<K, K::Schema, V, V::Schema>,
+    part_builder: PartBuilder<K, K::Schema, V, V::Schema>,
+    finished_parts: Vec<Part>,
     pub(crate) builder: BatchBuilderInternal<K, V, T, D>,
 }
 
@@ -548,8 +549,41 @@ where
         Self {
             inline_desc,
             inclusive_upper: Antichain::new(),
-            records_builder,
+            part_builder: records_builder,
+            finished_parts: vec![],
             builder,
+        }
+    }
+
+    fn in_progress_goodbytes(&self) -> usize {
+        self.part_builder.goodbytes()
+            + self
+                .finished_parts
+                .iter()
+                .map(|p| p.goodbytes())
+                .sum::<usize>()
+    }
+
+    fn finish_part_builder(&mut self) {
+        if self.part_builder.len() > 0 {
+            let part = self.part_builder.finish_and_replace(
+                &*self.builder.write_schemas.key,
+                &*self.builder.write_schemas.val,
+            );
+            self.finished_parts.push(part);
+        }
+    }
+
+    async fn flush_parts(&mut self) -> bool {
+        self.finish_part_builder();
+        if let Some(part) = Part::concat(&self.finished_parts).expect("type aligned") {
+            self.builder
+                .flush_part(self.inline_desc.clone(), part)
+                .await;
+            self.finished_parts.clear();
+            true
+        } else {
+            false
         }
     }
 
@@ -583,10 +617,7 @@ where
             }
         }
 
-        let updates = self.records_builder.finish();
-        self.builder
-            .flush_part(self.inline_desc.clone(), updates)
-            .await;
+        self.flush_parts().await;
 
         self.builder
             .finish(Description::new(
@@ -595,6 +626,51 @@ where
                 self.inline_desc.since().clone(),
             ))
             .await
+    }
+
+    /// Adds the given update to the batch.
+    ///
+    /// The update timestamp must be greater or equal to `lower` that was given
+    /// when creating this [BatchBuilder].
+    pub async fn add_part(&mut self, part: Part) -> Result<Added, InvalidUsage<T>> {
+        for time in part.time.values() {
+            let ts = T::decode(time.to_le_bytes());
+            if !self.inline_desc.lower().less_equal(&ts) {
+                return Err(InvalidUsage::UpdateNotBeyondLower {
+                    ts,
+                    lower: self.inline_desc.lower().clone(),
+                });
+            }
+            self.inclusive_upper.insert(Reverse(ts));
+        }
+
+        assert_eq!(
+            data_type::<K>(&self.builder.write_schemas.key).expect("valid type"),
+            *part.key.data_type(),
+        );
+        assert_eq!(
+            data_type::<V>(&self.builder.write_schemas.val).expect("valid type"),
+            *part.val.data_type()
+        );
+
+        self.finish_part_builder();
+
+        let mut flushed = false;
+        if self.in_progress_goodbytes() + part.goodbytes() > self.builder.parts.cfg.blob_target_size
+        {
+            flushed |= self.flush_parts().await;
+        }
+        self.finished_parts.push(part);
+        if self.in_progress_goodbytes() > self.builder.parts.cfg.blob_target_size {
+            flushed |= self.flush_parts().await;
+        }
+
+        let added = if flushed {
+            Added::RecordAndParts
+        } else {
+            Added::Record
+        };
+        Ok(added)
     }
 
     /// Adds the given update to the batch.
@@ -616,24 +692,13 @@ where
         }
         self.inclusive_upper.insert(Reverse(ts.clone()));
 
-        let added = {
-            self.records_builder
-                .push(key, val, ts.clone(), diff.clone());
-            if self.records_builder.goodbytes() >= self.builder.parts.cfg.blob_target_size {
-                let part = self.records_builder.finish_and_replace(
-                    self.builder.write_schemas.key.as_ref(),
-                    self.builder.write_schemas.val.as_ref(),
-                );
-                Some(part)
-            } else {
-                None
-            }
-        };
+        let mut flushed = false;
+        self.part_builder.push(key, val, ts.clone(), diff.clone());
+        if self.in_progress_goodbytes() >= self.builder.parts.cfg.blob_target_size {
+            flushed |= self.flush_parts().await;
+        }
 
-        let added = if let Some(full_batch) = added {
-            self.builder
-                .flush_part(self.inline_desc.clone(), full_batch)
-                .await;
+        let added = if flushed {
             Added::RecordAndParts
         } else {
             Added::Record
@@ -754,9 +819,8 @@ where
         Ok(batch)
     }
 
-    /// Flushes the current part to Blob storage, first consolidating and then
-    /// columnar encoding the updates. It is the caller's responsibility to
-    /// chunk `current_part` to be no greater than
+    /// Flushes the current part to Blob storage, first columnar encoding the updates.
+    /// It is the caller's responsibility to chunk `current_part` to be no greater than
     /// [BatchBuilderConfig::blob_target_size], and must absolutely be less than
     /// [mz_persist::indexed::columnar::KEY_VAL_DATA_MAX_LEN]
     pub async fn flush_part(&mut self, part_desc: Description<T>, columnar: Part) {
