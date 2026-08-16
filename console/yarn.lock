@@ -4019,6 +4019,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@standard-schema/spec@npm:^1.1.0":
+  version: 1.1.0
+  resolution: "@standard-schema/spec@npm:1.1.0"
+  checksum: 10c0/d90f55acde4b2deb983529c87e8025fa693de1a5e8b49ecc6eb84d1fd96328add0e03d7d551442156c7432fd78165b2c26ff561b970a9a881f046abb78d6a526
+  languageName: node
+  linkType: hard
+
 "@stripe/react-stripe-js@npm:^5.6.1":
   version: 5.6.1
   resolution: "@stripe/react-stripe-js@npm:5.6.1"
@@ -4166,6 +4173,31 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@tanstack/db-ivm@npm:0.1.18":
+  version: 0.1.18
+  resolution: "@tanstack/db-ivm@npm:0.1.18"
+  dependencies:
+    fractional-indexing: "npm:^3.2.0"
+    sorted-btree: "npm:^1.8.1"
+  peerDependencies:
+    typescript: ">=4.7"
+  checksum: 10c0/769b86b24970d83ef53e0a4ae97cd9fa0f79ac6d546acb8a49269095df2ea85e0e479a6eba748df3671a3fa17100acb9195257fd7a91c06b2ba127189f215eef
+  languageName: node
+  linkType: hard
+
+"@tanstack/db@npm:0.6.17":
+  version: 0.6.17
+  resolution: "@tanstack/db@npm:0.6.17"
+  dependencies:
+    "@standard-schema/spec": "npm:^1.1.0"
+    "@tanstack/db-ivm": "npm:0.1.18"
+    "@tanstack/pacer-lite": "npm:^0.2.1"
+  peerDependencies:
+    typescript: ">=4.7"
+  checksum: 10c0/04fe3815c9280b55c0b1138371305483b6166dd5e119f735103c5bcb829c59c28107aa0df50996cdabb9f790c9b472dafface37e8102a5d4a77cdbce2c9a4394
+  languageName: node
+  linkType: hard
+
 "@tanstack/eslint-plugin-query@npm:^5.95.0":
   version: 5.95.2
   resolution: "@tanstack/eslint-plugin-query@npm:5.95.2"
@@ -4181,6 +4213,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@tanstack/pacer-lite@npm:^0.2.1":
+  version: 0.2.2
+  resolution: "@tanstack/pacer-lite@npm:0.2.2"
+  checksum: 10c0/fc442c25af3403e1be3d95f6c67b8d044ca5a655f2d0c0219030d75f990ae6a0d599fb496a355b0985056cdd032037c96711c7ed6f736d8d8ca1154a357457dd
+  languageName: node
+  linkType: hard
+
 "@tanstack/query-core@npm:5.95.2":
   version: 5.95.2
   resolution: "@tanstack/query-core@npm:5.95.2"
@@ -4192,6 +4231,18 @@ __metadata:
   version: 5.95.2
   resolution: "@tanstack/query-devtools@npm:5.95.2"
   checksum: 10c0/33b9dc74b4807a9316d3c43df9acf3b99c19e72424f3efd78984350f114d6b03ccba3ca3a01e5ad01d9fb78c32b719fee4aa5dfd2c62c641430838903e2f7576
+  languageName: node
+  linkType: hard
+
+"@tanstack/react-db@npm:0.1.95":
+  version: 0.1.95
+  resolution: "@tanstack/react-db@npm:0.1.95"
+  dependencies:
+    "@tanstack/db": "npm:0.6.17"
+    use-sync-external-store: "npm:^1.6.0"
+  peerDependencies:
+    react: ">=16.8.0"
+  checksum: 10c0/c3c7b880505240215e279c6453eb92311c21e249380ba4530dea4c1d3ae346804f777e2fb032caebb79ffa57f4f5d109737ced0e392b1800b4ef6062fc1c5c33
   languageName: node
   linkType: hard
 
@@ -8753,6 +8804,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"fractional-indexing@npm:^3.2.0":
+  version: 3.4.0
+  resolution: "fractional-indexing@npm:3.4.0"
+  checksum: 10c0/43c6fd9babc4a387da60a1fc1f3fbdb5a61f6237b8e93150772e269e58e053571b2d5e073dfae89c4facaa28edaa16548f74b6d25ae24f6c4f50ba7ba6099f4c
+  languageName: node
+  linkType: hard
+
 "framer-motion@npm:^12.38.0":
   version: 12.38.0
   resolution: "framer-motion@npm:12.38.0"
@@ -10889,7 +10947,9 @@ __metadata:
     "@stripe/react-stripe-js": "npm:^5.6.1"
     "@stripe/stripe-js": "npm:^9.5.0"
     "@svgr/babel-plugin-transform-svg-component": "npm:^8.0.0"
+    "@tanstack/db": "npm:0.6.17"
     "@tanstack/eslint-plugin-query": "npm:^5.95.0"
+    "@tanstack/react-db": "npm:0.1.95"
     "@tanstack/react-query": "npm:^5.95.0"
     "@tanstack/react-query-devtools": "npm:^5.95.0"
     "@tanstack/react-table": "npm:^8.21.3"
@@ -13601,6 +13661,13 @@ __metadata:
   languageName: node
   linkType: hard
 
+"sorted-btree@npm:^1.8.1":
+  version: 1.8.1
+  resolution: "sorted-btree@npm:1.8.1"
+  checksum: 10c0/96b1d920ad40bc9dfcf13698a209532cebe50fa063426d59bd9a862930ab025afec5c5597c254724403b5107f7b7ca91572565f4efc2214ce05d9c617c6b1142
+  languageName: node
+  linkType: hard
+
 "source-map-js@npm:^1.2.1":
   version: 1.2.1
   resolution: "source-map-js@npm:1.2.1"
@@ -14854,6 +14921,15 @@ __metadata:
   peerDependencies:
     react: ^16.8.0 || ^17.0.0 || ^18.0.0
   checksum: 10c0/23b1597c10adf15b26ade9e8c318d8cc0abc9ec0ab5fc7ca7338da92e89c2536abd150a5891bf076836c352fdfa104fc7231fb48f806fd9960e0cbe03601abaf
+  languageName: node
+  linkType: hard
+
+"use-sync-external-store@npm:^1.6.0":
+  version: 1.6.0
+  resolution: "use-sync-external-store@npm:1.6.0"
+  peerDependencies:
+    react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
+  checksum: 10c0/35e1179f872a53227bdf8a827f7911da4c37c0f4091c29b76b1e32473d1670ebe7bcd880b808b7549ba9a5605c233350f800ffab963ee4a4ee346ee983b6019b
   languageName: node
   linkType: hard
 
