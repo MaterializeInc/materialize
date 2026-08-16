@@ -264,6 +264,9 @@ class ScenarioRunner:
         self.replica_size: str | None = None
         self.target = target
         self.envd_cpus: int | None = None
+        # `test_name` -> `explanation` for every measurement recorded through
+        # this runner, collected by `run_scenario` for upload to test_analytics.
+        self.test_explanations: dict[str, str] = {}
 
     def add_result(
         self,
@@ -271,6 +274,8 @@ class ScenarioRunner:
         name: str,
         repetition: int,
         size_bytes: int | None,
+        *,
+        explanation: str,
         time_ms: int | None = None,
         qps: float | None = None,
         healthy: int | None = None,
@@ -278,11 +283,17 @@ class ScenarioRunner:
     ) -> None:
         """Write one result row.
 
+        ``explanation`` says what the measurement means, in one sentence, for
+        display next to its chart in the CI dashboard. It is metadata about
+        ``name`` rather than about this row, so it is collected separately
+        instead of being written to the CSV.
+
         ``healthy`` and ``failure_mode`` are recorded for
         cluster_object_limits only; extra columns are silently dropped
         on streams whose schema doesn't include them
         (``csv.DictWriter(extrasaction="ignore")``).
         """
+        self.test_explanations[name] = explanation
         self.results_writer.writerow(
             {
                 "scenario": self.scenario,
@@ -331,6 +342,8 @@ class ScenarioRunner:
         self,
         category: str,
         name: str,
+        *,
+        explanation: str,
         setup: list[str],
         query: list[str | tuple[str, list[tuple]]],
         after: list[str] = [],
@@ -369,6 +382,7 @@ class ScenarioRunner:
                     name,
                     repetition,
                     size_bytes,
+                    explanation=explanation,
                     time_ms=int((end_time - start_time) * 1000),
                 )
                 for after_part in after:
@@ -381,6 +395,7 @@ class ScenarioRunner:
         category: str,
         name: str,
         *,
+        explanation: str,
         setup: list[str],
         query: list[str],
         after: list[str],
@@ -513,6 +528,7 @@ class ScenarioRunner:
             # we ever want also multiple repetitions for QPS).
             0,
             None,
+            explanation=explanation,
             qps=qps_val,
         )
 
@@ -595,6 +611,7 @@ class TpchScenario(ClusterScalingScenario):
         runner.measure(
             "arrangement_formation",
             "create_index_primary_key",
+            explanation="TODO",
             setup=[
                 "DROP INDEX IF EXISTS lineitem_primary_idx CASCADE",
                 "SELECT * FROM t;",
@@ -610,6 +627,7 @@ class TpchScenario(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_index_key_fast_path",
+            explanation="TODO",
             size_of_index="lineitem_primary_idx",
             setup=[],
             query=[
@@ -622,6 +640,7 @@ class TpchScenario(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_index_non_key_fast_path",
+            explanation="TODO",
             size_of_index="lineitem_primary_idx",
             setup=[],
             query=[
@@ -633,6 +652,7 @@ class TpchScenario(ClusterScalingScenario):
         runner.measure(
             "arrangement_formation",
             "index_restart",
+            explanation="TODO",
             size_of_index="lineitem_primary_idx",
             setup=[
                 "SELECT count(*) > 0 FROM lineitem;",
@@ -670,6 +690,7 @@ class TpchScenarioMV(ClusterScalingScenario):
         runner.measure(
             "materialized_view_formation",
             "create_materialize_view",
+            explanation="TODO",
             setup=[
                 "DROP MATERIALIZED VIEW IF EXISTS mv_lineitem CASCADE",
                 "SELECT * FROM t;",
@@ -686,6 +707,7 @@ class TpchScenarioMV(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_key_slow_path",
+            explanation="TODO",
             setup=[],
             query=[
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123) SELECT * FROM data, t;",
@@ -697,6 +719,7 @@ class TpchScenarioMV(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_key_fast_path",
+            explanation="TODO",
             setup=[],
             query=[
                 "SELECT * FROM mv_lineitem WHERE l_orderkey = 123412341234 and l_linenumber = 123",
@@ -708,6 +731,7 @@ class TpchScenarioMV(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_non_key_slow_path",
+            explanation="TODO",
             setup=[],
             query=[
                 "WITH data AS (SELECT * FROM mv_lineitem WHERE l_tax = 123) SELECT * FROM data, t;",
@@ -718,6 +742,7 @@ class TpchScenarioMV(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_materialized_view_non_key_fast_path",
+            explanation="TODO",
             setup=[],
             query=[
                 "SELECT * FROM mv_lineitem WHERE l_tax = 123;",
@@ -728,6 +753,7 @@ class TpchScenarioMV(ClusterScalingScenario):
         runner.measure(
             "materialized_view_formation",
             "materialized_view_restart",
+            explanation="TODO",
             setup=[
                 "SELECT count(*) > 0 FROM mv_lineitem;",
                 "ALTER CLUSTER c SET (REPLICATION FACTOR 0);",
@@ -1522,6 +1548,7 @@ class TpchScenarioQueriesIndexedInputs(ClusterScalingScenario):
         runner.measure(
             "arrangement_formation",
             "create_index_inputs",
+            explanation="TODO",
             setup=["SELECT * FROM t;"],
             query=[
                 "CREATE INDEX pk_nation_nationkey ON nation (n_nationkey ASC);",
@@ -1551,6 +1578,7 @@ class TpchScenarioQueriesIndexedInputs(ClusterScalingScenario):
             runner.measure(
                 "arrangement_formation",
                 f"create_index_vq{i:02}",
+                explanation="TODO",
                 setup=["SELECT * FROM t;"],
                 query=[
                     f"DROP INDEX IF EXISTS vq{i:02}_primary_idx CASCADE;",
@@ -1564,6 +1592,7 @@ class TpchScenarioQueriesIndexedInputs(ClusterScalingScenario):
 
 
 class AuctionScenario(ClusterScalingScenario):
+
     def name(self) -> str:
         return "auction"
 
@@ -1723,6 +1752,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "arrangement_formation",
             "create_index_primary_key",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[
                 "SELECT * FROM t;",
@@ -1737,6 +1767,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "arrangement_formation",
             "create_index_foreign_key",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=["DROP INDEX IF EXISTS bids_auction_id_idx CASCADE"],
             query=[
@@ -1751,6 +1782,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_index_key_slow_path",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1763,6 +1795,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_index_key_fast_path",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1775,6 +1808,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_index_non_key_slow_path",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1787,6 +1821,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "peek_index_non_key_fast_path",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1799,6 +1834,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_max",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1809,6 +1845,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_max_subscribe",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1823,6 +1860,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_sum",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1833,6 +1871,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_sum_subscribe",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1847,6 +1886,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_count",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1857,6 +1897,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_count_subscribe",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1871,6 +1912,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_basic_list_agg",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1881,6 +1923,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "bids_basic_list_agg_subscribe",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1907,6 +1950,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "primitive_operators",
             "join",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1919,6 +1963,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "composite_operators",
             "bids_count_max_sum_min",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1935,6 +1980,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "composite_operators",
             "bids_count_max_sum_min_subscribe",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1959,6 +2005,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "composite_operators",
             "join_max",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=[],
             query=[
@@ -1971,6 +2018,7 @@ class AuctionScenario(ClusterScalingScenario):
         runner.measure(
             "peek_serving",
             "index_restart",
+            explanation="TODO",
             size_of_index="bids_id_idx",
             setup=["ALTER CLUSTER c SET (REPLICATION FACTOR 0);"],
             query=[
@@ -1993,6 +2041,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         runner.measure_dbbench(
             category="peek_qps",
             name="dbbench_256_conns",
+            explanation="TODO",
             setup=[
                 "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
                 "create default index on gen_view",
@@ -2011,6 +2060,7 @@ class QpsEnvdStrongScalingScenario(ClusterScalingScenario):
         runner.measure_dbbench(
             category="peek_qps",
             name="dbbench_512_conns",
+            explanation="TODO",
             setup=[
                 "create view if not exists gen_view as select generate_series as x from generate_series(1, 10)",
                 "create default index on gen_view",
@@ -2100,6 +2150,7 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
                     "copy_from_stdin_1m_rows",
                     repetition,
                     None,
+                    explanation="TODO",
                     time_ms=int(elapsed * 1000),
                     qps=rows_per_sec,
                 )
@@ -2111,6 +2162,7 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
 
 
 class SourceIngestionScenario(ClusterScalingScenario):
+
     def name(self) -> str:
         return "source_ingestion"
 
@@ -2224,6 +2276,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
         runner.measure(
             "hydration",
             "postgres",
+            explanation="TODO",
             setup=["DROP SOURCE IF EXISTS pg_source CASCADE;"],
             query=[
                 "CREATE SOURCE pg_source IN CLUSTER c FROM POSTGRES CONNECTION pg_conn (PUBLICATION 'mz_source') FOR TABLES (tbl AS pg_table);",
@@ -2236,6 +2289,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
         runner.measure(
             "hydration",
             "mysql",
+            explanation="TODO",
             setup=["DROP SOURCE IF EXISTS mysql_source CASCADE;"],
             query=[
                 "CREATE SOURCE mysql_source IN CLUSTER c FROM MYSQL CONNECTION mysql_conn FOR TABLES (admin.tbl AS mysql_table);",
@@ -2248,6 +2302,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
         runner.measure(
             "hydration",
             "kafka",
+            explanation="TODO",
             setup=["DROP SOURCE IF EXISTS kafka_table CASCADE;"],
             query=[
                 "CREATE SOURCE kafka_table IN CLUSTER c FROM KAFKA CONNECTION kafka_conn (TOPIC 'qa_cluster_spec_sheet_table') FORMAT AVRO USING CONFLUENT SCHEMA REGISTRY CONNECTION csr_conn ENVELOPE NONE;",
@@ -2297,6 +2352,7 @@ class EnvdObjectsScalabilityScenario(ABC):
         runner.measure(
             "adapter_ddl_latency",
             "create_table",
+            explanation="TODO",
             setup=["DROP TABLE IF EXISTS m_tmp CASCADE"],
             query=["CREATE TABLE m_tmp (a int)"],
             after=["DROP TABLE m_tmp"],
@@ -2308,6 +2364,7 @@ class EnvdObjectsScalabilityScenario(ABC):
         runner.measure(
             "adapter_peek_latency",
             "select_one_row",
+            explanation="TODO",
             setup=[],
             query=["SELECT * FROM t"],
             repetitions=self.REPETITIONS,
@@ -3053,6 +3110,7 @@ class ClusterObjectLimitsScenario(Scenario):
             "max_local_lag_ms",
             repetition=0,
             size_bytes=None,
+            explanation="TODO",
             time_ms=int(capped_lag_ms),
             healthy=1 if healthy else 0,
             failure_mode=None if healthy else status,
@@ -3902,6 +3960,10 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
             spec.key: _open_stream(spec, base_name) for spec in RESULT_STREAMS
         }
 
+        # `test_name` -> explanation, filled in by the scenarios as they record
+        # measurements and uploaded once at the end.
+        test_explanations: dict[str, str] = {}
+
         def process(scenario_name: str) -> None:
             with composition.test_case(scenario_name):
                 conn = ConnectionHandler(target.new_connection)
@@ -3919,7 +3981,9 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
                 scenario = spec.factory(args, target)
                 writer = streams[scenario.stream_key()].writer
                 print(f"--- SCENARIO: Running {spec.log_label}")
-                run_scenario(scenario, writer, conn, target, max_scale)
+                run_scenario(
+                    scenario, writer, conn, target, max_scale, test_explanations
+                )
 
         test_failed = True
         try:
@@ -3939,6 +4003,7 @@ def workflow_default(composition: Composition, parser: WorkflowArgumentParser) -
         # CSV directly.
         for stream in streams.values():
             stream.spec.upload(composition, stream.path, not test_failed)
+        upload_test_explanations_to_test_analytics(composition, test_explanations)
 
         assert not test_failed
 
@@ -4128,12 +4193,17 @@ def run_scenario(
     connection: ConnectionHandler,
     target: BenchTarget,
     max_scale: int,
+    test_explanations: dict[str, str],
 ) -> None:
     """Run a `Scenario` end-to-end: prepare, sweep, teardown.
 
     The scenario decides what to sweep (cluster size, envd CPUs, object
     count) and how to measure each point; this driver just threads the
     lifecycle calls. ``apply`` returning False skips a single point.
+
+    ``test_explanations`` accumulates the `test_name` -> explanation mapping of
+    every measurement recorded across scenarios, including on failure, hence the
+    caller-owned dict rather than a return value.
     """
     runner = ScenarioRunner(
         scenario.name(),
@@ -4156,6 +4226,7 @@ def run_scenario(
             finally:
                 scenario.cleanup_point(runner, point)
     finally:
+        test_explanations.update(runner.test_explanations)
         scenario.teardown(runner)
 
 
@@ -4728,6 +4799,44 @@ def plot(
         bbox_to_anchor=(1.0, 1.0),
     )
     save_plot(plot_dir, filtered, f"{title} (Normalized)", f"{slug}_normalized")
+
+
+def upload_test_explanations_to_test_analytics(
+    composition: Composition,
+    explanations: dict[str, str],
+) -> None:
+    """Upsert the `test_name` -> explanation mapping into test_analytics.
+
+    Metadata about the test names rather than about a build, so it goes up once
+    per run instead of per result stream and needs no build job entry. Covers
+    the measurements this job actually recorded. Every job of a default branch
+    build upserts, so across shards the table converges on the full mapping.
+
+    Only the default branch publishes, because the rows are global and describe
+    what the current tests measure. A branch run may hold explanations that were
+    never merged, and its build number would not order it against main anyway.
+
+    NOTE: the mapping is keyed by test name alone, so when two scenarios record
+    the same test name only one of the two explanations survives.
+    """
+    if (
+        not buildkite.is_in_buildkite()
+        or not buildkite.is_on_default_branch()
+        or not explanations
+    ):
+        return
+
+    test_analytics = TestAnalyticsDb(create_test_analytics_config(composition))
+    test_analytics.cluster_spec_sheet_test_explanations.add_or_update_explanations(
+        explanations
+    )
+
+    try:
+        test_analytics.submit_updates()
+        print("Uploaded test name explanations.")
+    except Exception as e:
+        # An error during an upload must never cause the build to fail
+        test_analytics.on_upload_failed(e)
 
 
 def upload_cluster_results_to_test_analytics(

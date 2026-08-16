@@ -133,3 +133,56 @@ class ClusterSpecSheetEnvironmentdResultStorage(BaseDataStorage):
                 """)
 
         self.database_connector.add_update_statements(sql_statements)
+
+
+class ClusterSpecSheetTestExplanationStorage(BaseDataStorage):
+    """The `test_name` to explanation mapping shown next to spec sheet charts.
+
+    Unlike the result tables this holds no per-build rows: the `explanation`
+    passed to each measurement in test/cluster-spec-sheet/mzcompose.py is the
+    source of truth and a default branch run upserts what it recorded, at most
+    one row per test name.
+    """
+
+    def add_or_update_explanations(self, explanations: dict[str, str]) -> None:
+        """Upsert one row per entry, keyed by test name.
+
+        Only for the default branch: the rows are global, and the build number
+        that orders them tells nothing about a branch commit. The caller
+        enforces that.
+
+        A row already written by a newer build is left alone, so a job of an
+        older commit finishing after a newer build cannot revert the text to
+        what that older commit said. Jobs of the same build may overwrite each
+        other, which is harmless because they carry the same text.
+
+        Explanations are never deleted here: a renamed or removed test leaves
+        its row behind until someone cleans it up.
+        """
+        build_number = buildkite.get_var(BuildkiteEnvVar.BUILDKITE_BUILD_NUMBER)
+
+        sql_statements = []
+
+        for test_name, explanation in explanations.items():
+            name_literal = as_sanitized_literal(test_name)
+            explanation_literal = as_sanitized_literal(explanation)
+
+            sql_statements.append(f"""
+                UPDATE cluster_spec_sheet_test_explanation
+                SET explanation = {explanation_literal}, build_number = {build_number}
+                WHERE test_name = {name_literal}
+                AND build_number <= {build_number}
+                ;
+                """)
+            sql_statements.append(f"""
+                INSERT INTO cluster_spec_sheet_test_explanation (test_name, explanation, build_number)
+                    SELECT {name_literal}, {explanation_literal}, {build_number}
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM cluster_spec_sheet_test_explanation
+                        WHERE test_name = {name_literal}
+                    )
+                ;
+                """)
+
+        self.database_connector.add_update_statements(sql_statements)
