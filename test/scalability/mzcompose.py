@@ -69,6 +69,7 @@ from materialize.test_analytics.data.scalability_framework import (
     scalability_framework_result_storage,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
+from materialize.ui import UIError
 from materialize.util import YesNoOnce, all_subclasses
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
@@ -339,6 +340,12 @@ def get_baseline_and_other_endpoints(
                 )
 
                 if resolved_target is None:
+                    if specified_target == regression_against_target:
+                        raise UIError(
+                            f"Could not resolve --regression-against={specified_target} "
+                            "to an image tag, so no regression comparison can be performed"
+                        )
+
                     print(
                         f"Skipping target {specified_target}: no ancestor image could be resolved"
                     )
