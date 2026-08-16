@@ -127,6 +127,14 @@ impl Coordinator {
             || "create secret ensure",
             async move {
                 secrets_controller.ensure(item_id, &payload).await?;
+
+                // Pause between the secret-store write and the finishing
+                // catalog transaction so a concurrent DROP DATABASE/SCHEMA
+                // ... CASCADE can commit. Runs in the off-thread ensure task,
+                // not the coordinator main loop, so the pause won't freeze
+                // the coordinator (which would block that DROP).
+                fail::fail_point!("create_secret_between_ensure_and_finish");
+
                 let stage = SecretStage::CreateFinish(CreateSecretFinish {
                     validity,
                     item_id,
