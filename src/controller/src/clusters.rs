@@ -39,6 +39,7 @@ use mz_ore::task::{self, AbortOnDropHandle};
 use mz_ore::{halt, instrument};
 use mz_repr::GlobalId;
 use mz_repr::adt::numeric::Numeric;
+use mz_service::transport::tls::{ClientTlsConfig, ClusterTlsContext, replica_secret_name};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use tokio::time;
@@ -461,6 +462,7 @@ impl Controller {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
         let metrics_task: Option<AbortOnDropHandle<()>>;
+        let tls: Option<ClientTlsConfig>;
 
         match config.location {
             ReplicaLocation::Unmanaged(UnmanagedReplicaLocation {
@@ -474,6 +476,9 @@ impl Controller {
                     ctl_addrs: storagectl_addrs,
                 };
                 metrics_task = None;
+                // Unmanaged replicas run outside the orchestrator, so there is no channel for
+                // distributing credentials to them. They connect in plaintext.
+                tls = None;
             }
             ReplicaLocation::Managed(m) => {
                 let (service, metrics_task_join_handle) = self.provision_replica(
@@ -498,16 +503,30 @@ impl Controller {
                 let http_addresses = service.addresses("internal-http");
                 self.replica_http_locator
                     .register_replica(cluster_id, replica_id, http_addresses);
+
+                tls = match &self.cluster_tls {
+                    Some(ctx) => {
+                        let service_name = ReplicaServiceName {
+                            cluster_id,
+                            replica_id,
+                            generation: self.deploy_generation,
+                        }
+                        .to_string();
+                        Some(ctx.client_config(&service_name)?)
+                    }
+                    None => None,
+                };
             }
         }
 
         self.storage
-            .connect_replica(cluster_id, replica_id, storage_location);
+            .connect_replica(cluster_id, replica_id, storage_location, tls.clone());
         self.compute.add_replica_to_instance(
             cluster_id,
             replica_id,
             compute_location,
             config.compute,
+            tls,
         )?;
 
         if let Some(task) = metrics_task {
@@ -544,13 +563,18 @@ impl Controller {
         let deploy_generation = self.deploy_generation;
         let dyncfg = Arc::clone(self.compute.dyncfg());
         let orchestrator = Arc::clone(&self.orchestrator);
+        let cluster_tls = self.cluster_tls.clone();
         task::spawn(
             || "controller_remove_past_generation_replicas",
             async move {
                 info!("attempting to remove past generation replicas");
                 loop {
-                    match try_remove_past_generation_replicas(&*orchestrator, deploy_generation)
-                        .await
+                    match try_remove_past_generation_replicas(
+                        &*orchestrator,
+                        cluster_tls.as_deref(),
+                        deploy_generation,
+                    )
+                    .await
                     {
                         Ok(()) => {
                             info!("successfully removed past generation replicas");
@@ -698,6 +722,24 @@ impl Controller {
         let persist_pubsub_url = self.persist_pubsub_url.clone();
         let secrets_args = self.secrets_args.to_flags();
 
+        // Mint the replica's transport credentials and write them to its secret. The write is
+        // asynchronous and races replica startup: clusterd retries reading the secret at boot,
+        // so it converges once the write lands. Re-provisioning an existing replica (e.g. on
+        // controller restart) re-mints its credentials, which is harmless: running processes
+        // keep using the credentials they loaded, and both chain to the same CA.
+        let ctp_tls_secret = self.cluster_tls.as_ref().map(|ctx| {
+            let ctx = Arc::clone(ctx);
+            let service_name = service_name.clone();
+            let secret_name = replica_secret_name(&service_name);
+            let task_name = format!("ctp_tls_mint_{service_name}");
+            task::spawn(|| task_name, async move {
+                if let Err(error) = ctx.mint_replica_credentials(&service_name).await {
+                    error!(%service_name, "failed to mint CTP TLS credentials: {error:#}");
+                }
+            });
+            secret_name
+        });
+
         // TODO(teskje): use the same values as for compute?
         let storage_proto_timely_config = TimelyConfig {
             arrangement_exert_proportionality: 1337,
@@ -817,6 +859,9 @@ impl Controller {
                     }
 
                     args.extend(secrets_args.clone());
+                    if let Some(secret_name) = &ctp_tls_secret {
+                        args.push(format!("--ctp-tls-secret={secret_name}"));
+                    }
                     args
                 }),
                 ports: vec![
@@ -973,6 +1018,18 @@ impl Controller {
             generation,
         }
         .to_string();
+
+        if let Some(ctx) = &self.cluster_tls {
+            let ctx = Arc::clone(ctx);
+            let service_name = service_name.clone();
+            let task_name = format!("ctp_tls_delete_{service_name}");
+            task::spawn(|| task_name, async move {
+                if let Err(error) = ctx.delete_replica_credentials(&service_name).await {
+                    warn!(%service_name, "failed to delete CTP TLS credentials: {error:#}");
+                }
+            });
+        }
+
         self.orchestrator.drop_service(&service_name)
     }
 }
@@ -980,6 +1037,7 @@ impl Controller {
 /// Remove all replicas from past generations.
 async fn try_remove_past_generation_replicas(
     orchestrator: &dyn NamespacedOrchestrator,
+    cluster_tls: Option<&ClusterTlsContext>,
     deploy_generation: u64,
 ) -> Result<(), anyhow::Error> {
     let services: BTreeSet<_> = orchestrator.list_services().await?.into_iter().collect();
@@ -993,6 +1051,15 @@ async fn try_remove_past_generation_replicas(
                 "removing past generation replica",
             );
             orchestrator.drop_service(&service)?;
+
+            // Delete the replica's transport credentials along with its service. Unlike
+            // `deprovision_replica`, this path can await the deletion, so a transient failure
+            // propagates to the caller's retry loop rather than leaking the secret. Every deploy
+            // generation creates a fresh set of credentials, so a leak here would accumulate one
+            // secret per replica per upgrade.
+            if let Some(ctx) = cluster_tls {
+                ctx.delete_replica_credentials(&service).await?;
+            }
         }
     }
 

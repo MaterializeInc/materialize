@@ -1330,6 +1330,7 @@ impl<'a> RunnerInner<'a> {
                     secrets_reader_name_prefix: None,
                 },
                 connection_context,
+                cluster_tls: None,
                 replica_http_locator: Arc::new(ReplicaHttpLocator::default()),
             },
             secrets_controller,

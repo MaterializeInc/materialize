@@ -477,9 +477,11 @@ reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
 rlimit = "0.11.0"
+rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs", "pem"] }
 rocksdb = { version = "0.24.0", default-features = false, features = ["lz4", "snappy", "zstd"] }
 ropey = "1.6.1"
 rustls = "0.23.38"
+rustls-pki-types = { version = "1", features = ["std"] }
 rpassword = "7.5.1"
 rusqlite = { version = "0.32.1", features = ["bundled"] }
 ryu = "1.0.23"
@@ -532,6 +534,7 @@ tokio-metrics = "0.5.0"
 tokio-native-tls = "0.3.1"
 tokio-openssl = "0.6.5"
 tokio-postgres = "0.7.15"
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["aws_lc_rs", "logging"] }
 tokio-stream = "0.1.18"
 tokio-test = "0.4.5"
 tokio-util = "0.7.18"

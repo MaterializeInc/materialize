@@ -39,6 +39,7 @@ use mz_persist_types::{Codec64, ShardId};
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, RelationDesc, RelationVersion, Row, Timestamp};
+use mz_service::transport::tls::ClientTlsConfig;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::connections::inline::InlinedConnection;
 use mz_storage_types::controller::{CollectionMetadata, StorageError};
@@ -471,6 +472,7 @@ pub trait StorageController: Debug {
         instance_id: StorageInstanceId,
         replica_id: ReplicaId,
         location: ClusterReplicaLocation,
+        tls: Option<ClientTlsConfig>,
     );
 
     /// Disconnects the storage instance from the specified replica.
