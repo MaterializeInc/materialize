@@ -62,6 +62,17 @@ export function isExecuteSqlError(error: unknown): error is ExecuteSqlError {
   return error != null && typeof error === "object" && "errorMessage" in error;
 }
 
+/** True for a `databaseError` denied by a missing USAGE/SELECT grant. */
+export function isInsufficientPrivilegeError(
+  error: ExecuteSqlError | null | undefined,
+): boolean {
+  return (
+    !!error &&
+    "code" in error &&
+    error.code === ErrorCode.INSUFFICIENT_PRIVILEGE
+  );
+}
+
 export function buildExecuteSqlUrl(environmentdHttpAddress: string) {
   return new URL(
     `${apiClient.mzHttpUrlScheme}://${environmentdHttpAddress}/api/sql`,
