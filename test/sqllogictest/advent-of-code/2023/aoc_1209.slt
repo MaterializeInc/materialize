@@ -94,8 +94,8 @@ Explained Query:
                   Map (array_index(regexp_split_to_array["\n", case_insensitive=false](#0{input}), integer_to_bigint(#1{i}))) // { arity: 3 }
                     FlatMap generate_series(1, array_length(regexp_split_to_array["\n", case_insensitive=false](#0{input}), 1), 1) // { arity: 2 }
                       ReadStorage materialize.public.input // { arity: 1 }
-          Project (#8..=#11) // { arity: 4 }
-            Map ((coalesce(#4{value}, 0) - coalesce(#0{value}, 0)), coalesce(#1{line_no}, #5{line_no}), coalesce((#2{col_no} + 1), #6{col_no}), (coalesce(#3{round}, #7{round}) + 1)) // { arity: 12 }
+          Project (#9, #10, #8, #11) // { arity: 4 }
+            Map (coalesce((#2{col_no} + 1), #6{col_no}), (coalesce(#4{value}, 0) - coalesce(#0{value}, 0)), coalesce(#1{line_no}, #5{line_no}), (coalesce(#3{round}, #7{round}) + 1)) // { arity: 12 }
               Union // { arity: 8 }
                 Project (#4..=#7, #0..=#3) // { arity: 8 }
                   Map (null, null, null, null) // { arity: 8 }

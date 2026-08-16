@@ -47,7 +47,8 @@ Explained Query:
     Filter (#0{f1} ilike #1{op_val})
       CrossJoin type=differential
         ArrangeBy keys=[[]]
-          ReadStorage materialize.public.t_data
+          Filter (#0{f1}) IS NOT NULL
+            ReadStorage materialize.public.t_data
         ArrangeBy keys=[[]]
           Union
             ReadStorage materialize.public.t_operator
@@ -58,6 +59,7 @@ Explained Query:
                     ReadStorage materialize.public.t_operator
 
 Source materialize.public.t_data
+  filter=((#0{f1}) IS NOT NULL)
 Source materialize.public.t_operator
 
 Target cluster: quickstart

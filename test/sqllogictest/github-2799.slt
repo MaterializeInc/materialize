@@ -18,16 +18,15 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 ----
 Explained Query:
   Project (#0{f1}, #1{f2}) // { arity: 2 }
-    Join on=(#0{f1} = #2{f1}) type=differential // { arity: 3 }
+    Join on=(#0{f1} = #2{f1} AND #1{f2} = #3{f2}) type=differential // { arity: 4 }
       implementation
-        %1[#0]UKA » %0:t1[#0]K
-      ArrangeBy keys=[[#0{f1}]] // { arity: 2 }
+        %1[#0, #1]UKKA » %0:t1[#0, #1]KK
+      ArrangeBy keys=[[#0{f1}, #1{f2}]] // { arity: 2 }
         ReadStorage materialize.public.t1 // { arity: 2 }
-      ArrangeBy keys=[[#0{f1}]] // { arity: 1 }
-        Distinct project=[#0{f1}] // { arity: 1 }
-          Project (#0{f1}) // { arity: 1 }
-            Filter (#0{f1} > 1) // { arity: 2 }
-              ReadStorage materialize.public.t1 // { arity: 2 }
+      ArrangeBy keys=[[#0{f1}, #1{f2}]] // { arity: 2 }
+        Distinct project=[#0{f1}, #1{f2}] // { arity: 2 }
+          Filter (#0{f1} > 1) // { arity: 2 }
+            ReadStorage materialize.public.t1 // { arity: 2 }
 
 Source materialize.public.t1
 

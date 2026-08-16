@@ -151,41 +151,51 @@ EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) 
 Explained Query:
   With
     cte l0 =
+      Project (#0{l_orderkey}..=#8{o_custkey}, #10{o_orderdate}) // { arity: 10 }
+        Join on=(#4{l_extendedprice} = #9{o_totalprice}) type=differential // { arity: 11 }
+          implementation
+            %1:orders[#2{o_totalprice}]Keiif » %0:lineitem[#4{l_extendedprice}]Keiif
+          ArrangeBy keys=[[#4{l_extendedprice}]] // { arity: 7 }
+            Project (#0{l_orderkey}..=#5{l_shipdate}, #7{l_receiptdate}) // { arity: 7 }
+              Filter (#6{l_commitdate} = 1997-01-25) // { arity: 8 }
+                ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
+          ArrangeBy keys=[[#2{o_totalprice}]] // { arity: 4 }
+            Filter (#0{o_orderkey} <= 195) AND (#0{o_orderkey} >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#3{o_orderdate})) // { arity: 4 }
+              ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
+    cte l1 =
       Project (#0{l_orderkey}) // { arity: 1 }
         ReadIndex on=materialize.public.lineitem fk_lineitem_orderkey=[lookup value=(38)] // { arity: 9 }
-    cte l1 =
+    cte l2 =
       Reduce aggregates=[min(#0{o_orderkey})] // { arity: 1 }
-        Project (#1{o_orderkey}) // { arity: 1 }
-          Join on=(#0{l_extendedprice} = #2{o_totalprice} AND #1{o_orderkey} = #3{l_orderkey}) type=delta // { arity: 4 }
+        Project (#7{o_orderkey}) // { arity: 1 }
+          Join on=(#0{l_orderkey} = #10{l_orderkey} AND #1{l_partkey} = #11{l_partkey} AND #2{l_suppkey} = #12{l_suppkey} AND #3{l_linenumber} = #13{l_linenumber} AND #4{l_extendedprice} = #14{l_extendedprice} AND #5{l_shipdate} = #15{l_shipdate} AND #6{l_receiptdate} = #16{l_receiptdate} AND #7{o_orderkey} = #17{o_orderkey} = #20{l_orderkey} AND #8{o_custkey} = #18{o_custkey} AND #9{o_orderdate} = #19{o_orderdate}) type=delta // { arity: 21 }
             implementation
-              %0:lineitem » %1:orders[#1{o_totalprice}]Keiif » %2[#0]K
-              %1:orders » %0:lineitem[#0{l_extendedprice}]Kef » %2[#0]K
-              %2 » %1:orders[#0{o_orderkey}]KAeiif » %0:lineitem[#0{l_extendedprice}]Kef
-            ArrangeBy keys=[[#0{l_extendedprice}]] // { arity: 1 }
-              Project (#4{l_extendedprice}) // { arity: 1 }
-                Filter (#6{l_commitdate} = 1997-01-25) // { arity: 8 }
-                  ReadIndex on=lineitem fk_lineitem_orderkey=[*** full scan ***] // { arity: 8 }
-            ArrangeBy keys=[[#0{o_orderkey}], [#1{o_totalprice}]] // { arity: 2 }
-              Project (#0{o_orderkey}, #2{o_totalprice}) // { arity: 2 }
-                Filter (#0{o_orderkey} <= 195) AND (#0{o_orderkey} >= 38) AND (1997-08-25 00:00:00 = date_to_timestamp(#3{o_orderdate})) // { arity: 4 }
-                  ReadIndex on=orders pk_orders_orderkey=[*** full scan ***] // { arity: 4 }
+              %0:l0 » %1[#0..=#9]UKKKKKKKKKKA » %2[#0]K
+              %1 » %0:l0[#0..=#9]KKKKKKKKKK » %2[#0]K
+              %2 » %0:l0[#7]K » %1[#0..=#9]UKKKKKKKKKKA
+            ArrangeBy keys=[[#0{l_orderkey}..=#9{o_orderdate}], [#7{o_orderkey}]] // { arity: 10 }
+              Get l0 // { arity: 10 }
+            ArrangeBy keys=[[#0{l_orderkey}..=#9{o_orderdate}]] // { arity: 10 }
+              Distinct project=[#0{l_orderkey}..=#9{o_orderdate}] // { arity: 10 }
+                Filter (#4{l_extendedprice} = #4{l_extendedprice}) // { arity: 10 }
+                  Get l0 // { arity: 10 }
             ArrangeBy keys=[[#0{l_orderkey}]] // { arity: 1 }
               Union // { arity: 1 }
-                Get l0 // { arity: 1 }
+                Get l1 // { arity: 1 }
                 Project (#1) // { arity: 1 }
                   Filter (#1 <= 195) AND (#1 >= 38) // { arity: 2 }
                     FlatMap guard_subquery_size(#0{count}) // { arity: 2 }
                       Reduce aggregates=[count(*)] // { arity: 1 }
                         Project () // { arity: 0 }
-                          Get l0 // { arity: 1 }
+                          Get l1 // { arity: 1 }
   Return // { arity: 1 }
     Union // { arity: 1 }
-      Get l1 // { arity: 1 }
+      Get l2 // { arity: 1 }
       Map (null) // { arity: 1 }
         Union // { arity: 0 }
           Negate // { arity: 0 }
             Project () // { arity: 0 }
-              Get l1 // { arity: 1 }
+              Get l2 // { arity: 1 }
           Constant // { arity: 0 }
             - ()
 
