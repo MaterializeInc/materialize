@@ -77,8 +77,8 @@
       {
         "name": "enableRbac",
         "type": "Bool",
-        "description": "Whether to enable role based access control. Defaults to false.",
-        "default": false,
+        "description": "Whether to enable role based access control. Defaults to true.",
+        "default": true,
         "required": false,
         "deprecated": false
       },
