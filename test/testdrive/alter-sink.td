@@ -125,6 +125,20 @@ $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=10s
 $ kafka-verify-data format=json sink=materialize.public.sink key=false
 {"before": null, "after": {"created_post_name": "hundred", "created_post_value": 99}}
 
+# Regression test for SQL-517. A catalog change to a connection, for example
+# a GRANT, re-alters all dependent sinks in the storage controller. This used
+# to panic the coordinator after ALTER SINK ... SET FROM, because the
+# controller kept the sink's pre-ALTER description and considered the newly
+# computed connection incompatible with it.
+> CREATE ROLE conn_grant_role;
+
+> GRANT USAGE ON CONNECTION kafka_conn TO conn_grant_role;
+
+> INSERT INTO created_post_alter VALUES ('after-grant', 1);
+
+$ kafka-verify-data format=json sink=materialize.public.sink key=false
+{"before": null, "after": {"created_post_name": "after-grant", "created_post_value": 1}}
+
 # COMMIT INTERVAL only applies to Iceberg sinks.
 ! ALTER SINK sink SET (COMMIT INTERVAL = '1s');
 contains: COMMIT INTERVAL option is not supported with KAFKA sinks
