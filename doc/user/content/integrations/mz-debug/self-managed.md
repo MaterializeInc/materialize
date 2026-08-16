@@ -64,6 +64,8 @@ Each resource type directory also contains a `describe.txt` file with the output
 
 {{% integrations/mz-debug/memory-profiles %}}
 
+{{% integrations/mz-debug/symbolize-profiles %}}
+
 
 
 ## Prerequisite: Get the Materialize instance name
