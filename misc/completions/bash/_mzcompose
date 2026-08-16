@@ -2,7 +2,6 @@
 
 _shtab_mzcompose_subparsers=(build config cp create describe ls list description down events exec gen-shortcuts help images kill list-compositions list-workflows logs pause port ps pull push restart rm run scale start stop sql top unpause up web completion)
 
-_shtab_mzcompose_option_strings=(-h --help --mz-quiet --find --preserve-ports --project-name --host-network --sanity-restart-mz --ignore-docker-version --dev --release --optimized --coverage --sanitizer --arch --image-registry --image-prefix)
 _shtab_mzcompose_build_option_strings=(-h --help)
 _shtab_mzcompose_config_option_strings=(-h --help)
 _shtab_mzcompose_cp_option_strings=(-h --help)
@@ -38,30 +37,14 @@ _shtab_mzcompose_unpause_option_strings=(-h --help)
 _shtab_mzcompose_up_option_strings=(-h --help)
 _shtab_mzcompose_web_option_strings=(-h --help)
 _shtab_mzcompose_completion_option_strings=(-h --help)
+_shtab_mzcompose_option_strings=(-h --help --mz-quiet --find --preserve-ports --project-name --host-network --sanity-restart-mz --ignore-docker-version --dev --release --optimized --coverage --sanitizer --arch --image-registry --image-prefix)
 
 
 
+_shtab_mzcompose_completion_pos_0_choices=(bash zsh tcsh fish)
 _shtab_mzcompose_pos_0_choices=(build config cp create describe ls list description down events exec gen-shortcuts help images kill list-compositions list-workflows logs pause port ps pull push restart rm run scale start stop sql top unpause up web completion)
 _shtab_mzcompose___sanitizer_choices=(address hwaddress cfi thread leak undefined none)
-_shtab_mzcompose_completion_pos_0_choices=(bash zsh tcsh fish)
 
-_shtab_mzcompose_pos_0_nargs=A...
-_shtab_mzcompose__h_nargs=0
-_shtab_mzcompose___help_nargs=0
-_shtab_mzcompose___mz_quiet_nargs=0
-_shtab_mzcompose___preserve_ports_nargs=0
-_shtab_mzcompose___host_network_nargs=0
-_shtab_mzcompose___sanity_restart_mz_nargs=0
-_shtab_mzcompose___ignore_docker_version_nargs=0
-_shtab_mzcompose___dev_nargs=0
-_shtab_mzcompose___release_nargs=0
-_shtab_mzcompose___optimized_nargs=0
-_shtab_mzcompose___coverage_nargs=0
-_shtab_mzcompose__f_nargs='?'
-_shtab_mzcompose___file_nargs='?'
-_shtab_mzcompose___project_directory_nargs='?'
-_shtab_mzcompose__v_nargs=0
-_shtab_mzcompose___version_nargs=0
 _shtab_mzcompose_build__h_nargs=0
 _shtab_mzcompose_build___help_nargs=0
 _shtab_mzcompose_config__h_nargs=0
@@ -129,6 +112,18 @@ _shtab_mzcompose_web__h_nargs=0
 _shtab_mzcompose_web___help_nargs=0
 _shtab_mzcompose_completion__h_nargs=0
 _shtab_mzcompose_completion___help_nargs=0
+_shtab_mzcompose_pos_0_nargs=A...
+_shtab_mzcompose__h_nargs=0
+_shtab_mzcompose___help_nargs=0
+_shtab_mzcompose___mz_quiet_nargs=0
+_shtab_mzcompose___preserve_ports_nargs=0
+_shtab_mzcompose___host_network_nargs=0
+_shtab_mzcompose___sanity_restart_mz_nargs=0
+_shtab_mzcompose___ignore_docker_version_nargs=0
+_shtab_mzcompose___dev_nargs=0
+_shtab_mzcompose___release_nargs=0
+_shtab_mzcompose___optimized_nargs=0
+_shtab_mzcompose___coverage_nargs=0
 
 
 # $1=COMP_WORDS[1]
@@ -247,18 +242,20 @@ _shtab_mzcompose() {
 
   # Generate the completions
 
+  COMPREPLY=()
   if [[ $pos_only = 0 && "${completing_word}" == -* ]]; then
     # optional argument started: use option strings
-    mapfile -t COMPREPLY < <(compgen -W "${current_option_strings[*]}" -- "${completing_word}")
-  elif [[ "${previous_word}" == ">" || "${previous_word}" == ">>" ||
-          "${previous_word}" =~ ^[12]">" || "${previous_word}" =~ ^[12]">>" ]]; then
+    while IFS= read -r line; do COMPREPLY+=("$line"); done < <(
+      compgen -W "${current_option_strings[*]}" -- "${completing_word}")
+  elif [[ "${previous_word}" =~ ^[0-9\&]*[\<\>]\>?$ ]]; then
     # handle redirection operators
-    mapfile -t COMPREPLY < <(compgen -f -- "${completing_word}")
+    while IFS= read -r line; do COMPREPLY+=("$line"); done < <(compgen -f -- "${completing_word}")
   else
     # use choices & compgen
     [ -n "${current_action_compgen}" ] &&
-      mapfile -t COMPREPLY < <("${current_action_compgen}" "${completing_word}")
-    mapfile -t -O "${#COMPREPLY[@]}" COMPREPLY < <(
+      while IFS= read -r line; do COMPREPLY+=("$line"); done < <(
+        "${current_action_compgen}" "${completing_word}")
+    while IFS= read -r line; do COMPREPLY+=("$line"); done < <(
       compgen -W "${current_action_choices[*]}" -- "${completing_word}")
   fi
 
