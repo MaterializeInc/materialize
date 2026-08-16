@@ -117,4 +117,15 @@ pub enum LoadError {
         path1: PathBuf,
         path2: PathBuf,
     },
+
+    /// A profile suffix pushed an identifier past the maximum length.
+    #[error(
+        "identifier '{name}' is too long after applying the profile suffix (limit is {limit} bytes)"
+    )]
+    SuffixedIdentifierTooLong {
+        /// The over-length identifier, suffix included.
+        name: String,
+        /// The maximum allowed identifier length in bytes.
+        limit: usize,
+    },
 }
