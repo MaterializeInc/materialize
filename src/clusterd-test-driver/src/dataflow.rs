@@ -466,11 +466,57 @@ impl DataflowBuilder {
             optimize_dataflow(&mut self.mir, &mut ctx, false)
                 .map_err(|e| anyhow::anyhow!("optimizing dataflow failed: {e}"))?;
         }
+        // The lowering aborts the process on a `Reduce` mixing reduction types,
+        // rather than returning an error, so screen for it here to keep the
+        // no-panic contract above. See `check_no_mixed_reduce`.
+        for object in &self.mir.objects_to_build {
+            check_no_mixed_reduce(object.plan.as_inner())
+                .map_err(|e| anyhow::anyhow!("object {}: {e}", object.id))?;
+        }
         // Lower MIR -> LIR. Deterministic and self-contained.
         let lowered: DataflowDescription<LirRelationExpr, ()> =
             LirRelationExpr::finalize_dataflow(self.mir, &features, None)
                 .map_err(|e| anyhow::anyhow!("lowering dataflow failed: {e}"))?;
         augment(lowered, &self.sources, &self.sinks)
+    }
+}
+
+/// Reject a `Reduce` whose aggregates span more than one `ReductionType`.
+///
+/// `ReducePlan::create_from` asserts that they all share one type, so lowering
+/// such a reduce aborts the process. The assertion is sound for the real
+/// optimizer, where `ReduceReduction` always runs first and splits a mixed reduce
+/// into one reduce per type joined back together. It is not sound for a caller
+/// that lowers MIR straight from external input, which is exactly what the script
+/// reader does, and a panic there takes the whole run down instead of failing one
+/// scenario with a readable message.
+///
+/// Screening here rather than fixing the assertion keeps the change local to the
+/// test driver. Turning `create_from` into a fallible call would touch the
+/// optimizer's hot path for a case it cannot hit.
+fn check_no_mixed_reduce(expr: &MirRelationExpr) -> anyhow::Result<()> {
+    use mz_compute_types::plan::reduce::reduction_type;
+    use mz_expr::visit::Visit;
+
+    let mut mixed = None;
+    expr.visit_post(&mut |e| {
+        if let MirRelationExpr::Reduce { aggregates, .. } = e {
+            let mut types = aggregates.iter().map(|a| reduction_type(&a.func));
+            if let Some(first) = types.next() {
+                if let Some(other) = types.find(|t| *t != first) {
+                    mixed.get_or_insert((first, other));
+                }
+            }
+        }
+    });
+    match mixed {
+        None => Ok(()),
+        Some((a, b)) => anyhow::bail!(
+            "a Reduce mixes reduction types ({a:?} and {b:?}); the lowering \
+             requires one type per Reduce, which the MIR optimizer's \
+             ReduceReduction pass establishes. Set `optimize` so it runs, or \
+             split the aggregates across separate Reduces."
+        ),
     }
 }
 
@@ -991,6 +1037,68 @@ mod tests {
         let (iid, import) = df.index_imports.iter().next().unwrap();
         assert_eq!(*iid, index_id);
         assert_eq!(import.desc.on_id, on_id);
+    }
+
+    /// A `Reduce` mixing reduction types is reported as an error, not a panic.
+    ///
+    /// The lowering asserts one reduction type per `Reduce`, so without the
+    /// screen in `finish` this aborts the process. That matters because the
+    /// script reader lowers MIR straight from a `.spec` file: a panic there takes
+    /// down the whole run instead of failing one scenario. With `optimize` on,
+    /// `ReduceReduction` splits the reduce and the same plan lowers fine.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `rust_psm_stack_pointer`
+    fn mixed_reduce_errors_rather_than_panics() {
+        let loc = PersistLocation {
+            blob_uri: "mem://".parse().unwrap(),
+            consensus_uri: "mem://".parse().unwrap(),
+        };
+        // `max` is hierarchical, `count` is accumulable: one Reduce, two types.
+        let assemble = |optimize: bool| {
+            let mut builder = DataflowBuilder::new("headless-mixed-reduce");
+            let src = builder.import_persist(
+                GlobalId::User(1000),
+                PersistSource {
+                    shard: ShardId::new(),
+                    location: loc.clone(),
+                    desc: crate::data::sample_desc(),
+                    upper: Timestamp::from(1),
+                },
+            );
+            let reduce = MirRelationExpr::Reduce {
+                input: Box::new(src.get()),
+                group_key: vec![],
+                aggregates: vec![
+                    AggregateExpr {
+                        func: AggregateFunc::MaxInt64,
+                        expr: MirScalarExpr::column(0),
+                        distinct: false,
+                    },
+                    AggregateExpr {
+                        func: AggregateFunc::Count,
+                        expr: MirScalarExpr::literal_true(),
+                        distinct: false,
+                    },
+                ],
+                monotonic: false,
+                expected_group_size: None,
+            };
+            builder.build(GlobalId::User(2000), reduce);
+            if optimize {
+                builder.optimize();
+            }
+            builder.as_of(Timestamp::from(0));
+            builder.export_index(GlobalId::User(2001), GlobalId::User(2000), vec![0]);
+            builder.finish()
+        };
+
+        let err = assemble(false).expect_err("a mixed reduce must be rejected");
+        assert!(
+            err.to_string().contains("mixes reduction types"),
+            "expected the mixed-reduction message, got: {err}"
+        );
+        // The optimizer's ReduceReduction splits it, so the same plan lowers.
+        assert!(assemble(true).is_ok());
     }
 
     /// A count-over-index dataflow imports the index (no storage source), builds

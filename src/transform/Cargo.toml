@@ -22,6 +22,8 @@ ordered-float.workspace = true
 paste.workspace = true
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
+rand_chacha = { workspace = true, optional = true }
 serde.workspace = true
 tracing.workspace = true
 
@@ -36,3 +38,6 @@ proptest-derive.workspace = true
 [features]
 default = []
 proptest = ["dep:proptest", "dep:proptest-derive", "mz-repr/proptest", "mz-expr/proptest"]
+# Random MIR generation and the `FoldConstants` result-equivalence oracle, shared
+# by the `mz-transform` fuzz targets and the compute surface suite.
+mirgen = ["dep:rand", "dep:rand_chacha"]

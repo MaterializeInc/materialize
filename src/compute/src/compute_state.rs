@@ -1656,16 +1656,30 @@ impl IndexPeek {
                 }
             });
             if copies.is_negative() {
+                // Not a corrupt source, and not an internal inconsistency either.
+                //
+                // An error is emitted with the multiplicity of the row it was raised
+                // on, and a `Negate` negates its input's rows while passing its
+                // errors through, so an expression evaluated above a `Negate` raises
+                // errors with negative multiplicity. `EXCEPT ALL` and the
+                // null-extended branch of an outer join both build exactly that, and
+                // predicate pushdown deliberately leaves a literal-error predicate
+                // above the `Negate` so that those errors cancel against the other
+                // branch's (see `predicate_pushdown`'s `Negate` arm and
+                // database-issues#5691). When they fail to cancel exactly, the
+                // remainder lands here, from a plain user query.
+                //
+                // So report the error itself, which is what the persist and
+                // subscribe read paths do with the same collection, and log at
+                // `warn` rather than paging on it. Borrowing the storage layer's
+                // "Invalid data in source" wording pointed every reader at an
+                // upstream source that is not involved.
                 let error = cursor.key(&storage);
-                error!(
+                warn!(
                     target = %self.peek.target.id(), diff = %copies, %error,
-                    "index peek encountered negative multiplicities in error trace",
+                    "index peek found a negative accumulation in the error trace",
                 );
-                return PeekStatus::Ready(PeekResponse::Error(format!(
-                    "Invalid data in source errors, \
-                    saw retractions ({}) for row that does not exist: {}",
-                    -copies, error,
-                )));
+                return PeekStatus::Ready(PeekResponse::Error(error.to_string()));
             }
             if copies.is_positive() {
                 return PeekStatus::Ready(PeekResponse::Error(cursor.key(&storage).to_string()));

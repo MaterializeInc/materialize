@@ -16,7 +16,23 @@ driver and clusterd.
 
 Run via the repo virtualenv so the `materialize` helpers are importable:
 
+    # one hand-written scenario (SCRIPT), the default
     bin/pyactivate test/clusterd-test-driver/run-local.py
+
+    # every hand-written scenario, each against a fresh clusterd
+    SCRIPT=all bin/pyactivate test/clusterd-test-driver/run-local.py
+
+    # the generated compute-surface corpus
+    WORKLOAD_SEED=default bin/pyactivate test/clusterd-test-driver/run-local.py
+
+    # soak: 250 freshly drawn plans, every one kept, at one configuration
+    WORKLOAD_SEED=12345 WORKLOAD_SOAK=250 \
+        bin/pyactivate test/clusterd-test-driver/run-local.py
+
+`SCRIPT=all` exists because the scenarios assert on driver output, including
+error messages, so a change to one can break a golden in a scenario nobody
+thought to re-run. Running a single scenario is the fast loop; run them all
+before pushing anything that touches the driver's messages.
 
 Configuration is via environment variables (see CONFIG below), matching the
 former shell script. To profile clusterd, set WRAPPER (e.g. "heaptrack" or
@@ -63,9 +79,26 @@ SECRETS_DIR = env("SECRETS_DIR", "/tmp/clusterd-test-driver-secrets")
 # Path to the JSON-line command script the driver runs. Relative paths are
 # resolved against the repo root. Defaults to the `index` scenario script.
 SCRIPT = env("SCRIPT", "test/clusterd-test-driver/scripts/index.spec")
+# Seed for the generated compute-surface corpus. When set, the driver generates
+# the corpus in process and runs it instead of `SCRIPT`. Set to "default" to use
+# the generator's own fixed seed.
+WORKLOAD_SEED = env("WORKLOAD_SEED", "")
+# Number of plans to draw in soak mode. When set, every draw is kept and run at the
+# replica's defaults, instead of selecting by surface coverage across the strategy
+# matrix. Pair it with a WORKLOAD_SEED nobody has run before.
+WORKLOAD_SOAK = env("WORKLOAD_SOAK", "")
+# Directory of JSON workloads, for replaying a hand-written or dumped one. Takes
+# effect only when WORKLOAD_SEED is unset. Relative paths resolve against the repo
+# root.
+WORKLOADS = env("WORKLOADS", "")
 RUN_CLUSTERD = env("RUN_CLUSTERD", "1") == "1"
 # Command prepended to clusterd, e.g. "heaptrack" or "perf record -g --".
 WRAPPER = env("WRAPPER", "")
+# Timely workers for the local clusterd. Above one, the renderer's key-routing
+# exchanges and the multi-worker response merging actually run, which is where a
+# whole class of rendering bugs lives. The mzcompose `workloads` workflow covers
+# both widths for the same reason.
+WORKERS = int(env("WORKERS", "1"))
 # Cargo profile; `optimized` is release-like with debug symbols.
 PROFILE = env("PROFILE", "optimized")
 PROFILE_DIR = "debug" if PROFILE == "dev" else PROFILE
@@ -165,10 +198,10 @@ def cargo_build() -> None:
 
 def clusterd_command() -> list[str]:
     compute_tc = timely_config(
-        ["127.0.0.1"], 2102, 1, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
+        ["127.0.0.1"], 2102, WORKERS, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
     )
     storage_tc = timely_config(
-        ["127.0.0.1"], 2103, 1, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
+        ["127.0.0.1"], 2103, WORKERS, DEFAULT_STORAGE_EXERT_PROPORTIONALITY
     )
     return [
         *shlex.split(WRAPPER),
@@ -252,56 +285,119 @@ def terminate(launched: "subprocess.Popen[bytes]", clusterd_pid: int | None) -> 
             launched.terminate()
 
 
+def start_clusterd() -> "tuple[subprocess.Popen[bytes] | None, int | None]":
+    """Launch clusterd and wait for it to accept connections."""
+    if not RUN_CLUSTERD:
+        return None, None
+    cmd = clusterd_command()
+    print(
+        "clusterd command:\n  PERSIST_PUBSUB_URL=http://127.0.0.1:"
+        f"{PUBSUB_PORT} \\\n  " + " ".join(shlex.quote(a) for a in cmd)
+    )
+    log = open("/tmp/clusterd-test-driver-clusterd.log", "w")
+    clusterd_env = dict(
+        os.environ, PERSIST_PUBSUB_URL=f"http://127.0.0.1:{PUBSUB_PORT}"
+    )
+    launched = subprocess.Popen(cmd, stdout=log, stderr=log, env=clusterd_env, cwd=ROOT)
+    # Wait for the wrapper to fork clusterd, then resolve its pid.
+    clusterd_pid = None
+    for _ in range(60):
+        clusterd_pid = inner_clusterd_pid(launched.pid)
+        if clusterd_pid is not None:
+            break
+        time.sleep(0.5)
+    wait_for_port(COMPUTE_ADDR)
+    return launched, clusterd_pid
+
+
+def driver_env_base() -> dict[str, str]:
+    return dict(
+        os.environ,
+        CLUSTERD_COMPUTE_ADDR=COMPUTE_ADDR,
+        PERSIST_BLOB_URL=f"file://{BLOB_DIR}",
+        PERSIST_CONSENSUS_URL=CONSENSUS_URL,
+        DRIVER_PUBSUB_BIND=f"0.0.0.0:{PUBSUB_PORT}",
+    )
+
+
+def run_driver(driver_env: dict[str, str]) -> int:
+    result = subprocess.run(
+        [str(ROOT / "target" / PROFILE_DIR / "headless-driver")],
+        env=driver_env,
+        cwd=ROOT,
+    )
+    return result.returncode
+
+
+def run_all_scripts() -> int:
+    """Run every scenario, each against a fresh clusterd.
+
+    A fresh replica per scenario is required, not tidiness: the scenarios reuse
+    global ids and would collide otherwise. This mirrors what the mzcompose
+    `scripts` workflow does, and exists so a change to the driver's output can be
+    checked against every golden with one command. Scenarios assert on error
+    messages, so a message change breaks goldens in scenarios nobody thought to
+    re-run.
+    """
+    scripts = sorted((ROOT / "test/clusterd-test-driver/scripts").glob("*.spec"))
+    if not scripts:
+        print("no .spec scenarios found", file=sys.stderr)
+        return 1
+    failures = []
+    for script in scripts:
+        print(f"\n=== {script.name}")
+        launched, clusterd_pid = start_clusterd()
+        try:
+            env = driver_env_base()
+            env["DRIVER_SCRIPT"] = str(script)
+            if run_driver(env) != 0:
+                failures.append(script.name)
+        finally:
+            if launched is not None:
+                terminate(launched, clusterd_pid)
+    print("\n=== summary")
+    if failures:
+        print(f"{len(failures)}/{len(scripts)} failed: {', '.join(failures)}")
+        return 1
+    print(f"all {len(scripts)} scenarios passed")
+    return 0
+
+
 def main() -> int:
     for d in (BLOB_DIR, SCRATCH_DIR, SECRETS_DIR):
         Path(d).mkdir(parents=True, exist_ok=True)
     ensure_cockroach()
     cargo_build()
 
-    launched: "subprocess.Popen[bytes] | None" = None
-    clusterd_pid: int | None = None
-    try:
-        if RUN_CLUSTERD:
-            cmd = clusterd_command()
-            print(
-                "clusterd command:\n  PERSIST_PUBSUB_URL=http://127.0.0.1:"
-                f"{PUBSUB_PORT} \\\n  " + " ".join(shlex.quote(a) for a in cmd)
-            )
-            log = open("/tmp/clusterd-test-driver-clusterd.log", "w")
-            clusterd_env = dict(
-                os.environ, PERSIST_PUBSUB_URL=f"http://127.0.0.1:{PUBSUB_PORT}"
-            )
-            launched = subprocess.Popen(
-                cmd, stdout=log, stderr=log, env=clusterd_env, cwd=ROOT
-            )
-            # Wait for the wrapper to fork clusterd, then resolve its pid.
-            clusterd_pid = None
-            for _ in range(60):
-                clusterd_pid = inner_clusterd_pid(launched.pid)
-                if clusterd_pid is not None:
-                    break
-                time.sleep(0.5)
-            wait_for_port(COMPUTE_ADDR)
+    if SCRIPT == "all" and not WORKLOAD_SEED and not WORKLOADS:
+        return run_all_scripts()
 
+    launched, clusterd_pid = start_clusterd()
+    try:
         print("Running driver...")
         script_path = Path(SCRIPT)
         if not script_path.is_absolute():
             script_path = ROOT / script_path
-        print(f"  DRIVER_SCRIPT={script_path}")
-        driver_env = dict(
-            os.environ,
-            CLUSTERD_COMPUTE_ADDR=COMPUTE_ADDR,
-            PERSIST_BLOB_URL=f"file://{BLOB_DIR}",
-            PERSIST_CONSENSUS_URL=CONSENSUS_URL,
-            DRIVER_PUBSUB_BIND=f"0.0.0.0:{PUBSUB_PORT}",
-            DRIVER_SCRIPT=str(script_path),
-        )
-        result = subprocess.run(
-            [str(ROOT / "target" / PROFILE_DIR / "headless-driver")],
-            env=driver_env,
-            cwd=ROOT,
-        )
-        return result.returncode
+        driver_env = driver_env_base()
+        driver_env["DRIVER_SCRIPT"] = str(script_path)
+        if WORKLOAD_SEED:
+            # An empty value tells the driver to use its own default seed, which is
+            # how "default" is passed through without duplicating the constant here.
+            seed = "" if WORKLOAD_SEED == "default" else WORKLOAD_SEED
+            driver_env["DRIVER_WORKLOAD_SEED"] = seed
+            print(f"  DRIVER_WORKLOAD_SEED={seed or '(generator default)'}")
+            if WORKLOAD_SOAK:
+                driver_env["DRIVER_WORKLOAD_SOAK"] = WORKLOAD_SOAK
+                print(f"  DRIVER_WORKLOAD_SOAK={WORKLOAD_SOAK}")
+        elif WORKLOADS:
+            workloads_path = Path(WORKLOADS)
+            if not workloads_path.is_absolute():
+                workloads_path = ROOT / workloads_path
+            driver_env["DRIVER_WORKLOADS"] = str(workloads_path)
+            print(f"  DRIVER_WORKLOADS={workloads_path}")
+        else:
+            print(f"  DRIVER_SCRIPT={script_path}")
+        return run_driver(driver_env)
     finally:
         if launched is not None:
             terminate(launched, clusterd_pid)

@@ -190,7 +190,7 @@ fn scalar_type_from_str(s: &str) -> anyhow::Result<SqlScalarType> {
 /// by a type tag. Each numeric/bool/duration type reuses [`mz_dyncfg`]'s own
 /// `ConfigType::parse` (so the accepted syntax — e.g. `on`/`off` for bool, humantime
 /// for duration — matches the rest of the codebase); `string` is taken verbatim.
-fn parse_config_val(ty: &str, value: &str) -> anyhow::Result<ConfigVal> {
+pub(crate) fn parse_config_val(ty: &str, value: &str) -> anyhow::Result<ConfigVal> {
     let err = |e: String| anyhow::anyhow!("config value {value:?} is not a valid {ty}: {e}");
     Ok(match ty {
         "bool" => <bool as ConfigType>::parse(value).map_err(err)?.into(),
