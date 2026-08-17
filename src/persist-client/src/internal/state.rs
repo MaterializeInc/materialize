@@ -57,7 +57,7 @@ use uuid::Uuid;
 use crate::critical::{CriticalReaderId, Opaque};
 use crate::error::InvalidUsage;
 use crate::internal::encoding::{
-    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataMap, parse_id,
+    LazyInlineBatchPart, LazyPartStats, LazyProto, MetadataKey, MetadataMap, parse_id,
 };
 use crate::internal::gc::GcReq;
 use crate::internal::machine::retry_external;
@@ -815,6 +815,30 @@ pub struct RunMeta {
     /// Additional unstructured metadata.
     #[serde(skip_serializing_if = "MetadataMap::is_empty")]
     pub(crate) meta: MetadataMap,
+}
+
+/// Metadata key for [RunMeta::bounds_truncated].
+const RUN_META_BOUNDS_TRUNCATED: MetadataKey<bool> = MetadataKey::new("truncated");
+
+impl RunMeta {
+    /// Whether this run's parts may hold updates outside the registered desc
+    /// of the batch that contains them.
+    ///
+    /// Set when a batch is appended under a desc narrower than the one it was
+    /// written with (truncation). Readers filter such updates out against the
+    /// registered desc, but per-part statistics like `diffs_sum` are computed
+    /// at write time over everything physically in the part, so accounting
+    /// that compares those statistics against data seen through a read must
+    /// skip runs with this bit set.
+    pub(crate) fn bounds_truncated(&self) -> bool {
+        self.meta.get(RUN_META_BOUNDS_TRUNCATED).unwrap_or(false)
+    }
+
+    /// Marks this run as possibly holding updates outside its batch's
+    /// registered desc. See [Self::bounds_truncated].
+    pub(crate) fn set_bounds_truncated(&mut self) {
+        self.meta.set(RUN_META_BOUNDS_TRUNCATED, true);
+    }
 }
 
 /// A subset of a [HollowBatch] corresponding 1:1 to a blob.

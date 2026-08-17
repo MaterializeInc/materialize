@@ -1835,8 +1835,13 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let truncated_desc = Description::new(lower, upper, batch.batch.desc.since().clone());
-        let () = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
+        let bounds_truncated = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
         let mut new_hollow_batch = (*batch.batch).clone();
+        if bounds_truncated {
+            for run_meta in &mut new_hollow_batch.run_meta {
+                run_meta.set_bounds_truncated();
+            }
+        }
         new_hollow_batch.desc = truncated_desc;
         let new_batch = IdHollowBatch {
             batch: Arc::new(new_hollow_batch),

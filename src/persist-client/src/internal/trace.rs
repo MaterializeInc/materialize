@@ -1055,8 +1055,30 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         Some(sum)
     }
 
+    /// Get the diff sum across all runs of the given batch.
+    ///
+    /// Returns `None` if any parts don't have statistics, or if any run may
+    /// hold updates outside the batch's registered desc: the statistics count
+    /// those updates but readers filter them out, so no sum computed from the
+    /// statistics can be compared against data seen through a read.
+    fn batch_diffs_sum<D: Monoid + Codec64>(
+        batch: &HollowBatch<T>,
+        metrics: &ColumnarMetrics,
+    ) -> Option<D> {
+        let mut sum = D::zero();
+        for (meta, run) in batch.runs() {
+            if meta.bounds_truncated() {
+                return None;
+            }
+            sum.plus_equals(&Self::diffs_sum(run, metrics)?);
+        }
+        Some(sum)
+    }
+
     /// Get the diff sum from the given batch for the given runs.
-    /// Returns `None` if the runs aren't present or any parts don't have statistics.
+    /// Returns `None` if the runs aren't present, any parts don't have
+    /// statistics, or any of the runs may hold updates outside the batch's
+    /// registered desc (see [Self::batch_diffs_sum]).
     fn diffs_sum_for_runs<D: Monoid + Codec64>(
         batch: &HollowBatch<T>,
         run_ids: &[RunId],
@@ -1068,6 +1090,9 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         for (meta, run) in batch.runs() {
             let id = meta.id?;
             if run_ids.remove(&id) {
+                if meta.bounds_truncated() {
+                    return None;
+                }
                 sum.plus_equals(&Self::diffs_sum(run, metrics)?);
             }
         }
@@ -1240,12 +1265,13 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
 
         // We need to replace a range of parts. Here we don't care about the run_indices
         // because we must be replacing the entire part(s)
-        let old_diffs_sum = Self::diffs_sum::<D>(
+        let old_diffs_sum =
             self.parts[replacement_range.clone()]
                 .iter()
-                .flat_map(|p| p.batch.parts.iter()),
-            metrics,
-        );
+                .try_fold(D::zero(), |mut sum, p| {
+                    sum.plus_equals(&Self::batch_diffs_sum::<D>(&p.batch, metrics)?);
+                    Some(sum)
+                });
 
         Self::validate_diffs_sum_match(old_diffs_sum, new_diffs_sum, "id range replacement");
 
@@ -1314,8 +1340,8 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
                     new_diffs_sum,
                     "partial batch replacement",
                 );
-                let old_batch_diff_sum = Self::diffs_sum::<D>(batch.parts.iter(), metrics);
-                let new_batch_diff_sum = Self::diffs_sum::<D>(new_batch.parts.iter(), metrics);
+                let old_batch_diff_sum = Self::batch_diffs_sum::<D>(batch, metrics);
+                let new_batch_diff_sum = Self::batch_diffs_sum::<D>(&new_batch, metrics);
                 Self::validate_diffs_sum_match(
                     old_batch_diff_sum,
                     new_batch_diff_sum,
@@ -1375,10 +1401,10 @@ impl<T: Timestamp + Lattice + Codec64> SpineBatch<T> {
         let exact_match = res.output.desc.lower() == self.desc().lower()
             && res.output.desc.upper() == self.desc().upper();
         if exact_match {
-            let old_diffs_sum = Self::diffs_sum::<D>(
-                self.parts.iter().flat_map(|p| p.batch.parts.iter()),
-                metrics,
-            );
+            let old_diffs_sum = self.parts.iter().try_fold(D::zero(), |mut sum, p| {
+                sum.plus_equals(&Self::batch_diffs_sum::<D>(&p.batch, metrics)?);
+                Some(sum)
+            });
 
             if let (Some(old_diffs_sum), Some(new_diffs_sum)) = (old_diffs_sum, new_diffs_sum) {
                 assert_eq!(
