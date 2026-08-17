@@ -372,6 +372,16 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_iceberg_sinks",
         ),
+        // The mz_cluster_reconfigurations MV definition changed (the `changes`
+        // diff now includes the `arrangement_compression` dimension). See the
+        // NOTE above: this version must stay at the workspace's current dev
+        // version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_reconfigurations",
+        ),
     ]
 });
 

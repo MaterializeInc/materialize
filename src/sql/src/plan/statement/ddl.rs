@@ -6550,10 +6550,11 @@ pub fn plan_alter_cluster(
                         && availability_zones.is_none()
                         && introspection_debugging.is_none()
                         && introspection_interval.is_none()
+                        && experimental_arrangement_compression.is_none()
                     {
                         sql_bail!(
                             "WAIT can only be used together with a SIZE, AVAILABILITY ZONES, \
-                            or INTROSPECTION change"
+                            INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change"
                         );
                     }
 
