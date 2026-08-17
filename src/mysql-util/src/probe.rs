@@ -1146,8 +1146,8 @@ pub(crate) mod tests {
 
     /// Sum of this session's `Handler_read_*` counters: how many index or row
     /// read operations the connection has performed so far.
-    async fn handler_reads<Q: Queryable>(conn: &mut Q) -> Result<u64, anyhow::Error> {
-        let rows: Vec<(String, String)> = conn
+    async fn handler_reads(tx: &mut Transaction<'_>) -> Result<u64, anyhow::Error> {
+        let rows: Vec<(String, String)> = tx
             .exec("SHOW SESSION STATUS LIKE 'Handler_read%'", ())
             .await?;
         Ok(rows.into_iter().map(|(_, v)| v.parse().unwrap_or(0)).sum())
