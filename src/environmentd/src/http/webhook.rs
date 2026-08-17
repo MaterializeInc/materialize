@@ -26,9 +26,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use bytes::Bytes;
 use http::StatusCode;
-use mz_adapter_types::dyncfgs::{
-    WEBHOOK_MAX_REQUEST_SIZE_BYTES, WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES,
-};
+use mz_adapter_types::dyncfgs::WEBHOOK_MAX_REQUEST_SIZE_BYTES;
 use thiserror::Error;
 
 use crate::http::WebhookState;
@@ -44,7 +42,6 @@ pub async fn handle_webhook(
     body: Body,
 ) -> impl IntoResponse {
     let max_request_size = WEBHOOK_MAX_REQUEST_SIZE_BYTES.get(&dyncfgs);
-    let validation_memory_budget = WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES.get(&dyncfgs);
     let body = axum::body::to_bytes(body, max_request_size)
         .await
         .map_err(|err| {
@@ -91,7 +88,6 @@ pub async fn handle_webhook(
                 &name,
                 &body,
                 &headers,
-                validation_memory_budget,
             )
             .await;
 
@@ -118,7 +114,6 @@ async fn append_webhook(
     name: &str,
     body: &Bytes,
     headers: &Arc<BTreeMap<String, String>>,
-    validation_memory_budget: usize,
 ) -> Result<(), AppendWebhookError> {
     // Shenanigans to get the types working for the async retry.
     let (database, schema, name) = (database.to_string(), schema.to_string(), name.to_string());
@@ -169,12 +164,7 @@ async fn append_webhook(
     // If this source requires validation, then validate!
     if let Some(validator) = validator {
         let valid = validator
-            .eval(
-                Bytes::clone(body),
-                Arc::clone(headers),
-                received_at,
-                validation_memory_budget,
-            )
+            .eval(Bytes::clone(body), Arc::clone(headers), received_at)
             .await?;
         if !valid {
             return Err(AppendWebhookError::ValidationFailed);

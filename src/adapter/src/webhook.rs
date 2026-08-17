@@ -76,17 +76,11 @@ impl AppendWebhookValidator {
         }
     }
 
-    /// Runs the validation expression against one request.
-    ///
-    /// `memory_budget` caps the temporary storage the expression may allocate. The expression is
-    /// user-authored and runs in `environmentd`, so without a cap proportionate to the request one
-    /// `CHECK` can turn a bounded body into an unbounded amount of heap on a shared process.
     pub async fn eval(
         self,
         body: bytes::Bytes,
         headers: Arc<BTreeMap<String, String>>,
         received_at: DateTime<Utc>,
-        memory_budget: usize,
     ) -> Result<bool, AppendWebhookError> {
         let AppendWebhookValidator {
             validation,
@@ -131,7 +125,9 @@ impl AppendWebhookValidator {
         // work.
         let validate = move || {
             // Gather our Datums for evaluation
-            let temp_storage = RowArena::with_budget(memory_budget);
+            //
+            // TODO(parkmycar): Re-use the RowArena when we implement rate limiting.
+            let temp_storage = RowArena::default();
             let mut datums = Vec::with_capacity(
                 body_columns.len() + header_columns.len() + secret_contents.len(),
             );

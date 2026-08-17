@@ -40,24 +40,11 @@ pub fn regexp_split_to_array<'a>(text: &'a str, regexp: &Regex) -> Vec<&'a str> 
     found
 }
 
-/// How many chunks [`regexp_split_to_array`] would return, without building them.
-///
-/// One chunk per kept match plus the trailing remainder, keeping a match exactly when it is not
-/// zero-length at the start or end of the string. This must mirror the split's rule so a caller
-/// sizing an allocation refuses only what the split itself would refuse.
-/// `tests::test_regexp_split_array_count` pins the two together.
-pub fn regexp_split_to_array_count(text: &str, regexp: &Regex) -> usize {
-    1 + regexp
-        .find_iter(text)
-        .filter(|m| m.end() > 0 && m.start() < text.len())
-        .count()
-}
-
 #[cfg(test)]
 mod tests {
     use mz_repr::adt::regex::Regex;
 
-    use crate::{regexp_split_to_array, regexp_split_to_array_count};
+    use crate::regexp_split_to_array;
 
     fn build_regex(needle: &str, flags: &str) -> Result<Regex, anyhow::Error> {
         let mut case_insensitive = false;
@@ -249,26 +236,6 @@ mod tests {
                 println!(
                     "input: `{}`, regex: `{}`, got: {:?}, expect: {:?}",
                     tc.text, tc.regexp, result, tc.expect
-                );
-            }
-        }
-    }
-
-    /// The count must agree with the split for every input, so a caller sizing an allocation from
-    /// it refuses exactly what the split would have built. Covers no match, matches at each
-    /// boundary, and empty-string matches, where the naive "matches + 1" is wrong.
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // too slow
-    fn test_regexp_split_array_count() {
-        let texts = ["", " ", "  ", "abc", "aaa", "12 34", " 12 34 "];
-        let regexps = ["", "\\s", "\\s+", "\\s*", "a", "a*", "b*", "x"];
-        for text in texts {
-            for re in regexps {
-                let regex = build_regex(re, "").unwrap();
-                assert_eq!(
-                    regexp_split_to_array_count(text, &regex),
-                    regexp_split_to_array(text, &regex).len(),
-                    "text: `{text}`, regexp: `{re}`",
                 );
             }
         }
