@@ -3360,6 +3360,48 @@ mod tests {
         );
     }
 
+    /// `round` must not depend on a numeric's exponent: `Row` encoding folds
+    /// trailing zeroes into it, so the interpreter, which reads its datums back
+    /// out of a `Row`, would otherwise disagree with the evaluator and pushdown
+    /// could discard a part it has to keep.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_round_numeric_representation_independent() {
+        use mz_repr::adt::date::Date;
+
+        let arena = RowArena::new();
+        let lit = |d: Datum, ty: ReprScalarType| {
+            let mut row = Row::default();
+            row.packer().push(d);
+            MirScalarExpr::Literal(Ok(row), ty.nullable(false))
+        };
+
+        // `extract` hands `round` a `946684800` whose exponent is zero, where
+        // the same value read out of a `Row` is `9.466848E+8`.
+        let expr = lit(
+            Datum::Date(Date::from_pg_epoch(0).unwrap()),
+            ReprScalarType::Date,
+        )
+        .call_unary(UnaryFunc::ExtractDate(ExtractDate(DateTimeUnits::Epoch)))
+        .call_binary(
+            lit(Datum::Int32(i32::MAX), ReprScalarType::Int32),
+            BinaryFunc::from(RoundNumericBinary),
+        );
+
+        let relation = ReprRelationType::new(vec![]);
+        let range = ColumnSpecs::new(&relation, &arena).expr(&expr).range;
+        match expr.eval(&[], &arena) {
+            Ok(value) => assert!(
+                range.may_contain(value),
+                "interpreter ruled out {value:?}, which the evaluator produced: {range:?}",
+            ),
+            Err(_) => assert!(
+                range.may_fail(),
+                "interpreter ruled out the error the evaluator produced: {range:?}",
+            ),
+        }
+    }
+
     #[mz_ore::test]
     fn test_trace() {
         use super::Trace;
