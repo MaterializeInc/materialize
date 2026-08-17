@@ -48,6 +48,20 @@ ${MZ_NGINX_LISTENER_CONFIG}
         proxy_set_header X-Webhook-Event $http_x_webhook_event;
     }
 
+    # RFC 9728 OAuth protected-resource metadata. MCP clients pointed at
+    # /api/mcp follow the resource_metadata URL from the 401 challenge, which
+    # environmentd publishes on this host, so it must reach environmentd too.
+    location /.well-known/oauth-protected-resource {
+        resolver ${NGINX_LOCAL_RESOLVERS} valid=10s;
+        set $backend ${MZ_ENDPOINT};
+        proxy_pass $backend;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Request-ID $request_id;
+    }
+
     # Cache policy for static assets
     location ~* \.(js|css|png|jpg|jpeg|gif|svg|woff|woff2)$ {
         root /usr/share/nginx/html;
