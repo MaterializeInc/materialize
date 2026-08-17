@@ -523,46 +523,6 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
     "The memory budget for consolidating stashed peek responses in environmentd.",
 );
 
-/// Whether to walk a fast-path index peek's cursor on a blocking task instead of inline on the
-/// timely worker that received it.
-///
-/// Independent of `enable_compute_interactive_runtime`, and useful with or without it. It applies on
-/// whichever runtime serves the peek, taking the cursor from that runtime's own traces or from the
-/// sharing registry as appropriate. The serving worker still takes the snapshot, which costs a
-/// mutex and a handful of `Arc` clones, and then dispatches.
-///
-/// What it buys: a long scan no longer delays the peeks queued behind it on the serving worker.
-/// Without it, a runtime that serves peeks inline reintroduces head-of-line blocking between
-/// peeks, which is the pathology a second runtime removes between reads and maintenance.
-///
-/// What it costs: the walk now runs concurrently with the serving worker rather than instead of
-/// it, so on a CPU-saturated replica it competes for cores with the work that worker went on to
-/// do. Each in-flight walk also pins the batches its cursor covers, bounded by
-/// `index_peek_offload_max_inflight`.
-///
-/// Applies to peeks the peek response stash could take as well. The offloaded walk makes the same
-/// size-based diversion partway through, and drives the upload from its own thread rather than
-/// handing rows back to the worker to pump.
-pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
-    "enable_index_peek_offload",
-    false,
-    "Walk fast-path index peeks on a blocking task rather than on the serving timely worker.",
-)
-.scoped(ParameterScope::Replica);
-
-/// How many offloaded index-peek walks one worker may have in flight before it falls back to
-/// walking inline.
-///
-/// Each in-flight walk pins the batches its snapshot covers and holds the trace back from
-/// compacting past the read, so unbounded concurrency trades memory for latency. Serving inline
-/// bounds that implicitly at one walk per worker; this is the explicit form of the same bound.
-pub const INDEX_PEEK_OFFLOAD_MAX_INFLIGHT: Config<usize> = Config::new(
-    "index_peek_offload_max_inflight",
-    16,
-    "Maximum offloaded index-peek walks in flight per worker before falling back to an inline walk.",
-)
-.scoped(ParameterScope::Replica);
-
 /// The number of batches to pump from the peek result iterator when stashing peek responses.
 pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
     "compute_peek_stash_num_batches",
@@ -648,8 +608,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
         .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
-        .add(&ENABLE_INDEX_PEEK_OFFLOAD)
-        .add(&INDEX_PEEK_OFFLOAD_MAX_INFLIGHT)
         .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
