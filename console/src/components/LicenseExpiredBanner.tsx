@@ -12,28 +12,29 @@ import * as React from "react";
 
 import { useLicenseKey } from "~/access/license/queries";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
+import { SUPPORT_CHAT_URL } from "~/externalUrls";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
 import useLocalStorage from "~/hooks/useLocalStorage";
 
 import { AlertBanner } from "./Alert";
-import TextLink from "./TextLink";
+import SupportLink from "./SupportLink";
 
-export const LICENSE_EXPIRED_DISMISSED_KEY = "mz-license-expired-dismissed";
+/** Stores the epoch milliseconds of the most recent dismissal, 0 if never. */
+export const LICENSE_EXPIRED_DISMISSED_AT_KEY =
+  "mz-license-expired-dismissed-at";
 
-/**
- * Support URL used by the License page ("Questions about your license? Talk to us").
- * Reused here so the banner points super users to the same place.
- */
-const SUPPORT_URL = "https://materialize.com/s/chat";
+/** How long a dismissal lasts before the banner shows again. */
+export const DISMISSAL_DURATION_MS = 7 * 24 * 60 * 60 * 1000;
 
 const LicenseExpiredBannerContent = () => {
   const { isSuperUser } = useIsSuperUser();
   const { data } = useLicenseKey();
 
-  const [dismissed, setDismissed] = useLocalStorage<boolean>(
-    LICENSE_EXPIRED_DISMISSED_KEY,
-    false,
+  const [dismissedAt, setDismissedAt] = useLocalStorage<number>(
+    LICENSE_EXPIRED_DISMISSED_AT_KEY,
+    0,
   );
+  const dismissed = Date.now() - dismissedAt < DISMISSAL_DURATION_MS;
 
   const licenseKey = data?.rows?.at(0);
   const { expiration } = licenseKey ?? {};
@@ -60,10 +61,8 @@ const LicenseExpiredBannerContent = () => {
       <Flex justifyContent="center" width="100%">
         <Text>
           Your Materialize Enterprise license has expired.{" "}
-          <TextLink as="a" href={SUPPORT_URL} target="_blank" rel="noreferrer">
-            Contact support
-          </TextLink>{" "}
-          to renew.
+          <SupportLink href={SUPPORT_CHAT_URL}>Contact support</SupportLink> to
+          renew.
         </Text>
       </Flex>
       <CloseButton
@@ -71,7 +70,7 @@ const LicenseExpiredBannerContent = () => {
         right="0"
         size="sm"
         onClick={() => {
-          setDismissed(true);
+          setDismissedAt(Date.now());
         }}
       />
     </AlertBanner>
@@ -81,7 +80,7 @@ const LicenseExpiredBannerContent = () => {
 /**
  * A full-width banner shown to self-managed super users when the environment's
  * enterprise license has expired. Dismissible, with the dismissal persisted in
- * local storage.
+ * local storage for a week, after which the banner shows again.
  */
 export const LicenseExpiredBanner = () => (
   <AppConfigSwitch selfManagedConfigElement={<LicenseExpiredBannerContent />} />

@@ -25,7 +25,8 @@ import { getQueryClient } from "~/queryClient";
 import { renderComponent } from "~/test/utils";
 
 import {
-  LICENSE_EXPIRED_DISMISSED_KEY,
+  DISMISSAL_DURATION_MS,
+  LICENSE_EXPIRED_DISMISSED_AT_KEY,
   LicenseExpiredBanner,
 } from "./LicenseExpiredBanner";
 
@@ -184,8 +185,11 @@ describe("LicenseExpiredBanner", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not render when it has already been dismissed", async () => {
-    localStorage.setItem(LICENSE_EXPIRED_DISMISSED_KEY, JSON.stringify(true));
+  it("does not render when it was recently dismissed", async () => {
+    localStorage.setItem(
+      LICENSE_EXPIRED_DISMISSED_AT_KEY,
+      JSON.stringify(Date.now()),
+    );
     server.use(buildIsSuperUserHandler(true));
     server.use(buildLicenseKeyHandler(EXPIRED_DATE()));
 
@@ -199,5 +203,18 @@ describe("LicenseExpiredBanner", () => {
     expect(
       screen.queryByTestId("license-expired-alert"),
     ).not.toBeInTheDocument();
+  });
+
+  it("renders again once the dismissal has expired", async () => {
+    localStorage.setItem(
+      LICENSE_EXPIRED_DISMISSED_AT_KEY,
+      JSON.stringify(Date.now() - DISMISSAL_DURATION_MS - 1),
+    );
+    server.use(buildIsSuperUserHandler(true));
+    server.use(buildLicenseKeyHandler(EXPIRED_DATE()));
+
+    renderComponent(<LicenseExpiredBanner />);
+
+    expect(await screen.findByTestId("license-expired-alert")).toBeVisible();
   });
 });
