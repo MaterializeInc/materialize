@@ -1952,3 +1952,168 @@ fn test_rejected_in_non_writable_transaction() {
         .get::<_, i32>(0);
     assert_eq!(count, 0, "no rejected write may have landed");
 }
+
+/// A read-then-write must not mistake a frontier that replica expiration held
+/// back for the frontier of its selection.
+///
+/// Replica expiration lets a replica drop diffs beyond the time it expects to be
+/// restarted, and holds a dataflow's output frontier at that time so that nothing
+/// downstream believes data at or after it. A selection that can never change
+/// again has the empty antichain for a frontier, and holding that back reports it
+/// as merely frozen until the expiration, days out. The OCC path reads the
+/// frontier both as "this selection is final" and as the timestamp it writes at,
+/// so a statement over such a selection either parks until the oracle reaches the
+/// expiration or commits its write there and drags the oracle along with it.
+///
+/// What earns a dataflow an expiration in the first place is wall-clock
+/// dependence, which the compute controller derives from the imports its exports
+/// read. Each statement here keeps an import that no export reads: the optimizer
+/// folds the selection to a constant, but only in the global pipeline, which runs
+/// after the dataflow's imports were collected, so the table stays an import.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_replica_expiration_spares_folded_selections() {
+    // The two branches are the same collection under the filter. The global
+    // pipeline sees that, local optimization does not.
+    const FOLDED: &str = "WITH x AS (SELECT c0 FROM a WHERE TRUE = c0) \
+                          ((SELECT true AS c0 FROM x) EXCEPT ALL (SELECT c0 FROM x))";
+
+    let server = frontend_occ_harness()
+        // Sampled once per replica, when it is created, which for the default
+        // cluster is during bootstrap. So this has to be a default rather than an
+        // `ALTER SYSTEM SET`.
+        .with_system_parameter_default(
+            "compute_replica_expiration_offset".to_string(),
+            "3d".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE a (c0 bool)").unwrap();
+    client
+        .batch_execute("INSERT INTO a VALUES (true), (false), (NULL)")
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (c0 bool)").unwrap();
+
+    let selection = format!("{FOLDED} UNION ALL (VALUES (true))");
+
+    // Pin the premise. Were the fold to move to local optimization, the dataflow
+    // would have no unread import left and none of this would cover the bug.
+    let local: String = client
+        .query_one(
+            &format!("EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR {selection}"),
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_contains!(local, "materialize.public.a");
+    let global: String = client
+        .query_one(
+            &format!("EXPLAIN OPTIMIZED PLAN AS TEXT FOR {selection}"),
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_contains!(global.as_str(), "Constant");
+    assert!(
+        !global.contains("materialize.public.a"),
+        "the selection no longer folds to a constant, so its frontier is not the \
+         empty antichain and there is nothing here to hold back: {global}"
+    );
+
+    // Bounds a regression: a held frontier parks the statement until the oracle
+    // reaches it, which is three days out.
+    client
+        .batch_execute("SET statement_timeout = '30s'")
+        .unwrap();
+
+    // This one has diffs, so it is the case that turns a held frontier into a
+    // durable write timestamp, and the oracle is the witness. Checked before
+    // reading `dst` back, because a read parks once the oracle is that far ahead.
+    let inserted = client.execute(&format!("INSERT INTO dst {selection}"), &[]);
+    let inserted = inserted.expect("INSERT ... SELECT over a folded selection");
+    assert_eq!(inserted, 1, "the INSERT reported {inserted} rows");
+    let skew: i64 = client
+        .query_one(
+            "SELECT mz_now()::text::bigint - (extract(epoch FROM now()) * 1000)::bigint",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert!(
+        skew.abs() < 60_000,
+        "the oracle is {skew}ms from wall clock, so a write landed at a timestamp \
+         derived from a held frontier"
+    );
+    let rows = client
+        .query_one("SELECT count(*) FROM dst", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 1, "the INSERT did not land exactly one row");
+
+    // This one has no diffs, so it concludes zero rows from the frontier it
+    // observed and then linearizes against it.
+    let updated = client.execute("UPDATE a SET c0 = TRUE WHERE TRUE = a.c0", &[]);
+    let updated = updated.expect("UPDATE over a folded selection");
+    assert_eq!(updated, 0, "the UPDATE reported {updated} rows");
+    let rows = client
+        .query_one("SELECT count(*), count(*) FILTER (WHERE c0) FROM a", &[])
+        .unwrap();
+    assert_eq!(
+        (rows.get::<_, i64>(0), rows.get::<_, i64>(1)),
+        (3, 1),
+        "the UPDATE changed the table"
+    );
+
+    // Ask the process rather than the flag which path those two took: they only
+    // reach the histogram if the frontend sequenced them, and the coordinator's
+    // lock path does not read subscribe frontiers at all.
+    let metrics = server.metrics_registry().gather();
+    let observations = metrics
+        .iter()
+        .find(|m| m.name() == "mz_occ_read_then_write_retry_count")
+        .expect("mz_occ_read_then_write_retry_count metric should be registered")
+        .get_metric()
+        .first()
+        .expect("a single histogram series")
+        .get_histogram()
+        .get_sample_count();
+    assert!(
+        observations >= 2,
+        "the OCC path sequenced {observations} statements, so the INSERT and the \
+         UPDATE did not both go through it"
+    );
+
+    // The same fault reaches a plain subscribe, with no write anywhere: one over a
+    // collection that is already complete has to end. A subscribe is exempt from
+    // `statement_timeout`, so the deadline is ours to impose.
+    let mut worker = server.connect(postgres::NoTls).unwrap();
+    let cancel = worker.cancel_token();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let subscribe = format!("COPY (SUBSCRIBE ({FOLDED})) TO STDOUT");
+    let handle = thread::spawn(move || {
+        let streamed = (|| -> Result<String, String> {
+            let mut reader = worker
+                .copy_out(&subscribe)
+                .map_err(|e| e.to_string_with_causes())?;
+            let mut out = String::new();
+            std::io::Read::read_to_string(&mut reader, &mut out).map_err(|e| e.to_string())?;
+            Ok(out)
+        })();
+        let _ = tx.send(streamed);
+    });
+
+    let streamed = rx.recv_timeout(Duration::from_secs(60));
+    if streamed.is_err() {
+        // Free the subscribe so the server can shut down cleanly.
+        let _ = cancel.cancel_query(postgres::NoTls);
+    }
+    let _ = handle.join();
+    let streamed = streamed
+        .expect(
+            "a subscribe over a collection that can never change again did not end \
+             within 60s, so its frontier was held at the replica expiration",
+        )
+        .expect("subscribe failed");
+    assert_eq!(streamed, "", "the subscribe streamed {streamed:?}");
+}
