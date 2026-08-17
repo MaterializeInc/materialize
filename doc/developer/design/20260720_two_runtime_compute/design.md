@@ -13,14 +13,14 @@ distinct is the most important thing a reader can take from it.
   that renders temporary dataflows and serves reads directly off the
   arrangements the "maintenance" runtime builds, zero-copy through a per-process
   sharing registry. It is a placement choice for rendered dataflows, and is
-  gated by `ENABLE_TWO_RUNTIME_COMPUTE`.
+  gated by `ENABLE_COMPUTE_INTERACTIVE_RUNTIME`.
 
 They fix different problems, they are distinguished by different workloads, and
 they should be adopted, flagged and rolled separately. See [Two mechanisms, not
 one](#two-mechanisms-not-one) for what each one buys and the scenarios that tell
 them apart.
 
-The feature is gated by the `ENABLE_TWO_RUNTIME_COMPUTE` dyncfg, off in
+The feature is gated by the `ENABLE_COMPUTE_INTERACTIVE_RUNTIME` dyncfg, off in
 production and on by default in CI. With the dyncfg off, a replica runs a single
 `Solo` runtime that takes the same code paths, with no sharing registry, no second
 runtime, and no `role` metric label. It is not a byte-identical deployment: the
@@ -574,7 +574,7 @@ is needed for peeks.
 | Fixes | head-of-line blocking between peeks on one worker | interference between maintenance work and interactive rendering |
 | Needs the second runtime | no | yes, it *is* the second runtime |
 | Deployment cost | a dyncfg, no restart | a port, a fleet roll, doubled timely worker threads, the sharing registry, and the command-ordering invariant and capping that go with it |
-| Flag | `ENABLE_INDEX_PEEK_OFFLOAD` | `ENABLE_TWO_RUNTIME_COMPUTE` |
+| Flag | `ENABLE_INDEX_PEEK_OFFLOAD` | `ENABLE_COMPUTE_INTERACTIVE_RUNTIME` |
 
 Peek offloading applies on either runtime, so the two compose. The single place
 they meet is serving a peek from the sharing registry, where an interactive peek
@@ -1369,7 +1369,7 @@ mechanism.
 
 ## Configuration
 
-* `ENABLE_TWO_RUNTIME_COMPUTE` (dyncfg, `mz-controller-types`) is off in
+* `ENABLE_COMPUTE_INTERACTIVE_RUNTIME` (dyncfg, `mz-controller-types`) is off in
   production and on by default in the variable CI system parameters, so the suite
   exercises the two-runtime path broadly. The compiled default stays off, so
   production is unaffected.

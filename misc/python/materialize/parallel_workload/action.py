@@ -3020,7 +3020,9 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["enable_upsert_v2"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["enable_two_runtime_compute"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_compute_interactive_runtime"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_index_peek_offload"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["index_peek_offload_max_inflight"] = ["1", "16", "64"]
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES

@@ -90,8 +90,8 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
 /// by the caller and passed into provisioning rather than read from a replica's `worker_config`.
 ///
 /// Off in production. On by default in the CI system parameters.
-pub const ENABLE_TWO_RUNTIME_COMPUTE: Config<bool> = Config::new(
-    "enable_two_runtime_compute",
+pub const ENABLE_COMPUTE_INTERACTIVE_RUNTIME: Config<bool> = Config::new(
+    "enable_compute_interactive_runtime",
     false,
     "Whether to launch compute replicas with a second, interactive compute timely runtime.",
 )
@@ -109,5 +109,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
-        .add(&ENABLE_TWO_RUNTIME_COMPUTE)
+        .add(&ENABLE_COMPUTE_INTERACTIVE_RUNTIME)
 }

@@ -19,7 +19,7 @@ The question is which cell should be the default, and the cells differ in deploy
 
 ## The configuration matrix
 
-| Cell | `enable_two_runtime_compute` | `enable_index_peek_offload` | Peek received by | Peek walked by | Temporary dataflows | Deployment cost |
+| Cell | `enable_compute_interactive_runtime` | `enable_index_peek_offload` | Peek received by | Peek walked by | Temporary dataflows | Deployment cost |
 |---|---|---|---|---|---|---|
 | **V0** | off | off | maintenance loop | maintenance worker | maintenance | none, this is today |
 | **V1** | off | on | maintenance loop | blocking task | maintenance | dyncfg only, no restart |
@@ -27,7 +27,7 @@ The question is which cell should be the default, and the cells differ in deploy
 | **V3** | on | on | interactive loop | blocking task | interactive | new port, rolls every replica |
 
 Both flags are live dyncfgs, but only one is a live toggle.
-Flipping `enable_two_runtime_compute` changes `ServiceConfig::ports`, so moving between the V0/V1 row and the V2/V3 row restarts every compute replica in the environment.
+Flipping `enable_compute_interactive_runtime` changes `ServiceConfig::ports`, so moving between the V0/V1 row and the V2/V3 row restarts every compute replica in the environment.
 Moving along a row does not.
 Plan the arms so that the expensive transition happens once, not per arm.
 
@@ -39,7 +39,7 @@ The two peek flags are declared `ParameterScope::Replica`, so a targeting rule c
 The override is resolved against a replica evaluation context and pushed to that replica as a `ConfigUpdates`, which lands in the `worker_config` both flags are read from inside `clusterd`.
 Scoped overrides require `enable_scoped_system_parameters` to be on in the environment.
 
-`enable_two_runtime_compute` is replica-scoped too, but it reaches the replica by a different route.
+`enable_compute_interactive_runtime` is replica-scoped too, but it reaches the replica by a different route.
 It is consumed in `environmentd`, in the controller's provisioning path, to decide `ServiceConfig::ports` and the `--interactive-compute-timely-config` argument, and that decision is made before the replica exists.
 A scoped override delivered to a running replica would arrive too late to change either.
 So the coordinator resolves the per-replica value from the scoped working copy and passes it into `create_replica`, exactly as it already does for `enable_worker_core_affinity` and `enable_storage_introspection_logs`.
@@ -87,14 +87,14 @@ Within a phase, all listed replicas run concurrently in one cluster.
 This phase split is no longer forced, now that the runtime axis is replica-scoped.
 It is kept here as the record of how the measurements below were actually taken.
 
-### Phase A: `enable_two_runtime_compute = false` (environment-wide)
+### Phase A: `enable_compute_interactive_runtime = false` (environment-wide)
 
 | Variation | Replica name | Replica-scoped overrides | Serves |
 |---|---|---|---|
 | V0 | `eval-v0-inline` | none, all defaults | E1, E2 baseline |
 | V1 | `eval-v1-offload` | `enable_index_peek_offload=true` | E1, E2 |
 
-### Phase B: `enable_two_runtime_compute = true` (environment-wide)
+### Phase B: `enable_compute_interactive_runtime = true` (environment-wide)
 
 | Variation | Replica name | Replica-scoped overrides | Serves |
 |---|---|---|---|
@@ -277,9 +277,9 @@ Staging is the right venue for the second half, because the question is whether 
 Venue: a personal staging region in `aws/us-east-1`, build `140494e39a`.
 Cluster `eval` carries two `100cc` replicas named `eval-v0-inline` and `eval-v1-offload`.
 The fixture is view `e6_li`, three columns of `sf1.lineitem` at 6,003,692 rows, indexed by `e6_li_idx`, plus materialized view `e6_agg`.
-`enable_two_runtime_compute` was on environment-wide for phase B, so both replicas ran two runtimes and differed only in `enable_index_peek_offload`.
+`enable_compute_interactive_runtime` was on environment-wide for phase B, so both replicas ran two runtimes and differed only in `enable_index_peek_offload`.
 
-`enable_two_runtime_compute` was environment-scoped when these runs were taken, so no two replicas of one environment could disagree on it, and every comparison across that flag was sequential and picked up whatever else changed between the two deployments.
+`enable_compute_interactive_runtime` was environment-scoped when these runs were taken, so no two replicas of one environment could disagree on it, and every comparison across that flag was sequential and picked up whatever else changed between the two deployments.
 It is replica-scoped now, so a rerun would not have that limitation.
 
 ### E6: neither the reported size nor resident memory follows publication
@@ -336,7 +336,7 @@ p50 is round-trip bound in every cell and carries no signal, which is expected w
 
 ### E2: the offload alone captures the win
 
-Same fixture and same sweep with `enable_two_runtime_compute = false`, so both arms are single-runtime.
+Same fixture and same sweep with `enable_compute_interactive_runtime = false`, so both arms are single-runtime.
 The replicas carry no `role` metric label, which is the `Solo` signature and confirms the flip reached them.
 
 | Scan walk | Arm | p50 | p90 | max |
@@ -362,7 +362,7 @@ Temporary dataflows are the other thing it moves, and they cannot use the offloa
 Fixture: one `400cc` cluster, a `6,003,750` row index as the lookup target, and two temporary-dataflow probes.
 Late materialization is a differential join of about 120 keys against that index, confirmed by `EXPLAIN` to render rather than take a fast path.
 The introspection probe is a count over `mz_introspection.mz_scheduling_elapsed`.
-`enable_two_runtime_compute` was environment-scoped at the time of this run, so the two arms are sequential phases with a replica recycle between them.
+`enable_compute_interactive_runtime` was environment-scoped at the time of this run, so the two arms are sequential phases with a replica recycle between them.
 
 The first maintenance load, repeatedly creating and dropping an index over six million rows, moved almost nothing in either phase.
 It never saturated eight workers, and a load that does not saturate cannot demonstrate isolation.

@@ -457,7 +457,7 @@ impl Controller {
         config: ReplicaConfig,
         enable_worker_core_affinity: bool,
         enable_storage_introspection_logs: bool,
-        two_runtime_compute: bool,
+        interactive_runtime: bool,
     ) -> Result<(), anyhow::Error> {
         let storage_location: ClusterReplicaLocation;
         let compute_location: ClusterReplicaLocation;
@@ -486,7 +486,7 @@ impl Controller {
                     m,
                     enable_worker_core_affinity,
                     enable_storage_introspection_logs,
-                    two_runtime_compute,
+                    interactive_runtime,
                 )?;
                 storage_location = ClusterReplicaLocation {
                     ctl_addrs: service.addresses("storagectl"),
@@ -672,6 +672,11 @@ impl Controller {
     }
 
     /// Provisions a replica with the service orchestrator.
+    ///
+    /// `interactive_runtime` says whether to launch a second, interactive compute timely runtime
+    /// alongside the primary one. The caller resolves it per replica rather than this function
+    /// reading it: the flag is replica-scoped, scoped overrides reach a replica only once it
+    /// exists, and this value is needed before that.
     fn provision_replica(
         &self,
         cluster_id: ClusterId,
@@ -682,7 +687,7 @@ impl Controller {
         location: ManagedReplicaLocation,
         enable_worker_core_affinity: bool,
         enable_storage_introspection_logs: bool,
-        two_runtime_compute: bool,
+        interactive_runtime: bool,
     ) -> Result<(Box<dyn Service>, AbortOnDropHandle<()>), anyhow::Error> {
         let service_name = ReplicaServiceName {
             cluster_id,
@@ -713,15 +718,6 @@ impl Controller {
             zero_copy_limit: TIMELY_ZERO_COPY_LIMIT.get(&self.dyncfg),
             ..Default::default()
         };
-        // Whether to launch a second, interactive compute timely runtime alongside the primary
-        // one. `interactive_compute_arg` and `interactive_compute_port` must be gated on the same
-        // flag: `peer_addresses` panics if asked for a port that isn't in `ServiceConfig::ports`.
-        //
-        // Resolved per replica by the caller rather than read here. The flag is replica-scoped, and
-        // scoped overrides are delivered to replicas, so a value needed before the replica exists
-        // has to arrive as an argument.
-        let two_runtime = two_runtime_compute;
-
         let mut disk_limit = location.allocation.disk_limit;
         let memory_limit = location.allocation.memory_limit;
         let mut memory_request = None;
@@ -766,7 +762,7 @@ impl Controller {
                 port_hint: 6878,
             },
         ];
-        if let Some(interactive_port) = interactive_compute_port(two_runtime) {
+        if let Some(interactive_port) = interactive_compute_port(interactive_runtime) {
             ports.push(interactive_port);
         }
 
@@ -815,7 +811,7 @@ impl Controller {
                         ),
                     ];
                     if let Some(interactive_arg) = interactive_compute_arg(
-                        two_runtime,
+                        interactive_runtime,
                         location.allocation.workers.get(),
                         &compute_proto_timely_config,
                         &assigned,
@@ -1082,32 +1078,32 @@ const INTERACTIVE_PORT_NAME: &str = "interactive";
 // rejecting a replica that a local test would have provisioned happily.
 const _: () = assert!(INTERACTIVE_PORT_NAME.len() <= MAX_PORT_NAME_LEN);
 
-/// The `ServicePort` clusterd needs to advertise the second, interactive compute timely
-/// runtime, if [`mz_controller_types::dyncfgs::ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added to `ServiceConfig::ports`
-/// together with the `--interactive-compute-timely-config` argument produced by
+/// The `ServicePort` clusterd needs to advertise the second, interactive compute timely runtime,
+/// if [`mz_controller_types::dyncfgs::ENABLE_COMPUTE_INTERACTIVE_RUNTIME`] is on. Must be added
+/// to `ServiceConfig::ports` together with the `--interactive-compute-timely-config` produced by
 /// [`interactive_compute_arg`]: `ServiceAssignments::peer_addresses` panics if asked for a port
 /// name that isn't present in `ServiceConfig::ports`.
 ///
 /// NOTE: the name is `interactive`, not `compute-interactive`, because Kubernetes rejects a
 /// container port name longer than 15 characters. See [`MAX_PORT_NAME_LEN`].
-fn interactive_compute_port(two_runtime: bool) -> Option<ServicePort> {
-    two_runtime.then(|| ServicePort {
+fn interactive_compute_port(interactive_runtime: bool) -> Option<ServicePort> {
+    interactive_runtime.then(|| ServicePort {
         name: INTERACTIVE_PORT_NAME.into(),
         port_hint: 2104,
     })
 }
 
-/// The `--interactive-compute-timely-config` clusterd argument for the second, interactive
-/// compute timely runtime, if [`mz_controller_types::dyncfgs::ENABLE_TWO_RUNTIME_COMPUTE`] is on. Must be added together with
-/// the `interactive` port from [`interactive_compute_port`]: this reads the peer
-/// addresses for that port name, which panics if the port wasn't advertised.
+/// The `--interactive-compute-timely-config` clusterd argument for the second, interactive compute
+/// timely runtime, if [`mz_controller_types::dyncfgs::ENABLE_COMPUTE_INTERACTIVE_RUNTIME`] is on.
+/// Must be added together with the `interactive` port from [`interactive_compute_port`]: this reads
+/// the peer addresses for that port name, which panics if the port wasn't advertised.
 fn interactive_compute_arg(
-    two_runtime: bool,
+    interactive_runtime: bool,
     workers: usize,
     compute_proto_timely_config: &TimelyConfig,
     assigned: &ServiceAssignments,
 ) -> Option<String> {
-    two_runtime.then(|| {
+    interactive_runtime.then(|| {
         let interactive_compute_timely_config = TimelyConfig {
             workers,
             addresses: assigned.peer_addresses(INTERACTIVE_PORT_NAME),
@@ -1170,7 +1166,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn interactive_compute_port_only_when_two_runtime_enabled() {
+    fn interactive_compute_port_only_when_interactive_runtime_enabled() {
         assert_eq!(
             interactive_compute_port(true),
             Some(ServicePort {
@@ -1182,7 +1178,7 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn interactive_compute_arg_only_when_two_runtime_enabled() {
+    fn interactive_compute_arg_only_when_interactive_runtime_enabled() {
         let listen_addrs = BTreeMap::new();
         let peer_addrs = vec![BTreeMap::from([(
             INTERACTIVE_PORT_NAME.to_string(),
@@ -1195,7 +1191,7 @@ mod tests {
         };
 
         let arg = interactive_compute_arg(true, 4, &proto, &assigned)
-            .expect("arg present when two_runtime is enabled");
+            .expect("arg present when interactive_runtime is enabled");
         assert!(arg.starts_with("--interactive-compute-timely-config="));
         let json = arg
             .strip_prefix("--interactive-compute-timely-config=")
@@ -1208,7 +1204,7 @@ mod tests {
         assert_eq!(
             interactive_compute_arg(false, 4, &proto, &assigned),
             None,
-            "no arg when two_runtime is disabled"
+            "no arg when interactive_runtime is disabled"
         );
     }
 }

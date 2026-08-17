@@ -303,7 +303,7 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
-            "enable_two_runtime_compute",
+            "enable_compute_interactive_runtime",
             "true",
             ["true", "false"],
         ),

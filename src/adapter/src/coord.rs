@@ -119,7 +119,7 @@ use mz_controller::clusters::{
     ClusterConfig, ClusterEvent, ClusterStatus, ProcessId, ReplicaLocation,
 };
 use mz_controller::{ControllerConfig, Readiness};
-use mz_controller_types::dyncfgs::ENABLE_TWO_RUNTIME_COMPUTE;
+use mz_controller_types::dyncfgs::ENABLE_COMPUTE_INTERACTIVE_RUNTIME;
 use mz_controller_types::{ClusterId, ReplicaId, WatchSetId};
 use mz_dyncfg::{ConfigUpdates, ParameterScope};
 use mz_expr::{MapFilterProject, MirRelationExpr, OptimizedMirRelationExpr, RowSetFinishing};
@@ -2543,10 +2543,11 @@ impl Coordinator {
             )?;
             for replica in instance.replicas() {
                 let role = instance.role();
-                let two_runtime_compute = self.catalog().state().replica_scoped_bool(
+                let interactive_runtime = self.catalog().state().replica_scoped_bool(
                     replica.replica_id,
-                    ENABLE_TWO_RUNTIME_COMPUTE.name(),
-                    ENABLE_TWO_RUNTIME_COMPUTE.get(self.catalog().system_config().dyncfgs()),
+                    ENABLE_COMPUTE_INTERACTIVE_RUNTIME.name(),
+                    ENABLE_COMPUTE_INTERACTIVE_RUNTIME
+                        .get(self.catalog().system_config().dyncfgs()),
                 );
                 self.controller.create_replica(
                     instance.id,
@@ -2557,7 +2558,7 @@ impl Coordinator {
                     replica.config.clone(),
                     enable_worker_core_affinity,
                     enable_storage_introspection_logs,
-                    two_runtime_compute,
+                    interactive_runtime,
                 )?;
             }
         }

@@ -256,7 +256,7 @@ Steps 0 to 4 are done (`9babb21b5b`, `cb496355e0`, `4198ec1e77`). Only step 5 re
 The grouping was forced: step 1 without step 2 leaks a hold, and step 4 is only safe
 once synthesis exists, so 3 and 4 landed together.
 
-The mechanism is live rather than inert as of step 3, and `enable_two_runtime_compute`
+The mechanism is live rather than inert as of step 3, and `enable_compute_interactive_runtime`
 defaults on in the CI system parameters, so every mzcompose test exercises it. The first
 interactive dataflow to acquire holds in any session is a system-catalog query over the
 introspection indexes, not a user query.

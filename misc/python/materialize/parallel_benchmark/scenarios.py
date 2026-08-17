@@ -1314,10 +1314,10 @@ class TwoRuntimeReadIsolation(Scenario):
     Run the same scenario twice and compare the SELECT p50/p99/qps:
         bin/mzcompose --find parallel-benchmark run default \
             --scenario TwoRuntimeReadIsolation \
-            --this-params enable_two_runtime_compute=true
+            --this-params enable_compute_interactive_runtime=true
         bin/mzcompose --find parallel-benchmark run default \
             --scenario TwoRuntimeReadIsolation \
-            --this-params enable_two_runtime_compute=false
+            --this-params enable_compute_interactive_runtime=false
 
     With two runtimes ON the interactive runtime serves the peeks off the shared
     arrangements, isolated from the maintenance workers hydrating the churn MVs.

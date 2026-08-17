@@ -79,7 +79,7 @@ The bulk, about 5,200 lines, and the riskiest.
 | C1 | Per-process arrangement sharing registry: `sharing.rs`, `shared_trace.rs`, with unit tests | ~3,700 |
 | C2 | Render index imports from the registry: `render.rs`, `typedefs.rs`, arrange/threshold/join edges | ~900 |
 | C3 | Launch the second interactive timely runtime: `server.rs` role plumbing, `clusterd`, `cluster/client.rs`, the controller's `interactive` port and its length guard | ~500 |
-| C4 | Scope `enable_two_runtime_compute` to replicas | ~120 |
+| C4 | Scope `enable_compute_interactive_runtime` to replicas | ~120 |
 | C5 | Serve peeks from the registry: the shared peek path and `shared_snapshot_for_offload` | ~400 |
 | C6 | Tests and harness: clusterd-test-driver specs, `two_runtime_shared_fate`, mzcompose and parallel-workload flag registration | ~650 |
 | C7 | Fold `evaluation.md` and the stash plan into #37747 | docs |

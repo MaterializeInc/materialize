@@ -526,7 +526,7 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
 /// Whether to walk a fast-path index peek's cursor on a blocking task instead of inline on the
 /// timely worker that received it.
 ///
-/// Independent of `enable_two_runtime_compute`, and useful with or without it. It applies on
+/// Independent of `enable_compute_interactive_runtime`, and useful with or without it. It applies on
 /// whichever runtime serves the peek, taking the cursor from that runtime's own traces or from the
 /// sharing registry as appropriate. The serving worker still takes the snapshot, which costs a
 /// mutex and a handful of `Arc` clones, and then dispatches.
