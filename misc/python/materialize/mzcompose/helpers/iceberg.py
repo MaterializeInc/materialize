@@ -124,7 +124,10 @@ def create_polaris_catalog(
         "properties": properties,
         "storageConfigInfo": {
             "storageType": "S3",
-            "allowedLocations": [f"s3://{bucket_name}/*"],
+            # Allowed locations are prefixes, not globs. Polaris rejects the
+            # catalog unless `default-base-location` sits within one of them, and
+            # a trailing `/*` is matched literally, so it contains nothing.
+            "allowedLocations": [f"s3://{bucket_name}/"],
             "endpoint": endpoint,
             "endpointInternal": endpoint,
             "pathStyleAccess": True,
@@ -136,6 +139,7 @@ def create_polaris_catalog(
         "curl",
         "-sS",
         "-i",
+        "--fail-with-body",
         "-X",
         "POST",
         "-H",
@@ -145,6 +149,30 @@ def create_polaris_catalog(
         "http://localhost:8181/api/management/v1/catalogs",
         "--data-binary",
         json.dumps(catalog_payload),
+    )
+
+
+def assert_polaris_catalog_exists(
+    c: "Composition",
+    access_token: str,
+    catalog_name: str = "default_catalog",
+) -> None:
+    """Read the catalog back, failing here if it is missing.
+
+    A rejected catalog creation otherwise stays invisible until whatever first
+    uses the warehouse reports a 404, which points the investigation at the
+    consumer instead of at setup.
+    """
+    c.exec(
+        "polaris",
+        "curl",
+        "-sS",
+        "--fail-with-body",
+        "-X",
+        "GET",
+        "-H",
+        f"Authorization: Bearer {access_token}",
+        f"http://localhost:8181/api/management/v1/catalogs/{catalog_name}",
     )
 
 
@@ -160,6 +188,7 @@ def create_polaris_namespace(
         "curl",
         "-sS",
         "-i",
+        "--fail-with-body",
         "-X",
         "POST",
         "-H",
@@ -294,6 +323,8 @@ def setup_polaris_for_iceberg(
         secret_key=key,
         static_credentials=static_credentials,
     )
+
+    assert_polaris_catalog_exists(c, access_token, catalog_name=catalog_name)
 
     create_polaris_namespace(
         c,
