@@ -89,7 +89,7 @@ describe("buildMcpSnippet", () => {
 
   it("omits headers from JSON configs for the OAuth flow", () => {
     const snippet = buildMcpSnippet({
-      client: client("vscode"),
+      client: client("cursor"),
       server: server("developer"),
       baseUrl: BASE_URL,
     });
@@ -97,6 +97,70 @@ describe("buildMcpSnippet", () => {
       mcpServers: {
         "materialize-developer": {
           url: `${BASE_URL}/api/mcp/developer`,
+        },
+      },
+    });
+  });
+
+  it("roots VS Code configs at servers with an explicit http type", () => {
+    const snippet = buildMcpSnippet({
+      client: client("vscode"),
+      server: server("developer"),
+      baseUrl: BASE_URL,
+      token: "dG9rZW4=",
+    });
+    expect(JSON.parse(snippet)).toEqual({
+      servers: {
+        "materialize-developer": {
+          type: "http",
+          url: `${BASE_URL}/api/mcp/developer`,
+          headers: { Authorization: "Basic dG9rZW4=" },
+        },
+      },
+    });
+  });
+
+  it("uses serverUrl for Windsurf configs", () => {
+    const snippet = buildMcpSnippet({
+      client: client("windsurf"),
+      server: server("developer"),
+      baseUrl: BASE_URL,
+    });
+    expect(JSON.parse(snippet)).toEqual({
+      mcpServers: {
+        "materialize-developer": {
+          serverUrl: `${BASE_URL}/api/mcp/developer`,
+        },
+      },
+    });
+  });
+
+  it("shows just the URL for Claude Desktop's OAuth connector flow", () => {
+    const snippet = buildMcpSnippet({
+      client: client("claude-desktop"),
+      server: server("developer"),
+      baseUrl: BASE_URL,
+    });
+    expect(snippet).toEqual(`${BASE_URL}/api/mcp/developer`);
+  });
+
+  it("proxies Claude Desktop's token flow through mcp-remote", () => {
+    const snippet = buildMcpSnippet({
+      client: client("claude-desktop"),
+      server: server("developer"),
+      baseUrl: BASE_URL,
+      token: "dG9rZW4=",
+    });
+    expect(JSON.parse(snippet)).toEqual({
+      mcpServers: {
+        "materialize-developer": {
+          command: "npx",
+          args: [
+            "mcp-remote",
+            `${BASE_URL}/api/mcp/developer`,
+            "--header",
+            "Authorization: Basic dG9rZW4=",
+          ],
         },
       },
     });

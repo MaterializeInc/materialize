@@ -73,7 +73,7 @@ export type McpClientId =
   | "codex"
   | "other";
 
-export type McpConfigKind = "cli" | "json" | "toml";
+export type McpConfigKind = "cli" | "json" | "toml" | "connector";
 
 export interface McpClient {
   id: McpClientId;
@@ -81,12 +81,19 @@ export interface McpClient {
   kind: McpConfigKind;
   /** Where the config goes, used as the final step's title. */
   configLocation: string;
-  /** How the user completes the browser sign-in for the OAuth flow. */
-  signInHint: string;
+  /** Overrides `configLocation` for the token flow. Used by clients whose
+   * token setup goes somewhere else than the OAuth setup. */
+  tokenConfigLocation?: string;
+  /** How the user completes the browser sign-in for the OAuth flow. Use the
+   * function form when the hint names the server. */
+  signInHint: string | ((serverName: string) => string);
   /** Whether the client supports one-click install via a deep link. */
   oneClickInstall?: boolean;
 }
 
+// Config formats and sign-in behavior verified against each client's docs.
+// When a client changes its config schema, this registry is the single place
+// to update.
 export const MCP_CLIENTS: McpClient[] = [
   {
     id: "claude-code",
@@ -106,12 +113,16 @@ export const MCP_CLIENTS: McpClient[] = [
     oneClickInstall: true,
   },
   {
+    // Claude Desktop's config file only launches local stdio servers. Remote
+    // servers are added as custom connectors in the app for OAuth, or through
+    // the mcp-remote proxy for the token flow.
     id: "claude-desktop",
     name: "Claude Desktop",
-    kind: "json",
-    configLocation: "Add to claude_desktop_config.json",
+    kind: "connector",
+    configLocation: "Add as a custom connector under Settings > Connectors",
+    tokenConfigLocation: "Add to claude_desktop_config.json",
     signInHint:
-      "Claude Desktop opens your browser to sign in when the server first connects.",
+      "Claude Desktop opens your browser to sign in when you add the connector.",
   },
   {
     id: "vscode",
@@ -135,8 +146,8 @@ export const MCP_CLIENTS: McpClient[] = [
     name: "Codex CLI",
     kind: "toml",
     configLocation: "Add to ~/.codex/config.toml",
-    signInHint:
-      "Codex opens your browser to sign in the first time the server is used.",
+    signInHint: (serverName) =>
+      `Run codex mcp login ${serverName} to sign in through your browser.`,
   },
   {
     id: "other",
@@ -146,6 +157,11 @@ export const MCP_CLIENTS: McpClient[] = [
     signInHint: "Your client opens a browser to sign in on first connect.",
   },
 ];
+
+export const resolveSignInHint = (client: McpClient, serverName: string) =>
+  typeof client.signInHint === "function"
+    ? client.signInHint(serverName)
+    : client.signInHint;
 
 export interface McpSnippetOptions {
   client: McpClient;
@@ -164,15 +180,61 @@ const buildCliSnippet = ({ server, baseUrl, token }: McpSnippetOptions) => {
   return `claude mcp add --transport http ${server.serverName} \\\n  ${mcpServerUrl(server, baseUrl)}${header}`;
 };
 
-const buildJsonSnippet = ({ server, baseUrl, token }: McpSnippetOptions) => {
-  const entry: Record<string, unknown> = {
-    url: mcpServerUrl(server, baseUrl),
-  };
-  if (token) {
-    entry.headers = { Authorization: `Basic ${token}` };
+const buildJsonSnippet = ({
+  client,
+  server,
+  baseUrl,
+  token,
+}: McpSnippetOptions) => {
+  const url = mcpServerUrl(server, baseUrl);
+  const headers = token
+    ? { headers: { Authorization: `Basic ${token}` } }
+    : undefined;
+  // Each client expects a slightly different JSON schema for remote servers.
+  let config: Record<string, unknown>;
+  switch (client.id) {
+    // VS Code roots at "servers" and needs an explicit transport type,
+    // otherwise it treats the entry as a stdio command.
+    case "vscode":
+      config = {
+        servers: { [server.serverName]: { type: "http", url, ...headers } },
+      };
+      break;
+    // Windsurf's canonical key for remote servers is "serverUrl".
+    case "windsurf":
+      config = {
+        mcpServers: { [server.serverName]: { serverUrl: url, ...headers } },
+      };
+      break;
+    default:
+      config = { mcpServers: { [server.serverName]: { url, ...headers } } };
   }
+  return JSON.stringify(config, null, 2);
+};
+
+/** Claude Desktop: the OAuth flow pastes the URL into the connectors UI, the
+ * token flow proxies through mcp-remote since the config file is stdio-only. */
+const buildConnectorSnippet = ({
+  server,
+  baseUrl,
+  token,
+}: McpSnippetOptions) => {
+  const url = mcpServerUrl(server, baseUrl);
+  if (!token) return url;
   return JSON.stringify(
-    { mcpServers: { [server.serverName]: entry } },
+    {
+      mcpServers: {
+        [server.serverName]: {
+          command: "npx",
+          args: [
+            "mcp-remote",
+            url,
+            "--header",
+            `Authorization: Basic ${token}`,
+          ],
+        },
+      },
+    },
     null,
     2,
   );
@@ -195,6 +257,8 @@ export const buildMcpSnippet = (options: McpSnippetOptions): string => {
       return buildCliSnippet(options);
     case "toml":
       return buildTomlSnippet(options);
+    case "connector":
+      return buildConnectorSnippet(options);
     case "json":
       return buildJsonSnippet(options);
   }
