@@ -862,10 +862,6 @@ pub(crate) mod tests {
         let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
 
-        // One transaction serves every measurement below. The handler
-        // counters are session-level, so they read fine through it, and a
-        // throwaway prober per probe keeps the transaction usable in between
-        // (a prober holds the exclusive borrow for its whole lifetime).
         let mut tx = start_tx(&mut conn).await?;
 
         // Prove the methodology first: a deliberately non-sargable predicate
