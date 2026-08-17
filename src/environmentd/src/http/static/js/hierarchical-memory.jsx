@@ -78,7 +78,7 @@ function ClusterReplicaView() {
       {loading ? (
         <div>Loading...</div>
       ) : error ? (
-        <div>error: {error}</div>
+        <div>error: {String(error)}</div>
       ) : (
         <div>
           <label htmlFor="cluster_replica">Cluster Replica </label>
@@ -270,16 +270,17 @@ function Dataflows(props) {
           const labels = ids_seen.map((id) => {
             let name = id_to_name[id];
             if (name != null) {
+              const label = escapeDotLabel(`${id} : ${name}`);
               if (scope_children.has(addrStr(id_to_addr[id]))) {
                 // indicate subgraphs
-                return `${id} [label="${id} : ${name}",shape=house,style=filled,color=green,fillcolor="#bbffbb"]`;
+                return `${id} [label="${label}",shape=house,style=filled,color=green,fillcolor="#bbffbb"]`;
               } else {
                 let my_records = records["".concat(id)];
                 if (my_records != null) {
                   let my_size = Math.ceil(my_records[1]/1024);
-                  return `${id} [label= "${id} : ${name}\nrecords: ${my_records[0]}, ${my_size} KiB",style=filled,color=red,fillcolor="#ffbbbb",shape=box]`;
+                  return `${id} [label= "${label}\nrecords: ${my_records[0]}, ${my_size} KiB",style=filled,color=red,fillcolor="#ffbbbb",shape=box]`;
                 } else {
-                  return `${id} [label="${id} : ${name}",shape=box]`;
+                  return `${id} [label="${label}",shape=box]`;
                 }
               }
             } else {
@@ -325,7 +326,7 @@ function Dataflows(props) {
       {loading ? (
         <div>Loading...</div>
       ) : error ? (
-        <div>error: {error}</div>
+        <div>error: {String(error)}</div>
       ) : (
         <div>
           {page}
@@ -400,6 +401,13 @@ async function getCreateView(dataflow_name) {
 
 function addrStr(addr) {
   return addr.join(', ');
+}
+
+// Escape special characters in DOT labels. Operator names routinely contain
+// double quotes, e.g. `ArrangeBy[[Column(0, "id")]]`, which would otherwise
+// terminate the quoted label and make the whole graph unparseable.
+function escapeDotLabel(str) {
+  return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function toggle_active(e) {
