@@ -99,19 +99,47 @@ const ReplicaLastStatusChangeCell = ({
 );
 
 /**
- * The CPU figure a cluster row sorts by: its busiest replica, or null when none
- * of them reports a sample.
+ * The value a cluster row sorts by in a per-replica column: the greatest of its
+ * replicas' values under `compare`, or null when none of them has one.
  *
- * A cluster has no utilization of its own. Sorting it on a constant would leave
- * every cluster tied, and TanStack breaks ties by row index, so the column would
- * only ever reorder replicas within a cluster and never move the clusters.
+ * A cluster has no reading of its own in these columns. Sorting it on a constant
+ * would leave every cluster tied, and TanStack breaks ties by row index, so the
+ * column would only ever reorder replicas within a cluster and never move the
+ * clusters themselves.
+ *
+ * NOTE: `compare` must order values the same way the column's `sortingFn` does.
+ * If the two disagree, a cluster can sort above another whose replicas all rank
+ * higher, because the two levels are being ranked by different rules.
  */
-const maxReplicaCpuPercent = (replicas: Replica[]) =>
-  replicas.reduce<number | null>(
-    (max, { cpuPercent }) =>
-      cpuPercent !== null && (max === null || cpuPercent > max)
-        ? cpuPercent
-        : max,
+const maxReplicaValue = <T,>(
+  replicas: Replica[],
+  read: (replica: Replica) => T | null,
+  compare: (a: T, b: T) => number,
+): T | null =>
+  replicas.reduce<T | null>((max, replica) => {
+    const value = read(replica);
+    if (value === null) return max;
+    return max === null || compare(value, max) > 0 ? value : max;
+  }, null);
+
+/** Orders sizes the way `nullsLast` does, so "50cc" ranks below "100cc". */
+const compareSizes = (a: string, b: string) =>
+  a.localeCompare(b, undefined, { numeric: true });
+
+const compareTimestamps = (a: string, b: string) =>
+  Date.parse(a) - Date.parse(b);
+
+/**
+ * The newest of a replica's status timestamps, or null when it has none. A
+ * replica carries one status row per process and the query leaves them
+ * unordered, so position must not decide which one wins.
+ */
+const latestReplicaStatusAt = (replica: Replica) =>
+  replica.statuses.reduce<string | null>(
+    (latest, { updated_at }) =>
+      latest === null || Date.parse(updated_at) > Date.parse(latest)
+        ? updated_at
+        : latest,
     null,
   );
 
@@ -135,11 +163,17 @@ const columns = [
     },
   }),
   columnHelper.accessor(
-    (row) => (row.rowType === "replica" ? row.size : null),
+    (row) =>
+      row.rowType === "cluster"
+        ? maxReplicaValue(row.replicas, (r) => r.size, compareSizes)
+        : row.size,
     {
       id: "sizes",
       header: "Size",
       sortingFn: sortingFunctions.nullsLast,
+      // Pinned because TanStack would otherwise infer this from the first row's
+      // value type, which for a cluster row depends on whether it has replicas.
+      sortDescFirst: true,
       // A cluster row is a heading, so it stays blank. Only a replica that
       // genuinely reports no size gets a dash.
       cell: (info) =>
@@ -154,12 +188,17 @@ const columns = [
     // themselves both fall out of one accessor.
     (row) =>
       row.rowType === "cluster"
-        ? maxReplicaCpuPercent(row.replicas)
+        ? maxReplicaValue(
+            row.replicas,
+            (r) => r.cpuPercent,
+            (a, b) => a - b,
+          )
         : row.cpuPercent,
     {
       id: "cpuPercent",
       header: "CPU",
       sortingFn: sortingFunctions.numericNullsLast,
+      sortDescFirst: true,
       cell: (info) => {
         const row = info.row.original;
         // Utilization is per replica, so a cluster row has nothing to show
@@ -172,24 +211,25 @@ const columns = [
     },
   ),
   columnHelper.accessor(
-    (row) => {
-      if (row.rowType === "cluster") {
-        return row.latestStatusUpdate;
-      }
-      // A replica carries one status row per process and the query leaves them
-      // unordered, so pick the newest by timestamp.
-      return row.statuses.reduce<string | null>(
-        (latest, { updated_at }) =>
-          latest === null || Date.parse(updated_at) > Date.parse(latest)
-            ? updated_at
-            : latest,
-        null,
-      );
-    },
+    // NOTE: deliberately not the cluster's own `latestStatusUpdate`. That comes
+    // from the replica status *history*, so it counts replicas that have since
+    // been dropped and can name a time no visible replica row reports. Rolling
+    // the replicas up keeps a cluster ranked by the rows shown beneath it.
+    (row) =>
+      row.rowType === "cluster"
+        ? maxReplicaValue(
+            row.replicas,
+            latestReplicaStatusAt,
+            compareTimestamps,
+          )
+        : latestReplicaStatusAt(row),
     {
       id: "lastStatusChange",
       header: "Last status change",
       sortingFn: sortingFunctions.nullsLast,
+      // Pinned for the same reason as the other two: otherwise the direction
+      // depends on the first row's value type.
+      sortDescFirst: false,
       cell: (info) => {
         const row = info.row.original;
         if (row.rowType === "cluster") {

@@ -578,6 +578,282 @@ describe("ClustersList CPU sorting", () => {
   });
 });
 
+describe("ClustersList Size sorting", () => {
+  const clickSizeHeader = (user: ReturnType<typeof userEvent.setup>) =>
+    clickHeader(user, /^Size/);
+
+  const sortBySizeDescending = clickSizeHeader;
+
+  const sortBySizeAscending = async (
+    user: ReturnType<typeof userEvent.setup>,
+  ) => {
+    await clickSizeHeader(user);
+    await clickSizeHeader(user);
+  };
+
+  /**
+   * Ranked by largest replica the order is bravo (200cc), alpha (400cc), charlie
+   * (1600cc). Ranked by smallest it is alphabetical, so a min-based or missing
+   * aggregate fails visibly.
+   */
+  const interleavedClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "alpha",
+      replicas: [
+        buildReplica({ id: "u10", name: "a-25", size: "25cc" }),
+        buildReplica({ id: "u11", name: "a-400", size: "400cc" }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      replicas: [
+        buildReplica({ id: "u20", name: "b-100", size: "100cc" }),
+        buildReplica({ id: "u21", name: "b-200", size: "200cc" }),
+      ],
+    }),
+    buildCluster({
+      id: "u3",
+      name: "charlie",
+      replicas: [
+        buildReplica({ id: "u30", name: "c-800", size: "800cc" }),
+        buildReplica({ id: "u31", name: "c-1600", size: "1600cc" }),
+      ],
+    }),
+  ];
+
+  it("orders clusters by their largest replica", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(interleavedClusters());
+
+    expect(await rowOrderAfter(sortBySizeDescending, user)).toEqual([
+      "charlie",
+      "c-1600",
+      "c-800",
+      "alpha",
+      "a-400",
+      "a-25",
+      "bravo",
+      "b-200",
+      "b-100",
+    ]);
+  });
+
+  it("reverses clusters and their replicas together when sorted ascending", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(interleavedClusters());
+
+    expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
+      "bravo",
+      "b-100",
+      "b-200",
+      "alpha",
+      "a-25",
+      "a-400",
+      "charlie",
+      "c-800",
+      "c-1600",
+    ]);
+  });
+
+  it("compares sizes numerically rather than lexicographically", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "alpha",
+        replicas: [buildReplica({ id: "u10", name: "a-1", size: "100cc" })],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "bravo",
+        replicas: [buildReplica({ id: "u20", name: "b-1", size: "50cc" })],
+      }),
+    ]);
+
+    // Character by character "100cc" precedes "50cc", which ascending would put
+    // alpha first.
+    expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
+      "bravo",
+      "b-1",
+      "alpha",
+      "a-1",
+    ]);
+  });
+
+  it("sorts a cluster whose replicas report no size after the sized ones", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "alpha-unsized",
+        replicas: [buildReplica({ id: "u10", name: "a-1", size: null })],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "bravo-sized",
+        replicas: [buildReplica({ id: "u20", name: "b-1", size: "50cc" })],
+      }),
+    ]);
+
+    expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
+      "bravo-sized",
+      "b-1",
+      "alpha-unsized",
+      "a-1",
+    ]);
+  });
+});
+
+describe("ClustersList Last status change sorting", () => {
+  const clickStatusHeader = (user: ReturnType<typeof userEvent.setup>) =>
+    clickHeader(user, /^Last status change/);
+
+  const sortByStatusAscending = clickStatusHeader;
+
+  const sortByStatusDescending = async (
+    user: ReturnType<typeof userEvent.setup>,
+  ) => {
+    await clickStatusHeader(user);
+    await clickStatusHeader(user);
+  };
+
+  /** A replica whose single process last changed status at `updatedAt`. */
+  const replicaAt = (id: string, name: string, updatedAt: string) =>
+    buildReplica({
+      id,
+      name,
+      statuses: [
+        {
+          replica_id: id,
+          process_id: "0",
+          reason: null,
+          status: "online",
+          updated_at: updatedAt,
+        },
+      ],
+    });
+
+  /**
+   * Ranked by newest replica the order is bravo (Mar 11), alpha (Mar 20),
+   * charlie (Mar 28). Ranked by oldest it is alphabetical, so a min-based or
+   * missing aggregate fails visibly.
+   */
+  const interleavedClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "alpha",
+      replicas: [
+        replicaAt("u10", "a-01", "2024-03-01T08:00:00.000Z"),
+        replicaAt("u11", "a-20", "2024-03-20T08:00:00.000Z"),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      replicas: [
+        replicaAt("u20", "b-10", "2024-03-10T08:00:00.000Z"),
+        replicaAt("u21", "b-11", "2024-03-11T08:00:00.000Z"),
+      ],
+    }),
+    buildCluster({
+      id: "u3",
+      name: "charlie",
+      replicas: [
+        replicaAt("u30", "c-25", "2024-03-25T08:00:00.000Z"),
+        replicaAt("u31", "c-28", "2024-03-28T08:00:00.000Z"),
+      ],
+    }),
+  ];
+
+  it("orders clusters by their most recently changed replica", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(interleavedClusters());
+
+    expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
+      "bravo",
+      "b-10",
+      "b-11",
+      "alpha",
+      "a-01",
+      "a-20",
+      "charlie",
+      "c-25",
+      "c-28",
+    ]);
+  });
+
+  it("reverses clusters and their replicas together when sorted descending", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(interleavedClusters());
+
+    expect(await rowOrderAfter(sortByStatusDescending, user)).toEqual([
+      "charlie",
+      "c-28",
+      "c-25",
+      "alpha",
+      "a-20",
+      "a-01",
+      "bravo",
+      "b-11",
+      "b-10",
+    ]);
+  });
+
+  it("ranks a cluster by its replicas, not by its own latestStatusUpdate", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "live",
+        latestStatusUpdate: "2000-01-01T00:00:00.000Z",
+        replicas: [replicaAt("u10", "l-1", "2024-03-05T08:00:00.000Z")],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "stale-history",
+        // The status history reaches far past anything its replicas report, which
+        // is what a dropped replica leaves behind.
+        latestStatusUpdate: "2099-01-01T00:00:00.000Z",
+        replicas: [replicaAt("u20", "h-1", "2024-03-01T08:00:00.000Z")],
+      }),
+    ]);
+
+    // Ranking on latestStatusUpdate would leave live first, which is also the
+    // alphabetical order.
+    expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
+      "stale-history",
+      "h-1",
+      "live",
+      "l-1",
+    ]);
+  });
+
+  it("sorts a cluster whose replicas have no statuses after the rest", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "alpha-silent",
+        replicas: [buildReplica({ id: "u10", name: "a-1", statuses: [] })],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "bravo-reporting",
+        replicas: [replicaAt("u20", "b-1", "2024-03-05T08:00:00.000Z")],
+      }),
+    ]);
+
+    expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
+      "bravo-reporting",
+      "b-1",
+      "alpha-silent",
+      "a-1",
+    ]);
+  });
+});
+
 describe("ClustersList keyboard navigation", () => {
   // A cluster with replicas puts an expand caret ahead of its name, which would
   // shift every tab stop in the row. These tests are about the name and the
