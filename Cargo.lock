@@ -6731,6 +6731,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytesize",
+ "chrono",
  "columnar",
  "columnation",
  "core_affinity",

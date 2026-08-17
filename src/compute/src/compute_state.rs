@@ -727,6 +727,12 @@ impl<'a> ActiveComputeState<'a> {
         // scheduled.
         let suspension_token = self.compute_state.suspended_collections.remove(&id);
         drop(suspension_token);
+
+        if let Some(collection) = self.compute_state.collections.get(&id) {
+            if let Some(logging) = &collection.logging {
+                logging.set_hydration_start();
+            }
+        }
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
@@ -871,6 +877,11 @@ impl<'a> ActiveComputeState<'a> {
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            // Log collections are never suspended and the controller marks them scheduled
+            // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
+            // start here, or they would sit permanently in the illegal state of being hydrated
+            // without having started.
+            logging.set_hydration_start();
             collection.logging = Some(logging);
 
             let existing = self.compute_state.collections.insert(id, collection);

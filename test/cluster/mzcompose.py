@@ -4287,6 +4287,94 @@ def workflow_test_subscribe_hydration_status(
             """))
 
 
+def workflow_test_hydration_timestamps(c: Composition) -> None:
+    """
+    Test that compute hydration timestamps are stamped by the replica.
+
+    They must therefore survive an environmentd restart, which does not disturb
+    the replica, and reset on a replica restart, which rebuilds the dataflows
+    they describe.
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized", "clusterd1")
+
+    c.sql(
+        "ALTER SYSTEM SET unsafe_enable_unorchestrated_cluster_replicas = true;",
+        port=6877,
+        user="mz_system",
+    )
+
+    c.sql("""
+        CREATE CLUSTER cluster1 REPLICAS (replica1 (
+            STORAGECTL ADDRESSES ['clusterd1:2100'],
+            STORAGE ADDRESSES ['clusterd1:2103'],
+            COMPUTECTL ADDRESSES ['clusterd1:2101'],
+            COMPUTE ADDRESSES ['clusterd1:2102'],
+            WORKERS 2
+        ));
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        CREATE INDEX idx ON t (a);
+        """)
+
+    def collect_timestamps() -> list[tuple]:
+        """Return one `(worker_id, installed_at, started_at, hydrated_at)` row per worker.
+
+        Retries until every worker reports a complete set of timestamps, since
+        dataflows take an unknown time to hydrate and the introspection
+        relations are updated asynchronously.
+        """
+        deadline = time.time() + 120
+        while True:
+            with c.sql_cursor() as cursor:
+                cursor.execute("SET cluster = cluster1")
+                cursor.execute("""
+                    SELECT h.worker_id, h.installed_at, h.started_at, h.hydrated_at
+                    FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+                    JOIN mz_indexes i ON (i.id = h.export_id)
+                    WHERE i.name = 'idx'
+                    ORDER BY h.worker_id
+                    """)
+                rows = [tuple(row) for row in cursor.fetchall()]
+            if len(rows) == 2 and all(all(v is not None for v in row) for row in rows):
+                return rows
+            assert time.time() < deadline, f"idx did not hydrate, last saw: {rows}"
+            time.sleep(1)
+
+    before = collect_timestamps()
+    for worker_id, installed_at, started_at, hydrated_at in before:
+        assert (
+            installed_at <= started_at <= hydrated_at
+        ), f"worker {worker_id} timestamps out of order: {installed_at}, {started_at}, {hydrated_at}"
+
+    # An environmentd restart triggers a reconciliation on clusterd, which
+    # retains the dataflow, so the timestamps describe the same episode and must
+    # not change.
+    c.kill("materialized")
+    c.up("materialized")
+
+    after_environmentd_restart = collect_timestamps()
+    assert before == after_environmentd_restart, (
+        "hydration timestamps changed across an environmentd restart: "
+        f"{before} vs {after_environmentd_restart}"
+    )
+
+    # A replica restart rebuilds the dataflow, which is a new hydration episode,
+    # so every timestamp must be fresh.
+    c.kill("clusterd1")
+    c.up("clusterd1")
+
+    after_replica_restart = collect_timestamps()
+    for (_, before_installed, _, _), (worker_id, after_installed, _, _) in zip(
+        before, after_replica_restart
+    ):
+        assert after_installed > before_installed, (
+            f"worker {worker_id} kept its installed_at across a replica restart: "
+            f"{before_installed} vs {after_installed}"
+        )
+
+
 def workflow_cluster_drop_concurrent(
     c: Composition, parser: WorkflowArgumentParser
 ) -> None:
