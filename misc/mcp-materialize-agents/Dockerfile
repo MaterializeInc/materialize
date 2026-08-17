@@ -7,7 +7,9 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM python:3.13-alpine
+# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# digest for security fixes.
+FROM python:3.13-alpine@sha256:540c7d91f98ff6880174c40e99067bf5941eb54d818a7a5e094d188b196a934d
 
 RUN pip install uv
 
