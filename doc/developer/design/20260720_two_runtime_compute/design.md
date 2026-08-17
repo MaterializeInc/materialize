@@ -8,7 +8,8 @@ distinct is the most important thing a reader can take from it.
 
 * **Peek offloading** moves a fast-path index peek's *walk* off the serving
   timely worker onto a blocking task. It is a substrate choice for one kind of
-  work, needs no second runtime, and is gated by `ENABLE_INDEX_PEEK_OFFLOAD`.
+  work, needs no second runtime, and is gated by `ENABLE_INDEX_PEEK_OFFLOAD`. It is parked,
+  and orthogonal to the rest of this document: see [peek-placement.md](peek-placement.md).
 * **Dataflow offloading** runs a second, in-process "interactive" timely runtime
   that renders temporary dataflows and serves reads directly off the
   arrangements the "maintenance" runtime builds, zero-copy through a per-process
@@ -384,6 +385,15 @@ reason they are complements rather than alternatives, and it survives the
 corrections above.
 
 ### What follows
+
+The peek-placement question, S1 against S5, is **parked pending an experiment** rather than
+settled here, and it is orthogonal to the interactive runtime: see
+[peek-placement.md](peek-placement.md) for the decision rule and the two table cells that
+decide it. Two corrections belong with the conclusions below. Placement and preemption are
+independent, so an off-worker walk that yields is a fourth candidate rather than a
+contradiction, and this section's framing of S1 and S5 as alternatives is incomplete. And
+S1's advantage on M1 is predicted throughout, never measured, which is what the experiment
+is for.
 
 * **S1 is the right default.** It costs no core and no thread, it reaches M1, it is
   predicted to match or beat S5 on both fixtures this document leans on, and it
