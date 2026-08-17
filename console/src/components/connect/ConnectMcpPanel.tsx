@@ -320,39 +320,41 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
         </HStack>
       )}
       <LabeledCommandBox
-        label={installLink ? "Or copy the config:" : undefined}
+        label={
+          installLink
+            ? "Or copy the config:"
+            : client.kind === "cli"
+              ? "Run this in your terminal:"
+              : undefined
+        }
         contents={snippet}
         displayContents={displaySnippet}
       />
-      {oauthActive ? (
-        <HStack justifyContent="space-between" alignItems="baseline">
-          <Text fontSize="sm" color={colors.foreground.secondary}>
-            {resolveSignInHint(client, server.serverName)}
-          </Text>
+      {ctx.oauthAvailable && (
+        <HStack justifyContent="flex-end">
           <TextLink
             as="button"
             type="button"
             fontSize="sm"
-            flexShrink={0}
-            onClick={() => setUseTokenFlow(true)}
+            onClick={() => setUseTokenFlow(oauthActive)}
           >
-            Use a token instead
+            {oauthActive ? "Use a token instead" : "Use OAuth instead"}
           </TextLink>
         </HStack>
-      ) : (
-        ctx.oauthAvailable && (
-          <HStack justifyContent="flex-end">
-            <TextLink
-              as="button"
-              type="button"
-              fontSize="sm"
-              onClick={() => setUseTokenFlow(false)}
-            >
-              Use OAuth instead
-            </TextLink>
-          </HStack>
-        )
       )}
+    </VStack>
+  );
+
+  const authenticateStep = (
+    <VStack alignItems="stretch" spacing="2">
+      {client.authenticateCommand && (
+        <LabeledCommandBox
+          contents={client.authenticateCommand(server.serverName)}
+        />
+      )}
+      <Text fontSize="sm" color={colors.foreground.secondary}>
+        {resolveSignInHint(client, server.serverName)}
+      </Text>
     </VStack>
   );
 
@@ -399,6 +401,9 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
         : client.configLocation,
     content: commandStep,
   });
+  if (oauthActive) {
+    steps.push({ title: "Authenticate", content: authenticateStep });
+  }
   if (isDeveloper) {
     steps.push({
       title: "Install agent skills (optional)",

@@ -85,8 +85,11 @@ export interface McpClient {
   /** Overrides `configLocation` for the token flow. Used by clients whose
    * token setup goes somewhere else than the OAuth setup. */
   tokenConfigLocation?: string;
-  /** How the user completes the browser sign-in for the OAuth flow. Use the
-   * function form when the hint names the server. */
+  /** Command that starts the client's sign-in, when it has one. Shown in the
+   * Authenticate step of the OAuth flow. */
+  authenticateCommand?: (serverName: string) => string;
+  /** How the sign-in proceeds, shown in the Authenticate step. Use the
+   * function form when the text names the server. */
   signInHint: string | ((serverName: string) => string);
   /** Whether the client supports one-click install via a deep link. */
   oneClickInstall?: boolean;
@@ -100,9 +103,10 @@ export const MCP_CLIENTS: McpClient[] = [
     id: "claude-code",
     name: "Claude Code",
     kind: "cli",
-    configLocation: "Run this in your terminal",
-    signInHint:
-      "Claude Code opens your browser to sign in on first use. Run /mcp inside Claude Code to sign in right away.",
+    configLocation: "Add the MCP server",
+    authenticateCommand: () => "claude /mcp",
+    signInHint: (serverName) =>
+      `Select the ${serverName} server, then Authenticate. Your browser opens to sign in.`,
   },
   {
     id: "cursor",
@@ -147,8 +151,8 @@ export const MCP_CLIENTS: McpClient[] = [
     name: "Codex CLI",
     kind: "toml",
     configLocation: "Add to ~/.codex/config.toml",
-    signInHint: (serverName) =>
-      `Run codex mcp login ${serverName} to sign in through your browser.`,
+    authenticateCommand: (serverName) => `codex mcp login ${serverName}`,
+    signInHint: "Your browser opens to sign in.",
   },
   {
     id: "other",

@@ -14,7 +14,13 @@ import React from "react";
 
 import server from "~/api/mocks/server";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
-import { renderComponent } from "~/test/utils";
+import {
+  defaultRegionId,
+  healthyEnvironment,
+  renderComponent,
+  setFakeEnvironment,
+} from "~/test/utils";
+import { parseDbVersion } from "~/version/api";
 
 import ConnectDrawer from "./ConnectDrawer";
 
@@ -36,7 +42,7 @@ describe("ConnectDrawer", () => {
     expect(
       screen.getByRole("button", { name: "Generate app password" }),
     ).toBeVisible();
-    expect(screen.getByText("Run this in your terminal")).toBeVisible();
+    expect(screen.getByText("Add the MCP server")).toBeVisible();
     expect(
       screen.getByText(new RegExp(`https://${ENVIRONMENT_HOST}`)),
     ).toBeVisible();
@@ -65,6 +71,40 @@ describe("ConnectDrawer", () => {
     expect(
       screen.queryByText("Install agent skills (optional)"),
     ).not.toBeInTheDocument();
+  });
+
+  it("shows the OAuth flow with an authenticate step on gated environments", async () => {
+    await renderComponent(
+      <ConnectDrawer isOpen onClose={vi.fn()} user={dummyValidUser} />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, defaultRegionId, {
+            ...healthyEnvironment,
+            status: {
+              health: "healthy",
+              errors: [],
+              version: parseDbVersion("v26.30.0 (abcdef123)"),
+            },
+          }),
+      },
+    );
+    const user = userEvent.setup();
+
+    expect(await screen.findByText("Authenticate")).toBeVisible();
+    expect(screen.getByText("claude /mcp")).toBeVisible();
+    expect(
+      screen.getByText(/Select the materialize-developer server/),
+    ).toBeVisible();
+    // The OAuth command carries no credential.
+    expect(screen.queryByText(/Authorization/)).not.toBeInTheDocument();
+
+    await user.click(screen.getByText("Use a token instead"));
+
+    expect(
+      await screen.findByRole("button", { name: "Generate app password" }),
+    ).toBeVisible();
+    expect(screen.queryByText("Authenticate")).not.toBeInTheDocument();
+    expect(screen.getByText("Use OAuth instead")).toBeVisible();
   });
 
   it("generates an MCP token and masks it in the command", async () => {
