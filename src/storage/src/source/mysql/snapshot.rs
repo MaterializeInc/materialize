@@ -238,27 +238,27 @@ const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
 const MIN_PROBED_PREFIXES: u64 = 256;
 const BILLION_ROWS: u64 = 1_000_000_000;
 
-/// Partitioning knobs read from dyncfgs, bundled so call sites can't transpose
-/// the bare `u64`s.
+/// Partitioning knobs read from the same-named `mysql_source_snapshot_partition_*` dyncfgs.
 struct PartitionSettings {
-    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS`].
     min_rows: u64,
-    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS`].
     probed_prefixes_per_billion_rows: u64,
 }
 
 /// Attempts to compute roughly even boundaries for primary keys. Returns None if the column type
 /// is unsupported or boundaries couldn't be estimated for some reason. Currently only supports
 /// CHAR/VARCHAR columns with up to 768 characters with utf8mb4_bin collation.
-async fn compute_sampled_splits(
-    conn: &mut mysql_async::Conn,
+async fn compute_sampled_splits<Q>(
+    conn: &mut Q,
     table: &MySqlTableName,
     raw_col: &str,
     scalar_type: &SqlScalarType,
     worker_count: usize,
     row_count: u64,
     settings: &PartitionSettings,
-) -> Result<Option<PkBoundaries>, TransientError> {
+) -> Result<Option<PkBoundaries>, TransientError>
+where
+    Q: Queryable,
+{
     match scalar_type {
         SqlScalarType::Char { length }
             if length.is_some_and(|l| l.into_u32() <= mz_mysql_util::MAX_KEY_LENGTH) => {}
@@ -282,17 +282,13 @@ async fn compute_sampled_splits(
     let max_probed_prefixes = (row_count.saturating_mul(settings.probed_prefixes_per_billion_rows)
         / BILLION_ROWS)
         .max(MIN_PROBED_PREFIXES);
-    let prefixes = match mz_mysql_util::partition_table(
-        conn,
-        table_ref,
-        raw_col,
-        worker_count,
-        row_count,
-        settings.min_rows,
+    let params = mz_mysql_util::PartitionParams {
+        num_workers: worker_count,
+        estimated_row_count: row_count,
+        min_split_threshold: settings.min_rows,
         max_probed_prefixes,
-    )
-    .await
-    {
+    };
+    let prefixes = match mz_mysql_util::partition_table(conn, table_ref, raw_col, params).await {
         Ok(prefixes) => prefixes,
         Err(err @ (MySqlError::NonUtf8KeyValue { .. } | MySqlError::MissingRowEstimate { .. })) => {
             tracing::warn!(%err, "partitioning failed, falling back to a single partition");
@@ -380,27 +376,21 @@ async fn sample_pk_bounds(
                             ))
                             .await?;
                         }
-                        // `partition_table` requires the probes to run inside a
-                        // REPEATABLE READ transaction so they all see one snapshot
-                        // of the table. The session default isolation level is
-                        // server-configurable, so set it explicitly. It applies to
-                        // every transaction started on this session, i.e. it
-                        // survives the connection being pooled and reused.
-                        #[allow(clippy::disallowed_methods)]
-                        conn.query_drop("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-                            .await?;
-                        #[allow(clippy::disallowed_methods)]
-                        conn.query_drop("START TRANSACTION READ ONLY").await?;
                         conn
                     }
                 };
+                // Repeatable read required by the partitioner.
+                let mut tx_opts = TxOpts::default();
+                tx_opts
+                    .with_isolation_level(IsolationLevel::RepeatableRead)
+                    .with_readonly(true);
+                let mut tx = conn.start_transaction(tx_opts).await?;
                 // Row count, reused for boundary discovery and the size gauge. When it
-                // is counted exactly it runs on the same `READ ONLY` transaction as the
-                // boundary walk in `compute_sampled_splits`, so both see one consistent
+                // is counted exactly it runs on the same transaction as the boundary
+                // walk in `compute_sampled_splits`, so both see one consistent
                 // snapshot. For large tables it is an optimizer estimate instead, which
                 // `compute_sampled_splits` tolerates.
-                let stats =
-                    collect_table_statistics(&mut *conn, table, exact_count_max_rows).await?;
+                let stats = collect_table_statistics(&mut tx, table, exact_count_max_rows).await?;
                 metrics.record_table_count_latency(
                     table.1.clone(),
                     table.0.clone(),
@@ -414,7 +404,7 @@ async fn sample_pk_bounds(
                 {
                     Some((raw_col, scalar_type)) => {
                         compute_sampled_splits(
-                            &mut *conn,
+                            &mut tx,
                             table,
                             &raw_col,
                             &scalar_type,
@@ -426,6 +416,7 @@ async fn sample_pk_bounds(
                     }
                     None => None,
                 };
+                tx.commit().await?;
                 pool.borrow_mut().push(conn);
                 Ok::<_, TransientError>((table.clone(), count, splits))
             }
@@ -444,8 +435,7 @@ async fn sample_pk_bounds(
     }
 
     // Every future has completed and dropped its `Rc` clone, so `pool` is the sole
-    // owner. Release the probe connections now, ending their `READ ONLY` transactions
-    // and the shared metadata locks they hold, before the caller takes `LOCK TABLES`.
+    // owner. Release the probe connections before the caller takes `LOCK TABLES`.
     let probe_conns = Rc::into_inner(pooled_conns)
         .expect("all sampling futures completed, so no Rc clones remain")
         .into_inner();
@@ -965,6 +955,7 @@ pub(crate) fn render<'scope>(
                     .with_consistent_snapshot(true)
                     .with_readonly(true);
                 let mut tx = conn.start_transaction(tx_opts).await?;
+
                 // Set the session time zone to UTC so that we can read TIMESTAMP columns as UTC
                 // From https://dev.mysql.com/doc/refman/8.0/en/datetime.html: "MySQL converts TIMESTAMP values
                 // from the current time zone to UTC for storage, and back from UTC to the current time zone

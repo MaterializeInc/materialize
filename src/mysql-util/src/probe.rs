@@ -25,8 +25,8 @@ pub const MAX_KEY_LENGTH: u32 = 768;
 /// Probes a string primary key column. Only supports `utf8mb4_bin` against CHAR/VARCHAR
 /// columns up to 768 characters. Enforcement is deferred to the caller. There may be
 /// other collations we can support, but we should do more validation.
-pub struct KeyProber<'a> {
-    conn: &'a mut mysql_async::Conn,
+pub struct KeyProber<'a, Q> {
+    conn: &'a mut Q,
     /// Quoted `` `schema`.`table` `` for SQL interpolation.
     table: String,
     /// Quoted key column for SQL interpolation.
@@ -37,14 +37,10 @@ pub struct KeyProber<'a> {
     col_name: String,
 }
 
-impl<'a> KeyProber<'a> {
+impl<'a, Q: Queryable> KeyProber<'a, Q> {
     /// NOTE: `conn` is assumed to use a utf8mb4 connection character set (the
     /// driver's handshake default), so key values arrive converted to UTF-8.
-    pub fn new(
-        conn: &'a mut mysql_async::Conn,
-        table: QualifiedTableRef<'_>,
-        key_col: &str,
-    ) -> Self {
+    pub fn new(conn: &'a mut Q, table: QualifiedTableRef<'_>, key_col: &str) -> Self {
         Self {
             conn,
             table: format!(
@@ -240,12 +236,13 @@ fn like_prefix_pattern(prefix: &str) -> String {
     pattern
 }
 
-async fn explain_row_estimate<P>(
-    conn: &mut mysql_async::Conn,
+async fn explain_row_estimate<Q, P>(
+    conn: &mut Q,
     select: &str,
     params: P,
 ) -> Result<Option<u64>, MySqlError>
 where
+    Q: Queryable,
     P: Into<Params> + Send,
 {
     let plan: Option<mysql_async::Row> = conn
@@ -1114,7 +1111,7 @@ pub(crate) mod tests {
 
     // Wrapped to limit boilerplate
     async fn prefix_of_first_key_in_range(
-        prober: &mut KeyProber<'_>,
+        prober: &mut KeyProber<'_, mysql_async::Conn>,
         lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
@@ -1131,7 +1128,7 @@ pub(crate) mod tests {
 
     // Wrapped to limit boilerplate
     async fn prefix_of_first_row_not_matching_prefix(
-        prober: &mut KeyProber<'_>,
+        prober: &mut KeyProber<'_, mysql_async::Conn>,
         prefix: &str,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
@@ -1156,7 +1153,7 @@ pub(crate) mod tests {
     /// Test helper to walk prefixes at a consistent depth. Only works when
     /// all keys have length >= len.
     async fn walk_prefixes(
-        prober: &mut KeyProber<'_>,
+        prober: &mut KeyProber<'_, mysql_async::Conn>,
         len: usize,
     ) -> Result<Vec<String>, anyhow::Error> {
         let mut walked = Vec::new();

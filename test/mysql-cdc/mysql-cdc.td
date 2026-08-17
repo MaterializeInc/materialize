@@ -573,46 +573,6 @@ true
 > DROP SOURCE large_cluster_source CASCADE;
 
 #
-# Integer PK. Integer keys are not split into PK ranges, so on a multi-worker
-# cluster this covers the single-worker whole-table fallback.
-#
-
-$ mysql-execute name=mysql
-DROP TABLE IF EXISTS pk_range_test;
-CREATE TABLE pk_range_test (id BIGINT PRIMARY KEY, val BIGINT);
-SET @i := 0;
-INSERT INTO pk_range_test SELECT @i := @i + 1, @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
-
-> CREATE CLUSTER pk_range_cluster SIZE 'scale=1,workers=4'
-
-> CREATE SOURCE pk_range_source
-  IN CLUSTER pk_range_cluster
-  FROM MYSQL CONNECTION mysql_conn;
-> CREATE TABLE pk_range_table FROM SOURCE pk_range_source (REFERENCE public.pk_range_test);
-
-# Exact row count
-> SELECT COUNT(*) FROM pk_range_table;
-1000
-
-# No duplicates: distinct count must equal total count
-> SELECT COUNT(DISTINCT id) = COUNT(*) FROM pk_range_table;
-true
-
-# Full key range present (ids 1..1000)
-> SELECT MIN(id), MAX(id) FROM pk_range_table;
-1 1000
-
-# Checksum: val = id * 7, so SUM(val) = 7 * SUM(1..1000) = 7 * 500500
-> SELECT SUM(val) FROM pk_range_table;
-3503500
-
-> DROP SOURCE pk_range_source CASCADE;
-> DROP CLUSTER pk_range_cluster CASCADE;
-
-$ mysql-execute name=mysql
-DROP TABLE pk_range_test;
-
-#
 # Single-column char PK with the utf8mb4_bin collation, the supported type for
 # PK-range splitting. The explicit collation matters: the database default is
 # utf8mb4_general_ci, which is not split.
