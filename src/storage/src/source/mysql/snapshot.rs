@@ -177,8 +177,8 @@ struct PkBoundaries {
     boundaries: Vec<String>,
 }
 
-// Manual impl so no `{:?}` site can print the boundaries, which are key
-// values and therefore user data. Redacted outside of CI.
+// Ensure that boundaries are not printed because they contain data from the
+// primary key column.
 impl std::fmt::Debug for PkBoundaries {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PkBoundaries")
@@ -238,12 +238,9 @@ const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
 const MIN_PROBED_PREFIXES: u64 = 256;
 const BILLION_ROWS: u64 = 1_000_000_000;
 
-/// Partitioning knobs read from dyncfgs, bundled so call sites can't transpose
-/// the bare `u64`s.
+/// Partitioning configuration settings bundled to avoid accidental mixing.
 struct PartitionSettings {
-    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS`].
     min_rows: u64,
-    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS`].
     probed_prefixes_per_billion_rows: u64,
 }
 
