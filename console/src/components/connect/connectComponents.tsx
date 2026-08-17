@@ -64,12 +64,16 @@ export const ConnectStep = ({
 export interface LabeledCommandBoxProps {
   contents: string;
   label?: React.ReactNode;
+  /** Shown instead of `contents`, e.g. with secrets masked. Copying always
+   * copies `contents`. */
+  displayContents?: string;
 }
 
 /** A copyable command or config snippet with an optional instruction above. */
 export const LabeledCommandBox = ({
   contents,
   label,
+  displayContents,
 }: LabeledCommandBoxProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -80,7 +84,9 @@ export const LabeledCommandBox = ({
           {label}
         </Text>
       )}
-      <CopyableBox variant="default" wrap contents={contents} />
+      <CopyableBox variant="default" wrap contents={contents}>
+        {displayContents}
+      </CopyableBox>
     </VStack>
   );
 };
@@ -107,7 +113,14 @@ export const ConnectionDetailRow = ({
       >
         {label}
       </Text>
-      <CopyableBox variant="compact" contents={contents} aria-label={label} />
+      <CopyableBox
+        variant="compact"
+        contents={contents}
+        aria-label={label}
+        flex="1"
+        minW={0}
+        w="auto"
+      />
     </HStack>
   );
 };
