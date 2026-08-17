@@ -13,17 +13,29 @@
 # The Polaris catalog backing this test is created without client-visible S3
 # credentials, so nothing in the config it returns lets Materialize reach MinIO
 # on its own. The only usable credentials are the ones Polaris mints per table
-# in response to Materialize's `X-Iceberg-Access-Delegation: vended-credentials`
-# request. A sink that commits data here therefore exercises the vending path
-# end to end. Were the request dropped, or the vended credentials not threaded
-# into the sink's FileIO, the sink would fail to write rather than pass quietly.
+# in response to the `X-Iceberg-Access-Delegation: vended-credentials` request
+# that `ACCESS DELEGATION` below turns on. A sink that commits data here
+# therefore exercises the vending path end to end. Were the request dropped, or
+# the vended credentials not threaded into the sink's FileIO, the sink would
+# fail to write rather than pass quietly.
+
+# Delegation is opt-in. Only 'vended-credentials' is accepted.
+! CREATE CONNECTION bad_delegation TO ICEBERG CATALOG (
+    CATALOG TYPE = 'REST',
+    URL = 'http://polaris:8181/api/catalog',
+    CREDENTIAL = 'root:root',
+    WAREHOUSE = 'default_catalog',
+    ACCESS DELEGATION = 'remote-signing'
+  );
+contains:invalid iceberg access delegation
 
 > CREATE CONNECTION vended_polaris TO ICEBERG CATALOG (
     CATALOG TYPE = 'REST',
     URL = 'http://polaris:8181/api/catalog',
     CREDENTIAL = 'root:root',
     WAREHOUSE = 'default_catalog',
-    SCOPE = 'PRINCIPAL_ROLE:ALL'
+    SCOPE = 'PRINCIPAL_ROLE:ALL',
+    ACCESS DELEGATION = 'vended-credentials'
   );
 
 > CREATE TABLE vended_src (a int, b text);

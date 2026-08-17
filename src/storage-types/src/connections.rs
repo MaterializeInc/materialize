@@ -101,7 +101,6 @@ const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
 /// properties into headers on every REST request, the same way the Iceberg Java client
 /// carries this one.
 const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "header.X-Iceberg-Access-Delegation";
-const ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
 
 /// A credential loader that wraps an aws-sdk-rust credentials provider for use with
 /// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
@@ -659,6 +658,29 @@ pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     pub auth: IcebergCatalogAuth<C>,
     /// The warehouse for REST catalogs
     pub warehouse: Option<String>,
+    /// Which form of storage-access delegation to request from the catalog, if any.
+    ///
+    /// `None` means never ask. Requesting delegation is not free of consequence: a
+    /// catalog that gates it behind privileges the principal lacks rejects the whole
+    /// request rather than falling back, so this stays opt-in per connection.
+    pub access_delegation: Option<IcebergAccessDelegation>,
+}
+
+/// The value Materialize sends in the Iceberg REST `X-Iceberg-Access-Delegation`
+/// header, naming how the catalog should grant access to table storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergAccessDelegation {
+    /// Ask the catalog to mint temporary, table-scoped storage credentials.
+    VendedCredentials,
+}
+
+impl IcebergAccessDelegation {
+    /// The header value, as spelled in the Iceberg REST specification.
+    pub fn as_header_value(&self) -> &'static str {
+        match self {
+            IcebergAccessDelegation::VendedCredentials => "vended-credentials",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -695,6 +717,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<RestIcebergCatalog, R>
         RestIcebergCatalog {
             auth: self.auth.into_inline_connection(&r),
             warehouse: self.warehouse,
+            access_delegation: self.access_delegation,
         }
     }
 }
@@ -987,14 +1010,6 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
                 }
 
-                // Ask the catalog for temporary, table-scoped storage credentials. A catalog
-                // that does not implement vending ignores the header and returns its
-                // configured storage properties instead, so requesting it always is safe.
-                props.insert(
-                    REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
-                    ACCESS_DELEGATION_VENDED_CREDENTIALS.to_string(),
-                );
-
                 (
                     OpenDalStorageFactory::S3 {
                         // When used with MinIO, Polaris returns a config with:
@@ -1038,6 +1053,18 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 )
             }
         };
+
+        // `iceberg-rust` turns `header.*` props into headers on every REST request, so
+        // this rides along on `loadTable` and `createTable` alike. Only send it when the
+        // connection asked for delegation: catalogs that gate delegation behind
+        // privileges reject the entire request when the principal lacks them, rather
+        // than falling back to their configured storage credentials.
+        if let Some(delegation) = &rest.access_delegation {
+            props.insert(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                delegation.as_header_value().to_string(),
+            );
+        }
 
         let mut catalog =
             RestCatalogBuilder::default().with_storage_factory(Arc::new(storage_factory));

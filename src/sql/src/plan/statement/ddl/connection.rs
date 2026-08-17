@@ -34,11 +34,11 @@ use mz_storage_types::connections::inline::ReferencedConnection;
 use mz_storage_types::connections::string_or_secret::StringOrSecret;
 use mz_storage_types::connections::{
     AwsPrivatelink, AwsPrivatelinkConnection, AwsPrivatelinkRule, CsrConnection,
-    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergCatalogAuth,
-    IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType, KafkaConnection,
-    KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection, MySqlSslMode,
-    PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog, SqlServerConnectionDetails,
-    SshConnection, SshTunnel, TlsIdentity, Tunnel,
+    CsrConnectionHttpAuth, GlueSchemaRegistryConnection, IcebergAccessDelegation,
+    IcebergCatalogAuth, IcebergCatalogConnection, IcebergCatalogImpl, IcebergCatalogType,
+    KafkaConnection, KafkaSaslConfig, KafkaTlsConfig, KafkaTopicOptions, MySqlConnection,
+    MySqlSslMode, PostgresConnection, RestIcebergCatalog, S3TablesRestIcebergCatalog,
+    SqlServerConnectionDetails, SshConnection, SshTunnel, TlsIdentity, Tunnel,
 };
 
 use crate::names::Aug;
@@ -49,6 +49,7 @@ use crate::session::vars;
 
 generate_extracted_config!(
     ConnectionOption,
+    (AccessDelegation, IcebergAccessDelegation),
     (AccessKeyId, StringOrSecret),
     (AssumeRoleArn, String),
     (AssumeRoleSessionName, String),
@@ -191,6 +192,7 @@ pub(super) fn validate_options_per_connection_type(
             User,
         ],
         CreateConnectionType::IcebergCatalog => &[
+            AccessDelegation,
             AwsConnection,
             CatalogType,
             Credential,
@@ -704,6 +706,11 @@ impl ConnectionOptionExtracted {
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections do not support OAUTH2 SERVER URL"
                             );
                         }
+                        if self.access_delegation.is_some() {
+                            sql_bail!(
+                                "invalid CONNECTION: ICEBERG s3tablesrest connections do not support ACCESS DELEGATION"
+                            );
+                        }
                         let Some(warehouse) = warehouse else {
                             sql_bail!(
                                 "invalid CONNECTION: ICEBERG s3tablesrest connections must specify WAREHOUSE"
@@ -757,7 +764,11 @@ impl ConnectionOptionExtracted {
                             ),
                         };
 
-                        IcebergCatalogImpl::Rest(RestIcebergCatalog { auth, warehouse })
+                        IcebergCatalogImpl::Rest(RestIcebergCatalog {
+                            auth,
+                            warehouse,
+                            access_delegation: self.access_delegation,
+                        })
                     }
                 };
 
