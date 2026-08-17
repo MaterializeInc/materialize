@@ -55,15 +55,18 @@ a hydration concurrency limit, that waiting can dominate the measurement.
    wallclock time at which hydration started and the wallclock time at which it
    completed, or NULL where the corresponding event has not happened.
 2. Grouping those columns by replica or cluster and taking `min` and `max`
-   yields a well defined hydration episode with no additional state.
+   yields a well defined hydration episode for a given set of objects. Choosing
+   that set is the consumer's job, see "Scoping an episode to an object set".
 3. An object that is currently hydrating is distinguishable from one waiting on
    its inputs, one queued behind the hydration concurrency limit, and one whose
    dataflow was never installed.
 4. Time spent hydrating is distinguishable from time spent waiting to start.
 5. Values are stable across an environmentd restart, including a 0dt cutover,
    for as long as the replica process lives.
-6. An episode that never completes is observable while it is in flight, so a
-   layer above compute can record it before the evidence is gone.
+6. An episode that never completes is observable while it is in flight. A
+   replica crash resets all of its introspection, so there is no
+   after-the-fact recovery path and a consumer can only record such an episode
+   if it observed the in-flight state first.
 7. Each row carries a key that identifies its hydration episode, so a consumer
    reading the relation repeatedly can tell a re-observation of a known episode
    from a new one.
@@ -102,7 +105,7 @@ timestamps, all stamped by the replica.
 
 | Column | Stamped when | Meaning |
 | --- | --- | --- |
-| `installed_at` | `CreateDataflow` is applied | the dataflow exists on the replica, possibly suspended |
+| `installed_at` | `CreateDataflow` is applied | the dataflow exists on the replica, suspended, so this is also the start of queueing |
 | `started_at` | `Schedule` unsuspends the dataflow | hydration is actually running |
 | `hydrated_at` | the output frontier passes the as-of | hydration is complete |
 
@@ -110,6 +113,15 @@ timestamps, all stamped by the replica.
 `started_at - installed_at` is the queueing interval, which answers whether a
 slow cluster is slow at hydrating or merely gated on upstream frontiers or the
 hydration concurrency limit. Today's `time_ns` conflates the two.
+
+Storing the start of queueing as its own timestamp rather than only reporting a
+corrected duration is deliberate. It keeps both intervals derivable, so
+narrowing `hydration_time` to the interval users mean does not destroy the
+number they see today. From the replica's vantage point the two waits that make
+up queueing, waiting for input frontiers to advance and waiting for a hydration
+concurrency slot, are indistinguishable: both simply delay the arrival of
+`Schedule`. Splitting them would require the controller to report when it
+considered the collection ready, which is not worth a protocol change here.
 
 Everything else follows from those three columns. The per-replica episode is
 `min(started_at)` to `max(hydrated_at)` over the objects on the replica. An
@@ -138,8 +150,15 @@ advances off an `Instant` rather than re-reading the system clock, so it does
 not jump if NTP steps the wall clock. And its epoch anchor is sampled once per
 replica process, so two replicas of the same cluster can disagree by whatever
 their clock skew is. That is harmless for durations, which are computed within
-one process, and introduces skew into absolute cross-replica comparisons. This
-must be documented on the relation.
+one process, and it introduces skew into absolute cross-replica comparisons,
+including the cluster-level rollup that takes a min and a max across replicas.
+
+We accept that skew rather than design around it. It is pre-existing, since
+every relation derived from compute logging already carries it, and it has not
+been observed to be severe in practice. It is nonetheless a real risk, because
+this design is the first to invite direct comparison of absolute times from
+different replicas, so it is acknowledged here and must be documented on the
+relation rather than left implicit.
 
 ### A new hydration start event
 
@@ -156,12 +175,18 @@ makes the event idempotent under reconciliation: `reconcile`
 `Schedule` reaches a `suspended_collections.remove` that returns `None`.
 
 A dataflow may export several collections sharing one suspension token, so
-computation starts only once every export has been scheduled. Today Materialize
-only produces single-export dataflows, which
-`sequential_hydration.rs` already relies on. Logging per export keeps the
-relation shaped correctly if that ever changes, at the cost of the
-per-export `started_at` values in a multi-export dataflow differing slightly
-from the moment the dataflow actually starts.
+computation actually starts only once every export has been scheduled. We log
+per export anyway. Today Materialize only produces single-export dataflows, an
+assumption `sequential_hydration.rs` already depends on, so the two are
+equivalent in practice.
+
+If multi-output dataflows ever land, the accurate shape is to stamp per dataflow,
+keyed by the `dataflow_index` the demux already tracks on `ExportState`, and
+recover the per-export relation as a view that fans the dataflow's timestamps out
+across its exports. That bridges the gap cleanly. It is not worth building now:
+the gap is unobservable with single-export dataflows, and there is no scheduled
+work on multi-output dataflows to build against. Recorded here so the fix is
+known rather than rediscovered.
 
 ### Log relation shape
 
@@ -244,26 +269,45 @@ It stays a differential storage-managed collection
 subscribe, and keeps its `replica_id` index and its
 `is_retained_metrics_object` setting.
 
-A rename is proposed rather than a widening in place because a relation with the
-same name and different column semantics is worse for existing queries than one
-that is visibly gone. Blast radius is `mz_internal`, the `mz_introspection`
-per-worker relation, the builtin index, `mz_compute_hydration_statuses`,
-`src/mz-debug/src/system_catalog_dumper.rs`, the freshness check in
-`src/adapter/src/coord/message_handler.rs:520-523`, the autogenerated catalog
-slt files, and the user-facing system catalog reference pages.
+`mz_internal.mz_compute_hydration_times` is not deleted. It becomes a view over
+the new relation, preserving its exact current shape and semantics:
 
-`mz_internal.mz_compute_hydration_statuses` keeps its
+```sql
+SELECT
+    replica_id,
+    object_id,
+    (extract(epoch FROM hydrated_at - installed_at) * 1000000000)::uint8 AS time_ns
+FROM mz_internal.mz_compute_hydration_timestamps
+```
+
+Note that the compat view reproduces the *old* measurement, from install to
+hydrated, rather than the corrected one. That is the point: it is a compatibility
+shim, so existing consumers see no change at all. This is what makes the rename
+cheap. `src/mz-debug/src/system_catalog_dumper.rs`, the freshness check in
+`src/adapter/src/coord/message_handler.rs:520-523`, and any external query keep
+working untouched, and the blast radius shrinks to the new builtins plus the
+autogenerated catalog slt files and the reference pages.
+
+Because the old number stays available, the same trick applies to
+`mz_internal.mz_compute_hydration_statuses`. It keeps its
 `(object_id, replica_id, hydrated, hydration_time)` shape, with `hydrated`
-becoming `hydrated_at IS NOT NULL` and `hydration_time` becoming
-`hydrated_at - started_at`. That is a user-visible behavior change:
-`hydration_time` stops including the queueing interval. It is the correction
-described above, and it should be called out in the release notes. The
-`complete_mvs` UNION branch for materialized views that have advanced to the
-empty frontier stays as it is, with NULL timestamps, since those objects have no
-dataflow installed.
+becoming `hydrated_at IS NOT NULL`, and gains a `queue_time` column. The
+question is what `hydration_time` should mean:
 
-The per-replica and per-cluster rollups the PRD asks for are then plain SQL over
-this relation joined to `mz_cluster_replicas`, with no new compute state:
+- Keep it as `hydrated_at - installed_at`, matching today exactly, and let
+  `queue_time` plus arithmetic recover the corrected interval.
+- Narrow it to `hydrated_at - started_at` and let `queue_time` recover the old
+  number.
+
+This design proposes the second, because the narrow reading is the one the
+column name claims and the one the PRD's history table wants, and because
+`queue_time` makes the change non-destructive. It remains a user-visible
+behavior change and needs a release note. The `complete_mvs` UNION branch for
+materialized views that have advanced to the empty frontier stays as it is, with
+NULL timestamps, since those objects have no dataflow installed.
+
+The per-replica and per-cluster rollups the PRD asks for are then SQL over this
+relation joined to `mz_cluster_replicas`, with no new compute state:
 
 ```sql
 SELECT
@@ -280,6 +324,30 @@ FROM mz_internal.mz_compute_hydration_timestamps h
 JOIN mz_cluster_replicas r ON r.id = h.replica_id
 GROUP BY r.cluster_id, h.replica_id
 ```
+
+### Scoping an episode to an object set
+
+The rollup query above is over whichever objects are on the replica right now,
+which is not the same as a hydration episode. A cluster that has fully hydrated
+and then gains one new index will report a `max(hydrated_at)` that moves forward
+to the new object, so the replica appears to have finished hydrating at the
+moment the newest object did.
+
+This is not a defect in the relation, and it is not compute's problem to solve.
+The information needed to scope an episode, which objects belonged to the
+replica's initial object set, lives in the controller, and the PRD already
+states the intended rule: adding an object starts a new replica episode only if
+the replica transitions from fully hydrated to not fully hydrated. A consumer
+holding both the object set and these timestamps can apply that rule. A relation
+of per-object timestamps cannot, because it does not know which objects arrived
+together.
+
+What compute owes here is that the per-object rows are individually correct and
+carry a stable episode key, so any scoping rule a consumer chooses is
+expressible. Restating the rollup as an illustration rather than a finished
+answer: it is correct for a replica whose object set has not changed, and it is
+the join with the controller's notion of the initial set that makes it correct
+in general.
 
 ### Episode identity
 
@@ -301,10 +369,17 @@ Behavior across the events that matter:
 | --- | --- |
 | environmentd restart, replica reconnects and reconciles | values unchanged, the subscribe re-snapshots and reports the same keys |
 | 0dt cutover | same as above, for replicas the new generation inherits |
-| replica process restart | logging dataflows recreated, fresh `installed_at` and `started_at`, new episode |
-| `CREATE INDEX` on a running cluster | one new row, joining the replica's current object set |
-| replica OOM killed mid-hydration | rows disappear with `hydrated_at` still NULL |
+| replica process restart, including after an OOM kill | all introspection restarts from scratch, every object gets a fresh `installed_at` and `started_at`, all previous episodes are gone |
+| `CREATE INDEX` on a running cluster | one new row, joining the replica's current object set, see "Scoping an episode to an object set" |
 | materialized view reaches the empty frontier | dataflow dropped, row disappears, `complete_mvs` branch covers it |
+
+The replica restart row is the one to design against. A crash does not surgically
+remove the rows of objects that were mid-hydration, it resets the entire
+introspection state of that replica, so the whole object set reappears with new
+timestamps. There is therefore no way to reconstruct a failed episode after the
+fact from this relation, at any layer. The only record that can exist is one a
+consumer captured while the episode was in flight, which is why publishing the
+in-flight row matters more than publishing the completed one.
 
 ### Why the replica and not the compute controller
 
@@ -346,12 +421,10 @@ its clock is already epoch-anchored, and it observes hydration directly.
 - `src/catalog/src/durable/transaction.rs:947`: a durable log id for the new
   variant.
 - `src/catalog/src/builtin/mz_introspection.rs:323`: the per-worker builtin.
-- `src/catalog/src/builtin/mz_internal.rs`: the storage-managed collection, its
-  index, and the `mz_compute_hydration_statuses` view definition.
+- `src/catalog/src/builtin/mz_internal.rs`: the new storage-managed collection
+  and its index, `mz_compute_hydration_times` recast as a compat view, and the
+  `mz_compute_hydration_statuses` view definition.
 - `src/adapter/src/coord/introspection.rs`: the subscribe rollup.
-- `src/adapter/src/coord/message_handler.rs`: the
-  `ComputeHydrationTimes` freshness check reference.
-- `src/mz-debug/src/system_catalog_dumper.rs`: the dumped relation name.
 - Tests: `test/testdrive/hydration-status.td`, `test/testdrive/indexes.td`,
   `test/testdrive/catalog.td`,
   `test/testdrive/materialized-view-replica-targeted.td`,
@@ -360,10 +433,19 @@ its clock is already epoch-anchored, and it observes hydration directly.
 - Docs: the `mz_internal` and `mz_introspection` system catalog reference pages,
   plus a release note for the `hydration_time` semantic change.
 
+Two places need no change, because the compat view keeps them working:
+`src/mz-debug/src/system_catalog_dumper.rs` and the `ComputeHydrationTimes`
+freshness check in `src/adapter/src/coord/message_handler.rs:520-523`. The
+freshness check keys off the `IntrospectionType`, which the new relation
+inherits, so its behaviour is unchanged.
+
 New testdrive coverage worth adding: that `started_at` is non-NULL and
 `hydrated_at` NULL for an object gated by `HYDRATION_CONCURRENCY`, that
-`started_at` is NULL for an object waiting on an unavailable input, and that
-all three timestamps survive an environmentd restart unchanged.
+`started_at` is NULL for an object waiting on an unavailable input, that all
+three timestamps survive an environmentd restart unchanged, that a replica
+restart yields entirely fresh timestamps for every object on it, and that
+`mz_compute_hydration_times` reports the same numbers before and after the
+change.
 
 ## Minimal Viable Prototype
 
@@ -380,10 +462,16 @@ wireframe.
 
 ## Alternatives
 
-**Keep `time_ns` and add timestamps alongside.** Avoids the rename and the
-release note. Rejected because the two would disagree, `time_ns` measuring from
-install and the timestamp delta from start, and because there is no honest way
-to document which is correct.
+**Keep `time_ns` as a stored column alongside the timestamps.** Rejected because
+two stored measurements of the same thing drift apart and neither can be called
+authoritative. Deriving the old number in a compat view, as proposed above,
+gets the compatibility without the second source of truth.
+
+**Widen `ComputeLog::HydrationTime` in place instead of adding a variant.**
+Fewer moving parts, no new durable log id. Rejected because every column of that
+relation changes meaning, and a relation keeping its name while all its columns
+change is the worst outcome for anyone with an existing query. The compat view
+makes the rename nearly free anyway.
 
 **Stamp in the compute controller.** Covered above. Less code, but it resets on
 every environmentd restart and cannot produce a stable episode key.
@@ -409,30 +497,46 @@ option the PRD considers and rejects for peak resources, and it fails here for a
 different reason: sampling cannot observe a transition, only its aftermath, so a
 hydration that starts and finishes between two samples is invisible.
 
+## Settled during review
+
+Recorded so the reasoning is not relitigated.
+
+- **Relation naming.** Add the new relation and turn
+  `mz_compute_hydration_times` into a view over it, preserving the old shape and
+  the old measurement exactly. This makes the rename cheap and leaves existing
+  consumers untouched.
+- **The queueing interval.** Store the start of queueing as a timestamp rather
+  than only reporting a corrected duration, so both intervals stay derivable and
+  narrowing `hydration_time` is non-destructive.
+- **Read-only mode.** Not a compute concern. Introspection relations are not
+  durable state, and `CollectionManager` already handles read-only mode itself by
+  buffering batches and appending them on exit
+  (`src/storage-controller/src/collection_mgmt.rs:23-25,45-52`). Durable
+  recording is entirely an adapter question.
+- **Clock skew.** Accepted. Pre-existing across everything derived from compute
+  logging, not observed to be severe, acknowledged and documented on the
+  relation rather than designed around.
+- **Multi-export dataflows.** Stamp per export for now. The per-dataflow stamp
+  plus a fan-out view is the known fix if multi-output dataflows ever land.
+- **Incremental hydration.** A replica that gains an object after hydrating will
+  report a later `max(hydrated_at)`. Not a defect. Scoping an episode to the
+  initial object set requires the controller's knowledge of that set, not a
+  richer introspection relation.
+
 ## Open questions
 
-1. **Relation naming.** Is `mz_compute_hydration_timestamps` the right name, and
-   is replacing `mz_compute_hydration_times` outright preferable to widening it
-   in place? The rename costs a builtin migration and touches the autogenerated
-   catalog tests.
-2. **`hydration_time` semantics.** Narrowing
-   `mz_compute_hydration_statuses.hydration_time` to exclude the queueing
-   interval is a correction, but it will make some clusters' reported hydration
-   times drop noticeably. Is a release note sufficient, or should the queueing
-   interval also be exposed as its own column on the view so the old number
-   remains derivable?
-3. **Read-only mode.** Replica-stamped values survive a 0dt cutover, but writes
-   to durable relations are blocked while the new generation is read only. An
-   episode that starts and finishes entirely inside the read-only window is only
-   recoverable if adapter flushes on promotion. Compute holds the values for the
-   whole window regardless, so this is an adapter decision, but it needs to be
-   made explicitly rather than discovered.
-4. **Multi-export dataflows.** Logging `started_at` per export is correct for
-   today's single-export dataflows and slightly wrong for a hypothetical
-   multi-export one, where computation begins only once all exports are
-   scheduled. Is per-export the right granularity, or should the start event be
-   logged per dataflow?
-5. **Clock skew.** Absolute timestamps from different replicas of one cluster
-   are only comparable up to their clock skew. Documenting it on the relation is
-   the cheap answer. Is that enough for the cluster-level rollup the PRD wants,
-   which takes a min and a max across replicas?
+1. **Deprecating the compat view.** `mz_compute_hydration_times` as a view is
+   cheap to keep, but it reports the measurement this design argues is wrong. Do
+   we keep it indefinitely, or announce a removal once consumers have moved to
+   the timestamps?
+2. **`hydration_time` narrow or wide.** The design proposes narrowing
+   `mz_compute_hydration_statuses.hydration_time` to
+   `hydrated_at - started_at` and adding `queue_time`. The alternative is to
+   leave `hydration_time` matching today and let consumers subtract. Both are
+   non-destructive now that `queue_time` exists, so this is a judgment call about
+   which number deserves the better name.
+3. **The unified view.** `mz_hydration_statuses` unions compute and storage.
+   Compute would now have timestamps and storage would not, since sources report
+   `rehydration_latency` through their own statistics path. Do we expose
+   timestamps only on the compute relation, or does the storage half need a
+   counterpart before the unified view can carry them?
