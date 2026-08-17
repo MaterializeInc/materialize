@@ -24,7 +24,7 @@ prost = "0.14.3"
 prost-types = "0.14.3"
 serde_json = "1.0.150"
 tokio = { version = "1.52.3", features = ["rt"] }
-uuid = "1.19.0"
+uuid = "1.23.1"
 
 [[bin]]
 name = "avro_decode_fuzzed_schema"

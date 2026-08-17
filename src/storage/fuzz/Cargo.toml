@@ -22,7 +22,7 @@ differential-dataflow = "0.25.0"
 timely = "0.31.0"
 tokio = { version = "1.52.3", features = ["rt"] }
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
-uuid = "1.19.0"
+uuid = "1.23.1"
 
 [[bin]]
 name = "upsert_consolidate"
