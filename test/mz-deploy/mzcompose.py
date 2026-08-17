@@ -2619,6 +2619,31 @@ def workflow_cluster_options(c: Composition, parser: WorkflowArgumentParser) -> 
             len(phase_actions(phase, "up_to_date")) == 1
         ), f"expected the cluster to be up-to-date, got {phase}"
 
+    with c.test_case("cluster-option-spellings-are-idempotent"):
+        # The planner gives bare booleans their implied true value, maps a zero
+        # introspection interval to NULL, and accepts DISK as a legacy no-op.
+        result = run_mz_deploy(c, "cluster-options/spellings", "apply")
+        assert result.returncode == 0, f"apply spellings failed: {result.stderr}"
+
+        zero_and_noops = await_create_sql(
+            "zero_and_noops",
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = true",
+            "INTROSPECTION INTERVAL = NULL",
+            "MANAGED = true",
+        )
+        assert (
+            "DISK" not in zero_and_noops
+        ), f"expected SHOW CREATE to omit DISK, got {zero_and_noops}"
+        await_create_sql("implied_debugging", "INTROSPECTION DEBUGGING = true")
+
+        phase = clusters_phase("cluster-options/spellings")
+        assert (
+            len(phase_actions(phase, "altered")) == 0
+        ), f"equivalent option spellings must not drift, got {phase}"
+        assert (
+            len(phase_actions(phase, "up_to_date")) == 2
+        ), f"expected both clusters to be up-to-date, got {phase}"
+
     with c.test_case("cluster-options-stage-clones-every-option"):
         # The clone is identical option for option.
         result = run_mz_deploy(

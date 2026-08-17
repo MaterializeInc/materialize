@@ -19,6 +19,7 @@ use crate::cli::executor::{
 use crate::client::{Client, parse_create_cluster, quote_identifier};
 use crate::config::Settings;
 use crate::project::clusters::{self, ClusterDefinition};
+use mz_repr::adt::interval::Interval;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_sql_parser::ast::visit_mut::VisitMut;
 use mz_sql_parser::ast::{
@@ -199,9 +200,7 @@ async fn live_cluster(
 /// `SHOW CREATE CLUSTER` when unset need no entry here.
 ///
 /// The interval mirrors `mz_controller_types::DEFAULT_REPLICA_LOGGING_INTERVAL`.
-fn default_options(
-    replication_factor: u32,
-) -> BTreeMap<ClusterOptionName, Option<WithOptionValue<Raw>>> {
+fn default_options(replication_factor: u32) -> BTreeMap<ClusterOptionName, WithOptionValue<Raw>> {
     let sql = format!(
         "CREATE CLUSTER defaults (\
          EXPERIMENTAL ARRANGEMENT COMPRESSION = false, \
@@ -222,17 +221,24 @@ fn default_options(
 /// An option's value reduced to a form the two sides of the diff can be compared
 /// by.
 ///
-/// The server re-renders durations in canonical interval form, so a definition's
-/// `LINGER DURATION = '60s'` comes back from `SHOW CREATE CLUSTER` as
-/// `'00:01:00'`. Every value that parses as an interval is reduced to that
-/// interval, whatever syntax it was written in.
+/// Each reduction mirrors a normalization the server performs before it records
+/// the option, so a definition that spells a value differently from `SHOW CREATE
+/// CLUSTER` still compares equal. An option written without a value carries its
+/// implied value, which for every cluster option that permits the spelling is
+/// `true`. Intervals are canonicalized by [`CanonicalIntervals`]. A zero
+/// introspection interval turns introspection off, which the server records as
+/// the absence of an interval and renders as `NULL`.
 ///
 /// Comparison only. An option that needs setting is emitted as the definition
 /// wrote it.
-fn comparable(option: &ClusterOption<Raw>) -> Option<WithOptionValue<Raw>> {
-    let mut value = option.value.clone();
-    if let Some(value) = &mut value {
-        CanonicalIntervals.visit_with_option_value_mut(value);
+fn comparable(option: &ClusterOption<Raw>) -> WithOptionValue<Raw> {
+    let mut value = option
+        .value
+        .clone()
+        .unwrap_or(WithOptionValue::Value(Value::Boolean(true)));
+    CanonicalIntervals.visit_with_option_value_mut(&mut value);
+    if option.name == ClusterOptionName::IntrospectionInterval && is_zero_interval(&value) {
+        value = WithOptionValue::Value(Value::Null);
     }
     value
 }
@@ -240,12 +246,17 @@ fn comparable(option: &ClusterOption<Raw>) -> Option<WithOptionValue<Raw>> {
 /// Rewrites every interval-valued literal in an option to its canonical form,
 /// reaching nested values such as `LINGER DURATION` inside `AUTO SCALING
 /// STRATEGY`.
+///
+/// The server re-renders durations in canonical interval form, so a definition's
+/// `LINGER DURATION = '60s'` comes back from `SHOW CREATE CLUSTER` as
+/// `'00:01:00'`. Number literals are rewritten too, because the server reads
+/// them as intervals through the same parse.
 struct CanonicalIntervals;
 
 impl<'ast> VisitMut<'ast, Raw> for CanonicalIntervals {
     fn visit_value_mut(&mut self, node: &'ast mut Value) {
         let text = match node {
-            Value::String(text) => text.as_str(),
+            Value::Number(text) | Value::String(text) => text.as_str(),
             Value::Interval(interval) => interval.value.as_str(),
             _ => return,
         };
@@ -253,6 +264,15 @@ impl<'ast> VisitMut<'ast, Raw> for CanonicalIntervals {
             *node = Value::String(interval.to_string());
         }
     }
+}
+
+/// Whether a value is a zero-length interval, as [`CanonicalIntervals`] renders
+/// one.
+fn is_zero_interval(value: &WithOptionValue<Raw>) -> bool {
+    let WithOptionValue::Value(Value::String(text)) = value else {
+        return false;
+    };
+    mz_repr::strconv::parse_interval(text).is_ok_and(|interval| interval == Interval::default())
 }
 
 /// Compare a cluster definition against the live cluster and return the options
@@ -267,7 +287,7 @@ impl<'ast> VisitMut<'ast, Raw> for CanonicalIntervals {
 fn diff_cluster_options(
     local: &CreateClusterStatement<Raw>,
     live: &CreateClusterStatement<Raw>,
-    defaults: &BTreeMap<ClusterOptionName, Option<WithOptionValue<Raw>>>,
+    defaults: &BTreeMap<ClusterOptionName, WithOptionValue<Raw>>,
 ) -> (Vec<ClusterOption<Raw>>, Vec<ClusterOptionName>) {
     let local_options = index_options(local);
     let live_options = index_options(live);
@@ -290,7 +310,7 @@ fn diff_cluster_options(
     (to_set, to_reset)
 }
 
-/// Index a statement's options by name, dropping the ones that spell "unset".
+/// Index a statement's options by name, dropping the ones the server discards.
 ///
 /// A duplicate name is rejected by the server, so the last one wins here.
 fn index_options(
@@ -299,17 +319,20 @@ fn index_options(
     create
         .options
         .iter()
-        .filter(|option| !is_unset(option))
+        .filter(|option| !is_discarded(option))
         .map(|option| (option.name.clone(), option))
         .collect()
 }
 
-/// Whether an option is set to an empty block, as in `AUTO SCALING STRATEGY = ()`.
+/// Whether the server discards an option rather than recording it, leaving it
+/// out of `SHOW CREATE CLUSTER`.
 ///
-/// That is how a definition spells "unset". The server normalizes it away and
-/// omits the option from `SHOW CREATE CLUSTER`.
-fn is_unset(option: &ClusterOption<Raw>) -> bool {
-    option.to_ast_string_simple().ends_with("= ()")
+/// An empty block, as in `AUTO SCALING STRATEGY = ()`, is how a definition
+/// spells "unset". `DISK` is a deprecated no-op the server accepts and drops.
+/// Either one would read as drift on every apply if the diff kept it, because
+/// setting it can never bring it back.
+fn is_discarded(option: &ClusterOption<Raw>) -> bool {
+    option.name == ClusterOptionName::Disk || option.to_ast_string_simple().ends_with("= ()")
 }
 
 /// Render cluster options (or option names) as a comma-separated `ALTER CLUSTER`
@@ -340,6 +363,12 @@ mod tests {
              SCHEDULE = MANUAL{extra})"
         );
         parse_create_cluster(&sql).unwrap()
+    }
+
+    /// A live cluster whose rendered options are exactly `options`, for cases
+    /// that need one of the always-rendered options to hold a non-default value.
+    fn live_exactly(options: &str) -> CreateClusterStatement<Raw> {
+        parse_create_cluster(&format!("CREATE CLUSTER \"scaled\" ({options})")).unwrap()
     }
 
     /// Render a diff as `(SET statement parts, RESET names)` for concise asserts.
@@ -487,6 +516,82 @@ mod tests {
         assert_eq!(
             diff(
                 "CREATE CLUSTER scaled (SIZE = '25cc', AUTO SCALING STRATEGY = ())",
+                &live("25cc", 1, "")
+            ),
+            (vec![], Vec::<String>::new())
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_implied_true_is_not_drift() {
+        // A value-less option means `true`, which is what the server renders.
+        assert_eq!(
+            diff(
+                "CREATE CLUSTER scaled (SIZE = '25cc', EXPERIMENTAL ARRANGEMENT COMPRESSION, \
+                 INTROSPECTION DEBUGGING, MANAGED)",
+                &live_exactly(
+                    "EXPERIMENTAL ARRANGEMENT COMPRESSION = true, \
+                     INTROSPECTION DEBUGGING = true, \
+                     INTROSPECTION INTERVAL = INTERVAL '00:00:01', \
+                     MANAGED = true, REPLICATION FACTOR = 1, SIZE = '25cc', SCHEDULE = MANUAL"
+                )
+            ),
+            (vec![], Vec::<String>::new())
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_zero_interval_is_not_drift() {
+        // A zero introspection interval disables introspection, which the
+        // server renders as NULL.
+        let live = live_exactly(
+            "EXPERIMENTAL ARRANGEMENT COMPRESSION = false, \
+             INTROSPECTION INTERVAL = NULL, \
+             MANAGED = true, REPLICATION FACTOR = 1, SIZE = '25cc', SCHEDULE = MANUAL",
+        );
+        assert_eq!(
+            diff(
+                "CREATE CLUSTER scaled (SIZE = '25cc', INTROSPECTION INTERVAL = 0)",
+                &live
+            ),
+            (vec![], Vec::<String>::new())
+        );
+        assert_eq!(
+            diff(
+                "CREATE CLUSTER scaled (SIZE = '25cc', INTROSPECTION INTERVAL = '0s')",
+                &live
+            ),
+            (vec![], Vec::<String>::new())
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_zero_reduces_to_null_only_for_the_interval() {
+        // WORKLOAD CLASS renders NULL when unset too, but a class named '0' is
+        // a value like any other.
+        assert_eq!(
+            diff(
+                "CREATE CLUSTER scaled (SIZE = '25cc', WORKLOAD CLASS = '0')",
+                &live_exactly(
+                    "INTROSPECTION INTERVAL = INTERVAL '00:00:01', MANAGED = true, \
+                     REPLICATION FACTOR = 1, SIZE = '25cc', SCHEDULE = MANUAL, \
+                     WORKLOAD CLASS = NULL"
+                )
+            ),
+            (
+                vec!["WORKLOAD CLASS = '0'".to_string()],
+                Vec::<String>::new()
+            )
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_diff_disk_is_not_drift() {
+        // DISK is a no-op the server drops, so it never comes back from SHOW
+        // CREATE CLUSTER and setting it could never converge.
+        assert_eq!(
+            diff(
+                "CREATE CLUSTER scaled (SIZE = '25cc', DISK)",
                 &live("25cc", 1, "")
             ),
             (vec![], Vec::<String>::new())
