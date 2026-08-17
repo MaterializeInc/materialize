@@ -1077,10 +1077,6 @@ pub fn create_new_client_config(
         timeout_config.socket_timeout.as_millis().to_string(),
     );
     config.set(
-        "transaction.timeout.ms",
-        timeout_config.transaction_timeout.as_millis().to_string(),
-    );
-    config.set(
         "socket.connection.setup.timeout.ms",
         timeout_config
             .socket_connection_setup_timeout
