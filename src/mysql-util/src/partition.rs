@@ -7,13 +7,14 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-use mysql_async::prelude::Queryable;
+use mysql_async::Transaction;
 use mz_ore::cast::CastFrom;
 use mz_ore::str::redact;
 
 use crate::{KeyProber, MySqlError, QualifiedTableRef};
 
-/// Settings for [`partition_table`], bundled so call sites can't transpose the bare `u64`s.
+/// Settings for [`partition_table`], bundled to make it harder to accidentally put arguments
+/// in the wrong order.
 pub struct PartitionParams {
     pub num_workers: usize,
     pub estimated_row_count: u64,
@@ -33,21 +34,21 @@ pub struct PartitionParams {
 /// * The column type is CHAR or VARCHAR with a declared length of at most
 ///   [`crate::probe::MAX_KEY_LENGTH`] characters.
 /// * The column collation is `utf8mb4_bin`.
-/// * The connection is inside a REPEATABLE READ transaction, so the probes
-///   (several queries each) all see one snapshot of the table.
+/// * The transaction is `REPEATABLE READ`, so the probes (several queries
+///   each) all see one snapshot of the table.
 ///
 /// `min_split_threshold` is the smallest estimated row count granularity partitioning will
 /// target, which means if the algorithm processes a prefix estimated to cover less
 /// than min_split_threshold rows it won't bother splitting it up further. This is useful to
 /// avoid unnecessary work for smaller tables limiting the overhead of partitioning.
-pub async fn partition_table<Q: Queryable>(
-    conn: &mut Q,
+pub async fn partition_table(
+    tx: &mut Transaction<'_>,
     table: QualifiedTableRef<'_>,
     pk_col: &str,
     params: PartitionParams,
 ) -> Result<Vec<String>, MySqlError> {
     let (schema_name, table_name) = (table.schema_name, table.table_name);
-    let mut db = KeyProber::new(conn, table, pk_col);
+    let mut db = KeyProber::new(tx, table, pk_col);
     let boundaries = partition(
         &mut db,
         params.num_workers,
@@ -255,7 +256,7 @@ trait PrimaryKeyProber {
     ) -> Result<Option<String>, MySqlError>;
 }
 
-impl<'a, Q: Queryable> PrimaryKeyProber for KeyProber<'a, Q> {
+impl<'a, 't> PrimaryKeyProber for KeyProber<'a, 't> {
     async fn estimate_range_rows(
         &mut self,
         start: &str,
@@ -289,7 +290,7 @@ mod tests {
     use mz_ore::cast::CastFrom;
 
     use super::*;
-    use crate::probe::tests::{connect, drop_db, setup_table};
+    use crate::probe::tests::{connect, drop_db, setup_table, start_tx};
 
     fn params(
         num_workers: usize,
@@ -564,7 +565,9 @@ mod tests {
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &all_keys).await?;
         let total = u64::cast_from(all_keys.len());
 
-        let bounds = partition_table(&mut conn, table.clone(), "id", params(4, total, 100)).await?;
+        let mut tx = start_tx(&mut conn).await?;
+        let bounds = partition_table(&mut tx, table.clone(), "id", params(4, total, 100)).await?;
+        tx.rollback().await?;
         assert_eq!(bounds.len(), 3, "{bounds:?}");
         assert_bounds_increasing(&mut conn, &bounds, "utf8mb4_bin").await?;
         let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
@@ -601,14 +604,17 @@ mod tests {
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &all_keys).await?;
         let total = u64::cast_from(all_keys.len());
 
+        let mut tx = start_tx(&mut conn).await?;
+
         // A minimum above the table size yields no boundaries at all.
         let bounds =
-            partition_table(&mut conn, table.clone(), "id", params(4, total, 50_000)).await?;
+            partition_table(&mut tx, table.clone(), "id", params(4, total, 50_000)).await?;
         assert!(bounds.is_empty(), "{bounds:?}");
 
         // A low minimum splits inside the 'a' extensions rather than stopping
         // at the exact key.
-        let bounds = partition_table(&mut conn, table, "id", params(4, total, 10)).await?;
+        let bounds = partition_table(&mut tx, table, "id", params(4, total, 10)).await?;
+        tx.rollback().await?;
         assert_eq!(bounds.len(), 3, "{bounds:?}");
 
         assert_bounds_increasing(&mut conn, &bounds, "utf8mb4_bin").await?;
@@ -648,7 +654,9 @@ mod tests {
         let total = u64::cast_from(all_keys.len());
 
         // Partition for 4 workers with a minimum split size around 250.
-        let bounds = partition_table(&mut conn, table, "id", params(4, total, 250)).await?;
+        let mut tx = start_tx(&mut conn).await?;
+        let bounds = partition_table(&mut tx, table, "id", params(4, total, 250)).await?;
+        tx.rollback().await?;
         assert_eq!(bounds.len(), 3);
         let counts = partition_counts(&mut conn, DB, &bounds, total).await?;
         // ~8k keys are visible, so each count gets at least 2k under perfect

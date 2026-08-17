@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 use mysql_async::prelude::Queryable;
-use mysql_async::{Params, Value};
+use mysql_async::{Params, Transaction, Value};
 use mz_ore::str::redact;
 
 use crate::{MySqlError, QualifiedTableRef, quote_identifier};
@@ -25,8 +25,8 @@ pub const MAX_KEY_LENGTH: u32 = 768;
 /// Probes a string primary key column. Only supports `utf8mb4_bin` against CHAR/VARCHAR
 /// columns up to 768 characters. Enforcement is deferred to the caller. There may be
 /// other collations we can support, but we should do more validation.
-pub struct KeyProber<'a, Q> {
-    conn: &'a mut Q,
+pub struct KeyProber<'a, 't> {
+    tx: &'a mut Transaction<'t>,
     /// Quoted `` `schema`.`table` `` for SQL interpolation.
     table: String,
     /// Quoted key column for SQL interpolation.
@@ -37,12 +37,14 @@ pub struct KeyProber<'a, Q> {
     col_name: String,
 }
 
-impl<'a, Q: Queryable> KeyProber<'a, Q> {
-    /// NOTE: `conn` is assumed to use a utf8mb4 connection character set (the
-    /// driver's handshake default), so key values arrive converted to UTF-8.
-    pub fn new(conn: &'a mut Q, table: QualifiedTableRef<'_>, key_col: &str) -> Self {
+impl<'a, 't> KeyProber<'a, 't> {
+    /// NOTE: `tx` should be `REPEATABLE READ` so sequential probes see one
+    /// snapshot of the table, and its connection is assumed to use a utf8mb4
+    /// connection character set (the driver's handshake default), so key
+    /// values arrive converted to UTF-8.
+    pub fn new(tx: &'a mut Transaction<'t>, table: QualifiedTableRef<'_>, key_col: &str) -> Self {
         Self {
-            conn,
+            tx,
             table: format!(
                 "{}.{}",
                 quote_identifier(table.schema_name),
@@ -75,7 +77,7 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
             col = self.col,
             table = self.table,
         );
-        explain_row_estimate(&mut *self.conn, &select, Params::Positional(params))
+        explain_row_estimate(&mut *self.tx, &select, Params::Positional(params))
             .await?
             .ok_or_else(|| MySqlError::MissingRowEstimate {
                 qualified_table_name: self.table_name.clone(),
@@ -204,10 +206,8 @@ impl<'a, Q: Queryable> KeyProber<'a, Q> {
         sql: String,
         params: Vec<Value>,
     ) -> Result<Option<String>, MySqlError> {
-        let row: Option<mysql_async::Row> = self
-            .conn
-            .exec_first(sql, Params::Positional(params))
-            .await?;
+        let row: Option<mysql_async::Row> =
+            self.tx.exec_first(sql, Params::Positional(params)).await?;
         match row.and_then(|mut row| row.take_opt::<String, _>(0)) {
             None => Ok(None),
             Some(Ok(value)) => Ok(Some(value)),
@@ -236,16 +236,15 @@ fn like_prefix_pattern(prefix: &str) -> String {
     pattern
 }
 
-async fn explain_row_estimate<Q, P>(
-    conn: &mut Q,
+async fn explain_row_estimate<P>(
+    tx: &mut Transaction<'_>,
     select: &str,
     params: P,
 ) -> Result<Option<u64>, MySqlError>
 where
-    Q: Queryable,
     P: Into<Params> + Send,
 {
-    let plan: Option<mysql_async::Row> = conn
+    let plan: Option<mysql_async::Row> = tx
         .exec_first(format!("EXPLAIN FORMAT=TRADITIONAL {select}"), params)
         .await?;
     let estimate = plan.and_then(|row| {
@@ -287,7 +286,8 @@ pub(crate) mod tests {
         let keys = ["aa", "ab", "b", "bb", "bbb", "c"];
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
 
-        let p = &mut KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let p = &mut KeyProber::new(&mut tx, table, "id");
         assert_eq!(
             prefix_of_first_key_in_range(p, "", None, 1).await,
             some("a")
@@ -330,6 +330,7 @@ pub(crate) mod tests {
         );
         assert_eq!(prefix_of_first_key_in_range(p, "c", None, 2).await, None);
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -344,7 +345,8 @@ pub(crate) mod tests {
         const DB: &str = "mz_probe_explain_test";
         let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
-        let mut p = KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let mut p = KeyProber::new(&mut tx, table, "id");
 
         // Estimates are index dives, near reality but never exact by
         // contract, so the bounds are deliberately loose.
@@ -355,6 +357,7 @@ pub(crate) mod tests {
         let none = p.estimate_range_rows("zzz", None).await?;
         assert!(none <= 5, "none={none}");
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -370,7 +373,8 @@ pub(crate) mod tests {
         let keys = ["Aa", "ab", "b", "Bb", "bbb", "C"];
         let table = setup_table(&mut conn, DB, "utf8mb4_general_ci", &keys).await?;
 
-        let p = &mut KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let p = &mut KeyProber::new(&mut tx, table, "id");
         // Sorting is case-insensitive but returned prefixes are the stored
         // bytes: "A", "b", "C".
         // Grab the initial prefix.
@@ -425,6 +429,7 @@ pub(crate) mod tests {
 
         assert_eq!(prefix_of_first_key_in_range(p, "C", None, 2).await, None);
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -443,7 +448,8 @@ pub(crate) mod tests {
         let keys = ["a_1", "a\\2", "a\\3", "a%4", "a|5"];
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
 
-        let p = &mut KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let p = &mut KeyProber::new(&mut tx, table, "id");
         assert_eq!(
             prefix_of_first_key_in_range(p, "", None, 1).await,
             some("a")
@@ -511,6 +517,7 @@ pub(crate) mod tests {
             None
         );
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -528,7 +535,8 @@ pub(crate) mod tests {
         let keys = ["a", "a😀", "日本", "日本語", "😀", "😀a", "😀😀"];
         let table = setup_table(&mut conn, DB, "utf8mb4_general_ci", &keys).await?;
 
-        let p = &mut KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let p = &mut KeyProber::new(&mut tx, table, "id");
         // Prefix lengths count characters, not bytes: a one-char prefix of a
         // four-byte emoji is the whole emoji, never a broken fragment.
         assert_eq!(
@@ -578,6 +586,7 @@ pub(crate) mod tests {
             None
         );
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -599,7 +608,8 @@ pub(crate) mod tests {
             })
             .collect();
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
-        let mut p = KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let mut p = KeyProber::new(&mut tx, table, "id");
 
         // Lowercase hex order matches byte order under this collation.
         assert_eq!(
@@ -616,6 +626,7 @@ pub(crate) mod tests {
             .collect();
         assert_eq!(walked, expected);
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -659,8 +670,10 @@ pub(crate) mod tests {
         // Assert that walking the prefixes gives range boundaries that
         // partition the table and every key falls into exactly one range.
         for len in [1, 2] {
+            let mut tx = start_tx(&mut conn).await?;
             let walked =
-                walk_prefixes(&mut KeyProber::new(&mut conn, table.clone(), "id"), len).await?;
+                walk_prefixes(&mut KeyProber::new(&mut tx, table.clone(), "id"), len).await?;
+            tx.rollback().await?;
             let mut total = 0;
             for (i, lo) in walked.iter().enumerate() {
                 let (n, prefixed) = count_range(&mut conn, DB, lo, walked.get(i + 1)).await?;
@@ -699,19 +712,23 @@ pub(crate) mod tests {
         // keys differ by letter, in mixed case.
         let ci_keys = ["Apple", "apricot", "banana", "Cherry"];
         let t_ci = setup_table(&mut conn, CI_DB, "utf8mb4_general_ci", &ci_keys).await?;
-        let mut prober = KeyProber::new(&mut conn, t_ci, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let mut prober = KeyProber::new(&mut tx, t_ci, "id");
         // 'A' covers 'apricot' too: LIKE is case-insensitive here, so a
         // returned prefix covers every case variant of it.
         assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "b", "C"]);
+        tx.rollback().await?;
 
         // Binary collation: case variants coexist and order by byte value.
         let bin_keys = ["ABC", "ABD", "abc", "abd"];
         let t_bin = setup_table(&mut conn, BIN_DB, "utf8mb4_bin", &bin_keys).await?;
-        let mut prober = KeyProber::new(&mut conn, t_bin, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let mut prober = KeyProber::new(&mut tx, t_bin, "id");
         // Uppercase sorts before lowercase in byte order, and case variants
         // are distinct prefixes.
         assert_eq!(walk_prefixes(&mut prober, 1).await?, ["A", "a"]);
         assert_eq!(walk_prefixes(&mut prober, 3).await?, bin_keys);
+        tx.rollback().await?;
 
         drop_db(&mut conn, CI_DB).await?;
         drop_db(&mut conn, BIN_DB).await?;
@@ -748,7 +765,8 @@ pub(crate) mod tests {
             schema_name: DB,
             table_name: "t",
         };
-        let mut p = KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let mut p = KeyProber::new(&mut tx, table, "id");
 
         // Estimates never decode key values, they keep working.
         assert!(p.estimate_range_rows("", None).await.is_ok());
@@ -770,6 +788,7 @@ pub(crate) mod tests {
             .unwrap_err();
         assert!(matches!(err, MySqlError::NonUtf8KeyValue { .. }), "{err:?}");
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -817,7 +836,8 @@ pub(crate) mod tests {
             schema_name: DB,
             table_name: "t",
         };
-        let mut prober = KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let mut prober = KeyProber::new(&mut tx, table, "id");
 
         // Range estimates come from index dives on the real B-tree, not the
         // stale table statistics, so they still reflect the actual data.
@@ -826,6 +846,7 @@ pub(crate) mod tests {
         let range = prober.estimate_range_rows("a00100", Some("a00200")).await?;
         assert!((50..=200).contains(&range), "range={range}");
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -856,38 +877,44 @@ pub(crate) mod tests {
         // Every probe must stay a handful of index operations. A regression
         // to a scan costs >= 1000 reads, far past the generous bound.
         let before = handler_reads(&mut conn).await?;
+        let mut tx = start_tx(&mut conn).await?;
         let got = prefix_of_first_key_in_range(
-            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            &mut KeyProber::new(&mut tx, table.clone(), "id"),
             "a00500",
             None,
             6,
         )
         .await;
+        tx.rollback().await?;
         let reads = handler_reads(&mut conn).await? - before;
         // The exclusive bound skips the exact key a00500.
         assert_eq!(got, some("a00501"));
         assert!(reads < 50, "prefix_of_first_key_in_range reads={reads}");
 
         let before = handler_reads(&mut conn).await?;
+        let mut tx = start_tx(&mut conn).await?;
         let got = prefix_of_first_row_not_matching_prefix(
-            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            &mut KeyProber::new(&mut tx, table.clone(), "id"),
             "a00500",
             None,
             6,
         )
         .await;
+        tx.rollback().await?;
         let reads = handler_reads(&mut conn).await? - before;
         assert_eq!(got, some("a00501"));
         assert!(reads < 50, "max_key probe reads={reads}");
 
         let before = handler_reads(&mut conn).await?;
+        let mut tx = start_tx(&mut conn).await?;
         let got = prefix_of_first_row_not_matching_prefix(
-            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            &mut KeyProber::new(&mut tx, table.clone(), "id"),
             "a0",
             None,
             6,
         )
         .await;
+        tx.rollback().await?;
         let reads = handler_reads(&mut conn).await? - before;
         // Every key matches 'a0%', so the prefix match covers the whole table and
         // there is no next prefix, at the cost of two dives rather than a
@@ -932,13 +959,15 @@ pub(crate) mod tests {
         ];
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
 
-        let p = &mut KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let p = &mut KeyProber::new(&mut tx, table, "id");
         assert_eq!(walk_prefixes(p, 1).await?, ["a", "c", "d", "h", "i"]);
         assert_eq!(
             walk_prefixes(p, 2).await?,
             ["aa", "as", "aß", "ce", "ch", "du", "ho", "ib"]
         );
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -960,7 +989,8 @@ pub(crate) mod tests {
         let keys = ["\0a", "\u{1}a", "\u{9}b", "a1", "a1\u{1}x", "b1"];
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &keys).await?;
 
-        let p = &mut KeyProber::new(&mut conn, table, "id");
+        let mut tx = start_tx(&mut conn).await?;
+        let p = &mut KeyProber::new(&mut tx, table, "id");
         assert_eq!(
             prefix_of_first_key_in_range(p, "", None, 2).await,
             some("a1")
@@ -987,6 +1017,7 @@ pub(crate) mod tests {
             some("a1")
         );
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -1008,6 +1039,18 @@ pub(crate) mod tests {
         Ok(Some(
             mysql_async::Conn::new(mysql_async::Opts::from_url(&url)?).await?,
         ))
+    }
+
+    /// Opens the transaction shape [`KeyProber`]'s contract expects:
+    /// `REPEATABLE READ` and read-only.
+    pub(crate) async fn start_tx(
+        conn: &mut mysql_async::Conn,
+    ) -> Result<Transaction<'_>, anyhow::Error> {
+        let mut tx_opts = mysql_async::TxOpts::default();
+        tx_opts
+            .with_isolation_level(mysql_async::IsolationLevel::RepeatableRead)
+            .with_readonly(true);
+        Ok(conn.start_transaction(tx_opts).await?)
     }
 
     /// Drops and recreates the scratch database `db`. Each test must use its
@@ -1111,7 +1154,7 @@ pub(crate) mod tests {
 
     // Wrapped to limit boilerplate
     async fn prefix_of_first_key_in_range(
-        prober: &mut KeyProber<'_, mysql_async::Conn>,
+        prober: &mut KeyProber<'_, '_>,
         lower_bound_exclusive: &str,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
@@ -1128,7 +1171,7 @@ pub(crate) mod tests {
 
     // Wrapped to limit boilerplate
     async fn prefix_of_first_row_not_matching_prefix(
-        prober: &mut KeyProber<'_, mysql_async::Conn>,
+        prober: &mut KeyProber<'_, '_>,
         prefix: &str,
         upper_bound_exclusive: Option<&str>,
         max_prefix_length: usize,
@@ -1153,7 +1196,7 @@ pub(crate) mod tests {
     /// Test helper to walk prefixes at a consistent depth. Only works when
     /// all keys have length >= len.
     async fn walk_prefixes(
-        prober: &mut KeyProber<'_, mysql_async::Conn>,
+        prober: &mut KeyProber<'_, '_>,
         len: usize,
     ) -> Result<Vec<String>, anyhow::Error> {
         let mut walked = Vec::new();

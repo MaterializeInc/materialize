@@ -115,7 +115,7 @@ use differential_dataflow::AsCollection;
 use futures::{StreamExt as _, TryStreamExt};
 use itertools::Itertools;
 use mysql_async::prelude::Queryable;
-use mysql_async::{IsolationLevel, Row as MySqlRow, TxOpts, Value};
+use mysql_async::{IsolationLevel, Row as MySqlRow, Transaction, TxOpts, Value};
 use mz_mysql_util::{
     MySqlConn, MySqlError, QualifiedTableRef, pack_mysql_row, query_sys_var, quote_identifier,
 };
@@ -238,27 +238,27 @@ const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
 const MIN_PROBED_PREFIXES: u64 = 256;
 const BILLION_ROWS: u64 = 1_000_000_000;
 
-/// Partitioning knobs read from the same-named `mysql_source_snapshot_partition_*` dyncfgs.
+/// Partitioning knobs read from dyncfgs, bundled so call sites can't transpose
+/// the bare `u64`s.
 struct PartitionSettings {
+    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS`].
     min_rows: u64,
+    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS`].
     probed_prefixes_per_billion_rows: u64,
 }
 
 /// Attempts to compute roughly even boundaries for primary keys. Returns None if the column type
 /// is unsupported or boundaries couldn't be estimated for some reason. Currently only supports
 /// CHAR/VARCHAR columns with up to 768 characters with utf8mb4_bin collation.
-async fn compute_sampled_splits<Q>(
-    conn: &mut Q,
+async fn compute_sampled_splits(
+    tx: &mut Transaction<'_>,
     table: &MySqlTableName,
     raw_col: &str,
     scalar_type: &SqlScalarType,
     worker_count: usize,
     row_count: u64,
     settings: &PartitionSettings,
-) -> Result<Option<PkBoundaries>, TransientError>
-where
-    Q: Queryable,
-{
+) -> Result<Option<PkBoundaries>, TransientError> {
     match scalar_type {
         SqlScalarType::Char { length }
             if length.is_some_and(|l| l.into_u32() <= mz_mysql_util::MAX_KEY_LENGTH) => {}
@@ -266,7 +266,7 @@ where
             if max_length.is_some_and(|l| l.into_u32() <= mz_mysql_util::MAX_KEY_LENGTH) => {}
         _ => return Ok(None),
     }
-    let collation = fetch_column_collation(conn, table, raw_col).await?;
+    let collation = fetch_column_collation(&mut *tx, table, raw_col).await?;
     let supported = matches!(&collation, Some(c) if c.1 == SUPPORTED_PK_COLLATION);
     if !supported {
         tracing::debug!(?collation, "PK splitting skipped: unsupported collation");
@@ -288,7 +288,7 @@ where
         min_split_threshold: settings.min_rows,
         max_probed_prefixes,
     };
-    let prefixes = match mz_mysql_util::partition_table(conn, table_ref, raw_col, params).await {
+    let prefixes = match mz_mysql_util::partition_table(tx, table_ref, raw_col, params).await {
         Ok(prefixes) => prefixes,
         Err(err @ (MySqlError::NonUtf8KeyValue { .. } | MySqlError::MissingRowEstimate { .. })) => {
             tracing::warn!(%err, "partitioning failed, falling back to a single partition");
@@ -386,8 +386,8 @@ async fn sample_pk_bounds(
                     .with_readonly(true);
                 let mut tx = conn.start_transaction(tx_opts).await?;
                 // Row count, reused for boundary discovery and the size gauge. When it
-                // is counted exactly it runs on the same transaction as the boundary
-                // walk in `compute_sampled_splits`, so both see one consistent
+                // is counted exactly it runs on the same `READ ONLY` transaction as the
+                // boundary walk in `compute_sampled_splits`, so both see one consistent
                 // snapshot. For large tables it is an optimizer estimate instead, which
                 // `compute_sampled_splits` tolerates.
                 let stats = collect_table_statistics(&mut tx, table, exact_count_max_rows).await?;
@@ -416,7 +416,9 @@ async fn sample_pk_bounds(
                     }
                     None => None,
                 };
-                tx.commit().await?;
+                // Ends the borrow of `conn`; the transaction itself is rolled
+                // back when the pooled connection is next used or disconnected.
+                drop(tx);
                 pool.borrow_mut().push(conn);
                 Ok::<_, TransientError>((table.clone(), count, splits))
             }
@@ -435,7 +437,8 @@ async fn sample_pk_bounds(
     }
 
     // Every future has completed and dropped its `Rc` clone, so `pool` is the sole
-    // owner. Release the probe connections before the caller takes `LOCK TABLES`.
+    // owner. Release the probe connections now, ending their `READ ONLY` transactions
+    // and the shared metadata locks they hold, before the caller takes `LOCK TABLES`.
     let probe_conns = Rc::into_inner(pooled_conns)
         .expect("all sampling futures completed, so no Rc clones remain")
         .into_inner();
@@ -955,7 +958,6 @@ pub(crate) fn render<'scope>(
                     .with_consistent_snapshot(true)
                     .with_readonly(true);
                 let mut tx = conn.start_transaction(tx_opts).await?;
-
                 // Set the session time zone to UTC so that we can read TIMESTAMP columns as UTC
                 // From https://dev.mysql.com/doc/refman/8.0/en/datetime.html: "MySQL converts TIMESTAMP values
                 // from the current time zone to UTC for storage, and back from UTC to the current time zone
