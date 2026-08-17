@@ -11,7 +11,9 @@
 # `mz_introspection.mz_compute_hydration_timestamps_per_worker`.
 #
 # These tests rely on testdrive's retry feature, as dataflows take an unknown
-# (but hopefully small) time to be installed and to hydrate.
+# (but hopefully small) time to be installed and to hydrate. The one section
+# that must not retry, so that a transient invariant violation is not retried
+# away, comes last, since `set-max-tries` has no way to restore the default.
 
 $ set-sql-timeout duration=60s
 
@@ -103,48 +105,6 @@ true true
 > DROP MATERIALIZED VIEW mv_unavailable
 > DROP CLUSTER source_cluster
 
-# The ordering invariant `installed_at <= started_at <= hydrated_at` must hold
-# for every row, and no row may report a later stage without its predecessors.
-# Import-free dataflows are the interesting case: their operators are not gated
-# on the suspension token, so they can hydrate before their `Schedule` arrives.
-#
-# Such dataflows advance to the empty frontier and have their replica state
-# cleaned up promptly, so we cannot reliably observe an individual one. Assert
-# the invariant repeatedly instead, without retries, while they are being
-# created and torn down.
-
-$ set-max-tries max-tries=1
-
-> CREATE MATERIALIZED VIEW mv_const1 IN CLUSTER test AS SELECT 1
-> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
-  WHERE installed_at IS NULL
-     OR (started_at IS NULL AND hydrated_at IS NOT NULL)
-     OR started_at < installed_at
-     OR hydrated_at < started_at
-0
-
-> CREATE MATERIALIZED VIEW mv_const2 IN CLUSTER test AS SELECT 2
-> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
-  WHERE installed_at IS NULL
-     OR (started_at IS NULL AND hydrated_at IS NOT NULL)
-     OR started_at < installed_at
-     OR hydrated_at < started_at
-0
-
-> CREATE MATERIALIZED VIEW mv_const3 IN CLUSTER test AS SELECT 3
-> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
-  WHERE installed_at IS NULL
-     OR (started_at IS NULL AND hydrated_at IS NOT NULL)
-     OR started_at < installed_at
-     OR hydrated_at < started_at
-0
-
-$ set-max-tries default
-
-> DROP MATERIALIZED VIEW mv_const1
-> DROP MATERIALIZED VIEW mv_const2
-> DROP MATERIALIZED VIEW mv_const3
-
 # An object queued behind `compute_hydration_concurrency` reports an
 # `installed_at` but no `started_at`, exactly as one waiting on its inputs
 # does. `mv_stuck` oscillates between one row and no rows, so it never
@@ -192,3 +152,39 @@ true true true
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM RESET compute_hydration_concurrency;
+
+# The ordering invariant `installed_at <= started_at <= hydrated_at` must hold
+# for every row, and no row may report a later stage without its predecessors.
+# Import-free dataflows are the interesting case: their operators are not gated
+# on the suspension token, so they can hydrate before their `Schedule` arrives.
+#
+# Such dataflows advance to the empty frontier and have their replica state
+# cleaned up promptly, so we cannot reliably observe an individual one. Assert
+# the invariant repeatedly instead, while they are being created and torn down.
+# Retries are disabled from here on, so that a violation cannot be retried away.
+
+$ set-max-tries max-tries=1
+
+> CREATE MATERIALIZED VIEW mv_const1 IN CLUSTER test AS SELECT 1
+> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
+  WHERE installed_at IS NULL
+     OR (started_at IS NULL AND hydrated_at IS NOT NULL)
+     OR started_at < installed_at
+     OR hydrated_at < started_at
+0
+
+> CREATE MATERIALIZED VIEW mv_const2 IN CLUSTER test AS SELECT 2
+> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
+  WHERE installed_at IS NULL
+     OR (started_at IS NULL AND hydrated_at IS NOT NULL)
+     OR started_at < installed_at
+     OR hydrated_at < started_at
+0
+
+> CREATE MATERIALIZED VIEW mv_const3 IN CLUSTER test AS SELECT 3
+> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
+  WHERE installed_at IS NULL
+     OR (started_at IS NULL AND hydrated_at IS NOT NULL)
+     OR started_at < installed_at
+     OR hydrated_at < started_at
+0
