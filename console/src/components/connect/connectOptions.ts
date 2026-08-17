@@ -79,8 +79,10 @@ export interface McpClient {
   id: McpClientId;
   name: string;
   kind: McpConfigKind;
-  /** Instruction shown above the config snippet, e.g. where the file lives. */
+  /** Where the config goes, used as the final step's title. */
   configLocation: string;
+  /** How the user completes the browser sign-in for the OAuth flow. */
+  signInHint: string;
   /** Whether the client supports one-click install via a deep link. */
   oneClickInstall?: boolean;
 }
@@ -91,12 +93,16 @@ export const MCP_CLIENTS: McpClient[] = [
     name: "Claude Code",
     kind: "cli",
     configLocation: "Run this in your terminal",
+    signInHint:
+      "Claude Code opens your browser to sign in on first use. Run /mcp inside Claude Code to sign in right away.",
   },
   {
     id: "cursor",
     name: "Cursor",
     kind: "json",
     configLocation: "Add to ~/.cursor/mcp.json",
+    signInHint:
+      "Cursor prompts you to sign in when the server first connects. You can also click the server under Settings > MCP.",
     oneClickInstall: true,
   },
   {
@@ -104,12 +110,16 @@ export const MCP_CLIENTS: McpClient[] = [
     name: "Claude Desktop",
     kind: "json",
     configLocation: "Add to claude_desktop_config.json",
+    signInHint:
+      "Claude Desktop opens your browser to sign in when the server first connects.",
   },
   {
     id: "vscode",
     name: "VS Code",
     kind: "json",
     configLocation: "Add to .vscode/mcp.json",
+    signInHint:
+      "VS Code prompts you to authenticate the server the first time chat uses it.",
     oneClickInstall: true,
   },
   {
@@ -117,18 +127,23 @@ export const MCP_CLIENTS: McpClient[] = [
     name: "Windsurf",
     kind: "json",
     configLocation: "Add to ~/.codeium/windsurf/mcp_config.json",
+    signInHint:
+      "Windsurf opens your browser to sign in when the server first connects.",
   },
   {
     id: "codex",
     name: "Codex CLI",
     kind: "toml",
     configLocation: "Add to ~/.codex/config.toml",
+    signInHint:
+      "Codex opens your browser to sign in the first time the server is used.",
   },
   {
     id: "other",
     name: "Other",
     kind: "json",
     configLocation: "Add to your client's MCP config",
+    signInHint: "Your client opens a browser to sign in on first connect.",
   },
 ];
 

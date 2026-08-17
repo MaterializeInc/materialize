@@ -31,10 +31,12 @@ describe("ConnectDrawer", () => {
     await renderDrawer();
 
     expect(await screen.findByText("Choose your MCP server")).toBeVisible();
+    expect(screen.getByText("Select your client")).toBeVisible();
     // The test environment predates the OAuth gate, so the token flow shows.
     expect(
-      screen.getByRole("button", { name: "Generate personal MCP token" }),
+      screen.getByRole("button", { name: "Generate app password" }),
     ).toBeVisible();
+    expect(screen.getByText("Run this in your terminal")).toBeVisible();
     expect(
       screen.getByText(new RegExp(`https://${ENVIRONMENT_HOST}`)),
     ).toBeVisible();
@@ -49,7 +51,7 @@ describe("ConnectDrawer", () => {
     await user.click(await screen.findByRole("button", { name: "MCP client" }));
     await user.click(await screen.findByRole("menuitem", { name: "Cursor" }));
 
-    expect(await screen.findByText("Add to ~/.cursor/mcp.json:")).toBeVisible();
+    expect(await screen.findByText("Add to ~/.cursor/mcp.json")).toBeVisible();
     expect(screen.getByText(/mcpServers/)).toBeVisible();
   });
 
@@ -60,10 +62,34 @@ describe("ConnectDrawer", () => {
     await user.click(await screen.findByText("Query your data products"));
 
     expect(await screen.findByText(/materialize-agent/)).toBeVisible();
-    expect(screen.getByText(/Admins can scope agent access/)).toBeVisible();
     expect(
       screen.queryByText("Install agent skills (optional)"),
     ).not.toBeInTheDocument();
+  });
+
+  it("generates an MCP token and masks it in the command", async () => {
+    server.use(
+      http.post("*/frontegg/identity/resources/users/api-tokens/v1", () =>
+        HttpResponse.json({
+          clientId: "11111111-1111-1111-1111-111111111111",
+          secret: "22222222-2222-2222-2222-222222222222",
+          createdAt: "2026-01-01T00:00:00Z",
+          description: "MCP token",
+          metadata: {},
+        }),
+      ),
+    );
+    await renderDrawer();
+    const user = userEvent.setup();
+
+    await user.click(
+      await screen.findByRole("button", { name: "Generate app password" }),
+    );
+
+    expect(
+      await screen.findByText(/App password created and added to the command/),
+    ).toBeVisible();
+    expect(screen.getByText(/Authorization: Basic \*+/)).toBeVisible();
   });
 
   it("shows connection details on the External tools tab", async () => {
@@ -106,10 +132,13 @@ describe("ConnectDrawer", () => {
       await screen.findByRole("button", { name: /External tools/ }),
     );
     await user.click(
-      await screen.findByRole("button", { name: "Create app password" }),
+      await screen.findByRole("button", { name: "Create new password" }),
     );
     const nameInput = await screen.findByLabelText("App password name");
-    expect(nameInput).toHaveValue("External tools");
+    expect(nameInput).toHaveValue("");
+    expect(screen.getByText(/You are naming this password/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Create" })).toBeDisabled();
+    await user.type(nameInput, "External tools");
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await waitFor(() => {
@@ -117,10 +146,16 @@ describe("ConnectDrawer", () => {
         screen.getByText(/Copy it now\. It will not be shown again\./),
       ).toBeVisible();
     });
+    // The tool snippet shows the password masked. Copying yields the real one.
     const expectedPassword = `mzp_${"1".repeat(32)}${"2".repeat(32)}`;
     expect(
-      screen.getByText(new RegExp(`Password\\s+${expectedPassword}`)),
+      screen.getByText(
+        new RegExp(`Password\\s+\\*{${expectedPassword.length}}`),
+      ),
     ).toBeVisible();
+    expect(
+      screen.queryByText(new RegExp(expectedPassword)),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the psql command on the Terminal tab", async () => {

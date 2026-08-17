@@ -45,7 +45,7 @@ const CreateAppPasswordRow = ({
 }) => {
   const { colors } = useTheme<MaterializeTheme>();
   const [isNaming, setIsNaming] = useState(false);
-  const [name, setName] = useState("External tools");
+  const [name, setName] = useState("");
   const {
     mutate: createAppPassword,
     isPending,
@@ -80,6 +80,8 @@ const CreateAppPasswordRow = ({
             contents={newPassword.password}
             obfuscatedContent={newPassword.obfuscatedPassword}
             overflow="hidden"
+            flex="1"
+            w="auto"
             minWidth={0}
           />
         ) : isNaming ? (
@@ -89,6 +91,7 @@ const CreateAppPasswordRow = ({
               onChange={(event) => setName(event.target.value)}
               maxW="220px"
               isDisabled={isPending}
+              placeholder="Password name"
               aria-label="App password name"
               autoFocus
               onKeyDown={(event) => {
@@ -102,6 +105,7 @@ const CreateAppPasswordRow = ({
               flexShrink={0}
               isLoading={isPending}
               loadingText="Creating"
+              isDisabled={name.trim().length === 0}
               onClick={create}
             >
               Create
@@ -122,10 +126,21 @@ const CreateAppPasswordRow = ({
             size="sm"
             onClick={() => setIsNaming(true)}
           >
-            Create app password
+            Create new password
           </Button>
         )}
       </HStack>
+      {isNaming && !newPassword?.password && (
+        <Text
+          fontSize="sm"
+          color={colors.foreground.secondary}
+          mt="1.5"
+          ml={`calc(${DETAIL_LABEL_WIDTH} + 12px)`}
+        >
+          You are naming this password. The password itself is generated for
+          you.
+        </Text>
+      )}
       {newPassword?.password && (
         <Text
           fontSize="sm"
@@ -161,6 +176,8 @@ const IdTokenRow = ({ idToken }: { idToken: string }) => {
           contents={idToken}
           obfuscatedContent={obfuscateSecret(idToken)}
           overflow="hidden"
+          flex="1"
+          w="auto"
           minWidth={0}
         />
       </HStack>
@@ -199,6 +216,11 @@ export const ConnectExternalToolsPanel = ({
     password: createdPassword,
     ssl: ctx.ssl,
   });
+  // Mask the password in the rendered snippet. The copy button copies the
+  // real value.
+  const displaySnippet = createdPassword
+    ? snippet.replaceAll(createdPassword, obfuscateSecret(createdPassword))
+    : undefined;
 
   return (
     <VStack alignItems="stretch" spacing="0">
@@ -248,7 +270,11 @@ export const ConnectExternalToolsPanel = ({
               );
             })}
           </HStack>
-          <LabeledCommandBox label={tool.instruction} contents={snippet} />
+          <LabeledCommandBox
+            label={tool.instruction}
+            contents={snippet}
+            displayContents={displaySnippet}
+          />
         </VStack>
       </ConnectStep>
     </VStack>

@@ -28,9 +28,7 @@ import {
 } from "@chakra-ui/react";
 import React, { useState } from "react";
 
-import { SecretCopyableBox } from "~/components/copyableComponents";
 import TextLink from "~/components/TextLink";
-import docUrls from "~/mz-doc-urls.json";
 import { useCreateApiToken } from "~/queries/frontegg";
 import ChevronDownIcon from "~/svg/ChevronDownIcon";
 import ClaudeLogoIcon from "~/svg/ClaudeLogoIcon";
@@ -52,7 +50,6 @@ import {
   MCP_CLIENTS,
   MCP_SERVERS,
   MCP_TOKEN_PLACEHOLDER,
-  McpClient,
   McpClientId,
   McpServerId,
 } from "./connectOptions";
@@ -177,16 +174,17 @@ const McpClientSelect = ({ value, onChange }: McpClientSelectProps) => {
   );
 };
 
-/** Token acquisition UI for the Basic-auth flow. Cloud sessions can mint a
- * personal token, everyone can Base64-encode an existing app password. */
-const McpTokenSection = ({
+/** Content of the token acquisition step. Cloud sessions mint an app password
+ * that is substituted into the command, self-managed users Base64-encode an
+ * existing one. */
+const McpTokenStep = ({
   ctx,
-  mcpToken,
+  hasToken,
   isGenerating,
   onGenerate,
 }: {
   ctx: ConnectContext;
-  mcpToken?: string;
+  hasToken: boolean;
   isGenerating: boolean;
   onGenerate: () => void;
 }) => {
@@ -201,47 +199,31 @@ const McpTokenSection = ({
     );
   }
 
-  return (
-    <VStack alignItems="stretch" spacing="3">
-      {isGenerating ? (
-        <Flex alignItems="center" color={colors.foreground.secondary}>
-          <Spinner size="sm" mr={2} />
-          <Text fontSize="sm">Generating token...</Text>
-        </Flex>
-      ) : mcpToken ? (
-        <VStack alignItems="stretch" spacing="1">
-          <Text fontSize="sm" color={colors.foreground.secondary}>
-            Copy this token now. It will not be shown again:
-          </Text>
-          <SecretCopyableBox
-            label="mcpToken"
-            contents={mcpToken}
-            obfuscatedContent={obfuscateSecret(mcpToken)}
-            overflow="hidden"
-            minWidth={0}
-          />
-        </VStack>
-      ) : (
-        <Box>
-          <Button onClick={onGenerate} variant="primary" size="sm" px="4">
-            Generate personal MCP token
-          </Button>
-        </Box>
-      )}
-      <Text fontSize="xs" color={colors.foreground.secondary}>
-        For service accounts, create a{" "}
-        <TextLink href="/access/app-passwords">service app password</TextLink>{" "}
-        and Base64-encode it instead:
-      </Text>
-      <LabeledCommandBox contents={buildBase64TokenCommand(ctx.user)} />
-    </VStack>
-  );
-};
+  if (isGenerating) {
+    return (
+      <Flex alignItems="center" color={colors.foreground.secondary}>
+        <Spinner size="sm" mr={2} />
+        <Text fontSize="sm">Generating app password...</Text>
+      </Flex>
+    );
+  }
 
-const snippetLabel = (client: McpClient, asAlternative: boolean) => {
-  const location = client.configLocation;
-  if (!asAlternative) return `${location}:`;
-  return `Or ${location.charAt(0).toLowerCase()}${location.slice(1)}:`;
+  if (hasToken) {
+    return (
+      <Text fontSize="sm" color={colors.foreground.secondary}>
+        App password created and added to the command below. It will not be
+        shown again.
+      </Text>
+    );
+  }
+
+  return (
+    <Box>
+      <Button onClick={onGenerate} variant="primary" size="sm" px="4">
+        Generate app password
+      </Button>
+    </Box>
+  );
 };
 
 export interface ConnectMcpPanelProps {
@@ -280,121 +262,128 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
     baseUrl: ctx.mcpBaseUrl,
     token: oauthActive ? undefined : (mcpToken ?? MCP_TOKEN_PLACEHOLDER),
   });
+  // Mask the token in the rendered snippet. The copy button copies the real
+  // value.
+  const displaySnippet = mcpToken
+    ? snippet.replace(mcpToken, obfuscateSecret(mcpToken))
+    : undefined;
   const installLink =
     oauthActive && client.oneClickInstall
       ? buildMcpInstallLink(client, server, ctx.mcpBaseUrl)
       : undefined;
 
+  const clientStep = (
+    <VStack alignItems="stretch" spacing="3">
+      <Text fontSize="sm" color={colors.foreground.secondary}>
+        Select your client
+      </Text>
+      <McpClientSelect value={clientId} onChange={setClientId} />
+    </VStack>
+  );
+
+  const commandStep = (
+    <VStack alignItems="stretch" spacing="3">
+      {installLink && (
+        <HStack spacing="3">
+          <Button as="a" href={installLink} variant="primary" size="sm" px="4">
+            Add to {client.name}
+          </Button>
+          <Text fontSize="sm" color={colors.foreground.secondary}>
+            Installs the server config for you.
+          </Text>
+        </HStack>
+      )}
+      <LabeledCommandBox
+        label={installLink ? "Or copy the config:" : undefined}
+        contents={snippet}
+        displayContents={displaySnippet}
+      />
+      {oauthActive ? (
+        <HStack justifyContent="space-between" alignItems="baseline">
+          <Text fontSize="sm" color={colors.foreground.secondary}>
+            {client.signInHint}
+          </Text>
+          <TextLink
+            as="button"
+            type="button"
+            fontSize="sm"
+            flexShrink={0}
+            onClick={() => setUseTokenFlow(true)}
+          >
+            Use a token instead
+          </TextLink>
+        </HStack>
+      ) : (
+        ctx.oauthAvailable && (
+          <HStack justifyContent="flex-end">
+            <TextLink
+              as="button"
+              type="button"
+              fontSize="sm"
+              onClick={() => setUseTokenFlow(false)}
+            >
+              Use OAuth instead
+            </TextLink>
+          </HStack>
+        )
+      )}
+    </VStack>
+  );
+
+  const skillsStep = (
+    <VStack alignItems="stretch" spacing="2">
+      <Text fontSize="sm" color={colors.foreground.secondary}>
+        Ready-made instructions that help your agent work with Materialize
+        accurately.
+      </Text>
+      <LabeledCommandBox contents={AGENT_SKILLS_COMMAND} />
+    </VStack>
+  );
+
+  const steps: { title: string; content: React.ReactNode }[] = [
+    {
+      title: "Choose your MCP server",
+      content: <McpServerSelect value={serverId} onChange={setServerId} />,
+    },
+    { title: "Connect your client", content: clientStep },
+  ];
+  if (!oauthActive) {
+    steps.push({
+      title: ctx.canCreateAppPassword
+        ? "Generate an app password"
+        : "Create a token",
+      content: (
+        <McpTokenStep
+          ctx={ctx}
+          hasToken={Boolean(mcpToken)}
+          isGenerating={isGeneratingToken}
+          onGenerate={() =>
+            createAppPassword({ type: "personal", description: "MCP token" })
+          }
+        />
+      ),
+    });
+  }
+  steps.push({ title: client.configLocation, content: commandStep });
+  if (isDeveloper) {
+    steps.push({
+      title: "Install agent skills (optional)",
+      content: skillsStep,
+    });
+  }
+
   return (
     <VStack alignItems="stretch" spacing="0">
-      <ConnectStep stepNumber={1} title="Choose your MCP server">
-        <McpServerSelect value={serverId} onChange={setServerId} />
-      </ConnectStep>
-      <ConnectStep
-        stepNumber={2}
-        title="Connect your client"
-        isLast={!isDeveloper}
-      >
-        <VStack alignItems="stretch" spacing="3">
-          <McpClientSelect value={clientId} onChange={setClientId} />
-          {!oauthActive && (
-            <McpTokenSection
-              ctx={ctx}
-              mcpToken={mcpToken}
-              isGenerating={isGeneratingToken}
-              onGenerate={() =>
-                createAppPassword({
-                  type: "personal",
-                  description: "MCP token",
-                })
-              }
-            />
-          )}
-          {installLink && (
-            <HStack spacing="3">
-              <Button
-                as="a"
-                href={installLink}
-                variant="primary"
-                size="sm"
-                px="4"
-              >
-                Add to {client.name}
-              </Button>
-              <Text fontSize="sm" color={colors.foreground.secondary}>
-                Installs the server config for you.
-              </Text>
-            </HStack>
-          )}
-          <LabeledCommandBox
-            label={snippetLabel(client, Boolean(installLink))}
-            contents={snippet}
-          />
-          {oauthActive ? (
-            <HStack justifyContent="space-between" alignItems="baseline">
-              <Text fontSize="sm" color={colors.foreground.secondary}>
-                Your browser opens to sign in on first connect.
-              </Text>
-              <TextLink
-                as="button"
-                type="button"
-                fontSize="sm"
-                flexShrink={0}
-                onClick={() => setUseTokenFlow(true)}
-              >
-                Use a token instead
-              </TextLink>
-            </HStack>
-          ) : (
-            ctx.oauthAvailable && (
-              <HStack justifyContent="flex-end">
-                <TextLink
-                  as="button"
-                  type="button"
-                  fontSize="sm"
-                  onClick={() => setUseTokenFlow(false)}
-                >
-                  Use OAuth instead
-                </TextLink>
-              </HStack>
-            )
-          )}
-          {!isDeveloper && (
-            <Box
-              borderTop="1px solid"
-              borderColor={colors.border.primary}
-              pt="3"
-              mt="2"
-            >
-              <Text fontSize="sm" color={colors.foreground.secondary}>
-                Admins can scope agent access. See the{" "}
-                <TextLink
-                  href={docUrls["/docs/integrations/mcp-server/"]}
-                  target="_blank"
-                >
-                  documentation
-                </TextLink>
-                .
-              </Text>
-            </Box>
-          )}
-        </VStack>
-      </ConnectStep>
-      {isDeveloper && (
+      {steps.map((step, index) => (
         <ConnectStep
-          stepNumber={3}
-          title="Install agent skills (optional)"
-          isLast
+          key={step.title}
+          stepNumber={index + 1}
+          title={step.title}
+          isLast={index === steps.length - 1}
         >
-          <VStack alignItems="stretch" spacing="2">
-            <Text fontSize="sm" color={colors.foreground.secondary}>
-              Ready-made instructions that help your agent work with Materialize
-              accurately.
-            </Text>
-            <LabeledCommandBox contents={AGENT_SKILLS_COMMAND} />
-          </VStack>
+          {step.content}
         </ConnectStep>
-      )}
+      ))}
     </VStack>
   );
 };
