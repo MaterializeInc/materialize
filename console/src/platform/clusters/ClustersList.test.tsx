@@ -159,6 +159,26 @@ const cellsForRow = (rowLabel: string) =>
     .getAllByRole("cell")
     .map((cell) => cell.textContent);
 
+/**
+ * Name-column text of every body row, in render order, so cluster rows and the
+ * replicas nested under them appear in one flat list.
+ */
+const rowOrder = () =>
+  screen
+    .getAllByRole("row")
+    // The header row is a row too, and has no data cells.
+    .slice(1)
+    .map((row) => within(row).getAllByRole("cell")[COLUMN.name].textContent);
+
+/** Applies `sort`, then reads the resulting row order. */
+const rowOrderAfter = async (
+  sort: (user: ReturnType<typeof userEvent.setup>) => Promise<void>,
+  user: ReturnType<typeof userEvent.setup>,
+) => {
+  await sort(user);
+  return rowOrder();
+};
+
 describe("ClustersList replica rows", () => {
   it("renders replica rows without requiring a click", async () => {
     await renderClustersList([buildCluster()]);
@@ -374,6 +394,187 @@ describe("ClustersList replica rows", () => {
     expect(cells[COLUMN.size]).toBe("");
     expect(cells[COLUMN.cpu]).toBe("");
     expect(cells[COLUMN.lastStatusChange]).toBe("");
+  });
+});
+
+const clickHeader = (user: ReturnType<typeof userEvent.setup>, name: RegExp) =>
+  user.click(screen.getByRole("columnheader", { name }));
+/**
+ * Every sorting fixture below names its clusters in alphabetical order and then
+ * arranges their replica values so that neither the ascending nor the descending
+ * result matches that order.
+ *
+ * This matters because `orderedClusters` hands the table its clusters sorted by
+ * name, and TanStack breaks ties by row index. A cluster accessor that returns a
+ * constant therefore reproduces alphabetical order exactly, so a fixture whose
+ * expected order happens to be alphabetical passes even when the aggregate is
+ * missing entirely. Three clusters are the minimum that can defeat this in both
+ * directions.
+ */
+
+describe("ClustersList CPU sorting", () => {
+  const clickCpuHeader = (user: ReturnType<typeof userEvent.setup>) =>
+    clickHeader(user, /^CPU/);
+
+  // Each per-replica column pins its own first sort direction, and CPU's is
+  // descending.
+  const sortByCpuDescending = clickCpuHeader;
+
+  const sortByCpuAscending = async (
+    user: ReturnType<typeof userEvent.setup>,
+  ) => {
+    await clickCpuHeader(user);
+    await clickCpuHeader(user);
+  };
+
+  /**
+   * Ranked by peak the order is bravo (31), alpha (50), charlie (90). Ranked by
+   * floor or by mean it is alpha, bravo, charlie, which is also the alphabetical
+   * order, so a min-based, mean-based, or missing aggregate all fail visibly.
+   */
+  const interleavedClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "alpha",
+      replicas: [
+        buildReplica({ id: "u10", name: "a-0", cpuPercent: 0 }),
+        buildReplica({ id: "u11", name: "a-50", cpuPercent: 50 }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      replicas: [
+        buildReplica({ id: "u20", name: "b-30", cpuPercent: 30 }),
+        buildReplica({ id: "u21", name: "b-31", cpuPercent: 31 }),
+      ],
+    }),
+    buildCluster({
+      id: "u3",
+      name: "charlie",
+      replicas: [
+        buildReplica({ id: "u30", name: "c-89", cpuPercent: 89 }),
+        buildReplica({ id: "u31", name: "c-90", cpuPercent: 90 }),
+      ],
+    }),
+  ];
+
+  it("orders clusters by their busiest replica", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(interleavedClusters());
+
+    expect(await rowOrderAfter(sortByCpuDescending, user)).toEqual([
+      "charlie",
+      "c-90",
+      "c-89",
+      "alpha",
+      "a-50",
+      "a-0",
+      "bravo",
+      "b-31",
+      "b-30",
+    ]);
+  });
+
+  it("reverses clusters and their replicas together when sorted ascending", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(interleavedClusters());
+
+    expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
+      "bravo",
+      "b-30",
+      "b-31",
+      "alpha",
+      "a-0",
+      "a-50",
+      "charlie",
+      "c-89",
+      "c-90",
+    ]);
+  });
+
+  it("keeps each cluster's replicas contiguous beneath it", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(interleavedClusters());
+
+    const order = await rowOrderAfter(sortByCpuAscending, user);
+
+    // Sorted flat, the replicas would run 0, 30, 31, 50, 89, 90, splitting
+    // alpha's pair around bravo's.
+    const alphaAt = order.indexOf("alpha");
+    expect(order.slice(alphaAt, alphaAt + 3)).toEqual(["alpha", "a-0", "a-50"]);
+  });
+
+  it("compares cluster maxima numerically rather than as text", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "alpha",
+        replicas: [buildReplica({ id: "u10", name: "a-1", cpuPercent: 12.48 })],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "bravo",
+        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 12.5 })],
+      }),
+    ]);
+
+    // Text collation reads these as (12, 48) and (12, 5) and would rank 12.48
+    // above 12.5, leaving alpha first.
+    expect(await rowOrderAfter(sortByCpuDescending, user)).toEqual([
+      "bravo",
+      "b-1",
+      "alpha",
+      "a-1",
+    ]);
+  });
+
+  // Nulls trail the sampled clusters ascending and lead them descending, which
+  // is how `nullsLast` behaves for every column in this table.
+  it("sorts a cluster whose replicas report no CPU after the sampled ones", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "alpha-unsampled",
+        replicas: [
+          buildReplica({ id: "u10", name: "a-1", cpuPercent: null }),
+          buildReplica({ id: "u11", name: "a-2", cpuPercent: null }),
+        ],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "bravo-sampled",
+        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 3 })],
+      }),
+    ]);
+
+    expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
+      "bravo-sampled",
+      "b-1",
+      "alpha-unsampled",
+      "a-1",
+      "a-2",
+    ]);
+  });
+
+  it("sorts a cluster with no replicas at all after the sampled ones", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({ id: "u1", name: "alpha-empty", replicas: [] }),
+      buildCluster({
+        id: "u2",
+        name: "bravo-sampled",
+        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 3 })],
+      }),
+    ]);
+
+    expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
+      "bravo-sampled",
+      "b-1",
+      "alpha-empty",
+    ]);
   });
 });
 

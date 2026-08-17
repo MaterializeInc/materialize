@@ -127,9 +127,7 @@ const ReplicaCpuCell = ({ cpuPercent }: { cpuPercent: number | null }) => {
   if (cpuPercent === null) {
     return <>-</>;
   }
-  return (
-    <PercentBar value={cpuPercent.toFixed(1)} />
-  );
+  return <PercentBar value={cpuPercent} />;
 };
 
 /** Formats a status-change timestamp for display, or "-" when there is none. */
@@ -168,6 +166,23 @@ const ReplicaLastStatusChangeCell = ({
     )}
   </HStack>
 );
+
+/**
+ * The CPU figure a cluster row sorts by: its busiest replica, or null when none
+ * of them reports a sample.
+ *
+ * A cluster has no utilization of its own. Sorting it on a constant would leave
+ * every cluster tied, and TanStack breaks ties by row index, so the column would
+ * only ever reorder replicas within a cluster and never move the clusters.
+ */
+const maxReplicaCpuPercent = (replicas: Replica[]) =>
+  replicas.reduce<number | null>(
+    (max, { cpuPercent }) =>
+      cpuPercent !== null && (max === null || cpuPercent > max)
+        ? cpuPercent
+        : max,
+    null,
+  );
 
 const ClusterActionsCell = ({ cluster }: { cluster: ClusterWithOwnership }) => (
   <OverflowMenu
@@ -225,11 +240,17 @@ const columns = [
     },
   ),
   columnHelper.accessor(
-    (row) => (row.rowType === "replica" ? row.cpuPercent : null),
+    // Sorting recurses into sub-rows with this same value, so a cluster
+    // ordering by its busiest replica and its replicas ordering among
+    // themselves both fall out of one accessor.
+    (row) =>
+      row.rowType === "cluster"
+        ? maxReplicaCpuPercent(row.replicas)
+        : row.cpuPercent,
     {
       id: "cpuPercent",
       header: "CPU",
-      sortingFn: sortingFunctions.nullsLast,
+      sortingFn: sortingFunctions.numericNullsLast,
       cell: (info) => {
         const row = info.row.original;
         // Utilization is per replica, so a cluster row has nothing to show

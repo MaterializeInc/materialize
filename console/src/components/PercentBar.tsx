@@ -7,13 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import {
-  Box,
-  HStack,
-  Text,
-  useTheme,
-} from "@chakra-ui/react";
-import React from "react"; 
+import { Box, HStack, Text, useTheme } from "@chakra-ui/react";
+import React from "react";
+
 import { MaterializeTheme } from "~/theme";
 
 export interface PercentBarProps {
@@ -34,19 +30,20 @@ const PercentBar = ({ value }: PercentBarProps) => {
 
   if (value === null || value === undefined) {
     return (
-      <Text textStyle="text-ui-reg" color={colors.foreground.secondary}>
+      <Text as="span" color={colors.foreground.secondary}>
         —
       </Text>
     );
   }
 
-  const rounded = Math.round(value);
-  const barColor = getPercentColor(rounded, colors);
+  // Color and width track the value as shown, not a rounded copy of it, so a
+  // reading of 90.4% reads as over the red threshold rather than sitting at it.
+  const barColor = getPercentColor(value, colors);
 
   return (
     <HStack spacing="2" minWidth="80px">
-      <Text textStyle="text-ui-med" whiteSpace="nowrap" minWidth="32px">
-        {rounded}%
+      <Text as="span" whiteSpace="nowrap" minWidth="32px">
+        {value.toFixed(1)}%
       </Text>
       <Box
         width="48px"
@@ -58,7 +55,7 @@ const PercentBar = ({ value }: PercentBarProps) => {
       >
         <Box
           height="100%"
-          width={`${Math.min(rounded, 100)}%`}
+          width={`${Math.min(value, 100)}%`}
           borderRadius="full"
           bg={barColor}
           transition="width 0.3s ease"
