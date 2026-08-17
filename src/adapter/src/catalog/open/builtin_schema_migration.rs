@@ -394,15 +394,22 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
         ),
         // Required because renaming the `mz_compute_hydration_times_per_worker`
         // log to `mz_compute_hydration_timestamps_per_worker` removes one log
-        // name and adds another. make_mz_indexes inlines the builtin-log set as
-        // VALUES, so any add/remove changes its SQL fingerprint and requires an
-        // explicit replacement step. See the NOTE above: this version must stay
-        // at the workspace's current dev version until the change ships.
+        // name and adds another. Both make_mz_indexes and make_mz_sources inline
+        // the builtin-log set as VALUES, so any add/remove changes their SQL
+        // fingerprints and requires explicit replacement steps. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
         MigrationStep::replacement(
             "26.39.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_indexes",
+        ),
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
         ),
     ]
 });
