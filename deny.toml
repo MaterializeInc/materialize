@@ -138,8 +138,8 @@ skip = [
     { name = "quick-xml", version = "0.37.5" },
     # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
     { name = "untrusted", version = "0.7.1" },
-    # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
-    { name = "spin", version = "0.5.2" },
+    # Held back by lazy_static 1.5.0 (used by num-bigint-dig, deadpool).
+    { name = "spin", version = "0.9.9" },
     # held back by tower-lsp 0.20 (mz-deploy LSP server)
     { name = "dashmap", version = "5.5.3" },
     { name = "tower", version = "0.4.13" },
@@ -237,6 +237,7 @@ wrappers = [
 [[bans.deny]]
 name = "lazy_static"
 wrappers = [
+    "deadpool",
     "dynfmt",
     "findshlibs",
     "launchdarkly-server-sdk-evaluation",
