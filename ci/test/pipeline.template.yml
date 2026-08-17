@@ -201,6 +201,32 @@ steps:
         coverage: skip
         sanitizer: skip
 
+      - id: tla-holds
+        label: ":tla: Read-hold protocol model"
+        command: ci/test/tla-holds.sh
+        inputs:
+          - doc/developer/design/20260720_two_runtime_compute/protocol-holds
+          - ci/test/tla-holds.sh
+        depends_on: []
+        timeout_in_minutes: 20
+        agents:
+          queue: hetzner-x86-64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
+      - id: lean-protocol
+        label: ":lean: Two-runtime protocol model"
+        command: ci/test/lean-protocol.sh
+        inputs:
+          - doc/developer/design/20260720_two_runtime_compute/protocol
+          - ci/test/lean-protocol.sh
+        depends_on: []
+        timeout_in_minutes: 15
+        agents:
+          queue: hetzner-x86-64-4cpu-8gb
+        coverage: skip
+        sanitizer: skip
+
       - id: lint-macos
         label: ":rust: macOS Clippy"
         command: ci/test/lint-macos.sh

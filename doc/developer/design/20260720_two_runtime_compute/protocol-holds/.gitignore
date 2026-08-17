@@ -1,0 +1,4 @@
+# TLC writes these next to the spec it runs.
+states/
+*_TTrace_*
+*.out
