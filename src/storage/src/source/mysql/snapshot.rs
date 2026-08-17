@@ -170,11 +170,22 @@ fn try_extract_single_column_pk(
     Some((name.clone(), scalar_type))
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct PkBoundaries {
     pk_col: String,
     // Ordered primary key values that partition the table space.
     boundaries: Vec<String>,
+}
+
+// Manual impl so no `{:?}` site can print the boundaries, which are key
+// values and therefore user data. Redacted outside of CI.
+impl std::fmt::Debug for PkBoundaries {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PkBoundaries")
+            .field("pk_col", &self.pk_col)
+            .field("boundaries", &mz_ore::str::redact(&self.boundaries))
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -223,6 +234,7 @@ fn worker_pk_range(
 }
 
 const SUPPORTED_PK_COLLATION: &str = "utf8mb4_bin";
+const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
 const MIN_PROBED_PREFIXES: u64 = 256;
 const BILLION_ROWS: u64 = 1_000_000_000;
 
@@ -592,17 +604,28 @@ where
         if !matches!(plan, ReadPlan::Range(_)) {
             continue;
         }
+        // A `Range` plan is only ever derived from populated bounds over a
+        // single-column PK recorded in the static source desc, so either
+        // lookup failing means `plan_worker_reads` and this check disagree.
         let Some(Some(splits)) = pk_bounds.get(table) else {
-            continue;
+            return Err(TransientError::Generic(anyhow::anyhow!(
+                "PK range planned for {table} without verifiable bounds"
+            )));
         };
         let Some((raw_col, _)) = tables
             .get(table)
             .and_then(|outputs| try_extract_single_column_pk(&outputs[0].desc))
         else {
-            continue;
+            return Err(TransientError::Generic(anyhow::anyhow!(
+                "PK range planned for {table} without verifiable bounds"
+            )));
         };
         let ok = match fetch_column_collation(tx, table, &raw_col).await? {
-            Some((charset, collation)) if collation == SUPPORTED_PK_COLLATION => {
+            // The character set is always utf8mb4 for the utf8mb4_bin
+            // collation, so this is a sanity assertion.
+            Some((charset, collation))
+                if collation == SUPPORTED_PK_COLLATION && charset == SUPPORTED_PK_CHARSET =>
+            {
                 boundaries_strictly_monotonic(tx, &splits.boundaries, &charset, &collation).await?
             }
             // Populated PK bounds imply the split column was a supported string PK.
