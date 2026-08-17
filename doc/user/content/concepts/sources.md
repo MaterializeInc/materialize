@@ -48,7 +48,7 @@ There are two versions of the syntax:
 
 A source makes external data available in Materialize through:
 
-- The [tables created](/sql/create-table/) from it, when using the new
+- The [tables](/sql/create-table/) created from it, when using the new
   `CREATE SOURCE` syntax.
 
 - The subsources, when using the legacy `CREATE SOURCE` syntax.
@@ -61,10 +61,9 @@ you cannot insert, update, or delete their data directly.
 
 When you create a table from a source (or, with the legacy syntax, when the
 subsources are created), Materialize [snapshots](/concepts/snapshotting/) the
-data currently available in the upstream system for that table or subsource.
-The table cannot be queried until its snapshot completes. Once the snapshot
-completes, the table is queryable, and Materialize continuously ingests new
-changes as they occur upstream.
+data currently available in the upstream system for that table.
+
+{{% include-headless "/headless/ingestion/snapshotting-queries" %}}
 
 See [Snapshotting](/concepts/snapshotting/) for more information.
 
@@ -93,3 +92,4 @@ See also [Operational guidelines](/manage/operational-guidelines/).
 - [`CREATE SOURCE`](/sql/create-source)
 - [`CREATE TABLE`](/sql/create-table)
 - [Snapshotting](/concepts/snapshotting/)
+- [Hydration](/concepts/hydration/)
