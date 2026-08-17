@@ -270,7 +270,7 @@ impl SwapExtent {
             let mut buf = cell.borrow_mut();
             codec.encode(bytes, &mut buf);
             let comp_len = buf.len();
-            debug_assert!(
+            crate::soft_assert_no_log!(
                 comp_len <= max_stored_len(bytes.len()),
                 "codec output exceeds the extent-store bound",
             );
@@ -367,7 +367,7 @@ impl SwapExtent {
     /// Callers must not invoke this on a [`SwapExtent::pageout_capped`]
     /// extent.
     pub(crate) fn pageout(&mut self) -> bool {
-        debug_assert!(!self.pageout_capped());
+        crate::soft_assert_no_log!(!self.pageout_capped());
         region::pageout(self.ptr, self.alloc_size);
         if region::nonresident(self.ptr, self.alloc_size) {
             self.resident = false;

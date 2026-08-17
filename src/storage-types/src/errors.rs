@@ -925,8 +925,8 @@ mod columnation {
                     DataflowError::EnvelopeError(boxed)
                 }
             };
-            // Debug-only check that we're returning an equal object.
-            debug_assert_eq!(item, &err);
+            // Soft-assert-only check that we're returning an equal object.
+            mz_ore::soft_assert_eq_no_log!(item, &err);
             err
         }
 

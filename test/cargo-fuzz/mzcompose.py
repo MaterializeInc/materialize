@@ -28,6 +28,8 @@ SERVICES = []
 # coverage accumulates instead of restarting from the seeds every time.
 CORPUS_ARTIFACT = "fuzz-corpus.tar.zst"
 
+LOGS_ARTIFACT = "fuzz-logs.tar.zst"
+
 # Every fuzz crate. Keep in sync with the crates that have a `fuzz/`
 # subdirectory. `bin/ci-builder` and the release-qualification pipeline build the same set.
 FUZZ_CRATES = [
@@ -474,6 +476,12 @@ class FuzzRunner:
         # annotation, without fetching the artifact from the machine that ran it.
         if artifacts:
             lines += crash_input_lines(job.artifact_dir / repro)
+        if buildkite.is_in_buildkite():
+            lines.append(
+                f"full log: {job.log_path.name} inside the {LOGS_ARTIFACT} build artifact"
+            )
+        else:
+            lines.append(f"full log: {job.log_path}")
         lines.append("last output:")
         lines += [f"  {ln}" for ln in tail(job.log_path, 8).splitlines()]
         lines.append("---------- CARGO-FUZZ FAILURE END ----------")
@@ -775,6 +783,26 @@ def upload_corpus(env: dict[str, str], crates: list[str]) -> None:
         say(f"uploaded corpus artifact {CORPUS_ARTIFACT} ({len(dirs)} crate(s))")
     except Exception as e:  # never fail the run over corpus housekeeping
         say(f"corpus upload failed (non-fatal): {e}")
+
+
+def upload_logs(env: dict[str, str], log_dir: Path) -> None:
+    """Tar this run's per-target logs and upload them as a Buildkite artifact."""
+    if not buildkite.is_in_buildkite():
+        return
+    logs = sorted(log_dir.glob("*.log"))
+    if not logs:
+        return
+    try:
+        subprocess.run(
+            ["tar", "-caf", LOGS_ARTIFACT, "-C", str(log_dir.parent), log_dir.name],
+            cwd=MZ_ROOT,
+            env=env,
+            check=True,
+        )
+        buildkite.upload_artifact(LOGS_ARTIFACT, cwd=MZ_ROOT)
+        say(f"uploaded log artifact {LOGS_ARTIFACT} ({len(logs)} target log(s))")
+    except Exception as e:
+        say(f"log upload failed (non-fatal): {e}")
 
 
 def download_previous_corpus(env: dict[str, str]) -> None:
@@ -1088,6 +1116,7 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     if not args.no_build:
         runner.build()
     failed = runner.run()
+    upload_logs(env, log_dir)
     if args.corpus_sync:
         # After run() (which has minimized) so we upload the lean corpus, and
         # before the raise below so it persists even when a target crashed.

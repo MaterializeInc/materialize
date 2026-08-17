@@ -222,7 +222,7 @@ impl<D: Data> CorrectionV1<D> {
         let mut new_size = self.total_size;
         let mut updates = updates.drain(..).peekable();
         while let Some(&(_, time, _)) = updates.peek() {
-            debug_assert!(
+            mz_ore::soft_assert_no_log!(
                 self.since.less_equal(&time),
                 "update not advanced by `since`"
             );

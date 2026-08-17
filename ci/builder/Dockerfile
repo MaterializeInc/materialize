@@ -7,7 +7,13 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:24-trixie-slim AS node
+FROM node:26-trixie-slim AS node
+
+# Node 25 dropped corepack from the distribution, but the console pins its
+# package manager through `packageManager` in console/package.json and CI drives
+# yarn through `corepack enable`. Reinstall it here so that the stages copying
+# `/usr/local/lib/node_modules` below still find `corepack/dist/corepack.js`.
+RUN npm install -g corepack
 
 # Stage 1: Build a minimum CI Builder image that we can use for the initial
 # steps like `mkpipeline` and `Build`, as well as any tests that are self

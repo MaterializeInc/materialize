@@ -6422,12 +6422,7 @@ ddl_action_list = ActionList(
         (CreateTypeAction, 2),
         (DropTypeAction, 2),
         (CreateNetworkPolicyAction, 1),
-        # TODO: Reenable once ALTER NETWORK POLICY resolves quoted (e.g.
-        # hyphenated) names. It looks the policy up by its quoted display form,
-        # so it fails with "unknown network policy" for any name that requires
-        # quoting, even though CREATE and DROP work.
-        # See https://linear.app/materializeinc/issue/CLO-143
-        # (AlterNetworkPolicyAction, 1),
+        (AlterNetworkPolicyAction, 1),
         (DropNetworkPolicyAction, 1),
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),

@@ -557,7 +557,7 @@ mod columnar {
         const SLICE_COUNT: usize = BC::SLICE_COUNT + VC::SLICE_COUNT;
         #[inline(always)]
         fn get_byte_slice(&self, index: usize) -> (u64, &'a [u8]) {
-            debug_assert!(index < Self::SLICE_COUNT);
+            mz_ore::soft_assert_no_log!(index < Self::SLICE_COUNT);
             if index < BC::SLICE_COUNT {
                 self.bounds.get_byte_slice(index)
             } else {
@@ -3060,10 +3060,11 @@ impl<'a> Iterator for DatumDictIter<'a> {
             let key = unsafe { read_lengthed_datum(&mut self.data, key_tag).unwrap_str() };
             let val = unsafe { read_datum(&mut self.data) };
 
-            // if in debug mode, sanity check keys
-            if cfg!(debug_assertions) {
+            // Gate the `prev_key` bookkeeping on the same flag as the assert it feeds, so builds
+            // with soft assertions off pay nothing for it.
+            if mz_ore::assert::soft_assertions_enabled() {
                 if let Some(prev_key) = self.prev_key {
-                    debug_assert!(
+                    mz_ore::soft_assert_no_log!(
                         prev_key < key,
                         "Dict keys must be unique and given in ascending order: {} came before {}",
                         prev_key,
