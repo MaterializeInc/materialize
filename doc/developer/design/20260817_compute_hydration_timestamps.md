@@ -89,9 +89,12 @@ a hydration concurrency limit, that waiting can dominate the measurement.
   provides per-LIR-node booleans, which are the numerator and denominator the
   PRD's progress view needs. No compute change required.
 - **Storage hydration.** Sources report `rehydration_latency` through their own
-  statistics path, and `mz_hydration_statuses` unions the two halves. This
-  design does not touch the storage half, but it keeps the compute half shaped
-  so that union still works.
+  statistics path, and `mz_hydration_statuses` unions the two halves. Storage has
+  no hydration introspection to offer, which is a known pre-existing gap and not
+  one this design closes. The consequence is that the timestamps live on the
+  compute relation only, and `mz_hydration_statuses` keeps its current
+  boolean-shaped columns. This design keeps the compute half shaped so that union
+  still works.
 - **Subscribes, peeks, and other transient dataflows.** Excluded today by the
   `export_id NOT LIKE 't%'` filter in the introspection subscribe, and staying
   excluded.
@@ -584,6 +587,12 @@ Recorded so the reasoning is not relitigated.
   report a later `max(hydrated_at)`. Not a defect. Scoping an episode to the
   initial object set requires the controller's knowledge of that set, not a
   richer introspection relation.
+- **The unified view.** Timestamps go on the compute relation only.
+  `mz_hydration_statuses` keeps its current shape, because storage has no
+  hydration introspection to union in. Pre-existing gap, out of scope here.
+- **A fourth stamp for the hydration-slot boundary.** Not added. The interceptor
+  knows the boundary but runs in environmentd, so a stamp there would reset on
+  restart. If the split is wanted it belongs in a live-only column or a metric.
 
 ## Open questions
 
@@ -597,8 +606,3 @@ Recorded so the reasoning is not relitigated.
    leave `hydration_time` matching today and let consumers subtract. Both are
    non-destructive now that `queue_time` exists, so this is a judgment call about
    which number deserves the better name.
-3. **The unified view.** `mz_hydration_statuses` unions compute and storage.
-   Compute would now have timestamps and storage would not, since sources report
-   `rehydration_latency` through their own statistics path. Do we expose
-   timestamps only on the compute relation, or does the storage half need a
-   counterpart before the unified view can carry them?
