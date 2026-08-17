@@ -82,6 +82,22 @@ updates:
         - minor
         - patch
 - package-ecosystem: docker
+  directory: /misc/mcp-materialize
+  schedule:
+    interval: weekly
+    day: sunday
+    time: "22:00"
+  # TODO: Add cooldown when https://github.com/dependabot/dependabot-core/issues/14044 is fixed
+  open-pull-requests-limit: 50
+  labels: [A-dependencies]
+  groups:
+    simple:
+      applies-to: version-updates
+      update-types:
+        - minor
+        - patch
+- package-ecosystem: docker
+  directory: /misc/mcp-materialize-agents
   directory: /misc/images/materialized-base
   schedule:
     interval: weekly
