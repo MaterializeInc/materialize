@@ -382,6 +382,16 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_cluster_reconfigurations",
         ),
+        // The mz_audit_events MV gained a `metric-sink` arm in its object_type
+        // CASE, changing its SQL fingerprint, so it needs an explicit
+        // replacement step. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
     ]
 });
 

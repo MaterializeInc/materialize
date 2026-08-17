@@ -2735,7 +2735,7 @@ pub static MZ_AUDIT_EVENTS: LazyLock<BuiltinMaterializedView> = LazyLock::new(||
             ),
             (
                 "object_type",
-                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
+                "The type of the affected object: `cluster`, `cluster-replica`, `connection`, `continual-task`, `database`, `func`, `index`, `materialized-view`, `metric-sink`, `network-policy`, `role`, `schema`, `secret`, `sink`, `source`, `system`, `table`, `type`, or `view`.",
             ),
             (
                 "details",
@@ -2814,6 +2814,7 @@ SELECT
         WHEN '16' THEN 'system'
         WHEN '17' THEN 'continual-task'
         WHEN '18' THEN 'network-policy'
+        WHEN '19' THEN 'metric-sink'
     END                                                                     AS object_type,
     mz_internal.parse_catalog_audit_log_details(e->'details')               AS details,
     e->'user'->>'inner'                                                     AS \"user\",
@@ -3672,12 +3673,15 @@ mod tests {
     /// it's handled. A wrong string in the CASE fails the substring assertion.
     #[mz_ore::test]
     fn object_type_case_matches_proto_display() {
-        // Returns `None` for proto variants that never appear in stored
-        // `DefaultPrivilege` keys (currently just `Unknown`, the zero-value
-        // sentinel). Match is exhaustive: a new variant forces an update.
+        // `None` means the variant never shows up in a stored `DefaultPrivilege`
+        // key, so the CASE deliberately has no arm for it: `Unknown` is the
+        // zero-value sentinel, and `ON METRIC SINKS` is rejected by
+        // `plan_alter_default_privileges` before a key ever gets built. Match is
+        // exhaustive: a new variant forces an update.
         fn expected_for(proto: ProtoObjectType) -> Option<SqlObjectType> {
             match proto {
                 ProtoObjectType::Unknown => None,
+                ProtoObjectType::MetricSink => None,
                 ProtoObjectType::Table => Some(SqlObjectType::Table),
                 ProtoObjectType::View => Some(SqlObjectType::View),
                 ProtoObjectType::MaterializedView => Some(SqlObjectType::MaterializedView),
@@ -3719,6 +3723,7 @@ mod tests {
             ProtoObjectType::Schema,
             ProtoObjectType::Func,
             ProtoObjectType::NetworkPolicy,
+            ProtoObjectType::MetricSink,
         ];
 
         let sql = MZ_DEFAULT_PRIVILEGES.sql;

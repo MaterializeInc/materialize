@@ -1517,6 +1517,7 @@ impl CatalogState {
         match entry.item_mut() {
             CatalogItem::Index(idx) => idx.optimized_plan = Some(Arc::new(plan)),
             CatalogItem::MaterializedView(mv) => mv.optimized_plan = Some(Arc::new(plan)),
+            CatalogItem::MetricSink(ms) => ms.optimized_plan = Some(Arc::new(plan)),
             other => panic!("set_optimized_plan called on {} ({:?})", id, other.typ()),
         }
     }
@@ -1535,6 +1536,7 @@ impl CatalogState {
         match entry.item_mut() {
             CatalogItem::Index(idx) => idx.physical_plan = Some(Arc::new(plan)),
             CatalogItem::MaterializedView(mv) => mv.physical_plan = Some(Arc::new(plan)),
+            CatalogItem::MetricSink(ms) => ms.physical_plan = Some(Arc::new(plan)),
             other => panic!("set_physical_plan called on {} ({:?})", id, other.typ()),
         }
     }
@@ -1570,6 +1572,7 @@ impl CatalogState {
         match entry.item_mut() {
             CatalogItem::Index(idx) => idx.dataflow_metainfo = Some(metainfo),
             CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo = Some(metainfo),
+            CatalogItem::MetricSink(ms) => ms.dataflow_metainfo = Some(metainfo),
             other => panic!("set_dataflow_metainfo called on {} ({:?})", id, other.typ()),
         }
     }
@@ -2381,7 +2384,8 @@ fn sort_updates(updates: Vec<StateUpdate>) -> Vec<StateUpdate> {
                 CatalogItemType::Table => tables.push(update),
                 CatalogItemType::View
                 | CatalogItemType::MaterializedView
-                | CatalogItemType::Index => derived_items.push(update),
+                | CatalogItemType::Index
+                | CatalogItemType::MetricSink => derived_items.push(update),
                 CatalogItemType::Sink => sinks.push(update),
             }
         }
