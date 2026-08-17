@@ -28,6 +28,7 @@ import {
 } from "@chakra-ui/react";
 import React, { useState } from "react";
 
+import { SecretCopyableBox } from "~/components/copyableComponents";
 import TextLink from "~/components/TextLink";
 import {
   ChevronDownIcon,
@@ -49,11 +50,13 @@ import {
   buildMcpInstallLink,
   buildMcpSnippet,
   ConnectContext,
+  ID_TOKEN_PLACEHOLDER,
   MCP_CLIENTS,
   MCP_SERVERS,
   MCP_TOKEN_PLACEHOLDER,
   McpClientId,
   McpServerId,
+  PASSWORD_PLACEHOLDER,
   resolveSignInHint,
 } from "./connectOptions";
 
@@ -194,10 +197,32 @@ const McpTokenStep = ({
   const { colors } = useTheme<MaterializeTheme>();
 
   if (!ctx.canCreateAppPassword) {
+    if (ctx.idToken) {
+      return (
+        <VStack alignItems="stretch" spacing="3">
+          <LabeledCommandBox
+            label="Base64-encode your username and ID token:"
+            contents={buildBase64TokenCommand(ctx.user, ID_TOKEN_PLACEHOLDER)}
+          />
+          <VStack alignItems="stretch" spacing="1.5">
+            <Text fontSize="sm" color={colors.foreground.secondary}>
+              Your ID token:
+            </Text>
+            <SecretCopyableBox
+              label="idToken"
+              contents={ctx.idToken}
+              obfuscatedContent={obfuscateSecret(ctx.idToken)}
+              overflow="hidden"
+              minWidth={0}
+            />
+          </VStack>
+        </VStack>
+      );
+    }
     return (
       <LabeledCommandBox
-        label="Base64-encode your username and app password:"
-        contents={buildBase64TokenCommand(ctx.user)}
+        label="Base64-encode your username and password:"
+        contents={buildBase64TokenCommand(ctx.user, PASSWORD_PLACEHOLDER)}
       />
     );
   }

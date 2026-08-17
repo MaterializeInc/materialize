@@ -273,9 +273,15 @@ describe("buildPsqlCommand", () => {
 });
 
 describe("buildBase64TokenCommand", () => {
-  it("embeds the user with an app password placeholder", () => {
+  it("embeds the user with an app password placeholder by default", () => {
     expect(buildBase64TokenCommand("user@example.com")).toEqual(
       "printf '%s' 'user@example.com:<app-password>' | base64 -w0",
+    );
+  });
+
+  it("uses the deployment-specific credential placeholder", () => {
+    expect(buildBase64TokenCommand("user@example.com", "<id-token>")).toEqual(
+      "printf '%s' 'user@example.com:<id-token>' | base64 -w0",
     );
   });
 });

@@ -11,6 +11,8 @@ import { toBase64 } from "~/utils/format";
 
 export const MCP_TOKEN_PLACEHOLDER = "<mcp-token>";
 export const APP_PASSWORD_PLACEHOLDER = "<app-password>";
+export const ID_TOKEN_PLACEHOLDER = "<id-token>";
+export const PASSWORD_PLACEHOLDER = "<password>";
 
 /** Deployment-derived inputs the connect panels render from. */
 export interface ConnectContext {
@@ -388,6 +390,10 @@ export const buildPsqlCommand = (
   return `psql "postgres://${encodeURIComponent(details.user)}@${details.host}:${details.port}/${details.database}${query}"`;
 };
 
-/** Command to Base64-encode `user:app-password` for the MCP token flow. */
-export const buildBase64TokenCommand = (user: string) =>
-  `printf '%s' '${user}:${APP_PASSWORD_PLACEHOLDER}' | base64 -w0`;
+/** Command to Base64-encode the user and their credential for the MCP token
+ * flow. The credential differs by deployment: an app password on cloud, the
+ * OIDC ID token or the login password on self-managed. */
+export const buildBase64TokenCommand = (
+  user: string,
+  credentialPlaceholder: string = APP_PASSWORD_PLACEHOLDER,
+) => `printf '%s' '${user}:${credentialPlaceholder}' | base64 -w0`;
