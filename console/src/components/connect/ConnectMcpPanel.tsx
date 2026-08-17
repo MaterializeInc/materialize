@@ -52,6 +52,7 @@ import {
   MCP_TOKEN_PLACEHOLDER,
   McpClientId,
   McpServerId,
+  resolveSignInHint,
 } from "./connectOptions";
 
 const CLIENT_ICONS: Record<McpClientId, React.ReactElement> = {
@@ -301,7 +302,7 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
       {oauthActive ? (
         <HStack justifyContent="space-between" alignItems="baseline">
           <Text fontSize="sm" color={colors.foreground.secondary}>
-            {client.signInHint}
+            {resolveSignInHint(client, server.serverName)}
           </Text>
           <TextLink
             as="button"
@@ -364,7 +365,13 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
       ),
     });
   }
-  steps.push({ title: client.configLocation, content: commandStep });
+  steps.push({
+    title:
+      !oauthActive && client.tokenConfigLocation
+        ? client.tokenConfigLocation
+        : client.configLocation,
+    content: commandStep,
+  });
   if (isDeveloper) {
     steps.push({
       title: "Install agent skills (optional)",
