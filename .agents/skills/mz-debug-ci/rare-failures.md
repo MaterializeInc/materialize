@@ -27,6 +27,12 @@ annotation names the file. For known-vs-new use
 `bin/ci-failures '<target name>'`; cargo-fuzz runs only in release
 qualification, so that is its entire history.
 
+## Limits test failures
+
+For red `Product limits` / `Instance size limits` jobs, the mz-limits-test
+skill explains the framework, its typical failure modes, and
+single-scenario local reruns.
+
 ## Miri failures
 
 `:rust: Miri test (full)` fails as either `timed_out` (a test too slow under

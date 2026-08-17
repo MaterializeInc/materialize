@@ -142,7 +142,7 @@ known-issue links (Linear keys like `CPU-170`, or legacy
 `database-issues/#NNNN`) and the job's main-branch history, a flaky-test
 indicator.
 
-Two things to know when reconciling annotations against jobs:
+Things to know when reconciling annotations against jobs:
 
 - Error annotations persist from failed attempts even when a retry later
   passed, so a build can have more error annotations than failed jobs. A
@@ -155,6 +155,13 @@ Two things to know when reconciling annotations against jobs:
   shell steps (lint, Security advisories, and similar checks) produce neither,
   so a real failure there has no annotation at all. Go straight to its job
   log.
+- Info-style annotations ("<job> succeeded with known error logs") mean the
+  job passed and every logged error matched an open known issue; they are
+  not failures. When a job went red via "Test succeeded, but unknown errors
+  found in logs" (see Step 3), the unknown and potential-regression entries
+  in its annotation are what turned it red. The reverse also exists: a
+  failed job turns green ("<job> would have failed with known error logs")
+  when all its logged errors match issues marked `ci-ignore-failure: true`.
 
 ## Step 3: Fetch logs when needed
 
@@ -238,8 +245,8 @@ passing run to tell a gradually outgrown budget from a hung test.
 
 If the failure matches one of these, read `rare-failures.md` in this
 skill's directory for its triage pattern: `New regression against
-<version>` (feature benchmark), a cargo-fuzz crash, a Miri failure, or
-`ImagesNotPublicError`.
+<version>` (feature benchmark), a cargo-fuzz crash, a Miri failure, a
+limits-test failure, or `ImagesNotPublicError`.
 
 ## Step 5: Summarize
 
