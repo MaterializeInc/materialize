@@ -215,8 +215,7 @@ pub static MYSQL_SOURCE_SNAPSHOT_PARALLELISM: Config<bool> = Config::new(
     "Whether to split MySQL snapshot reads across workers by primary-key ranges.",
 );
 
-/// Smallest estimated row count the MySQL snapshot partitioner attempts to subdivide
-/// for partitioning.
+/// Smallest estimated row count the MySQL snapshot partitioner attempts to subdivide.
 pub static MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS: Config<usize> = Config::new(
     "mysql_source_snapshot_partition_min_rows",
     50_000,

@@ -572,6 +572,11 @@ true
 
 > DROP SOURCE large_cluster_source CASCADE;
 
+#
+# Integer PK. Integer keys are not split into PK ranges, so on a multi-worker
+# cluster this covers the single-worker whole-table fallback.
+#
+
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_range_test;
 CREATE TABLE pk_range_test (id BIGINT PRIMARY KEY, val BIGINT);
@@ -608,12 +613,14 @@ $ mysql-execute name=mysql
 DROP TABLE pk_range_test;
 
 #
-# Same, but for a single-column non-integer (char) PK.
+# Single-column char PK with the utf8mb4_bin collation, the supported type for
+# PK-range splitting. The explicit collation matters: the database default is
+# utf8mb4_general_ci, which is not split.
 #
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_char_test;
-CREATE TABLE pk_char_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_char_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 SET @i := 0;
 INSERT INTO pk_char_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
 
@@ -637,6 +644,40 @@ INSERT INTO pk_char_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FR
 
 $ mysql-execute name=mysql
 DROP TABLE pk_char_test;
+
+#
+# Same shape, but with the database-default utf8mb4_general_ci collation.
+# Only utf8mb4_bin PKs are split, so this pins the collation fallback: the
+# table is read whole by a single worker and must still be complete and
+# duplicate-free.
+#
+
+$ mysql-execute name=mysql
+DROP TABLE IF EXISTS pk_general_ci_test;
+CREATE TABLE pk_general_ci_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+SET @i := 0;
+INSERT INTO pk_general_ci_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
+
+> CREATE CLUSTER pk_general_ci_cluster SIZE 'scale=1,workers=4'
+
+> CREATE SOURCE pk_general_ci_source
+  IN CLUSTER pk_general_ci_cluster
+  FROM MYSQL CONNECTION mysql_conn;
+> CREATE TABLE pk_general_ci_table FROM SOURCE pk_general_ci_source (REFERENCE public.pk_general_ci_test);
+
+# Exact count and no duplicate/missing keys
+> SELECT COUNT(*), COUNT(DISTINCT id) FROM pk_general_ci_table;
+1000 1000
+
+# Checksum: val = row number, so SUM(val) = SUM(1..1000) = 500500
+> SELECT SUM(val) FROM pk_general_ci_table;
+500500
+
+> DROP SOURCE pk_general_ci_source CASCADE;
+> DROP CLUSTER pk_general_ci_cluster CASCADE;
+
+$ mysql-execute name=mysql
+DROP TABLE pk_general_ci_test;
 
 #
 # Same, but for a composite (char, int) primary key.
@@ -677,9 +718,14 @@ ee 200
 $ mysql-execute name=mysql
 DROP TABLE pk_comp_test;
 
+#
+# Splittable PK with far more workers than rows: any splitting must not
+# duplicate or drop the few rows.
+#
+
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_surplus_test;
-CREATE TABLE pk_surplus_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_surplus_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 SET @i := 0;
 INSERT INTO pk_surplus_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1 LIMIT 3;
 
@@ -705,12 +751,12 @@ $ mysql-execute name=mysql
 DROP TABLE pk_surplus_test;
 
 #
-# Empty table.
+# Empty table with a splittable PK.
 #
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_empty_test;
-CREATE TABLE pk_empty_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_empty_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 
 > CREATE CLUSTER pk_empty_cluster SIZE 'scale=1,workers=4'
 
@@ -817,7 +863,7 @@ ALTER SYSTEM SET mysql_source_snapshot_parallelism = false
 
 $ mysql-execute name=mysql
 DROP TABLE IF EXISTS pk_serial_test;
-CREATE TABLE pk_serial_test (id CHAR(26) PRIMARY KEY, val BIGINT);
+CREATE TABLE pk_serial_test (id CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, val BIGINT);
 SET @i := 0;
 INSERT INTO pk_serial_test SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i * 7 FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT 1000;
 

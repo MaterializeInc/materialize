@@ -238,6 +238,15 @@ const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
 const MIN_PROBED_PREFIXES: u64 = 256;
 const BILLION_ROWS: u64 = 1_000_000_000;
 
+/// Partitioning knobs read from dyncfgs, bundled so call sites can't transpose
+/// the bare `u64`s.
+struct PartitionSettings {
+    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS`].
+    min_rows: u64,
+    /// [`mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS`].
+    probed_prefixes_per_billion_rows: u64,
+}
+
 /// Attempts to compute roughly even boundaries for primary keys. Returns None if the column type
 /// is unsupported or boundaries couldn't be estimated for some reason. Currently only supports
 /// CHAR/VARCHAR columns with up to 768 characters with utf8mb4_bin collation.
@@ -248,8 +257,7 @@ async fn compute_sampled_splits(
     scalar_type: &SqlScalarType,
     worker_count: usize,
     row_count: u64,
-    partition_min_rows: u64,
-    partition_probed_prefixes_per_billion_rows: u64,
+    settings: &PartitionSettings,
 ) -> Result<Option<PkBoundaries>, TransientError> {
     match scalar_type {
         SqlScalarType::Char { length }
@@ -271,23 +279,23 @@ async fn compute_sampled_splits(
     // For larger table sizes we can afford to spend more time computing partitions. Making thousands of
     // network requests to search through prefixes can take minutes, but is worth it for billions of rows
     // that can take hours to snapshot.
-    let max_probed_prefixes =
-        (row_count.saturating_mul(partition_probed_prefixes_per_billion_rows) / BILLION_ROWS)
-            .max(MIN_PROBED_PREFIXES);
+    let max_probed_prefixes = (row_count.saturating_mul(settings.probed_prefixes_per_billion_rows)
+        / BILLION_ROWS)
+        .max(MIN_PROBED_PREFIXES);
     let prefixes = match mz_mysql_util::partition_table(
         conn,
         table_ref,
         raw_col,
         worker_count,
         row_count,
-        partition_min_rows,
+        settings.min_rows,
         max_probed_prefixes,
     )
     .await
     {
         Ok(prefixes) => prefixes,
         Err(err @ (MySqlError::NonUtf8KeyValue { .. } | MySqlError::MissingRowEstimate { .. })) => {
-            tracing::warn!(%err, "Unexpected error during partitioning, falling back to a single partition");
+            tracing::warn!(%err, "partitioning failed, falling back to a single partition");
             return Ok(None);
         }
         Err(err) => return Err(err.into()),
@@ -295,10 +303,9 @@ async fn compute_sampled_splits(
     if prefixes.is_empty() {
         return Ok(None);
     }
-    let boundaries = prefixes;
     Ok(Some(PkBoundaries {
         pk_col: quote_identifier(raw_col),
-        boundaries,
+        boundaries: prefixes,
     }))
 }
 
@@ -337,14 +344,18 @@ async fn sample_pk_bounds(
         mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_EXACT_COUNT_MAX_ROWS
             .get(config.config.config_set()),
     );
-    let partition_min_rows = u64::cast_from(
+    let min_rows = u64::cast_from(
         mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_MIN_ROWS
             .get(config.config.config_set()),
     );
-    let partition_probed_prefixes_per_billion_rows = u64::cast_from(
+    let probed_prefixes_per_billion_rows = u64::cast_from(
         mz_storage_types::dyncfgs::MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS
             .get(config.config.config_set()),
     );
+    let partition_settings = &PartitionSettings {
+        min_rows,
+        probed_prefixes_per_billion_rows,
+    };
 
     let pooled_conns: Rc<RefCell<Vec<MySqlConn>>> = Rc::new(RefCell::new(Vec::new()));
     // Get row count and boundary estimates with worker-count concurrency.
@@ -369,6 +380,15 @@ async fn sample_pk_bounds(
                             ))
                             .await?;
                         }
+                        // `partition_table` requires the probes to run inside a
+                        // REPEATABLE READ transaction so they all see one snapshot
+                        // of the table. The session default isolation level is
+                        // server-configurable, so set it explicitly. It applies to
+                        // every transaction started on this session, i.e. it
+                        // survives the connection being pooled and reused.
+                        #[allow(clippy::disallowed_methods)]
+                        conn.query_drop("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                            .await?;
                         #[allow(clippy::disallowed_methods)]
                         conn.query_drop("START TRANSACTION READ ONLY").await?;
                         conn
@@ -400,8 +420,7 @@ async fn sample_pk_bounds(
                             &scalar_type,
                             worker_count,
                             count,
-                            partition_min_rows,
-                            partition_probed_prefixes_per_billion_rows,
+                            partition_settings,
                         )
                         .await?
                     }
