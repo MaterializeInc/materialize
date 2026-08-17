@@ -11,7 +11,6 @@ import { toBase64 } from "~/utils/format";
 
 export const MCP_TOKEN_PLACEHOLDER = "<mcp-token>";
 export const APP_PASSWORD_PLACEHOLDER = "<app-password>";
-export const ID_TOKEN_PLACEHOLDER = "<id-token>";
 export const PASSWORD_PLACEHOLDER = "<password>";
 
 /** Deployment-derived inputs the connect panels render from. */

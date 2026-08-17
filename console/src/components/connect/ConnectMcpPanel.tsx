@@ -50,7 +50,6 @@ import {
   buildMcpInstallLink,
   buildMcpSnippet,
   ConnectContext,
-  ID_TOKEN_PLACEHOLDER,
   MCP_CLIENTS,
   MCP_SERVERS,
   MCP_TOKEN_PLACEHOLDER,
@@ -181,8 +180,8 @@ const McpClientSelect = ({ value, onChange }: McpClientSelectProps) => {
 };
 
 /** Content of the token acquisition step. Cloud sessions mint an app password
- * that is substituted into the command, self-managed users Base64-encode an
- * existing one. */
+ * that is substituted into the command, OIDC sessions get the token derived
+ * from their ID token, password-auth users Base64-encode their password. */
 const McpTokenStep = ({
   ctx,
   hasToken,
@@ -198,24 +197,20 @@ const McpTokenStep = ({
 
   if (!ctx.canCreateAppPassword) {
     if (ctx.idToken) {
+      const oidcToken = toBase64(`${ctx.user}:${ctx.idToken}`);
       return (
-        <VStack alignItems="stretch" spacing="3">
-          <LabeledCommandBox
-            label="Base64-encode your username and ID token:"
-            contents={buildBase64TokenCommand(ctx.user, ID_TOKEN_PLACEHOLDER)}
+        <VStack alignItems="stretch" spacing="1.5">
+          <SecretCopyableBox
+            label="mcpToken"
+            contents={oidcToken}
+            obfuscatedContent={obfuscateSecret(oidcToken)}
+            overflow="hidden"
+            minWidth={0}
           />
-          <VStack alignItems="stretch" spacing="1.5">
-            <Text fontSize="sm" color={colors.foreground.secondary}>
-              Your ID token:
-            </Text>
-            <SecretCopyableBox
-              label="idToken"
-              contents={ctx.idToken}
-              obfuscatedContent={obfuscateSecret(ctx.idToken)}
-              overflow="hidden"
-              minWidth={0}
-            />
-          </VStack>
+          <Text fontSize="sm" color={colors.foreground.secondary}>
+            Derived from your username and current ID token. It expires with
+            your session.
+          </Text>
         </VStack>
       );
     }
@@ -270,6 +265,9 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
     isPending: isGeneratingToken,
     data: newPassword,
   } = useCreateApiToken();
+  // Only cloud-generated tokens are substituted into the command. The
+  // OIDC-derived token is a full JWT, far too long to inline readably, so it
+  // stays in the token step's secret box.
   const mcpToken = newPassword?.password
     ? toBase64(`${ctx.user}:${newPassword.password}`)
     : undefined;
@@ -379,7 +377,9 @@ export const ConnectMcpPanel = ({ ctx }: ConnectMcpPanelProps) => {
     steps.push({
       title: ctx.canCreateAppPassword
         ? "Generate an app password"
-        : "Create a token",
+        : ctx.idToken
+          ? "Copy your MCP token"
+          : "Create a token",
       content: (
         <McpTokenStep
           ctx={ctx}
