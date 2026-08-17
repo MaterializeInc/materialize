@@ -769,7 +769,10 @@ impl DemuxState {
 struct HydrationTimestamps {
     /// When this export's dataflow was installed, still suspended. Also the start of queueing.
     installed_at: Duration,
-    /// When this export's dataflow was unsuspended, so hydration work began.
+    /// When hydration work began, that is, when the dataflow was unsuspended.
+    ///
+    /// Equals `installed_at` for a dataflow that was never suspended, since such a dataflow starts
+    /// running the moment it is built.
     started_at: Option<Duration>,
     /// When this export's output frontier passed the dataflow as-of.
     hydrated_at: Option<Duration>,
@@ -1100,11 +1103,13 @@ impl DemuxHandler<'_, '_, '_> {
         let old_timestamps = export.hydration_timestamps;
         export.hydration_timestamps.hydrated_at = Some(hydrated_at);
         // `StartSignal` gates only imported collections, so an import-free dataflow can hydrate
-        // before its `Schedule` arrives. Such a dataflow never queued, so a zero queueing interval
-        // is the honest reading, and it keeps `started_at <= hydrated_at` total rather than asking
-        // consumers to handle a negative interval.
+        // before its `Schedule` arrives. Its operators were never suspended, so hydration really
+        // began when the dataflow was installed: backfilling `installed_at` reports the queueing
+        // interval as zero and the whole elapsed time as hydration work, which is what happened.
+        // Backfilling `hydrated_at` instead would invert that, reporting every such dataflow as
+        // hydrating instantaneously after queueing for its entire life.
         if export.hydration_timestamps.started_at.is_none() {
-            export.hydration_timestamps.started_at = Some(hydrated_at);
+            export.hydration_timestamps.started_at = Some(export.hydration_timestamps.installed_at);
         }
         let new_timestamps = export.hydration_timestamps;
 
