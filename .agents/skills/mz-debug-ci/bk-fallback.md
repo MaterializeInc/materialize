@@ -4,6 +4,11 @@ Command recipes for sessions without the Buildkite MCP. The semantics (job
 states, annotation contents, triage rules) live in SKILL.md; only the `bk`
 mechanics live here.
 
+`bk` writes warnings to stderr, including a benign `BUILDKITE_API_TOKEN is
+overriding the credential stored for this organization` on healthy setups.
+Pipe `bk` output with `2>/dev/null`, never `2>&1`, or the noise corrupts the
+JSON.
+
 ## Listing a build's failed jobs
 
 ```bash
