@@ -29,6 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use futures::StreamExt;
 use mz_ore::future::InTask;
 use mz_repr::GlobalId;
+use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::cdc::Lsn;
 use mz_sql_server_util::inspect::{get_latest_restore_history_id, get_max_lsn};
 use mz_storage_types::connections::SqlServerConnectionDetails;
@@ -100,10 +101,11 @@ pub(crate) fn render<'scope>(
                 .map(SourceOutputInfo::resume_lsn)
                 .min()
                 .unwrap_or_else(Lsn::minimum);
-            for stat in config.statistics.values() {
-                stat.set_offset_committed(max_committed_lsn.abbreviate());
-            }
 
+            // Retrieve the latest upstream LSN eagerly to ensure the lag calculation
+            // (offset_known - offset_committed) is non-negative. Statistics represents these as
+            // uint8, which would cause the calculation to underflow for the brief period between
+            // setting offset_committed here and offset_known further below.
             let conn_config = connection
                 .resolve_config(
                     &config.config.connection_context.secrets_reader,
@@ -112,6 +114,11 @@ pub(crate) fn render<'scope>(
                 )
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(conn_config).await?;
+            let max_lsn: Lsn = get_max_lsn(&mut client).await?;
+            for stat in config.statistics.values() {
+                stat.set_offset_committed(max_committed_lsn.abbreviate());
+                stat.set_offset_known(max_lsn.abbreviate());
+            }
 
 
             // Terminate the progress probes if a restore has happened. Replication operator will
