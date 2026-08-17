@@ -17,7 +17,7 @@ completes.
 
   - When altering a source to add a new subsource (`ALTER SOURCE ... ADD
     SUBSOURCE`), only the new subsource snapshots. The source's other subsources
-    remain queryable. **However**, ingestion for these subsource is temporarily
+    remain queryable. **However**, ingestion for these subsources is temporarily
     blocked, so they stop advancing until the snapshot completes.
 
 - With the source-versioning `CREATE TABLE FROM SOURCE` syntax:
