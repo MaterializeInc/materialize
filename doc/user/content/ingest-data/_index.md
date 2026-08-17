@@ -16,7 +16,7 @@ aliases:
 
 You can ingest data into Materialize from various external systems:
 
-{{% include-headless "/headless/multilink-box-native-connectors" %}}
+{{% include-headless "/headless/ingest-connectors-table" %}}
 
 ## Sources and clusters
 
