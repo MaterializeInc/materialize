@@ -12,12 +12,13 @@ aliases:
   - /self-managed/v25.2/concepts/indexes/
 ---
 
+In Materialize, you can create indexes on [views](/concepts/views/#views) and
+[materialized views](/concepts/views/#materialized-views) as well as tables,
+[sources](/concepts/sources/), and subsources.
+
 ## Overview
 
-In Materialize, indexes represent query results stored in memory **within a
-[cluster](/concepts/clusters/)**. You can create indexes on
-[sources](/concepts/sources/), [views](/concepts/views/#views), or [materialized
-views](/concepts/views/#materialized-views).
+{{% include-from-yaml data="index_details" name="definition" %}}
 
 ## Indexes on sources
 
@@ -53,11 +54,8 @@ a name"), the view is executed and the view results are stored in memory within
 the cluster. **As new data arrives**, the index **incrementally updates** the
 view results in memory.
 
-Within the cluster, querying an indexed view is:
-
-- **fast** because the results are served from memory, and
-
-- **computationally free** because no computation is performed on read.
+Within the cluster, querying an indexed view is **fast** because the results are
+already computed and are served from memory.
 
 For best practices on using indexes, and understanding when to use indexed views
 vs. materialized views, see [Usage patterns](#usage-patterns).
@@ -74,10 +72,10 @@ materialized views require no additional computation to keep results up-to-date.
 
 A materialized view can be queried from any cluster whereas its indexed results
 are available only within the cluster you create the index. Querying a
-materialized view, whether indexed or not, from any cluster is computationally
-free. However, querying an indexed materialized view within the cluster where
-the index is created is faster since the results are served from memory rather
-than from storage.
+materialized view, whether indexed or not, from any cluster is fast since the
+results are already computed. However, querying an indexed materialized view
+within the cluster where the index is created is faster since the results are
+served from memory rather than from storage.
 
 {{</ note >}}
 
