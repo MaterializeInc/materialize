@@ -49,6 +49,8 @@ const validCluster: Cluster = {
       size: "50cc",
       disk: true,
       cpuPercent: 12.5,
+      memoryPercent: 40,
+      diskPercent: 25,
       statuses: [
         {
           replica_id: "u678",

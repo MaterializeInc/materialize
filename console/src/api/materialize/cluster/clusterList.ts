@@ -19,7 +19,7 @@ import {
 } from "~/api/materialize/expressionBuilders";
 
 /**
- * Replica CPU utilization, guaranteed one row per replica.
+ * Replica utilization percentages, guaranteed one row per replica.
  *
  * The shared utilization builder groups by (replica_id, process_id), which is
  * the key of the underlying view, so it emits a row per process. Joining that
@@ -28,15 +28,21 @@ import {
  *
  * Dividing by the row count rather than using AVG mirrors the shared builder:
  * an offline process still has a row, with null metrics, and is meant to drag
- * the replica's number down rather than be skipped.
+ * the replica's number down rather than be skipped. Averaging percentages is
+ * only sound because every process of a replica has the same allocation, so
+ * the per-process denominators are identical.
  */
-function buildReplicaCpuUtilization() {
+function buildReplicaUtilization() {
   return queryBuilder
     .selectFrom(buildClusterReplicaUtilizationTable().as("cru"))
     .groupBy("cru.replica_id")
     .select([
       "cru.replica_id as replicaId",
       sql<number | null>`SUM(cru.cpu_percent) / COUNT(*)`.as("cpuPercent"),
+      sql<number | null>`SUM(cru.memory_percent) / COUNT(*)`.as(
+        "memoryPercent",
+      ),
+      sql<number | null>`SUM(cru.disk_percent) / COUNT(*)`.as("diskPercent"),
     ]);
 }
 
@@ -92,6 +98,8 @@ export const buildClustersQuery = ({
         size: string | null;
         disk: boolean | null;
         cpuPercent: number | null;
+        memoryPercent: number | null;
+        diskPercent: number | null;
         statuses: {
           replica_id: string;
           process_id: string;
@@ -105,7 +113,7 @@ export const buildClustersQuery = ({
           // A left join keeps replicas that have no metrics rows yet. The
           // cluster detail query inner joins here, which drops them.
           .leftJoin(
-            buildReplicaCpuUtilization().as("cru"),
+            buildReplicaUtilization().as("cru"),
             "cru.replicaId",
             "cr.id",
           )
@@ -115,6 +123,8 @@ export const buildClustersQuery = ({
             "cr.size",
             "cr.disk",
             "cru.cpuPercent",
+            "cru.memoryPercent",
+            "cru.diskPercent",
             jsonArrayFrom(
               replicaEb
                 .selectFrom("mz_cluster_replica_statuses as crs_inner")

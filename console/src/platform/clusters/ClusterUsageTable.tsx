@@ -52,13 +52,13 @@ const CLUSTER_ROW_CLASS = "cluster-row";
 
 const ReplicaNameCell = ({ replica }: { replica: Replica }) => replica.name;
 
-const ReplicaCpuCell = ({ cpuPercent }: { cpuPercent: number | null }) => {
+const ReplicaPercentCell = ({ value }: { value: number | null }) => {
   // NOTE: an idle replica reports 0, which must render as "0.0%" rather than
   // being treated as "no reading". Only a missing sample is a dash.
-  if (cpuPercent === null) {
+  if (value === null) {
     return <>-</>;
   }
-  return <PercentBar value={cpuPercent} />;
+  return <PercentBar value={value} />;
 };
 
 /** Formats a status-change timestamp for display, or "-" when there is none. */
@@ -145,6 +145,45 @@ const latestReplicaStatusAt = (replica: Replica) =>
 
 const columnHelper = createColumnHelper<ClusterRow>();
 
+/**
+ * A utilization column, read from a replica by `read`.
+ *
+ * All three share one shape because the reading is per replica in every case: a
+ * cluster row ranks by its busiest replica and renders blank, and a replica
+ * renders a bar, or a dash when it has no sample.
+ */
+const percentColumn = (
+  id: string,
+  header: string,
+  read: (replica: Replica) => number | null,
+) =>
+  columnHelper.accessor(
+    // Sorting recurses into sub-rows with this same value, so a cluster
+    // ordering by its busiest replica and its replicas ordering among
+    // themselves both fall out of one accessor.
+    (row) =>
+      row.rowType === "cluster"
+        ? maxReplicaValue(row.replicas, read, (a, b) => a - b)
+        : read(row),
+    {
+      id,
+      header,
+      sortingFn: sortingFunctions.numericNullsLast,
+      // Pinned because TanStack would otherwise infer this from the first row's
+      // value type, which for a cluster row depends on whether it has replicas.
+      sortDescFirst: true,
+      cell: (info) => {
+        const row = info.row.original;
+        // Utilization is per replica, so a cluster row has nothing to show
+        // here. Deliberately blank rather than a dash.
+        if (row.rowType === "cluster") {
+          return null;
+        }
+        return <ReplicaPercentCell value={info.getValue()} />;
+      },
+    },
+  );
+
 const columns = [
   columnHelper.accessor("name", {
     header: "Name",
@@ -182,34 +221,15 @@ const columns = [
           : (info.getValue() ?? "-"),
     },
   ),
-  columnHelper.accessor(
-    // Sorting recurses into sub-rows with this same value, so a cluster
-    // ordering by its busiest replica and its replicas ordering among
-    // themselves both fall out of one accessor.
-    (row) =>
-      row.rowType === "cluster"
-        ? maxReplicaValue(
-            row.replicas,
-            (r) => r.cpuPercent,
-            (a, b) => a - b,
-          )
-        : row.cpuPercent,
-    {
-      id: "cpuPercent",
-      header: "CPU",
-      sortingFn: sortingFunctions.numericNullsLast,
-      sortDescFirst: true,
-      cell: (info) => {
-        const row = info.row.original;
-        // Utilization is per replica, so a cluster row has nothing to show
-        // here. Deliberately blank rather than a dash.
-        if (row.rowType === "cluster") {
-          return null;
-        }
-        return <ReplicaCpuCell cpuPercent={info.getValue()} />;
-      },
-    },
-  ),
+  percentColumn("cpuPercent", "CPU", (replica) => replica.cpuPercent),
+  // NOTE: this is `memory_percent`, RAM against the size's RAM allocation. The
+  // cluster detail page's "Memory Utilization" column is `heap_percent`, which
+  // is RAM plus swap over the heap limit, so the two read differently for a
+  // replica that is swapping.
+  percentColumn("memoryPercent", "Memory", (replica) => replica.memoryPercent),
+  // NOTE: the denominator is the size's configured disk allocation, so this is
+  // null, and renders a dash, for any replica on a size that allocates no disk.
+  percentColumn("diskPercent", "Disk", (replica) => replica.diskPercent),
   columnHelper.accessor(
     // NOTE: deliberately not the cluster's own `latestStatusUpdate`. That comes
     // from the replica status *history*, so it counts replicas that have since
@@ -267,7 +287,7 @@ export interface ClusterUsageTableProps {
 
 /**
  * Clusters with their replicas nested underneath, each replica carrying its own
- * size, CPU utilization, and status.
+ * size, utilization, and status.
  */
 export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   const { data: offlineReplicaMap, error: offlineReplicaError } =

@@ -48,6 +48,8 @@ describe("useClustersDropdown subscribe", () => {
           name: "r1",
           size: "bootstrap",
           cpuPercent: NUMBER_OR_NULL,
+          memoryPercent: NUMBER_OR_NULL,
+          diskPercent: NUMBER_OR_NULL,
           statuses: [
             {
               process_id: 0,

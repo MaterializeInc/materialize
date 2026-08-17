@@ -75,6 +75,8 @@ const buildReplica = (overrides: Partial<Replica> = {}): Replica => ({
   size: "50cc",
   disk: true,
   cpuPercent: 12.5,
+  memoryPercent: 40,
+  diskPercent: 25,
   statuses: [
     {
       replica_id: "u10",
@@ -143,8 +145,10 @@ const COLUMN = {
   name: 1,
   size: 2,
   cpu: 3,
-  lastStatusChange: 4,
-  actions: 5,
+  memory: 4,
+  disk: 5,
+  lastStatusChange: 6,
+  actions: 7,
 } as const;
 
 const rowFor = (rowLabel: string) => {
@@ -198,7 +202,7 @@ describe("ClustersList replica rows", () => {
     expect(caretFor("compute")).toHaveAttribute("aria-expanded", "false");
   });
 
-  it("renders a replica's name, size, CPU and last status change", async () => {
+  it("renders a replica's name, size, utilization and last status change", async () => {
     await renderClustersList([buildCluster()]);
 
     // The caret column is empty on a replica row, and actions are
@@ -208,6 +212,8 @@ describe("ClustersList replica rows", () => {
       "r1",
       "50cc",
       "12.5%",
+      "40.0%",
+      "25.0%",
       formatted(STATUS_UPDATED_AT),
       "",
     ]);
@@ -260,32 +266,44 @@ describe("ClustersList replica rows", () => {
     expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe(formatted(newest));
   });
 
-  it("renders zero CPU as a percentage rather than blank", async () => {
-    await renderClustersList([
-      buildCluster({
-        replicas: [buildReplica({ cpuPercent: 0 }), SECOND_REPLICA],
-      }),
-    ]);
+  // The three utilization columns are built by one shared factory, so each
+  // rendering rule is asserted against all of them rather than CPU alone.
+  describe.each([
+    ["CPU", COLUMN.cpu, (value: number | null) => ({ cpuPercent: value })],
+    [
+      "Memory",
+      COLUMN.memory,
+      (value: number | null) => ({ memoryPercent: value }),
+    ],
+    ["Disk", COLUMN.disk, (value: number | null) => ({ diskPercent: value })],
+  ])("the %s column", (_label, column, withValue) => {
+    it("renders zero as a percentage rather than blank", async () => {
+      await renderClustersList([
+        buildCluster({
+          replicas: [buildReplica(withValue(0)), SECOND_REPLICA],
+        }),
+      ]);
 
-    // An idle replica genuinely reports 0. Treating that as "no reading" would
-    // leave the cell empty and imply the metric is unavailable.
-    expect(cellsForRow("r1")[COLUMN.cpu]).toBe("0.0%");
-  });
+      // An idle replica genuinely reports 0. Treating that as "no reading"
+      // would leave the cell empty and imply the metric is unavailable.
+      expect(cellsForRow("r1")[column]).toBe("0.0%");
+    });
 
-  it("renders a dash when the replica has no CPU sample", async () => {
-    await renderClustersList([
-      buildCluster({
-        replicas: [buildReplica({ cpuPercent: null }), SECOND_REPLICA],
-      }),
-    ]);
+    it("renders a dash when the replica has no sample", async () => {
+      await renderClustersList([
+        buildCluster({
+          replicas: [buildReplica(withValue(null)), SECOND_REPLICA],
+        }),
+      ]);
 
-    expect(cellsForRow("r1")[COLUMN.cpu]).toBe("-");
-  });
+      expect(cellsForRow("r1")[column]).toBe("-");
+    });
 
-  it("leaves the CPU cell empty on cluster rows", async () => {
-    await renderClustersList([buildCluster()]);
+    it("is empty on cluster rows", async () => {
+      await renderClustersList([buildCluster()]);
 
-    expect(cellsForRow("compute")[COLUMN.cpu]).toBe("");
+      expect(cellsForRow("compute")[column]).toBe("");
+    });
   });
 
   it("renders a dash when the replica has no size", async () => {
@@ -393,6 +411,8 @@ describe("ClustersList replica rows", () => {
     expect(cells[COLUMN.name]).toContain("compute");
     expect(cells[COLUMN.size]).toBe("");
     expect(cells[COLUMN.cpu]).toBe("");
+    expect(cells[COLUMN.memory]).toBe("");
+    expect(cells[COLUMN.disk]).toBe("");
     expect(cells[COLUMN.lastStatusChange]).toBe("");
   });
 });
