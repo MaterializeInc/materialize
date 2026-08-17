@@ -18,6 +18,8 @@ aliases:
 
 {{% include-headless "/headless/source-definition" %}}
 
+{{% include-headless "/headless/source-upstream-prereq" %}}
+
 ## Syntax summary
 
 <!--"Docs Note: Using include-example shortcode instead of include-syntax since only want the code snippet on this page."
@@ -164,7 +166,7 @@ The privileges required to execute `CREATE SOURCE` are:
 
 The following guides step you through setting up sources:
 
-{{% include-headless "/headless/multilink-box-native-connectors" %}}
+{{% include-headless "/headless/ingest-connectors-table" %}}
 
 ## Best practices
 

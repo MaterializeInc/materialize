@@ -20,23 +20,24 @@ In Materialize, you can create indexes on [views](/concepts/views/#views) and
 
 {{% include-from-yaml data="index_details" name="definition" %}}
 
-## Indexes on sources
+## Indexes on sources, tables, and subsources
 
 {{< note >}}
-In practice, you may find that you rarely need to index a source
-without performing some transformation using a view, etc.
+
+In practice, you may find that you rarely need to index a source and its tables
+or subsources without performing some transformation using a view, etc.
+
 {{</ note >}}
 
-In Materialize, you can create indexes on a [source](/concepts/sources/) to
-maintain in-memory up-to-date source data within the cluster you create the
-index. This can help improve [query
-performance](#indexes-and-query-optimizations) when serving results directly
-from the source or when [using joins](/transform-data/optimization/#join).
-However, in practice, you may find that you rarely need to index a source
-directly.
+In Materialize, you can create indexes on a [source and its tables or
+subsources](/concepts/sources/) to maintain in-memory up-to-date data within the
+cluster you create the index. This can help improve [query
+performance](#indexes-and-query-optimizations) such as when [using
+joins](/transform-data/optimization/#join) in your transformation. However, in
+practice, you may find that you rarely need to index these objects directly.
 
 ```mzsql
-CREATE INDEX idx_on_my_source ON my_source (...);
+CREATE INDEX idx_on_my_source_table ON my_source_table (...);
 ```
 
 ## Indexes on views
