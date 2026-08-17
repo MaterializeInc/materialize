@@ -17,14 +17,12 @@ import { useAppConfig } from "~/config/useAppConfig";
 import { User } from "~/external-library-wrappers/frontegg";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
+import { ConnectionIcon, MonitorIcon, Terminal } from "~/icons";
 import { ClusterDetailParams } from "~/platform/clusters/ClusterRoutes";
 import {
   currentEnvironmentState,
   useEnvironmentGate,
 } from "~/store/environments";
-import ConnectionIcon from "~/svg/ConnectionIcon";
-import { MonitorIcon } from "~/svg/Monitor";
-import TerminalIcon from "~/svg/Terminal";
 
 import { ConnectMethodCard } from "./connectComponents";
 import { ConnectExternalToolsPanel } from "./ConnectExternalToolsPanel";
@@ -48,19 +46,19 @@ const CONNECT_METHODS: {
     id: "mcp",
     label: "MCP Server",
     sublabel: "Connect your agent",
-    icon: <ConnectionIcon w="4" h="4" />,
+    icon: <ConnectionIcon w="4" h="4" color="inherit" />,
   },
   {
     id: "external-tools",
     label: "External tools",
     sublabel: "Connection details",
-    icon: <MonitorIcon w="4" h="4" />,
+    icon: <MonitorIcon w="4" h="4" color="inherit" />,
   },
   {
     id: "terminal",
     label: "Terminal",
     sublabel: "psql",
-    icon: <TerminalIcon w="4" h="4" />,
+    icon: <Terminal w="4" h="4" color="inherit" />,
   },
 ];
 

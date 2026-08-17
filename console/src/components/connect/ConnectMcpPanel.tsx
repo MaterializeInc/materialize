@@ -29,14 +29,16 @@ import {
 import React, { useState } from "react";
 
 import TextLink from "~/components/TextLink";
+import {
+  ChevronDownIcon,
+  ClaudeLogoIcon,
+  CodexLogoIcon,
+  CursorLogoIcon,
+  OverflowMenuIcon,
+  VsCodeLogoIcon,
+  WindsurfLogoIcon,
+} from "~/icons";
 import { useCreateApiToken } from "~/queries/frontegg";
-import ChevronDownIcon from "~/svg/ChevronDownIcon";
-import ClaudeLogoIcon from "~/svg/ClaudeLogoIcon";
-import CodexLogoIcon from "~/svg/CodexLogoIcon";
-import CursorLogoIcon from "~/svg/CursorLogoIcon";
-import OverflowMenuIcon from "~/svg/OverflowMenuIcon";
-import VsCodeLogoIcon from "~/svg/VsCodeLogoIcon";
-import WindsurfLogoIcon from "~/svg/WindsurfLogoIcon";
 import { MaterializeTheme } from "~/theme";
 import { obfuscateSecret, toBase64 } from "~/utils/format";
 
