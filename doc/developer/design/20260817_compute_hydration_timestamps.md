@@ -117,11 +117,21 @@ hydration concurrency limit. Today's `time_ns` conflates the two.
 Storing the start of queueing as its own timestamp rather than only reporting a
 corrected duration is deliberate. It keeps both intervals derivable, so
 narrowing `hydration_time` to the interval users mean does not destroy the
-number they see today. From the replica's vantage point the two waits that make
-up queueing, waiting for input frontiers to advance and waiting for a hydration
-concurrency slot, are indistinguishable: both simply delay the arrival of
-`Schedule`. Splitting them would require the controller to report when it
-considered the collection ready, which is not worth a protocol change here.
+number they see today.
+
+Queueing is made of two distinct waits, and the replica cannot tell them apart.
+A collection waits first for its input frontiers to advance, which the controller
+enforces by not sending `Schedule` at all
+(`instance.rs:1666-1696`), and then for a hydration concurrency slot, which the
+`SequentialHydration` interceptor enforces by withholding a `Schedule` it has
+already received (`sequential_hydration.rs:128-135`). Both appear to the replica
+as `Schedule` simply arriving late.
+
+Separating them is possible, because the interceptor knows the moment it
+enqueued a `Schedule`, but that observation lives in environmentd and would reset
+on restart, which is the property this whole design exists to avoid. So if the
+distinction is wanted it belongs in a live-only column or a Prometheus metric,
+not in the durable episode record. This design does not attempt it.
 
 Everything else follows from those three columns. The per-replica episode is
 `min(started_at)` to `max(hydrated_at)` over the objects on the replica. An
@@ -187,6 +197,58 @@ across its exports. That bridges the gap cleanly. It is not worth building now:
 the gap is unobservable with single-export dataflows, and there is no scheduled
 work on multi-output dataflows to build against. Recorded here so the fix is
 known rather than rediscovered.
+
+### Sequence of events
+
+Two cases matter, and they differ in exactly the way the three stamps are meant
+to expose.
+
+**An index created on a running, already-hydrated cluster.** Everything happens
+in one controller turn and one replica turn.
+
+| Step | Where | What | Stamp |
+| --- | --- | --- | --- |
+| 1 | controller | `Instance::create_dataflow` downgrades input read holds to the as-of and calls `add_collection` per export (`instance.rs:1467`), which creates `ReplicaCollectionState` on each hosting replica (`:3125`) with `output_frontier = as_of`, so the controller's own `hydrated()` is false | |
+| 2 | controller | sends `ComputeCommand::CreateDataflow` (`instance.rs:1616`) | |
+| 3 | controller | calls `maybe_schedule_collection` immediately (`:1618-1620`). Inputs are already available, so `frontiers_ready` holds and `ComputeCommand::Schedule` goes out in the same turn (`:1692`) | |
+| 4 | interceptor | forwards `CreateDataflow` and starts tracking the collection (`sequential_hydration.rs:120-127`). Withholds `Schedule`, enqueuing it (`:128-135`), then `hydrate_collections` re-emits it because the cluster is idle and below `HYDRATION_CONCURRENCY` | |
+| 5 | replica | `handle_create_dataflow`: `CollectionState::new`, then `CollectionLogging::new` logs `ComputeEvent::Export` (`compute_state.rs:682-690`) | **`installed_at`** (`logging/compute.rs:843-850`) |
+| 6 | replica | inserts the suspension token (`compute_state.rs:705-710`) and renders the dataflow, whose operators park on the `StartSignal` | |
+| 7 | replica | `handle_schedule` drops the suspension token, the `StartSignal` fires, operators start (`compute_state.rs:722-730`) | **`started_at`** (new event) |
+| 8 | replica | the dataflow reads its inputs from the as-of forward and builds arrangements. Nothing is stamped here, this interval *is* hydration | |
+| 9 | replica | output frontier passes the as-of, `set_reported_output_frontier` sees `hydrated()` flip and calls `set_hydrated` (`compute_state.rs:2059-2070`) | **`hydrated_at`** (`logging/compute.rs:964-990`) |
+| 10 | replica | the demux writes the retract/insert pair, so the per-worker introspection relation now carries all three | |
+| 11 | controller | separately, a `Frontiers` response arrives and `update_output_frontier` (`instance.rs:3317`) flips the controller's own `hydrated()`, which is what the 0dt caught-up check and the autoscaling signal read. One round trip later, and it stamps nothing | |
+| 12 | adapter | the introspection `SUBSCRIBE` rolls the per-worker rows up and writes them to the storage-managed collection | |
+
+Because steps 2 through 7 collapse into one turn, `installed_at` and `started_at`
+are within milliseconds of each other and the queueing interval is
+approximately zero. This is the uninteresting case, and it is the one today's
+`time_ns` happens to measure correctly.
+
+**A replica joining a cluster that already hosts N objects.** This is the
+rehydration case the PRD is about, and the one today's measurement gets wrong.
+
+1. `add_replica_state` creates `ReplicaCollectionState` for every existing
+   collection (`instance.rs:370-387`), then the command history is replayed to
+   the new replica.
+2. The replica receives N `CreateDataflow` commands and stamps N `installed_at`
+   values, all within a few milliseconds. This is the moment the replica learned
+   its whole workload.
+3. All N `Schedule` commands are withheld by the interceptor. Only
+   `HYDRATION_CONCURRENCY` of them are released at a time.
+4. Objects therefore acquire `started_at` in waves. An object at the back of the
+   queue has `installed_at` set and `started_at` NULL, and is correctly reported
+   as not yet started rather than as hydrating slowly.
+5. Each completion releases the next queued `Schedule`, so the queue drains at
+   the rate dataflows hydrate.
+6. The episode is `min(started_at)` to `max(hydrated_at)` over the N objects,
+   while each object's own `started_at - installed_at` is how long it waited for
+   a slot.
+
+For an object at the back of that queue, today's single `time_ns` is mostly
+queueing time. Splitting the two intervals is the whole point of stamping
+`installed_at` separately.
 
 ### Log relation shape
 
