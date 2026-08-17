@@ -120,6 +120,23 @@ describe("buildMcpSnippet", () => {
     });
   });
 
+  it("uses httpUrl for Gemini CLI configs", () => {
+    const snippet = buildMcpSnippet({
+      client: client("gemini-cli"),
+      server: server("developer"),
+      baseUrl: BASE_URL,
+      token: "dG9rZW4=",
+    });
+    expect(JSON.parse(snippet)).toEqual({
+      mcpServers: {
+        "materialize-developer": {
+          httpUrl: `${BASE_URL}/api/mcp/developer`,
+          headers: { Authorization: "Basic dG9rZW4=" },
+        },
+      },
+    });
+  });
+
   it("uses serverUrl for Windsurf configs", () => {
     const snippet = buildMcpSnippet({
       client: client("windsurf"),

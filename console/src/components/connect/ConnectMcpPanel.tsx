@@ -35,6 +35,7 @@ import {
   ClaudeLogoIcon,
   CodexLogoIcon,
   CursorLogoIcon,
+  GeminiLogoIcon,
   OverflowMenuIcon,
   VsCodeLogoIcon,
   WindsurfLogoIcon,
@@ -66,6 +67,7 @@ const CLIENT_ICONS: Record<McpClientId, React.ReactElement> = {
   vscode: <VsCodeLogoIcon boxSize="4" />,
   windsurf: <WindsurfLogoIcon boxSize="4" />,
   codex: <CodexLogoIcon boxSize="4" />,
+  "gemini-cli": <GeminiLogoIcon boxSize="4" />,
   other: <OverflowMenuIcon boxSize="4" />,
 };
 

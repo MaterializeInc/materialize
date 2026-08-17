@@ -44,6 +44,7 @@ export { default as EyeOpenIcon } from "~/icon/EyeOpenIcon.svg?react";
 export { default as FilterIcon } from "~/icon/FilterIcon.svg?react";
 export { default as FrameSelectionIcon } from "~/icon/FrameSelectionIcon.svg?react";
 export { default as GcpLogoIcon } from "~/icon/GcpLogoIcon.svg?react";
+export { default as GeminiLogoIcon } from "~/icon/GeminiLogoIcon.svg?react";
 export { default as GlobeIcon } from "~/icon/GlobeIcon.svg?react";
 export { default as HamburgerIcon } from "~/icon/HamburgerIcon.svg?react";
 export { default as IndexIcon } from "~/icon/IndexIcon.svg?react";

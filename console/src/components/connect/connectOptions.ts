@@ -72,6 +72,7 @@ export type McpClientId =
   | "vscode"
   | "windsurf"
   | "codex"
+  | "gemini-cli"
   | "other";
 
 export type McpConfigKind = "cli" | "json" | "toml" | "connector";
@@ -155,6 +156,14 @@ export const MCP_CLIENTS: McpClient[] = [
     signInHint: "Your browser opens to sign in.",
   },
   {
+    id: "gemini-cli",
+    name: "Gemini CLI",
+    kind: "json",
+    configLocation: "Add to ~/.gemini/settings.json",
+    signInHint: (serverName) =>
+      `Run /mcp auth ${serverName} inside Gemini CLI. Your browser opens to sign in.`,
+  },
+  {
     id: "other",
     name: "Other",
     kind: "json",
@@ -209,6 +218,12 @@ const buildJsonSnippet = ({
     case "windsurf":
       config = {
         mcpServers: { [server.serverName]: { serverUrl: url, ...headers } },
+      };
+      break;
+    // Gemini CLI uses "httpUrl" for the streamable HTTP transport.
+    case "gemini-cli":
+      config = {
+        mcpServers: { [server.serverName]: { httpUrl: url, ...headers } },
       };
       break;
     default:
