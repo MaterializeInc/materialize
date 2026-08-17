@@ -1198,7 +1198,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_DATAFLOW_OPERATORS),
         Builtin::View(&MZ_DATAFLOW_GLOBAL_IDS),
         Builtin::View(&MZ_COMPUTE_EXPORTS),
-        Builtin::View(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
         Builtin::View(&MZ_MAPPABLE_OBJECTS),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS_PER_WORKER),
         Builtin::View(&MZ_DATAFLOW_OPERATOR_DATAFLOWS),
@@ -1464,6 +1463,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        Builtin::View(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
     ];
 
     builtin_items.extend(notice::builtins());
