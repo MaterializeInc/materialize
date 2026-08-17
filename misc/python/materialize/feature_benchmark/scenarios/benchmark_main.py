@@ -2097,7 +2097,7 @@ class MySqlInitialLoadMultiWorkerSampled(MySqlCdc):
         for i in range(self.TABLES):
             table = f"pk_table{i + 1}"
             table_blocks.append(
-                f"CREATE TABLE {table} (pk CHAR(26) PRIMARY KEY, f2 BIGINT);\n"
+                f"CREATE TABLE {table} (pk CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, f2 BIGINT);\n"
                 f"SET @i := 0;\n"
                 f"INSERT INTO {table} SELECT {row_values} "
                 f"FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {row_counts[i]};"
@@ -2188,7 +2188,7 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE pk_table (pk CHAR(26) PRIMARY KEY, f2 BIGINT);
+CREATE TABLE pk_table (pk CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, f2 BIGINT);
 SET @i := 0;
 INSERT INTO pk_table SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.n()};
 """)
