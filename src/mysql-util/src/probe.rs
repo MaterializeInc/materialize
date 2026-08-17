@@ -38,10 +38,10 @@ pub struct KeyProber<'a, 't> {
 }
 
 impl<'a, 't> KeyProber<'a, 't> {
-    /// NOTE: `tx` should be `REPEATABLE READ` so sequential probes see one
-    /// snapshot of the table, and its connection is assumed to use a utf8mb4
-    /// connection character set (the driver's handshake default), so key
-    /// values arrive converted to UTF-8.
+    /// NOTE: `tx` is assumed to use a utf8mb4 connection character set (the
+    /// driver's handshake default), so key values arrive converted to UTF-8.
+    /// `tx` should be `REPEATABLE READ` so sequential probes see one
+    /// snapshot of the table.
     pub fn new(tx: &'a mut Transaction<'t>, table: QualifiedTableRef<'_>, key_col: &str) -> Self {
         Self {
             tx,
@@ -862,22 +862,27 @@ pub(crate) mod tests {
         let ids: Vec<String> = (0..1000).map(|i| format!("a{i:05}")).collect();
         let table = setup_table(&mut conn, DB, "utf8mb4_bin", &ids).await?;
 
+        // One transaction serves every measurement below. The handler
+        // counters are session-level, so they read fine through it, and a
+        // throwaway prober per probe keeps the transaction usable in between
+        // (a prober holds the exclusive borrow for its whole lifetime).
+        let mut tx = start_tx(&mut conn).await?;
+
         // Prove the methodology first: a deliberately non-sargable predicate
         // reads every row, and the session handler counters see it.
-        let before = handler_reads(&mut conn).await?;
-        let _: Option<u64> = conn
+        let before = handler_reads(&mut tx).await?;
+        let _: Option<u64> = tx
             .exec_first(
                 format!("SELECT COUNT(*) FROM {DB}.t WHERE LEFT(id, 2) = 'a0'"),
                 (),
             )
             .await?;
-        let scan_reads = handler_reads(&mut conn).await? - before;
+        let scan_reads = handler_reads(&mut tx).await? - before;
         assert!(scan_reads >= 1000, "scan_reads={scan_reads}");
 
         // Every probe must stay a handful of index operations. A regression
         // to a scan costs >= 1000 reads, far past the generous bound.
-        let before = handler_reads(&mut conn).await?;
-        let mut tx = start_tx(&mut conn).await?;
+        let before = handler_reads(&mut tx).await?;
         let got = prefix_of_first_key_in_range(
             &mut KeyProber::new(&mut tx, table.clone(), "id"),
             "a00500",
@@ -885,14 +890,12 @@ pub(crate) mod tests {
             6,
         )
         .await;
-        tx.rollback().await?;
-        let reads = handler_reads(&mut conn).await? - before;
+        let reads = handler_reads(&mut tx).await? - before;
         // The exclusive bound skips the exact key a00500.
         assert_eq!(got, some("a00501"));
         assert!(reads < 50, "prefix_of_first_key_in_range reads={reads}");
 
-        let before = handler_reads(&mut conn).await?;
-        let mut tx = start_tx(&mut conn).await?;
+        let before = handler_reads(&mut tx).await?;
         let got = prefix_of_first_row_not_matching_prefix(
             &mut KeyProber::new(&mut tx, table.clone(), "id"),
             "a00500",
@@ -900,13 +903,11 @@ pub(crate) mod tests {
             6,
         )
         .await;
-        tx.rollback().await?;
-        let reads = handler_reads(&mut conn).await? - before;
+        let reads = handler_reads(&mut tx).await? - before;
         assert_eq!(got, some("a00501"));
         assert!(reads < 50, "max_key probe reads={reads}");
 
-        let before = handler_reads(&mut conn).await?;
-        let mut tx = start_tx(&mut conn).await?;
+        let before = handler_reads(&mut tx).await?;
         let got = prefix_of_first_row_not_matching_prefix(
             &mut KeyProber::new(&mut tx, table.clone(), "id"),
             "a0",
@@ -914,31 +915,31 @@ pub(crate) mod tests {
             6,
         )
         .await;
-        tx.rollback().await?;
-        let reads = handler_reads(&mut conn).await? - before;
+        let reads = handler_reads(&mut tx).await? - before;
         // Every key matches 'a0%', so the prefix match covers the whole table and
         // there is no next prefix, at the cost of two dives rather than a
         // scan.
         assert_eq!(got, None);
         assert!(reads < 50, "whole-table match reads={reads}");
 
-        let before = handler_reads(&mut conn).await?;
+        let before = handler_reads(&mut tx).await?;
         let got = prefix_of_first_key_in_range(
-            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            &mut KeyProber::new(&mut tx, table.clone(), "id"),
             "a00500",
             Some("a00501"),
             6,
         )
         .await;
-        let reads = handler_reads(&mut conn).await? - before;
+        let reads = handler_reads(&mut tx).await? - before;
         assert_eq!(got, None);
         assert!(reads < 50, "empty bounded range reads={reads}");
 
-        let bounded = KeyProber::new(&mut conn, table.clone(), "id")
+        let bounded = KeyProber::new(&mut tx, table.clone(), "id")
             .estimate_range_rows("a00100", Some("a00200"))
             .await?;
         assert!((50..=300).contains(&bounded), "bounded estimate={bounded}");
 
+        tx.rollback().await?;
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -1145,7 +1146,7 @@ pub(crate) mod tests {
 
     /// Sum of this session's `Handler_read_*` counters: how many index or row
     /// read operations the connection has performed so far.
-    async fn handler_reads(conn: &mut mysql_async::Conn) -> Result<u64, anyhow::Error> {
+    async fn handler_reads<Q: Queryable>(conn: &mut Q) -> Result<u64, anyhow::Error> {
         let rows: Vec<(String, String)> = conn
             .exec("SHOW SESSION STATUS LIKE 'Handler_read%'", ())
             .await?;
