@@ -3433,6 +3433,26 @@ impl ClusterVariantManaged {
         }
     }
 
+    /// Advances this config's realized shape to `target`, the write a
+    /// reconfiguration cut-over performs. The inverse of
+    /// [`ClusterVariantManaged::realized_reconfiguration_target`].
+    pub fn apply_reconfiguration_target(&mut self, target: ReconfigurationTarget) {
+        // Destructured so a new target dimension fails to compile until it is
+        // applied here too.
+        let ReconfigurationTarget {
+            size,
+            replication_factor,
+            availability_zones,
+            logging,
+            arrangement_compression,
+        } = target;
+        self.size = size;
+        self.replication_factor = replication_factor;
+        self.availability_zones = availability_zones;
+        self.logging = logging;
+        self.arrangement_compression = arrangement_compression;
+    }
+
     /// Whether the in-flight `burst` record is no longer warranted by this
     /// config: the `ON HYDRATION` policy was removed or re-sized away from the
     /// record's size, or the cluster was turned off (`replication_factor` 0).

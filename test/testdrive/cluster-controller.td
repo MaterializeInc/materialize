@@ -434,21 +434,103 @@ FROM mz_internal.mz_cluster_reconfigurations recon
 JOIN mz_clusters c ON c.id = recon.cluster_id
 WHERE c.name = 'cc_preserve'
 
+# Baseline and overlap run side by side while the record is in flight. Capture
+# both ids: the fold below must bounce only the overlap.
+> SELECT r.size, count(*) FROM mz_cluster_replicas r JOIN mz_clusters c ON r.cluster_id = c.id WHERE c.name = 'cc_preserve' GROUP BY r.size
+scale=1,workers=1 1
+scale=1,workers=4 1
+
+$ set-from-sql var=cc_preserve_baseline_id
+SELECT r.id::text
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'cc_preserve' AND r.size = 'scale=1,workers=1'
+
+$ set-from-sql var=cc_preserve_overlap_id
+SELECT r.id::text
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'cc_preserve' AND r.size = 'scale=1,workers=4'
+
 # An unrelated no-WAIT ALTER folds onto the record. The size dimension it did
 # not mention keeps the in-flight target's workers=4, and the deadline and
-# on-timeout action are preserved unchanged.
+# on-timeout action are preserved unchanged. The compression flip lands in the
+# target and is reported as a changed dimension.
 > ALTER CLUSTER cc_preserve SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
 
-> SELECT recon.status, recon.on_timeout, recon.deadline::text = '${cc_preserve_deadline}', recon.target->>'size'
+> SELECT recon.status, recon.on_timeout, recon.deadline::text = '${cc_preserve_deadline}', recon.target->>'size', recon.target->>'arrangement_compression', recon.changes->>'arrangement_compression'
   FROM mz_internal.mz_cluster_reconfigurations recon
   JOIN mz_clusters c ON c.id = recon.cluster_id
   WHERE c.name = 'cc_preserve'
-in-progress rollback true scale=1,workers=4
+in-progress rollback true scale=1,workers=4 true true
+
+# The realized config is untouched by the fold: the compression flip is part of
+# the record's target and transitions only at cut-over. Regression: the reshape
+# write used to leak the compression dimension into the realized config, which
+# had the controller bounce the baseline replica mid-reconfiguration, defeating
+# the graceful overlap.
+> SELECT create_sql LIKE '%EXPERIMENTAL ARRANGEMENT COMPRESSION = false%' FROM (SHOW CREATE CLUSTER cc_preserve)
+true
+
+# The retarget bounces the overlap replica, whose shape no longer matches the
+# folded target. Once the fresh overlap is up, the baseline must still be the
+# original replica.
+> SELECT r.id::text != '${cc_preserve_overlap_id}'
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_preserve' AND r.size = 'scale=1,workers=4'
+true
+
+> SELECT r.id::text = '${cc_preserve_baseline_id}'
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_preserve' AND r.size = 'scale=1,workers=1'
+true
 
 > DROP CLUSTER cc_preserve CASCADE
 
 $ postgres-execute connection=postgres://mz_system@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET unsafe_enable_unstable_dependencies = false
+
+# ----- Compression-only graceful reconfiguration -----
+#
+# EXPERIMENTAL ARRANGEMENT COMPRESSION is a replica config shape dimension like
+# SIZE: a compression-only ALTER transitions through the record and a
+# hydrate-overlap rather than flipping the realized config in place. Nothing
+# pins hydration here, so the overlap replica created at the flipped shape
+# hydrates, the cut-over advances the realized config, and the baseline replica
+# is retired.
+
+> CREATE CLUSTER cc_compression (SIZE 'scale=1,workers=1', REPLICATION FACTOR 1)
+
+$ set-from-sql var=cc_compression_baseline_id
+SELECT r.id::text
+FROM mz_cluster_replicas r
+JOIN mz_clusters c ON c.id = r.cluster_id
+WHERE c.name = 'cc_compression'
+
+> ALTER CLUSTER cc_compression SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true)
+
+# The record settles, the realized config carries the new value, and the diff
+# is empty again.
+> SELECT recon.status, recon.changes::text
+  FROM mz_internal.mz_cluster_reconfigurations recon
+  JOIN mz_clusters c ON c.id = recon.cluster_id
+  WHERE c.name = 'cc_compression'
+finalized {}
+
+> SELECT create_sql LIKE '%EXPERIMENTAL ARRANGEMENT COMPRESSION = true%' FROM (SHOW CREATE CLUSTER cc_compression)
+true
+
+# The transition went through the overlap: the surviving replica is the target
+# replica, not a bounced baseline.
+> SELECT r.id::text != '${cc_compression_baseline_id}', r.size
+  FROM mz_cluster_replicas r
+  JOIN mz_clusters c ON c.id = r.cluster_id
+  WHERE c.name = 'cc_compression'
+true scale=1,workers=1
+
+> DROP CLUSTER cc_compression
 
 # ----- A single-replica sink does not block graceful reconfiguration -----
 #
