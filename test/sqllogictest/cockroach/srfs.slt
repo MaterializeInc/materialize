@@ -1140,6 +1140,12 @@ mz_arrangement_sharing_raw  2
 mz_arrangement_sharing_raw  2
 mz_cluster_auto_scaling_strategies  1
 mz_cluster_deployment_lineage  1
+mz_cluster_peak_usage  1
+mz_cluster_peak_usage  1
+mz_cluster_peak_usage  1
+mz_cluster_peak_usage  1
+mz_cluster_peak_usage  1
+mz_cluster_peak_usage  1
 mz_cluster_prometheus_metrics  1
 mz_cluster_prometheus_metrics  1
 mz_cluster_prometheus_metrics  1

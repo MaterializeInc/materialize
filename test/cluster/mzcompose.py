@@ -7956,6 +7956,82 @@ def workflow_test_prometheus_metrics(c: Composition) -> None:
                 """))
 
 
+def workflow_test_peak_usage(c: Composition) -> None:
+    """Test that mz_cluster_peak_usage reports a monotonic peak per replica process."""
+
+    c.up("materialized")
+
+    # Sample fast, so the test does not have to wait out the default interval.
+    c.sql(
+        "ALTER SYSTEM SET mz_metrics_peak_usage_refresh_interval = '1s';",
+        port=6877,
+        user="mz_system",
+    )
+    c.sql("CREATE CLUSTER cluster1 SIZE 'scale=2,workers=2';")
+
+    def peaks() -> dict[int, tuple[int | None, int | None, int | None]]:
+        with c.sql_cursor() as cursor:
+            cursor.execute(b"SET cluster = cluster1")
+            cursor.execute(b"""
+                SELECT process_id, memory_bytes, heap_bytes, disk_bytes
+                FROM mz_introspection.mz_cluster_peak_usage
+                """)
+            return {row[0]: (row[1], row[2], row[3]) for row in cursor.fetchall()}
+
+    # Both processes report, and the memory peaks populate once the sampler has run.
+    for _ in range(60):
+        before = peaks()
+        if set(before) == {0, 1} and all(
+            memory is not None and heap is not None
+            for memory, heap, _ in before.values()
+        ):
+            break
+        time.sleep(1)
+    else:
+        assert False, f"peak usage not reported for both processes: {before}"
+
+    for process_id, (memory, heap, _disk) in before.items():
+        assert memory is not None and heap is not None
+        assert (
+            heap >= memory
+        ), f"process {process_id}: heap {heap} below memory {memory}"
+
+    # Do some work to push usage up. The peaks must not go backwards, whether or not this
+    # particular workload moves them.
+    c.sql("""
+        SET cluster = cluster1;
+        CREATE TABLE t (a int);
+        INSERT INTO t SELECT generate_series(1, 500000);
+        CREATE MATERIALIZED VIEW mv AS SELECT count(*) FROM t;
+        """)
+    with c.sql_cursor() as cursor:
+        cursor.execute(b"SET cluster = cluster1")
+        cursor.execute(b"SELECT * FROM mv")
+        cursor.fetchall()
+
+    # Give the sampler a few intervals to observe the new usage.
+    time.sleep(5)
+
+    after = peaks()
+    assert set(after) == set(before), f"processes changed: {before} -> {after}"
+    for process_id, (memory, heap, disk) in after.items():
+        old_memory, old_heap, old_disk = before[process_id]
+        assert memory is not None and heap is not None
+        assert old_memory is not None and old_heap is not None
+        assert (
+            memory >= old_memory
+        ), f"process {process_id}: memory peak fell to {memory}"
+        assert heap >= old_heap, f"process {process_id}: heap peak fell to {heap}"
+        assert (
+            heap >= memory
+        ), f"process {process_id}: heap {heap} below memory {memory}"
+        assert (disk is None) == (
+            old_disk is None
+        ), f"process {process_id}: disk availability changed"
+        if disk is not None and old_disk is not None:
+            assert disk >= old_disk, f"process {process_id}: disk peak fell to {disk}"
+
+
 def workflow_test_metrics_null_label(c: Composition) -> None:
     """SQL-198: `/metrics/mz_usage` must not abort environmentd when a
     Prometheus label column is SQL NULL. An unorchestrated cluster replica has

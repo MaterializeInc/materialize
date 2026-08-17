@@ -248,6 +248,21 @@ pub static MZ_CLUSTER_PROMETHEUS_METRICS: LazyLock<BuiltinLog> = LazyLock::new(|
     }),
 });
 
+pub static MZ_CLUSTER_PEAK_USAGE: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
+    name: "mz_cluster_peak_usage",
+    schema: MZ_INTROSPECTION_SCHEMA,
+    oid: oid::LOG_MZ_CLUSTER_PEAK_USAGE_OID,
+    variant: LogVariant::Compute(ComputeLog::PeakUsage),
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "cluster_peak_usage",
+        description: "Peak resource usage of each process of the cluster replica, \
+                      measured since the process started.",
+        links: &const { [] },
+        column_semantic_types: &[],
+    }),
+});
+
 pub static MZ_COMPUTE_FRONTIERS_PER_WORKER: LazyLock<BuiltinLog> = LazyLock::new(|| BuiltinLog {
     name: "mz_compute_frontiers_per_worker",
     schema: MZ_INTROSPECTION_SCHEMA,

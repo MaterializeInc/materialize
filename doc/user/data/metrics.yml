@@ -1371,6 +1371,18 @@ metrics:
   help: user CPU time used
   source: src/metrics/src/rusage.rs
   visibility: internal
+- name: mz_metrics_peak_disk_bytes
+  help: Peak disk usage since process start.
+  source: src/metrics/src/usage.rs
+  visibility: internal
+- name: mz_metrics_peak_heap_bytes
+  help: Peak heap (RAM + swap) usage since process start.
+  source: src/metrics/src/usage.rs
+  visibility: internal
+- name: mz_metrics_peak_memory_bytes
+  help: Peak memory (RAM) usage since process start.
+  source: src/metrics/src/usage.rs
+  visibility: internal
 - name: mz_metrics_update_duration_bucket
   help: The time it took to update lgalloc stats
   labels:

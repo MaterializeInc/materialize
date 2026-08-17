@@ -921,6 +921,10 @@ mz_arrangement_sizes_per_worker
 VIEW
 materialize
 mz_introspection
+mz_cluster_peak_usage
+SOURCE
+materialize
+mz_introspection
 mz_cluster_prometheus_metrics
 SOURCE
 materialize
