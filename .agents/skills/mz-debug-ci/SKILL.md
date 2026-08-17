@@ -238,7 +238,7 @@ passing run to tell a gradually outgrown budget from a hung test.
 
 If the failure matches one of these, read `rare-failures.md` in this
 skill's directory for its triage pattern: `New regression against
-<version>` (feature benchmark), a cargo-fuzz crash, or
+<version>` (feature benchmark), a cargo-fuzz crash, a Miri failure, or
 `ImagesNotPublicError`.
 
 ## Step 5: Summarize

@@ -27,6 +27,15 @@ annotation names the file. For known-vs-new use
 `bin/ci-failures '<target name>'`; cargo-fuzz runs only in release
 qualification, so that is its entire history.
 
+## Miri failures
+
+`:rust: Miri test (full)` fails as either `timed_out` (a test too slow under
+Miri's interpreter) or `failed` with `unsupported operation` (code Miri
+cannot execute, e.g. a foreign function). Neither is a product bug, and the
+standard reaction is not to make the code Miri-compatible: add
+`#[cfg_attr(miri, ignore)]` with a short reason to the offending test, as
+about a thousand existing tests do.
+
 ## `ImagesNotPublicError`
 
 A PR adding a new publishable mzbuild image fails `:rust: Build x86_64`
