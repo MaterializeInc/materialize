@@ -1,0 +1,18 @@
+
+- name: definition
+  content: |
+    Materialize indexes maintain the full result set of the indexed object in
+    the memory of the [cluster](/concepts/clusters/) where the index is
+    created.[^db-term] The indexed results are kept up-to-date as new data
+    arrives.
+
+    ![Materialize index maintains the full result set in memory](/images/indexes/index_in_memory.svg)
+
+    Materialize indexes are **not** secondary indexes that store the index keys
+    and pointers to data rows.
+
+    ![Materialize indexes do not use a key-pointer structure.](/images/indexes/index_not_key_pointer.svg)
+
+    [^db-term]: Materialize indexes are like clustered hash indexes. The term
+    *clustered index* is a database term unrelated to Materialize clusters,
+    which are compute resources.

@@ -98,6 +98,7 @@ updates:
         - patch
 - package-ecosystem: docker
   directory: /misc/mcp-materialize-agents
+  directory: /misc/images/materialized-base
   schedule:
     interval: weekly
     day: sunday
