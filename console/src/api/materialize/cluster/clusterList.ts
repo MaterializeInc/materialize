@@ -31,6 +31,13 @@ import {
  * the replica's number down rather than be skipped. Averaging percentages is
  * only sound because every process of a replica has the same allocation, so
  * the per-process denominators are identical.
+ *
+ * Heap is the exception and takes the max instead. Its denominator is
+ * `heap_limit`, which the orchestrator reports per process rather than the
+ * size catalog configuring per size, so the processes are not guaranteed to
+ * share a denominator and an average of the percentages would not be a
+ * percentage of anything. The max is also what the shared builder documents
+ * for multi-process replicas.
  */
 function buildReplicaUtilization() {
   return queryBuilder
@@ -43,6 +50,7 @@ function buildReplicaUtilization() {
         "memoryPercent",
       ),
       sql<number | null>`SUM(cru.disk_percent) / COUNT(*)`.as("diskPercent"),
+      sql<number | null>`MAX(cru.heap_percent)`.as("heapPercent"),
     ]);
 }
 
@@ -100,6 +108,7 @@ export const buildClustersQuery = ({
         cpuPercent: number | null;
         memoryPercent: number | null;
         diskPercent: number | null;
+        heapPercent: number | null;
         statuses: {
           replica_id: string;
           process_id: string;
@@ -125,6 +134,7 @@ export const buildClustersQuery = ({
             "cru.cpuPercent",
             "cru.memoryPercent",
             "cru.diskPercent",
+            "cru.heapPercent",
             jsonArrayFrom(
               replicaEb
                 .selectFrom("mz_cluster_replica_statuses as crs_inner")

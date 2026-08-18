@@ -77,6 +77,7 @@ const buildReplica = (overrides: Partial<Replica> = {}): Replica => ({
   cpuPercent: 12.5,
   memoryPercent: 40,
   diskPercent: 25,
+  heapPercent: 45,
   statuses: [
     {
       replica_id: "u10",
@@ -147,8 +148,9 @@ const COLUMN = {
   cpu: 3,
   memory: 4,
   disk: 5,
-  lastStatusChange: 6,
-  actions: 7,
+  heap: 6,
+  lastStatusChange: 7,
+  actions: 8,
 } as const;
 
 const rowFor = (rowLabel: string) => {
@@ -214,6 +216,7 @@ describe("ClustersList replica rows", () => {
       "12.5%",
       "40.0%",
       "25.0%",
+      "45.0%",
       formatted(STATUS_UPDATED_AT),
       "",
     ]);

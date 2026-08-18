@@ -170,7 +170,7 @@ const columnHelper = createColumnHelper<ClusterRow>();
 /**
  * A utilization column, read from a replica by `read`.
  *
- * All three share one shape because the reading is per replica in every case: a
+ * They all share one shape because the reading is per replica in every case: a
  * cluster row ranks by its busiest replica and renders blank, and a replica
  * renders a bar, or a dash when it has no sample.
  */
@@ -191,8 +191,6 @@ const percentColumn = (
       id,
       header,
       sortingFn: sortingFunctions.numericNullsLast,
-      // Pinned because TanStack would otherwise infer this from the first row's
-      // value type, which for a cluster row depends on whether it has replicas.
       sortDescFirst: true,
       cell: (info) => {
         const row = info.row.original;
@@ -232,8 +230,6 @@ const columns = [
       id: "sizes",
       header: "Size",
       sortingFn: sortingFunctions.nullsLast,
-      // Pinned because TanStack would otherwise infer this from the first row's
-      // value type, which for a cluster row depends on whether it has replicas.
       sortDescFirst: true,
       // A cluster row is a heading, so it stays blank. Only a replica that
       // genuinely reports no size gets a dash.
@@ -244,14 +240,15 @@ const columns = [
     },
   ),
   percentColumn("cpuPercent", "CPU", (replica) => replica.cpuPercent),
-  // NOTE: this is `memory_percent`, RAM against the size's RAM allocation. The
-  // cluster detail page's "Memory Utilization" column is `heap_percent`, which
-  // is RAM plus swap over the heap limit, so the two read differently for a
-  // replica that is swapping.
+  // NOTE: this is `memory_percent`, RAM against the size's RAM allocation.
   percentColumn("memoryPercent", "Memory", (replica) => replica.memoryPercent),
   // NOTE: the denominator is the size's configured disk allocation, so this is
   // null, and renders a dash, for any replica on a size that allocates no disk.
   percentColumn("diskPercent", "Disk", (replica) => replica.diskPercent),
+  // NOTE: `heap_percent` is RAM plus swap over the heap limit. The heap limit
+  // comes from the orchestrator, not the size catalog, so this is null on any
+  // environment that does not report one.
+  percentColumn("heapPercent", "Heap", (replica) => replica.heapPercent),
   columnHelper.accessor(
     // NOTE: deliberately not the cluster's own `latestStatusUpdate`. That comes
     // from the replica status *history*, so it counts replicas that have since
@@ -269,8 +266,6 @@ const columns = [
       id: "lastStatusChange",
       header: "Last status change",
       sortingFn: sortingFunctions.nullsLast,
-      // Pinned for the same reason as the other two: otherwise the direction
-      // depends on the first row's value type.
       sortDescFirst: false,
       cell: (info) => {
         const row = info.row.original;

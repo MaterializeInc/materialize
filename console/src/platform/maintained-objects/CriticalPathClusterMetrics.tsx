@@ -232,7 +232,7 @@ const ReplicaMetricsRow = ({
   <SimpleGrid columns={2} spacing={3}>
     <ClusterMetricCard cluster={cluster} />
     <ReplicaInfoCard replica={replica} isDropped={isDropped} />
-    {/* Use maxHeap to match the "Memory Utilization" graph on the cluster
+    {/* Use maxHeap to match the "Heap Utilization" graph on the cluster
         overview. heap_percent already falls back to size-based memory percent
         when heap_limit is null (self-managed/emulator), so this is correct in
         both environments. */}

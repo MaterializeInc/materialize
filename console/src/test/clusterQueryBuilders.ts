@@ -44,6 +44,7 @@ export function buildClusterServerResponse(
       cpuPercent: 12.5,
       memoryPercent: 40,
       diskPercent: 25,
+      heapPercent: 45,
       statuses: [
         {
           replica_id: "u678",

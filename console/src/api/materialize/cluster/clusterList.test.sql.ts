@@ -45,6 +45,7 @@ describe("buildClusterSubscribe", () => {
           cpuPercent: NUMBER_OR_NULL,
           memoryPercent: NUMBER_OR_NULL,
           diskPercent: NUMBER_OR_NULL,
+          heapPercent: NUMBER_OR_NULL,
           statuses: [
             {
               process_id: 0,
@@ -85,6 +86,7 @@ describe("buildClusterSubscribe", () => {
             cpuPercent: NUMBER_OR_NULL,
             memoryPercent: NUMBER_OR_NULL,
             diskPercent: NUMBER_OR_NULL,
+            heapPercent: NUMBER_OR_NULL,
             statuses: [
               {
                 process_id: 0,
