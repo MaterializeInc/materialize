@@ -3093,7 +3093,7 @@ class FlipFlagsAction(Action):
             "2",
             "50000",
         ]
-        # 0 will end up as 256 probes internally because that's the floor.
+        # 0 will end up as 64 probes internally because that's the floor.
         self.flags_with_values[
             "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows"
         ] = [

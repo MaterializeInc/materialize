@@ -235,7 +235,7 @@ fn worker_pk_range(
 
 const SUPPORTED_PK_COLLATION: &str = "utf8mb4_bin";
 const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
-const MIN_PROBED_PREFIXES: u64 = 256;
+const MIN_PROBED_PREFIXES: u64 = 64;
 const BILLION_ROWS: u64 = 1_000_000_000;
 
 /// Partitioning configuration settings bundled to avoid accidental mixing.
