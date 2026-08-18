@@ -60,7 +60,7 @@ mz_compute_error_counts_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_error_c
 mz_compute_exports_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_exports_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_exports_per_worker"␠("export_id",␠"worker_id")
 mz_compute_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_frontiers_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_frontiers_per_worker"␠("export_id",␠"worker_id")
 mz_compute_hydration_times_ind  CREATE␠INDEX␠"mz_compute_hydration_times_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s750␠AS␠"mz_internal"."mz_compute_hydration_times"]␠("replica_id")
-mz_compute_hydration_timestamps_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_hydration_timestamps_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_hydration_timestamps_per_worker"␠("export_id",␠"worker_id")
+mz_compute_hydration_times_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_hydration_times_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_hydration_times_per_worker"␠("export_id",␠"worker_id")
 mz_compute_import_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_import_frontiers_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_import_frontiers_per_worker"␠("export_id",␠"import_id",␠"worker_id")
 mz_compute_lir_mapping_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_lir_mapping_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_lir_mapping_per_worker"␠("global_id",␠"lir_id",␠"worker_id")
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_operator_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_operator_durations_histogram_raw"␠("id",␠"worker_id",␠"duration_ns")
@@ -83,7 +83,7 @@ mz_message_batch_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_messag
 mz_message_batch_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_batch_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_batch_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_received_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_received_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_received_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
 mz_message_counts_sent_raw_s2_primary_idx  CREATE␠INDEX␠"mz_message_counts_sent_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_message_counts_sent_raw"␠("channel_id",␠"from_worker_id",␠"to_worker_id")
-mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s836␠AS␠"mz_internal"."mz_notices"]␠("id")
+mz_notices_ind  CREATE␠INDEX␠"mz_notices_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s835␠AS␠"mz_internal"."mz_notices"]␠("id")
 mz_object_arrangement_size_history_object_ind  CREATE␠INDEX␠"mz_object_arrangement_size_history_object_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s753␠AS␠"mz_internal"."mz_object_arrangement_size_history"]␠("object_id")
 mz_object_arrangement_size_history_ts_ind  CREATE␠INDEX␠"mz_object_arrangement_size_history_ts_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s753␠AS␠"mz_internal"."mz_object_arrangement_size_history"]␠("collection_timestamp")
 mz_object_arrangement_sizes_ind  CREATE␠INDEX␠"mz_object_arrangement_sizes_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s751␠AS␠"mz_internal"."mz_object_arrangement_sizes"]␠("replica_id")
@@ -344,12 +344,9 @@ mz_compute_hydration_statuses  replica_id
 mz_compute_hydration_times  object_id
 mz_compute_hydration_times  replica_id
 mz_compute_hydration_times  time_ns
-mz_compute_hydration_timestamps_per_worker  export_id
-mz_compute_hydration_timestamps_per_worker  hydrated_at
-mz_compute_hydration_timestamps_per_worker  installed_at
-mz_compute_hydration_timestamps_per_worker  started_at
-mz_compute_hydration_timestamps_per_worker  time_ns
-mz_compute_hydration_timestamps_per_worker  worker_id
+mz_compute_hydration_times_per_worker  export_id
+mz_compute_hydration_times_per_worker  time_ns
+mz_compute_hydration_times_per_worker  worker_id
 mz_compute_import_frontiers_per_worker  export_id
 mz_compute_import_frontiers_per_worker  import_id
 mz_compute_import_frontiers_per_worker  time

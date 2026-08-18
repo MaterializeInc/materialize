@@ -1245,4 +1245,3 @@ SELECT oid, name FROM mz_objects WHERE id LIKE 's%' AND oid < 20000 ORDER BY oid
 17113  mz_aws_account_id
 17114  mz_aws_external_id_prefix
 17115  mz_aws_connection_role_arn
-17116  mz_compute_hydration_timestamps_per_worker

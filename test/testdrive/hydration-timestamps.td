@@ -8,7 +8,8 @@
 # by the Apache License, Version 2.0.
 
 # Test the hydration lifecycle timestamps reported by
-# `mz_introspection.mz_compute_hydration_timestamps_per_worker`.
+# `mz_introspection.mz_compute_hydration_times_per_worker`, alongside the
+# `time_ns` duration the relation has always carried.
 #
 # These tests rely on testdrive's retry feature, as dataflows take an unknown
 # (but hopefully small) time to be installed and to hydrate. The one section
@@ -27,7 +28,7 @@ $ set-sql-timeout duration=60s
       installed_at IS NOT NULL,
       started_at IS NOT NULL,
       hydrated_at IS NOT NULL
-  FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
+  FROM mz_introspection.mz_compute_hydration_times_per_worker
   WHERE export_id LIKE 's%'
 true true true
 
@@ -41,7 +42,7 @@ true true true
       h.started_at >= h.installed_at,
       h.hydrated_at >= h.started_at,
       h.time_ns IS NOT NULL
-  FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
   JOIN mz_indexes i ON (i.id = h.export_id)
   WHERE i.name = 'idx'
 true true true true
@@ -50,22 +51,24 @@ true true true true
 # origin, so they must land in the recent past.
 
 > SELECT DISTINCT h.installed_at BETWEEN now() - '1 hour'::interval AND now()
-  FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
   JOIN mz_indexes i ON (i.id = h.export_id)
   WHERE i.name = 'idx'
 true
 
-# `mz_compute_hydration_times_per_worker` is an exact projection of the new
-# relation, so the two must never disagree.
+# `time_ns` and the timestamps measure the same interval by different means:
+# `time_ns` from an `Instant` taken when the export state is created, the
+# timestamps from logging event times rounded to microseconds. They must agree,
+# which is what makes the retained `time_ns` column and the new columns tell one
+# consistent story. The tolerance is generous because the point is to catch a
+# wrong interval or a units error, not to pin down the rounding.
 
-> SELECT count(*)
-  FROM mz_introspection.mz_compute_hydration_times_per_worker t
-  FULL OUTER JOIN mz_introspection.mz_compute_hydration_timestamps_per_worker h
-      USING (export_id, worker_id)
-  WHERE t.export_id IS NULL
-     OR h.export_id IS NULL
-     OR t.time_ns IS DISTINCT FROM h.time_ns
-0
+> SELECT DISTINCT
+      abs(extract(epoch FROM (h.hydrated_at - h.installed_at)) - h.time_ns / 1e9) < 1
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
+  JOIN mz_indexes i ON (i.id = h.export_id)
+  WHERE i.name = 'idx'
+true
 
 # An object whose inputs are unavailable is never scheduled, so it reports an
 # `installed_at` but no `started_at`. A cluster with no replicas never advances
@@ -82,7 +85,7 @@ true
       h.started_at IS NULL,
       h.hydrated_at IS NULL,
       h.time_ns IS NULL
-  FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
   JOIN mz_indexes i ON (i.id = h.export_id)
   WHERE i.name = 'idx_waiting'
 true true true true
@@ -96,7 +99,7 @@ true true true true
 > SELECT DISTINCT
       h.started_at > h.installed_at,
       h.hydrated_at >= h.started_at
-  FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
   JOIN mz_indexes i ON (i.id = h.export_id)
   WHERE i.name = 'idx_waiting'
 true true
@@ -129,7 +132,7 @@ ALTER SYSTEM SET compute_hydration_concurrency = 1;
 # An in-flight object is distinguishable from one that never started: it has a
 # `started_at` but no `hydrated_at`.
 > SELECT DISTINCT h.started_at IS NOT NULL, h.hydrated_at IS NULL
-  FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
   JOIN mz_materialized_views mv ON (mv.id = h.export_id)
   WHERE mv.name = 'mv_stuck'
 true true
@@ -140,7 +143,7 @@ true true
       h.installed_at IS NOT NULL,
       h.started_at IS NULL,
       h.hydrated_at IS NULL
-  FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
   JOIN mz_indexes i ON (i.id = h.export_id)
   WHERE i.name = 'idx_queued'
 true true true
@@ -166,7 +169,7 @@ ALTER SYSTEM RESET compute_hydration_concurrency;
 $ set-max-tries max-tries=1
 
 > CREATE MATERIALIZED VIEW mv_const1 IN CLUSTER test AS SELECT 1
-> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
+> SELECT count(*) FROM mz_introspection.mz_compute_hydration_times_per_worker
   WHERE installed_at IS NULL
      OR (started_at IS NULL AND hydrated_at IS NOT NULL)
      OR started_at < installed_at
@@ -174,7 +177,7 @@ $ set-max-tries max-tries=1
 0
 
 > CREATE MATERIALIZED VIEW mv_const2 IN CLUSTER test AS SELECT 2
-> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
+> SELECT count(*) FROM mz_introspection.mz_compute_hydration_times_per_worker
   WHERE installed_at IS NULL
      OR (started_at IS NULL AND hydrated_at IS NOT NULL)
      OR started_at < installed_at
@@ -182,7 +185,7 @@ $ set-max-tries max-tries=1
 0
 
 > CREATE MATERIALIZED VIEW mv_const3 IN CLUSTER test AS SELECT 3
-> SELECT count(*) FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
+> SELECT count(*) FROM mz_introspection.mz_compute_hydration_times_per_worker
   WHERE installed_at IS NULL
      OR (started_at IS NULL AND hydrated_at IS NOT NULL)
      OR started_at < installed_at

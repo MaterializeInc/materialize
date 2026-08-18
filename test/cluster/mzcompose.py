@@ -4331,7 +4331,7 @@ def workflow_test_hydration_timestamps(c: Composition) -> None:
                 cursor.execute("SET cluster = cluster1")
                 cursor.execute("""
                     SELECT h.worker_id, h.installed_at, h.started_at, h.hydrated_at
-                    FROM mz_introspection.mz_compute_hydration_timestamps_per_worker h
+                    FROM mz_introspection.mz_compute_hydration_times_per_worker h
                     JOIN mz_indexes i ON (i.id = h.export_id)
                     WHERE i.name = 'idx'
                     ORDER BY h.worker_id

@@ -1105,7 +1105,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
-        Builtin::Log(&MZ_COMPUTE_HYDRATION_TIMESTAMPS_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::MaterializedView(&MZ_KAFKA_SINKS),
         Builtin::MaterializedView(&MZ_KAFKA_CONNECTIONS),
@@ -1463,7 +1463,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
-        Builtin::View(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
     ];
 
     builtin_items.extend(notice::builtins());

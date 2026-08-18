@@ -315,59 +315,17 @@ pub static MZ_COMPUTE_ERROR_COUNTS_RAW: LazyLock<BuiltinLog> = LazyLock::new(|| 
     ontology: None,
 });
 
-pub static MZ_COMPUTE_HYDRATION_TIMESTAMPS_PER_WORKER: LazyLock<BuiltinLog> =
+pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
     LazyLock::new(|| BuiltinLog {
-        name: "mz_compute_hydration_timestamps_per_worker",
+        name: "mz_compute_hydration_times_per_worker",
         schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::LOG_MZ_COMPUTE_HYDRATION_TIMESTAMPS_PER_WORKER_OID,
+        oid: oid::LOG_MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER_OID,
         variant: LogVariant::Compute(ComputeLog::HydrationTime),
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
-            entity_name: "hydration_timestamps_per_worker",
-            description: "Hydration lifecycle of each compute export per worker.",
-            links: &const {
-                [OntologyLink {
-                    name: "hydration_timestamps_of",
-                    target: "compute_export_per_worker",
-                    properties: LinkProperties::fk_composite(
-                        "export_id",
-                        "export_id",
-                        Cardinality::OneToOne,
-                        &[("worker_id", "worker_id")],
-                    ),
-                }]
-            },
-            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
-        }),
-    });
-
-pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinView> =
-    LazyLock::new(|| BuiltinView {
-        name: "mz_compute_hydration_times_per_worker",
-        schema: MZ_INTROSPECTION_SCHEMA,
-        oid: oid::VIEW_MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER_OID,
-        desc: RelationDesc::builder()
-            .with_column("export_id", SqlScalarType::String.nullable(false))
-            .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
-            .with_column("time_ns", SqlScalarType::UInt64.nullable(true))
-            .with_key(vec![0, 1])
-            .finish(),
-        column_comments: BTreeMap::from_iter([
-            ("export_id", "The ID of the export."),
-            ("worker_id", "The ID of the worker thread."),
-            (
-                "time_ns",
-                "The time it took for the dataflow to hydrate, in nanoseconds. \
-                 NULL while the export is not hydrated.",
-            ),
-        ]),
-        sql: "
-SELECT export_id, worker_id, time_ns
-FROM mz_introspection.mz_compute_hydration_timestamps_per_worker",
-        access: vec![PUBLIC_SELECT],
-        ontology: Some(Ontology {
             entity_name: "hydration_time_per_worker",
-            description: "Time in nanoseconds for each compute export to hydrate per worker.",
+            description: "Hydration duration and lifecycle timestamps for each compute export \
+                          per worker.",
             links: &const {
                 [OntologyLink {
                     name: "hydration_time_of",
