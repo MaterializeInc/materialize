@@ -2016,7 +2016,9 @@ class MySqlInitialLoad(MySqlCdc):
     # load, so allow a bit more headroom than the base default before flagging a
     # regression.
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
+        # Integer primary keys are no longer handled for primary key splitting.
+        # Bumping to account for this.
+        MeasurementType.WALLCLOCK: 0.25,
         MeasurementType.MEMORY_MZ: 0.30,
         MeasurementType.MEMORY_CLUSTERD: 0.50,
     }
@@ -2168,7 +2170,11 @@ class MySqlInitialLoadMultiWorkerSingleTable(MySqlCdc):
     single-table companion to MySqlInitialLoadMultiWorkerSampled."""
 
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
+        # Bumping to account for small performance regression for approximate
+        # primary key probing: measured locally at 2-14% wallclock versus the
+        # exact OFFSET-sampler baseline. Grabbing the offset was quite fast
+        # for small datasets in MySQL.
+        MeasurementType.WALLCLOCK: 0.25,
         MeasurementType.MEMORY_MZ: 0.60,
         MeasurementType.MEMORY_CLUSTERD: 0.60,
     }
