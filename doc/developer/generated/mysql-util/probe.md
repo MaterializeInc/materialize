@@ -1,6 +1,6 @@
 ---
 source: src/mysql-util/src/probe.rs
-revision: a2661591b3
+revision: 0a1805034a
 ---
 
 # mysql-util::probe

@@ -1,12 +1,12 @@
 ---
 source: src/sql/src/plan.rs
-revision: 447da2b53e
+revision: 39dcae2fba
 ---
 
 # mz-sql::plan
 
 Defines all `Plan` variants produced by the SQL planner and consumed by the adapter, plus the shared infrastructure for planning.
-Key types exported from `plan.rs`: `Plan` (the top-level enum covering every statement kind), `PlanContext`, `QueryContext`, `QueryLifetime`, `Params`, and dozens of plan-specific structs (`CreateSourcePlan`, `SelectPlan`, `SubscribePlan`, etc.).
+Key types exported from `plan.rs`: `Plan` (the top-level enum covering every statement kind), `PlanContext`, `QueryContext`, `QueryLifetime`, `Params`, and dozens of plan-specific structs (`CreateSourcePlan`, `SelectPlan`, `SubscribePlan`, `CreateMetricSinkPlan`, etc.).
 `SubscribeFrom::Query` carries an `HirRelationExpr` (not a `MirRelationExpr`); lowering to MIR happens downstream of planning.
 `TryFromValue` is re-exported from the `with_options` submodule for callers that need to convert `WithOptionValue` items outside the planner.
 The module is organized into: `query` (query planning), `hir` + `lowering` (HIR IR and HIR→MIR translation), `statement` (statement dispatch), `func` helpers (`typeconv`, `side_effecting_func`), `transform_ast`/`transform_hir` (rewrites), and supporting utilities (`error`, `notice`, `literal`, `plan_utils`, `scope`, `with_options`, `explain`, `virtual_syntax`).

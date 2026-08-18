@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/open.rs
-revision: 4f0805a4d8
+revision: 39dcae2fba
 ---
 
 # adapter::catalog::open
