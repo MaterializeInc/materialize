@@ -489,7 +489,7 @@ mv_div_by_zero   1
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 3
-idx2_div_by_zero 3
+idx2_div_by_zero 1
 mv_div_by_zero   3
 
 > DELETE FROM zeros
@@ -508,7 +508,7 @@ mv_div_by_zero   3
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
 idx1_div_by_zero 2
-idx2_div_by_zero 2
+idx2_div_by_zero 1
 mv_div_by_zero   2
 
 > DROP INDEX idx1_div_by_zero
@@ -517,7 +517,7 @@ mv_div_by_zero   2
   FROM mz_introspection.mz_compute_error_counts c
   JOIN mz_objects o ON (c.export_id = o.id)
   ORDER BY name
-idx2_div_by_zero 2
+idx2_div_by_zero 1
 mv_div_by_zero   2
 
 > DROP MATERIALIZED VIEW mv_div_by_zero
