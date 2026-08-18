@@ -31,6 +31,7 @@ import websocket
 from psycopg import Cursor, sql
 from psycopg.errors import (
     DatabaseError,
+    DivisionByZero,
     InternalError_,
     OperationalError,
     QueryCanceled,
@@ -4893,6 +4894,109 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
                     "state without first submitting a write, so the window was never "
                     "observed"
                 )
+
+
+def workflow_test_occ_sealed_input_write_stands_alone(c: Composition) -> None:
+    """A read-then-write whose selection reads persisted state must commit as
+    its own transaction, including when its subscribe ends on its own.
+
+    The OCC path stages a mutation's diffs only when the selection reads
+    nothing, because only then is the statement one that may belong to a
+    transaction. A selection that reads persisted state commits inside the OCC
+    loop and ends the implicit transaction it opened instead of spanning the
+    rest of an extended-protocol pipeline, so a later failure there cannot undo
+    it.
+
+    Which of the two happens is decided twice, and the answers differ. Before
+    the dataflow runs it is `depends_on()` on the selection. Once it runs it is
+    whether the subscribe closed on its own, which it also does for a sealed
+    persisted input: a `REFRESH AT` materialized view past its last refresh has
+    an empty write frontier, so the sink's output frontier reaches the empty
+    antichain. An `INSERT ... SELECT` over such a view reads persisted state and
+    still takes the closed-channel exit. Only the syntactic answer may decide
+    transaction membership, or whether a statement's rows survive would turn on
+    an input passing its last refresh rather than on the statement.
+    """
+
+    def rows_surviving(write: str) -> int:
+        """Rows left in `dst` once `write` has succeeded and the pipeline behind
+        it has failed. Leaves `dst` empty again.
+
+        `write` is sent as one extended-protocol pipeline with a failing
+        statement behind it and no `Sync` between them. A pipeline is an
+        implicit transaction, so rows going missing here is exactly `write`
+        having joined that transaction instead of committing on its own.
+        """
+        with c.sql_connection() as conn:
+            try:
+                # psycopg pipelines the extended protocol only, and syncs when
+                # the block ends. Autocommit keeps a `BEGIN` off the front,
+                # which the OCC path would refuse outright.
+                with conn.cursor() as cur, conn.pipeline():
+                    cur.execute(write.encode())
+                    cur.execute(b"SELECT 1 / 0")
+            except DivisionByZero:
+                pass
+            else:
+                raise AssertionError(f"the statement behind {write!r} succeeded")
+        rows = c.sql_query("SELECT count(*) FROM dst")[0][0]
+        c.sql("DELETE FROM dst")
+        return rows
+
+    with c.override(
+        Materialized(
+            # Sampled once at startup, so this cannot be an `ALTER SYSTEM SET`.
+            additional_system_parameter_defaults={
+                "enable_adapter_frontend_occ_read_then_write": "true"
+            },
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent("""
+                CREATE TABLE src (a int);
+                INSERT INTO src VALUES (1), (2), (3);
+                CREATE TABLE dst (a int);
+                CREATE MATERIALIZED VIEW sealed WITH (REFRESH AT CREATION) AS
+                    SELECT a FROM src;
+                """))
+
+        # An empty write frontier is what closes the subscribe, and it surfaces
+        # as a NULL `write_frontier`. Hydration alone is not enough, so wait for
+        # the seal rather than for the first successful read.
+        sealed = """SELECT f.write_frontier IS NULL
+                    FROM mz_internal.mz_frontiers f
+                    JOIN mz_materialized_views m ON (m.id = f.object_id)
+                    WHERE m.name = 'sealed'"""
+        deadline = time.time() + 120
+        while c.sql_query(sealed) != [(True,)]:
+            assert (
+                time.time() < deadline
+            ), "the REFRESH AT CREATION materialized view never sealed"
+            time.sleep(0.1)
+
+        # Control: the same pipeline over `src`, whose subscribe never ends on
+        # its own. It pins the harness, since rows lost here would mean the
+        # pipeline was never an open transaction to begin with.
+        write = "INSERT INTO dst SELECT a FROM src"
+        rows = rows_surviving(write)
+        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
+
+        # Ask the process rather than the catalog which path that took: the
+        # write only reaches the histogram if the frontend sequenced it, and on
+        # the coordinator's lock path none of this is about read-then-write
+        # transaction handling at all.
+        metrics = c.exec(
+            "materialized", "curl", "localhost:6878/metrics", capture=True
+        ).stdout
+        assert any(
+            line.startswith("mz_occ_read_then_write_retry_count_count ")
+            and float(line.split()[1]) > 0
+            for line in metrics.splitlines()
+        ), "no read-then-write went through the OCC path"
+
+        write = "INSERT INTO dst SELECT a FROM sealed"
+        rows = rows_surviving(write)
+        assert rows == 3, f"{write} succeeded, then lost {3 - rows} of its 3 rows"
 
 
 def workflow_test_refresh_mv_warmup(

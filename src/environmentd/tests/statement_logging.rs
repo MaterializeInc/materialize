@@ -1256,11 +1256,14 @@ const DML_LOGGING_PARITY_CASES: &[DmlLoggingCase] = &[
         after: &[],
         frontend_only_execution_timestamp: true,
     },
+    // Reads nothing, so both paths stage the rows and the write timestamp is
+    // chosen when the transaction commits rather than by the statement. Neither
+    // path records an execution timestamp for it.
     DmlLoggingCase {
         before: &[],
         sql: "INSERT INTO parity_t VALUES (100) RETURNING x",
         after: &[],
-        frontend_only_execution_timestamp: true,
+        frontend_only_execution_timestamp: false,
     },
     // A RETURNING insert that matches no rows. Both paths report a row count
     // rather than an empty result set, so this pins the response kind (and with

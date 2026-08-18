@@ -117,7 +117,8 @@ pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Dura
 pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "enable_expression_cache",
     true,
-    "Use a cache to store optimized expressions to help speed up start times.",
+    "Use a cache to store optimized expressions to help speed up start times. \
+     Read at startup, so changing it takes effect on the next restart.",
 );
 
 /// Whether to enable password authentication.
@@ -416,7 +417,8 @@ pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
     "enable_adapter_frontend_occ_read_then_write",
     false,
     "Use frontend sequencing (with optimistic concurrency control) for \
-     DELETE, UPDATE, and INSERT operations.",
+     DELETE, UPDATE, and INSERT operations. Read at startup, so changing it \
+     takes effect on the next restart.",
 );
 
 /// Adds the full set of all adapter `Config`s.
