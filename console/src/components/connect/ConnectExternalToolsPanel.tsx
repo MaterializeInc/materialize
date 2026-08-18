@@ -115,7 +115,10 @@ const CreateAppPasswordRow = ({
               size="sm"
               flexShrink={0}
               isDisabled={isPending}
-              onClick={() => setIsNaming(false)}
+              onClick={() => {
+                setIsNaming(false);
+                setName("");
+              }}
             >
               Cancel
             </Button>
@@ -246,6 +249,7 @@ export const ConnectExternalToolsPanel = ({
                   key={candidate.id}
                   as="button"
                   type="button"
+                  aria-pressed={isActive}
                   px="3"
                   py="1.5"
                   borderRadius="lg"

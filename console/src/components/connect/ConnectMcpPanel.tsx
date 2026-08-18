@@ -75,7 +75,7 @@ const McpServerRadioCard = forwardRef<
   RadioProps & { label: string; blurb: string },
   "input"
 >(({ label, blurb, ...props }, ref) => {
-  const { colors } = useTheme<MaterializeTheme>();
+  const { colors, shadows } = useTheme<MaterializeTheme>();
   const { getInputProps, getRadioProps } = useRadio(props);
 
   return (
@@ -92,6 +92,9 @@ const McpServerRadioCard = forwardRef<
         bg={colors.background.primary}
         _checked={{
           borderColor: colors.accent.brightPurple,
+        }}
+        _focus={{
+          boxShadow: shadows.input.focus,
         }}
         _hover={{
           borderColor: colors.border.secondary,
