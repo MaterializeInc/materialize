@@ -2836,6 +2836,54 @@ mod tests {
         .await;
     }
 
+    /// Resolving a statement and resolving its normalized `create_sql` must
+    /// yield the same `ResolvedIds`.
+    ///
+    /// The in-memory catalog records the ids from the first resolution, while
+    /// a catalog reload re-derives them from the stored `create_sql`. Any
+    /// disagreement makes the reloaded catalog differ from the in-memory one.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // slow
+    async fn test_resolved_ids_survive_create_sql_round_trip() {
+        use mz_ore::collections::CollectionExt;
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &conn_catalog);
+
+            let resolve_and_normalize = |scx: &mut StatementContext, sql: &str| {
+                let parsed = mz_sql_parser::parser::parse_statements(sql)
+                    .expect("parses")
+                    .into_element()
+                    .ast;
+                let (stmt, ids) = names::resolve(scx.catalog, parsed).expect("resolves");
+                let normalized =
+                    mz_sql::normalize::create_statement(scx, stmt).expect("normalizes");
+                (ids, normalized)
+            };
+
+            let mut ids_by_spelling = Vec::new();
+            for sql in [
+                "create table public.t (a pg_catalog.int4[])",
+                "create table public.t (a pg_catalog._int4)",
+                "create table public.t (a pg_catalog.int4)",
+                "create table public.t (a pg_catalog.int4 list)",
+                "create view public.v as select null::pg_catalog.text[]",
+            ] {
+                let (ids, normalized) = resolve_and_normalize(scx, sql);
+                let (round_tripped_ids, _) = resolve_and_normalize(scx, &normalized);
+                assert_eq!(
+                    ids.items().collect::<Vec<_>>(),
+                    round_tripped_ids.items().collect::<Vec<_>>(),
+                    "resolving {normalized:?} produced different ids than {sql:?}",
+                );
+                ids_by_spelling.push((sql, ids));
+            }
+
+            catalog.expire().await;
+        })
+        .await;
+    }
+
     // Test that if a large catalog item is somehow committed, then we can still load the catalog.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // slow
