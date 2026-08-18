@@ -156,6 +156,8 @@ use mz_ore::soft_assert_or_log;
 use mz_persist_client::metrics::{SinkMetrics, SinkWorkerMetrics, UpdateDelta};
 use mz_repr::{Diff, Timestamp};
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::align_buffer::{AlignBuffer, Origin};
+use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::chunk::LZ4_CODEC;
 use mz_timely_util::pool_config;
 use mz_timely_util::temporal::{Bucket, BucketChain};
@@ -1488,10 +1490,9 @@ impl<D: Data> Chunk<D> {
                 .expect("spill mutex poisoned")
                 .take()
                 .expect("spilled form present until materialized");
-            let mut words = Vec::new();
-            handle.read_into(&mut words);
+            let body = AlignBuffer::build(Origin::Fetch, |words| handle.read_into(words));
             drop(handle);
-            Column::Align(words)
+            Column::Align(body)
         })
     }
 
@@ -1579,7 +1580,7 @@ impl<D: Data> Chunk<D> {
 /// serialized byte boundary (~2 MiB, matching the ship granularity used elsewhere in the
 /// codebase). Each minted chunk is therefore a single, predictably-sized aligned allocation.
 struct ChunkBuilder<D: Data> {
-    inner: mz_timely_util::columnar::builder::ColumnBuilder<(D, Timestamp, Diff)>,
+    inner: ColumnBuilder<(D, Timestamp, Diff)>,
     /// The generational depth minted chunks carry as their pool hint.
     depth: u8,
 }
@@ -1597,9 +1598,7 @@ impl<D: Data> ChunkBuilder<D> {
             // These chunks are retained in the correction chains across
             // timestamps rather than shipped, so they are stamped apart from
             // dataflow-edge traffic in the align-buffer metrics.
-            inner: mz_timely_util::columnar::builder::ColumnBuilder::with_origin(
-                mz_timely_util::columnar::align_buffer::Origin::Correction,
-            ),
+            inner: ColumnBuilder::with_origin(Origin::Correction),
             depth,
         }
     }

@@ -18,8 +18,8 @@
 //! question is about: they are owned by whoever holds the container and belong
 //! to no budget. The other origins are recorded so they can be told apart from
 //! the edges, not because they share their behavior. [`Origin::Correction`]
-//! and [`Origin::Pager`] bodies are retained on purpose, and [`Origin::Fetch`]
-//! and [`Origin::Decode`] bodies come from a read rather than a producer.
+//! bodies are retained on purpose, and [`Origin::Fetch`] and
+//! [`Origin::Decode`] bodies come from a read rather than a producer.
 //!
 //! Recording is off until [`set_tracking_enabled`], because it costs an
 //! [`Instant::now`] and a handful of atomics per buffer, on a path that mints
@@ -54,7 +54,6 @@ static TRACKING: AtomicBool = AtomicBool::new(false);
 
 /// Per-origin counters, indexed by `Origin::index`.
 static COUNTERS: [Counters; Origin::ALL.len()] = [
-    Counters::new(),
     Counters::new(),
     Counters::new(),
     Counters::new(),

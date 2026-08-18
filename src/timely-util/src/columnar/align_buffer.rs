@@ -47,13 +47,6 @@ pub enum Origin {
     /// from [`Origin::Ship`] because a retained body's life says nothing about
     /// a body in flight on an edge.
     Correction,
-    /// Serialized to a fitting size by the column pager, which does this to
-    /// every typed body it is handed, before parking or paging it. Covers both
-    /// arrangement merge chains and the sink correction chains, which route
-    /// through the pager whatever the batcher gate says. A correction chunk the
-    /// builder minted itself is [`Origin::Correction`]; one the pager
-    /// serialized lands here.
-    Pager,
     /// Copied out of a backing store to serve a read.
     Fetch,
     /// Relocated from received bytes that could not be borrowed in place,
@@ -63,11 +56,10 @@ pub enum Origin {
 
 impl Origin {
     /// Every origin, in metric-label order.
-    pub const ALL: [Origin; 6] = [
+    pub const ALL: [Origin; 5] = [
         Origin::Ship,
         Origin::Consolidate,
         Origin::Correction,
-        Origin::Pager,
         Origin::Fetch,
         Origin::Decode,
     ];
@@ -78,7 +70,6 @@ impl Origin {
             Origin::Ship => "ship",
             Origin::Consolidate => "consolidate",
             Origin::Correction => "correction",
-            Origin::Pager => "pager",
             Origin::Fetch => "fetch",
             Origin::Decode => "decode",
         }
@@ -90,9 +81,8 @@ impl Origin {
             Origin::Ship => 0,
             Origin::Consolidate => 1,
             Origin::Correction => 2,
-            Origin::Pager => 3,
-            Origin::Fetch => 4,
-            Origin::Decode => 5,
+            Origin::Fetch => 3,
+            Origin::Decode => 4,
         }
     }
 }
