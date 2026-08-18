@@ -392,6 +392,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn splits_evenly_across_workers() -> Result<(), MySqlError> {
         let mut db = MockDb::new(keys(200_000));
         let count = u64::cast_from(db.keys.len());
@@ -463,6 +464,7 @@ mod tests {
     }
 
     #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // too slow
     async fn probe_budget_bounds_requests() -> Result<(), MySqlError> {
         // Confirms baseline over 200 requests.
         let mut db = MockDb::new(keys(200_000));
