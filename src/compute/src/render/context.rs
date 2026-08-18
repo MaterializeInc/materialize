@@ -438,10 +438,15 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
 }
 /// Rewrites an arranged error collection to hold each of its errors once.
 ///
-/// Sound because error semantics depend only on whether an error is present, and correct under
+/// Sound because query semantics depend only on whether an error is present, and correct under
 /// retraction only because it reads the accumulated collection: no pointwise function of the input
 /// diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the errors
 /// retract.
+///
+/// NOTE: One consumer does read the multiplicity. Error-count introspection reports it as the
+/// number of failing rows, so `log_dataflow_errors` must see the collection before this collapses
+/// it, or a dataflow reports one error however many rows failed. Collapse after the logging, never
+/// before.
 pub(crate) fn distinct_arranged_errs<'a, T: RenderTimestamp>(
     errs: Arranged<'a, ErrAgent<T, Diff>>,
     name: &str,

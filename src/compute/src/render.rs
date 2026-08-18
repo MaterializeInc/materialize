@@ -711,13 +711,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
 
         let key = &idx.key;
         match bundle.arrangement(key) {
-            Some(ArrangementFlavor::Local(mut oks, errs)) => {
-                // Normalize before handing the trace out. An importing dataflow receives these
-                // diffs verbatim and its first consolidation sums them, so an uncollapsed export
-                // multiplies across the object graph exactly as an uncollapsed binding does within
-                // one dataflow.
-                let mut errs = distinct_arranged_errs(errs, "Distinct exported errors");
-
+            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -737,6 +731,13 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
+
+                // Normalize only what leaves the dataflow. An importing dataflow receives these
+                // diffs verbatim and its first consolidation sums them, so an uncollapsed export
+                // multiplies across the object graph exactly as an uncollapsed binding does within
+                // one dataflow. Strictly after the logging above, which reports the multiplicity as
+                // an error count: collapsing first would report one error however many rows failed.
+                let errs = distinct_arranged_errs(errs, "Distinct errors");
 
                 compute_state.traces.set(
                     idx_id,
@@ -813,17 +814,12 @@ where
                         "Arrange export iterative",
                     );
 
-                // Normalize before handing the trace out, for the same reason as `export_index`:
-                // an importing dataflow consolidates these diffs and would otherwise accumulate
-                // this dataflow's error fan-out into its own.
-                let mut errs = distinct_arranged_errs(
-                    errs.as_collection(|k, v| (k.clone(), v.clone()))
-                        .leave(outer)
-                        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                            "Arrange export iterative err",
-                        ),
-                    "Distinct exported errors",
-                );
+                let mut errs = errs
+                    .as_collection(|k, v| (k.clone(), v.clone()))
+                    .leave(outer)
+                    .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                        "Arrange export iterative err",
+                    );
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
@@ -844,6 +840,10 @@ where
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
+
+                // Normalize only what leaves the dataflow, and strictly after the logging above.
+                // See `export_index` for both halves of the reasoning.
+                let errs = distinct_arranged_errs(errs, "Distinct errors");
 
                 compute_state.traces.set(
                     idx_id,
