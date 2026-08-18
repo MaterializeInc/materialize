@@ -131,7 +131,6 @@ skip = [
     # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
     # while native-tls still pulls older versions.
     { name = "core-foundation", version = "0.10.1" },
-    { name = "openssl-probe", version = "0.2.1" },
     # reqsign (via iceberg-storage-opendal / opendal) pins older deps
     # than the workspace.
     { name = "jsonwebtoken", version = "9.3.1" },
