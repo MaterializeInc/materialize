@@ -69,7 +69,6 @@ from materialize.test_analytics.data.scalability_framework import (
     scalability_framework_result_storage,
 )
 from materialize.test_analytics.test_analytics_db import TestAnalyticsDb
-from materialize.ui import UIError
 from materialize.util import YesNoOnce, all_subclasses
 from materialize.version_ancestor_overrides import (
     ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS,
@@ -340,12 +339,14 @@ def get_baseline_and_other_endpoints(
                 )
 
                 if resolved_target is None:
-                    if specified_target == regression_against_target:
-                        raise UIError(
-                            f"Could not resolve --regression-against={specified_target} "
-                            "to an image tag, so no regression comparison can be performed"
-                        )
-
+                    # No comparable ancestor image exists. The common case is
+                    # an accepted regression that landed on main and demands a
+                    # baseline newer than any published release (see
+                    # ANCESTOR_OVERRIDES_FOR_SCALABILITY_REGRESSIONS); only
+                    # release images share HEAD's build profile, so there is
+                    # nothing fair to measure against until that release ships.
+                    # Drop the target and keep benchmarking the remaining ones,
+                    # so the measurements still reach test analytics.
                     print(
                         f"Skipping target {specified_target}: no ancestor image could be resolved"
                     )
@@ -424,7 +425,7 @@ def report_assessment(regression_assessment: RegressionAssessment):
     print("+++ Assessment of regressions")
 
     if not regression_assessment.has_comparison_target():
-        print("No comparison was performed because not baseline was specified")
+        print("No comparison was performed because there is no baseline endpoint")
         return
 
     assert regression_assessment.baseline_endpoint is not None
