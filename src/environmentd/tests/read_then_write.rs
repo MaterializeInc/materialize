@@ -12,11 +12,11 @@
 //! path.
 //!
 //! Most tests here enable `enable_adapter_frontend_occ_read_then_write` and so
-//! cover the frontend OCC path. `test_counts_query_total` runs with the flag
-//! both off and on, because the property it checks must hold whichever path
-//! sequenced the statement. `test_cancel_read_then_write` covers the
-//! coordinator path only, and is the other half of the cancellation behavior
-//! its OCC counterpart pins.
+//! cover the frontend OCC path. `test_counts_query_total` and
+//! `test_constant_insert_reading_catalog_in_transaction` run with the flag both
+//! off and on, because what they check is how the two paths compare.
+//! `test_cancel_read_then_write` covers the coordinator path only, and is the
+//! other half of the cancellation behavior its OCC counterpart pins.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
@@ -1720,6 +1720,82 @@ fn test_zero_row_write_does_not_wait_for_keepalive() {
         "zero-row writes averaged {per_statement:?} each, which is the keepalive \
          interval rather than a nudged group commit (total {elapsed:?})"
     );
+}
+
+/// An INSERT whose values are constant to the parser can still plan to a
+/// selection that reads persisted state, because SQL-implemented builtins expand
+/// to queries over system relations. The AST gate cannot see that, so the
+/// decision falls to the planned selection.
+///
+/// Such a statement is invalid whatever the transaction state, since a
+/// read-then-write may not read a system table. What this pins is which reason
+/// each path reports, because reporting the transaction state suggests the
+/// statement would work outside a transaction when it never does.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_constant_insert_reading_catalog_in_transaction() {
+    // `pg_get_viewdef` expands to `(SELECT definition FROM mz_catalog.mz_views
+    // WHERE name = $1)`, so the planned selection carries a dependency while the
+    // AST holds only a function call. `ConstantVisitor` rejects `Show` and
+    // `Table` references, nothing else, so the entry gate admits both of these.
+    const READS_CATALOG: &str = "INSERT INTO t VALUES (pg_get_viewdef('v'))";
+    const READS_CATALOG_AND_MZ_NOW: &str =
+        "INSERT INTO t VALUES (pg_get_viewdef('v') || mz_now()::text)";
+
+    let error_code = |client: &mut postgres::Client, sql: &str| {
+        let err = client.execute(sql, &[]).unwrap_err();
+        err.as_db_error()
+            .unwrap_or_else(|| panic!("{sql} did not fail on the server: {err}"))
+            .code()
+            .clone()
+    };
+
+    for frontend in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default(
+                "enable_adapter_frontend_occ_read_then_write".to_string(),
+                frontend.to_string(),
+            )
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.batch_execute("CREATE TABLE t (a text)").unwrap();
+        client.batch_execute("CREATE VIEW v AS SELECT 1").unwrap();
+
+        // Reading a system table is what makes these invalid, and both paths
+        // agree on that when no transaction is in the way.
+        assert_eq!(
+            error_code(&mut client, READS_CATALOG),
+            SqlState::INVALID_TRANSACTION_STATE,
+            "frontend={frontend}: a read-then-write may not read a system table"
+        );
+
+        // `mz_now` outranks the transaction state on both paths. Answering the
+        // transaction question first would report 25001 and hide the reason the
+        // statement can never work.
+        client.batch_execute("BEGIN").unwrap();
+        assert_eq!(
+            error_code(&mut client, READS_CATALOG_AND_MZ_NOW),
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "frontend={frontend}: mz_now must outrank the transaction refusal"
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+
+        // The dependency question is where the paths still differ. The frontend
+        // refuses on transaction state before it validates dependencies, so it
+        // reports the transaction where the lock path reports the selection.
+        client.batch_execute("BEGIN").unwrap();
+        let expected = if frontend {
+            SqlState::ACTIVE_SQL_TRANSACTION
+        } else {
+            SqlState::INVALID_TRANSACTION_STATE
+        };
+        assert_eq!(
+            error_code(&mut client, READS_CATALOG),
+            expected,
+            "frontend={frontend}: unexpected reason reported in a transaction"
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+    }
 }
 
 /// An INSERT whose values read no persisted state may run in a transaction,

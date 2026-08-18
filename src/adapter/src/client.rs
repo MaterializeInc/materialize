@@ -65,7 +65,9 @@ use crate::command::{
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
-use crate::frontend_read_then_write::{FrontendWriteAttemptState, FrontendWriteCancellation};
+use crate::frontend_read_then_write::{
+    FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
+};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
@@ -1956,6 +1958,20 @@ impl SessionClient {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let in_transaction = session.transaction().is_effectively_multi_statement();
             if in_transaction && !rtw_plan.selection.depends_on().is_empty() {
+                // `mz_now` outranks the transaction state, matching the lock
+                // path, which admits this class of statement past its own
+                // transaction gate and then reports `mz_now` while sequencing
+                // it. Both errors are reachable from one statement: the AST gate
+                // above admits an INSERT whose values are constant to the
+                // parser, and such a statement can carry both `mz_now()` and a
+                // builtin that reads a system relation. Reporting the
+                // transaction would be the worse answer of the two, because it
+                // suggests the statement works outside a transaction.
+                if contains_mz_now(&rtw_plan) {
+                    return Err(AdapterError::Unsupported(
+                        "calls to mz_now in write statements",
+                    ));
+                }
                 return Err(prohibited_in_transaction(&stmt));
             }
         }
