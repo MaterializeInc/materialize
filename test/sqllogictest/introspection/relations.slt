@@ -55,6 +55,7 @@ ArrangementSize  LogOperatorHydration␠(2)  alloc::vec::Vec<alloc::rc::Rc<diffe
 BuildingObject(User(2))  expire_stream_at(materialize.public.test_primary_idx_export_index_errs)  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyBatch<mz_compute::typedefs::spines::MzStack<((mz_compute::render::errors::DataflowErrorSer,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 BuildingObject(User(2))  expire_stream_at(materialize.public.test_primary_idx_export_index_oks)  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Concatenate  FlatMap  alloc::vec::Vec<(mz_compute::render::errors::DataflowErrorSer,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+Distinct␠errors  ArrangementSize  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyBatch<mz_compute::typedefs::spines::MzStack<((mz_compute::render::errors::DataflowErrorSer,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 Exchange  FlatMap  alloc::vec::Vec<(u64,␠mz_txn_wal::txn_read::DataRemapEntry<mz_repr::timestamp::Timestamp>)>
 Feedback  persist_source_backpressure(backpressure(u1))  alloc::vec::Vec<core::convert::Infallible>
 FlatMap  ArrangeBy[[Column(0,␠"a"),␠Column(1,␠"b")]]-errors  alloc::vec::Vec<((mz_compute::render::errors::DataflowErrorSer,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -65,6 +66,7 @@ FormArrangementKey  Concatenate  alloc::vec::Vec<(mz_compute::render::errors::Da
 InputRegion:␠materialize.public.test_primary_idx  BuildRegion:␠materialize.public.test_primary_idx  alloc::vec::Vec<(mz_compute::render::errors::DataflowErrorSer,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 InputRegion:␠materialize.public.test_primary_idx  BuildRegion:␠materialize.public.test_primary_idx  alloc::vec::Vec<(mz_repr::row::Row,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 LimitProgress(Dataflow:␠materialize.public.test_primary_idx)  Probe  alloc::vec::Vec<(mz_repr::row::Row,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
+LogDataflowErrorsStream  Distinct␠errors  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyBatch<mz_compute::typedefs::spines::MzStack<((mz_compute::render::errors::DataflowErrorSer,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 LogOperatorHydration␠(1)  FormArrangementKey  alloc::vec::Vec<(mz_repr::row::Row,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 OkErr  SuppressEarlyProgress  alloc::vec::Vec<(mz_repr::row::Row,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 SuppressEarlyProgress  LimitProgress(Dataflow:␠materialize.public.test_primary_idx)  alloc::vec::Vec<(mz_repr::row::Row,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
@@ -97,10 +99,10 @@ GROUP BY type;
 2  alloc::vec::Vec<(usize,␠mz_persist_client::fetch::ExchangeableBatchPart<mz_repr::timestamp::Timestamp>)>
 2  alloc::vec::Vec<mz_txn_wal::txn_read::DataRemapEntry<mz_repr::timestamp::Timestamp>>
 4  alloc::vec::Vec<(core::result::Result<mz_repr::row::Row,␠mz_compute::render::errors::DataflowErrorSer>,␠(mz_repr::timestamp::Timestamp,␠mz_storage_operators::persist_source::Subtime),␠mz_ore::overflowing::Overflowing<i64>)>
-5  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyBatch<mz_compute::typedefs::spines::MzStack<((mz_compute::render::errors::DataflowErrorSer,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 5  alloc::vec::Vec<core::convert::Infallible>
 6  alloc::vec::Vec<(mz_compute::render::errors::DataflowErrorSer,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 6  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::val_batch::OrdValBatch<mz_row_spine::spines::RowRowLayout<((mz_repr::row::Row,␠mz_repr::row::Row),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
+7  alloc::vec::Vec<alloc::rc::Rc<differential_dataflow::trace::implementations::ord_neu::key_batch::OrdKeyBatch<mz_compute::typedefs::spines::MzStack<((mz_compute::render::errors::DataflowErrorSer,␠()),␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>>>>
 9  alloc::vec::Vec<(mz_repr::row::Row,␠mz_repr::timestamp::Timestamp,␠mz_ore::overflowing::Overflowing<i64>)>
 
 query TTT rowsort
