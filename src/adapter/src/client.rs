@@ -67,6 +67,7 @@ use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
     FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
+    validate_selection_dependencies,
 };
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
@@ -1957,21 +1958,21 @@ impl SessionClient {
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
             let in_transaction = session.transaction().is_effectively_multi_statement();
-            if in_transaction && !rtw_plan.selection.depends_on().is_empty() {
-                // `mz_now` outranks the transaction state, matching the lock
-                // path, which admits this class of statement past its own
-                // transaction gate and then reports `mz_now` while sequencing
-                // it. Both errors are reachable from one statement: the AST gate
-                // above admits an INSERT whose values are constant to the
-                // parser, and such a statement can carry both `mz_now()` and a
-                // builtin that reads a system relation. Reporting the
-                // transaction would be the worse answer of the two, because it
-                // suggests the statement works outside a transaction.
+            let depends_on = rtw_plan.selection.depends_on();
+            if in_transaction && !depends_on.is_empty() {
+                // Everything that holds wherever the statement runs is reported
+                // before the transaction state, which only holds here. A
+                // statement carrying `mz_now` or reading a system table never
+                // works, so answering with the transaction suggests it would
+                // work outside one. The lock path reports these two the same
+                // way, since its own transaction gate admits this class of
+                // statement and leaves both to sequencing.
                 if contains_mz_now(&rtw_plan) {
                     return Err(AdapterError::Unsupported(
                         "calls to mz_now in write statements",
                     ));
                 }
+                validate_selection_dependencies(&catalog, &depends_on)?;
                 return Err(prohibited_in_transaction(&stmt));
             }
         }

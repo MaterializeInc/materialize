@@ -1728,9 +1728,9 @@ fn test_zero_row_write_does_not_wait_for_keepalive() {
 /// decision falls to the planned selection.
 ///
 /// Such a statement is invalid whatever the transaction state, since a
-/// read-then-write may not read a system table. What this pins is which reason
-/// each path reports, because reporting the transaction state suggests the
-/// statement would work outside a transaction when it never does.
+/// read-then-write may not read a system table. What this pins is that both
+/// paths say so, rather than reporting the transaction state, which would
+/// suggest the statement works outside a transaction when it never does.
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_constant_insert_reading_catalog_in_transaction() {
@@ -1780,19 +1780,13 @@ fn test_constant_insert_reading_catalog_in_transaction() {
         );
         client.batch_execute("ROLLBACK").unwrap();
 
-        // The dependency question is where the paths still differ. The frontend
-        // refuses on transaction state before it validates dependencies, so it
-        // reports the transaction where the lock path reports the selection.
+        // A transaction does not change the answer. Both paths still report the
+        // selection, which is the reason that holds either way.
         client.batch_execute("BEGIN").unwrap();
-        let expected = if frontend {
-            SqlState::ACTIVE_SQL_TRANSACTION
-        } else {
-            SqlState::INVALID_TRANSACTION_STATE
-        };
         assert_eq!(
             error_code(&mut client, READS_CATALOG),
-            expected,
-            "frontend={frontend}: unexpected reason reported in a transaction"
+            SqlState::INVALID_TRANSACTION_STATE,
+            "frontend={frontend}: the invalid selection must outrank the transaction"
         );
         client.batch_execute("ROLLBACK").unwrap();
     }

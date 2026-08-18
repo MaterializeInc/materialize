@@ -309,6 +309,36 @@ fn end_own_transaction(session: &mut Session, stages_rows: bool) {
     }
 }
 
+/// Checks that a read-then-write may read what its selection depends on.
+///
+/// An invalid selection is invalid wherever the statement runs, so a caller with
+/// something contextual to report, such as the transaction state, must ask this
+/// first. Reporting the transaction for a statement that can never work suggests
+/// it would work outside one.
+///
+/// `catalog` must be the snapshot the plan was built against. A missing item
+/// means the caller mixed snapshots, which is reported as a catalog error rather
+/// than treated as a dropped dependency.
+pub(crate) fn validate_selection_dependencies(
+    catalog: &Catalog,
+    depends_on: &BTreeSet<GlobalId>,
+) -> Result<(), AdapterError> {
+    let dependency_ids = depends_on
+        .iter()
+        .copied()
+        .map(|gid| {
+            catalog.try_resolve_item_id(&gid).ok_or_else(|| {
+                AdapterError::Catalog(mz_catalog::memory::error::Error {
+                    kind: ErrorKind::Sql(CatalogError::UnknownItem(gid.to_string())),
+                })
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let max_rw_dependencies = mz_adapter_types::dyncfgs::READ_THEN_WRITE_MAX_DEPENDENCIES
+        .get(catalog.system_config().dyncfgs());
+    validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies)
+}
+
 /// Validates a read-then-write and resolves the context the rest of the
 /// pipeline runs against.
 ///
@@ -339,22 +369,7 @@ fn validate_read_then_write(
     // timeline validation below.
     let depends_on = plan.selection.depends_on();
 
-    // Validate read dependencies. A missing item would mean `catalog` is
-    // not the snapshot the plan was built against, so fail cleanly.
-    let dependency_ids = depends_on
-        .iter()
-        .copied()
-        .map(|gid| {
-            catalog.try_resolve_item_id(&gid).ok_or_else(|| {
-                AdapterError::Catalog(mz_catalog::memory::error::Error {
-                    kind: ErrorKind::Sql(CatalogError::UnknownItem(gid.to_string())),
-                })
-            })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let max_rw_dependencies = mz_adapter_types::dyncfgs::READ_THEN_WRITE_MAX_DEPENDENCIES
-        .get(catalog.system_config().dyncfgs());
-    validate_read_then_write_dependencies(catalog, dependency_ids, max_rw_dependencies)?;
+    validate_selection_dependencies(catalog, &depends_on)?;
 
     let cluster = catalog.resolve_target_cluster(target_cluster, session)?;
     let cluster_id = cluster.id;
