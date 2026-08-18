@@ -65,7 +65,10 @@ use crate::command::{
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
-use crate::frontend_read_then_write::{FrontendWriteAttemptState, FrontendWriteCancellation};
+use crate::frontend_read_then_write::{
+    FrontendWriteAttemptState, FrontendWriteCancellation, contains_mz_now,
+    validate_selection_dependencies,
+};
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
@@ -1942,26 +1945,35 @@ impl SessionClient {
             }
         };
 
-        // Only single-statement (`Started` without staged write ops)
-        // transactions may enter the OCC loop, its writes commit immediately
-        // and cannot be rolled back at transaction end. Multi-statement
-        // transactions reach this point only for AST-constant INSERTs whose
-        // planned expression turned out non-constant. Match the coordinator's
-        // error precedence: `mz_now()` gets its dedicated error, everything
-        // else is prohibited in a transaction block. The coordinator's
-        // lock-based path additionally supports INSERTs of volatile constants
-        // (for example `random()`) in transaction blocks by buffering the diffs
-        // until commit, which the OCC path cannot do.
+        // The syntactic predicate for "reads persisted state", see the module
+        // docs on `frontend_read_then_write`. Inside a transaction, only a write
+        // that reads nothing can run on this path.
+        //
+        // The AST gate above is not enough to establish this. It admits
+        // INSERTs whose source is constant in the AST, and such a statement can
+        // still plan to a selection with `Get` nodes, because SQL-implemented
+        // builtins (`pg_get_viewdef`, `text` to `reg*` casts, ...) read system
+        // relations. So decide on the planned selection, and do it before we
+        // execute a dataflow for a statement we would then refuse.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
-            let single_statement = matches!(session.transaction(), TransactionStatus::Started(_))
-                && !session.transaction().contains_ops();
-            if !single_statement {
-                if crate::frontend_read_then_write::contains_mz_now(&rtw_plan) {
+            let in_transaction = session
+                .transaction()
+                .may_share_transaction_with_other_statements();
+            let depends_on = rtw_plan.selection.depends_on();
+            if in_transaction && !depends_on.is_empty() {
+                // Report the reasons that hold wherever the statement runs
+                // before the one that holds only here. A statement carrying
+                // `mz_now`, or reading a system table, never works anywhere.
+                // Answering with the transaction state names the one condition
+                // the caller could remove, which tells them to retry outside a
+                // transaction and get the same refusal again.
+                if contains_mz_now(&rtw_plan) {
                     return Err(AdapterError::Unsupported(
                         "calls to mz_now in write statements",
                     ));
                 }
+                validate_selection_dependencies(&catalog, &depends_on)?;
                 return Err(prohibited_in_transaction(&stmt));
             }
         }

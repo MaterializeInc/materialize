@@ -1810,8 +1810,16 @@ fn test_insert_concurrent_alter_table() {
         let packed = Arc::clone(&packed);
         let resume = Arc::clone(&resume);
         move || {
-            packed.wait();
-            resume.wait();
+            // This runs on a worker of the server's runtime, and `resume` does not clear until the
+            // `ALTER TABLE` below has committed. That statement needs the runtime to get there:
+            // its catalog writes, the persist schema evolution, and the table registration all run
+            // as tasks, and the harness caps Consensus at a single connection, so a worker parked
+            // here can stall the statement, which in turn never releases the worker.
+            // `block_in_place` hands this worker's queue to another thread before parking.
+            tokio::task::block_in_place(|| {
+                packed.wait();
+                resume.wait();
+            });
         }
     })
     .unwrap();
