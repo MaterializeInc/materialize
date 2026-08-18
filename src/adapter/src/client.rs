@@ -1954,11 +1954,7 @@ impl SessionClient {
         // execute a dataflow for a statement we would then refuse.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
-            // `is_in_multi_statement_transaction` reports false for `Started`,
-            // but an extended-protocol pipeline stays `Started` while it
-            // accumulates write ops, and this statement runs alongside them.
-            let in_transaction = session.transaction().is_in_multi_statement_transaction()
-                || session.transaction().contains_ops();
+            let in_transaction = session.transaction().is_effectively_multi_statement();
             if in_transaction && !rtw_plan.selection.depends_on().is_empty() {
                 return Err(prohibited_in_transaction(&stmt));
             }

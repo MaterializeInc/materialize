@@ -633,10 +633,9 @@ impl PeekClient {
         // statements that cannot run in a transaction block.
         let stages_rows = depends_on.is_empty();
 
-        // Snapshot this before the marker op below, which makes `contains_ops`
+        // Snapshot this before the marker op below, which makes the predicate
         // true unconditionally.
-        let in_transaction = session.transaction().is_in_multi_statement_transaction()
-            || session.transaction().contains_ops();
+        let in_transaction = session.transaction().is_effectively_multi_statement();
 
         if !stages_rows && in_transaction {
             // Defense in depth for the gate in

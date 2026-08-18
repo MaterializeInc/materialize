@@ -1209,6 +1209,29 @@ impl TransactionStatus {
         }
     }
 
+    /// Whether statements other than the current one can belong to this
+    /// transaction.
+    ///
+    /// This is [`Self::is_in_multi_statement_transaction`] widened to cover the
+    /// `Started` trap. An extended-protocol pipeline stays `Started` from its
+    /// first statement until `Sync`, so a `Started` transaction already holding
+    /// ops has a pipeline accumulating in it, and a statement running now runs
+    /// alongside those ops.
+    ///
+    /// Callers must evaluate this before the current statement stages ops of
+    /// its own. Afterwards `contains_ops` reports the statement's own ops and
+    /// every statement looks like it shares a transaction.
+    ///
+    /// Reports true for a `Failed` transaction that holds ops, where the
+    /// match-shaped gates in `client.rs` and the coordinator's `handle_execute`
+    /// classify the same state the other way. Nothing reaches those callers in
+    /// that state, since pgwire admits only `COMMIT` and `ROLLBACK` once a
+    /// transaction has failed, so folding those gates into this method needs an
+    /// argument this doc cannot give.
+    pub fn is_effectively_multi_statement(&self) -> bool {
+        self.is_in_multi_statement_transaction() || self.contains_ops()
+    }
+
     /// Whether we are in a multi-statement transaction, AND the query is immediate.
     pub fn in_immediate_multi_stmt_txn(&self, when: &QueryWhen) -> bool {
         self.is_in_multi_statement_transaction() && when == &QueryWhen::Immediately
