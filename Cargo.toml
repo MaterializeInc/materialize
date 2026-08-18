@@ -426,7 +426,7 @@ open = "5.3.5"
 openssh = { version = "0.11.6", default-features = false, features = ["native-mux"] }
 openssh-mux-client = "0.17.9"
 openssl = { version = "0.10.80", features = ["vendored"] }
-openssl-probe = "0.1.6"
+openssl-probe = "0.2.1"
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
 opentelemetry = { version = "0.32.0", features = ["trace"] }
 opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
