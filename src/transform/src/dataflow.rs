@@ -100,9 +100,13 @@ pub fn optimize_dataflow(
         transform_ctx.df_meta,
     )?;
 
+    prune_dataflow_source_imports(dataflow);
+
     // Warning: If you want to add a transform call here, consider it very carefully whether it
     // could accidentally invalidate information that we already derived above in
-    // `optimize_dataflow_monotonic` or `prune_and_annotate_dataflow_index_imports`.
+    // `optimize_dataflow_monotonic`, `prune_and_annotate_dataflow_index_imports`, or
+    // `prune_dataflow_source_imports`. A transform here that drops the last reference to an import
+    // puts back exactly the discrepancy the two prunes just removed.
 
     mz_repr::explain::trace_plan(dataflow);
 
@@ -509,6 +513,41 @@ pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), Tra
     }
 
     Ok(())
+}
+
+/// Restricts the sources imported by `dataflow` to only the ones its exports read.
+///
+/// The counterpart to [`prune_and_annotate_dataflow_index_imports`] for source imports. Imports are
+/// collected before the global pipeline runs, from the plans as they were written, so a transform
+/// can drop the last `Get` of one, for instance by folding a selection to a constant.
+///
+/// An import that survives that is not free. Every worker builds a `persist_source` for it and
+/// decodes a shard into a stream nobody consumes, the controller takes a read hold that pins the
+/// collection's `since` for as long as the dataflow lives, and the dataflow reports a wall-clock
+/// dependence none of its exports have. The last of those is the dangerous one. It earns a dataflow
+/// whose exports can never change again an expiration, and that pins their output frontier at the
+/// expiration time rather than letting it reach the empty antichain, so nothing downstream learns
+/// the collection is final.
+///
+/// The input plans should be normalized with `NormalizeLets`, for the same reason
+/// [`prune_and_annotate_dataflow_index_imports`] wants them to be: an unused `Let` binding can
+/// otherwise keep alive a `Get` that nothing reads.
+#[mz_ore::instrument(
+    target = "optimizer",
+    level = "debug",
+    fields(path.segment = "source_imports")
+)]
+fn prune_dataflow_source_imports(dataflow: &mut DataflowDesc) {
+    // NOTE: A description with no exports has no answer to "what do the exports read", and pruning
+    // everything is the wrong one. `EXPLAIN` builds a peek description without its index export,
+    // see the conditional `export_index` in `mz_adapter::optimize::peek`. Such a description is
+    // explained and then dropped, never installed, so leaving its import list alone costs nothing.
+    if dataflow.index_exports.is_empty() && dataflow.sink_exports.is_empty() {
+        return;
+    }
+
+    let used = dataflow.used_import_ids();
+    dataflow.source_imports.retain(|id, _| used.contains(id));
 }
 
 /// Restricts the indexes imported by `dataflow` to only the ones it needs.
@@ -1371,5 +1410,106 @@ impl DataflowMetainfo<RawOptimizerNotice> {
         if !self.optimizer_notices.contains(&notice) {
             self.optimizer_notices.push(notice);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_compute_types::sinks::{
+        ComputeSinkConnection, ComputeSinkDesc, SubscribeSinkConnection,
+    };
+    use mz_expr::OptimizedMirRelationExpr;
+    use mz_repr::{RelationDesc, ReprRelationType, ReprScalarType, SqlRelationType};
+
+    use super::*;
+
+    const READ: GlobalId = GlobalId::User(1);
+    const UNREAD: GlobalId = GlobalId::User(2);
+    const VIEW: GlobalId = GlobalId::Transient(1);
+    const SINK: GlobalId = GlobalId::Transient(2);
+
+    fn typ() -> ReprRelationType {
+        ReprRelationType::new(vec![ReprScalarType::Int64.nullable(false)])
+    }
+
+    /// A dataflow importing `READ` and `UNREAD` and building `VIEW` from `plan`. It has no exports
+    /// until `export_subscribe` adds one.
+    fn dataflow(plan: MirRelationExpr) -> DataflowDesc {
+        let mut df = DataflowDesc::new("test".to_string());
+        df.import_source(READ, SqlRelationType::from_repr(&typ()), false);
+        df.import_source(UNREAD, SqlRelationType::from_repr(&typ()), false);
+        df.objects_to_build.push(BuildDesc {
+            id: VIEW,
+            plan: OptimizedMirRelationExpr::declare_optimized(plan),
+        });
+        df
+    }
+
+    fn export_subscribe(df: &mut DataflowDesc) {
+        df.export_sink(
+            SINK,
+            ComputeSinkDesc {
+                from: VIEW,
+                from_desc: RelationDesc::new(SqlRelationType::from_repr(&typ()), ["c"]),
+                connection: ComputeSinkConnection::Subscribe(SubscribeSinkConnection {
+                    output: Vec::new(),
+                }),
+                with_snapshot: true,
+                up_to: Default::default(),
+                non_null_assertions: Vec::new(),
+                refresh_schedule: None,
+            },
+        );
+    }
+
+    fn get(id: GlobalId) -> MirRelationExpr {
+        MirRelationExpr::Get {
+            id: Id::Global(id),
+            typ: typ(),
+            access_strategy: AccessStrategy::Persist,
+        }
+    }
+
+    fn constant() -> MirRelationExpr {
+        MirRelationExpr::Constant {
+            rows: Ok(Vec::new()),
+            typ: typ(),
+        }
+    }
+
+    #[mz_ore::test]
+    fn prune_drops_the_import_no_export_reads() {
+        let mut df = dataflow(get(READ));
+        export_subscribe(&mut df);
+
+        prune_dataflow_source_imports(&mut df);
+
+        assert_eq!(df.imported_source_ids().collect::<Vec<_>>(), vec![READ]);
+    }
+
+    /// The shape this prune exists for: the optimizer folded the export to a constant, so neither
+    /// import is read any more even though both are still listed.
+    #[mz_ore::test]
+    fn prune_drops_every_import_of_a_constant_export() {
+        let mut df = dataflow(constant());
+        export_subscribe(&mut df);
+
+        prune_dataflow_source_imports(&mut df);
+
+        assert_eq!(df.imported_source_ids().count(), 0);
+    }
+
+    /// A description with no exports is one `EXPLAIN` builds and never installs. Pruning it against
+    /// an empty set of exports would strip every import, so the prune leaves it alone.
+    #[mz_ore::test]
+    fn prune_leaves_an_export_less_description_alone() {
+        let mut df = dataflow(get(READ));
+
+        prune_dataflow_source_imports(&mut df);
+
+        assert_eq!(
+            df.imported_source_ids().collect::<Vec<_>>(),
+            vec![READ, UNREAD]
+        );
     }
 }

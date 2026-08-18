@@ -481,11 +481,15 @@ where
     /// Computes the set of imports the dataflow's exports read, meaning the imports reachable from
     /// an index export's `on_id` or a sink export's `from`.
     ///
-    /// This is not the same as [`Self::import_ids`]. An import that no export reaches contributes
-    /// neither contents nor frontier to any of them, and one ends up in the description whenever
-    /// optimization drops the reference to it after the imports were collected, for instance by
-    /// folding a collection to a constant. The answer covers the dataflow as a whole, so an import
-    /// only one export reads is still reported, and a dataflow with no exports reports none.
+    /// A description that has been through the optimizer answers [`Self::import_ids`] here, because
+    /// the optimizer prunes the import list to what the exports read. The two come apart while a
+    /// description is still being assembled, and this is what the prune and the assertion guarding
+    /// it are both defined in terms of. The answer covers the dataflow as a whole, so an import only
+    /// one export reads is still reported, and a dataflow with no exports reports none.
+    ///
+    /// NOTE: On the index side this over-approximates. [`Self::depends_on`] cannot tell which index
+    /// on a collection a plan will use, so reaching a collection reports every index imported on it.
+    /// Pruning index imports needs the exact usage information the MIR pipeline collects, not this.
     ///
     /// Panics for an export naming a collection that is neither an import nor built exactly once
     /// here, which is [`Self::depends_on`]'s precondition on its argument. Rendering resolves the
