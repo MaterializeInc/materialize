@@ -40,7 +40,7 @@ use crate::ast::{
     RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
 };
 use crate::catalog::{
-    CatalogError, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails, SessionCatalog,
+    CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
 use crate::normalize;
 use crate::plan::PlanError;
@@ -1355,10 +1355,26 @@ impl<'a> NameResolver<'a> {
     }
 
     fn resolve_data_type(&mut self, data_type: RawDataType) -> Result<ResolvedDataType, PlanError> {
+        self.resolve_data_type_inner(data_type, true)
+    }
+
+    /// Resolves `data_type`, recording the types it references in `self.ids`
+    /// when `record_ids` is set.
+    ///
+    /// `T[]` resolves to the array type `_T` alone, so the element type is
+    /// resolved with `record_ids` cleared: it is needed only to look up the
+    /// paired array type, not as a reference in its own right. An independent
+    /// mention of `T` elsewhere in the statement still records `T`, because
+    /// each mention is resolved separately.
+    fn resolve_data_type_inner(
+        &mut self,
+        data_type: RawDataType,
+        record_ids: bool,
+    ) -> Result<ResolvedDataType, PlanError> {
         match data_type {
             RawDataType::Array(elem_type) => {
                 let name = elem_type.to_string();
-                match self.resolve_data_type(*elem_type)? {
+                match self.resolve_data_type_inner(*elem_type, false)? {
                     ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => {
                         sql_bail!("type \"{}[]\" does not exist", name)
                     }
@@ -1384,7 +1400,9 @@ impl<'a> NameResolver<'a> {
                                 );
                             }
                         };
-                        self.ids.insert(array_item.id(), BTreeSet::new());
+                        if record_ids {
+                            self.ids.insert(array_item.id(), BTreeSet::new());
+                        }
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
                             qualifiers: array_item.name().qualifiers.clone(),
@@ -1397,15 +1415,15 @@ impl<'a> NameResolver<'a> {
                 }
             }
             RawDataType::List(elem_type) => {
-                let elem_type = self.resolve_data_type(*elem_type)?;
+                let elem_type = self.resolve_data_type_inner(*elem_type, record_ids)?;
                 Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
             }
             RawDataType::Map {
                 key_type,
                 value_type,
             } => {
-                let key_type = self.resolve_data_type(*key_type)?;
-                let value_type = self.resolve_data_type(*value_type)?;
+                let key_type = self.resolve_data_type_inner(*key_type, record_ids)?;
+                let value_type = self.resolve_data_type_inner(*value_type, record_ids)?;
                 Ok(ResolvedDataType::AnonymousMap {
                     key_type: Box::new(key_type),
                     value_type: Box::new(value_type),
@@ -1433,17 +1451,8 @@ impl<'a> NameResolver<'a> {
                         (full_name, item)
                     }
                 };
-                self.ids.insert(item.id(), BTreeSet::new());
-                // If this is a named array type, then make sure to include the element reference
-                // in the resolved IDs. This helps ensure that named array types are resolved the
-                // same as an array type with the same element type. For example, `int4[]` and
-                // `_int4` should have the same set of resolved IDs.
-                if let Some(CatalogTypeDetails {
-                    typ: CatalogType::Array { element_reference },
-                    ..
-                }) = item.type_details()
-                {
-                    self.ids.insert(*element_reference, BTreeSet::new());
+                if record_ids {
+                    self.ids.insert(item.id(), BTreeSet::new());
                 }
                 Ok(ResolvedDataType::Named {
                     id: item.id(),

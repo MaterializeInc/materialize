@@ -2836,6 +2836,76 @@ mod tests {
         .await;
     }
 
+    /// Resolving a statement and resolving its normalized `create_sql` must
+    /// yield the same `ResolvedIds`.
+    ///
+    /// The in-memory catalog records the ids from the first resolution, while
+    /// a catalog reload re-derives them from the stored `create_sql`. Any
+    /// disagreement makes the reloaded catalog differ from the in-memory one,
+    /// which is what testdrive's consistency check reports (database-issues
+    /// #6598). Array types are the interesting case: `T[]` normalizes to a
+    /// reference to the array type, so both spellings must resolve alike.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // slow
+    async fn test_resolved_ids_survive_create_sql_round_trip() {
+        use mz_ore::collections::CollectionExt;
+        Catalog::with_debug(|catalog| async move {
+            let conn_catalog = catalog.for_system_session();
+            let scx = &mut StatementContext::new(None, &conn_catalog);
+
+            let resolve_and_normalize = |scx: &mut StatementContext, sql: &str| {
+                let parsed = mz_sql_parser::parser::parse_statements(sql)
+                    .expect("parses")
+                    .into_element()
+                    .ast;
+                let (stmt, ids) = names::resolve(scx.catalog, parsed).expect("resolves");
+                let normalized =
+                    mz_sql::normalize::create_statement(scx, stmt).expect("normalizes");
+                (ids, normalized)
+            };
+
+            let mut ids_by_spelling = Vec::new();
+            for sql in [
+                "create table public.t (a pg_catalog.int4[])",
+                "create table public.t (a pg_catalog._int4)",
+                "create table public.t (a pg_catalog.int4)",
+                "create table public.t (a pg_catalog.int4 list)",
+                "create view public.v as select null::pg_catalog.text[]",
+            ] {
+                let (ids, normalized) = resolve_and_normalize(scx, sql);
+                let (round_tripped_ids, _) = resolve_and_normalize(scx, &normalized);
+                assert_eq!(
+                    ids.items().collect::<Vec<_>>(),
+                    round_tripped_ids.items().collect::<Vec<_>>(),
+                    "resolving {normalized:?} produced different ids than {sql:?}",
+                );
+                ids_by_spelling.push((sql, ids));
+            }
+
+            // `T[]` and the array type named directly must agree, so that a
+            // statement is unaffected by which spelling it used.
+            let array_syntax = &ids_by_spelling[0].1;
+            let named_array = &ids_by_spelling[1].1;
+            assert_eq!(
+                array_syntax.items().collect::<Vec<_>>(),
+                named_array.items().collect::<Vec<_>>(),
+                "int4[] and _int4 must resolve to the same ids",
+            );
+
+            // The element type is not a dependency of the array type, so the
+            // two spellings above differ from a bare `int4`.
+            let bare_element = &ids_by_spelling[2].1;
+            assert_ne!(
+                array_syntax.items().collect::<Vec<_>>(),
+                bare_element.items().collect::<Vec<_>>(),
+                "int4[] must not resolve to the same ids as int4",
+            );
+
+            catalog.expire().await;
+        })
+        .await;
+    }
+
     // Test that if a large catalog item is somehow committed, then we can still load the catalog.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // slow
