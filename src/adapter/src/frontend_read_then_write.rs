@@ -650,7 +650,9 @@ impl PeekClient {
 
         // Snapshot this before the marker op below, which makes the predicate
         // true unconditionally.
-        let in_transaction = session.transaction().is_effectively_multi_statement();
+        let in_transaction = session
+            .transaction()
+            .may_share_transaction_with_other_statements();
 
         if !stages_rows && in_transaction {
             // Defense in depth for the gate in

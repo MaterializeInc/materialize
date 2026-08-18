@@ -1209,8 +1209,8 @@ impl TransactionStatus {
         }
     }
 
-    /// Whether statements other than the current one can belong to this
-    /// transaction.
+    /// Whether a statement other than the current one can belong to this
+    /// transaction, so committing here would commit more than this statement.
     ///
     /// This is [`Self::is_in_multi_statement_transaction`] widened to cover the
     /// `Started` trap. An extended-protocol pipeline stays `Started` from its
@@ -1228,7 +1228,7 @@ impl TransactionStatus {
     /// that state, since pgwire admits only `COMMIT` and `ROLLBACK` once a
     /// transaction has failed, so folding those gates into this method needs an
     /// argument this doc cannot give.
-    pub fn is_effectively_multi_statement(&self) -> bool {
+    pub fn may_share_transaction_with_other_statements(&self) -> bool {
         self.is_in_multi_statement_transaction() || self.contains_ops()
     }
 

@@ -1957,7 +1957,9 @@ impl SessionClient {
         // execute a dataflow for a statement we would then refuse.
         {
             let session = self.session.as_ref().expect("SessionClient invariant");
-            let in_transaction = session.transaction().is_effectively_multi_statement();
+            let in_transaction = session
+                .transaction()
+                .may_share_transaction_with_other_statements();
             let depends_on = rtw_plan.selection.depends_on();
             if in_transaction && !depends_on.is_empty() {
                 // Everything that holds wherever the statement runs is reported
