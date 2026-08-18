@@ -543,7 +543,7 @@ tonic-prost-build = "0.14.6"
 tower = { version = "0.5.3", features = ["balance", "buffer", "filter", "limit", "load-shed", "retry", "timeout", "util"] }
 tower-http = { version = "0.6.11", features = ["auth", "cors", "decompression-br", "decompression-deflate", "decompression-gzip", "decompression-zstd", "map-response-body", "trace", "util"] }
 tower-lsp = { version = "0.20.0", features = ["proposed"] }
-tower-sessions = "0.14.0"
+tower-sessions = "0.15.0"
 tower-sessions-memory-store = "0.14.0"
 tracing = "0.1.44"
 tracing-capture = "0.1.0"
