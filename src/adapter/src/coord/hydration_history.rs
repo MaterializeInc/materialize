@@ -1,0 +1,521 @@
+// Copyright Materialize, Inc. and contributors. All rights reserved.
+//
+// Use of this software is governed by the Business Source License
+// included in the LICENSE file.
+//
+// As of the Change Date specified in that file, in accordance with
+// the Business Source License, use of this software will be governed
+// by the Apache License, Version 2.0.
+
+//! Durable history collection for completed compute-object hydration episodes.
+//!
+//! One sweep visits a single managed user replica, installs a replica-targeted
+//! subscribe that diffs that replica's live hydration timestamps against the
+//! durable history table, and appends what is missing through the timestamped
+//! OCC write path. Including the history table in the read expression is what
+//! makes the write idempotent across concurrent `environmentd` processes: two
+//! collectors that compute the same row race for one write timestamp, and the
+//! loser observes the winner's append through its own subscribe and finds
+//! nothing left to write.
+//!
+//! Collection is sampling, not an event log. An episode whose live row is
+//! retracted before its replica's turn in the sweep (a dropped object, or a
+//! replica process that restarts first) is not recorded, and cannot be, because
+//! the only evidence is gone. See the design doc for why that is accepted here.
+
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+
+use itertools::Itertools;
+use mz_adapter_types::dyncfgs::{
+    HYDRATION_HISTORY_COLLECTION_INTERVAL, HYDRATION_HISTORY_RETENTION_PERIOD,
+};
+use mz_catalog::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY};
+use mz_cluster_client::ReplicaId;
+use mz_controller_types::ClusterId;
+use mz_ore::collections::CollectionExt;
+use mz_ore::now::EpochMillis;
+use mz_ore::task;
+use mz_repr::CatalogItemId;
+use mz_sql::plan::{MutationKind, Params, Plan, ReadThenWritePlan};
+use tracing::warn;
+
+use crate::coord::{Coordinator, Message};
+use crate::peek_client::CoordinatorClient;
+use crate::session::Session;
+use crate::{AdapterError, PeekClient};
+
+/// Longest a scheduler sleep may run before it rechecks the configuration.
+///
+/// Sleeping the whole interval would leave a dyncfg change ineffective until the
+/// old interval elapsed, so lowering the interval at runtime (which tests do)
+/// would not take effect for up to the previous interval.
+const SCHEDULE_RECHECK_CAP: Duration = Duration::from_secs(5);
+
+/// How often a disabled collector rechecks whether it was enabled.
+///
+/// This is the cadence of every environment in the default configuration, so it
+/// is much coarser than the enabled one: nothing is waiting on it.
+const DISABLED_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Bound on one mutation, including the wait for its read to linearize.
+///
+/// A mutation that finds nothing to write still waits for the oracle to advance,
+/// which can take a full `default_timestamp_interval`, so this has to be well
+/// above any sane value of that parameter. Exceeding it skips the step. The next
+/// sweep recomputes from current state.
+const MUTATION_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Rows retracted per retention step.
+///
+/// Retention has to be bounded: the OCC path refuses a selection larger than
+/// `max_result_size` before submitting any write, so an unbounded delete over a
+/// large backlog would fail identically on every sweep and never shrink the
+/// table. Deleting a bounded batch converges instead, across as many sweeps as
+/// it takes.
+const RETENTION_BATCH_SIZE: usize = 1000;
+
+impl Coordinator {
+    /// Schedules the next hydration history sweep.
+    ///
+    /// Fires are aligned to interval boundaries so that they stay evenly spaced
+    /// across restarts, and each sleep is capped so a configuration change is
+    /// picked up promptly. Sweeps never overlap: the next one is only scheduled
+    /// once the previous one has finished or failed.
+    ///
+    /// NOTE: Alignment reads the wall clock, so a test that freezes `NowFn` and
+    /// configures an interval longer than the recheck cap never reaches a
+    /// boundary and never fires.
+    pub(super) fn schedule_hydration_history_collection(&self) {
+        let interval =
+            HYDRATION_HISTORY_COLLECTION_INTERVAL.get(self.catalog().system_config().dyncfgs());
+
+        // A zero interval disables collection. Keep polling so that enabling it
+        // takes effect without an `environmentd` restart.
+        let (delay, fire) = if interval.is_zero() {
+            (DISABLED_RECHECK_INTERVAL, false)
+        } else {
+            // An absurd interval saturates rather than panicking. The setting is
+            // durable, so a panic here would recur on every restart.
+            let interval_ms = EpochMillis::try_from(interval.as_millis())
+                .unwrap_or(EpochMillis::MAX)
+                .max(1);
+            let now = self.now();
+            let remaining = Duration::from_millis(interval_ms - (now % interval_ms));
+            if remaining <= SCHEDULE_RECHECK_CAP {
+                (remaining, true)
+            } else {
+                (SCHEDULE_RECHECK_CAP, false)
+            }
+        };
+
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+        task::spawn(|| "hydration_history_schedule", async move {
+            tokio::time::sleep(delay).await;
+            let message = if fire {
+                Message::HydrationHistoryRun
+            } else {
+                Message::HydrationHistorySchedule
+            };
+            // Best effort: the coordinator may be shutting down.
+            let _ = internal_cmd_tx.send(message);
+        });
+    }
+
+    /// Runs one sweep: collect from the next replica, then apply retention.
+    pub(super) fn run_hydration_history_collection(&mut self) {
+        let (collection_interval, retention) = {
+            let dyncfgs = self.catalog().system_config().dyncfgs();
+            (
+                HYDRATION_HISTORY_COLLECTION_INTERVAL.get(dyncfgs),
+                HYDRATION_HISTORY_RETENTION_PERIOD.get(dyncfgs),
+            )
+        };
+        // Builtin tables are not writable in read-only mode, and a disabled
+        // collector must do no background work at all. Retention is part of the
+        // sweep, so disabling collection also suspends it. That is deliberate:
+        // the table can only be non-empty if collection ran at some point, and
+        // the alternative is an always-on subscribe in the default (disabled)
+        // production configuration.
+        if collection_interval.is_zero() || self.controller.read_only() {
+            self.schedule_hydration_history_collection();
+            return;
+        }
+
+        // Only managed replicas expose a worker count, and without it the
+        // collector cannot tell a complete cross-worker aggregate from a partial
+        // one. A replica with introspection disabled is skipped too: its log
+        // arrangements are installed but never populated, so a subscribe would
+        // read a sealed, empty collection and find nothing, every sweep.
+        let replicas = self
+            .catalog()
+            .user_cluster_replicas()
+            .filter(|replica| replica.config.compute.logging.enabled())
+            .filter_map(|replica| {
+                replica
+                    .config
+                    .location
+                    .workers()
+                    .map(|workers| (replica.cluster_id, replica.replica_id, workers))
+            })
+            .sorted_by_key(|(_, replica_id, _)| *replica_id)
+            .collect_vec();
+
+        let catalog = self.owned_catalog();
+        // Retention runs on the catalog server, so that it keeps working when
+        // there are no user replicas to collect from at all. Without a replica
+        // there it is skipped, while collection still runs.
+        let catalog_server = catalog.resolve_builtin_cluster(&MZ_CATALOG_SERVER_CLUSTER);
+        let catalog_server_target = catalog_server
+            .replicas()
+            .next()
+            .map(|replica| (catalog_server.id, replica.replica_id));
+
+        let replica = next_replica(&replicas, self.hydration_history_replica_cursor);
+        if let Some((_, replica_id, _)) = replica {
+            self.hydration_history_replica_cursor = Some(replica_id);
+        }
+        let history_id = catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY);
+        let retention_ms = u64::try_from(retention.as_millis()).unwrap_or(u64::MAX);
+        let cutoff = mz_ore::now::to_datetime(self.now().saturating_sub(retention_ms)).to_rfc3339();
+        let wall_time = self.now_datetime();
+        let build_version = catalog.state().config().build_info.human_version(None);
+        let statement_logging_frontend = self.statement_logging.create_frontend(build_version);
+        let mut client = PeekClient::new(
+            CoordinatorClient::Background {
+                tx: self.internal_cmd_tx.clone(),
+                metrics: self.metrics.clone(),
+            },
+            &catalog,
+            Arc::clone(&self.controller.storage_collections),
+            Arc::clone(&self.transient_id_gen),
+            self.optimizer_metrics.clone(),
+            self.persist_client.clone(),
+            statement_logging_frontend,
+            Arc::clone(&self.occ_write_semaphore),
+            // The background path never consults this: it calls
+            // `background_read_then_write` directly rather than going through
+            // the session dyncfg gate.
+            false,
+            self.group_commit_tx.clone(),
+            self.controller.read_only(),
+        );
+        let internal_cmd_tx = self.internal_cmd_tx.clone();
+
+        let handle = task::spawn(|| "hydration_history_sweep", async move {
+            if let Some((cluster_id, replica_id, workers)) = replica {
+                let sql = collect_sql(cluster_id, replica_id, workers, &cutoff);
+                run_mutation(
+                    &mut client,
+                    &catalog,
+                    history_id,
+                    cluster_id,
+                    replica_id,
+                    MutationKind::Insert,
+                    &sql,
+                    wall_time,
+                    "collect",
+                )
+                .await;
+            }
+
+            // Retention runs even when collection failed above. A replica that
+            // is crash-looping or slow must not be able to stop the table from
+            // shrinking back to its retention bound.
+            if let Some((cluster_id, replica_id)) = catalog_server_target {
+                let sql = retention_sql(&cutoff);
+                run_mutation(
+                    &mut client,
+                    &catalog,
+                    history_id,
+                    cluster_id,
+                    replica_id,
+                    MutationKind::Delete,
+                    &sql,
+                    wall_time,
+                    "retention",
+                )
+                .await;
+            }
+
+            let _ = internal_cmd_tx.send(Message::HydrationHistorySchedule);
+        });
+
+        // NOTE: The sweep must not outlive the coordinator. Unlike a session it
+        // holds no `Client`, so nothing stops the coordinator from exiting while
+        // a mutation is in flight, and the runtime teardown that follows drops
+        // the timestamp oracle's worker task. A sweep still running at that
+        // point reads a timestamp from a dead oracle and panics. Parking the
+        // handle here means dropping the coordinator cancels the sweep first.
+        self.hydration_history_sweep = Some(handle.abort_on_drop());
+    }
+}
+
+/// Picks the replica after `cursor`, wrapping around at the end.
+///
+/// `replicas` must be sorted ascending by replica id. Unsorted input still
+/// returns a replica but degenerates the rotation, revisiting some replicas and
+/// starving others.
+fn next_replica(
+    replicas: &[(ClusterId, ReplicaId, usize)],
+    cursor: Option<ReplicaId>,
+) -> Option<(ClusterId, ReplicaId, usize)> {
+    replicas
+        .iter()
+        .find(|(_, replica_id, _)| cursor.is_none_or(|cursor| *replica_id > cursor))
+        .or_else(|| replicas.first())
+        .copied()
+}
+
+/// The rows this replica has completed that the history table is missing.
+///
+/// `workers` is the replica's total worker count, and an object is only
+/// considered once every worker has reported it hydrated.
+///
+/// Unlike retention this needs no batch bound. The result is at most the
+/// replica's not-yet-recorded dataflows, which is bounded by the objects
+/// installed on one replica.
+fn collect_sql(
+    cluster_id: ClusterId,
+    replica_id: ReplicaId,
+    workers: usize,
+    cutoff: &str,
+) -> String {
+    // Interpolating into SQL is safe here: the ids are catalog-internal and the
+    // cutoff is an RFC 3339 timestamp we formatted ourselves. Nothing in this
+    // query comes from a user.
+    // NOTE: We group by `export_id`, the runtime dataflow, not by catalog item.
+    // A materialized view can own several `GlobalId`s at once, because a
+    // replacement adds the new dataflow's id while the old one still serves
+    // reads. Grouping by item would mix both dataflows' worker rows, present
+    // twice the expected per-worker count, and record nothing for either.
+    //
+    // NOTE: `max(installed_at) <= min(hydrated_at)` rejects worker rows that
+    // cannot belong to one episode. Without it, a replica whose processes
+    // restarted at different times can present worker 0 from the old process
+    // and worker 1 from the new one, pass the worker count check, and yield a
+    // row spanning two episodes whose duration includes the downtime between
+    // them.
+    //
+    // `started_at` is only reported when every worker observed a start. An
+    // import-free dataflow is never suspended, so no start is observed, and a
+    // partially observed start would otherwise be presented as the episode's,
+    // which is a value nobody measured.
+    //
+    // The outer aggregation collapses to the table's key. Per-dataflow grouping
+    // can otherwise emit two rows for one item, and two dataflows installed in
+    // the same instant would collide on `(object_id, replica_id, installed_at)`.
+    format!(
+        "SELECT
+            c.object_id,
+            '{cluster_id}'::text AS cluster_id,
+            '{replica_id}'::text AS replica_id,
+            c.installed_at,
+            min(c.started_at) AS started_at,
+            max(c.finished_at) AS finished_at,
+            'hydrated'::text AS status
+        FROM (
+            SELECT
+                ids.id AS object_id,
+                min(t.installed_at) AS installed_at,
+                CASE WHEN count(t.started_at) = {workers} THEN min(t.started_at) END AS started_at,
+                max(t.hydrated_at) AS finished_at
+            FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
+            JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = ids.id
+            WHERE ids.id LIKE 'u%'
+              AND o.type IN ('index', 'materialized-view')
+            GROUP BY t.export_id, ids.id
+            HAVING count(*) = {workers}
+               AND count(*) = count(t.hydrated_at)
+               AND max(t.installed_at) <= min(t.hydrated_at)
+        ) AS c
+        WHERE c.finished_at >= TIMESTAMPTZ '{cutoff}'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM mz_internal.mz_object_hydration_history AS h
+              WHERE h.object_id = c.object_id
+                AND h.replica_id = '{replica_id}'::text
+                AND h.installed_at = c.installed_at
+          )
+        GROUP BY c.object_id, c.installed_at"
+    )
+}
+
+/// A bounded batch of history rows that have aged out.
+///
+/// Only rows with a `finished_at` age out. Every row written today has one, and
+/// a row without one would be immortal here, so an unfinished-episode
+/// representation needs a second age basis before it can be recorded.
+fn retention_sql(cutoff: &str) -> String {
+    // The LIMIT has to sit inside a subquery. A top-level LIMIT lands in the
+    // plan's `RowSetFinishing`, which the OCC path deliberately ignores, so it
+    // would be silently dropped and the delete would be unbounded again. Inside
+    // a derived table it lowers into the relation expression instead.
+    format!(
+        "SELECT * FROM (
+            SELECT
+                object_id, cluster_id, replica_id, installed_at, started_at,
+                finished_at, status
+            FROM mz_internal.mz_object_hydration_history
+            WHERE finished_at < TIMESTAMPTZ '{cutoff}'
+            ORDER BY finished_at
+            LIMIT {RETENTION_BATCH_SIZE}
+        )"
+    )
+}
+
+/// Runs one mutation, logging rather than propagating failure.
+///
+/// Every failure mode here is expected in normal operation: the targeted replica
+/// can fail or be dropped, a dependency can be replaced, and the write can lose
+/// its timestamp race. None of them are actionable, and the next sweep recomputes
+/// from current state, so they are logged and the sweep continues.
+#[allow(clippy::too_many_arguments)]
+async fn run_mutation(
+    client: &mut PeekClient,
+    catalog: &Arc<crate::catalog::Catalog>,
+    target_id: CatalogItemId,
+    cluster_id: ClusterId,
+    replica_id: ReplicaId,
+    kind: MutationKind,
+    sql: &str,
+    wall_time: chrono::DateTime<chrono::Utc>,
+    step: &str,
+) {
+    let mutation = async {
+        let plan = plan_mutation(catalog, target_id, kind, sql)?;
+        let mut session = Session::dummy();
+        session.start_transaction_single_stmt(wall_time);
+        client
+            .background_read_then_write(&mut session, plan, cluster_id, replica_id, catalog)
+            .await?;
+        Ok::<_, AdapterError>(())
+    };
+    match tokio::time::timeout(MUTATION_TIMEOUT, mutation).await {
+        Ok(Ok(())) => {}
+        // Exhausted retries mean every attempt lost its timestamp race. The
+        // write timestamp is the subscribe's observed frontier, and the log half
+        // of that frontier advances on the replica's clock, so a replica whose
+        // clock trails `environmentd` by more than its introspection interval
+        // can never get ahead of the oracle and will fail here every sweep.
+        Ok(Err(error @ AdapterError::ReadThenWriteContention)) => {
+            warn!(
+                %step, %cluster_id, %replica_id, %error,
+                "hydration history step exhausted retries, \
+                 the replica's introspection frontier may be trailing the write frontier"
+            )
+        }
+        Ok(Err(error)) => {
+            warn!(%step, %cluster_id, %replica_id, %error, "hydration history step failed")
+        }
+        Err(_) => warn!(%step, %cluster_id, %replica_id, "hydration history step timed out"),
+    }
+}
+
+/// Plans `sql` as the read side of a mutation against `target_id`.
+///
+/// The statement is planned as a `SELECT` whose columns are already in the
+/// target table's order, so the mutation needs no assignments or projection.
+///
+/// The selection's column types are checked against the target table here. A
+/// user `INSERT ... SELECT` gets that from the planner, but a hand-built plan
+/// bypasses it, and a wrong type would be written into the shard verbatim and
+/// break every later read of a table that is deliberately never truncated.
+fn plan_mutation(
+    catalog: &Arc<crate::catalog::Catalog>,
+    target_id: CatalogItemId,
+    kind: MutationKind,
+    sql: &str,
+) -> Result<ReadThenWritePlan, AdapterError> {
+    let session_catalog = catalog.for_system_session();
+    let parsed = mz_sql::parse::parse(sql)
+        .map_err(AdapterError::from)?
+        .into_element();
+    let (stmt, resolved_ids) = mz_sql::names::resolve(&session_catalog, parsed.ast)?;
+    let (plan, _) = mz_sql::plan::plan(
+        None,
+        &session_catalog,
+        stmt,
+        &Params::empty(),
+        &resolved_ids,
+    )?;
+    let Plan::Select(select) = plan else {
+        return Err(AdapterError::Internal(
+            "hydration history query did not plan as SELECT".into(),
+        ));
+    };
+
+    let target_desc = catalog
+        .get_entry(&target_id)
+        .relation_desc_latest()
+        .expect("hydration history target is a table");
+    let selection_types = select.source.typ(&[], &BTreeMap::new()).column_types;
+    let target_types = &target_desc.typ().column_types;
+    let matches = selection_types.len() == target_types.len()
+        && selection_types
+            .iter()
+            .zip_eq(target_types)
+            // Nullability may be tighter than the column allows, only the
+            // scalar types have to agree.
+            .all(|(selected, target)| selected.scalar_type == target.scalar_type);
+    if !matches {
+        return Err(AdapterError::Internal(format!(
+            "hydration history query does not match the target table: \
+             selection {selection_types:?}, table {target_types:?}"
+        )));
+    }
+
+    Ok(ReadThenWritePlan {
+        id: target_id,
+        selection: select.source,
+        finishing: select.finishing,
+        assignments: BTreeMap::new(),
+        kind,
+        returning: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn replica_sweep_advances_and_wraps() {
+        let cluster = ClusterId::user(1).expect("valid cluster ID");
+        let replicas = [
+            (cluster, ReplicaId::User(1), 1),
+            (cluster, ReplicaId::User(3), 4),
+        ];
+
+        assert_eq!(next_replica(&replicas, None), Some(replicas[0]));
+        assert_eq!(
+            next_replica(&replicas, Some(ReplicaId::User(1))),
+            Some(replicas[1])
+        );
+        assert_eq!(
+            next_replica(&replicas, Some(ReplicaId::User(3))),
+            Some(replicas[0])
+        );
+        assert_eq!(next_replica(&[], None), None);
+    }
+
+    /// The replica's worker count has to reach both places that gate on it, the
+    /// completeness check and the start aggregation. Interpolating it into one
+    /// but not the other silently records partial episodes.
+    #[mz_ore::test]
+    fn collect_uses_worker_count_everywhere() {
+        let sql = collect_sql(
+            ClusterId::user(1).expect("valid cluster ID"),
+            ReplicaId::User(2),
+            4,
+            "1970-01-01T00:00:00+00:00",
+        );
+        assert!(sql.contains("count(*) = 4"), "{sql}");
+        assert!(
+            sql.contains("CASE WHEN count(t.started_at) = 4 THEN min(t.started_at) END"),
+            "{sql}"
+        );
+    }
+}

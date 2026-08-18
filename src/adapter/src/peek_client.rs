@@ -42,7 +42,8 @@ use crate::catalog::Catalog;
 use crate::command::{CatalogSnapshot, Command, ExecuteResponse};
 use crate::coord::appends::GroupCommitNotifier;
 use crate::coord::peek::FastPathPlan;
-use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard};
+use crate::coord::{Coordinator, ExecuteContextExtra, ExecuteContextGuard, Message};
+use crate::metrics::Metrics;
 use crate::session::{LifecycleTimestamps, Session};
 use crate::statement_logging::{
     FrontendStatementLoggingEvent, PreparedStatementEvent, PreparedStatementLoggingInfo,
@@ -57,7 +58,7 @@ pub type StorageCollectionsHandle =
 /// Clients needed for peek sequencing in the Adapter Frontend.
 #[derive(Debug)]
 pub struct PeekClient {
-    coordinator_client: Client,
+    coordinator_client: CoordinatorClient,
     /// Cache of the latest catalog snapshot. Serves
     /// [`PeekClient::catalog_snapshot`] without a Coordinator round-trip
     /// while the catalog's transient revision is unchanged.
@@ -91,13 +92,69 @@ pub struct PeekClient {
     pub read_only: bool,
 }
 
+/// A command sender that does not make background work keep the coordinator alive.
+#[derive(Debug, Clone)]
+pub(crate) enum CoordinatorClient {
+    Session(Client),
+    Background {
+        tx: tokio::sync::mpsc::UnboundedSender<Message>,
+        metrics: Metrics,
+    },
+}
+
+impl CoordinatorClient {
+    /// Sends a command, dropping it if the coordinator is gone.
+    ///
+    /// A session cannot outrun the coordinator: it holds a `Client`, and the
+    /// coordinator's loop only exits once every client is dropped, so a failed
+    /// send there is a real bug. Background work holds no client on purpose, so
+    /// losing the race with shutdown is normal and must not crash the process.
+    /// The dropped command's response channel never resolves, which parks the
+    /// caller until its task is cancelled.
+    pub(crate) fn send(&self, command: Command) {
+        if self.try_send(command) {
+            return;
+        }
+        match self {
+            CoordinatorClient::Session(_) => panic!("coordinator unexpectedly gone"),
+            CoordinatorClient::Background { .. } => {
+                tracing::debug!("dropping background command, coordinator is gone")
+            }
+        }
+    }
+
+    fn is_background(&self) -> bool {
+        matches!(self, CoordinatorClient::Background { .. })
+    }
+
+    pub(crate) fn try_send(&self, command: Command) -> bool {
+        match self {
+            CoordinatorClient::Session(client) => client.try_send(command),
+            CoordinatorClient::Background { tx, .. } => tx
+                .send(Message::Command(
+                    mz_ore::tracing::OpenTelemetryContext::obtain(),
+                    command,
+                ))
+                .is_ok(),
+        }
+    }
+
+    pub(crate) fn metrics(&self) -> &Metrics {
+        match self {
+            CoordinatorClient::Session(client) => client.metrics(),
+            CoordinatorClient::Background { metrics, .. } => metrics,
+        }
+    }
+}
+
 impl PeekClient {
     /// Creates a PeekClient.
     ///
     /// `catalog` seeds the catalog snapshot cache, so that the session's
     /// first statements don't need a `Command::CatalogSnapshot` round-trip.
-    pub fn new(
-        coordinator_client: Client,
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        coordinator_client: CoordinatorClient,
         catalog: &Arc<Catalog>,
         storage_collections: StorageCollectionsHandle,
         transient_id_gen: Arc<TransientIdGen>,
@@ -218,12 +275,23 @@ impl PeekClient {
     {
         let (tx, rx) = oneshot::channel();
         self.coordinator_client.send(f(tx));
-        rx.await
-            .expect("if the coordinator is still alive, it shouldn't have dropped our call")
+        match rx.await {
+            Ok(response) => response,
+            // A dropped sender means the coordinator never answered. For a
+            // background caller that is shutdown racing us: `send` dropped the
+            // command, and our task is cancelled with the coordinator, so
+            // parking here is bounded. A session cannot reach this.
+            Err(oneshot::error::RecvError { .. }) if self.coordinator_client.is_background() => {
+                std::future::pending().await
+            }
+            Err(oneshot::error::RecvError { .. }) => {
+                panic!("if the coordinator is still alive, it shouldn't have dropped our call")
+            }
+        }
     }
 
     /// The client for sending commands to the coordinator.
-    pub(crate) fn coordinator_client(&self) -> &crate::Client {
+    pub(crate) fn coordinator_client(&self) -> &CoordinatorClient {
         &self.coordinator_client
     }
 
@@ -645,7 +713,7 @@ impl PeekClient {
 struct StatementLoggingGuard {
     /// `None` if the statement was not sampled for logging.
     id: Option<StatementLoggingId>,
-    coordinator_client: Client,
+    coordinator_client: CoordinatorClient,
     now: mz_ore::now::NowFn,
 }
 

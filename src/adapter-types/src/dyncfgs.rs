@@ -344,6 +344,20 @@ pub const ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::
     "How long to retain rows in mz_internal.mz_object_arrangement_size_history.",
 );
 
+/// How often to sweep replicas for completed object hydration episodes.
+pub const HYDRATION_HISTORY_COLLECTION_INTERVAL: Config<Duration> = Config::new(
+    "hydration_history_collection_interval",
+    Duration::ZERO,
+    "How often to record completed object hydration episodes. A zero duration disables collection.",
+);
+
+/// How long to retain completed object hydration episodes.
+pub const HYDRATION_HISTORY_RETENTION_PERIOD: Config<Duration> = Config::new(
+    "hydration_history_retention_period",
+    Duration::from_hours(30 * 24),
+    "How long to retain rows in mz_internal.mz_object_hydration_history.",
+);
+
 /// How frequently the catalog `*_info` metrics (`mz_object_info`,
 /// `mz_cluster_info`, …) are reconciled with the catalog. A zero duration
 /// disables reconciliation.
@@ -470,6 +484,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CONSOLE_OIDC_SCOPES)
         .add(&ARRANGEMENT_SIZE_HISTORY_COLLECTION_INTERVAL)
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
+        .add(&HYDRATION_HISTORY_COLLECTION_INTERVAL)
+        .add(&HYDRATION_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
         .add(&FRONTEND_READ_THEN_WRITE)

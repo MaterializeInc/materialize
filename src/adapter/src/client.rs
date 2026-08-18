@@ -72,7 +72,7 @@ use crate::frontend_read_then_write::{
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::{ExecutionLogging, TakeOver};
+use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -313,7 +313,7 @@ impl Client {
         } = response;
 
         let peek_client = PeekClient::new(
-            self.clone(),
+            CoordinatorClient::Session(self.clone()),
             &catalog,
             storage_collections,
             transient_id_gen,

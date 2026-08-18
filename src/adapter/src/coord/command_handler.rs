@@ -638,25 +638,14 @@ impl Coordinator {
                     as_of,
                     arity,
                     sink_id,
-                    conn_id,
-                    session_uuid,
+                    owner,
                     start_time,
                     read_holds,
                     tx,
                 } => {
                     self.handle_create_internal_subscribe(
-                        *df_desc,
-                        cluster_id,
-                        replica_id,
-                        depends_on,
-                        as_of,
-                        arity,
-                        sink_id,
-                        conn_id,
-                        session_uuid,
-                        start_time,
-                        read_holds,
-                        tx,
+                        *df_desc, cluster_id, replica_id, depends_on, as_of, arity, sink_id, owner,
+                        start_time, read_holds, tx,
                     )
                     .await;
                 }

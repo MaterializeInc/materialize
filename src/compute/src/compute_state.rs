@@ -725,6 +725,20 @@ impl<'a> ActiveComputeState<'a> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
+        // NOTE: We stamp a start per export here, which only coincides with the
+        // shared token's release because every compute dataflow has exactly one
+        // export today (`sequential_hydration.rs` asserts it). If multi-export
+        // dataflows land, this has to move to where the token is released and fan
+        // out to every export, or an earlier-scheduled export reports a start
+        // before any work could begin.
+        if let Some(logging) = self
+            .compute_state
+            .collections
+            .get(&id)
+            .and_then(|collection| collection.logging.as_ref())
+        {
+            logging.set_started();
+        }
         let suspension_token = self.compute_state.suspended_collections.remove(&id);
         drop(suspension_token);
     }
@@ -871,6 +885,7 @@ impl<'a> ActiveComputeState<'a> {
 
             let logging =
                 CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            logging.set_started();
             collection.logging = Some(logging);
 
             let existing = self.compute_state.collections.insert(id, collection);
