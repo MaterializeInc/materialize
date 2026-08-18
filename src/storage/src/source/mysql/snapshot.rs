@@ -413,9 +413,8 @@ async fn sample_pk_bounds(
                     }
                     None => None,
                 };
-                // Ends the borrow of `conn`; the transaction itself is rolled
-                // back when the pooled connection is next used or disconnected.
-                drop(tx);
+                // Ends the borrow of `conn`.
+                tx.rollback().await?;
                 pool.borrow_mut().push(conn);
                 Ok::<_, TransientError>((table.clone(), count, splits))
             }
