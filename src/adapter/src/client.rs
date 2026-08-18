@@ -1962,13 +1962,12 @@ impl SessionClient {
                 .may_share_transaction_with_other_statements();
             let depends_on = rtw_plan.selection.depends_on();
             if in_transaction && !depends_on.is_empty() {
-                // Everything that holds wherever the statement runs is reported
-                // before the transaction state, which only holds here. A
-                // statement carrying `mz_now` or reading a system table never
-                // works, so answering with the transaction suggests it would
-                // work outside one. The lock path reports these two the same
-                // way, since its own transaction gate admits this class of
-                // statement and leaves both to sequencing.
+                // Report the reasons that hold wherever the statement runs
+                // before the one that holds only here. A statement carrying
+                // `mz_now`, or reading a system table, never works anywhere.
+                // Answering with the transaction state names the one condition
+                // the caller could remove, which tells them to retry outside a
+                // transaction and get the same refusal again.
                 if contains_mz_now(&rtw_plan) {
                     return Err(AdapterError::Unsupported(
                         "calls to mz_now in write statements",

@@ -1222,12 +1222,12 @@ impl TransactionStatus {
     /// its own. Afterwards `contains_ops` reports the statement's own ops and
     /// every statement looks like it shares a transaction.
     ///
-    /// Reports true for a `Failed` transaction that holds ops, where the
-    /// match-shaped gates in `client.rs` and the coordinator's `handle_execute`
-    /// classify the same state the other way. Nothing reaches those callers in
-    /// that state, since pgwire admits only `COMMIT` and `ROLLBACK` once a
-    /// transaction has failed, so folding those gates into this method needs an
-    /// argument this doc cannot give.
+    /// Reports true for a `Failed` transaction that holds ops, since
+    /// `contains_ops` reads through to the inner transaction in that state.
+    /// Callers that treat a failed transaction as one a statement may run in
+    /// need their own check, because pgwire admits only `COMMIT` and `ROLLBACK`
+    /// once a transaction has failed and so nothing else can observe the
+    /// difference.
     pub fn may_share_transaction_with_other_statements(&self) -> bool {
         self.is_in_multi_statement_transaction() || self.contains_ops()
     }
