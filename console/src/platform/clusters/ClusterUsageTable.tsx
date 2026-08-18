@@ -8,7 +8,7 @@
 // by the Apache License, Version 2.0.
 
 import { HStack, Text, Tooltip, useTheme, VStack } from "@chakra-ui/react";
-import { createColumnHelper } from "@tanstack/react-table";
+import { createColumnHelper, FilterFn, filterFns } from "@tanstack/react-table";
 import React from "react";
 
 import {
@@ -46,7 +46,8 @@ import {
  */
 type ClusterRow =
   | ({ rowType: "cluster" } & ClusterWithOwnership)
-  | ({ rowType: "replica" } & Replica);
+  // `clusterName` mirrors the parent's name for the global filter's benefit.
+  | ({ rowType: "replica"; clusterName: string } & Replica);
 
 const CLUSTER_ROW_CLASS = "cluster-row";
 
@@ -142,6 +143,27 @@ const latestReplicaStatusAt = (replica: Replica) =>
         : latest,
     null,
   );
+
+/**
+ * Global filter that also keeps a replica whose own cluster matches, so a hit on
+ * a cluster row displays all that cluster's replicas.
+ */
+const globalFilterFn: FilterFn<ClusterRow> = (
+  row,
+  columnId,
+  filterValue,
+  addMeta,
+) => {
+  if (filterFns.includesString(row, columnId, filterValue, addMeta)) {
+    return true;
+  }
+  return (
+    row.original.rowType === "replica" &&
+    row.original.clusterName
+      .toLowerCase()
+      .includes(String(filterValue).toLowerCase())
+  );
+};
 
 const columnHelper = createColumnHelper<ClusterRow>();
 
@@ -313,8 +335,13 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     initialExpanded: true,
     getSubRows: (row) =>
       row.rowType === "cluster" && row.replicas.length > 0
-        ? row.replicas.map((r) => ({ rowType: "replica" as const, ...r }))
+        ? row.replicas.map((r) => ({
+            rowType: "replica" as const,
+            clusterName: row.name,
+            ...r,
+          }))
         : undefined,
+    globalFilterFn,
     state: {
       columnVisibility: {
         lastStatusChange: !offlineReplicaError,

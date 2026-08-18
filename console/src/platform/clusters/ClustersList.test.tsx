@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
 
@@ -871,6 +871,85 @@ describe("ClustersList Last status change sorting", () => {
       "alpha-silent",
       "a-1",
     ]);
+  });
+});
+
+describe("ClustersList search", () => {
+  /**
+   * `compute` holds the only 100cc replica, so its aggregate Size matches
+   * "100cc" even though that cell renders blank on a cluster row.
+   */
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({ id: "u10", name: "alpha", size: "50cc" }),
+        buildReplica({ id: "u11", name: "beta", size: "100cc" }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "ingest",
+      replicas: [buildReplica({ id: "u20", name: "gamma", size: "50cc" })],
+    }),
+  ];
+
+  /** Types `term`, then waits out the search box's debounce. */
+  const expectRowsMatching = async (
+    user: ReturnType<typeof userEvent.setup>,
+    term: string,
+    expected: (string | null)[],
+  ) => {
+    await user.type(screen.getByLabelText("Search clusters..."), term);
+    await waitFor(() => expect(rowOrder()).toEqual(expected));
+  };
+
+  it("shows a matching replica under its cluster, without its siblings", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await expectRowsMatching(user, "alpha", ["compute", "alpha"]);
+  });
+
+  it("shows every replica of a cluster whose name matches", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    // The cluster is the hit here, so its replicas come along rather than
+    // leaving a heading with nothing under it.
+    await expectRowsMatching(user, "compute", ["compute", "alpha", "beta"]);
+  });
+
+  it("leaves other clusters out when one cluster matches", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await expectRowsMatching(user, "ingest", ["ingest", "gamma"]);
+  });
+
+  it("matches replicas on columns other than the name", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await expectRowsMatching(user, "100cc", ["compute", "beta"]);
+  });
+
+  it("does not expand a cluster matched only by an aggregate of its replicas", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    // "100cc" is compute's aggregate Size as well as beta's own, but that cell
+    // is blank on the cluster row, so treating it as a cluster hit would surface
+    // alpha for a term found nowhere the user can see.
+    await expectRowsMatching(user, "100cc", ["compute", "beta"]);
+  });
+
+  it("shows no rows when nothing matches", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await expectRowsMatching(user, "nonesuch", []);
   });
 });
 
