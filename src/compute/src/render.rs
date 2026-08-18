@@ -166,7 +166,7 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::columnar::CollectionEdge;
-use crate::render::context::{ArrangementFlavor, Context, distinct_arranged_errs};
+use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
@@ -712,6 +712,13 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
         let key = &idx.key;
         match bundle.arrangement(key) {
             Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
+                // NOTE: The exported error trace is deliberately not collapsed. `output_probe`
+                // below watches `oks.stream` only, so the controller's index frontier tracks the ok
+                // trace; putting an operator on the error path desynchronizes the two, and a peek
+                // that derives `upper` from oks then calls `cursor_through(upper)` on the error
+                // trace panics with `upper` straddles batch. Cross-object error multiplicity has to
+                // be bounded on the import side instead.
+
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -731,13 +738,6 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
-
-                // Normalize only what leaves the dataflow. An importing dataflow receives these
-                // diffs verbatim and its first consolidation sums them, so an uncollapsed export
-                // multiplies across the object graph exactly as an uncollapsed binding does within
-                // one dataflow. Strictly after the logging above, which reports the multiplicity as
-                // an error count: collapsing first would report one error however many rows failed.
-                let errs = distinct_arranged_errs(errs, "Distinct errors");
 
                 compute_state.traces.set(
                     idx_id,
@@ -840,10 +840,6 @@ where
                 if let Some(logger) = compute_state.compute_logger.clone() {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
-
-                // Normalize only what leaves the dataflow, and strictly after the logging above.
-                // See `export_index` for both halves of the reasoning.
-                let errs = distinct_arranged_errs(errs, "Distinct errors");
 
                 compute_state.traces.set(
                     idx_id,
