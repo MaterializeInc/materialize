@@ -6908,7 +6908,7 @@ dependencies = [
 
 [[package]]
 name = "mz-deploy"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "annotate-snippets",
  "async-stream",
