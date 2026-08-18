@@ -26,11 +26,11 @@ use futures_util::stream::FuturesOrdered;
 use futures_util::{FutureExt, StreamExt};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 use time::OffsetDateTime;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 use url::Url;
 use uuid::Uuid;
@@ -38,6 +38,7 @@ use uuid::Uuid;
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
+use mz_ore::task::AbortOnDropHandle;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
@@ -51,31 +52,27 @@ const AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
 const AZURE_FEDERATED_TOKEN: &str = "AZURE_FEDERATED_TOKEN";
 const AZURE_FEDERATED_TOKEN_FILE: &str = "AZURE_FEDERATED_TOKEN_FILE";
 
-/// Time before an access token's expiry at which a refresh is started. The
-/// current token keeps being served while the refresh is in flight, so
-/// storage requests don't stall on the round trip to AAD.
+/// Time before an access token's expiry at which its refresh task fetches a
+/// replacement, so requests keep being served from an unexpired token while
+/// the refresh round trip to AAD is in flight.
 const TOKEN_REFRESH_BUFFER: Duration = Duration::from_secs(5 * 60);
 
-/// Time before an access token's expiry at which it is no longer presented
-/// to storage, so it cannot expire while a request using it is in flight.
-/// Matches the margin in `azure_identity`'s internal token cache.
-const TOKEN_EXPIRY_BUFFER: Duration = Duration::from_secs(20);
-
-fn needs_refresh(token: &AccessToken) -> bool {
-    token.expires_on < OffsetDateTime::now_utc() + TOKEN_REFRESH_BUFFER
-}
-
-fn is_usable(token: &AccessToken) -> bool {
-    token.expires_on >= OffsetDateTime::now_utc() + TOKEN_EXPIRY_BUFFER
-}
+/// Minimum time a refresh task waits between fetch attempts once a refresh
+/// is due. This paces retries after failures, e.g. when AAD is transiently
+/// unreachable, and prevents hot-looping if issued tokens are already within
+/// [TOKEN_REFRESH_BUFFER] of expiry.
+const TOKEN_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 
 /// Exchanges a client assertion (the projected service account token) for an
 /// AAD access token with the given scopes.
-type ExchangeFn = Box<
+type ExchangeFn = Arc<
     dyn Fn(String, Vec<String>) -> BoxFuture<'static, azure_core::Result<AccessToken>>
         + Send
         + Sync,
 >;
+
+/// A shared slot holding the current access token for one scope set.
+type TokenSlot = Arc<std::sync::RwLock<AccessToken>>;
 
 /// A [TokenCredential] for AKS-style workload identity that re-reads the
 /// projected service account token file on every AAD access token refresh.
@@ -90,12 +87,12 @@ type ExchangeFn = Box<
 struct RefreshingWorkloadIdentityCredential {
     federated_token_file: PathBuf,
     exchange: ExchangeFn,
-    /// AAD access tokens by requested scopes. A token is refreshed once it is
-    /// within [TOKEN_REFRESH_BUFFER] of expiry and served until it is within
-    /// [TOKEN_EXPIRY_BUFFER] of expiry.
-    cache: RwLock<BTreeMap<Vec<String>, AccessToken>>,
-    /// Serializes refreshes so concurrent callers don't stampede AAD.
-    refresh: Mutex<()>,
+    /// One token slot and refresh task per requested scope set. The task
+    /// keeps the slot fresh, so [TokenCredential::get_token] only blocks on
+    /// the first use of a scope set.
+    cache: RwLock<BTreeMap<Vec<String>, (TokenSlot, AbortOnDropHandle<()>)>>,
+    refresh_buffer: Duration,
+    retry_interval: Duration,
 }
 
 impl Debug for RefreshingWorkloadIdentityCredential {
@@ -136,7 +133,7 @@ impl RefreshingWorkloadIdentityCredential {
         let options = TokenCredentialOptions::default();
         let http_client = options.http_client();
         let authority_host = options.authority_host()?;
-        let exchange: ExchangeFn = Box::new(move |assertion, scopes| {
+        let exchange: ExchangeFn = Arc::new(move |assertion, scopes| {
             let http_client = Arc::clone(&http_client);
             let authority_host = authority_host.clone();
             let tenant_id = tenant_id.clone();
@@ -166,44 +163,81 @@ impl RefreshingWorkloadIdentityCredential {
             }
             .boxed()
         });
-        Ok(Self::with_exchange(federated_token_file, exchange))
+        Ok(Self::with_exchange(
+            federated_token_file,
+            exchange,
+            TOKEN_REFRESH_BUFFER,
+            TOKEN_REFRESH_RETRY_INTERVAL,
+        ))
     }
 
-    fn with_exchange(federated_token_file: PathBuf, exchange: ExchangeFn) -> Self {
+    fn with_exchange(
+        federated_token_file: PathBuf,
+        exchange: ExchangeFn,
+        refresh_buffer: Duration,
+        retry_interval: Duration,
+    ) -> Self {
         Self {
             federated_token_file,
             exchange,
             cache: RwLock::new(BTreeMap::new()),
-            refresh: Mutex::new(()),
+            refresh_buffer,
+            retry_interval,
         }
     }
+}
 
-    /// Exchanges the current contents of the token file for a fresh access
-    /// token and caches it. Callers must hold the [Self::refresh] lock.
-    async fn refresh_token(&self, scopes_key: &[String]) -> azure_core::Result<AccessToken> {
-        let assertion = tokio::fs::read_to_string(&self.federated_token_file)
-            .await
-            .map_err(|err| {
-                azure_core::error::Error::full(
-                    ErrorKind::Credential,
-                    err,
-                    format!(
-                        "failed to read federated token from file {}",
-                        self.federated_token_file.display()
-                    ),
-                )
-            })?;
-        // Kubernetes writes the projected token without surrounding
-        // whitespace, but a hand-provisioned file may have a trailing
-        // newline, which would corrupt the client assertion.
-        let assertion = assertion.trim().to_string();
+/// Reads the projected service account token file and exchanges its contents
+/// for an AAD access token.
+async fn fetch_token(
+    federated_token_file: &Path,
+    exchange: &ExchangeFn,
+    scopes: Vec<String>,
+) -> azure_core::Result<AccessToken> {
+    let assertion = tokio::fs::read_to_string(federated_token_file)
+        .await
+        .map_err(|err| {
+            azure_core::error::Error::full(
+                ErrorKind::Credential,
+                err,
+                format!(
+                    "failed to read federated token from file {}",
+                    federated_token_file.display()
+                ),
+            )
+        })?;
+    // Kubernetes writes the projected token without surrounding whitespace,
+    // but a hand-provisioned file may have a trailing newline, which would
+    // corrupt the client assertion.
+    (exchange)(assertion.trim().to_string(), scopes).await
+}
 
-        let token = (self.exchange)(assertion, scopes_key.to_vec()).await?;
-        self.cache
-            .write()
-            .await
-            .insert(scopes_key.to_vec(), token.clone());
-        Ok(token)
+/// Keeps `slot` holding an unexpired token by fetching a replacement within
+/// `refresh_buffer` of the current token's expiry. A failed fetch leaves the
+/// current token in place and is retried after `retry_interval`.
+async fn refresh_task(
+    federated_token_file: PathBuf,
+    exchange: ExchangeFn,
+    slot: TokenSlot,
+    scopes: Vec<String>,
+    refresh_buffer: Duration,
+    retry_interval: Duration,
+) {
+    loop {
+        let refresh_at = slot.read().expect("lock poisoned").expires_on - refresh_buffer;
+        let wait = refresh_at - OffsetDateTime::now_utc();
+        let wait = if wait.is_positive() {
+            wait.unsigned_abs()
+        } else {
+            Duration::ZERO
+        };
+        tokio::time::sleep(wait.max(retry_interval)).await;
+        match fetch_token(&federated_token_file, &exchange, scopes.clone()).await {
+            Ok(token) => *slot.write().expect("lock poisoned") = token,
+            Err(err) => {
+                warn!("failed to refresh Azure workload identity token, will retry: {err}")
+            }
+        }
     }
 }
 
@@ -212,49 +246,46 @@ impl TokenCredential for RefreshingWorkloadIdentityCredential {
     async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
         let scopes_key: Vec<String> = scopes.iter().map(ToString::to_string).collect();
 
-        let current = self.cache.read().await.get(&scopes_key).cloned();
-        if let Some(token) = &current {
-            if !needs_refresh(token) {
-                return Ok(token.clone());
+        {
+            let cache = self.cache.read().await;
+            if let Some((slot, _refresh)) = cache.get(&scopes_key) {
+                return Ok(slot.read().expect("lock poisoned").clone());
             }
         }
 
-        // The token is missing or due for a refresh. While it is still usable
-        // it keeps being served: callers that find a refresh already in
-        // flight return it immediately instead of waiting.
-        let usable = current.filter(is_usable);
-        let _refresh = match (self.refresh.try_lock(), &usable) {
-            (Ok(guard), _) => guard,
-            (Err(_), Some(token)) => return Ok(token.clone()),
-            (Err(_), None) => self.refresh.lock().await,
-        };
-
-        // Another caller may have refreshed while we waited for the lock.
-        let refreshed = self.cache.read().await.get(&scopes_key).cloned();
-        if let Some(token) = refreshed {
-            if !needs_refresh(&token) {
-                return Ok(token);
-            }
+        let mut cache = self.cache.write().await;
+        if let Some((slot, _refresh)) = cache.get(&scopes_key) {
+            return Ok(slot.read().expect("lock poisoned").clone());
         }
 
-        match self.refresh_token(&scopes_key).await {
-            Ok(token) => Ok(token),
-            // A still-usable token beats failing the storage request when the
-            // refresh fails, e.g. AAD is transiently unreachable. The next
-            // call retries the refresh.
-            Err(err) => match usable {
-                Some(token) => {
-                    warn!(
-                        "failed to refresh Azure workload identity token, still using current token: {err}"
-                    );
-                    Ok(token)
-                }
-                None => Err(err),
-            },
-        }
+        // First use of this scope set: fetch the initial token, then hand
+        // the slot to a task that keeps it fresh. A failed initial fetch is
+        // not cached, the next call retries it.
+        let token = fetch_token(
+            &self.federated_token_file,
+            &self.exchange,
+            scopes_key.clone(),
+        )
+        .await?;
+        let slot = Arc::new(std::sync::RwLock::new(token.clone()));
+        let refresh = mz_ore::task::spawn(
+            || "azure-workload-identity-token-refresh",
+            refresh_task(
+                self.federated_token_file.clone(),
+                Arc::clone(&self.exchange),
+                Arc::clone(&slot),
+                scopes_key.clone(),
+                self.refresh_buffer,
+                self.retry_interval,
+            ),
+        )
+        .abort_on_drop();
+        cache.insert(scopes_key, (slot, refresh));
+        Ok(token)
     }
 
     async fn clear_cache(&self) -> azure_core::Result<()> {
+        // Dropping the entries aborts their refresh tasks with them.
         self.cache.write().await.clear();
         Ok(())
     }
@@ -624,143 +655,135 @@ mod tests {
 
     use super::*;
 
-    /// Tests that the credential re-reads the token file on every refresh,
-    /// reuses cached tokens until they near expiry, and trims whitespace from
-    /// the file contents.
+    /// A [MockExchange] wrapped for sharing with the credential's exchange
+    /// closure.
+    struct MockExchange {
+        /// Client assertions passed to each exchange call.
+        assertions: Vec<String>,
+        /// Whether the next exchange calls fail.
+        fail: bool,
+    }
+
+    fn mock_exchange(state: &Arc<Mutex<MockExchange>>) -> ExchangeFn {
+        let state = Arc::clone(state);
+        Arc::new(move |assertion, _scopes| {
+            let state = Arc::clone(&state);
+            async move {
+                let mut state = state.lock().unwrap();
+                state.assertions.push(assertion);
+                if state.fail {
+                    return Err(azure_core::error::Error::message(
+                        ErrorKind::Credential,
+                        "mock exchange failure",
+                    ));
+                }
+                Ok(AccessToken::new(
+                    Secret::new(format!("aad-{}", state.assertions.len())),
+                    OffsetDateTime::now_utc() + Duration::from_secs(3600),
+                ))
+            }
+            .boxed()
+        })
+    }
+
+    /// Tests that the token file is re-read (and trimmed) on every fetch,
+    /// that fetched tokens are served from the slot without further
+    /// exchanges, and that a failed initial fetch is not cached.
     #[mz_ore::test(tokio::test)]
     async fn refreshing_workload_identity_credential() {
-        struct MockExchange {
-            /// Client assertions passed to each exchange call.
-            assertions: Vec<String>,
-            /// Validity of the next issued token.
-            validity: Duration,
-        }
-
         let token_file = tempfile::NamedTempFile::new().expect("create temp token file");
         std::fs::write(token_file.path(), "token-a\n").expect("write token file");
 
         let state = Arc::new(Mutex::new(MockExchange {
             assertions: Vec::new(),
-            validity: Duration::ZERO,
-        }));
-        let exchange: ExchangeFn = Box::new({
-            let state = Arc::clone(&state);
-            move |assertion, _scopes| {
-                let state = Arc::clone(&state);
-                async move {
-                    let mut state = state.lock().unwrap();
-                    state.assertions.push(assertion);
-                    Ok(AccessToken::new(
-                        Secret::new(format!("aad-{}", state.assertions.len())),
-                        OffsetDateTime::now_utc() + state.validity,
-                    ))
-                }
-                .boxed()
-            }
-        });
-        let credential = RefreshingWorkloadIdentityCredential::with_exchange(
-            token_file.path().to_path_buf(),
-            exchange,
-        );
-        let scopes = &["https://storage.azure.com/"];
-
-        // Already-expired tokens are refreshed on every call, and the token
-        // file is re-read (and trimmed) each time.
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-1");
-        std::fs::write(token_file.path(), "token-b").expect("write token file");
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-2");
-        assert_eq!(
-            state.lock().unwrap().assertions,
-            vec!["token-a".to_string(), "token-b".to_string()]
-        );
-
-        // Unexpired tokens are served from the cache without an exchange.
-        state.lock().unwrap().validity = Duration::from_secs(3600);
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-3");
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-3");
-        assert_eq!(state.lock().unwrap().assertions.len(), 3);
-
-        // Clearing the cache forces a refresh.
-        credential.clear_cache().await.expect("clear cache");
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-4");
-    }
-
-    /// Tests that a still-usable token keeps being served while a refresh is
-    /// in flight or failing, and that refresh failures only surface once the
-    /// token is no longer usable.
-    #[mz_ore::test(tokio::test)]
-    async fn workload_identity_credential_concurrent_refresh() {
-        struct MockExchange {
-            calls: usize,
-            fail: bool,
-        }
-
-        let token_file = tempfile::NamedTempFile::new().expect("create temp token file");
-        std::fs::write(token_file.path(), "token").expect("write token file");
-
-        let state = Arc::new(Mutex::new(MockExchange {
-            calls: 0,
             fail: false,
         }));
-        let exchange: ExchangeFn = Box::new({
-            let state = Arc::clone(&state);
-            move |_assertion, _scopes| {
-                let state = Arc::clone(&state);
-                async move {
-                    let mut state = state.lock().unwrap();
-                    state.calls += 1;
-                    if state.fail {
-                        return Err(azure_core::error::Error::message(
-                            ErrorKind::Credential,
-                            "mock exchange failure",
-                        ));
-                    }
-                    Ok(AccessToken::new(
-                        Secret::new(format!("aad-{}", state.calls)),
-                        // Usable (more than TOKEN_EXPIRY_BUFFER left) but due
-                        // for a refresh (less than TOKEN_REFRESH_BUFFER left).
-                        OffsetDateTime::now_utc() + Duration::from_secs(60),
-                    ))
-                }
-                .boxed()
-            }
-        });
         let credential = RefreshingWorkloadIdentityCredential::with_exchange(
             token_file.path().to_path_buf(),
-            exchange,
+            mock_exchange(&state),
+            TOKEN_REFRESH_BUFFER,
+            TOKEN_REFRESH_RETRY_INTERVAL,
         );
         let scopes = &["https://storage.azure.com/"];
 
         let token = credential.get_token(scopes).await.expect("token");
         assert_eq!(token.token.secret(), "aad-1");
-
-        // The token is due for a refresh, but with one already in flight
-        // (simulated by holding the refresh lock) it is served as is.
-        {
-            let _refresh = credential.refresh.lock().await;
-            let token = credential.get_token(scopes).await.expect("token");
-            assert_eq!(token.token.secret(), "aad-1");
-            assert_eq!(state.lock().unwrap().calls, 1);
-        }
-
-        // A failing refresh also keeps serving the usable token.
-        state.lock().unwrap().fail = true;
         let token = credential.get_token(scopes).await.expect("token");
         assert_eq!(token.token.secret(), "aad-1");
-        assert_eq!(state.lock().unwrap().calls, 2);
+        assert_eq!(state.lock().unwrap().assertions, vec!["token-a"]);
 
-        // Without a usable token, a failing refresh surfaces the error, and a
-        // subsequent successful refresh recovers.
+        // A failed initial fetch surfaces the error without caching it, and
+        // the rotated token file is re-read on the next fetch.
+        std::fs::write(token_file.path(), "token-b").expect("write token file");
         credential.clear_cache().await.expect("clear cache");
+        state.lock().unwrap().fail = true;
         assert!(credential.get_token(scopes).await.is_err());
         state.lock().unwrap().fail = false;
         let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-4");
+        assert_eq!(token.token.secret(), "aad-3");
+        assert_eq!(
+            state.lock().unwrap().assertions,
+            vec!["token-a", "token-b", "token-b"]
+        );
+    }
+
+    /// Tests that the background task refreshes the slot with fresh token
+    /// file contents and keeps the last good token through failed refreshes.
+    #[mz_ore::test(tokio::test)]
+    async fn workload_identity_credential_background_refresh() {
+        let token_file = tempfile::NamedTempFile::new().expect("create temp token file");
+        std::fs::write(token_file.path(), "token-a").expect("write token file");
+
+        let state = Arc::new(Mutex::new(MockExchange {
+            assertions: Vec::new(),
+            fail: false,
+        }));
+        // A refresh buffer longer than the issued validity makes every token
+        // immediately due, so refreshes run continuously at the (shortened)
+        // retry interval.
+        let credential = RefreshingWorkloadIdentityCredential::with_exchange(
+            token_file.path().to_path_buf(),
+            mock_exchange(&state),
+            Duration::from_secs(7200),
+            Duration::from_millis(10),
+        );
+        let scopes = &["https://storage.azure.com/"];
+
+        let token = credential.get_token(scopes).await.expect("token");
+        assert_eq!(token.token.secret(), "aad-1");
+
+        // The background task picks up the rotated token file without any
+        // caller blocking on the refresh.
+        std::fs::write(token_file.path(), "token-b").expect("write token file");
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let token = credential.get_token(scopes).await.expect("token");
+                if token.token.secret() != "aad-1" {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("token refreshed within timeout");
+        assert_eq!(
+            state.lock().unwrap().assertions.last().map(String::as_str),
+            Some("token-b")
+        );
+
+        // Failed refreshes keep the last good token in the slot and retry.
+        state.lock().unwrap().fail = true;
+        let held = credential.get_token(scopes).await.expect("token");
+        let calls_when_failing = state.lock().unwrap().assertions.len();
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while state.lock().unwrap().assertions.len() <= calls_when_failing + 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("retries within timeout");
+        let token = credential.get_token(scopes).await.expect("token");
+        assert_eq!(token.token.secret(), held.token.secret());
     }
 
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
