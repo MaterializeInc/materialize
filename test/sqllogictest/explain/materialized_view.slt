@@ -260,3 +260,41 @@ materialize.public.mv_folded:
 Target cluster: quickstart
 
 EOF
+
+
+# The same state through a different transform. The predicate in `unsatisfiable` cannot hold, so
+# that view folds on its own, and inlining it into the join is what drops the last reference to
+# `flags`. Unlike the fold above this one does not depend on recognizing a mapped literal as a
+# column, so the two goldens do not stand or fall together. `flags` carries no index, so it is a
+# source import rather than an index one.
+statement ok
+CREATE VIEW unsatisfiable AS SELECT c0 FROM flags WHERE c0 IS NULL AND c0 = true;
+
+statement ok
+CREATE MATERIALIZED VIEW mv_empty_join AS
+  SELECT f.c0 FROM flags f, unsatisfiable u WHERE f.c0 = u.c0;
+
+query T multiline
+EXPLAIN LOCALLY OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+MATERIALIZED VIEW mv_empty_join;
+----
+Project (#0{c0})
+  Join on=(#0{c0} = #1{c0})
+    Filter (#0{c0}) IS NOT NULL
+      Get materialize.public.flags
+    Get materialize.public.unsatisfiable
+
+Target cluster: quickstart
+
+EOF
+
+query T multiline
+EXPLAIN OPTIMIZED PLAN WITH (humanized expressions) AS VERBOSE TEXT FOR
+MATERIALIZED VIEW mv_empty_join;
+----
+materialize.public.mv_empty_join:
+  Constant <empty>
+
+Target cluster: quickstart
+
+EOF
