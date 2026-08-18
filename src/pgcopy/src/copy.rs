@@ -1358,6 +1358,16 @@ mod tests {
                         Datum::Timestamp(_) | Datum::TimestampTz(_) | Datum::Null => {
                             continue;
                         }
+                        // Text carries no sign for NaN, so `-NaN` decodes as
+                        // `NaN`, and `Row` equality compares the encoded bytes,
+                        // which differ. The positive NaN of the interesting set
+                        // covers the roundtrip itself.
+                        Datum::Float32(f) if f.is_nan() && f.is_sign_negative() => {
+                            continue;
+                        }
+                        Datum::Float64(f) if f.is_nan() && f.is_sign_negative() => {
+                            continue;
+                        }
                         Datum::String(s) => {
                             // TODO: The decoder cannot differentiate between empty string and null.
                             if s.trim() == copy_csv_params.null || s.trim().is_empty() {

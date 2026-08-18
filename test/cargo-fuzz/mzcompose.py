@@ -432,6 +432,22 @@ class FuzzRunner:
         if job.returncode == 0 and not self._new_artifacts(job):
             self.succeeded.append(job)
             say(f"✓ {job.name}  [{secs}s]  {final_stats(job.log_path)}")
+        elif (
+            job.returncode is not None
+            and job.returncode < 0
+            and not self._new_artifacts(job)
+        ):
+            # Killed by a signal (Ctrl-C, step timeout, an external kill)
+            # without a crash artifact: an interrupted run, not a crash.
+            # libFuzzer-detected crashes always leave an artifact, so this
+            # cannot mask one. A kernel OOM SIGKILL is also reported as
+            # interrupted; the rss limit passed to libFuzzer catches memory
+            # blowups as artifact-producing OOMs well before the kernel does.
+            self.succeeded.append(job)
+            say(
+                f"- {job.name} interrupted by signal {-job.returncode} [{secs}s]  "
+                f"{final_stats(job.log_path)}"
+            )
         else:
             self.failed.append(job)
             say(self._failure_block(job, secs))
@@ -505,13 +521,15 @@ class FuzzRunner:
                 except ProcessLookupError:
                     pass
 
-    def build(self) -> None:
-        # Compile every fuzz crate up front, one at a time, not just the crates
-        # this run will fuzz. A fuzz target that won't compile is a broken
-        # build: building only the crates the active --profile/filters select
-        # would let a compile break in a skipped crate pass as a green run,
-        # since that crate is never compiled. Building all of them makes a
-        # broken fuzzer fail the run immediately, whatever the profile.
+    def build(self, crates: list[str] | None = None) -> None:
+        # By default compile every fuzz crate up front, one at a time, not
+        # just the crates this run will fuzz. A fuzz target that won't compile
+        # is a broken build: building only the crates the active --profile
+        # selects would let a compile break in a skipped crate pass as a green
+        # run, since that crate is never compiled. Building all of them makes
+        # a broken fuzzer fail the run immediately, whatever the profile.
+        # Explicit positional `filters` are the exception: those are targeted
+        # runs, and `crates` narrows the build to the crates they selected.
         # Sequential, one crate at a time, so the concurrent fuzzing phase
         # doesn't have 20+ `cargo fuzz run` invocations fighting over cargo's
         # per-target-dir build lock; crates share the target dir, so common
@@ -525,8 +543,9 @@ class FuzzRunner:
         cmd = ["cargo", "fuzz", "build"]
         if self.sanitizer:
             cmd.append(f"--sanitizer={self.sanitizer}")
-        for i, crate in enumerate(FUZZ_CRATES, 1):
-            say(f"building [{i}/{len(FUZZ_CRATES)}] {crate}")
+        build_crates = FUZZ_CRATES if crates is None else crates
+        for i, crate in enumerate(build_crates, 1):
+            say(f"building [{i}/{len(build_crates)}] {crate}")
             if subprocess.run(cmd, cwd=MZ_ROOT / crate, env=self.env).returncode != 0:
                 raise ui.UIError(f"build FAILED for {crate}")
 
@@ -1114,7 +1133,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for crate in shard_crates:
         prepare_corpus(crate, env)
     if not args.no_build:
-        runner.build()
+        # Explicit filters mean a targeted run: build only the crates whose
+        # targets were selected. Without filters, build everything so a
+        # compile break in any fuzz crate fails the run (see build()).
+        runner.build(crates=shard_crates if args.filters else None)
     failed = runner.run()
     upload_logs(env, log_dir)
     if args.corpus_sync:
