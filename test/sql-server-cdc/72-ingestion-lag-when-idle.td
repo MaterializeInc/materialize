@@ -11,17 +11,17 @@
 # Regression test: a freshly created source must report a near-zero ingestion
 # lag, even while its upstream database is idle.
 #
-# The `offset_committed` statistic must be seeded from the resumption LSN when
-# the source starts. If it is left at the default 0 while `offset_known` tracks
-# the (large) upstream LSN, the console computes an enormous, bogus ingestion
-# lag (`offset_known - offset_committed`).
+# The two offset statistics must be initialized from a common validated
+# upstream point. Leaving `offset_committed` at 0 after `offset_known` advances
+# produces an enormous lag. Publishing the full resumption LSN before the known
+# frontier catches up reverses the ordering and makes the same lag calculation
+# (`offset_known - offset_committed`) underflow.
 #
-# An idle upstream database is what makes this reliably observable. Any activity
-# would advance the source frontier and set `offset_committed` to a correct
-# value, masking the bug. SQL Server tracks the max LSN per database, so we run
-# this against a dedicated database with no activity of its own. The background
-# ticker keeps writing to the shared `test` database, but that does not advance
-# the max LSN observed here.
+# A newly enabled capture instance can start ahead of the database-wide CDC
+# maximum. Purification must use that higher start LSN as the source's resumption
+# point. The progress probe still observes the lower database maximum. We stop
+# this database's capture job before enabling the target table so the two LSNs
+# cannot converge and mask the invalid statistics.
 
 $ sql-server-connect name=sql-server
 server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=${arg.default-sql-server-user};Password=${arg.default-sql-server-password}
@@ -41,17 +41,32 @@ ALTER DATABASE lag_test SET ALLOW_SNAPSHOT_ISOLATION ON;
 
 $ sql-server-execute name=sql-server
 USE lag_test;
+CREATE TABLE lag_seed (f1 VARCHAR(20));
+EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'lag_seed', @role_name = 'SA', @supports_net_changes = 0;
+INSERT INTO lag_seed VALUES ('seed');
+
+# Establish a nonzero database maximum, then freeze it. Enabling `lag_t` after
+# this point gives its capture instance a later start LSN.
+$ sql-server-execute name=sql-server split-lines=false
+WAITFOR DELAY '00:00:20';
+
+$ sql-server-execute name=sql-server
+USE lag_test;
+EXEC sys.sp_cdc_stop_job @job_type = 'capture';
 CREATE TABLE lag_t (f1 VARCHAR(20));
 EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'lag_t', @role_name = 'SA', @supports_net_changes = 0;
 INSERT INTO lag_t VALUES ('one'), ('two'), ('three');
 
-# Let the capture instance drain the writes above and go idle, so this
-# database's max LSN is frozen before we snapshot. Once idle, SQL Server does
-# not advance the max LSN for several minutes, which keeps the source frontier
-# from advancing on its own and thus exercises the startup seeding of
-# `offset_committed`.
+# This is the upstream state the test depends on. If SQL Server changes its CDC
+# behavior, fail here rather than attributing a later result to Materialize.
 $ sql-server-execute name=sql-server split-lines=false
-WAITFOR DELAY '00:00:20';
+IF NOT EXISTS (
+    SELECT 1
+    FROM lag_test.cdc.change_tables
+    WHERE capture_instance = 'dbo_lag_t'
+      AND start_lsn > lag_test.sys.fn_cdc_get_max_lsn()
+)
+    THROW 50000, 'expected capture start LSN above database maximum', 1;
 
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM SET storage_statistics_collection_interval = 1000;
@@ -102,21 +117,16 @@ SELECT cr.id
   ORDER BY cr.id
   LIMIT 1
 
-# With `offset_committed` seeded from the resumption LSN it tracks `offset_known`,
-# so the lag stays near zero even though the upstream database is idle. Without
-# the fix `offset_committed` stays at 0 and the lag is the full upstream LSN
-# until the idle database eventually advances its max LSN, which takes minutes.
-# The bounded timeout is shorter than that heal time, so a buggy build fails
-# here, while a correct build passes within seconds. The bound is phrased as an
-# addition rather than `offset_known - offset_committed` so it never underflows
-# the unsigned columns if `offset_known` is momentarily unset before the first
-# probe tick.
+# The reported committed offset must not exceed the first known upstream offset,
+# even though the actual resumption LSN does. The second expression is the
+# ingestion-lag calculation used by customers. Since both columns are `uint8`,
+# invalid ordering makes the subtraction itself fail instead of reporting lag.
 $ set-sql-timeout duration=60s
 
 > SELECT
     u.offset_committed > 0,
     u.offset_known >= u.offset_committed,
-    u.offset_known < u.offset_committed + 1000000
+    u.offset_known - u.offset_committed < 1000000
   FROM mz_sources s
   JOIN mz_internal.mz_source_statistics u ON s.id = u.id
   WHERE s.name = 'lag_source' AND u.replica_id = '${replica_id}'
