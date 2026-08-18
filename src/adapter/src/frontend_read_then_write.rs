@@ -77,10 +77,12 @@
 //! `frontend_read_then_write` re-checks the syntactic predicate before running a
 //! dataflow, which catches a caller that skipped the gate. If the syntactic
 //! predicate were laxer than the dynamic one, that check would pass and a write
-//! meant for staging would commit on its own, so the loop's `Committed` arm
-//! soft-panics when it has a write timestamp for a statement we meant to stage.
-//! By then the write is durable, so all that arm can do is make the
-//! disagreement loud.
+//! meant for staging would commit on its own, so the loop asserts wherever the
+//! two answers can be compared. The `Committed` arm catches a write timestamp
+//! for a statement we meant to stage, and the zero-row arm catches a read
+//! timestamp for one. Neither can undo anything by then, the write is already
+//! durable in the first case and there was never anything to write in the
+//! second, so all they do is make the disagreement loud.
 //!
 //! ## Rollout note
 //!
@@ -885,6 +887,18 @@ impl PeekClient {
                 // selection from state a later strict-serializable read cannot
                 // see yet, and that read finds the rows we said were not
                 // there.
+                //
+                // An `observed_ts` for a statement we meant to stage is the
+                // same predicate disagreement the `Committed` arm guards
+                // against: the syntactic answer said it reads nothing, the
+                // subscribe then read persisted state. Nothing is durable here,
+                // so there is nothing to undo, but the disagreement itself is
+                // the bug and it would otherwise park silently.
+                soft_assert_or_log!(
+                    !(stages_rows && observed_ts.is_some()),
+                    "read-then-write observed a read timestamp for a statement \
+                     it meant to stage"
+                );
                 end_own_transaction(session, stages_rows);
                 match observed_ts {
                     Some(observed_ts) => {
