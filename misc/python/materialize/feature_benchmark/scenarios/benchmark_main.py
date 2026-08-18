@@ -2012,8 +2012,9 @@ class MySqlInitialLoad(MySqlCdc):
 
     FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
-    # The initial load has a wider memory envelope, so allow a bit more
-    # headroom than the base default before flagging a regression.
+    # The parallel snapshot path has a wider memory envelope during the initial
+    # load, so allow a bit more headroom than the base default before flagging a
+    # regression.
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
         # Primary key splitting supports only string primary keys, so this
         # BIGINT-keyed snapshot reads serially where older versions split it across
