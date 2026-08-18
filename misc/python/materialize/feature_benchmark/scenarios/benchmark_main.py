@@ -2012,12 +2012,12 @@ class MySqlInitialLoad(MySqlCdc):
 
     FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
-    # The parallel snapshot path has a wider memory envelope during the initial
-    # load, so allow a bit more headroom than the base default before flagging a
-    # regression.
+    # The initial load has a wider memory envelope, so allow a bit more
+    # headroom than the base default before flagging a regression.
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        # Integer primary keys are no longer handled for primary key splitting.
-        # Bumping to account for this.
+        # Primary key splitting supports only string primary keys, so this
+        # BIGINT-keyed snapshot reads serially where older versions split it across
+        # workers. The increased wallclock tolerance covers that lost parallelism.
         MeasurementType.WALLCLOCK: 0.25,
         MeasurementType.MEMORY_MZ: 0.30,
         MeasurementType.MEMORY_CLUSTERD: 0.50,
@@ -2170,10 +2170,10 @@ class MySqlInitialLoadMultiWorkerSingleTable(MySqlCdc):
     single-table companion to MySqlInitialLoadMultiWorkerSampled."""
 
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        # Bumping to account for small performance regression for approximate
-        # primary key probing: measured locally at 2-14% wallclock versus the
-        # exact OFFSET-sampler baseline. Grabbing the offset was quite fast
-        # for small datasets in MySQL.
+        # In MySQL, probing primary keys (for approximately even partitions) is
+        # slower on small datasets than using OFFSET (for exactly even
+        # partitions). Measured locally at 2-14% slower by wallclock at
+        # SCALE=6 (1M rows).
         MeasurementType.WALLCLOCK: 0.25,
         MeasurementType.MEMORY_MZ: 0.60,
         MeasurementType.MEMORY_CLUSTERD: 0.60,

@@ -236,7 +236,6 @@ fn worker_pk_range(
 const SUPPORTED_PK_COLLATION: &str = "utf8mb4_bin";
 const SUPPORTED_PK_CHARSET: &str = "utf8mb4";
 const MIN_PROBED_PREFIXES: u64 = 64;
-const BILLION_ROWS: u64 = 1_000_000_000;
 
 /// Partitioning configuration settings bundled to avoid accidental mixing.
 struct PartitionSettings {
@@ -277,7 +276,7 @@ async fn compute_sampled_splits(
     // network requests to search through prefixes can take minutes, but is worth it for billions of rows
     // that can take hours to snapshot.
     let max_probed_prefixes = (row_count.saturating_mul(settings.probed_prefixes_per_billion_rows)
-        / BILLION_ROWS)
+        / 1_000_000_000)
         .max(MIN_PROBED_PREFIXES);
     let params = mz_mysql_util::PartitionParams {
         num_workers: worker_count,
@@ -617,7 +616,7 @@ where
         // lookup failing means `plan_worker_reads` and this check disagree.
         let Some(Some(splits)) = pk_bounds.get(table) else {
             return Err(TransientError::Generic(anyhow::anyhow!(
-                "PK range planned for {table} without verifiable bounds"
+                "PK range planned for {table} without any PK bounds, which is unexpected"
             )));
         };
         let Some((raw_col, _)) = tables
@@ -625,7 +624,7 @@ where
             .and_then(|outputs| try_extract_single_column_pk(&outputs[0].desc))
         else {
             return Err(TransientError::Generic(anyhow::anyhow!(
-                "PK range planned for {table} without verifiable bounds"
+                "PK range planned for {table} without a single-column PK, which is unexpected"
             )));
         };
         let ok = match fetch_column_collation(tx, table, &raw_col).await? {
