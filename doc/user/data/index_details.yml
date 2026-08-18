@@ -1,3 +1,7 @@
+# Manifest of reusable index content included by the indexes concept page,
+# rendered with the `include-from-yaml` shortcode. Related cluster-topic
+# entries (cross-cluster accessibility of tables/views/materialized views)
+# live in cluster_details.yml.
 
 - name: definition
   content: |
@@ -16,3 +20,15 @@
     [^db-term]: Materialize indexes are like clustered hash indexes. The term
     *clustered index* is a database term unrelated to Materialize clusters,
     which are compute resources.
+
+# Shared with the clusters concept page, which composes it after the
+# cross-cluster-accessibility entry in cluster_details.yml. Renders on both
+# the clusters and indexes pages, so avoid page-root links to either page;
+# deep anchor links (e.g., #resource-isolation) are fine — on clusters.md
+# they act as same-page jumps.
+- name: index-cluster-local
+  content: |
+    Indexes are accessible only from their own cluster. Indexed results reside
+    in the memory of the cluster where the index is created, and a [cluster's
+    memory](/concepts/clusters/#resource-isolation) cannot be accessed from
+    another cluster.

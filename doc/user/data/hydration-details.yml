@@ -31,6 +31,15 @@
     - **Adding a replica to a cluster**, which hydrates the new replica only.
       Existing replicas are unaffected and keep serving.
 
+# Shared by the hydration concept page (Objects and hydration) and the
+# clusters concept page (Hydration considerations).
+- name: per-replica
+  content: |
+    Hydration is per cluster replica: when a hydration trigger occurs, the
+    objects on the affected replicas hydrate. When a replica restarts, every
+    object on it re-hydrates. A resize or an added replica hydrates only the
+    new replicas.
+
 - name: materialized-view
   content: >-
     - **When**: Hydrates on creation and on every replica (re)start or cluster resize.
@@ -85,6 +94,18 @@
     Not applicable. A webhook source is not maintained by a dataflow. It
     receives data pushed over HTTP and writes the data directly to storage, so
     it does not hydrate.
+
+# Condensed summary of source hydration behavior, for pages that need the
+# takeaway without the per-object When/What/Memory detail (e.g., the sources
+# concept page). Keep consistent with kafka-upsert-sources,
+# append-only-and-cdc-sources, and webhook-sources above.
+- name: sources-summary
+  content: |
+    - For Kafka upsert sources, their associated read-only tables (or
+      subsources if using the legacy syntax) rebuild their internal upsert
+      index from storage on replica (re)start or cluster resize.
+
+    - For other sources, the hydration process is negligible or not applicable.
 
 - name: sink
   content: >-
