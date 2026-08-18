@@ -256,6 +256,13 @@ def get_variable_system_parameters(
             "true",
             ["true", "false"],
         ),
+        # On by default in tests so the recording path is exercised, while
+        # production keeps the code default of off.
+        VariableSystemParameter(
+            "enable_column_align_buffer_tracking",
+            "true",
+            ["true", "false"],
+        ),
         VariableSystemParameter(
             "enable_adapter_frontend_occ_read_then_write",
             "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
@@ -293,6 +300,11 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_upsert_paged_spill",
             "true",
             ["true", "false"],
         ),
@@ -584,13 +596,13 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "linear_join_yielding",
     "enable_column_paged_batcher",
     "enable_column_paged_batcher_spill",
+    "column_chunk_compress_min_depth",
     "column_paged_batcher_budget_fraction",
     "column_paged_batcher_lz4",
     "column_paged_batcher_swap_pageout",
     "column_paged_batcher_spill_worker_count",
     "column_paged_batcher_eager_backing",
     "column_paged_batcher_pool_rss_target_fraction",
-    "enable_upsert_paged_spill",
     "enable_lgalloc_eager_reclamation",
     "lgalloc_background_interval",
     "lgalloc_file_growth_dampener",

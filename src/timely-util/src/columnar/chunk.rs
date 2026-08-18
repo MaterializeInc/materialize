@@ -44,10 +44,10 @@
 //! resident fence metadata so a probe set faults only the chunk bodies it
 //! actually touches.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use columnar::bytes::indexed;
 use columnar::{Borrow, BorrowedOf, Columnar, Container as _, FromBytes, Index, Len, Push as _};
@@ -55,13 +55,15 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::Chunk;
 use mz_ore::cast::CastFrom;
-use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, Pool};
+use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, IDENTITY_CODEC, Pool};
 use timely::Accountable;
+use timely::PartialOrder;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Timestamp;
-use timely::progress::frontier::AntichainRef;
+use timely::progress::frontier::{Antichain, AntichainRef};
 
+use crate::columnar::align_buffer::{AlignBuffer, Origin};
 use crate::columnar::batcher::{ColumnChunker, gallop};
 use crate::columnar::unload::UnloadChunk;
 use crate::columnar::{Column, at_serialized_capacity};
@@ -77,6 +79,11 @@ thread_local! {
     /// enable flag and pool. Lets tests and benches spill through a private
     /// pool without touching process-global state.
     static SPILL_OVERRIDE: RefCell<Option<Pool>> = const { RefCell::new(None) };
+
+    /// A thread-scoped depth-floor override, taking precedence over the
+    /// global value. Lets tests and benches pin the floor without racing
+    /// concurrently running tests on the process-global state.
+    static COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
 
     /// Reusable staging for call-scoped reads of spilled bodies.
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -111,6 +118,51 @@ pub fn set_storage_spill_enabled(enabled: bool) {
 /// restores the global resolution.
 pub fn set_spill_override(pool: Option<Pool>) {
     SPILL_OVERRIDE.with(|cell| *cell.borrow_mut() = pool);
+}
+
+/// The youngest generational depth whose spilled bodies are compressed. See
+/// [`set_compress_min_depth`].
+static COMPRESS_MIN_DEPTH: AtomicU8 = AtomicU8::new(DEFAULT_COMPRESS_MIN_DEPTH);
+
+/// Set the youngest generational depth whose spilled bodies are compressed.
+///
+/// A chunk at depth `d` is rewritten (merged, extracted, advanced) with
+/// frequency proportional to `2^-d` under geometric merging, so compressing
+/// a shallow chunk buys a short stay in the pool at the cost of a guaranteed
+/// near-term codec round-trip: the body is encoded only to be read back and
+/// decoded by the next rewrite. Generations below the floor spill under the
+/// identity codec instead: still budgeted and swap-backed like every extent,
+/// but encode and decode are copies. The floor never exempts a body from the
+/// pool, so it cannot grow unbudgeted resident state.
+///
+/// `0` compresses every spilled body. Consulted at every commit, so changes
+/// apply to running dataflows.
+pub fn set_compress_min_depth(depth: u8) {
+    COMPRESS_MIN_DEPTH.store(depth, Ordering::Relaxed);
+}
+
+/// Set or unset a thread-scoped depth-floor override, taking precedence over
+/// [`set_compress_min_depth`]. For tests and benches, which run concurrently
+/// and must not race on the process-global floor.
+pub fn set_compress_min_depth_override(depth: Option<u8>) {
+    COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.set(depth));
+}
+
+/// The depth floor in effect for this thread's commits.
+fn compress_min_depth() -> u8 {
+    COMPRESS_MIN_DEPTH_OVERRIDE
+        .with(|cell| cell.get())
+        .unwrap_or_else(|| COMPRESS_MIN_DEPTH.load(Ordering::Relaxed))
+}
+
+/// The codec a body at `depth` stores under: identity below the compression
+/// floor, lz4 at and past it.
+fn codec_for_depth(depth: u8) -> &'static dyn ExtentCodec {
+    if depth < compress_min_depth() {
+        &IDENTITY_CODEC
+    } else {
+        &LZ4_CODEC
+    }
 }
 
 /// The pool committed chunks spill to, if any.
@@ -161,6 +213,16 @@ const COMMIT_BYTES: usize = 2 << 20;
 /// unbudgeted heap, and no accounting here would catch it.
 const SPILL_MIN_BYTES: usize = 64 << 10;
 
+/// The default compression depth floor: fresh (depth 0) bodies spill
+/// uncompressed.
+///
+/// A fresh chunk is consumed by its first merge with certainty, so
+/// compressing it can never save pool bytes for longer than one merge
+/// cadence and always costs a full encode plus decode. Depth 1 and beyond
+/// have survived a merge and wait geometrically longer for the next, so
+/// their compression amortizes.
+const DEFAULT_COMPRESS_MIN_DEPTH: u8 = 1;
+
 /// Whether a column is big enough to commit on its own. A monotone
 /// threshold, so settle's carry, which grows by whole chunks, cannot step
 /// over it.
@@ -184,15 +246,24 @@ fn rr<'b, 'a: 'b, C: Columnar>(item: columnar::Ref<'a, C>) -> columnar::Ref<'b, 
 
 /// A spilled chunk body: the serialized column in the pool, plus the resident
 /// metadata every [`Chunk`] must answer without fetching. That metadata is
-/// the record count and the first and last data items (the fence entries
-/// [`UnloadChunk::locate`] consults).
-pub struct SpilledBody<D: Columnar> {
+/// the record count, the first and last data items (the fence entries
+/// [`UnloadChunk::locate`] consults), and the time bounds `extract` consults
+/// to pass frontier-disjoint chunks through without loading them.
+pub struct SpilledBody<D: Columnar, T> {
     /// Number of updates in the body.
     records: usize,
     /// The first and last data items, as a two-element container. One
     /// container rather than two singletons, so the leaf allocations are not
     /// duplicated per fence.
     fences: D::Container,
+    /// The minimal times in the body: a lower bound antichain every
+    /// contained time is greater-or-equal to. Folded into `extract`'s
+    /// residual frontier when the chunk is kept whole.
+    time_lower: Antichain<T>,
+    /// The maximal times in the body. Some contained time is
+    /// greater-or-equal to a frontier exactly when some maximal time is,
+    /// which is `extract`'s ship-whole test.
+    time_upper: Vec<T>,
     /// The chunk's generational depth, mirrored into the pool's
     /// [`ChunkHints`] at spill time.
     depth: u8,
@@ -212,7 +283,7 @@ pub enum ColumnChunk<D: Columnar, T: Columnar, R: Columnar> {
     /// Body on the heap, shared via `Rc`, with its generational depth.
     Resident(Rc<Column<(D, T, R)>>, u8),
     /// Body in the pool. See [`SpilledBody`].
-    Spilled(Rc<SpilledBody<D>>),
+    Spilled(Rc<SpilledBody<D, T>>),
 }
 
 impl<D: Columnar, T: Columnar, R: Columnar> Clone for ColumnChunk<D, T, R> {
@@ -252,9 +323,9 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 Rc::try_unwrap(col).unwrap_or_else(|shared| copy_column(&shared))
             }
             ColumnChunk::Spilled(body) => {
-                let mut words = Vec::new();
-                body.handle.read_into(&mut words);
-                Column::Align(words)
+                Column::Align(AlignBuffer::build(Origin::Fetch, |words| {
+                    body.handle.read_into(words)
+                }))
             }
         }
     }
@@ -297,7 +368,10 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// Commit a non-empty column at the given generational depth: spill it to
     /// the pool when spilling is on and the body is worth a slot, else keep it
     /// resident.
-    fn commit(column: Column<(D, T, R)>, depth: u8) -> Self {
+    fn commit(column: Column<(D, T, R)>, depth: u8) -> Self
+    where
+        T: Timestamp,
+    {
         mz_ore::soft_assert_no_log!(!column.is_empty(), "chunks must be non-empty");
         if let Some(pool) = spill_pool() {
             if column.length_in_bytes() >= SPILL_MIN_BYTES {
@@ -309,20 +383,68 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
 
     /// Spill a non-empty column into `pool` unconditionally, capturing the
     /// resident fence metadata.
-    fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self {
+    ///
+    /// Generations below the compression depth floor store under the
+    /// identity codec: rewritten too soon for compression to amortize, they
+    /// stay budgeted and swap-backed while encode and decode reduce to
+    /// copies.
+    fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self
+    where
+        T: Timestamp,
+    {
+        let codec = codec_for_depth(depth);
         let len_bytes = column.length_in_bytes();
+        let (time_lower, time_upper) = Self::time_bounds(&column);
         let view = column.borrow();
         let records = view.len();
         let mut fences = D::Container::default();
         fences.push(view.0.get(0));
         fences.push(view.0.get(records - 1));
-        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth });
+        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth }, codec);
         ColumnChunk::Spilled(Rc::new(SpilledBody {
             records,
             fences,
+            time_lower,
+            time_upper,
             depth,
             handle,
         }))
+    }
+
+    /// The chunk's time bounds: stored metadata for spilled bodies, a scan
+    /// of the time column for resident ones. The scan costs less than the
+    /// copy it lets `extract` avoid when the chunk passes through whole.
+    fn chunk_time_bounds(&self) -> (Antichain<T>, Vec<T>)
+    where
+        T: Timestamp,
+    {
+        match self {
+            ColumnChunk::Resident(col, _) => Self::time_bounds(col),
+            ColumnChunk::Spilled(body) => (body.time_lower.clone(), body.time_upper.clone()),
+        }
+    }
+
+    /// The time bounds of a non-empty column: the antichain of minimal times
+    /// (every contained time is greater-or-equal to some element) and the
+    /// set of maximal times (some contained time is greater-or-equal to a
+    /// frontier exactly when some maximal one is).
+    fn time_bounds(column: &Column<(D, T, R)>) -> (Antichain<T>, Vec<T>)
+    where
+        T: Timestamp,
+    {
+        let view = column.borrow();
+        let times = view.1;
+        let mut lower = Antichain::new();
+        let mut upper: Vec<T> = Vec::new();
+        for i in 0..times.len() {
+            let t = T::into_owned(rr::<T>(times.get(i)));
+            if !upper.iter().any(|u| PartialOrder::less_equal(&t, u)) {
+                upper.retain(|u| !PartialOrder::less_equal(u, &t));
+                upper.push(t.clone());
+            }
+            lower.insert(t);
+        }
+        (lower, upper)
     }
 }
 
@@ -379,13 +501,14 @@ fn spill_column<C: Columnar>(
     pool: &Pool,
     len_bytes: usize,
     hints: ChunkHints,
+    codec: &'static dyn ExtentCodec,
 ) -> ChunkHandle {
     mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
     match column {
-        Column::Align(words) => pool.insert_with(words.len(), hints, &LZ4_CODEC, |dst| {
-            dst.copy_from_slice(&words)
-        }),
-        other => pool.insert_with(len_bytes / 8, hints, &LZ4_CODEC, |dst| {
+        Column::Align(words) => {
+            pool.insert_with(words.len(), hints, codec, |dst| dst.copy_from_slice(&words))
+        }
+        other => pool.insert_with(len_bytes / 8, hints, codec, |dst| {
             let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
             let mut cursor = std::io::Cursor::new(bytes);
             other.into_bytes(&mut cursor);
@@ -526,6 +649,25 @@ where
         let Some(chunk) = input.pop_front() else {
             return;
         };
+        // Whole-chunk pass-through from the resident time bounds: a chunk
+        // the frontier is entirely past ships unchanged, one entirely at or
+        // past the frontier keeps unchanged. Spilled bodies pass through
+        // without a load, a re-commit, or any codec work; only chunks the
+        // frontier actually splits are loaded below.
+        let (time_lower, time_upper) = chunk.chunk_time_bounds();
+        if time_upper.iter().all(|t| !frontier.less_equal(t)) {
+            ship.push_back(chunk);
+            return;
+        }
+        if time_lower.elements().iter().all(|m| frontier.less_equal(m)) {
+            // The residual must lower-bound every kept time, which is the
+            // chunk's lower bound antichain by construction.
+            for m in time_lower.elements() {
+                residual.insert(m.clone());
+            }
+            keep.push_back(chunk);
+            return;
+        }
         // Partitioning rewrites within a generation, so both sides keep the
         // input chunk's depth.
         let depth = chunk.depth();
@@ -1403,10 +1545,54 @@ mod tests {
         assert_eq!(collect_chunks(out), consolidate(advanced));
     }
 
+    /// Chunks the extract frontier does not split pass through whole from
+    /// their resident time bounds: spilled bodies land on their side still
+    /// spilled, with no load or re-commit, and a kept chunk's minimal times
+    /// feed the residual frontier.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn extract_passes_frontier_disjoint_chunks_through() {
+        set_spill_override(Some(test_pool()));
+        let low: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), i % 4, 1)).collect();
+        let high: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), 6 + i % 4, 1)).collect();
+        let spilled_chunk = |data: &[Tuple]| {
+            let chunk = TestChunk::commit(build_column(&consolidate(data.to_vec())), 1);
+            assert!(chunk.is_spilled());
+            chunk
+        };
+
+        // A frontier between the two chunks' time ranges: the low chunk
+        // ships whole and the high chunk keeps whole, both still spilled
+        // (no load, no re-commit), and the residual is the kept chunk's
+        // minimal time.
+        let mut input = VecDeque::from([spilled_chunk(&low), spilled_chunk(&high)]);
+        let frontier = Antichain::from_elem(5u64);
+        let mut residual = Antichain::new();
+        let (mut keep, mut ship) = (VecDeque::new(), VecDeque::new());
+        while !input.is_empty() {
+            TestChunk::extract(
+                &mut input,
+                frontier.borrow(),
+                &mut residual,
+                &mut keep,
+                &mut ship,
+            );
+        }
+        assert_eq!(ship.len(), 1);
+        assert!(ship[0].is_spilled(), "shipped whole: body untouched");
+        assert_eq!(keep.len(), 1);
+        assert!(keep[0].is_spilled(), "kept whole: body untouched");
+        assert_eq!(residual, Antichain::from_elem(6));
+        let shipped = ship.pop_front().unwrap().into_column();
+        assert_eq!(collect_column(&shipped), consolidate(low));
+        let kept = keep.pop_front().unwrap().into_column();
+        assert_eq!(collect_column(&kept), consolidate(high));
+        set_spill_override(None);
+    }
+
     /// Extracting a large chunk at an intermediate frontier cuts both sides
     /// into several chunks and partitions exactly by time.
     #[mz_ore::test]
-    #[cfg_attr(miri, ignore)]
     fn extract_cuts_large_output() {
         let records: Vec<Tuple> = (0..300_000u64).map(|k| ((k, 0), k % 2, 1)).collect();
         let mut input = VecDeque::from([ColumnChunk::from_column(build_column(&records))]);
@@ -1701,6 +1887,39 @@ mod tests {
         set_spill_override(None);
     }
 
+    /// The compression depth floor picks the codec, not whether a body
+    /// spills: shallow generations store at identity, the floor and deeper
+    /// at lz4, and every depth spills and round-trips.
+    #[mz_ore::test]
+    fn spill_codec_depth_floor() {
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(2));
+        // Codec identity via Debug: ZST statics and dyn vtables make
+        // pointer comparison unreliable.
+        let codec_name = |depth: u8| format!("{:?}", codec_for_depth(depth));
+        assert_eq!(codec_name(0), "IdentityCodec");
+        assert_eq!(codec_name(1), "IdentityCodec");
+        assert_eq!(codec_name(2), "Lz4Codec");
+        assert_eq!(codec_name(u8::MAX), "Lz4Codec");
+
+        let data: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
+        let data = consolidate(data);
+        let column = build_column(&data);
+        for depth in [0u8, 1, 2, 3] {
+            let chunk = TestChunk::commit(column.clone(), depth);
+            assert!(chunk.is_spilled(), "depth {depth} must spill");
+            assert_eq!(collect_column(&chunk.into_column()), data);
+        }
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+
+        // The default floor stores only fresh (depth 0) bodies at identity.
+        set_compress_min_depth_override(Some(DEFAULT_COMPRESS_MIN_DEPTH));
+        assert_eq!(codec_name(0), "IdentityCodec");
+        assert_eq!(codec_name(1), "Lz4Codec");
+        set_compress_min_depth_override(None);
+    }
+
     /// The compute and storage spill gates compose as an OR: either gate
     /// routes commits to the installed pool, and each setter writes only its
     /// own gate.
@@ -1732,6 +1951,7 @@ mod tests {
         assert!(commit(&col), "the compute gate alone spills");
         set_compute_spill_enabled(false);
         assert!(!commit(&col), "both gates off again");
+        set_compress_min_depth_override(None);
     }
 
     /// Re-spilling an already-serialized body exercises the `Column::Align`
@@ -1745,13 +1965,13 @@ mod tests {
         let Column::Align(words) = &column else {
             panic!("a spilled body reads back as Column::Align");
         };
-        let words = words.clone();
+        let words = words.as_words().to_vec();
         let respilled = force_spill(ColumnChunk::from_column(column), &pool);
         let reread = respilled.into_column();
         let Column::Align(words2) = &reread else {
             panic!("a spilled body reads back as Column::Align");
         };
-        assert_eq!(&words, words2, "byte-identical round trip");
+        assert_eq!(words, words2.as_words(), "byte-identical round trip");
         assert_eq!(collect_column(&reread), data);
     }
 

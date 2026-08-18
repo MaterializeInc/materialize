@@ -399,15 +399,13 @@ impl SwapExtent {
     }
 
     /// Decodes the byte range `[offset, offset + dst.len())` of the
-    /// extent's `body_len`-byte body into `dst`. The range must lie within
-    /// the body, and `body_len` must be the body's exact length (the codec
-    /// validates it against the stored form). Residency effects are those
-    /// of [`SwapExtent::read_into`] regardless of the range: the stored
-    /// form is one whole codec block, so any read faults and decodes the
-    /// entire extent, and a sub-range only narrows the final copy. A
-    /// backend whose stored form is rangeable (file extents reading with
-    /// `pread`, a sub-block-framed codec) can serve the range with
-    /// proportional I/O behind this same signature.
+    /// extent's `body_len`-byte body into `dst`, through the codec's
+    /// [`ExtentCodec::decode_range`]. The range must lie within the body,
+    /// and `body_len` must be the body's exact length. Residency effects
+    /// are those of [`SwapExtent::read_into`] regardless of the range: the
+    /// extent is marked and accounted fully resident (conservative when a
+    /// sub-blocked codec faults only part of the stored form), and any read
+    /// resets the pageout retry budget.
     pub(crate) fn read_range_into(
         &mut self,
         codec: &dyn ExtentCodec,
@@ -416,11 +414,10 @@ impl SwapExtent {
         dst: &mut [u8],
     ) {
         self.resident = true;
-        // The decode faults every page back in, so prior incomplete
-        // pageout passes no longer describe the mapping and the retry
-        // budget starts over.
+        // The decode faults pages back in, so prior incomplete pageout
+        // passes no longer describe the mapping and the retry budget
+        // starts over.
         self.incomplete_passes = 0;
-        self.prefetch();
         // SAFETY: the extent exclusively owns its backing, and the first
         // `comp_len` bytes were initialized by `write`.
         let buf = unsafe { std::slice::from_raw_parts(self.ptr, self.comp_len) };
@@ -432,28 +429,15 @@ impl SwapExtent {
             "range end {end} exceeds the extent's body length {body_len}",
         );
         if offset == 0 && dst.len() == body_len {
+            self.prefetch();
             codec.decode(buf, dst);
             return;
         }
-        // A sub-range still decodes the whole block, into a reused
-        // thread-local scratch, and copies the range out. Reads run on
-        // worker threads, so the scratch mirrors the write side's `Shrink`
-        // policy: capacity beyond the ~2 MiB chunk target is released after
-        // the copy rather than parked per worker.
-        use std::cell::RefCell;
-        thread_local! {
-            static SCRATCH: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
-        }
-        SCRATCH.with(|cell| {
-            let mut scratch = cell.borrow_mut();
-            scratch.resize(body_len, 0);
-            codec.decode(buf, &mut scratch);
-            dst.copy_from_slice(&scratch[offset..end]);
-            if scratch.capacity() > 2 << 20 {
-                scratch.clear();
-                scratch.shrink_to_fit();
-            }
-        });
+        // No whole-extent readahead on a sub-range: a sub-blocked codec
+        // faults only the stored pages its range touches, which is the
+        // point. The default `decode_range` decodes the whole body and
+        // faults everything on demand regardless.
+        codec.decode_range(buf, body_len, offset, dst);
     }
 }
 
