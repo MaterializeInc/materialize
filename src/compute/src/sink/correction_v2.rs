@@ -1511,7 +1511,12 @@ struct ChunkBuilder<D: Data> {
 impl<D: Data> Default for ChunkBuilder<D> {
     fn default() -> Self {
         Self {
-            inner: Default::default(),
+            // These chunks are retained in the correction chains across
+            // timestamps rather than shipped, so they are stamped apart from
+            // dataflow-edge traffic in the align-buffer metrics.
+            inner: mz_timely_util::columnar::builder::ColumnBuilder::with_origin(
+                mz_timely_util::columnar::align_buffer::Origin::Correction,
+            ),
         }
     }
 }

@@ -256,6 +256,13 @@ def get_variable_system_parameters(
             "true",
             ["true", "false"],
         ),
+        # On by default in tests so the recording path is exercised, while
+        # production keeps the code default of off.
+        VariableSystemParameter(
+            "enable_column_align_buffer_tracking",
+            "true",
+            ["true", "false"],
+        ),
         VariableSystemParameter(
             "enable_adapter_frontend_occ_read_then_write",
             "true" if version >= MzVersion.parse_mz("v26.36.0-dev") else "false",
