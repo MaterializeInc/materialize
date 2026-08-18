@@ -912,11 +912,23 @@ impl PeekClient {
                 // everything around it.
                 //
                 // NOTE: A staged session write carries no target-generation
-                // guard. A `WriteOp` only names the `CatalogItemId`, and commit
-                // staging resolves whatever global id is current then. So an
-                // `ALTER TABLE ... ADD COLUMN` that lands between here and the
-                // commit appends rows of the old arity under the new schema.
-                // This holds for every staged write, not just ours.
+                // guard the way the immediate path's `target_global_id` does. A
+                // `WriteOp` only names the `CatalogItemId`, and commit staging
+                // resolves whatever global id is current then. What keeps it
+                // safe is a check at the far end: group commit compares the
+                // arity of the rows each staged write carries against the
+                // target's latest `RelationDesc` and rolls the transaction back
+                // with `ConcurrentDependencyMutation` instead of encoding old
+                // rows against a new schema. So an `ALTER TABLE ... ADD COLUMN`
+                // landing between here and the commit becomes the same
+                // retryable failure the immediate path reports as
+                // `TargetChanged`. The comparison reads one row per staged
+                // write and looks only at arity, so it stands in for the
+                // descriptor rather than pinning it.
+                //
+                // Missing the pin is true of every staged write. The arity
+                // check is not: rows staged as a batch, which is how `COPY
+                // FROM` arrives, carry their schema into persist instead.
                 session
                     .add_transaction_ops(TransactionOps::Writes(vec![WriteOp {
                         id: target_id,
