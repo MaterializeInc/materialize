@@ -154,7 +154,7 @@ use timely::dataflow::channels::pact::{Exchange, Pipeline};
 use timely::dataflow::operators::vec::{Broadcast, Map, ToStream};
 use timely::dataflow::operators::{CapabilitySet, Concatenate};
 use timely::progress::{Antichain, Timestamp as _};
-use tracing::debug;
+use tracing::{debug, info, warn};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::sink::iceberg::IcebergSinkMetrics;
@@ -777,11 +777,63 @@ async fn reload_table(
     }
 }
 
+/// After attempting a commit, we expect to know whether it succeeded.
+enum CommitState {
+    /// The Catalog told us whether the commit succeeded and gave us an updated table
+    /// (which we can safely use for another attempt).
+    Known(Table),
+    /// We couldn't get an answer from the Catalog.
+    /// We don't have an updated table. We don't know if the commit succeeded or failed.
+    /// Before making any more attempts, we must reload the table
+    /// and check for ourselves whether the commit is there.
+    Unresolved(Table),
+}
+
+/// Check whether the most recent Materialize snapshot on the table belongs to another writer.
+fn check_fencing(
+    last: Option<&(Antichain<Timestamp>, u64)>,
+    sink_version: u64,
+    frontier: &Antichain<Timestamp>,
+    conn_table: &str,
+) -> Result<(), anyhow::Error> {
+    let Some((last_frontier, last_version)) = last else {
+        return Ok(());
+    };
+    if *last_version > sink_version {
+        anyhow::bail!(
+            "Iceberg table '{}' has been modified by another writer \
+             with version {}. Current sink version: {}. \
+             Frontiers may be out of sync, aborting to avoid data loss.",
+            conn_table,
+            last_version,
+            sink_version,
+        );
+    }
+
+    // Check if someone has already written this batch (or an even later batch).
+    // If it was us, we should already know.
+    // (Either we received a success response or we reloaded the table and checked.)
+    // So it must be another writer.
+    if PartialOrder::less_equal(frontier, last_frontier) {
+        anyhow::bail!(
+            "Iceberg table '{}' has been modified by another writer. \
+             Current frontier: {:?}, last frontier: {:?}.",
+            conn_table,
+            frontier,
+            last_frontier,
+        );
+    }
+    Ok(())
+}
+
 /// Attempt a single commit of a batch of data files to an Iceberg table.
-/// On conflict or failure, reloads the table and returns a retryable error.
-/// On success, returns the updated table state.
+///
+/// If a previous attempt left the outcome unknown, first reload the table to establish whether
+/// that attempt succeeded. Try again only once we're sure it failed.
+/// On conflict, reload the table and return a retryable error.
+/// On success, return the updated table state.
 async fn try_commit_batch(
-    mut table: Table,
+    state: CommitState,
     snapshot_properties: Vec<(String, String)>,
     data_files: Vec<DataFile>,
     delete_files: Vec<DataFile>,
@@ -793,7 +845,70 @@ async fn try_commit_batch(
     batch_lower: &Antichain<Timestamp>,
     batch_upper: &Antichain<Timestamp>,
     metrics: &IcebergSinkMetrics,
-) -> (Table, RetryResult<(), anyhow::Error>) {
+) -> (CommitState, RetryResult<(), anyhow::Error>) {
+    let table = match state {
+        CommitState::Known(table) => table,
+        CommitState::Unresolved(stale) => {
+            let reloaded = match reload_table(
+                catalog,
+                conn_namespace.to_string(),
+                conn_table.to_string(),
+                stale.clone(),
+            )
+            .await
+            {
+                Ok(reloaded) => reloaded,
+                // We can't proceed until we've checked the table.
+                Err(e) => {
+                    return (
+                        CommitState::Unresolved(stale),
+                        RetryResult::RetryableErr(anyhow!(e)),
+                    );
+                }
+            };
+
+            let mut snapshots: Vec<_> = reloaded.metadata().snapshots().cloned().collect();
+            match retrieve_upper_from_snapshots(&mut snapshots) {
+                // Our own commit for this batch is already on the table.
+                // It landed and we never saw the response.
+                Ok(Some((last_frontier, last_version)))
+                    if last_version == sink_version && last_frontier == *frontier =>
+                {
+                    info!(
+                        namespace = %conn_namespace,
+                        table = %conn_table,
+                        lower = %batch_lower.pretty(),
+                        upper = %batch_upper.pretty(),
+                        "iceberg commit with lost response found on reload, treating as success"
+                    );
+                    return (CommitState::Known(reloaded), RetryResult::Ok(()));
+                }
+                // Our commit isn't there.
+                // We can retry only if no other writer has taken over the table in the meantime.
+                Ok(last) => {
+                    if let Err(e) = check_fencing(last.as_ref(), sink_version, frontier, conn_table)
+                    {
+                        return (CommitState::Known(reloaded), RetryResult::FatalErr(e));
+                    }
+                    info!(
+                        namespace = %conn_namespace,
+                        table = %conn_table,
+                        lower = %batch_lower.pretty(),
+                        upper = %batch_upper.pretty(),
+                        "iceberg commit with lost response not found on reload, committing again"
+                    );
+                    reloaded
+                }
+                Err(e) => {
+                    return (
+                        CommitState::Unresolved(stale),
+                        RetryResult::RetryableErr(anyhow!(e)),
+                    );
+                }
+            }
+        }
+    };
+
     let tx = Transaction::new(&table);
     let mut action = tx
         .row_delta()
@@ -812,7 +927,7 @@ async fn try_commit_batch(
     {
         Ok(tx) => tx,
         Err(e) => {
-            match reload_table(
+            let reloaded = match reload_table(
                 catalog,
                 conn_namespace.to_string(),
                 conn_table.to_string(),
@@ -820,13 +935,16 @@ async fn try_commit_batch(
             )
             .await
             {
-                Ok(reloaded) => table = reloaded,
+                Ok(reloaded) => reloaded,
                 Err(reload_err) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(reload_err)));
+                    return (
+                        CommitState::Known(table),
+                        RetryResult::RetryableErr(anyhow!(reload_err)),
+                    );
                 }
-            }
+            };
             return (
-                table,
+                CommitState::Known(reloaded),
                 RetryResult::RetryableErr(anyhow!(
                     "Failed to apply data file addition to iceberg table transaction: {}",
                     e
@@ -839,7 +957,7 @@ async fn try_commit_batch(
     match new_table {
         Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
             metrics.commit_conflicts.inc();
-            match reload_table(
+            let table = match reload_table(
                 catalog,
                 conn_namespace.to_string(),
                 conn_table.to_string(),
@@ -847,9 +965,12 @@ async fn try_commit_batch(
             )
             .await
             {
-                Ok(reloaded) => table = reloaded,
+                Ok(reloaded) => reloaded,
                 Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
+                    return (
+                        CommitState::Known(table),
+                        RetryResult::RetryableErr(anyhow!(e)),
+                    );
                 }
             };
 
@@ -858,41 +979,20 @@ async fn try_commit_batch(
             let last = match last {
                 Ok(val) => val,
                 Err(e) => {
-                    return (table, RetryResult::RetryableErr(anyhow!(e)));
+                    return (
+                        CommitState::Known(table),
+                        RetryResult::RetryableErr(anyhow!(e)),
+                    );
                 }
             };
 
             // Check if another writer has advanced the frontier beyond ours (fencing check)
-            if let Some((last_frontier, last_version)) = last {
-                if last_version > sink_version {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer \
-                             with version {}. Current sink version: {}. \
-                             Frontiers may be out of sync, aborting to avoid data loss.",
-                            conn_table,
-                            last_version,
-                            sink_version,
-                        )),
-                    );
-                }
-                if PartialOrder::less_equal(frontier, &last_frontier) {
-                    return (
-                        table,
-                        RetryResult::FatalErr(anyhow!(
-                            "Iceberg table '{}' has been modified by another writer. \
-                             Current frontier: {:?}, last frontier: {:?}.",
-                            conn_table,
-                            frontier,
-                            last_frontier,
-                        )),
-                    );
-                }
+            if let Err(e) = check_fencing(last.as_ref(), sink_version, frontier, conn_table) {
+                return (CommitState::Known(table), RetryResult::FatalErr(e));
             }
 
             (
-                table,
+                CommitState::Known(table),
                 RetryResult::RetryableErr(anyhow!(
                     "Commit conflict detected when committing batch [{}, {}) \
                      to Iceberg table '{}.{}'. Retrying...",
@@ -903,11 +1003,29 @@ async fn try_commit_batch(
                 )),
             )
         }
+        // The catalog may have applied this commit before the success response was lost.
+        // Mark the outcome as unknown so the next attempt starts by reading the table to see what happened.
+        Err(e) if matches!(e.kind(), ErrorKind::Unexpected) => {
+            metrics.commit_failures.inc();
+            warn!(
+                namespace = %conn_namespace,
+                table = %conn_table,
+                lower = %batch_lower.pretty(),
+                upper = %batch_upper.pretty(),
+                error = %e,
+                "iceberg commit outcome unknown, will reload the table to check before retrying"
+            );
+            (
+                CommitState::Unresolved(table),
+                RetryResult::RetryableErr(anyhow!(e)),
+            )
+        }
+        // All other errors are definite: retrying will not change the outcome.
         Err(e) => {
             metrics.commit_failures.inc();
-            (table, RetryResult::RetryableErr(anyhow!(e)))
+            (CommitState::Known(table), RetryResult::FatalErr(anyhow!(e)))
         }
-        Ok(new_table) => (new_table, RetryResult::Ok(())),
+        Ok(new_table) => (CommitState::Known(new_table), RetryResult::Ok(())),
     }
 }
 
@@ -2538,9 +2656,9 @@ fn commit_to_iceberg<'scope>(
                         ("mz-sink-version".to_string(), sink_version.to_string()),
                     ];
 
-                    let (table_state, commit_result) = Retry::default()
+                    let (commit_state, commit_result) = Retry::default()
                         .max_tries(5)
-                        .retry_async_with_state(table, |_, table| {
+                        .retry_async_with_state(CommitState::Known(table), |_, commit_state| {
                             let snapshot_properties = snapshot_properties.clone();
                             let data_files = data_files.clone();
                             let delete_files = delete_files.clone();
@@ -2553,7 +2671,7 @@ fn commit_to_iceberg<'scope>(
                             let batch_upper = batch.1.clone();
                             async move {
                                 try_commit_batch(
-                                    table,
+                                    commit_state,
                                     snapshot_properties,
                                     data_files,
                                     delete_files,
@@ -2576,12 +2694,21 @@ fn commit_to_iceberg<'scope>(
                             connection.namespace, connection.table
                         )
                     });
-                    table = table_state;
                     let duration = instant.elapsed();
                     metrics
                         .commit_duration_seconds
                         .observe(duration.as_secs_f64());
                     commit_result?;
+                    table = match commit_state {
+                        CommitState::Known(table) => table,
+                        CommitState::Unresolved(_) => {
+                            anyhow::bail!(
+                                "invariant: unresolved commit state but the commit succeeded, Iceberg table '{}.{}'",
+                                connection.namespace,
+                                connection.table
+                            )
+                        }
+                    };
 
                     debug!(
                         ?sink_id,
