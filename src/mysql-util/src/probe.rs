@@ -898,6 +898,23 @@ pub(crate) mod tests {
         assert_eq!(got, None);
         assert!(reads < 50, "whole-table match reads={reads}");
 
+        let before = handler_reads(&mut conn).await?;
+        let got = prefix_of_first_key_in_range(
+            &mut KeyProber::new(&mut conn, table.clone(), "id"),
+            "a00500",
+            Some("a00501"),
+            6,
+        )
+        .await;
+        let reads = handler_reads(&mut conn).await? - before;
+        assert_eq!(got, None);
+        assert!(reads < 50, "empty bounded range reads={reads}");
+
+        let bounded = KeyProber::new(&mut conn, table.clone(), "id")
+            .estimate_range_rows("a00100", Some("a00200"))
+            .await?;
+        assert!((50..=300).contains(&bounded), "bounded estimate={bounded}");
+
         drop_db(&mut conn, DB).await?;
         conn.disconnect().await?;
         Ok(())
@@ -958,6 +975,19 @@ pub(crate) mod tests {
         assert_eq!(
             prefix_of_first_row_not_matching_prefix(p, "b1", None, 2).await,
             None
+        );
+
+        assert_eq!(
+            prefix_of_first_key_in_range(p, "", Some("a1"), 2).await,
+            None
+        );
+        assert_eq!(
+            prefix_of_first_row_not_matching_prefix(p, "\u{9}", Some("a1"), 2).await,
+            None
+        );
+        assert_eq!(
+            prefix_of_first_key_in_range(p, "", Some("b1"), 2).await,
+            some("a1")
         );
 
         drop_db(&mut conn, DB).await?;
