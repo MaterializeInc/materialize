@@ -208,9 +208,18 @@ predictable, so `handle_schedule` fires after hydration and would stamp
 `started_at` later than `hydrated_at`.
 
 Resolve it in the demux: when handling the hydration event, if `started_at` is
-NULL, stamp it to the same instant as `hydrated_at`. A dataflow that hydrated
-without being scheduled did not queue, so a zero queueing interval is the honest
-reading, and it keeps the invariant total rather than asking every consumer to
+NULL, stamp it from the collection's `installed_at`. A dataflow with nothing to
+wait on was never queued, so a zero queueing interval is the honest reading, and
+the whole elapsed interval is attributed to hydration work, which is where it
+belongs.
+
+Backfilling from `hydrated_at` would invert that. It would charge the entire
+interval to queueing and report zero hydration time for a dataflow that did
+nothing but hydrate, which is the opposite of what happened. `installed_at` is
+also the only choice that keeps `installed_at <= started_at` true by
+construction.
+
+Either way the invariant becomes total, rather than asking every consumer to
 handle a negative interval. The same handler already tolerates repeated hydration
 events, so this is a small addition to logic that exists.
 
