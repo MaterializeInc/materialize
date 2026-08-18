@@ -445,11 +445,11 @@ impl GroupCommitter {
     ///
     /// What [`Self::commit`] does that this skips, and why that is safe:
     ///
-    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose, so
-    ///   instead of sleeping until the clock catches up we refuse a target above
-    ///   [`write_ts_upper_bound`] outright. Sleeping is the wrong answer for a caller
-    ///   whose target can be hours out, and committing there would advance the oracle
-    ///   with it.
+    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose, and a
+    ///   target above [`write_ts_upper_bound`] is refused rather than slept off.
+    ///   Committing there would advance the oracle with it, and a caller that took its
+    ///   target from the oracle cannot exceed the bound unless the timeline has already
+    ///   run away, which sleeping would not resolve.
     /// * A [`GroupCommitPermit`]. The caller bounds how many of these are in
     ///   flight, and that is the backpressure for this path.
     /// * Merging queued commits. There is nothing to merge into: these diffs

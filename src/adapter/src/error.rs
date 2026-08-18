@@ -144,6 +144,10 @@ pub enum AdapterError {
     /// The write timestamp ran past what the write timeline may be advanced to,
     /// so nothing was appended. See `coord::timeline::write_ts_upper_bound` for
     /// the bound and why exceeding it is not recoverable.
+    ///
+    /// The timestamp comes from the timeline's oracle, so reaching this means the
+    /// oracle has run away from the wall clock rather than that the statement
+    /// asked for anything unusual.
     ReadThenWriteTimestampTooFarAhead {
         target_timestamp: mz_repr::Timestamp,
         limit: mz_repr::Timestamp,
@@ -929,7 +933,10 @@ impl AdapterError {
             }
             AdapterError::ReadThenWriteContention => SqlState::T_R_SERIALIZATION_FAILURE,
             AdapterError::ReadThenWriteTimestampTooFarAhead { .. } => {
-                SqlState::FEATURE_NOT_SUPPORTED
+                // An invariant violation in the environment rather than a property of
+                // the statement: the write timeline has run away from the wall clock.
+                // Nothing the client sends can produce or avoid it.
+                SqlState::INTERNAL_ERROR
             }
             AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
