@@ -314,6 +314,10 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
+        # Low default so small tables exercise partitioning.
+        VariableSystemParameter(
+            "mysql_source_snapshot_partition_min_rows", "2", ["2", "50000"]
+        ),
         VariableSystemParameter(
             "persist_batch_delete_enabled", "true", ["true", "false"]
         ),
@@ -713,6 +717,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     # The estimated path is covered explicitly in mysql-cdc/statistics.td and
     # by parallel-workload.
     "mysql_source_snapshot_exact_count_max_rows",
+    "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
     "pg_source_validate_timeline",

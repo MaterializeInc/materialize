@@ -3088,6 +3088,18 @@ class FlipFlagsAction(Action):
         self.flags_with_values["mysql_source_snapshot_parallelism"] = (
             BOOLEAN_FLAG_VALUES
         )
+        # 2 exercises PK-prefix splitting on parallel-workload sized tables.
+        self.flags_with_values["mysql_source_snapshot_partition_min_rows"] = [
+            "2",
+            "50000",
+        ]
+        # 0 will end up as 64 probes internally because that's the floor.
+        self.flags_with_values[
+            "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows"
+        ] = [
+            "0",
+            "1000",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
