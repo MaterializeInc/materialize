@@ -526,6 +526,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
+    "enable_compute_error_distinct",
     "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
     "enable_upsert_v2",

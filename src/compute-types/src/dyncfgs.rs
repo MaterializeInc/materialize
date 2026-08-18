@@ -37,7 +37,7 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
 /// unsafe.
 pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     "enable_compute_error_distinct",
-    false,
+    true,
     "Whether compute rendering should collapse error multiplicities to one where it arranges \
      errors.",
 );
