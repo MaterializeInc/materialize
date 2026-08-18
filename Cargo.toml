@@ -465,7 +465,7 @@ protobuf-src = "2.1.1"
 proxy-header = "0.1.2"
 qcell = "0.5"
 quote = "1.0.45"
-rand = "0.9.4"
+rand = "0.10.2"
 rand-8 = { package = "rand", version = "0.8.5", features = ["small_rng"] }
 rand_chacha = "0.9.0"
 rayon = "1.12.0"
