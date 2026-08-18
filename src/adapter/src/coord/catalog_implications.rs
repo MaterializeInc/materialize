@@ -1621,7 +1621,8 @@ impl Coordinator {
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
-                    | CatalogItem::Secret(_) => {
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::MetricSink(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
                     }
@@ -1838,6 +1839,7 @@ impl CatalogImplication {
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
+                CatalogItem::MetricSink(_) => {}
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,

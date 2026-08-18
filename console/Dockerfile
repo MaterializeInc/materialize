@@ -7,10 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
-RUN corepack enable
+
+# Node 25 dropped corepack from the distribution, but the console pins its
+# package manager through `packageManager` in package.json. Reinstall corepack
+# so it can provision that yarn version. Same reason as in ci/builder/Dockerfile.
+RUN npm install -g corepack && corepack enable
 
 COPY . .
 
@@ -29,7 +33,9 @@ ENV SOURCE_MAPS='true'
 ENV NODE_OPTIONS='--max_old_space_size=4096'
 RUN yarn build
 
-FROM nginxinc/nginx-unprivileged:alpine
+# Pinned by rolling tag + multi-arch index digest so dependabot refreshes the
+# digest for security fixes.
+FROM nginxinc/nginx-unprivileged:alpine@sha256:f972e5322b9797dc2a6b830030094426437b1ae7032e4644496395336ac6fdac
 
 LABEL maintainer="support@materialize.com" \
     version="1.0" \

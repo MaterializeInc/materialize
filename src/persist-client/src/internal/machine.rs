@@ -515,7 +515,7 @@ where
                     info!(
                         "compare_and_append received an indeterminate error, retrying in {:?}: {}",
                         retry.next_sleep(),
-                        err
+                        err.display_with_causes()
                     );
                     if indeterminate.is_none() {
                         indeterminate = Some(err);

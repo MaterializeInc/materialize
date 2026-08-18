@@ -79,7 +79,7 @@ function ClusterReplicaView() {
       {loading ? (
         <div>Loading...</div>
       ) : error ? (
-        <div>error: {error}</div>
+        <div>error: {String(error)}</div>
       ) : (
         <div>
           <label htmlFor="cluster_replica">Cluster Replica </label>
@@ -192,7 +192,7 @@ function Views(props) {
       {loading ? (
         <div>Loading...</div>
       ) : error ? (
-        <div>error: {error}</div>
+        <div>error: {String(error)}</div>
       ) : (
         <div>
           <table class="dataflows">
@@ -658,7 +658,7 @@ function View(props) {
       {loading ? (
         <div>Loading...</div>
       ) : error ? (
-        <div>error: {error}</div>
+        <div>error: {String(error)}</div>
       ) : (
         <div>
           <h3>

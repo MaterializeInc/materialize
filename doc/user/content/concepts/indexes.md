@@ -12,30 +12,32 @@ aliases:
   - /self-managed/v25.2/concepts/indexes/
 ---
 
+In Materialize, you can create indexes on [views](/concepts/views/#views) and
+[materialized views](/concepts/views/#materialized-views) as well as tables,
+[sources](/concepts/sources/), and subsources.
+
 ## Overview
 
-In Materialize, indexes represent query results stored in memory **within a
-[cluster](/concepts/clusters/)**. You can create indexes on
-[sources](/concepts/sources/), [views](/concepts/views/#views), or [materialized
-views](/concepts/views/#materialized-views).
+{{% include-from-yaml data="index_details" name="definition" %}}
 
-## Indexes on sources
+## Indexes on sources, tables, and subsources
 
 {{< note >}}
-In practice, you may find that you rarely need to index a source
-without performing some transformation using a view, etc.
+
+In practice, you may find that you rarely need to index a source and its tables
+or subsources without performing some transformation using a view, etc.
+
 {{</ note >}}
 
-In Materialize, you can create indexes on a [source](/concepts/sources/) to
-maintain in-memory up-to-date source data within the cluster you create the
-index. This can help improve [query
-performance](#indexes-and-query-optimizations) when serving results directly
-from the source or when [using joins](/transform-data/optimization/#join).
-However, in practice, you may find that you rarely need to index a source
-directly.
+In Materialize, you can create indexes on a [source and its tables or
+subsources](/concepts/sources/) to maintain in-memory up-to-date data within the
+cluster you create the index. This can help improve [query
+performance](#indexes-and-query-optimizations) such as when [using
+joins](/transform-data/optimization/#join) in your transformation. However, in
+practice, you may find that you rarely need to index these objects directly.
 
 ```mzsql
-CREATE INDEX idx_on_my_source ON my_source (...);
+CREATE INDEX idx_on_my_source_table ON my_source_table (...);
 ```
 
 ## Indexes on views
@@ -53,11 +55,8 @@ a name"), the view is executed and the view results are stored in memory within
 the cluster. **As new data arrives**, the index **incrementally updates** the
 view results in memory.
 
-Within the cluster, querying an indexed view is:
-
-- **fast** because the results are served from memory, and
-
-- **computationally free** because no computation is performed on read.
+Within the cluster, querying an indexed view is **fast** because the results are
+already computed and are served from memory.
 
 For best practices on using indexes, and understanding when to use indexed views
 vs. materialized views, see [Usage patterns](#usage-patterns).
@@ -74,10 +73,10 @@ materialized views require no additional computation to keep results up-to-date.
 
 A materialized view can be queried from any cluster whereas its indexed results
 are available only within the cluster you create the index. Querying a
-materialized view, whether indexed or not, from any cluster is computationally
-free. However, querying an indexed materialized view within the cluster where
-the index is created is faster since the results are served from memory rather
-than from storage.
+materialized view, whether indexed or not, from any cluster is fast since the
+results are already computed. However, querying an indexed materialized view
+within the cluster where the index is created is faster since the results are
+served from memory rather than from storage.
 
 {{</ note >}}
 

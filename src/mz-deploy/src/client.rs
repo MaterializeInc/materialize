@@ -34,7 +34,6 @@
 //! Most sub-client types are internal; this module re-exports the key public
 //! types so that consumers only need `use crate::client::*`.
 
-pub(crate) mod auto_scaling;
 mod connection;
 mod deployment_ops;
 mod dev_overlays;
@@ -49,6 +48,9 @@ mod validation;
 /// pins every connection to via libpq options.
 pub const SERVER_CLUSTER_NAME: &str = "_mz_deploy_server";
 
+use mz_sql_parser::ast::{CreateClusterStatement, Raw, Statement};
+use mz_sql_parser::parser::parse_statements;
+
 pub use crate::config::Profile;
 pub use connection::{Client, DevOverlaysClient};
 pub(crate) use connection::{build_options_string, default_sslmode, is_loopback_host};
@@ -56,6 +58,17 @@ pub(crate) use connection::{build_options_string, default_sslmode, is_loopback_h
 /// Double-quote a SQL identifier, escaping any embedded double quotes.
 pub fn quote_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// Parse the `create_sql` column of a `SHOW CREATE CLUSTER` result.
+pub fn parse_create_cluster(sql: &str) -> Result<CreateClusterStatement<Raw>, String> {
+    let statements = parse_statements(sql)
+        .map_err(|e| format!("failed to parse SHOW CREATE CLUSTER output: {}", e.error))?;
+    match statements.into_iter().next().map(|statement| statement.ast) {
+        Some(Statement::CreateCluster(create)) => Ok(create),
+        Some(other) => Err(format!("expected CREATE CLUSTER, got: {}", other)),
+        None => Err("SHOW CREATE CLUSTER returned empty SQL".to_string()),
+    }
 }
 
 /// Build a comma-separated `$1, $2, …, $n` placeholder string for parameterized queries.
@@ -128,8 +141,8 @@ pub use deployment_ops::{
 pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
 pub use introspection::DependentSink;
 pub use models::{
-    ApplyState, Cluster, ClusterConfig, ClusterOptions, ClusterReplica, ConflictRecord,
-    DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata, DeploymentMode,
+    ApplyState, Cluster, ClusterConfig, ClusterReplica, ConflictRecord, DeploymentDetails,
+    DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata, DeploymentMode,
     DeploymentObjectRecord, ObjectGrant, PendingStatement, ProductionClusterRecord,
     ReplacementMvRecord, SchemaDeploymentRecord, StagingDeployment,
 };
