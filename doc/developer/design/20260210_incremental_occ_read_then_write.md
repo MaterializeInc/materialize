@@ -336,6 +336,20 @@ that the next reader does not take them for bugs.
   because it hands the read-then-write's inner peek a trivial logging context
   and so logs nothing for it. We keep the extra event, it is real information
   about a statement the user did run.
+- **`execution_timestamp` for a write that reads.** The frontend path records an
+  `execution_timestamp` in `mz_statement_execution_history` for a read-then-write
+  that reads persisted state, the coordinator path leaves it NULL. The OCC loop
+  picks the write timestamp inside the statement's lifetime, so there is
+  something true to record. The coordinator stages the diffs instead, and the
+  statement retires before the commit that gives them a timestamp, so nothing
+  back-fills it. We keep the frontend's: it is accurate, it is additive, and a
+  query that tolerates NULL today keeps working. Enabling the path therefore
+  starts populating the column for `UPDATE`, `DELETE` and `INSERT ... SELECT`.
+- **`execution_timestamp` for a write that reads nothing (parity).** Such a
+  write stages its rows on both paths, so its rows take the transaction's commit
+  timestamp rather than one the statement chose, and neither path records
+  anything. `test_statement_logging_dml_path_parity` pins both of these cases,
+  so the divergence above cannot spread to the rest by accident.
 - **`max_result_size` accounting.** The coordinator sums one row length per diff
   entry before consolidation. The frontend recomputes the total from the
   consolidated set, which counts one row length per distinct row and ignores
