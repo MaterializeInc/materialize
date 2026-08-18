@@ -165,7 +165,7 @@ immediately.
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
 2. Waits for the new replicas to
-   [hydrate](/concepts/clusters/#consider-hydration-requirements).
+   [hydrate](/concepts/hydrations/).
 3. Retires the old replicas.
 
 Throughout, the cluster keeps serving queries, first from the old replicas,
