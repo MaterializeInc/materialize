@@ -582,29 +582,6 @@ impl RenderPlan {
         self.binds.iter().any(|b| !b.recs.is_empty())
     }
 
-    /// Counts, for each identifier the plan references, how many `Get` operators read it.
-    ///
-    /// Identifiers no `Get` mentions are absent rather than present with a count of zero.
-    /// Rendering uses this to find the bindings whose errors more than one reader propagates; see
-    /// `CollectionBundle::distinct_errs`.
-    pub fn reference_counts(&self) -> BTreeMap<Id, usize> {
-        let mut counts = BTreeMap::new();
-        self.reference_counts_into(&mut counts);
-        counts
-    }
-
-    fn reference_counts_into(&self, counts: &mut BTreeMap<Id, usize>) {
-        for stage in &self.binds {
-            for LetBind { value, .. } in &stage.lets {
-                value.reference_counts_into(counts);
-            }
-            for RecBind { value, .. } in &stage.recs {
-                value.reference_counts_into(counts);
-            }
-        }
-        self.body.reference_counts_into(counts);
-    }
-
     /// Replace references to global IDs by the result of `func`.
     pub fn replace_ids<F>(&mut self, func: &mut F)
     where
@@ -663,15 +640,6 @@ impl LetFreePlan {
             } = &mut node.expr
             {
                 *id = func(*id);
-            }
-        }
-    }
-
-    /// Adds this plan's `Get` references to `counts`. See [`RenderPlan::reference_counts`].
-    fn reference_counts_into(&self, counts: &mut BTreeMap<Id, usize>) {
-        for node in self.nodes.values() {
-            if let Expr::Get { id, .. } = &node.expr {
-                *counts.entry(id.clone()).or_default() += 1;
             }
         }
     }

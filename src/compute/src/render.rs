@@ -166,7 +166,7 @@ use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
 use crate::render::columnar::CollectionEdge;
-use crate::render::context::{ArrangementFlavor, Context};
+use crate::render::context::{ArrangementFlavor, Context, distinct_arranged_errs};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
@@ -711,7 +711,13 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
 
         let key = &idx.key;
         match bundle.arrangement(key) {
-            Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
+            Some(ArrangementFlavor::Local(mut oks, errs)) => {
+                // Normalize before handing the trace out. An importing dataflow receives these
+                // diffs verbatim and its first consolidation sums them, so an uncollapsed export
+                // multiplies across the object graph exactly as an uncollapsed binding does within
+                // one dataflow.
+                let mut errs = distinct_arranged_errs(errs, "Distinct exported errors");
+
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
                 if let Some(&expiration) = self.dataflow_expiration.as_option() {
@@ -807,12 +813,17 @@ where
                         "Arrange export iterative",
                     );
 
-                let mut errs = errs
-                    .as_collection(|k, v| (k.clone(), v.clone()))
-                    .leave(outer)
-                    .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
-                        "Arrange export iterative err",
-                    );
+                // Normalize before handing the trace out, for the same reason as `export_index`:
+                // an importing dataflow consolidates these diffs and would otherwise accumulate
+                // this dataflow's error fan-out into its own.
+                let mut errs = distinct_arranged_errs(
+                    errs.as_collection(|k, v| (k.clone(), v.clone()))
+                        .leave(outer)
+                        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, _>(
+                            "Arrange export iterative err",
+                        ),
+                    "Distinct exported errors",
+                );
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
@@ -892,7 +903,6 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
         plan: RenderPlan,
         binding: BindingInfo,
     ) -> CollectionBundle<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
-        let reference_counts = plan.reference_counts();
         for BindStage { lets, recs } in plan.binds {
             // Render the let bindings in order.
             let mut let_iter = lets.into_iter().peekable();
@@ -908,8 +918,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                                 .render_letfree_plan(object_id, value, binding)
                                 .leave_region(self.scope)
                         });
-                let bundle =
-                    self.distinct_shared_binding_errs(Id::Local(id), bundle, &reference_counts);
+                let bundle = self.distinct_binding_errs(bundle);
                 self.insert_id(Id::Local(id), bundle);
             }
 
@@ -947,8 +956,7 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // binding and is collapsed separately; without this, a `Get` in a later rec binding
                 // or in the body resolves to the bundle stored here and compounds level over level,
                 // which is exactly what the collapse prevents for non-recursive bindings.
-                let bundle =
-                    self.distinct_shared_binding_errs(Id::Local(id), bundle, &reference_counts);
+                let bundle = self.distinct_binding_errs(bundle);
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -1036,7 +1044,6 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         plan: RenderPlan,
     ) -> CollectionBundle<'scope, T> {
         let mut in_let = false;
-        let reference_counts = plan.reference_counts();
         for BindStage { lets, recs } in plan.binds {
             assert!(recs.is_empty());
 
@@ -1055,8 +1062,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                                 .render_letfree_plan(object_id, value, binding)
                                 .leave_region(self.scope)
                         });
-                let bundle =
-                    self.distinct_shared_binding_errs(Id::Local(id), bundle, &reference_counts);
+                let bundle = self.distinct_binding_errs(bundle);
                 self.insert_id(Id::Local(id), bundle);
             }
         }
@@ -1069,20 +1075,19 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
         })
     }
 
-    /// Collapses a binding's error multiplicities when more than one `Get` reads the binding.
+    /// Collapses a binding's error multiplicities.
     ///
-    /// A binding a single `Get` reads cannot duplicate its own errors, so the collapse would be
-    /// pure overhead there. See [`CollectionBundle::distinct_errs`] for why the collapse is needed
-    /// at all, and why a binding's definition is the place for it rather than the multi-input
-    /// operators where the duplicate copies happen to meet again.
-    fn distinct_shared_binding_errs(
+    /// Applied to every binding, not only the multiply-read ones. Gating on the reference count
+    /// would be a pure optimization, since collapsing a binding one `Get` reads is harmless, and
+    /// there is almost nothing to gate: `NormalizeLets` inlines single-use bindings, so the ones
+    /// reaching rendering are shared. See [`CollectionBundle::distinct_errs`] for why the collapse
+    /// is needed at all, and why a binding's definition is the place for it rather than the
+    /// multi-input operators where the duplicate copies happen to meet again.
+    fn distinct_binding_errs(
         &self,
-        id: Id,
         bundle: CollectionBundle<'scope, T>,
-        reference_counts: &BTreeMap<Id, usize>,
     ) -> CollectionBundle<'scope, T> {
-        let readers = reference_counts.get(&id).copied().unwrap_or(0);
-        if readers > 1 && ENABLE_ERROR_DISTINCT.get(&self.config_set) {
+        if ENABLE_ERROR_DISTINCT.get(&self.config_set) {
             bundle.distinct_errs()
         } else {
             bundle

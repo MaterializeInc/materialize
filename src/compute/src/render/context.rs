@@ -436,6 +436,36 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         }
     }
 }
+/// Rewrites an arranged error collection to hold each of its errors once.
+///
+/// Sound because error semantics depend only on whether an error is present, and correct under
+/// retraction only because it reads the accumulated collection: no pointwise function of the input
+/// diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the errors
+/// retract.
+pub(crate) fn distinct_arranged_errs<'a, T: RenderTimestamp>(
+    errs: Arranged<'a, ErrAgent<T, Diff>>,
+    name: &str,
+) -> Arranged<'a, ErrAgent<T, Diff>> {
+    errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
+        name,
+        |_err, _input, output| output.push(((), Diff::ONE)),
+    )
+}
+
+/// Rewrites an error collection to hold each of its errors once.
+///
+/// Costs an arrangement more than [`distinct_arranged_errs`], which reuses the arrangement its
+/// input already has.
+pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
+    errs: VecCollection<'a, T, DataflowErrorSer, Diff>,
+) -> VecCollection<'a, T, DataflowErrorSer, Diff> {
+    let errs: KeyCollection<_, _, _> = errs.into();
+    let errs = errs
+        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+            "Arrange errors",
+        );
+    distinct_arranged_errs(errs, "Distinct errors").as_collection(|err, _| err.clone())
+}
 
 /// A bundle of the various ways a collection can be represented.
 ///
@@ -534,27 +564,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// export. A global read more than once within one dataflow is not collapsed either, because
     /// only local bindings reach this.
     pub fn distinct_errs(mut self) -> Self {
-        /// Rewrites an arranged error collection to hold each of its errors once.
-        fn collapse<'a, T: RenderTimestamp>(
-            errs: Arranged<'a, ErrAgent<T, Diff>>,
-            name: &str,
-        ) -> Arranged<'a, ErrAgent<T, Diff>> {
-            errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
-                name,
-                |_err, _input, output| output.push(((), Diff::ONE)),
-            )
-        }
-
         if let Some((oks, errs)) = self.collection.take() {
-            let errs: KeyCollection<_, _, _> = errs.into();
-            let errs = errs.mz_arrange::<
-                ColumnationChunker<_>,
-                ErrBatcher<_, _>,
-                ErrBuilder<_, _>,
-                ErrSpine<_, _>,
-            >("Arrange errors");
-            let errs = collapse(errs, "Distinct errors").as_collection(|err, _| err.clone());
-            self.collection = Some((oks, errs));
+            self.collection = Some((oks, distinct_errs_collection(errs)));
         }
         for (key, flavor) in std::mem::take(&mut self.arranged) {
             let flavor = match flavor {
@@ -562,7 +573,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     // Names the key, not the binding: an operator name carrying a `LocalId` would
                     // churn the introspection goldens every time the optimizer renumbers locals.
                     let name = format!("Distinct errors[{key:?}]");
-                    ArrangementFlavor::Local(oks, collapse(errs, &name))
+                    ArrangementFlavor::Local(oks, distinct_arranged_errs(errs, &name))
                 }
                 flavor @ ArrangementFlavor::Trace(..) => flavor,
             };
