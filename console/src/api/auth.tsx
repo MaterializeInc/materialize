@@ -233,16 +233,35 @@ export function useCanViewBilling({
   return !!flags["billing-ui-3756"] && isOrgAdmin;
 }
 
-export function useCanViewUsage({
-  runtimeConfig,
+/**
+ * Whether the Usage & Billing nav tab should be visible. Pulled out of
+ * `useCanViewUsage` as a pure function so its branches (impersonation,
+ * non-production stacks, plan-type gating) are unit-testable without a
+ * provider wrapper.
+ */
+export function canViewUsage({
+  isImpersonating,
+  currentStack,
+  hasInvoiceRead,
+  isBillingVisible,
+  subscriptionType,
 }: {
-  runtimeConfig: CloudRuntimeConfig;
-}) {
-  const { organization } = useCurrentOrganization();
-  const isBillingVisible = useCanViewBilling({ runtimeConfig });
-
+  isImpersonating: boolean;
+  /** `null` outside cloud mode, where there is no stack concept. */
+  currentStack: string | null;
+  hasInvoiceRead: boolean;
+  isBillingVisible: boolean;
+  subscriptionType: string | undefined;
+}): boolean {
   // We assume impersonation users can always view usage pages
-  if (runtimeConfig.isImpersonating) {
+  if (isImpersonating) {
+    return true;
+  }
+
+  // Non-production stacks (staging, dev, personal stacks) always show Usage &
+  // Billing: demo/test orgs there don't reliably have a real subscription or
+  // the invoice-read permission a production customer would.
+  if (currentStack !== null && currentStack !== "production") {
     return true;
   }
 
@@ -252,8 +271,28 @@ export function useCanViewUsage({
   }
 
   return (
-    hasInvoiceReadPermission(runtimeConfig.user) &&
-    !!organization?.subscription?.type &&
-    allowedPlanTypes.includes(organization.subscription.type)
+    hasInvoiceRead &&
+    !!subscriptionType &&
+    allowedPlanTypes.includes(subscriptionType)
   );
+}
+
+export function useCanViewUsage({
+  runtimeConfig,
+}: {
+  runtimeConfig: CloudRuntimeConfig;
+}) {
+  const { organization } = useCurrentOrganization();
+  const isBillingVisible = useCanViewBilling({ runtimeConfig });
+  const appConfig = useAppConfig();
+
+  return canViewUsage({
+    isImpersonating: runtimeConfig.isImpersonating,
+    currentStack: appConfig.mode === "cloud" ? appConfig.currentStack : null,
+    hasInvoiceRead:
+      !runtimeConfig.isImpersonating &&
+      hasInvoiceReadPermission(runtimeConfig.user),
+    isBillingVisible,
+    subscriptionType: organization?.subscription?.type,
+  });
 }
