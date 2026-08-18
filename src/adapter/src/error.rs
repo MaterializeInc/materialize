@@ -141,6 +141,13 @@ pub enum AdapterError {
     /// The statement is retryable: every attempt was refused before anything
     /// was appended, so nothing it intended has been committed.
     ReadThenWriteContention,
+    /// The write timestamp ran past what the write timeline may be advanced to,
+    /// so nothing was appended. See `coord::timeline::write_ts_upper_bound` for
+    /// the bound and why exceeding it is not recoverable.
+    ReadThenWriteTimestampTooFarAhead {
+        target_timestamp: mz_repr::Timestamp,
+        limit: mz_repr::Timestamp,
+    },
     CollectionUnreadable {
         id: String,
     },
@@ -852,6 +859,11 @@ impl AdapterError {
                 "Concurrent writes to the target table kept this statement from \
                  committing. Retry the statement, or lower the write concurrency.".into()
             ),
+            AdapterError::ReadThenWriteTimestampTooFarAhead { .. } => Some(
+                "The write timestamp this statement would have committed at is far ahead of \
+                 the wall clock. Committing there would keep writes and strict-serializable \
+                 reads on this timeline from proceeding until the clock caught up.".into()
+            ),
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
             ),
@@ -916,6 +928,9 @@ impl AdapterError {
                 SqlState::T_R_SERIALIZATION_FAILURE
             }
             AdapterError::ReadThenWriteContention => SqlState::T_R_SERIALIZATION_FAILURE,
+            AdapterError::ReadThenWriteTimestampTooFarAhead { .. } => {
+                SqlState::FEATURE_NOT_SUPPORTED
+            }
             AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
@@ -1296,6 +1311,16 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "read-then-write exceeded maximum retry attempts under contention"
+                )
+            }
+            AdapterError::ReadThenWriteTimestampTooFarAhead {
+                target_timestamp,
+                limit,
+            } => {
+                write!(
+                    f,
+                    "read-then-write would have to commit at {target_timestamp}, past the \
+                     highest timestamp the write timeline may be advanced to ({limit})"
                 )
             }
             AdapterError::CollectionUnreadable { id } => {

@@ -2117,3 +2117,79 @@ fn test_replica_expiration_spares_folded_selections() {
         .expect("subscribe failed");
     assert_eq!(streamed, "", "the subscribe streamed {streamed:?}");
 }
+
+/// A read-then-write whose write timestamp would run past what the write timeline
+/// may be advanced to has to be refused, not committed.
+///
+/// The OCC path derives its write timestamp from the frontier its subscribe observed,
+/// and a selection over a materialized view with a `REFRESH` option settles until the
+/// next refresh, so that frontier is legitimately hours or days ahead of the clock.
+/// Committing there advances the timeline's oracle with it, and the oracle is monotone
+/// and durable, so every later write and strict-serializable read on the timeline blocks
+/// until the clock catches up, restarts included. Under `serializable` it is worse than a
+/// block: reads pick a timestamp near the clock, so the acknowledged write stays
+/// invisible.
+///
+/// The MV here refreshes once a few seconds out and once far away. Past the near
+/// refresh it is readable, and its upper is then the far one, which is what makes the
+/// write target far future deterministically rather than by racing a refresh interval.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_far_future_write_timestamp_is_refused() {
+    let server = frontend_occ_harness()
+        .unsafe_mode()
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client
+        .batch_execute("INSERT INTO src VALUES (1), (2), (3)")
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv \
+             WITH (REFRESH AT mz_now()::text::int8 + 3000, REFRESH AT '3000-01-01') \
+             AS SELECT a FROM src",
+        )
+        .unwrap();
+
+    // Reaching the write at all means waiting for the near refresh: until then the MV
+    // holds no readable content and the read parks instead.
+    client
+        .batch_execute("SET statement_timeout = '60s'")
+        .unwrap();
+
+    let err = client
+        .execute("INSERT INTO dst SELECT a FROM mv", &[])
+        .expect_err("a write at a far-future timestamp must be refused");
+    let message = server_error_message(&err);
+    assert!(
+        message.contains("past the highest timestamp the write timeline may be advanced to"),
+        "unexpected error for a far-future write: {message}"
+    );
+
+    // The refusal has to happen before the append, so the oracle never learns the
+    // far-future timestamp. Checked before anything reads `dst`, because a read cannot be
+    // served once the oracle is out there.
+    let skew: i64 = client
+        .query_one(
+            "SELECT mz_now()::text::bigint - (extract(epoch FROM now()) * 1000)::bigint",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert!(
+        skew.abs() < 60_000,
+        "the oracle is {skew}ms from wall clock, so the refused write reached it anyway"
+    );
+
+    // The timeline is still usable, both for writes and for reads of the target.
+    client.batch_execute("INSERT INTO dst VALUES (4)").unwrap();
+    let rows = client
+        .query_one("SELECT count(*) FROM dst", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 1, "the refused write must not have landed");
+}

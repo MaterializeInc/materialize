@@ -4976,6 +4976,20 @@ pub fn serve(
             .expect("inserted above")
             .oracle;
 
+        // The catalog shard's upper is durable, so a write that once landed far ahead of the
+        // clock is re-applied to the oracle here on every boot and cannot be waited out. We
+        // report it rather than refusing to start: the timeline is stalled either way, and a
+        // process that will not boot turns that into a total outage plus a crash loop.
+        let boot_now: mz_repr::Timestamp = (now)().into();
+        if catalog_upper > timeline::write_ts_upper_bound(&boot_now) {
+            tracing::error!(
+                %catalog_upper, %boot_now,
+                "catalog upper is far ahead of the wall clock, so writes and \
+                strict-serializable reads on the EpochMilliseconds timeline will block \
+                until the clock catches up",
+            );
+        }
+
         let mut boot_ts = if read_only_controllers {
             let read_ts = epoch_millis_oracle.read_ts().await;
             std::cmp::max(read_ts, catalog_upper)
