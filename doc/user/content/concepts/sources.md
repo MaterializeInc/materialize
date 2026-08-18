@@ -71,11 +71,7 @@ See [Snapshotting](/concepts/snapshotting/) for more information.
 
 {{% include-from-yaml data="hydration-details" name="definition" %}}
 
-- For Kafka upsert sources, their associated read-only tables (or subsources if
-  using the legacy syntax) rebuild their internal upsert index from storage on
-  replica (re)start or cluster resize.
-
-- For other sources, the hydration process is negligible or not applicable.
+{{% include-from-yaml data="hydration-details" name="sources-summary" %}}
 
 See [Hydration](/concepts/hydration/) for more information.
 
