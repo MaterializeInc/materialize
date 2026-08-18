@@ -29,7 +29,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use futures::StreamExt;
 use mz_ore::future::InTask;
 use mz_repr::GlobalId;
-use mz_sql_server_util::SqlServerError;
 use mz_sql_server_util::cdc::Lsn;
 use mz_sql_server_util::inspect::{get_latest_restore_history_id, get_max_lsn};
 use mz_storage_types::connections::SqlServerConnectionDetails;
@@ -42,7 +41,7 @@ use mz_timely_util::builder_async::{OperatorBuilder as AsyncOperatorBuilder, Pre
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::operators::vec::Map;
 use timely::dataflow::{Scope, StreamVec};
-use timely::progress::{Antichain, Timestamp};
+use timely::progress::Antichain;
 
 use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
 use crate::source::types::Probe;
@@ -87,21 +86,6 @@ pub(crate) fn render<'scope>(
                 return Ok(());
             }
 
-            // Seed `offset_committed` from the resumption LSN, or if not set, from the
-            // `initial_lsn` (see [`SourceOutputInfo::resume_lsn`]). Otherwise it stays at the
-            // default 0 until the initial snapshot durably commits and the first resume
-            // upper arrives, which for a large snapshot can be a long time. During that
-            // window the ingestion-lag calculation subtracts 0 from the (large) upstream
-            // LSN and reports an enormous, bogus lag.
-            //
-            // NOTE: This runs before connecting to the upstream so a slow or failing
-            // connection does not leave the statistic unset.
-            let mut max_committed_lsn = outputs
-                .values()
-                .map(SourceOutputInfo::resume_lsn)
-                .min()
-                .unwrap_or_else(Lsn::minimum);
-
             // Retrieve the latest upstream LSN eagerly to ensure the lag calculation
             // (offset_known - offset_committed) is non-negative. Statistics represents these as
             // uint8, which would cause the calculation to underflow for the brief period between
@@ -114,10 +98,31 @@ pub(crate) fn render<'scope>(
                 )
                 .await?;
             let mut client = mz_sql_server_util::Client::connect(conn_config).await?;
-            let max_lsn: Lsn = get_max_lsn(&mut client).await?;
+            // increment here to match known_offset calculation below
+            let next_upstream_lsn: Lsn = get_max_lsn(&mut client).await?.increment();
+
+            // Seed `offset_committed` from the resumption LSN, or if not set, from the
+            // upstream's current max LSN. Otherwise, it stays at the default 0 until the
+            // initial snapshot durably commits and the first resume upper arrives, which
+            // for a large snapshot can be a long time. During that window the ingestion-lag
+            // calculation subtracts 0 from the (large) upstream LSN and reports an
+            // enormous, bogus lag.
+            //
+            // This defaults to upstream's current max offset instead of `initial_lsn` because
+            // `initial_lsn` can be ahead of the value returned by `sys.fn_cdc_get_max_lsn`. This
+            // is a very obscure edge case where a user has a CDC enabled table, creates a new one
+            // and configures a source for at least the second table immediately after, without
+            // performing any DML operations.
+            let mut max_committed_lsn = outputs
+                .values()
+                // resume_lsn_or will panic if info resume_upper is empty
+                .map(|info| info.resume_lsn_or(next_upstream_lsn))
+                .min()
+                .unwrap_or(next_upstream_lsn);
+
             for stat in config.statistics.values() {
+                stat.set_offset_known(next_upstream_lsn.abbreviate());
                 stat.set_offset_committed(max_committed_lsn.abbreviate());
-                stat.set_offset_known(max_lsn.abbreviate());
             }
 
 

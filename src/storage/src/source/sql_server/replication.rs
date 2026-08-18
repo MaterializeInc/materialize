@@ -391,7 +391,10 @@ pub(crate) fn render<'scope>(
             // Resumption point is the minimum LSN that has been observed per capture instance.
             let mut resume_lsns = BTreeMap::new();
             for src_info in outputs.values() {
-                let resume_lsn = src_info.resume_lsn();
+                // initial_lsn is the max lsn observed, but the resume lsn
+                // is the next lsn that should be read.  After a snapshot, initial_lsn
+                // has been read, so replication will start at the next available lsn.
+                let resume_lsn = src_info.resume_lsn_or(src_info.initial_lsn.increment());
                 resume_lsns.entry(Arc::clone(&src_info.capture_instance))
                     .and_modify(|existing| *existing = std::cmp::min(*existing, resume_lsn))
                     .or_insert(resume_lsn);

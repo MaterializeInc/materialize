@@ -59,16 +59,14 @@ struct SourceOutputInfo {
 }
 
 impl SourceOutputInfo {
-    /// The [`Lsn`] this output resumes reading from.
+    /// The [`Lsn`] this output resumes reading from, or the provided fallback [`Lsn`].
     ///
     /// Panics if `resume_upper` is empty, which would mean the output has no
     /// resumption point at all.
-    fn resume_lsn(&self) -> Lsn {
+    fn resume_lsn_or(&self, fallback: Lsn) -> Lsn {
         match self.resume_upper.as_option() {
             Some(lsn) if *lsn != Lsn::minimum() => *lsn,
-            // `initial_lsn` is the max LSN observed when the snapshot was taken, so it has
-            // already been read and replication starts at the next available LSN.
-            Some(_) => self.initial_lsn.increment(),
+            Some(_) => fallback,
             None => panic!("resume_upper has at least one value"),
         }
     }
