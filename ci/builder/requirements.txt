@@ -15,7 +15,7 @@ aiohttp==3.14.3
 black==26.3.1
 # Pulls in dependencies that make launchdarkly/cloud tests fail, keep for now
 boto3-stubs[ec2,iam,kinesis,s3,sqs,ssm,sts,s3tables]==1.41.5
-boto3==1.43.66
+boto3==1.43.72
 click==8.1.3
 cryptography==50.0.0
 colored==2.3.2
@@ -27,7 +27,7 @@ ipympl==0.10.0
 ipywidgets==8.1.8
 junit-xml==1.9
 junitparser==5.0.1
-jupyterlab==4.6.2
+jupyterlab==4.6.3
 jupyter-black==0.4.0
 kubernetes==25.3.0
 kubernetes-stubs==22.6.0.post1
@@ -67,20 +67,20 @@ scipy==1.15.3; python_version < "3.11"
 scipy==1.17.1; python_version >= "3.11"
 scipy-stubs==1.15.3.0
 semver==3.0.4
-shtab==1.9.3
-sqlparse==0.5.5
+shtab==1.10.0
+sqlparse==0.6.0
 toml==0.10.2
 twine==7.0.0
 types-Markdown==3.10.2.20260712
 types-prettytable==3.4.2.6
 types-psutil==7.2.2.20260518
-types-PyMYSQL==1.2.0.20260724
-types-PyYAML==6.0.12.20260724
+types-PyMYSQL==1.2.0.20260807
+types-PyYAML==6.0.12.20260815
 types-requests==2.33.0.20260712
-types-setuptools==83.0.0.20260724
+types-setuptools==84.0.0.20260812
 types-toml==0.10.8.20260518
 typing-extensions==4.16.0
-xxhash==3.8.1
+xxhash==4.0.0
 yamllint==1.38.0
 # NOTE confluent-kafka only has wheels for a few python versions
 confluent-kafka==2.6.1; python_version < "3.13"
@@ -92,4 +92,4 @@ pyarrow==23.0.1
 minio==7.2.15
 zstandard==0.25.0
 build==1.5.1
-hatchling==1.31.0
+hatchling==1.32.0

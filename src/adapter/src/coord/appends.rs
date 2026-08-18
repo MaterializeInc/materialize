@@ -1588,6 +1588,7 @@ pub(crate) fn waiting_on_startup_appends(
         | Plan::CreateView(_)
         | Plan::CreateMaterializedView(_)
         | Plan::CreateIndex(_)
+        | Plan::CreateMetricSink(_)
         | Plan::CreateType(_)
         | Plan::Comment(_)
         | Plan::DiscardTemp

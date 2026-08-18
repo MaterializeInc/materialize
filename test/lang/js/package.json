@@ -14,7 +14,7 @@
     "@types/pg": "^8.21.0",
     "babel-jest": "^27.0.0",
     "jest": "^27.0.0",
-    "pg": "^8.22.0",
+    "pg": "^8.23.0",
     "pg-query-stream": "^4.5.3",
     "prettier": "^2.0.4"
   },
@@ -22,7 +22,7 @@
     "@babel/core": "^7.29.6",
     "@babel/plugin-transform-modules-systemjs": ">=7.29.4",
     "@tootallnate/once": "^2.0.1",
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^4.3.1",
     "lodash": ">=4.18.0"
   },
   "prettier": {

@@ -749,7 +749,6 @@ impl Instance {
         if self.replicas.is_empty() {
             return Ok(true);
         }
-        let mut all_hydrated = true;
         let target_replicas: BTreeSet<ReplicaId> = self
             .replicas
             .keys()
@@ -765,6 +764,7 @@ impl Instance {
             }
         }
 
+        let mut unhydrated = BTreeSet::new();
         for (id, _collection) in self.collections_iter() {
             if id.is_transient() || exclude_collections.contains(&id) {
                 continue;
@@ -789,14 +789,25 @@ impl Instance {
             }
 
             if !collection_hydrated {
-                tracing::info!("collection {id} is not hydrated on any replica");
-                all_hydrated = false;
-                // We continue with our loop instead of breaking out early, so
-                // that we log all non-hydrated replicas.
+                // We collect all non-hydrated collections instead of breaking
+                // out early, so that the log below names every collection the
+                // caller is waiting on.
+                unhydrated.insert(id);
             }
         }
 
-        Ok(all_hydrated)
+        if !unhydrated.is_empty() {
+            // Callers poll this on the cluster controller's reconcile tick,
+            // which tests turn down to milliseconds, so this is deliberately
+            // one line per call rather than one per collection.
+            tracing::info!(
+                replicas = ?target_replicas,
+                collections = ?unhydrated,
+                "collections are not hydrated on any target replica",
+            );
+        }
+
+        Ok(unhydrated.is_empty())
     }
 
     /// Clean up collection state that is not needed anymore.

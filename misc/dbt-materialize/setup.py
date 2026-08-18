@@ -52,7 +52,7 @@ setup(
         "dbt-adapters>=1.7,<2.0",
         # add dbt-core to ensure backwards compatibility of installation, this is not a functional dependency
         "dbt-core>=1.8.0",
-        "dbt-postgres>=1.8,<1.11",
+        "dbt-postgres>=1.8,<1.12",
     ],
     extras_require=extras_require,
 )

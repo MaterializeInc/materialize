@@ -5,9 +5,14 @@
     "noEmit": true,
     "jsx": "react",
     "target": "ES2020",
+    "module": "preserve",
     "lib": ["ES2020", "DOM"],
     "strict": false,
-    "moduleResolution": "node"
+    "moduleResolution": "bundler",
+    // The checked files are plain browser scripts with no imports, so nothing
+    // pulls `@types/*` in. List them explicitly to get `React` and `d3` as
+    // ambient globals.
+    "types": ["react", "react-dom", "d3"]
   },
   "include": [
     "../../src/environmentd/src/http/static/js/prometheus.js",
