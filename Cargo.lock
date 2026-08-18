@@ -1560,6 +1560,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "base64-simd"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5255,7 +5261,7 @@ checksum = "5a87cc7a48537badeae96744432de36f4be2b4a34a05a5ef32e9dd8a1c169dde"
 dependencies = [
  "base64 0.22.1",
  "js-sys",
- "pem",
+ "pem 3.0.6",
  "ring",
  "serde",
  "serde_json",
@@ -5272,7 +5278,7 @@ dependencies = [
  "base64 0.22.1",
  "getrandom 0.2.16",
  "js-sys",
- "pem",
+ "pem 3.0.6",
  "serde",
  "serde_json",
  "signature",
@@ -5367,7 +5373,7 @@ dependencies = [
  "k8s-openapi",
  "kube-core",
  "openssl",
- "pem",
+ "pem 3.0.6",
  "secrecy",
  "serde",
  "serde_json",
@@ -5996,7 +6002,7 @@ dependencies = [
  "lru",
  "mysql_common",
  "native-tls",
- "pem",
+ "pem 3.0.6",
  "percent-encoding",
  "rand 0.9.4",
  "serde",
@@ -7421,7 +7427,7 @@ dependencies = [
  "jsonwebtoken 10.3.0",
  "mz-aws-util",
  "mz-ore",
- "pem",
+ "pem 4.0.0",
  "serde",
  "serde_json",
  "tokio",
@@ -10039,6 +10045,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d30c53c26bc5b31a98cd02d20f25a7c8567146caf63ed593a9d87b2775291be"
 dependencies = [
  "base64 0.22.1",
+ "serde_core",
+]
+
+[[package]]
+name = "pem"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d354a98a3d1251555de99e8fdd8afda05573c31b82f59063a7b0a29b5527f120"
+dependencies = [
+ "base64 0.23.1",
  "serde_core",
 ]
 
