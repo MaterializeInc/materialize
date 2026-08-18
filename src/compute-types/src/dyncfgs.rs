@@ -29,13 +29,12 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
 /// information a consumer reads. Left uncollapsed, a shared collection contributes its errors once
 /// per plan path that reads it, and because those factors apply again at each level of sharing they
 /// compound multiplicatively until the `Diff` overflows.
-/// NOTE: Environment-scoped deliberately. Rendering reads this once, when a dataflow is built, and
-/// an errored materialized view's error multiplicity is durable state: the sink writes
-/// `desired - persist` into a shard every replica of the cluster shares. Two replicas that rendered
-/// under different values therefore each see the other's writes as an error to correct, and correct
-/// each other forever with no input activity. Per-replica and per-cluster overrides would make that
-/// divergence a supported operation, so neither is offered until the sink normalizes error
-/// multiplicity before writing.
+///
+/// Governs sharing within a dataflow only. Sharing across objects is bounded unconditionally, by
+/// normalizing at every boundary another dataflow can read, so what this flag decides is never
+/// durable state and two replicas rendering under different values still write the same thing.
+/// Environment-scoped for now because nothing needs finer granularity, not because finer would be
+/// unsafe.
 pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     "enable_compute_error_distinct",
     false,
