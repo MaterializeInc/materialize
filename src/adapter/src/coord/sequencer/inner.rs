@@ -21,7 +21,8 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE, READ_THEN_WRITE_MAX_DEPENDENCIES,
+    ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE,
+    READ_THEN_WRITE_MAX_DEPENDENCIES,
 };
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
@@ -4292,15 +4293,18 @@ impl Coordinator {
     /// lock-based and the OCC read-then-write path. Both are never live in one
     /// process, so the choice is fixed at boot and every session inherits it.
     /// `max_concurrent_occ_writes` sizes the OCC semaphore at boot.
+    /// `enable_expression_cache` decides whether catalog open builds the cache,
+    /// which has already happened by the time a session can ask.
     ///
     /// `ALTER SYSTEM` on one of these is allowed to go through. The catalog
     /// value is what the next process start reads, and the running process
     /// cannot observe it, so there is no window where two code paths are live at
     /// once.
-    fn startup_only_vars() -> [&'static str; 2] {
+    fn startup_only_vars() -> [&'static str; 3] {
         [
             FRONTEND_READ_THEN_WRITE.name(),
             MAX_CONCURRENT_OCC_WRITES.name(),
+            ENABLE_EXPRESSION_CACHE.name(),
         ]
     }
 
@@ -4329,7 +4333,7 @@ impl Coordinator {
         Self::startup_only_vars()
             .into_iter()
             .filter(|name| {
-                // Both names are registered system vars, a lookup failure
+                // These names are all registered system vars, a lookup failure
                 // would mean the definitions and this list have drifted apart.
                 let current = config
                     .get(name)
