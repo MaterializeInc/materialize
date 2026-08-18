@@ -37,9 +37,15 @@ Materialize.
 
 To help you get started, the following guides are available:
 
-- [Grafana](/manage/monitor/self-managed/grafana/)
+- [Grafana](/manage/monitor/self-managed/grafana/), for the monitoring stack the
+  Terraform modules install. Enabled by default starting in TF v12.0.0.
 
-- [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
+- [Datadog](/manage/monitor/self-managed/datadog/), for exporting the collected
+  metrics to Datadog.
+
+- [OpenTelemetry and remote
+  write](/manage/monitor/self-managed/opentelemetry/), for exporting to an OTLP
+  endpoint, a Prometheus remote-write store, or Google Cloud Monitoring.
 
 
 ### Alerting

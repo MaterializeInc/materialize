@@ -134,6 +134,13 @@ Prometheus and Grafana. **TF v10.1.0** then added durable state for Grafana and
 a load balancer to reach it on.
 
 {{< warning >}}
+Starting in **TF v12.0.0**, `enable_observability` defaults to `true`. Bumping
+`ref=<RELEASE_TAG>` to v12.0.0 or later therefore installs the whole stack, and
+its billable supporting resources, on a deployment that never set the variable.
+Set `enable_observability = false` in the same change if you do not want it.
+{{< /warning >}}
+
+{{< warning >}}
 `kubernetes/modules/prometheus` and `kubernetes/modules/grafana` were **removed**
 in v10.0.0, not deprecated in place. If your configuration references either
 directly, that reference breaks — pin the previous major until you have
@@ -148,7 +155,9 @@ stack](/manage/monitor/self-managed/grafana/#upgrading-from-the-previous-stack).
 
 ### If you use the example configuration
 
-Set the following in your `terraform.tfvars`:
+Nothing is required starting in TF v12.0.0, where the variable defaults to
+`true`. To be explicit, or on an earlier release, set the following in your
+`terraform.tfvars`:
 
 ```hcl
 enable_observability = true

@@ -84,8 +84,8 @@ This example provisions the following infrastructure:
 
 ### Observability
 
-Off by default in the simple example. Set `enable_observability = true` to
-create the following as well:
+On by default starting in TF v12.0.0. Whenever `enable_observability` is `true`,
+the following are created as well:
 
 | Resource | Description |
 |----------|-------------|
@@ -96,7 +96,9 @@ create the following as well:
 
 This stack requires TF v10.0.0 or later, which replaced an earlier
 Prometheus-and-Grafana pair. The Grafana database and load balancer were added
-in v10.1.0, and are both billable. For details, see
+in v10.1.0, and are both billable. Starting in TF v12.0.0,
+`enable_observability` defaults to `true`, so set it to `false` if you do not
+want the stack. For details, see
 [Grafana](/manage/monitor/self-managed/grafana/).
 
 ## Prerequisites
@@ -223,13 +225,14 @@ authentication mechanisms.
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
-   # enable_observability = true   # Set to true to enable observability stack.
+   # enable_observability = false   # default = true (install the observability stack).
    # grafana_host = "grafana.example.com"   # Only used when enable_observability = true.
    ```
 
    {{< note >}}
-   `enable_observability = true` also creates a `db-f1-micro` Cloud SQL instance
-   for Grafana's own state and an internal load balancer to reach Grafana on.
+   With `enable_observability` on, the modules also create a `db-f1-micro`
+   Cloud SQL instance for Grafana's own state and an internal load balancer to
+   reach Grafana on.
    Both are billable. See
    [Grafana](/manage/monitor/self-managed/grafana/).
    {{< /note >}}

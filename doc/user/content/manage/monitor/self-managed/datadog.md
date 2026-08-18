@@ -1,6 +1,6 @@
 ---
-title: "Datadog using Prometheus SQL Exporter"
-description: "How to monitor the performance and overall health of your Materialize region using Datadog."
+title: "Datadog"
+description: "How to export metrics from Self-Managed Materialize to Datadog."
 menu:
   main:
     parent: "monitor-sm"
@@ -8,164 +8,207 @@ menu:
     identifier: "datadog-sm"
 ---
 
-This guide walks you through the steps required to monitor the performance and
-overall health of your Materialize region using [Datadog](https://www.datadoghq.com/).
+The [monitoring stack](/manage/monitor/self-managed/grafana/) collects metrics
+from Materialize and from the cluster into a Grafana Alloy gateway, and that
+gateway can export them to [Datadog ⧉](https://www.datadoghq.com/) in addition
+to storing them in the bundled Thanos. Datadog receives a copy of the metrics;
+Thanos, Grafana, and Alertmanager keep working as before.
+
+Nothing runs alongside Materialize for this. There is no SQL exporter to
+operate, no Datadog Agent to install next to Materialize, and no scrape config
+to maintain: the gateway is already collecting these metrics, and Datadog becomes
+one more place it writes them.
+
+{{< note >}}
+This page covers Self-Managed Materialize. For Materialize Cloud, where the
+monitoring stack is not part of the deployment, see [Datadog for
+Cloud](/manage/monitor/cloud/datadog/).
+{{< /note >}}
 
 ## Before you begin
 
-To make Materialize metadata available to Datadog, you must configure and run
-the following additional services:
+Ensure you have:
 
-* A Prometheus SQL Exporter.
-* A Datadog Agent configured with an [OpenMetrics check](https://docs.datadoghq.com/integrations/openmetrics/).
+- The monitoring stack installed, with `enable_observability = true`. See
+  [Grafana](/manage/monitor/self-managed/grafana/). Datadog export requires **TF
+  v12.0.0** or later.
 
+- A [Datadog API key
+  ⧉](https://docs.datadoghq.com/account_management/api-app-keys/). An
+  application key is not needed and is not accepted: the metrics intake
+  authenticates with the API key alone.
 
-## Step 1. Set up a Prometheus SQL Exporter
+- Your [Datadog site ⧉](https://docs.datadoghq.com/getting_started/site/), such
+  as `datadoghq.com`, `datadoghq.eu`, or `us3.datadoghq.com`. A wrong site is a
+  403 from the intake rather than a routing error, so confirm it before you
+  apply.
 
+## Step 1. Configure the Datadog destination
 
-To export metrics from Materialize and expose them in a format that Datadog can
-consume, you need to configure and run a Prometheus SQL Exporter. This service
-will run SQL queries against Materialize at specified intervals, and export the
-resulting metrics to a Prometheus endpoint.
+Datadog is configured on the `monitoring` module block, not through a root
+variable of the examples. It provisions no cloud resources, so there is no
+`enable_datadog` toggle: setting `datadog_metrics` is what turns it on.
 
-We recommend using [`justwatchcom/sql_exporter`](https://github.com/justwatchcom/sql_exporter),
-which has been tried and tested in production environments.
+1. In the `monitoring` module block of your Terraform, add:
 
-1. In the host that will run the Prometheus SQL Exporter, create a configuration
-   file (`config.yml`) to hold the Exporter configuration.
+   ```hcl
+   module "monitoring" {
+     # ...
 
-   {{< tip >}}
-   You can use [this sample
-   `config.yml.example`](https://github.com/MaterializeInc/materialize-monitoring/blob/main/legacy/sql_exporter/config.yml)
-   as guidance to bootstrap your monitoring with some key Materialize metrics
-   and indicators.
-   {{</ tip >}}
-
-
-1. In the configuration file, define the connection to your Materialize region
-   under `connections` using the credentials provided in the [Materialize Console](/console/).
-
-   {{< note >}}
-   You must escape the special `@` character in `USER` for a successful
-   connection. Example: instead of `name@email.com`, use `name%40email.com`.
-   {{</ note >}}
-
-   **Filename:** config.yml
-   ```yaml
-   ---
-   jobs:
-   - name: "materialize"
-     # Interval between the runs of the job
-     interval: '1m'
-     # Materialize connection string
-     connections:
-     - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
-     ...
+     datadog_metrics = {
+       site           = "datadoghq.com"
+       min_importance = "essential"
+     }
+     datadog_api_key = var.datadog_api_key
+   }
    ```
 
-   To specify different configurations for different sets of metrics, like a
-   different `interval`, use additional jobs with a dedicated connection.
+   The examples ship this block commented out, so you can uncomment it in place.
 
-   ```yaml
-   ...
-   - name: "materialize"
-     interval: '1h'
-     connections:
-     - "postgres://<USER>:<PASSWORD>@<HOST>:6875/materialize?application_name=mz_datadog_integration&sslmode=require"
-     ...
+   | Field | Default | Purpose |
+   |-------|---------|---------|
+   | `site` | `datadoghq.com` | Your Datadog site. Determines the intake the exporter writes to. |
+   | `min_importance` | `essential` | Which metrics to send. See [Controlling what Datadog receives](#controlling-what-datadog-receives). |
+   | `metric_endpoint` | derived from `site` | Override the metrics intake URL. Only for a proxy or PrivateLink. |
+   | `logs_endpoint` | derived from `site` | Override the logs intake URL. Only for a proxy or PrivateLink. |
+
+   {{< warning >}}
+   A hand-written `metric_endpoint` or `logs_endpoint` that disagrees with `site`
+   fails at the intake, not at plan time. Leave both unset unless you are
+   routing through a proxy.
+   {{< /warning >}}
+
+1. Supply the API key. Declare it as a sensitive variable and pass it in the way
+   you pass other secrets, for example through an environment variable:
+
+   ```hcl
+   variable "datadog_api_key" {
+     type      = string
+     sensitive = true
+   }
    ```
 
-1. Then, configure the `queries` that the Prometheus SQL Exporter should run at the specified `interval`. Take [these considerations](#considerations) into account when exporting metrics from Materialize.
-
-   ```yaml
-    ...
-    queries:
-    # Prefixed with sql_ and used as the metric name.
-    - name: "replica_memory_usage"
-        # Required option of the Prometheus default registry. Currently NOT
-        # used by the Prometheus server.
-        help: "Replica memory usage"
-        # Array of columns used as additional labels. All lables should
-        # be of type text.
-        labels:
-        - "replica_name"
-        - "cluster_id"
-        # Array of columns used as metric values. All values should be
-        # of type float.
-        values:
-        - "memory_percent"
-        # The SQL query that is run unalterted for each job.
-        query:  |
-                SELECT
-                   name::text AS replica_name,
-                   cluster_id::text AS cluster_id,
-                   memory_percent::float AS memory_percent
-                FROM mz_cluster_replicas r
-                JOIN mz_internal.mz_cluster_replica_utilization u ON r.id=u.replica_id;
+   ```bash
+   export TF_VAR_datadog_api_key='<your-datadog-api-key>'
    ```
 
-1. Once you are done with the Prometheus SQL Exporter configuration,
-   follow the intructions in the [`sql_exporter` repository](https://github.com/justwatchcom/sql_exporter#getting-started)
-   to run the service using the configuration file from the previous step.
+1. Apply the configuration:
 
-## Step 2. Set up a Datadog Agent
-
-To scrape the metrics available in the Prometheus SQL Exporter endpoint, you
-must then set up a [Datadog Agent](https://docs.datadoghq.com/agent/) check
-configured to scrape the OpenMetrics format.
-
-1. Follow the [instructions to install and run a Datadog Agent](https://docs.datadoghq.com/agent/)
-   in your host.
-
-1. To configure an [OpenMetrics check](https://docs.datadoghq.com/integrations/openmetrics/)
-   for the Datadog Agent installed in the previous step, edit the
-   `openmetrics.d/conf.yaml` file at the root of the installation directory.
-
-   **Filename**: openmetrics.d/conf.yaml
-   ```yaml
-   init_config:
-       timeout: 50
-   instances:
-     - openmetrics_endpoint: <SQL_EXPORTER_HOST>/metrics/
-       # The namespace to prepend to all metrics.
-       namespace: "materialize"
-       metrics: [.*]
+   ```bash
+   terraform apply
    ```
 
-  **Tip:** see [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/datadog/datadog/conf.d/openmetrics.yaml)
-  for all available configuration options.
+The API key does not travel through the Helm values. The module puts it in a
+Kubernetes Secret that the gateway mounts, so it is not recoverable with `helm
+get values`. Rotating the key rolls the gateway, because environment variables
+are fixed at container start and a running pod would otherwise keep
+authenticating with the key it started with.
 
-For more details on how to configure, run and troubleshoot Datadog Agents, see the [Datadog documentation](https://docs.datadoghq.com/getting_started/agent/).
+## Step 2. Confirm metrics are arriving
 
-## Step 3. Build a monitoring dashboard
+1. Check that the gateway restarted and is healthy:
 
-With the Prometheus SQL Exporter running SQL queries againt your Materialize
-region and exporting the results as metrics, and the Datadog Agent routing
-these metrics to your Datadog account, you're ready to build a monitoring
-dashboard!
+   ```bash
+   kubectl -n monitoring rollout status deployment/alloy-gateway
+   ```
 
-**Tip:** use [this sample](https://github.com/MaterializeInc/demos/blob/main/integrations/datadog/dashboard.json)
-to bootstrap a new dashboard with the key Materialize metrics and indicators
-defined in the sample `config.yml`.
+1. In Datadog, open **Metrics > Summary** and search for `mz_`.
 
-1. **Log in** to your Datadog account.
+{{< note >}}
+Datadog's metric summary is cumulative: a metric appearing there is not proof it
+is arriving right now. Query for recent samples to confirm what is currently
+flowing.
+{{< /note >}}
 
-1. Navigate to **Dashboards**, and select **New Dashboard**.
+## Controlling what Datadog receives
 
-1. To use the sample dashboard, navigate to ⚙️ in the upper right corner, and
-   select **Import dashboard JSON**. Copy and paste the contents of the provided
-   sample `.json` file.
+Datadog bills per custom metric, so the volume you send is a cost decision.
+Every metric the stack collects carries an *importance* tier, and each
+destination keeps only the metrics at or above a chosen floor. The tiers below
+run from most to least important, and the floor is cumulative: it keeps that
+tier and every tier above it.
 
-    <br>
+| Tier | What it covers |
+|------|----------------|
+| `essential` | The metrics that are critical and that you would always want available. These are the ones used in alerting. |
+| `recommended` | The metrics used in dashboards, and generally desirable for troubleshooting. |
+| `extended` | The metrics used by optional and experimental dashboards. |
+| `diagnostic` | The metrics used for in-depth troubleshooting and analysis. |
+| `all` | Absolutely everything scraped, including metrics no tier classifies. Suited to cheap storage such as the bundled Thanos, not to a metered backend. |
 
-    <img width="1728" alt="Template Datadog monitoring dashboard" src="https://user-images.githubusercontent.com/11491779/216036715-9a4b4db7-8f93-4b6a-ac21-f7eb5a01d151.png">
+`datadog_metrics.min_importance` defaults to `essential`, a tighter floor than
+the other destinations use, for exactly this reason. `all` is a diagnostic
+setting, not a steady state.
 
-## Considerations
+The tiers are shared with the rest of the stack, so a tier selected here means
+the same set of metrics as the same tier selected in Helm. For the membership of
+each tier, see [List of metrics
+⧉](https://materializeinc.github.io/materialize-monitoring/reference/stable-metrics/list-metrics/).
+For the metrics Materialize recommends dashboarding and alerting on, see
+[essential metrics](/manage/monitor/essential-metrics/), and for everything it
+exposes, the [appendix of all metrics](/manage/monitor/appendix-metrics/).
 
-Before adding a custom query, make sure to consider the following:
+{{< note >}}
+The `extended` and `diagnostic` tiers are still being populated, so today they
+resolve to the same set as `recommended`. To send everything that is scraped,
+use `all`, not `diagnostic`.
+{{< /note >}}
 
-1. The label set cannot repeat across rows within the results of the same query.
-2. Columns must not contain `NULL` values.
-3. Value columns must be of type `float`.
-4. The Datadog agent is subject to a limit of 2000 metrics.
-5. Queries can impact cluster performance.
+{{< warning >}}
+The filter fails open. If the allowlist reaches the gateway empty, the gateway
+sends everything to that destination rather than nothing. That is safe for
+visibility and expensive on a metered backend, so check your Datadog metric
+volume after a configuration change.
+{{< /warning >}}
+
+## Forwarding logs as well
+
+The same exporter can also carry the logs the stack collects, alongside the
+metrics. Loki continues to receive them either way. Enable it through
+`additional_values` on the `monitoring` module block:
+
+```hcl
+additional_values = [
+  <<-EOT
+    pipeline:
+      logging:
+        gateway:
+          destination:
+            otel:
+              enabled: true
+  EOT
+]
+```
+
+This switch is not Datadog-specific: it turns on the log path to every
+logs-capable exporter the gateway has enabled, so if you also configure an [OTLP
+destination](/manage/monitor/self-managed/opentelemetry/), that one receives the
+logs too.
+
+Logs are considerably higher volume than metrics, and Datadog bills for them
+separately from custom metrics. Turn this on deliberately.
+
+## Building monitors and dashboards
+
+With metrics in Datadog, build monitors from the thresholds in
+[Alerting](/manage/monitor/self-managed/alerting/). Materialize also ships
+Alertmanager rules with the monitoring stack, so decide which system owns which
+alerts rather than running both against the same thresholds.
+
+## Installing with Helm
+
+If you install the `materialize-monitoring` chart directly rather than through
+the Terraform modules, the Datadog destination is a chart value and the API key
+is a Secret you create. See [Metrics > Storing
+⧉](https://materializeinc.github.io/materialize-monitoring/metrics/storing/) for
+the values, the Secret's name and keys, and the environment variable the API key
+becomes.
+
+## Other destinations
+
+- [OpenTelemetry and remote
+  write](/manage/monitor/self-managed/opentelemetry/), for OTLP endpoints,
+  Prometheus remote-write stores, and Google Cloud Monitoring.
+
+- [Grafana](/manage/monitor/self-managed/grafana/), for the bundled stack and
+  the query endpoints that existing tooling can read.
