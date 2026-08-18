@@ -75,8 +75,9 @@ where
             ) where
                 C: Columnar,
             {
-                use columnar::Borrow;
-                let buffer = AlignBuffer::encode(origin, &current.borrow());
+                use columnar::{Borrow, Len};
+                let view = current.borrow();
+                let buffer = AlignBuffer::encode(origin, view.len(), &view);
                 pending.push_back(Column::Align(buffer));
                 current.clear();
             }

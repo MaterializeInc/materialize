@@ -196,6 +196,25 @@ pub const ENABLE_COLUMN_ALIGN_BUFFER_TRACKING: Config<bool> = Config::new(
 )
 .scoped(ParameterScope::Replica);
 
+/// Page serialized column bodies on dataflow edges into the process buffer
+/// pool instead of the heap.
+///
+/// A shipped body is owned by whoever holds the container and belongs to no
+/// budget, yet measurement puts its life at seconds under memory pressure and
+/// its peak in-flight bytes above the whole pool budget. Paging moves those
+/// bytes into the pool's ledger, where they are budgeted and evictable for the
+/// interval between minting a body and the consumer reaching it. The first
+/// borrow copies the body back out, because the pool hands out no references.
+///
+/// Also installs the buffer pool, on the same terms as the chunk-spill gates:
+/// with no pool installed, bodies stay on the heap regardless of this flag.
+pub const ENABLE_COLUMN_EDGE_PAGING: Config<bool> = Config::new(
+    "enable_column_edge_paging",
+    false,
+    "Page serialized column bodies on dataflow edges into the process buffer pool.",
+)
+.scoped(ParameterScope::Replica);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -613,5 +632,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
+        .add(&ENABLE_COLUMN_EDGE_PAGING)
         .add(&ENABLE_COLUMN_ALIGN_BUFFER_TRACKING)
 }

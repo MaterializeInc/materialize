@@ -109,6 +109,9 @@ impl<C: Columnar> Column<C> {
     pub fn is_empty(&self) -> bool {
         match self {
             Column::Typed(t) => t.is_empty(),
+            // The `Align` arm avoids decoding whenever the producer recorded a
+            // count, which matters for a paged body: see `record_count`.
+            Column::Align(a) if a.records().is_some() => a.records() == Some(0),
             Column::Bytes(_) | Column::Align(_) => self.borrow().is_empty(),
         }
     }
@@ -158,7 +161,18 @@ where
 impl<C: Columnar> Accountable for Column<C> {
     #[inline]
     fn record_count(&self) -> i64 {
-        self.borrow().len().try_into().expect("Must fit")
+        // Timely asks for this at both push and pull. A paged body answers
+        // from its resident count rather than decoding, because materializing
+        // here would pull it back onto the heap before it ever sat in a queue,
+        // which is the entire interval paging covers.
+        let records = match self {
+            Column::Align(a) => a.records(),
+            _ => None,
+        };
+        records
+            .unwrap_or_else(|| self.borrow().len())
+            .try_into()
+            .expect("Must fit")
     }
 }
 impl<C: Columnar> DrainContainer for Column<C> {

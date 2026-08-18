@@ -60,6 +60,7 @@ static COUNTERS: [Counters; Origin::ALL.len()] = [
     Counters::new(),
     Counters::new(),
     Counters::new(),
+    Counters::new(),
 ];
 
 /// The per-origin histogram handles, resolved once by [`register`]. Absent
@@ -168,6 +169,24 @@ pub(super) fn record_mint(origin: Origin, capacity_words: usize) -> Option<Charg
         minted: Instant::now(),
         bytes,
     })
+}
+
+/// Records a paged body being copied out of the pool.
+///
+/// Count and bytes only, deliberately: the copy becomes part of an existing
+/// buffer rather than a buffer of its own, so it has no life of its own to
+/// time and no in-flight bytes to hold. The [`Origin::Unpage`] in-flight and
+/// lifetime series therefore stay at zero, and `mints_total` there is the
+/// useful number: how often paging actually cost a copy-out.
+pub(super) fn record_unpage(capacity_words: usize) {
+    if !TRACKING.load(Ordering::Relaxed) {
+        return;
+    }
+    let counters = counters(Origin::Unpage);
+    counters.mints.fetch_add(1, Ordering::Relaxed);
+    counters
+        .bytes_minted
+        .fetch_add(u64::cast_from(capacity_words) * 8, Ordering::Relaxed);
 }
 
 /// Credits back a buffer whose life just ended, and records how long it lasted.

@@ -194,9 +194,10 @@ where
             std::mem::take(&mut self.cur_t),
             std::mem::take(&mut self.cur_r),
         );
+        let records = self.cur_len;
         self.cur_len = 0;
 
-        let buffer = AlignBuffer::encode(Origin::Consolidate, &cur.borrow());
+        let buffer = AlignBuffer::encode(Origin::Consolidate, records, &cur.borrow());
         self.pending.push_back(Column::Align(buffer));
     }
 }
