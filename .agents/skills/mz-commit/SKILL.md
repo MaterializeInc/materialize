@@ -32,8 +32,15 @@ Materialize uses squash merging, so the PR title becomes the commit subject on `
 
 Write a thorough PR description explaining the rationale for the change.
 Mention which tests were added or modified in the pull request description, but do not list which tests were run.
-To auto-close issues, include `Fixes database-issues#NNNN`.
 Add release notes for user-visible changes (should complete "This release will...").
+
+## Issue tracking: Linear only for new issues
+
+New issues are filed in Linear, never in the `database-issues` GitHub repo. `database-issues` is legacy. Its open issues are still valid to read, link, and close, so an existing `database-issues#NNNN` reference in code or a comment stays as it is.
+
+Reference the Linear issue by its its key, e.g. `Closes: SQL-450`. Don't include the full URL containing the issue title.
+
+When a change closes a legacy GitHub issue, `Fixes database-issues#NNNN` works for auto-closing.
 
 ## Cargo.lock discipline
 

@@ -18,6 +18,7 @@ use std::iter;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use chrono::DateTime;
 use itertools::Itertools;
 use mz_adapter_types::compaction::{CompactionWindow, DEFAULT_LOGICAL_COMPACTION_WINDOW_DURATION};
 use mz_arrow_util::builder::ArrowBuilder;
@@ -33,6 +34,7 @@ use mz_ore::{soft_assert_or_log, soft_panic_or_log};
 use mz_proto::RustType;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::network_policy_id::NetworkPolicyId;
 use mz_repr::optimize::OptimizerFeatureOverrides;
 use mz_repr::refresh_schedule::{RefreshEvery, RefreshSchedule};
@@ -58,7 +60,8 @@ use mz_sql_parser::ast::{
     CommentStatement, ConnectionOption, ConnectionOptionName, CreateClusterReplicaStatement,
     CreateClusterStatement, CreateConnectionOption, CreateConnectionOptionName,
     CreateConnectionStatement, CreateConnectionType, CreateDatabaseStatement, CreateIndexStatement,
-    CreateMaterializedViewStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
+    CreateMaterializedViewStatement, CreateMetricSinkOption, CreateMetricSinkOptionName,
+    CreateMetricSinkStatement, CreateNetworkPolicyStatement, CreateRoleStatement,
     CreateSchemaStatement, CreateSecretStatement, CreateSinkConnection, CreateSinkOption,
     CreateSinkOptionName, CreateSinkStatement, CreateSourceConnection, CreateSourceOption,
     CreateSourceOptionName, CreateSourceStatement, CreateSubsourceOption,
@@ -156,19 +159,20 @@ use crate::plan::{
     ComputeReplicaConfig, ComputeReplicaIntrospectionConfig, ConnectionDetails,
     CreateClusterManagedPlan, CreateClusterPlan, CreateClusterReplicaPlan,
     CreateClusterUnmanagedPlan, CreateClusterVariant, CreateConnectionPlan, CreateDatabasePlan,
-    CreateIndexPlan, CreateMaterializedViewPlan, CreateNetworkPolicyPlan, CreateRolePlan,
-    CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan, CreateTablePlan,
-    CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan, DropOwnedPlan,
-    HirRelationExpr, Index, MaterializedView, NetworkPolicyRule, NetworkPolicyRuleAction,
-    NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption, PlanNotice, PolicyAddress,
-    QueryContext, ReplicaConfig, Secret, Sink, Source, Table, TableDataSource, Type, VariableValue,
-    View, WebhookBodyFormat, WebhookHeaderFilters, WebhookHeaders, WebhookValidation, literal,
-    plan_utils, query, transform_ast,
+    CreateIndexPlan, CreateMaterializedViewPlan, CreateMetricSinkPlan, CreateNetworkPolicyPlan,
+    CreateRolePlan, CreateSchemaPlan, CreateSecretPlan, CreateSinkPlan, CreateSourcePlan,
+    CreateTablePlan, CreateTypePlan, CreateViewPlan, DataSourceDesc, DropObjectsPlan,
+    DropOwnedPlan, HirRelationExpr, Index, MaterializedView, MetricSink, NetworkPolicyRule,
+    NetworkPolicyRuleAction, NetworkPolicyRuleDirection, OnHydration, Plan, PlanClusterOption,
+    PlanNotice, PolicyAddress, QueryContext, ReplicaConfig, Secret, Sink, Source, Table,
+    TableDataSource, Type, VariableValue, View, WebhookBodyFormat, WebhookHeaderFilters,
+    WebhookHeaders, WebhookValidation, literal, plan_utils, query, transform_ast,
 };
 use crate::session::vars::{
     self, ENABLE_AUTO_SCALING_STRATEGY, ENABLE_CLUSTER_SCHEDULE_REFRESH,
     ENABLE_COLLECTION_PARTITION_BY, ENABLE_CREATE_TABLE_FROM_SOURCE, ENABLE_KAFKA_SINK_HEADERS,
-    ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS, VarInput,
+    ENABLE_METRIC_SINK, ENABLE_REFRESH_EVERY_MVS, ENABLE_REPLICA_TARGETED_MATERIALIZED_VIEWS,
+    VarInput,
 };
 use crate::{names, parse};
 
@@ -2819,6 +2823,19 @@ pub fn describe_alter_network_policy(
     Ok(StatementDesc::new(None))
 }
 
+/// Rejects times that `mz_materialized_view_refresh_strategies` could not pack as a
+/// `timestamptz`, whose range is far smaller than `mz_timestamp`'s.
+fn check_refresh_time(option: &str, ts: Timestamp) -> Result<(), PlanError> {
+    let renderable = i64::try_from(ts)
+        .ok()
+        .and_then(DateTime::from_timestamp_millis)
+        .is_some_and(|dt| CheckedTimestamp::try_from(dt).is_ok());
+    if !renderable {
+        sql_bail!("{option} time too large: {ts}");
+    }
+    Ok(())
+}
+
 pub fn plan_create_materialized_view(
     scx: &StatementContext,
     mut stmt: CreateMaterializedViewStatement<Aug>,
@@ -2927,6 +2944,7 @@ pub fn plan_create_materialized_view(
                     let timestamp = hir
                         .into_literal_mz_timestamp()
                         .ok_or_else(|| PlanError::InvalidRefreshAt)?;
+                    check_refresh_time("REFRESH AT", timestamp)?;
                     refresh_schedule.ats.push(timestamp);
                 }
                 RefreshOptionValue::Every(RefreshEveryOptionValue {
@@ -2992,6 +3010,7 @@ pub fn plan_create_materialized_view(
                     let aligned_to_const = aligned_to_hir
                         .into_literal_mz_timestamp()
                         .ok_or_else(|| PlanError::InvalidRefreshEveryAlignedTo)?;
+                    check_refresh_time("REFRESH EVERY ... ALIGNED TO", aligned_to_const)?;
 
                     refresh_schedule.everies.push(RefreshEvery {
                         interval,
@@ -3298,7 +3317,7 @@ fn plan_sink(
                     });
                 }
             }
-            Sink | View | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | View | Index | Type | Func | Secret | Connection => {
                 let name = scx.catalog.minimal_qualification(from.name());
                 return Err(PlanError::InvalidSinkFrom {
                     name: name.to_string(),
@@ -4208,6 +4227,146 @@ fn kafka_sink_builder(
     }))
 }
 
+pub fn describe_create_metric_sink(
+    _: &StatementContext,
+    _: CreateMetricSinkStatement<Aug>,
+) -> Result<StatementDesc, PlanError> {
+    Ok(StatementDesc::new(None))
+}
+
+/// The columns a metric sink reads from its source, and the type each one has to be. Order
+/// doesn't matter, and nullability isn't checked here: nulls are the operator's problem at
+/// runtime.
+const METRIC_SINK_SOURCE_COLUMNS: &[(&str, fn(&SqlScalarType) -> bool)] = &[
+    ("metric_name", |t| matches!(t, SqlScalarType::String)),
+    ("metric_type", |t| matches!(t, SqlScalarType::String)),
+    (
+        "labels",
+        |t| matches!(t, SqlScalarType::Map { value_type, .. } if matches!(**value_type, SqlScalarType::String)),
+    ),
+    ("value", |t| matches!(t, SqlScalarType::Float64)),
+    ("help", |t| matches!(t, SqlScalarType::String)),
+];
+
+generate_extracted_config!(CreateMetricSinkOption, (Prefix, String));
+
+/// Rejects a prefix that could not start a Prometheus metric name.
+///
+/// The sink prepends this to every name it publishes, so `prefix + name` must stay a legal
+/// family name (`[a-zA-Z_:][a-zA-Z0-9_:]*`, the same grammar the runtime checks each row's
+/// `metric_name` against). The prefix must therefore be at least one character long.
+fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
+    if prefix.is_empty() {
+        return Err(sql_err!("metric sink prefix must not be empty"));
+    }
+    let mut chars = prefix.chars();
+    let valid = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == ':' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':')
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err(sql_err!(
+            "metric sink prefix {:?} is not a valid start of a Prometheus metric name",
+            prefix
+        ));
+    }
+    Ok(())
+}
+
+fn validate_metric_sink_desc(desc: &RelationDesc) -> Result<(), PlanError> {
+    for (name, type_ok) in METRIC_SINK_SOURCE_COLUMNS {
+        let col = ColumnName::from(*name);
+        let (_, column_type) = desc
+            .get_by_name(&col)
+            .ok_or_else(|| sql_err!("metric sink source must expose column {:?}", name))?;
+        if !type_ok(&column_type.scalar_type) {
+            return Err(sql_err!(
+                "metric sink source column {:?} is not of the required type",
+                name
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Plans a metric sink over `stmt.from`, which must expose the columns in
+/// `METRIC_SINK_SOURCE_COLUMNS`.
+///
+/// Every distinct `(metric_name, labels)` becomes its own Prometheus series, so high-cardinality
+/// labels mean a lot of series. A null `value` is a gap in the exposition rather than a zero, and
+/// the series stays missing until a non-null value shows up for that same key. Use
+/// `coalesce(value, 0)` if you want zeroes instead.
+pub fn plan_create_metric_sink(
+    scx: &StatementContext,
+    mut stmt: CreateMetricSinkStatement<Aug>,
+) -> Result<Plan, PlanError> {
+    scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
+
+    let CreateMetricSinkStatement {
+        name,
+        in_cluster,
+        if_not_exists,
+        from,
+        with_options,
+    } = &mut stmt;
+
+    let if_not_exists = *if_not_exists;
+    let CreateMetricSinkOptionExtracted { prefix, seen: _ } = with_options.clone().try_into()?;
+    // Required, not defaulted. A name-derived default reintroduces the collision problem the
+    // moment the sink is renamed, and an empty one never had it solved.
+    let Some(prefix) = prefix else {
+        sql_bail!("CREATE METRIC SINK requires a PREFIX option");
+    };
+    validate_metric_sink_prefix(&prefix)?;
+    let name = scx.allocate_qualified_name(normalize::unresolved_item_name(name.clone())?)?;
+    let full_name = scx.catalog.resolve_full_name(&name);
+    let partial_name = PartialItemName::from(full_name.clone());
+    if let (false, Ok(item)) = (if_not_exists, scx.catalog.resolve_item(&partial_name)) {
+        return Err(PlanError::ItemAlreadyExists {
+            name: full_name.to_string(),
+            item_type: item.item_type(),
+        });
+    }
+
+    let from_item = scx.get_item_by_resolved_name(from)?;
+    // `relation_desc()` returns `None` for exactly the item types a metric sink cannot read
+    // from (including `Index`, which lives on a cluster but exposes no relation description), so
+    // its `None` branch doubles as the reject filter. Fold the per-type error message in here.
+    let desc = from_item.relation_desc().ok_or_else(|| {
+        sql_err!(
+            "cannot create metric sink from {} because it is a {}",
+            scx.catalog.minimal_qualification(from_item.name()),
+            from_item.item_type(),
+        )
+    })?;
+    validate_metric_sink_desc(&desc)?;
+
+    let cluster_id = match in_cluster {
+        None => scx.resolve_cluster(None)?.id(),
+        Some(in_cluster) => in_cluster.id,
+    };
+    *in_cluster = Some(ResolvedClusterName {
+        id: cluster_id,
+        print_name: None,
+    });
+    let from_global_id = from_item.global_id();
+
+    let create_sql = normalize::create_statement(scx, Statement::CreateMetricSink(stmt))?;
+
+    Ok(Plan::CreateMetricSink(CreateMetricSinkPlan {
+        name,
+        metric_sink: MetricSink {
+            create_sql,
+            from: from_global_id,
+            cluster_id,
+            prefix,
+        },
+        if_not_exists,
+    }))
+}
+
 pub fn describe_create_index(
     _: &StatementContext,
     _: CreateIndexStatement<Aug>,
@@ -4241,7 +4400,7 @@ pub fn plan_create_index(
                     );
                 }
             }
-            Sink | Index | Type | Func | Secret | Connection => {
+            Sink | MetricSink | Index | Type | Func | Secret | Connection => {
                 sql_bail!(
                     "index cannot be created on {} because it is a {}",
                     on_name.full_name_str(),
@@ -4761,7 +4920,9 @@ pub fn plan_alter_network_policy(
     ctx.require_feature_flag(&vars::ENABLE_NETWORK_POLICIES)?;
 
     let policy_options: NetworkPolicyOptionExtracted = options.try_into()?;
-    let policy = ctx.catalog.resolve_network_policy(&name.to_string())?;
+    let policy = ctx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))?;
 
     let Some(rule_defs) = policy_options.rules else {
         sql_bail!("RULES must be specified when creating network policies.");
@@ -4919,6 +5080,7 @@ pub fn plan_create_cluster_inner(
         name,
         options,
         features,
+        if_not_exists,
     }: CreateClusterStatement<Aug>,
 ) -> Result<CreateClusterPlan, PlanError> {
     let ClusterOptionExtracted {
@@ -5055,6 +5217,7 @@ pub fn plan_create_cluster_inner(
                 auto_scaling_strategy,
             }),
             workload_class,
+            if_not_exists,
         })
     } else {
         let Some(replica_defs) = replicas else {
@@ -5102,19 +5265,24 @@ pub fn plan_create_cluster_inner(
             name: normalize::ident(name),
             variant: CreateClusterVariant::Unmanaged(CreateClusterUnmanagedPlan { replicas }),
             workload_class,
+            if_not_exists,
         })
     }
 }
 
 /// Convert a [`CreateClusterPlan`] into a [`CreateClusterStatement`].
 ///
-/// The reverse of [`plan_create_cluster`].
+/// The reverse of [`plan_create_cluster`], so this renders `IF NOT EXISTS`
+/// when the plan carries it. A caller that wants the cluster's canonical
+/// definition rather than a faithful reverse must pass `if_not_exists: false`,
+/// which is what `Cluster::try_to_plan` produces for `SHOW CREATE CLUSTER`.
 pub fn unplan_create_cluster(
     scx: &StatementContext,
     CreateClusterPlan {
         name,
         variant,
         workload_class,
+        if_not_exists,
     }: CreateClusterPlan,
 ) -> Result<CreateClusterStatement<Aug>, PlanError> {
     match variant {
@@ -5215,6 +5383,7 @@ pub fn unplan_create_cluster(
                 name,
                 options,
                 features,
+                if_not_exists,
             })
         }
         CreateClusterVariant::Unmanaged(_) => {
@@ -5544,6 +5713,7 @@ pub fn plan_create_cluster_replica(
     CreateClusterReplicaStatement {
         definition: ReplicaDefinition { name, options },
         of_cluster,
+        if_not_exists,
     }: CreateClusterReplicaStatement<Aug>,
 ) -> Result<Plan, PlanError> {
     let cluster = scx
@@ -5564,6 +5734,7 @@ pub fn plan_create_cluster_replica(
         name: normalize::ident(name),
         cluster_id: cluster.id(),
         config,
+        if_not_exists,
     }))
 }
 
@@ -6001,6 +6172,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
         | ObjectType::MaterializedView
         | ObjectType::Source
         | ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster
@@ -6017,6 +6189,7 @@ fn dependency_prevents_drop(object_type: ObjectType, dep: &dyn CatalogItem) -> b
             | CatalogItemType::View
             | CatalogItemType::MaterializedView
             | CatalogItemType::Sink
+            | CatalogItemType::MetricSink
             | CatalogItemType::Type
             | CatalogItemType::Secret
             | CatalogItemType::Connection => true,
@@ -6521,10 +6694,11 @@ pub fn plan_alter_cluster(
                         && availability_zones.is_none()
                         && introspection_debugging.is_none()
                         && introspection_interval.is_none()
+                        && experimental_arrangement_compression.is_none()
                     {
                         sql_bail!(
                             "WAIT can only be used together with a SIZE, AVAILABILITY ZONES, \
-                            or INTROSPECTION change"
+                            INTROSPECTION, or EXPERIMENTAL ARRANGEMENT COMPRESSION change"
                         );
                     }
 
@@ -6805,7 +6979,7 @@ pub fn plan_alter_item_set_cluster(
     // Prevent access to `SET CLUSTER` for unsupported objects.
     match object_type {
         ObjectType::MaterializedView => {}
-        ObjectType::Index | ObjectType::Sink | ObjectType::Source => {
+        ObjectType::Index | ObjectType::Sink | ObjectType::MetricSink | ObjectType::Source => {
             bail_unsupported!(29606, format!("ALTER {object_type} SET CLUSTER"))
         }
         ObjectType::Table
@@ -7253,6 +7427,7 @@ pub fn plan_alter_object_swap(
             | ObjectType::MaterializedView
             | ObjectType::Source
             | ObjectType::Sink
+            | ObjectType::MetricSink
             | ObjectType::Index
             | ObjectType::Type
             | ObjectType::Role
@@ -8318,7 +8493,10 @@ pub(crate) fn resolve_network_policy<'a>(
     name: Ident,
     if_exists: bool,
 ) -> Result<Option<ResolvedNetworkPolicyName>, PlanError> {
-    match scx.catalog.resolve_network_policy(&name.to_string()) {
+    match scx
+        .catalog
+        .resolve_network_policy(normalize::ident_ref(&name))
+    {
         Ok(policy) => Ok(Some(ResolvedNetworkPolicyName {
             id: policy.id(),
             name: policy.name().to_string(),
@@ -8342,6 +8520,7 @@ pub(crate) fn resolve_item_or_type<'a>(
         | ObjectType::MaterializedView
         | ObjectType::Source
         | ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster

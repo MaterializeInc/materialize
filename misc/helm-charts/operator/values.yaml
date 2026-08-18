@@ -13,10 +13,25 @@ operator:
     # -- The Docker repository for the operator image
     repository: materialize/orchestratord
     # -- The tag/version of the operator image to be used
-    tag: v26.34.1
+    tag: v26.37.0
     # -- Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images
     pullPolicy: IfNotPresent
 
+  # -- Number of operator replicas. The operator uses leader election so that
+  # only one replica reconciles at a time. Running more than one replica
+  # avoids downtime of the CRD conversion webhook during rollouts and node
+  # drains.
+  replicas: 2
+
+  podDisruptionBudget:
+    # -- Whether to create a PodDisruptionBudget for the operator. Only created
+    # when `replicas` is greater than 1, since a budget over a single replica
+    # either blocks node drains or protects nothing.
+    enabled: true
+    # -- Maximum number of operator pods that may be unavailable at once during
+    # voluntary disruptions. Expressed as a maximum rather than a minimum so
+    # that node drains are never blocked outright, they are only serialized.
+    maxUnavailable: 1
 
   args:
     # -- Log filtering settings for startup logs
@@ -84,10 +99,29 @@ operator:
             # -- ARN for CREATE CONNECTION feature
             connection: ""
 
-      # -- GCP Configuration (placeholder for future use)
+      # -- GCP Configuration
       gcp:
         enabled: false
-        # TODO: Add any other additions for GCP-specific configurations
+        # Trigger rollouts of Materialize instances when GKE upgrades the
+        # node pools underneath them, moving their pods onto the replacement
+        # nodes gracefully instead of letting GKE evict them. Requires
+        # `operator.args.installV1CRD`, and the watched node pools should be
+        # configured to use the blue-green upgrade strategy.
+        nodeUpgradeRolloutTrigger:
+          enabled: false
+          # -- The Pub/Sub subscription receiving GKE cluster notifications
+          # for this cluster, in
+          # `projects/{project}/subscriptions/{subscription}` form. The
+          # cluster must be configured to publish upgrade notifications to
+          # the corresponding topic, and the operator's service account must
+          # be able to subscribe to it and to read the cluster's node pools.
+          notificationSubscription: ""
+          # -- The name of the GKE cluster.
+          clusterName: ""
+          # -- The location (region or zone) of the GKE cluster.
+          clusterLocation: ""
+          # -- The node pools to watch. An empty list watches all node pools.
+          watchedNodePools: []
 
   clusters:
     # -- Configure sizes such that the pod QoS class is not Guaranteed,
@@ -365,6 +399,10 @@ serviceAccount:
   create: true
   # -- The name of the service account to be created
   name: "orchestratord"
+  # -- Annotations to add to the service account, e.g.
+  # `iam.gke.io/gcp-service-account` to link it to a GCP service account
+  # via workload identity.
+  annotations: {}
 
 # Observability settings (disabled in this case)
 observability:

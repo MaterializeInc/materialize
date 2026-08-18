@@ -20,18 +20,17 @@ aws-types.workspace = true
 bytes.workspace = true
 bytesize.workspace = true
 futures.workspace = true
-http.workspace = true
 hyper-0-14.workspace = true
 hyper-tls = "0.5.0"
 mz-ore = { path = "../ore", features = ["async", "network"], default-features = false }
 tower-service.workspace = true
 pin-project.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
-uuid = { workspace = true, features = ["v4"] }
 
 [dev-dependencies]
 mz-ore = { path = "../ore", default-features = false, features = ["test"] }
+tokio.workspace = true
+uuid = { workspace = true, features = ["v4"] }
 
 [features]
 default = []

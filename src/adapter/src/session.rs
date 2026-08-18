@@ -1097,15 +1097,13 @@ impl LifecycleTimestamps {
 pub enum TransactionStatus {
     /// Idle. Matches `TBLOCK_DEFAULT`.
     Default,
-    /// Running a single-query transaction. Matches
+    /// Running a transaction started outside of any `BEGIN`. Matches
     /// `TBLOCK_STARTED`. In PostgreSQL, when using the extended query protocol, this
     /// may be upgraded into multi-statement implicit query (see [`Self::InTransactionImplicit`]).
     /// Additionally, some statements may trigger an eager commit of the implicit transaction,
     /// see: <https://git.postgresql.org/gitweb/?p=postgresql.git&a=commitdiff&h=f92944137>. In
-    /// Materialize however, we eagerly commit all statements outside of an explicit transaction
-    /// when using the extended query protocol. Therefore, we can guarantee that this state will
-    /// always be a single-query transaction and never be upgraded into a multi-statement implicit
-    /// query.
+    /// Materialize we never upgrade it. We eagerly commit it unless it can take on further
+    /// statements of the same pipeline, see [`Self::may_span_pipeline`].
     Started(Transaction),
     /// Currently in a transaction issued from a `BEGIN`. Matches `TBLOCK_INPROGRESS`.
     InTransaction(Transaction),
@@ -1171,6 +1169,30 @@ impl TransactionStatus {
             TransactionStatus::Started(_) | TransactionStatus::InTransactionImplicit(_) => true,
             TransactionStatus::Default
             | TransactionStatus::InTransaction(_)
+            | TransactionStatus::Failed(_) => false,
+        }
+    }
+
+    /// Whether this implicit transaction may stay open for the rest of its
+    /// extended-protocol pipeline, so that the pipeline commits or rolls back as a
+    /// unit like PostgreSQL's.
+    ///
+    /// Only writes may, because they are merely staged. A read already pinned its
+    /// timestamp without timedomain read holds, so a second read could neither join
+    /// that timestamp nor pick its own.
+    pub fn may_span_pipeline(&self) -> bool {
+        match self {
+            TransactionStatus::Started(txn) => match &txn.ops {
+                TransactionOps::Writes(_) => true,
+                TransactionOps::None
+                | TransactionOps::Peeks { .. }
+                | TransactionOps::Subscribe
+                | TransactionOps::SingleStatement { .. }
+                | TransactionOps::DDL { .. } => false,
+            },
+            TransactionStatus::Default
+            | TransactionStatus::InTransaction(_)
+            | TransactionStatus::InTransactionImplicit(_)
             | TransactionStatus::Failed(_) => false,
         }
     }
@@ -1839,6 +1861,11 @@ impl GroupCommitWriteLocks {
             "separately staged group commits must have disjoint lock sets"
         );
         self.locks.extend(std::mem::take(&mut other.locks));
+    }
+
+    /// Inserts a single lock, keyed by the collection it guards.
+    pub fn insert_lock(&mut self, id: CatalogItemId, lock: tokio::sync::OwnedMutexGuard<()>) {
+        self.locks.insert(id, lock);
     }
 
     /// Returns the collections we're missing locks for, if any.

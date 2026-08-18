@@ -1,6 +1,6 @@
 - name: "syntax"
   code: |
-    CREATE CLUSTER <cluster_name> (
+    CREATE CLUSTER [IF NOT EXISTS] <cluster_name> (
         SIZE = <text>
         [, REPLICATION FACTOR = <int>]
         [, MANAGED = <bool>]
@@ -10,8 +10,15 @@
                 [, LINGER DURATION = <interval>]
             )
         )]
+        [, EXPERIMENTAL ARRANGEMENT COMPRESSION = <bool>]
     );
   syntax_elements:
+    - name: "**IF NOT EXISTS**"
+      description: |
+        *Optional.* If specified, do not throw an error if a cluster with the
+        same name already exists. Instead, issue a notice and skip the cluster
+        creation. Note that the existing cluster is left untouched, its
+        configuration is not updated to match the statement.
     - name: "`<cluster_name>`"
       description: |
         A name for the cluster.
@@ -61,3 +68,14 @@
         |--------|-------------|
         | `HYDRATION SIZE` | The size of the burst replica provisioned while the cluster has un-hydrated objects. Must differ from the cluster's steady `SIZE`. Choose a larger size to speed up hydration. For valid size values, see [Available sizes](#available-sizes). |
         | `LINGER DURATION` | Optional. How long the burst replica lingers after a steady-size replica catches up, before it is removed. Default: `0s`. |
+    - name: "`EXPERIMENTAL ARRANGEMENT COMPRESSION`"
+      description: |
+        {{< warn-if-unreleased-inline "v26.38" >}}
+
+        Optional. Whether to enable [dictionary
+        compression](#dictionary-compression) for the arrangements maintained by
+        the cluster's replicas. Compression reduces the memory those
+        arrangements use, at the cost of CPU, and does not benefit every
+        workload. Only available on managed clusters.
+
+        Default: `FALSE`

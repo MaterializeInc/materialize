@@ -534,10 +534,10 @@ impl<T: TryIntoStateUpdateKind, U: ApplyUpdate<T>> PersistHandle<T, U> {
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sync(&mut self, target_upper: Timestamp) -> Result<(), FenceError> {
         self.metrics.syncs.inc();
-        let counter = self.metrics.sync_latency_seconds.clone();
+        let histogram = self.metrics.sync_latency_seconds.clone();
         self.sync_inner(target_upper)
             .wall_time()
-            .inc_by(counter)
+            .observe(histogram)
             .await
     }
 
@@ -1323,6 +1323,22 @@ impl UnopenedPersistCatalogState {
                 txn.set_setting("migration_version".into(), old_version.map(Into::into))?;
             }
 
+            // Opening the catalog with write intent fences out every previous
+            // catalog owner, so all sessions served by previous owners are
+            // dead. Reclaim the temporary items they owned here, before
+            // anything else reads the catalog.
+            //
+            // NOTE: This only reclaims on the fence, which covers a
+            // single-writer world where every crash is followed by some
+            // process's writable open. Once several serving envds run
+            // concurrently, a peer crash triggers no fence here, so
+            // reclaiming its sessions' items needs the durable
+            // envd-heartbeat mechanism described in the durable temporary
+            // objects design doc.
+            if mode != Mode::Readonly {
+                txn.remove_ephemeral_items();
+            }
+
             txn.set_catalog_content_version(catalog_content_version)?;
             txn
         } else {
@@ -1926,10 +1942,10 @@ impl DurableCatalogState for PersistCatalogState {
             Ok(next_upper)
         }
         self.metrics.transaction_commits.inc();
-        let counter = self.metrics.transaction_commit_latency_seconds.clone();
+        let histogram = self.metrics.transaction_commit_latency_seconds.clone();
         commit_transaction_inner(self, txn_batch, commit_ts)
             .wall_time()
-            .inc_by(counter)
+            .observe(histogram)
             .await
     }
 
@@ -2038,10 +2054,10 @@ async fn snapshot_binary(
     metrics: &Arc<Metrics>,
 ) -> impl Iterator<Item = StateUpdate<StateUpdateKindJson>> + DoubleEndedIterator + use<> {
     metrics.snapshots_taken.inc();
-    let counter = metrics.snapshot_latency_seconds.clone();
+    let histogram = metrics.snapshot_latency_seconds.clone();
     snapshot_binary_inner(read_handle, as_of)
         .wall_time()
-        .inc_by(counter)
+        .observe(histogram)
         .await
 }
 

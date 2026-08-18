@@ -102,12 +102,6 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             "mz_cluster_replica_metrics_history",
         ),
         MigrationStep::replacement(
-            "0.160.0",
-            CatalogItemType::Table,
-            MZ_CATALOG_SCHEMA,
-            "mz_sinks",
-        ),
-        MigrationStep::replacement(
             "26.18.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
@@ -300,6 +294,101 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_kafka_sources",
+        ),
+        // Converting the four mz_*_source_tables from builtin tables to
+        // materialized views changes their catalog fingerprint, so each needs an
+        // explicit replacement step.
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_postgres_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_mysql_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_sql_server_source_tables",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_kafka_source_tables",
+        ),
+        // Converting the connection-detail builtin tables to materialized views
+        // changes their catalog fingerprint, so each needs an explicit
+        // replacement step.
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_connections",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_ssh_tunnel_connections",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_aws_connections",
+        ),
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_aws_privatelink_connections",
+        ),
+        // The three sink tables became materialized views, which moves their
+        // fingerprints. The old `0.160.0` `mz_sinks` step had to go at the same
+        // time, because it names the `Table` description and that no longer
+        // resolves. Nothing is lost: anything that needed the old step upgrades
+        // from further back than this one, so this one covers it too.
+        MigrationStep::replacement(
+            "26.38.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sinks",
+        ),
+        MigrationStep::replacement(
+            "26.38.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_kafka_sinks",
+        ),
+        MigrationStep::replacement(
+            "26.38.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_iceberg_sinks",
+        ),
+        // The mz_cluster_reconfigurations MV definition changed (the `changes`
+        // diff now includes the `arrangement_compression` dimension).
+        MigrationStep::replacement(
+            "26.38.0-rc.2",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_reconfigurations",
+        ),
+        // The mz_audit_events MV gained a `metric-sink` arm in its object_type
+        // CASE, changing its SQL fingerprint, so it needs an explicit
+        // replacement step. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
         ),
     ]
 });

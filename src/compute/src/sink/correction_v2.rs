@@ -855,7 +855,7 @@ impl<D: Data> Chain<D> {
     /// All updates in the chunk must sort after all updates already in the chain, in
     /// (time, data)-order, to ensure the chain remains sorted.
     fn push_chunk(&mut self, chunk: Chunk<D>) {
-        debug_assert!(self.can_accept_chunk(&chunk));
+        mz_ore::soft_assert_no_log!(self.can_accept_chunk(&chunk));
 
         self.update_count += chunk.len();
         self.chunks.push(chunk);
@@ -864,9 +864,13 @@ impl<D: Data> Chain<D> {
     /// Return whether the chain can accept the given chunk at its end while preserving
     /// (time, data)-order.
     ///
-    /// Uses the cached boundary times and only materializes the boundary chunks when the times
-    /// tie (a single timestamp straddling the chunk boundary), so the common
-    /// strictly-increasing-time case checks the invariant without paging chunks in.
+    /// NOTE: The cached boundary times settle every case but a tie. On a tie the boundary updates
+    /// themselves are compared, which materializes both chunks and keeps them resident for the
+    /// rest of their lifetime. The only caller is the soft assertion in [`Chain::push_chunk`], and
+    /// soft assertions are live in any build started with `MZ_SOFT_ASSERTIONS` set, so this cost is
+    /// not confined to debug builds. Ties are reached whenever a run of updates at a single
+    /// timestamp spans a chunk boundary, which [`ChunkBuilder`] produces for any such run larger
+    /// than its byte limit.
     fn can_accept_chunk(&self, chunk: &Chunk<D>) -> bool {
         match self.chunks.last() {
             None => true,
@@ -955,8 +959,10 @@ impl<D: Data> Chain<D> {
         };
 
         for chunk in self.chunks.drain(..) {
-            // Route whole chunks by cached boundary times so a chunk that lands entirely on one
-            // side is moved without paging it in; only a straddling chunk is materialized.
+            // Route whole chunks by cached boundary times, so a chunk that lands entirely on one
+            // side is moved without paging it in. Only a straddling chunk is materialized here.
+            // With soft assertions on, `push_chunk` can still page in a chunk whose boundary time
+            // ties the chain's last one, see `Chain::can_accept_chunk`.
             if chunk.last_time() < time {
                 lower.push_chunk(chunk);
             } else if chunk.first_time() >= time {
@@ -1553,7 +1559,7 @@ impl<D: Data> ChunkBuilder<D> {
         std::iter::from_fn(move || {
             loop {
                 let col = std::mem::take(self.inner.finish()?);
-                if col.borrow().len() > 0 {
+                if !col.is_empty() {
                     return Some(Chunk::from_column(col));
                 }
             }

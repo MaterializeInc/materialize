@@ -66,3 +66,182 @@
 - name: "syntax-version-requirement"
   description: |
     You must be on **v26+** to use the new syntax.
+
+- name: "create-table"
+  description: |
+
+    To create new **read-only** tables from a source table, use the `CREATE
+    TABLE ... FROM SOURCE ... (REFERENCE <upstream_table>)` statement in a [DDL
+    transaction block](/sql/begin/#ddl-only-transactions). The following example
+    creates **read-only** tables `items` and `orders` from the SQL Server
+    source's `dbo.items` and `dbo.orders` tables.
+
+    {{< note >}}
+
+    - Although the example creates the tables with the same names as the
+    upstream tables, the tables in Materialize can have names that differ from
+    the referenced table names.
+
+    - The upstream table must have [Change Data Capture
+    (CDC)](/ingest-data/sql-server/) enabled.
+
+    - For supported SQL Server data types, refer to [supported
+    types](/sql/create-table/sql-server/#supported-data-types).
+
+    {{< /note >}}
+
+  test_setup: |
+    $ sql-server-connect name=sql-server
+    server=tcp:sql-server,1433;IntegratedSecurity=true;TrustServerCertificate=true;User ID=SA;Password=RPSsql12345;Database=master
+
+    $ sql-server-execute name=sql-server split-lines=false
+    IF EXISTS (SELECT name FROM sys.databases WHERE name = N'test')
+    BEGIN
+        ALTER DATABASE test SET SINGLE_USER WITH ROLLBACK IMMEDIATE;
+        DROP DATABASE test;
+    END;
+
+    $ sql-server-execute name=sql-server split-lines=false
+    USE msdb;
+    IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'DummyTicker')
+    BEGIN
+        EXEC sp_delete_job @job_name = N'DummyTicker';
+    END;
+
+    $ sql-server-execute name=sql-server
+    CREATE DATABASE test;
+    USE test;
+    EXEC sys.sp_cdc_enable_db;
+    ALTER DATABASE test SET ALLOW_SNAPSHOT_ISOLATION ON;
+
+    CREATE TABLE items (id INT PRIMARY KEY, item VARCHAR(100), quantity INT);
+    INSERT INTO items VALUES (1, 'widget', 5), (2, 'gadget', 2);
+    EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'items', @role_name = 'SA', @supports_net_changes = 0;
+
+    CREATE TABLE orders (id INT PRIMARY KEY, item VARCHAR(100), quantity INT);
+    INSERT INTO orders VALUES (1, 'widget', 5), (2, 'gadget', 2);
+    EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'orders', @role_name = 'SA', @supports_net_changes = 0;
+
+    CREATE TABLE dummy (t datetime);
+    INSERT INTO dummy VALUES (CURRENT_TIMESTAMP);
+    EXEC sys.sp_cdc_enable_table @source_schema = 'dbo', @source_name = 'dummy', @role_name = 'SA', @supports_net_changes = 0;
+
+    $ sql-server-execute name=sql-server split-lines=false
+    CREATE OR ALTER PROCEDURE dbo.DummyTicker AS
+    BEGIN
+        SET NOCOUNT ON;
+        WHILE 1 = 1
+        BEGIN
+            UPDATE dbo.dummy SET t = CURRENT_TIMESTAMP;
+            WAITFOR DELAY '00:00:01';
+        END
+    END;
+
+    $ sql-server-execute name=sql-server
+    USE msdb;
+    EXEC sp_add_job @job_name = N'DummyTicker', @enabled = 1;
+    EXEC sp_add_jobstep @job_name = N'DummyTicker', @step_name = N'run', @subsystem = N'TSQL', @database_name = N'test', @command = N'EXEC dbo.DummyTicker;';
+    EXEC sp_add_jobserver @job_name = N'DummyTicker';
+    EXEC msdb.dbo.sp_start_job N'DummyTicker';
+
+    > CREATE SECRET sqlserver_pass AS 'RPSsql12345'
+    > CREATE CONNECTION sql_server_connection TO SQL SERVER (HOST 'sql-server', PORT 1433, DATABASE test, USER 'SA', PASSWORD = SECRET sqlserver_pass)
+    > CREATE SOURCE sql_server_source FROM SQL SERVER CONNECTION sql_server_connection
+
+  code: |
+    /* This example assumes:
+      - In the upstream SQL Server, you have:
+        - Enabled Change Data Capture (CDC) on the database and the tables.
+        - A user and password with the appropriate access.
+      - In Materialize:
+        - You have created a secret for the SQL Server password.
+        - You have defined the connection to the upstream SQL Server.
+        - You have used the connection to create a source.
+
+       For example (substitute with your configuration):
+          CREATE SECRET sqlserver_pass AS '<password>'; -- substitute
+          CREATE CONNECTION sql_server_connection TO SQL SERVER (
+            HOST '<hostname>',          -- substitute
+            PORT 1433,
+            DATABASE <db>,              -- substitute
+            USER <user>,                -- substitute
+            PASSWORD SECRET sqlserver_pass
+            -- [, <network security configuration> ]
+          );
+
+          CREATE SOURCE sql_server_source
+          FROM SQL SERVER CONNECTION sql_server_connection;
+    */
+
+    BEGIN;
+    CREATE TABLE items
+    FROM SOURCE sql_server_source (REFERENCE dbo.items)
+    ;
+    CREATE TABLE orders
+    FROM SOURCE sql_server_source (REFERENCE dbo.orders)
+    ;
+    COMMIT;
+  results: |
+
+    {{< include-md
+    file="content/headless/create-table-from-source-snapshotting.md" >}}
+
+    {{< include-md file="content/headless/create-table-if-not-exists-tip.md" >}}
+
+  testable_results: false
+
+- name: "show-tables"
+  description: |
+    To verify that the tables have been created, you can run [`SHOW
+    TABLES`](/sql/show-tables/) to list all tables in the current
+    [schema](/sql/namespaces/#namespace-hierarchy):
+  code: |
+    SHOW TABLES;
+  results: |
+    The results should include the tables `items` and `orders`:
+
+    ```hc {hl_lines="3-4"}
+    | name   | comment |
+    | ------ | ------- |
+    | items  |         |
+    | orders |         |
+    ```
+
+- name: "show-columns"
+  description: |
+    Inspect the table columns using the [`SHOW COLUMNS`](/sql/show-columns/)
+    command:
+  code: |
+    SHOW COLUMNS FROM items;
+  results: |
+    The results should display the table columns, with types mapped from the
+    upstream SQL Server table. For the list of supported SQL Server data types,
+    refer to [supported
+    types](/sql/create-table/sql-server/#supported-data-types).
+
+    ```hc
+    | name     | nullable | type              | comment |
+    | -------- | -------- | ----------------- | ------- |
+    | id       | false    | integer           |         |
+    | item     | true     | character varying |         |
+    | quantity | true     | integer           |         |
+    ```
+  test_results:
+    - |
+      id false integer ""
+      item true "character varying" ""
+      quantity true integer ""
+
+- name: "read-from-table"
+  description: |
+    Once the snapshotting process completes and the tables are in the running
+    state, you can query them:
+  code: |
+    SELECT * FROM items ORDER BY id;
+  results: |
+    ```hc
+    | id | item   | quantity |
+    | -- | ------ | -------- |
+    | 1  | widget | 5        |
+    | 2  | gadget | 2        |
+    ```

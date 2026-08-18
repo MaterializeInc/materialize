@@ -14,6 +14,9 @@ change occurs in an upstream system to when it becomes visible in the results of
 a query. This guide can help diagnose why freshness is degraded for an object as
 well as measure freshness across your deployment.
 
+To track freshness for an object over time before a problem occurs, see [Monitor
+freshness](/transform-data/monitor-freshness/).
+
 ## Key concepts
 
 | Concept | Description |

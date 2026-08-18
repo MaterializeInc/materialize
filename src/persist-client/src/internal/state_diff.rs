@@ -512,7 +512,7 @@ impl<T: Timestamp + Lattice + Codec64> State<T> {
                             return Err(format!(
                                 "since update didn't match: {:?} vs {:?}",
                                 self.collections.trace.since(),
-                                &from
+                                from
                             ));
                         }
                         trace.downgrade_since(&to);
@@ -588,7 +588,7 @@ fn apply_diff_single_option<X: PartialEq + Debug>(
             if single.as_ref() != Some(&from) {
                 return Err(format!(
                     "{} update didn't match: {:?} vs {:?}",
-                    name, single, &from
+                    name, single, from
                 ));
             }
             *single = Some(to)
@@ -603,7 +603,7 @@ fn apply_diff_single_option<X: PartialEq + Debug>(
             if single.as_ref() != Some(&from) {
                 return Err(format!(
                     "{} delete didn't match: {:?} vs {:?}",
-                    name, single, &from
+                    name, single, from
                 ));
             }
             *single = None
@@ -633,7 +633,7 @@ fn apply_diff_single<X: PartialEq + Debug>(
             if single != &from {
                 return Err(format!(
                     "{} update didn't match: {:?} vs {:?}",
-                    name, single, &from
+                    name, single, from
                 ));
             }
             *single = to
@@ -708,7 +708,9 @@ where
                         val: Delete(fv.clone()),
                     });
                     let f_next = from.next();
-                    debug_assert!(f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk));
+                    mz_ore::soft_assert_no_log!(
+                        f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk)
+                    );
                     f = f_next;
                 }
                 Ordering::Greater => {
@@ -717,7 +719,9 @@ where
                         val: Insert(tv.clone()),
                     });
                     let t_next = to.next();
-                    debug_assert!(t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk));
+                    mz_ore::soft_assert_no_log!(
+                        t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk)
+                    );
                     t = t_next;
                 }
                 Ordering::Equal => {
@@ -730,10 +734,14 @@ where
                         });
                     }
                     let f_next = from.next();
-                    debug_assert!(f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk));
+                    mz_ore::soft_assert_no_log!(
+                        f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk)
+                    );
                     f = f_next;
                     let t_next = to.next();
-                    debug_assert!(t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk));
+                    mz_ore::soft_assert_no_log!(
+                        t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk)
+                    );
                     t = t_next;
                 }
             },
@@ -743,7 +751,9 @@ where
                     val: Insert(tv.clone()),
                 });
                 let t_next = to.next();
-                debug_assert!(t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk));
+                mz_ore::soft_assert_no_log!(
+                    t_next.as_ref().map_or(true, |(tk_next, _)| tk_next > &tk)
+                );
                 t = t_next;
             }
             (Some((fk, fv)), None) => {
@@ -752,7 +762,9 @@ where
                     val: Delete(fv.clone()),
                 });
                 let f_next = from.next();
-                debug_assert!(f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk));
+                mz_ore::soft_assert_no_log!(
+                    f_next.as_ref().map_or(true, |(fk_next, _)| fk_next > &fk)
+                );
                 f = f_next;
             }
         }
@@ -1267,7 +1279,24 @@ impl ProtoStateFieldDiffs {
             ));
         }
 
-        let expected_data_bytes = usize::cast_from(self.data_lens.iter().copied().sum::<u64>());
+        // NOTE: A crafted diff can declare lengths whose sum exceeds `u64::MAX`.
+        // Overflow checks are off in release/optimized builds, so an unchecked
+        // sum would wrap to a small value, match `data_bytes.len()`, and let the
+        // diff past validation. `ProtoStateFieldDiffsIter` would then slice
+        // `data_bytes` far out of range and panic.
+        let Some(expected_data_bytes) = self
+            .data_lens
+            .iter()
+            .copied()
+            .try_fold(0u64, |acc, len| acc.checked_add(len))
+            .and_then(|sum| usize::try_from(sum).ok())
+        else {
+            return Err(format!(
+                "data_lens sum overflows, got {} lens over {} data bytes",
+                self.data_lens.len(),
+                self.data_bytes.len()
+            ));
+        };
         if expected_data_bytes != self.data_bytes.len() {
             return Err(format!(
                 "expected {} data bytes got {}",
@@ -1378,6 +1407,37 @@ mod tests {
         assert!(
             result.is_err(),
             "invalid field diffs must be a decode error"
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function on OS `linux`
+    fn proto_state_diff_data_lens_overflow_is_error() {
+        // `data_lens` entries that sum past `u64::MAX` are the one shape that can
+        // get *past* `validate()`: with overflow checks off the sum wraps to 0,
+        // matching an empty `data_bytes`, and the iterator then slices
+        // `0..u64::MAX` out of an empty slice.
+        use crate::internal::state::ProtoStateDiff;
+        use mz_proto::ProtoType;
+
+        let proto = ProtoStateDiff {
+            applier_version: "0.1.2".into(),
+            seqno_from: 0,
+            seqno_to: 1,
+            walltime_ms: 0,
+            latest_rollup_key: "rollup".into(),
+            field_diffs: Some(ProtoStateFieldDiffs {
+                fields: vec![ProtoStateField::Hostname.into()],
+                // Insert expects two data slices: the key and the new value.
+                diff_types: vec![ProtoStateFieldDiffType::Insert.into()],
+                data_lens: vec![u64::MAX, 1],
+                data_bytes: Bytes::new(),
+            }),
+        };
+        let result: Result<StateDiff<u64>, _> = proto.into_rust();
+        assert!(
+            result.is_err(),
+            "data_lens that overflow must be a decode error"
         );
     }
 

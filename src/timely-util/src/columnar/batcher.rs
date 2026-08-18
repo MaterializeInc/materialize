@@ -238,7 +238,7 @@ where
             }
         }
 
-        if self.target.borrow().len() > 0 {
+        if !self.target.is_empty() {
             let chunk = std::mem::replace(&mut self.target, Column::Typed(Default::default()));
             self.ready.push_back(chunk);
         }
@@ -259,7 +259,7 @@ where
 /// Compared to a linear scan, this is `O(log K)` for a run of length `K`
 /// satisfying `cmp` — useful when one side of a sorted merge has long runs
 /// dominated by the other side.
-fn gallop(upper: usize, lower: &mut usize, mut cmp: impl FnMut(usize) -> bool) {
+pub(crate) fn gallop(upper: usize, lower: &mut usize, mut cmp: impl FnMut(usize) -> bool) {
     // If `cmp` is already false at `*lower`, the run is empty — nothing to do.
     if *lower < upper && cmp(*lower) {
         // Phase 1 (overshoot): advance by exponentially growing steps as long

@@ -1,6 +1,6 @@
 ---
 title: "Upgrade on Azure"
-description: "Upgrade Materialize on Azure using the new Terraform module."
+description: "Upgrade Materialize on Azure using the Terraform module."
 menu:
   main:
     parent: "upgrading"
@@ -121,6 +121,119 @@ az aks get-credentials --resource-group $(terraform output -raw resource_group_n
 ```
 
 {{% include-from-yaml data="self_managed/upgrades" name="upgrade-verify-status" %}}
+
+## Enable the monitoring stack
+
+The Terraform modules can install a monitoring stack — Grafana, Thanos, Loki,
+Grafana Alloy, and Alertmanager — alongside your deployment, with the
+Materialize dashboards pre-installed. You can turn it on during an upgrade, in
+the same `terraform apply` as the version bump.
+
+The stack below arrived in **TF v10.0.0**, replacing the earlier single
+Prometheus and Grafana. **TF v10.1.0** then added durable state for Grafana and
+a load balancer to reach it on.
+
+{{< warning >}}
+`kubernetes/modules/prometheus` and `kubernetes/modules/grafana` were **removed**
+in v10.0.0, not deprecated in place. If your configuration references either
+directly, that reference breaks — pin the previous major until you have
+migrated.
+
+If you were running the old stack, upgrading **destroys** its Helm releases and
+PersistentVolumeClaims. Up to 15 days of local Prometheus data goes with them,
+along with anything hand-created in the old Grafana. There is no backfill. See
+[Upgrading from the previous
+stack](/manage/monitor/self-managed/grafana/#upgrading-from-the-previous-stack).
+{{< /warning >}}
+
+### If you use the example configuration
+
+Set the following in your `terraform.tfvars`:
+
+```hcl
+enable_observability = true
+```
+
+### If you instantiate the modules yourself
+
+1. Add the `monitoring` module, using the same release tag as the rest of your
+   modules:
+
+   ```hcl
+   module "monitoring" {
+     source = "github.com/MaterializeInc/materialize-terraform-self-managed//azure/modules/monitoring?ref=<RELEASE_TAG>"
+
+     prefix              = var.name_prefix
+     resource_group_name = azurerm_resource_group.materialize.name
+     location            = var.location
+
+     namespace = "monitoring"
+     # The operator module already creates this namespace.
+     create_namespace = false
+
+     oidc_issuer_url = module.aks.cluster_oidc_issuer_url
+
+     materialize_instance_namespace = "materialize-environment"
+     materialize_operator_namespace = "materialize"
+
+     # Grafana's own state. Omit to leave Grafana on SQLite.
+     grafana_database = {
+       subnet_id           = module.networking.postgres_subnet_id
+       private_dns_zone_id = module.networking.private_dns_zone_id
+     }
+
+     # Reach Grafana without port forwarding. Omit to keep it on ClusterIP.
+     grafana_load_balancer = {
+       ingress_cidr_blocks = var.ingress_cidr_blocks
+     }
+
+     tags = var.tags
+
+     depends_on = [module.operator]
+   }
+   ```
+
+1. Turn on the operator's scrape annotations so its pods are collected:
+
+   ```hcl
+   module "operator" {
+     # ...
+     helm_values = {
+       observability = {
+         enabled = true
+         prometheus = {
+           scrapeAnnotations = {
+             enabled = true
+           }
+         }
+       }
+     }
+   }
+   ```
+
+### What this creates
+
+Applying the above adds blob containers for metrics and logs, and — from TF
+v10.1.0 — a `B_Standard_B1ms` PostgreSQL Flexible Server for Grafana's own state
+and an internal load balancer to reach Grafana on. The database and the load
+balancer are both billable.
+
+{{< warning >}}
+The Grafana load balancer terminates no TLS, and Grafana has no identity
+provider until you configure one. Keep it internal until both are addressed. A
+public load balancer whose allowlist is still `0.0.0.0/0` is refused at plan
+time for Grafana specifically.
+{{< /warning >}}
+
+{{< note >}}
+The monitoring stack runs several components: Loki, Thanos, Grafana,
+Alertmanager, kube-state-metrics, and two Alloy roles. Your generic node pool
+may need to grow before the apply can schedule all of them.
+{{< /note >}}
+
+For accessing Grafana, pointing the stack at a database you already run, sizing
+profiles, and retention, see
+[Grafana](/manage/monitor/self-managed/grafana/).
 
 ## See also
 

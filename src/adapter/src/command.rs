@@ -31,7 +31,7 @@ use mz_persist_client::PersistClient;
 use mz_pgcopy::CopyFormatParams;
 use mz_repr::global_id::TransientIdGen;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, ColumnIndex, GlobalId, RowIterator, SqlRelationType};
+use mz_repr::{CatalogItemId, ColumnIndex, Diff, GlobalId, Row, RowIterator, SqlRelationType};
 use mz_sql::ast::{FetchDirection, Raw, Statement};
 use mz_sql::catalog::ObjectType;
 use mz_sql::optimizer_metrics::OptimizerMetrics;
@@ -42,17 +42,18 @@ use mz_sql::session::vars::{OwnedVarInput, SystemVars};
 use mz_sql_parser::ast::{AlterObjectRenameStatement, AlterOwnerStatement, DropObjectsStatement};
 use mz_storage_types::sources::Timeline;
 use mz_timestamp_oracle::TimestampOracle;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use uuid::Uuid;
 
 use crate::catalog::Catalog;
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
-use crate::coord::appends::BuiltinTableAppendNotify;
+use crate::coord::appends::{BuiltinTableAppendNotify, WriteResult};
 use crate::coord::consistency::CoordinatorInconsistencies;
 use crate::coord::peek::{PeekDataflowPlan, PeekResponseUnary};
 use crate::coord::timestamp_selection::TimestampDetermination;
 use crate::coord::{ExecuteContextExtra, ExecuteContextGuard};
 use crate::error::AdapterError;
+use crate::optimize::LirDataflowDescription;
 use crate::session::{EndTransactionAction, RowBatchStream, Session};
 use crate::statement_logging::{
     FrontendStatementLoggingEvent, StatementEndedExecutionReason, StatementExecutionStrategy,
@@ -130,7 +131,11 @@ pub enum Command {
         portal_name: String,
         session: Session,
         tx: oneshot::Sender<Response<ExecuteResponse>>,
-        outer_ctx_extra: Option<ExecuteContextGuard>,
+        /// The end-of-execution obligation of the statement this execution
+        /// serves, if any. `Coordinator::handle_execute` arms it again on
+        /// receipt. `None` means no log entry exists yet, so the coordinator
+        /// begins one.
+        outer_ctx_extra: Option<ExecuteContextExtra>,
     },
 
     /// Attempts to commit or abort the session's transaction. Guarantees that the Coordinator's
@@ -179,7 +184,7 @@ pub enum Command {
         overrides: ScopedParameters,
         /// Bounds which objects' durable rows the reconcile may prune. See
         /// [`crate::catalog::Op::UpdateScopedSystemParameters`].
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
         tx: oneshot::Sender<()>,
     },
 
@@ -391,6 +396,63 @@ pub enum Command {
     /// Statement logging event from frontend peek sequencing.
     /// No response channel needed - this is fire-and-forget.
     FrontendStatementLogging(FrontendStatementLoggingEvent),
+
+    /// Registers a connection-scoped cancellation watch and returns a receiver
+    /// that becomes `true` when cancellation is requested for the connection.
+    ///
+    /// Registration always installs a fresh channel, so the caller cannot
+    /// observe a cancellation aimed at an earlier statement.
+    RegisterConnectionCancelWatch {
+        conn_id: ConnectionId,
+        tx: oneshot::Sender<watch::Receiver<bool>>,
+    },
+
+    /// Creates an internal subscribe, meaning one that writes no
+    /// `mz_subscriptions` row, and returns the response channel. Used by
+    /// frontend-sequenced read-then-write (DELETE/UPDATE/INSERT...SELECT)
+    /// operations via OCC.
+    CreateInternalSubscribe {
+        df_desc: Box<LirDataflowDescription>,
+        cluster_id: ComputeInstanceId,
+        replica_id: Option<ReplicaId>,
+        depends_on: BTreeSet<GlobalId>,
+        as_of: mz_repr::Timestamp,
+        arity: usize,
+        sink_id: GlobalId,
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+        start_time: mz_ore::now::EpochMillis,
+        read_holds: ReadHolds,
+        tx: oneshot::Sender<Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>>,
+    },
+
+    /// Submits a write attempt. Carries the accumulated diffs to write.
+    ///
+    /// `write_ts` selects between two modes:
+    /// - `Some(ts)`: the write must land at exactly `ts`, and reports
+    ///   `WriteResult::TimestampPassed` if the table's timestamp is already past
+    ///   it. The caller decides whether to recompute the diffs and try again.
+    /// - `None`: the coordinator picks the timestamp from the oracle during
+    ///   group commit, so the timestamp cannot be passed. Every other outcome,
+    ///   including read-only, a changed target and cancellation, is reported the
+    ///   same way in both modes.
+    AttemptWrite {
+        /// Connection originating the write. Used so the coordinator can
+        /// cancel this pending write if the connection is cancelled before
+        /// the write commits.
+        conn_id: ConnectionId,
+        target_id: CatalogItemId,
+        target_global_id: GlobalId,
+        diffs: Vec<(Row, Diff)>,
+        write_ts: Option<mz_repr::Timestamp>,
+        tx: oneshot::Sender<WriteResult>,
+    },
+
+    /// Drops an internal subscribe. Fire-and-forget, the caller does not wait
+    /// for completion.
+    DropInternalSubscribe {
+        sink_id: GlobalId,
+    },
 }
 
 impl Command {
@@ -431,7 +493,11 @@ impl Command {
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
-            | Command::InjectAuditEvents { .. } => None,
+            | Command::InjectAuditEvents { .. }
+            | Command::RegisterConnectionCancelWatch { .. }
+            | Command::CreateInternalSubscribe { .. }
+            | Command::AttemptWrite { .. }
+            | Command::DropInternalSubscribe { .. } => None,
         }
     }
 
@@ -472,7 +538,11 @@ impl Command {
             | Command::UnregisterFrontendPeek { .. }
             | Command::ExplainTimestamp { .. }
             | Command::FrontendStatementLogging(..)
-            | Command::InjectAuditEvents { .. } => None,
+            | Command::InjectAuditEvents { .. }
+            | Command::RegisterConnectionCancelWatch { .. }
+            | Command::CreateInternalSubscribe { .. }
+            | Command::AttemptWrite { .. }
+            | Command::DropInternalSubscribe { .. } => None,
         }
     }
 }
@@ -510,6 +580,18 @@ pub struct StartupResponse {
     pub optimizer_metrics: OptimizerMetrics,
     pub persist_client: PersistClient,
     pub statement_logging_frontend: StatementLoggingFrontend,
+    /// Semaphore for limiting concurrent OCC (optimistic concurrency control)
+    /// write operations.
+    pub occ_write_semaphore: Arc<Semaphore>,
+    /// Whether frontend OCC read-then-write is enabled (determined once at
+    /// process startup).
+    pub frontend_read_then_write_enabled: bool,
+    /// Requests a group commit, which is how the frontend asks for the write
+    /// timeline to advance without having anything to write.
+    pub group_commit_notifier: crate::coord::appends::GroupCommitNotifier,
+    /// Whether the coordinator is in read-only mode (e.g. during 0dt upgrades).
+    /// The frontend path must reject mutations when this is true.
+    pub read_only: bool,
 }
 
 #[derive(Derivative)]
@@ -611,6 +693,8 @@ pub enum ExecuteResponse {
     CreatedClusterReplica,
     /// The requested index was created.
     CreatedIndex,
+    /// The requested metric sink was created.
+    CreatedMetricSink,
     /// The requested introspection subscribe was created.
     CreatedIntrospectionSubscribe,
     /// The requested secret was created.
@@ -787,6 +871,7 @@ impl TryInto<ExecuteResponse> for ExecuteResponseKind {
                 Ok(ExecuteResponse::CreatedClusterReplica)
             }
             ExecuteResponseKind::CreatedIndex => Ok(ExecuteResponse::CreatedIndex),
+            ExecuteResponseKind::CreatedMetricSink => Ok(ExecuteResponse::CreatedMetricSink),
             ExecuteResponseKind::CreatedSecret => Ok(ExecuteResponse::CreatedSecret),
             ExecuteResponseKind::CreatedSink => Ok(ExecuteResponse::CreatedSink),
             ExecuteResponseKind::CreatedSource => Ok(ExecuteResponse::CreatedSource),
@@ -851,6 +936,7 @@ impl ExecuteResponse {
             CreatedCluster { .. } => Some("CREATE CLUSTER".into()),
             CreatedClusterReplica { .. } => Some("CREATE CLUSTER REPLICA".into()),
             CreatedIndex { .. } => Some("CREATE INDEX".into()),
+            CreatedMetricSink { .. } => Some("CREATE METRIC SINK".into()),
             CreatedSecret { .. } => Some("CREATE SECRET".into()),
             CreatedSink { .. } => Some("CREATE SINK".into()),
             CreatedSource { .. } => Some("CREATE SOURCE".into()),
@@ -950,6 +1036,7 @@ impl ExecuteResponse {
             CreateView => &[CreatedView],
             CreateMaterializedView => &[CreatedMaterializedView],
             CreateIndex => &[CreatedIndex],
+            CreateMetricSink => &[CreatedMetricSink],
             CreateType => &[CreatedType],
             PlanKind::Deallocate => &[ExecuteResponseKind::Deallocate],
             CreateNetworkPolicy => &[CreatedNetworkPolicy],

@@ -20,11 +20,13 @@ The pages in this section introduces some of the key concepts in Materialize:
 
 Concept                                  | Description
 -----------------------------------------|-----
-[Reaction Time](/concepts/reaction-time) | Measures how quickly a system can reflect a change in input data and return an up-to-date query result. Defined as the sum of data freshness and query latency.
 [Clusters](/concepts/clusters/)          | Clusters are isolated pools of compute resources for sources, sinks, indexes, materialized views, and ad-hoc queries.
 [Sources](/concepts/sources/)            | Sources describe an external system you want Materialize to read data from.
 [Views](/concepts/views/)    | Views represent a named query that you want to save for repeated execution. You can use **indexed views** and **materialized views** to incrementally maintain the results of views.
 [Indexes](/concepts/indexes/)            | Indexes represent query results stored in memory.
 [Sinks](/concepts/sinks/)                | Sinks describe an external system you want Materialize to write data to.
+[Snapshotting](/concepts/snapshotting/) | The initial sync of a source's data from an upstream system, before the source can serve queries.
+[Hydration](/concepts/hydration/) | {{< include-from-yaml data="hydration-details" name="definition" >}}
+[Reaction Time](/concepts/reaction-time) | Measures how quickly a system can reflect a change in input data and return an up-to-date query result. Defined as the sum of data freshness and query latency.
 
 Refer to the individual pages for more information.

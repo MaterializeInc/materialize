@@ -4,20 +4,22 @@ description: "This section contains guides for installing Materialize Agent skil
 disable_list: true
 menu:
   main:
-    parent: integrations
-    name: "MCP Server and skills"
+    name: "AI & agents"
     identifier: mcp-server
-    weight: 6
+    weight: 48
+aliases:
+  - /integrations/mcp-server/llm/
+  - /integrations/llm/
 ---
 
 
 ## Agent skills
 
-Materialize provides the following open-source [agent
-skills](https://github.com/MaterializeInc/agent-skills) to help developers build
-with Materialize.
-
-{{% include-headless "/headless/agent-skills-table" %}}
+Materialize provides open-source [agent
+skills](https://github.com/MaterializeInc/agent-skills) that give coding agents
+like Claude Code, Codex, and Cursor access to Materialize documentation and
+reference material. For the list of available skills and installation
+instructions, see [Agent Skills](/integrations/coding-agent-skills/).
 
 ## MCP servers
 
@@ -36,5 +38,3 @@ and support the MCP `initialize`, `tools/list`, and `tools/call` methods.
   multi-table SQL.
 - [MCP Server
   Troubleshooting](/integrations/mcp-server/mcp-server-troubleshooting/)
-- [Appendix: MCP Server (Python)](/integrations/mcp-server/llm) for locally-run,
-  separate MCP Server.

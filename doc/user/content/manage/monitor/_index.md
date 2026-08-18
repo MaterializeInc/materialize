@@ -37,7 +37,7 @@ Materialize.
 
 To help you get started, the following guides are available:
 
-- [Grafana using Prometheus](/manage/monitor/self-managed/prometheus/)
+- [Grafana](/manage/monitor/self-managed/grafana/)
 
 - [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
 

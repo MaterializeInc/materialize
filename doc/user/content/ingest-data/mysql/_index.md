@@ -52,4 +52,8 @@ To help you get started, the following integration guides are available:
 
 ## Considerations
 
-{{% include-headless "/headless/mysql-considerations" %}}
+{{% include-headless "/headless/mysql-considerations-body" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="mysql" %}}

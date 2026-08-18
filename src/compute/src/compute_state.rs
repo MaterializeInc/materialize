@@ -1042,7 +1042,9 @@ impl<'a> ActiveComputeState<'a> {
                         .compute_state
                         .metrics
                         .index_peek_row_iteration_seconds,
+                    row_iteration_rows: &self.compute_state.metrics.index_peek_row_iteration_rows,
                     result_sort_seconds: &self.compute_state.metrics.index_peek_result_sort_seconds,
+                    result_sort_rows: &self.compute_state.metrics.index_peek_result_sort_rows,
                     row_collection_seconds: &self
                         .compute_state
                         .metrics
@@ -1567,7 +1569,9 @@ pub(crate) struct IndexPeekMetrics<'a> {
     pub error_scan_seconds: &'a prometheus::Histogram,
     pub cursor_setup_seconds: &'a prometheus::Histogram,
     pub row_iteration_seconds: &'a prometheus::Histogram,
+    pub row_iteration_rows: &'a prometheus::Histogram,
     pub result_sort_seconds: &'a prometheus::Histogram,
+    pub result_sort_rows: &'a prometheus::Histogram,
     pub row_collection_seconds: &'a prometheus::Histogram,
 }
 
@@ -1738,6 +1742,7 @@ impl IndexPeek {
         // Row iteration timing
         let row_iteration_start = Instant::now();
         let mut sort_time_accum = Duration::ZERO;
+        let mut rows_sorted = 0usize;
 
         while let Some(row) = peek_iterator.next() {
             let row: (Row, _) = match row {
@@ -1768,15 +1773,33 @@ impl IndexPeek {
                 // We use a threshold twice what we intend, to amortize the work
                 // across all of the insertions. We could tighten this, but it
                 // works for the moment.
-                if results.len() >= 2 * max_results {
+                //
+                // `max_results` is `limit + offset`, so a `LIMIT` near
+                // `i64::MAX` makes the doubling overflow. We then hold fewer
+                // rows than the threshold no matter what, and never thin. That
+                // is the right answer: such a peek cannot accumulate that many
+                // rows anyway, the result size limit stops it long before.
+                // Wrapping instead would make the threshold tiny, and we would
+                // thin while holding almost nothing, dropping rows past the end
+                // of the buffer.
+                if max_results
+                    .checked_mul(2)
+                    .is_some_and(|threshold| results.len() >= threshold)
+                {
                     if peek.finishing.order_by.is_empty() {
                         results.truncate(max_results);
                         metrics
                             .row_iteration_seconds
                             .observe(row_iteration_start.elapsed().as_secs_f64());
                         metrics
+                            .row_iteration_rows
+                            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
+                        metrics
                             .result_sort_seconds
                             .observe(sort_time_accum.as_secs_f64());
+                        metrics
+                            .result_sort_rows
+                            .observe(f64::cast_lossy(rows_sorted));
                         let row_collection_start = Instant::now();
                         let collection = RowCollection::new(results, &peek.finishing.order_by);
                         metrics
@@ -1793,6 +1816,7 @@ impl IndexPeek {
                         // inner test (as we prefer not to maintain `Vec<Datum>`
                         // in the other case).
                         let sort_start = Instant::now();
+                        rows_sorted = rows_sorted.saturating_add(results.len());
                         results.sort_by(|left, right| {
                             comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
                         });
@@ -1816,8 +1840,14 @@ impl IndexPeek {
             .row_iteration_seconds
             .observe(row_iteration_start.elapsed().as_secs_f64());
         metrics
+            .row_iteration_rows
+            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
+        metrics
             .result_sort_seconds
             .observe(sort_time_accum.as_secs_f64());
+        metrics
+            .result_sort_rows
+            .observe(f64::cast_lossy(rows_sorted));
 
         let row_collection_start = Instant::now();
         let collection = RowCollection::new(results, &peek.finishing.order_by);

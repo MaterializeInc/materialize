@@ -82,6 +82,8 @@ use chrono::Utc;
 use futures::StreamExt;
 use mz_adapter::PeekResponseUnary;
 use mz_adapter::telemetry::{EventDetails, SegmentClientExt};
+use mz_build_info::BuildInfo;
+use mz_license_keys::ValidatedLicenseKey;
 use mz_ore::collections::CollectionExt;
 use mz_ore::retry::Retry;
 use mz_ore::{soft_panic_or_log, task};
@@ -89,6 +91,8 @@ use mz_repr::adt::jsonb::Jsonb;
 use mz_sql::catalog::EnvironmentId;
 use serde_json::json;
 use tokio::time::{self, Duration};
+
+use crate::BUILD_INFO;
 
 /// Telemetry configuration.
 #[derive(Clone)]
@@ -102,7 +106,10 @@ pub struct Config {
     /// The validated license key for this environment. Reported so downstream
     /// analytics can tell which entitlements are active and whether the key has
     /// expired.
-    pub license_key: mz_license_keys::ValidatedLicenseKey,
+    pub license_key: ValidatedLicenseKey,
+    /// The version of the helm chart that deployed this environment, if
+    /// self-managed. Folded into the reported `mz_version` trait.
+    pub helm_chart_version: Option<String>,
     /// How frequently to send a summary to Segment.
     pub report_interval: Duration,
 }
@@ -118,6 +125,7 @@ async fn report_loop(
         adapter_client,
         environment_id,
         license_key,
+        helm_chart_version,
         report_interval,
     }: Config,
 ) {
@@ -212,32 +220,12 @@ async fn report_loop(
             }
         };
 
-        // Merge in the license key's organization and environment IDs, plus its
-        // current state. The license key is the authoritative source for these
-        // IDs. `EnvironmentId::organization_id` only matches the real
-        // organization in cloud SaaS, so we report the license key's `sub`
-        // (organization) and `aud` (environment) instead.
-        //
-        // Expiry is recomputed against the wall clock each interval rather than
-        // reusing the flag computed once at startup, so a key that lapses while
-        // environmentd keeps running is reported as expired. The
-        // `expiration == 0` guard exempts the sentinel disabled/emulator key,
-        // whose zero expiration is not a real timestamp.
-        let now_secs = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
-        let license_expired = license_key.expired
-            || (license_key.expiration != 0 && now_secs >= license_key.expiration);
         if let Some(traits) = traits.as_object_mut() {
-            traits.insert("organization_id".into(), json!(license_key.organization));
-            traits.insert("environment_id".into(), json!(license_key.environment_id));
-            traits.insert("license_key_id".into(), json!(license_key.id));
-            traits.insert(
-                "license_expiration_timestamp".into(),
-                json!(license_key.expiration),
-            );
-            traits.insert("license_expired".into(), json!(license_expired));
-            traits.insert(
-                "license_expiration_behavior".into(),
-                json!(license_key.expiration_behavior),
+            build_segment_traits(
+                traits,
+                &license_key,
+                &BUILD_INFO,
+                helm_chart_version.clone(),
             );
         }
 
@@ -283,5 +271,133 @@ async fn report_loop(
             );
         }
         last_stats = Some(current_stats);
+    }
+}
+
+/// Merges the build version and the license key's identity and state into the
+/// collected traits.
+///
+/// The license key is the authoritative source for the organization and
+/// environment IDs. `EnvironmentId::organization_id` only matches the real
+/// organization in cloud SaaS, so we report the license key's `sub`
+/// (organization) and `aud` (environment) instead.
+///
+/// Expiry is recomputed against the wall clock on every call rather than
+/// reusing the flag computed once at startup, so a key that lapses while
+/// environmentd keeps running is reported as expired. The `expiration == 0`
+/// guard exempts the sentinel disabled/emulator key, whose zero expiration is
+/// not a real timestamp.
+fn build_segment_traits(
+    traits: &mut serde_json::Map<String, serde_json::Value>,
+    license_key: &ValidatedLicenseKey,
+    build_info: &BuildInfo,
+    helm_chart_version: Option<String>,
+) {
+    let now_secs = u64::try_from(Utc::now().timestamp()).unwrap_or(0);
+    let license_expired =
+        license_key.expired || (license_key.expiration != 0 && now_secs >= license_key.expiration);
+    traits.insert("organization_id".into(), json!(license_key.organization));
+    traits.insert("environment_id".into(), json!(license_key.environment_id));
+    traits.insert("license_key_id".into(), json!(license_key.id));
+    traits.insert(
+        "license_expiration_timestamp".into(),
+        json!(license_key.expiration),
+    );
+    traits.insert("license_expired".into(), json!(license_expired));
+    traits.insert(
+        "license_expiration_behavior".into(),
+        json!(license_key.expiration_behavior),
+    );
+    traits.insert(
+        "mz_version".into(),
+        json!(build_info.human_version(helm_chart_version)),
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_license_keys::ValidatedLicenseKey;
+    use serde_json::json;
+
+    use super::build_segment_traits;
+
+    fn license_key(expiration: u64, expired: bool) -> ValidatedLicenseKey {
+        ValidatedLicenseKey {
+            id: "test-license-key-id".into(),
+            organization: "test-organization-id".into(),
+            environment_id: "test-environment-id".into(),
+            expiration,
+            expired,
+            ..ValidatedLicenseKey::for_tests()
+        }
+    }
+
+    // Expiry is computed against the real wall clock, so these tests use
+    // expirations in the distant past (1, i.e. just after the Unix epoch) or
+    // distant future (`u64::MAX`) to stay deterministic.
+
+    #[mz_ore::test]
+    fn reports_license_and_version_traits() {
+        let mut traits = json!({"active_clusters": 1});
+        build_segment_traits(
+            traits.as_object_mut().unwrap(),
+            &license_key(u64::MAX, false),
+            &DUMMY_BUILD_INFO,
+            Some("25.1.0".into()),
+        );
+        assert_eq!(
+            traits,
+            json!({
+                "active_clusters": 1,
+                "organization_id": "test-organization-id",
+                "environment_id": "test-environment-id",
+                "license_key_id": "test-license-key-id",
+                "license_expiration_timestamp": u64::MAX,
+                "license_expired": false,
+                "license_expiration_behavior": "Warn",
+                "mz_version": DUMMY_BUILD_INFO.human_version(Some("25.1.0".into()))
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    fn expiry_is_recomputed_from_wall_clock() {
+        // The key was valid at startup (`expired: false`) but the clock has
+        // since passed its expiration.
+        let mut traits = json!({});
+        build_segment_traits(
+            traits.as_object_mut().unwrap(),
+            &license_key(1, false),
+            &DUMMY_BUILD_INFO,
+            None,
+        );
+        assert_eq!(&traits["license_expired"], &json!(true));
+    }
+
+    #[mz_ore::test]
+    fn startup_expired_flag_is_preserved() {
+        // A key marked expired at startup stays expired even if the clock
+        // reads before its expiration.
+        let mut traits = json!({});
+        build_segment_traits(
+            traits.as_object_mut().unwrap(),
+            &license_key(u64::MAX, true),
+            &DUMMY_BUILD_INFO,
+            None,
+        );
+        assert_eq!(&traits["license_expired"], &json!(true));
+    }
+
+    #[mz_ore::test]
+    fn zero_expiration_sentinel_never_expires() {
+        let mut traits = json!({});
+        build_segment_traits(
+            traits.as_object_mut().unwrap(),
+            &license_key(0, false),
+            &DUMMY_BUILD_INFO,
+            None,
+        );
+        assert_eq!(&traits["license_expired"], &json!(false));
     }
 }

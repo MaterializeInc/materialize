@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/pool.rs
-revision: f2082d0163
+revision: 26305d8cb0
 ---
 
 # mz-ore::pool

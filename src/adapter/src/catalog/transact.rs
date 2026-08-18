@@ -40,13 +40,12 @@ use mz_catalog::memory::error::{AmbiguousRename, Error, ErrorKind};
 use mz_catalog::memory::objects::{
     CatalogEntry, CatalogItem, ClusterConfig, ClusterVariant, DataSourceDesc, DefaultPrivileges,
     ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget, SourceReferences,
-    StateDiff, StateUpdate, StateUpdateKind, TemporaryItem,
 };
 use mz_cluster_controller::ctx::RefreshWindowDecision;
 use mz_controller::clusters::{ManagedReplicaLocation, ReplicaConfig, ReplicaLocation};
 use mz_controller_types::{ClusterId, ReplicaId};
 use mz_ore::collections::HashSet;
-use mz_ore::instrument;
+use mz_ore::{instrument, soft_assert_or_log};
 use mz_persist_types::ShardId;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap, merge_mz_acl_items};
@@ -74,6 +73,7 @@ use mz_sql_parser::ast::{QualifiedReplica, Value};
 use mz_storage_client::storage_collections::StorageCollections;
 use serde::{Deserialize, Serialize};
 use tracing::{info, trace};
+use uuid::Uuid;
 
 use crate::AdapterError;
 use crate::catalog::state::LocalExpressionCache;
@@ -86,7 +86,6 @@ use crate::catalog::{
 use crate::config::{ScopedParameters, ScopedParametersScope};
 use crate::coord::ConnMeta;
 use crate::coord::catalog_implications::parsed_state_updates::ParsedStateUpdate;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::util::ResultExt;
 
 /// A manually injected audit event.
@@ -271,14 +270,13 @@ pub enum Op {
     /// the update no longer serves.
     ///
     /// `prune_scope` bounds removals to the objects the update was evaluated
-    /// for. `Some(scope)` removes a row only when its owning object is in
-    /// `scope`, so an object created after the update's evaluation snapshot, and
-    /// the override it folded into its own create transaction, survives a
-    /// concurrent full-state reconcile. `None` is an unscoped full replace, used
-    /// only by the disabled-feature clear path where no create-time writes race.
+    /// for: a row is removed only when its owning object is in `prune_scope`, so
+    /// an object created after the update's evaluation snapshot, and the override
+    /// it folded into its own create transaction, survives a concurrent
+    /// full-state reconcile.
     UpdateScopedSystemParameters {
         scoped: ScopedParameters,
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
     },
     /// Injects audit events into the catalog.
     ///
@@ -360,9 +358,6 @@ pub enum ReplicaCreateDropReason {
     /// - ALTERing various options on a managed cluster,
     /// - CREATE/DROP CLUSTER REPLICA on an unmanaged cluster.
     Manual,
-    /// The automated cluster scheduling initiated the replica create or drop, e.g., a
-    /// materialized view is needing a refresh on a SCHEDULE ON REFRESH cluster.
-    ClusterScheduling(Vec<SchedulingDecision>),
     /// The cluster controller's graceful-reconfiguration strategy created the replica while
     /// converging a cluster onto an in-flight `reconfiguration` target (a background
     /// `ALTER CLUSTER`).
@@ -373,11 +368,7 @@ pub enum ReplicaCreateDropReason {
     /// The cluster controller's on-refresh strategy created the replica for a refresh window on
     /// a `SCHEDULE = ON REFRESH` cluster. Audited as the `schedule` reason, carrying the tick's
     /// window decision (which MVs needed a refresh or compaction time, and the hydration-time
-    /// estimate) as the `scheduling_policies` detail, the same detail the legacy scheduler's
-    /// [`ReplicaCreateDropReason::ClusterScheduling`] records. Deliberately not that variant
-    /// itself: its legacy shape carries a per-policy `Vec` and an on/off flag for auditing
-    /// off-decisions, neither of which the controller has (controller drops are uniformly
-    /// `Retired`), and it is removed together with the legacy scheduler.
+    /// estimate) as the `scheduling_policies` detail.
     OnRefresh(RefreshWindowDecision),
     /// The cluster controller dropped the replica because the cluster's configuration no longer
     /// calls for it. The uniform reason on every controller-emitted drop (e.g. a
@@ -394,12 +385,6 @@ impl ReplicaCreateDropReason {
     ) {
         match self {
             ReplicaCreateDropReason::Manual => (CreateOrDropClusterReplicaReasonV1::Manual, None),
-            ReplicaCreateDropReason::ClusterScheduling(scheduling_decisions) => (
-                CreateOrDropClusterReplicaReasonV1::Schedule,
-                Some(SchedulingDecision::reasons_to_audit_log_reasons(
-                    &scheduling_decisions,
-                )),
-            ),
             ReplicaCreateDropReason::GracefulReconfiguration => {
                 (CreateOrDropClusterReplicaReasonV1::Reconfiguration, None)
             }
@@ -416,8 +401,8 @@ impl ReplicaCreateDropReason {
 }
 
 /// Convert the controller's on-refresh window decision into the audit log's
-/// `scheduling_policies` detail, the same shape the legacy scheduler records:
-/// ids as strings and the hydration-time estimate as an interval string.
+/// `scheduling_policies` detail: ids as strings and the hydration-time estimate
+/// as an interval string.
 fn refresh_window_decision_to_audit_log(
     decision: RefreshWindowDecision,
 ) -> SchedulingDecisionsWithReasonsV2 {
@@ -514,8 +499,8 @@ impl Catalog {
     /// status change, a fresh record, or the drop of an in-progress record.
     ///
     /// Every such movement is an audit-log transition, so a write performing
-    /// one must declare the matching intent. Status-preserving copies (legacy
-    /// paths carrying a record forward, re-targets that stay in progress with a
+    /// one must declare the matching intent. Status-preserving copies (a write
+    /// carrying a record forward, re-targets that stay in progress with a
     /// declared `Started`) and drops of already-settled records move nothing.
     fn reconfiguration_lifecycle_moved(
         old_config: &ClusterConfig,
@@ -920,7 +905,8 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => {}
+                    | CatalogItem::Connection(_)
+                    | CatalogItem::MetricSink(_) => {}
                 }
             }
         }
@@ -996,7 +982,7 @@ impl Catalog {
         let mut updates = Vec::new();
 
         for op in ops {
-            let temporary_item_updates = Self::transact_op(
+            Self::transact_op(
                 oracle_write_ts,
                 session,
                 op,
@@ -1010,22 +996,7 @@ impl Catalog {
             )
             .await?;
 
-            // Temporary items are not stored in the durable catalog, so they need to be handled
-            // separately for updating state and builtin tables.
-            // TODO(jkosh44) Some more thought needs to be given as to how temporary tables work
-            // in a multi-subscriber catalog world.
-            let upper = tx.upper();
-            let temporary_item_updates =
-                temporary_item_updates
-                    .into_iter()
-                    .map(|(item, diff)| StateUpdate {
-                        kind: StateUpdateKind::TemporaryItem(item),
-                        ts: upper,
-                        diff,
-                    });
-
             let mut op_updates: Vec<_> = tx.get_and_commit_op_updates();
-            op_updates.extend(temporary_item_updates);
             if !op_updates.is_empty() {
                 // Clone the cache so each apply_updates call has access to cached expressions.
                 // The cache uses `remove` semantics, so we need a fresh clone for each call.
@@ -1065,7 +1036,7 @@ impl Catalog {
                 }
             }
             TransactInnerMode::DryRun => {
-                debug_assert!(
+                mz_ore::soft_assert_no_log!(
                     storage_collections.is_none(),
                     "dry-run mode must not prepare storage state"
                 );
@@ -1095,10 +1066,6 @@ impl Catalog {
     /// Performs the transaction operation described by `op`. This function prepares the changes in
     /// `tx`, but does not update `state`. `state` will be updated when applying the durable
     /// changes.
-    ///
-    /// Optionally returns a builtin table update for any builtin table updates than cannot be
-    /// derived from the durable catalog state, and temporary item diffs. These are all very weird
-    /// scenarios and ideally in the future don't exist.
     #[instrument]
     async fn transact_op(
         oracle_write_ts: mz_repr::Timestamp,
@@ -1111,9 +1078,7 @@ impl Catalog {
         storage_collections_to_create: &mut BTreeSet<GlobalId>,
         storage_collections_to_drop: &mut BTreeSet<GlobalId>,
         storage_collections_to_register: &mut BTreeMap<GlobalId, ShardId>,
-    ) -> Result<Vec<(TemporaryItem, StateDiff)>, AdapterError> {
-        let mut temporary_item_updates = Vec::new();
-
+    ) -> Result<(), AdapterError> {
         match op {
             Op::CheckClusterState {
                 cluster_id,
@@ -1169,7 +1134,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry)?)?;
 
                 Self::log_update(state, &id);
             }
@@ -1219,7 +1184,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry)?)?;
 
                 Self::log_update(state, &id);
             }
@@ -1342,7 +1307,7 @@ impl Catalog {
                     )?;
                 }
 
-                tx.update_item(id, new_entry.into())?;
+                tx.update_item(id, state.durable_item(new_entry)?)?;
                 storage_collections_to_register.insert(new_global_id, shard_id);
             }
             Op::AlterMaterializedViewApplyReplacement { id, replacement_id } => {
@@ -1370,7 +1335,7 @@ impl Catalog {
                 tx.remove_item(replacement_id)?;
 
                 new_entry.id = replacement_id;
-                tx_replace_item(tx, state, id, new_entry, &mut temporary_item_updates)?;
+                tx_replace_item(tx, state, id, new_entry)?;
 
                 let comment_id = CommentObjectId::MaterializedView(replacement_id);
                 tx.drop_comments(&[comment_id].into())?;
@@ -1732,7 +1697,10 @@ impl Catalog {
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
                     | CatalogItem::Secret(_)
-                    | CatalogItem::Connection(_) => (),
+                    | CatalogItem::Connection(_)
+                    // Metric sinks write to the replica's metrics registry, never to persist,
+                    // so there is no storage collection to create.
+                    | CatalogItem::MetricSink(_) => (),
                 }
 
                 let system_user = session.map_or(false, |s| s.user().is_system_user());
@@ -1783,25 +1751,24 @@ impl Catalog {
                             ErrorKind::InvalidTemporarySchema,
                         )));
                     }
-                    let oid = tx.allocate_oid(&temporary_oids)?;
+                    let owner_session =
+                        temporary_item_owner_session(state, session, &item, &name.item)?;
 
                     let schema_id = name.qualifiers.schema_spec.clone().into();
                     let item_type = item.typ();
                     let (create_sql, global_id, versions) = item.to_serialized();
-
-                    let item = TemporaryItem {
+                    tx.insert_user_item(
                         id,
-                        oid,
                         global_id,
                         schema_id,
-                        name: name.item.clone(),
+                        &name.item,
                         create_sql,
-                        conn_id: item.conn_id().cloned(),
                         owner_id,
-                        privileges: privileges.clone(),
-                        extra_versions: versions,
-                    };
-                    temporary_item_updates.push((item, StateDiff::Addition));
+                        privileges.clone(),
+                        &temporary_oids,
+                        versions,
+                        Some(owner_session),
+                    )?;
 
                     info!(
                         "create temporary {} {} ({})",
@@ -1846,6 +1813,7 @@ impl Catalog {
                         privileges.clone(),
                         &temporary_oids,
                         versions,
+                        None,
                     )?;
                     info!(
                         "create {} {} ({})",
@@ -1916,7 +1884,8 @@ impl Catalog {
                         | CatalogItem::Type(_)
                         | CatalogItem::Func(_)
                         | CatalogItem::Secret(_)
-                        | CatalogItem::Connection(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
+                        | CatalogItem::Connection(_)
+                        | CatalogItem::MetricSink(_) => EventDetails::IdFullNameV1(IdFullNameV1 {
                             id: id.to_string(),
                             name,
                         }),
@@ -2045,17 +2014,8 @@ impl Catalog {
                 tx.drop_comments(&delta.comments)?;
 
                 // Drop any items.
-                let (durable_items_to_drop, temporary_items_to_drop): (BTreeSet<_>, BTreeSet<_>) =
-                    delta
-                        .items
-                        .iter()
-                        .map(|id| id)
-                        .partition(|id| !state.get_entry(*id).item().is_temporary());
-                tx.remove_items(&durable_items_to_drop)?;
-                temporary_item_updates.extend(temporary_items_to_drop.into_iter().map(|id| {
-                    let entry = state.get_entry(&id);
-                    (entry.clone().into(), StateDiff::Retraction)
-                }));
+                let items_to_drop: BTreeSet<_> = delta.items.iter().copied().collect();
+                tx.remove_items(&items_to_drop)?;
 
                 for item_id in delta.items {
                     let entry = state.get_entry(&item_id);
@@ -2380,14 +2340,7 @@ impl Catalog {
                             let entry = state.get_entry(id);
                             let mut new_entry = entry.clone();
                             update_privilege_fn(&mut new_entry.privileges);
-                            if !new_entry.item().is_temporary() {
-                                tx.update_item(*id, new_entry.into())?;
-                            } else {
-                                temporary_item_updates
-                                    .push((entry.clone().into(), StateDiff::Retraction));
-                                temporary_item_updates
-                                    .push((new_entry.into(), StateDiff::Addition));
-                            }
+                            tx.update_item(*id, state.durable_item(new_entry)?)?;
                         }
                         ObjectId::Role(_) | ObjectId::ClusterReplica(_) => {}
                     },
@@ -2620,21 +2573,10 @@ impl Catalog {
                             }))
                         })?;
 
-                    if !to_entry.item().is_temporary() {
-                        tx.update_item(*id, to_entry.into())?;
-                    } else {
-                        temporary_item_updates
-                            .push((dependent_item.clone().into(), StateDiff::Retraction));
-                        temporary_item_updates.push((to_entry.into(), StateDiff::Addition));
-                    }
+                    tx.update_item(*id, state.durable_item(to_entry)?)?;
                     updates.push(*id);
                 }
-                if !new_entry.item().is_temporary() {
-                    tx.update_item(id, new_entry.into())?;
-                } else {
-                    temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
-                    temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                }
+                tx.update_item(id, state.durable_item(new_entry)?)?;
 
                 updates.push(id);
                 for id in updates {
@@ -2670,16 +2612,9 @@ impl Catalog {
 
                 let mut updates: Vec<CatalogItemId> = Vec::new();
                 let mut items_to_update = BTreeMap::new();
-                // Dedup guard covering both persistent and temporary items. An
-                // item can be reached more than once: once as a member of the
-                // schema and again for each object in the schema it depends on.
-                // Persistent items are also tracked in `items_to_update`, but
-                // temporary items only land in `temporary_item_updates` (a Vec
-                // with no dedup), so a temp dependent referencing multiple
-                // objects in the renamed schema would otherwise be enqueued once
-                // per reference. That produces duplicate retraction/addition
-                // updates that consolidate to an invalid diff (e.g. -2) and
-                // panic catalog apply.
+                // An item can be reached more than once: once as a member of
+                // the schema and again for each object in the schema it
+                // depends on. Skip items that were already rewritten.
                 let mut seen: BTreeSet<CatalogItemId> = BTreeSet::new();
 
                 let mut update_item = |id: &CatalogItemId| {
@@ -2705,12 +2640,7 @@ impl Catalog {
                         })?;
 
                     // Queue updates for Catalog storage and Builtin Tables.
-                    if !new_entry.item().is_temporary() {
-                        items_to_update.insert(*id, new_entry.into());
-                    } else {
-                        temporary_item_updates.push((entry.clone().into(), StateDiff::Retraction));
-                        temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                    }
+                    items_to_update.insert(*id, state.durable_item(new_entry)?);
                     updates.push(*id);
 
                     Ok::<_, AdapterError>(())
@@ -2866,13 +2796,7 @@ impl Catalog {
                             new_owner,
                         );
                         new_entry.owner_id = new_owner;
-                        if !new_entry.item().is_temporary() {
-                            tx.update_item(*id, new_entry.into())?;
-                        } else {
-                            temporary_item_updates
-                                .push((entry.clone().into(), StateDiff::Retraction));
-                            temporary_item_updates.push((new_entry.into(), StateDiff::Addition));
-                        }
+                        tx.update_item(*id, state.durable_item(new_entry)?)?;
                     }
                     ObjectId::NetworkPolicy(id) => {
                         let mut policy = state.get_network_policy(id).clone();
@@ -3024,11 +2948,9 @@ impl Catalog {
             }
             Op::UpdateItem { id, name, to_item } => {
                 // A non-temporary item must not depend on a temporary one.
-                // Temporary objects are session-scoped and never persisted, so
-                // a durable item referencing one is a dangling reference that
-                // panics the coordinator when its create_sql is re-planned on
-                // catalog apply (apply emits durable items before temporary
-                // ones, relying on this invariant). `Op::CreateItem` enforces
+                // Temporary objects are session-scoped and disappear with
+                // their session, so a longer-lived item referencing one would
+                // be left with a dangling reference. `Op::CreateItem` enforces
                 // it; mirror it here so ALTER paths (e.g. ALTER SINK ... SET
                 // FROM) cannot repoint a persistent item at a temporary one.
                 if !to_item.is_temporary() {
@@ -3051,7 +2973,7 @@ impl Catalog {
                 let mut entry = state.get_entry(&id).clone();
                 entry.name = name.clone();
                 entry.item = to_item.clone();
-                tx.update_item(id, entry.into())?;
+                tx.update_item(id, state.durable_item(entry)?)?;
 
                 if Self::should_audit_log_item(&to_item) {
                     let mut full_name = Self::full_name_detail(
@@ -3167,28 +3089,16 @@ impl Catalog {
                 // bounded by `prune_scope` so this update does not delete a row
                 // for an object it was not evaluated for (e.g. one created after
                 // the update's snapshot, whose override rode its own create
-                // transaction). `None` prunes unconditionally (the
-                // disabled-feature clear path). Rows whose owning object is no
-                // longer live are always pruned regardless of `prune_scope`,
-                // because nothing else garbage collects them and ids are never
-                // reused, so this lazily reclaims orphans left by dropped
-                // objects.
+                // transaction). Rows whose owning object is no longer live are
+                // always pruned regardless of `prune_scope`, because nothing else
+                // garbage collects them and ids are never reused, so this lazily
+                // reclaims orphans left by dropped objects.
                 let live_clusters: BTreeSet<ClusterId> =
                     tx.get_clusters().map(|cluster| cluster.id).collect();
                 let live_replicas: BTreeSet<ReplicaId> = tx
                     .get_cluster_replicas()
                     .map(|replica| replica.replica_id)
                     .collect();
-                let prune_cluster = |id: &ClusterId| {
-                    prune_scope
-                        .as_ref()
-                        .map_or(true, |s| s.clusters.contains(id))
-                };
-                let prune_replica = |id: &ReplicaId| {
-                    prune_scope
-                        .as_ref()
-                        .map_or(true, |s| s.replicas.contains(id))
-                };
 
                 // Cluster-coherent scope.
                 let existing_cluster: BTreeMap<(ClusterId, String), String> = tx
@@ -3208,7 +3118,8 @@ impl Catalog {
                     }
                 }
                 for (cluster_id, name) in existing_cluster.into_keys() {
-                    if (!live_clusters.contains(&cluster_id) || prune_cluster(&cluster_id))
+                    if (!live_clusters.contains(&cluster_id)
+                        || prune_scope.clusters.contains(&cluster_id))
                         && !desired_cluster.contains(&(cluster_id, name.clone()))
                     {
                         tx.remove_cluster_system_config(cluster_id, &name);
@@ -3233,7 +3144,8 @@ impl Catalog {
                     }
                 }
                 for (replica_id, name) in existing_replica.into_keys() {
-                    if (!live_replicas.contains(&replica_id) || prune_replica(&replica_id))
+                    if (!live_replicas.contains(&replica_id)
+                        || prune_scope.replicas.contains(&replica_id))
                         && !desired_replica.contains(&(replica_id, name.clone()))
                     {
                         tx.remove_replica_system_config(replica_id, &name);
@@ -3256,7 +3168,7 @@ impl Catalog {
                 }
             }
         };
-        Ok(temporary_item_updates)
+        Ok(())
     }
 
     fn log_update(state: &CatalogState, id: &CatalogItemId) {
@@ -3333,6 +3245,36 @@ impl Catalog {
     }
 }
 
+/// Resolves the session UUID that durably owns a temporary item being
+/// created. The durable owner is the session that created the item.
+///
+/// The connection -> session mapping is registered lazily in
+/// `catalog_transact_inner`, so we defensively verify that the registered
+/// mapping matches the creating session.
+fn temporary_item_owner_session(
+    state: &CatalogState,
+    session: Option<&ConnMeta>,
+    item: &CatalogItem,
+    item_name: &str,
+) -> Result<Uuid, AdapterError> {
+    let session = session.ok_or_else(|| {
+        AdapterError::Internal("temporary items must have an owner session".to_string())
+    })?;
+    let owner_session = session.uuid();
+    soft_assert_or_log!(
+        Some(session.conn_id()) == item.conn_id(),
+        "temporary item connection must match the creating session"
+    );
+    if state.temporary_namespaces.uuid_for_conn(session.conn_id()) != Some(owner_session) {
+        return Err(AdapterError::Internal(format!(
+            "connection {} has no temporary namespace while creating temporary item {}",
+            session.conn_id(),
+            item_name,
+        )));
+    }
+    Ok(owner_session)
+}
+
 /// Prepare the given transaction for replacing a catalog item with a new version.
 ///
 /// The new version gets a new `CatalogItemId`, which requires rewriting the `create_sql` of all
@@ -3346,26 +3288,12 @@ fn tx_replace_item(
     state: &CatalogState,
     id: CatalogItemId,
     new_entry: CatalogEntry,
-    temporary_item_updates: &mut Vec<(TemporaryItem, StateDiff)>,
 ) -> Result<(), AdapterError> {
     let new_id = new_entry.id;
 
     // Rewrite dependent objects to point to the new ID.
     for use_id in new_entry.referenced_by() {
         let dependent = state.get_entry(use_id);
-
-        // Temporary items live only in the in-memory catalog, never in the durable
-        // transaction. They must be rewritten via `temporary_item_updates`. Routing them
-        // through `tx.update_item` would be a no-op (they are not in `tx`), leaving the
-        // temporary object referencing the removed `id` and tripping the catalog
-        // consistency check. Mirrors how `Op::RenameItem` handles temporary dependents.
-        if dependent.item().is_temporary() {
-            let mut rewritten = dependent.clone();
-            rewritten.item = rewritten.item.replace_item_refs(id, new_id);
-            temporary_item_updates.push((dependent.clone().into(), StateDiff::Retraction));
-            temporary_item_updates.push((rewritten.into(), StateDiff::Addition));
-            continue;
-        }
 
         // The dependent might be dropped in the same tx, so check.
         if tx.get_item(use_id).is_none() {
@@ -3374,7 +3302,7 @@ fn tx_replace_item(
 
         let mut dependent = dependent.clone();
         dependent.item = dependent.item.replace_item_refs(id, new_id);
-        tx.update_item(*use_id, dependent.into())?;
+        tx.update_item(*use_id, state.durable_item(dependent)?)?;
     }
 
     // Move comments to the new ID.
@@ -3397,7 +3325,8 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
-    } = new_entry.into();
+        ephemeral_owner_session,
+    } = state.durable_item(new_entry)?;
 
     tx.remove_item(id)?;
     tx.insert_item(
@@ -3410,6 +3339,7 @@ fn tx_replace_item(
         owner_id,
         privileges,
         extra_versions,
+        ephemeral_owner_session,
     )?;
 
     Ok(())
@@ -3637,6 +3567,8 @@ impl ObjectsToDrop {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{Arc, Mutex};
+
     use mz_catalog::SYSTEM_CONN_ID;
     use mz_catalog::memory::objects::{CatalogItem, Table, TableDataSource};
     use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem, PrivilegeMap};
@@ -3648,6 +3580,7 @@ mod tests {
         ItemQualifiers, QualifiedItemName, ResolvedDatabaseSpecifier, ResolvedIds,
     };
     use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
+    use mz_sql::session::vars::{MAX_CONNECTIONS, OwnedVarInput, SystemVars};
 
     use crate::catalog::{Catalog, Op};
     use crate::session::DEFAULT_DATABASE_NAME;
@@ -3827,8 +3760,8 @@ mod tests {
             &unmanaged,
         ));
 
-        // Not movements: no record at all, a status-preserving copy (legacy
-        // paths carry the record forward), and dropping a settled record.
+        // Not movements: no record at all, a status-preserving copy (a write
+        // that carries the record forward), and dropping a settled record.
         assert!(!Catalog::reconfiguration_lifecycle_moved(
             &managed(None),
             &managed(None),
@@ -3985,9 +3918,8 @@ mod tests {
 
         use crate::catalog::ReplicaCreateDropReason;
 
-        // `OnRefresh` shares the `schedule` audit word with the legacy
-        // `ClusterScheduling` variant and converts the controller's window
-        // decision into the same `scheduling_policies` detail blob: ids as
+        // `OnRefresh` audits the `schedule` word and converts the controller's
+        // window decision into the `scheduling_policies` detail blob: ids as
         // strings, the hydration-time estimate as an interval string, and the
         // decision hardcoded `on` (the controller produces a create, and so
         // this detail, only for an open window).
@@ -4426,7 +4358,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_a),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4448,7 +4380,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_b),
-                        prune_scope: Some(scope_with(&[cluster_b])),
+                        prune_scope: scope_with(&[cluster_b]),
                     }],
                 )
                 .await
@@ -4471,7 +4403,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: empty_scoped(),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4493,7 +4425,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: empty_scoped(),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4518,7 +4450,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_a),
-                        prune_scope: Some(scope_with(&[cluster_a])),
+                        prune_scope: scope_with(&[cluster_a]),
                     }],
                 )
                 .await
@@ -4551,7 +4483,7 @@ mod tests {
                     None,
                     vec![Op::UpdateScopedSystemParameters {
                         scoped: cluster_scoped(cluster_b),
-                        prune_scope: Some(scope_with(&[cluster_b])),
+                        prune_scope: scope_with(&[cluster_b]),
                     }],
                 )
                 .await
@@ -4562,6 +4494,112 @@ mod tests {
                     .iter()
                     .any(|(id, _, _)| *id == cluster_a),
                 "orphan row for a dropped cluster must be removed even when absent from prune_scope"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// Registers a `MAX_CONNECTIONS` callback that records every value it sees.
+    /// The initial fire from `register_callback` is cleared out, so callers
+    /// only observe notifications that happen afterwards.
+    fn record_max_connections(catalog: &mut Catalog) -> Arc<Mutex<Vec<u32>>> {
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&observed);
+        catalog.system_config_mut().register_callback(
+            &MAX_CONNECTIONS,
+            Arc::new(move |vars: &SystemVars| {
+                recorder
+                    .lock()
+                    .expect("recorder lock")
+                    .push(vars.max_connections())
+            }),
+        );
+        observed.lock().expect("recorder lock").clear();
+        observed
+    }
+
+    fn set_max_connections_op(value: u32) -> Op {
+        Op::UpdateSystemConfiguration {
+            name: MAX_CONNECTIONS.name.to_string(),
+            value: OwnedVarInput::Flat(value.to_string()),
+        }
+    }
+
+    // The commit-boundary firing now lives in
+    // `Coordinator::apply_catalog_implications`, so it is not observable from a
+    // bare `Catalog`. The tests below stay here to guard the speculative path:
+    // `Catalog::transact` itself must never notify.
+
+    /// A dry-run transaction is never committed, so it must not notify.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_dry_run() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            // The clone carries the registered callbacks, so the dry run
+            // genuinely *could* fire them. That's what makes this test worth
+            // anything.
+            let base_state = catalog.state().clone();
+            let oracle_write_ts = catalog.current_upper().await;
+            let (dry_run_state, _snapshot) = catalog
+                .transact_incremental_dry_run(
+                    &base_state,
+                    vec![set_max_connections_op(before + 1)],
+                    None,
+                    None,
+                    oracle_write_ts,
+                )
+                .await
+                .expect("dry run");
+
+            assert_eq!(dry_run_state.system_config().max_connections(), before + 1);
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "a dry run must not notify callbacks"
+            );
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    /// A transaction that fails after applying a system-config op to the
+    /// candidate state must not notify, since nothing ever gets committed.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn test_system_config_callback_not_fired_on_rollback() {
+        Catalog::with_debug(|mut catalog| async move {
+            let observed = record_max_connections(&mut catalog);
+            let before = catalog.system_config().max_connections();
+
+            let oracle_write_ts = catalog.current_upper().await;
+            let result = catalog
+                .transact(
+                    None,
+                    oracle_write_ts,
+                    None,
+                    vec![
+                        set_max_connections_op(before + 1),
+                        // `transact_op` rejects this while parsing, after the
+                        // first op already applied to the candidate state.
+                        Op::UpdateSystemConfiguration {
+                            name: MAX_CONNECTIONS.name.to_string(),
+                            value: OwnedVarInput::Flat("not a number".to_string()),
+                        },
+                    ],
+                )
+                .await;
+
+            assert!(result.is_err(), "the second op must abort the transaction");
+            assert_eq!(catalog.system_config().max_connections(), before);
+            assert!(
+                observed.lock().expect("recorder lock").is_empty(),
+                "an aborted transaction must not notify callbacks"
             );
 
             catalog.expire().await;

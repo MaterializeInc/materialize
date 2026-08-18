@@ -24,6 +24,7 @@ from materialize.mzcompose import (
     bootstrap_cluster_replica_size,
     cluster_replica_size_map,
     get_default_system_parameters,
+    sanitizer_enabled,
 )
 from materialize.mzcompose.service import (
     Service,
@@ -69,6 +70,18 @@ class MaterializeEmulator(Service):
 class Materialized(Service):
     class Size:
         DEFAULT_SIZE = 4
+
+        @staticmethod
+        def default() -> int:
+            """The size a composition should use when the caller pins none.
+
+            A `scale=N` replica is N separate clusterd processes, and a
+            sanitized clusterd holds several times the resident memory of an
+            ordinary one. A composition that keeps many clusters alive at once
+            runs the agent's memory cgroup out of memory at `DEFAULT_SIZE`, so
+            give a sanitized run one process per replica instead.
+            """
+            return 1 if sanitizer_enabled() else Materialized.Size.DEFAULT_SIZE
 
     def __init__(
         self,
@@ -129,9 +142,17 @@ class Materialized(Service):
         if cluster_replica_size is None:
             cluster_replica_size = cluster_replica_size_map()
         if builtin_system_cluster_replication_factor is None:
-            builtin_system_cluster_replication_factor = default_replication_factor
+            # Deliberately not `default_replication_factor`. A builtin cluster
+            # honors its replication factor, so tracking the user default here
+            # would run two mz_system and two mz_probe replicas in every
+            # composition that asks for a replicated user cluster, at no benefit
+            # to what those tests actually exercise. One replica is all these
+            # clusters need, and is what the flags below are here to guarantee.
+            # A test that needs a different builtin factor, including 0, has to
+            # ask for it explicitly.
+            builtin_system_cluster_replication_factor = 1
         if builtin_probe_cluster_replication_factor is None:
-            builtin_probe_cluster_replication_factor = default_replication_factor
+            builtin_probe_cluster_replication_factor = 1
 
         environment = [
             "MZ_NO_TELEMETRY=1",

@@ -40,6 +40,7 @@ use mz_dyncfg::ConfigUpdates;
 use mz_license_keys::ValidatedLicenseKey;
 use mz_orchestrator_process::{ProcessOrchestrator, ProcessOrchestratorConfig};
 use mz_orchestrator_tracing::{TracingCliArgs, TracingOrchestrator};
+use mz_ore::cast::CastLossy;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn, SYSTEM_TIME};
 use mz_ore::retry::Retry;
@@ -106,6 +107,12 @@ pub struct TestHarness {
     external_login_password_mz_system: Option<Password>,
     listeners_config: ListenersConfig,
     unsafe_mode: bool,
+    /// Whether the connection context carries the AWS external ID prefix and
+    /// connection role ARN. Default true, matching a cloud deployment. Set false
+    /// via [`TestHarness::without_aws_connection_context`] to model a deployment
+    /// that never configured the AWS context, where the context functions fold
+    /// to NULL.
+    aws_connection_context: bool,
     workers: usize,
     now: NowFn,
     seed: u32,
@@ -190,6 +197,7 @@ impl Default for TestHarness {
                 ],
             },
             unsafe_mode: false,
+            aws_connection_context: true,
             workers: 1,
             now: SYSTEM_TIME.clone(),
             seed: rand::random(),
@@ -303,6 +311,14 @@ impl TestHarness {
 
     pub fn unsafe_mode(mut self) -> Self {
         self.unsafe_mode = true;
+        self
+    }
+
+    /// Models a deployment that never configured the AWS context, so the AWS
+    /// external ID prefix and connection role ARN are absent and the plan-time
+    /// AWS context functions fold to NULL.
+    pub fn without_aws_connection_context(mut self) -> Self {
+        self.aws_connection_context = false;
         self
     }
 
@@ -592,6 +608,15 @@ impl TestHarness {
         self
     }
 
+    pub fn with_builtin_support_cluster_replication_factor(
+        mut self,
+        builtin_support_cluster_replication_factor: u32,
+    ) -> Self {
+        self.builtin_support_cluster_config.replication_factor =
+            builtin_support_cluster_replication_factor;
+        self
+    }
+
     pub fn with_builtin_catalog_server_cluster_replica_size(
         mut self,
         builtin_catalog_server_cluster_replica_size: String,
@@ -794,7 +819,11 @@ impl Listeners {
         let system_dyncfgs = Arc::clone(&persist_clients.cfg().configs);
 
         let secrets_controller = Arc::clone(&orchestrator);
-        let connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        let mut connection_context = ConnectionContext::for_tests(orchestrator.reader());
+        if !config.aws_connection_context {
+            connection_context.aws_external_id_prefix = None;
+            connection_context.aws_connection_role_arn = None;
+        }
         let orchestrator = Arc::new(TracingOrchestrator::new(
             orchestrator,
             config.orchestrator_tracing_cli_args,
@@ -1882,4 +1911,27 @@ impl Ca {
         fs::write(&key_path, pkey.private_key_to_pem_pkcs8()?)?;
         Ok((cert_path, key_path))
     }
+}
+
+/// Sums the counter series named `name` whose labels include all of `labels`.
+///
+/// Returns 0 when no series matches, which is how a labelled counter reads
+/// before its first increment.
+pub fn get_counter_value(registry: &MetricsRegistry, name: &str, labels: &[(&str, &str)]) -> u64 {
+    let Some(family) = registry.gather().into_iter().find(|m| m.name() == name) else {
+        return 0;
+    };
+    family
+        .get_metric()
+        .iter()
+        .filter(|metric| {
+            labels.iter().all(|(name, value)| {
+                metric
+                    .get_label()
+                    .iter()
+                    .any(|label| label.name() == *name && label.value() == *value)
+            })
+        })
+        .map(|metric| u64::cast_lossy(metric.get_counter().value()))
+        .sum()
 }

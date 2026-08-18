@@ -129,10 +129,17 @@ pub enum AdapterError {
     },
     /// A dependency's definition changed while a statement was being sequenced.
     /// Raised by `PlanValidity::check` when a dependency's `create_sql` hash no
-    /// longer matches what we captured at plan time.
+    /// longer matches what we captured at plan time, and by
+    /// `Coordinator::stage_group_commit` when a table's `RelationDesc` no longer
+    /// matches the rows a staged write packed against it.
     ConcurrentDependencyMutation {
         dependency_id: String,
     },
+    /// A frontend read-then-write exhausted its OCC retry budget.
+    ///
+    /// The statement is retryable: every attempt was refused before anything
+    /// was appended, so nothing it intended has been committed.
+    ReadThenWriteContention,
     CollectionUnreadable {
         id: String,
     },
@@ -474,6 +481,7 @@ fn eval_error_code(err: &EvalError) -> SqlState {
         EvalError::StringValueTooLong { .. } => SqlState::STRING_DATA_RIGHT_TRUNCATION,
         EvalError::LikePatternTooLong
         | EvalError::LengthTooLarge
+        | EvalError::TempStorageBudgetExceeded
         | EvalError::NullCharacterNotPermitted
         | EvalError::MaxArraySizeExceeded(_)
         | EvalError::LetRecLimitExceeded(_) => SqlState::PROGRAM_LIMIT_EXCEEDED,
@@ -824,6 +832,10 @@ impl AdapterError {
                 "Another session modified one of this statement's dependencies before \
                  it could commit. Retry the statement.".into()
             ),
+            AdapterError::ReadThenWriteContention => Some(
+                "Concurrent writes to the target table kept this statement from \
+                 committing. Retry the statement, or lower the write concurrency.".into()
+            ),
             AdapterError::CollectionUnreadable { .. } => Some(
                 "This could be because the collection has recently been dropped.".into()
             ),
@@ -887,6 +899,7 @@ impl AdapterError {
             AdapterError::ConcurrentDependencyMutation { .. } => {
                 SqlState::T_R_SERIALIZATION_FAILURE
             }
+            AdapterError::ReadThenWriteContention => SqlState::T_R_SERIALIZATION_FAILURE,
             AdapterError::CollectionUnreadable { .. } => SqlState::NO_DATA_FOUND,
             AdapterError::NoClusterReplicasAvailable { .. } => SqlState::FEATURE_NOT_SUPPORTED,
             AdapterError::OperationProhibitsTransaction(_) => SqlState::ACTIVE_SQL_TRANSACTION,
@@ -1260,6 +1273,12 @@ impl fmt::Display for AdapterError {
                 write!(
                     f,
                     "catalog item '{dependency_id}' was concurrently modified"
+                )
+            }
+            AdapterError::ReadThenWriteContention => {
+                write!(
+                    f,
+                    "read-then-write exceeded maximum retry attempts under contention"
                 )
             }
             AdapterError::CollectionUnreadable { id } => {

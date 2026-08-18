@@ -54,6 +54,7 @@ use mz_ore::{cast::CastFrom, cli::KeyValueArg, instrument};
 pub mod generation;
 pub mod global;
 
+#[derive(Clone)]
 pub struct Config {
     pub cloud_provider: CloudProvider,
     pub region: String,
@@ -505,7 +506,7 @@ impl k8s_controller::Context for Context {
                                      first.",
                                     last_completed_rollout_environmentd_image_ref
                                         .expect("should be set if upgrade window check fails"),
-                                    &mz.spec.environmentd_image_ref,
+                                    mz.spec.environmentd_image_ref,
                                 ),
                                 observed_generation: mz.meta().generation,
                                 reason: "FailedDeploy".into(),

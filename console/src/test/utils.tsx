@@ -228,6 +228,7 @@ export function buildCluster(
     managed: true,
     disk: true,
     isOwner: true,
+    ownerId: "u1",
     replicas: replicas,
     latestStatusUpdate: "2024-01-01T00:00:00.000Z",
     ...overrides,

@@ -18,17 +18,14 @@ use std::net::IpAddr;
 
 use async_trait::async_trait;
 use bytes::{Buf, BufMut, BytesMut};
-use bytesize::ByteSize;
 use futures::{SinkExt, TryStreamExt, sink};
 use itertools::Itertools;
 use mz_adapter_types::connection::ConnectionId;
-use mz_ore::cast::CastFrom;
 use mz_ore::future::OreSinkExt;
 use mz_ore::netio::AsyncReady;
 use mz_pgwire_common::{
-    ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header,
-    MAX_REQUEST_SIZE, Pgbuf, SASLClientFinalResponse, SASLInitialResponse, input_err,
-    parse_frame_len,
+    ChannelBinding, Conn, Cursor, DecodeState, ErrorResponse, FrontendMessage, GS2Header, Pgbuf,
+    SASLClientFinalResponse, SASLInitialResponse, input_err, parse_frame_len,
 };
 use tokio::io::{self, AsyncRead, AsyncWrite, Interest, Ready};
 use tokio::time::{self, Duration};
@@ -141,17 +138,11 @@ where
     pub fn set_encode_state(
         &mut self,
         encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
+        text_settings: mz_pgrepr::TextEncodeSettings,
     ) {
-        self.inner.get_mut().codec_mut().encode_state = encode_state;
-    }
-
-    /// Enables or disables copy mode on the codec.
-    ///
-    /// When copy mode is enabled, the aggregate buffer size check in the
-    /// decoder is skipped. This is needed during COPY FROM STDIN because
-    /// many small CopyData frames can accumulate in the TCP read buffer.
-    pub fn set_copy_mode(&mut self, enabled: bool) {
-        self.inner.get_mut().codec_mut().in_copy_mode = enabled;
+        let codec = self.inner.get_mut().codec_mut();
+        codec.encode_state = encode_state;
+        codec.text_settings = text_settings;
     }
 
     /// Waits for the connection to be closed.
@@ -217,12 +208,8 @@ where
 pub struct Codec {
     decode_state: DecodeState,
     encode_state: Vec<(mz_pgrepr::Type, mz_pgwire_common::Format)>,
-    /// When true, skip the aggregate buffer size check in `decode()`.
-    /// During COPY FROM STDIN, many small CopyData frames accumulate in the
-    /// TCP read buffer and can exceed MAX_REQUEST_SIZE even though individual
-    /// frames are small. Individual frame lengths are still validated by
-    /// `parse_frame_len()`.
-    in_copy_mode: bool,
+    /// The session's text encoding settings when `encode_state` was installed.
+    text_settings: mz_pgrepr::TextEncodeSettings,
 }
 
 impl Codec {
@@ -231,7 +218,7 @@ impl Codec {
         Codec {
             decode_state: DecodeState::Head,
             encode_state: vec![],
-            in_copy_mode: false,
+            text_settings: mz_pgrepr::TextEncodeSettings::STABLE,
         }
     }
 }
@@ -405,7 +392,7 @@ impl Codec {
                     if let Some(f) = f {
                         let base = dst.len();
                         dst.put_u32(0);
-                        f.encode(ty, *format, dst)?;
+                        f.encode(ty, *format, dst, self.text_settings)?;
                         let len = dst.len() - base - 4;
                         let len = i32::try_from(len).map_err(|_| {
                             io::Error::new(
@@ -443,17 +430,17 @@ impl Codec {
                 dst.put_u32(secret_key);
             }
             BackendMessage::ParameterDescription(params) => {
-                if params.len() > usize::try_from(i16::MAX).expect("i16::MAX is positive") {
+                if params.len() > usize::from(u16::MAX) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         format!(
                             "{} params in parameter description, which exceeds {}",
                             params.len(),
-                            i16::MAX
+                            u16::MAX
                         ),
                     ));
                 }
-                dst.put_length_i16(params.len())?;
+                dst.put_length_u16(params.len())?;
                 for param in params {
                     dst.put_u32(param.oid());
                 }
@@ -508,15 +495,6 @@ impl Decoder for Codec {
     type Error = io::Error;
 
     fn decode(&mut self, src: &mut BytesMut) -> Result<Option<FrontendMessage>, io::Error> {
-        if !self.in_copy_mode && src.len() > MAX_REQUEST_SIZE {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "request larger than {}",
-                    ByteSize::b(u64::cast_from(MAX_REQUEST_SIZE))
-                ),
-            ));
-        }
         loop {
             match self.decode_state {
                 DecodeState::Head => {
@@ -814,8 +792,12 @@ fn decode_parse(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let name = buf.read_cstr()?;
     let sql = buf.read_cstr()?;
 
+    // NOTE: the protocol calls the counts that precede repeated groups `Int16`,
+    // but PostgreSQL decodes them as unsigned, so they reach 65535. Reading one
+    // as signed makes it negative, which drops the group and leaves the cursor
+    // misaligned for the rest of the message.
     let mut param_types = vec![];
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         param_types.push(buf.read_u32()?);
     }
 
@@ -855,13 +837,15 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     let portal_name = buf.read_cstr()?.to_string();
     let statement_name = buf.read_cstr()?.to_string();
 
+    // The three counts below are `Int16` in the protocol but decoded as
+    // unsigned, for the reason spelled out in `decode_parse`.
     let mut param_formats = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         param_formats.push(buf.read_format()?);
     }
 
     let mut raw_params = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         let len = buf.read_i32()?;
         if len == -1 {
             raw_params.push(None); // NULL
@@ -876,7 +860,7 @@ fn decode_bind(mut buf: Cursor) -> Result<FrontendMessage, io::Error> {
     }
 
     let mut result_formats = Vec::new();
-    for _ in 0..buf.read_i16()? {
+    for _ in 0..buf.read_u16()? {
         result_formats.push(buf.read_format()?);
     }
 

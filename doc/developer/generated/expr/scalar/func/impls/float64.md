@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func/impls/float64.rs
-revision: 2668c60445
+revision: 94ee2d5448
 ---
 
 # mz-expr::scalar::func::impls::float64

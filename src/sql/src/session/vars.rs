@@ -82,6 +82,7 @@ use mz_persist_client::cfg::{
     CRDB_CONNECT_TIMEOUT, CRDB_KEEPALIVES_IDLE, CRDB_KEEPALIVES_INTERVAL, CRDB_KEEPALIVES_RETRIES,
     CRDB_TCP_USER_TIMEOUT,
 };
+use mz_pgrepr::TextEncodeSettings;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::bytes::ByteSize;
@@ -312,6 +313,20 @@ impl SessionVar {
         }
     }
 
+    /// Resets the variable to its default, discarding any session, staged, or
+    /// local override. Unlike [`SessionVar::reset`], which stages the reset for
+    /// the current transaction, this takes effect immediately and does not
+    /// depend on a later [`SessionVar::end_transaction`] commit.
+    ///
+    /// `DISCARD ALL` requires this: it ends the transaction before resetting, so
+    /// there is no commit left to promote a staged value. `default_value` (the
+    /// system/role/startup default) is deliberately preserved.
+    pub fn reset_durable(&mut self) {
+        self.local_value = None;
+        self.staged_value = None;
+        self.session_value = None;
+    }
+
     /// Returns a possibly new SessionVar if this needs to mutate at transaction end.
     #[must_use]
     pub fn end_transaction(&self, action: EndTransactionAction) -> Option<Self> {
@@ -520,11 +535,16 @@ impl SessionVars {
         .chain(std::iter::once(self.mz_version.as_var()))
     }
 
-    /// Resets all variables to their default value.
+    /// Durably resets all variables to their default value.
+    ///
+    /// Unlike a staged [`SessionVar::reset`], this takes effect immediately and
+    /// does not depend on a later transaction commit. Used by `DISCARD ALL`,
+    /// which ends the transaction before resetting, so there is no commit left
+    /// to promote a staged value. System/role/startup defaults are preserved.
     pub fn reset_all(&mut self) {
         let names: Vec<_> = self.vars.keys().copied().collect();
         for name in names {
-            self.vars[name].reset(false);
+            self.vars[name].reset_durable();
         }
     }
 
@@ -780,6 +800,14 @@ impl SessionVars {
     /// Returns the value of the `extra_float_digits` configuration parameter.
     pub fn extra_float_digits(&self) -> i32 {
         *self.expect_value(&EXTRA_FLOAT_DIGITS)
+    }
+
+    /// Returns the settings that govern how this session encodes values as
+    /// text.
+    pub fn text_encode_settings(&self) -> TextEncodeSettings {
+        TextEncodeSettings {
+            extra_float_digits: self.extra_float_digits(),
+        }
     }
 
     /// Returns the value of the `integer_datetimes` configuration parameter.
@@ -1197,6 +1225,8 @@ impl SystemVars {
             &MAX_RESULT_SIZE,
             &MAX_COPY_FROM_ROW_SIZE,
             &ALLOWED_CLUSTER_REPLICA_SIZES,
+            &MAX_CONCURRENT_OCC_WRITES,
+            &MAX_OCC_RETRIES,
             &upsert_rocksdb::UPSERT_ROCKSDB_COMPACTION_STYLE,
             &upsert_rocksdb::UPSERT_ROCKSDB_OPTIMIZE_COMPACTION_MEMTABLE_BUDGET,
             &upsert_rocksdb::UPSERT_ROCKSDB_LEVEL_COMPACTION_DYNAMIC_LEVEL_BYTES,
@@ -1236,6 +1266,7 @@ impl SystemVars {
             &MYSQL_SOURCE_TCP_KEEPALIVE,
             &MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME,
             &MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT,
+            &MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT,
             &MYSQL_SOURCE_CONNECT_TIMEOUT,
             &SSH_CHECK_INTERVAL,
             &SSH_CONNECT_TIMEOUT,
@@ -1280,7 +1311,6 @@ impl SystemVars {
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY,
             &cluster_scheduling::CLUSTER_SOFTEN_AZ_AFFINITY_WEIGHT,
             &cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL,
-            &cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL,
             &cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED,
             &cluster_scheduling::CLUSTER_REFRESH_MV_COMPACTION_ESTIMATE,
             &grpc_client::HTTP2_KEEP_ALIVE_TIMEOUT,
@@ -1290,6 +1320,7 @@ impl SystemVars {
             &STATEMENT_LOGGING_MAX_DATA_CREDIT,
             &ENABLE_INTERNAL_STATEMENT_LOGGING,
             &ENABLE_STATEMENT_ARRIVAL_LOGGING,
+            &ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION,
             &OPTIMIZER_STATS_TIMEOUT,
             &OPTIMIZER_ONESHOT_STATS_TIMEOUT,
             &PRIVATELINK_STATUS_UPDATE_QUOTA_PER_MINUTE,
@@ -1402,14 +1433,6 @@ impl SystemVars {
             .expect("provided var type should matched stored var")
     }
 
-    /// Reset all the values to their defaults (preserving
-    /// defaults from `VarMut::set_default).
-    pub fn reset_all(&mut self) {
-        for (_, var) in &mut self.vars {
-            var.reset();
-        }
-    }
-
     /// Returns an iterator over the configuration parameters and their current
     /// values on disk.
     pub fn iter(&self) -> impl Iterator<Item = &dyn Var> {
@@ -1516,7 +1539,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set(input))?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1559,7 +1581,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .and_then(|v| v.set_default(input))?;
-        self.notify_callbacks(name);
         Ok(())
     }
 
@@ -1586,7 +1607,6 @@ impl SystemVars {
             .get_mut(UncasedStr::new(name))
             .ok_or_else(|| VarError::UnknownParameter(name.into()))
             .map(|v| v.reset())?;
-        self.notify_callbacks(name);
         Ok(result)
     }
 
@@ -1604,10 +1624,24 @@ impl SystemVars {
             .collect()
     }
 
-    /// Registers a closure that will get called when the value for the
-    /// specified [`VarDefinition`] changes.
+    /// Registers a closure that mirrors the value of the given
+    /// [`VarDefinition`] into out-of-band state.
     ///
-    /// The callback is guaranteed to be called at least once.
+    /// The callback has to be an idempotent read of the passed [`SystemVars`],
+    /// because we don't promise to only call it when its var actually changed.
+    /// It runs once right now against the current values, and then again at
+    /// every catalog commit boundary whose transaction touched a system var
+    /// (see `Coordinator::apply_catalog_implications` and
+    /// [`SystemVars::notify_all_callbacks`]). Speculative mutations never
+    /// trigger it, so an aborted or dry-run transaction leaves the mirror
+    /// untouched.
+    ///
+    /// NOTE: a callback on a `feature_flags!` var won't observe the transient
+    /// flip that `CatalogState::with_enable_for_item_parsing` performs during
+    /// item parsing. That flip mutates the value and then restores the prior
+    /// `Arc` wholesale without re-notifying, so the mirror keeps tracking
+    /// committed state throughout, which is the contract here. Committed changes
+    /// to a feature flag (via `ALTER SYSTEM`) still notify like any other var.
     pub fn register_callback(
         &mut self,
         var: &VarDefinition,
@@ -1618,6 +1652,19 @@ impl SystemVars {
             .or_default()
             .push(callback);
         self.notify_callbacks(var.name());
+    }
+
+    /// Re-runs every registered callback against the current values.
+    ///
+    /// This fires all of them, even ones whose var didn't change, which is why
+    /// callbacks have to be idempotent reads of the passed [`SystemVars`]. See
+    /// [`SystemVars::register_callback`].
+    pub fn notify_all_callbacks(&self) {
+        for callbacks in self.callbacks.values() {
+            for callback in callbacks {
+                (callback)(self);
+            }
+        }
     }
 
     /// Notify any external components interested in this variable.
@@ -1748,6 +1795,16 @@ impl SystemVars {
             .into_iter()
             .map(|s| s.as_str().into())
             .collect()
+    }
+
+    /// Returns the value of the `max_concurrent_occ_writes` configuration parameter.
+    pub fn max_concurrent_occ_writes(&self) -> u32 {
+        *self.expect_value(&MAX_CONCURRENT_OCC_WRITES)
+    }
+
+    /// Returns the value of the `max_occ_retries` configuration parameter.
+    pub fn max_occ_retries(&self) -> u32 {
+        *self.expect_value(&MAX_OCC_RETRIES)
     }
 
     /// Returns the value of the `default_cluster_replication_factor` configuration parameter.
@@ -1887,6 +1944,11 @@ impl SystemVars {
         *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT)
     }
 
+    /// Returns the `mysql_source_snapshot_wait_timeout` configuration parameter.
+    pub fn mysql_source_snapshot_wait_timeout(&self) -> Duration {
+        *self.expect_value(&MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT)
+    }
+
     /// Returns the `mysql_source_connect_timeout` configuration parameter.
     pub fn mysql_source_connect_timeout(&self) -> Duration {
         *self.expect_value(&MYSQL_SOURCE_CONNECT_TIMEOUT)
@@ -2018,6 +2080,10 @@ impl SystemVars {
         *self.expect_value(&SCRAM_ITERATIONS)
     }
 
+    /// Computes an update for every dyncfg from its configured value.
+    ///
+    /// This does not touch our own [`ConfigSet`]. Callers that need this
+    /// process's dyncfgs to reflect the result want [`Self::sync_dyncfgs`].
     pub fn dyncfg_updates(&self) -> ConfigUpdates {
         let mut updates = ConfigUpdates::default();
         for entry in self.dyncfgs.entries() {
@@ -2045,6 +2111,18 @@ impl SystemVars {
             };
             updates.add_dynamic(entry.name(), val);
         }
+        updates
+    }
+
+    /// Applies the configured dyncfg values to our own [`ConfigSet`], and
+    /// returns them.
+    ///
+    /// Two callers own keeping this process's dyncfgs in step with the
+    /// catalog: catalog open, and every durable system-config change. Everyone
+    /// else only forwards the updates elsewhere and wants
+    /// [`Self::dyncfg_updates`] instead.
+    pub fn sync_dyncfgs(&self) -> ConfigUpdates {
+        let updates = self.dyncfg_updates();
         updates.apply(&self.dyncfgs);
         updates
     }
@@ -2207,10 +2285,6 @@ impl SystemVars {
         *self.expect_value(&cluster_scheduling::CLUSTER_ALTER_CHECK_READY_INTERVAL)
     }
 
-    pub fn cluster_check_scheduling_policies_interval(&self) -> Duration {
-        *self.expect_value(&cluster_scheduling::CLUSTER_CHECK_SCHEDULING_POLICIES_INTERVAL)
-    }
-
     pub fn cluster_security_context_enabled(&self) -> bool {
         *self.expect_value(&cluster_scheduling::CLUSTER_SECURITY_CONTEXT_ENABLED)
     }
@@ -2250,6 +2324,12 @@ impl SystemVars {
     /// Returns the `enable_statement_arrival_logging` configuration parameter.
     pub fn enable_statement_arrival_logging(&self) -> bool {
         *self.expect_value(&ENABLE_STATEMENT_ARRIVAL_LOGGING)
+    }
+
+    /// Returns the `enable_extended_protocol_implicit_transaction` configuration
+    /// parameter.
+    pub fn enable_extended_protocol_implicit_transaction(&self) -> bool {
+        *self.expect_value(&ENABLE_EXTENDED_PROTOCOL_IMPLICIT_TRANSACTION)
     }
 
     /// Returns the `optimizer_stats_timeout` configuration parameter.
@@ -2331,6 +2411,7 @@ impl SystemVars {
             || name == MYSQL_SOURCE_TCP_KEEPALIVE.name()
             || name == MYSQL_SOURCE_SNAPSHOT_MAX_EXECUTION_TIME.name()
             || name == MYSQL_SOURCE_SNAPSHOT_LOCK_WAIT_TIMEOUT.name()
+            || name == MYSQL_SOURCE_SNAPSHOT_WAIT_TIMEOUT.name()
             || name == MYSQL_SOURCE_CONNECT_TIMEOUT.name()
             || name == ENABLE_STORAGE_SHARD_FINALIZATION.name()
             || name == SSH_CHECK_INTERVAL.name()
@@ -2575,5 +2656,83 @@ mod isolation_feature_flag_tests {
             &system_vars,
         )
         .expect("unrelated var ignored");
+    }
+}
+
+#[cfg(test)]
+mod reset_all_tests {
+    use super::*;
+    use crate::session::user::SYSTEM_USER;
+
+    fn test_vars() -> SessionVars {
+        SessionVars::new_unchecked(&mz_build_info::DUMMY_BUILD_INFO, SYSTEM_USER.clone(), None)
+    }
+
+    // `reset_all` (used by `DISCARD ALL`) must clear a committed session
+    // override durably, without depending on a later transaction commit to
+    // promote the reset. Regression coverage for SQL-529.
+    #[mz_ore::test]
+    fn reset_all_clears_committed_session_value() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+        let default = vars.application_name().to_string();
+
+        // Set non-locally and commit, so the override lives in `session_value`.
+        vars.set(
+            &system_vars,
+            "application_name",
+            VarInput::Flat("custom"),
+            false,
+        )
+        .expect("set");
+        vars.end_transaction(EndTransactionAction::Commit);
+        assert_eq!(vars.application_name(), "custom");
+        assert_eq!(
+            vars.inspect("application_name")
+                .unwrap()
+                .inspect_session_value()
+                .map(|v| v.format()),
+            Some("custom".to_string())
+        );
+
+        vars.reset_all();
+
+        // The value falls back to the default, the var is unset, and it will
+        // not mutate at a later transaction end.
+        let var = vars.inspect("application_name").unwrap();
+        assert_eq!(vars.application_name(), default);
+        assert_eq!(var.inspect_session_value(), None);
+        assert!(!var.is_mutating());
+    }
+
+    // `reset_all` must fall back to a system/role/startup default installed via
+    // `set_default`, not the compiled-in default. Guards the "startup/role
+    // defaults survive DISCARD ALL" contract.
+    #[mz_ore::test]
+    fn reset_all_preserves_installed_default() {
+        let system_vars = SystemVars::new();
+        let mut vars = test_vars();
+
+        vars.set_default("application_name", VarInput::Flat("startup_default"))
+            .expect("set_default");
+        vars.set(
+            &system_vars,
+            "application_name",
+            VarInput::Flat("custom"),
+            false,
+        )
+        .expect("set");
+        vars.end_transaction(EndTransactionAction::Commit);
+        assert_eq!(vars.application_name(), "custom");
+
+        vars.reset_all();
+
+        assert_eq!(vars.application_name(), "startup_default");
+        assert_eq!(
+            vars.inspect("application_name")
+                .unwrap()
+                .inspect_session_value(),
+            None
+        );
     }
 }

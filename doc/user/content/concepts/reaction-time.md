@@ -4,7 +4,7 @@ description: "Learn about indexes in Materialize."
 menu:
   main:
     parent: concepts
-    weight: 1
+    weight: 100
     identifier: 'concepts-reaction-time'
 ---
 

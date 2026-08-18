@@ -36,7 +36,7 @@ steps:
 
       - id: build-x86_64-asan
         label: ":rust: Build x86_64 (ASan)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -45,14 +45,12 @@ steps:
           queue: builder-linux-x86_64
         env:
           CI_SANITIZER: address
-
         sanitizer: skip
         branches: "main"
-        skip: "currently broken"
 
       - id: build-aarch64-asan
         label: ":rust: Build aarch64 (ASan)"
-        command: bin/ci-builder run min bin/pyactivate -m ci.test.build
+        command: bin/ci-builder run nightly bin/pyactivate -m ci.test.build
         inputs:
           - "*"
         depends_on: []
@@ -63,7 +61,6 @@ steps:
           CI_SANITIZER: address
         sanitizer: skip
         branches: "main"
-        skip: "currently broken"
 
       - id: build-rust-latest-beta
         label: "Build with Latest Rust Beta"
@@ -107,7 +104,7 @@ steps:
 
       - id: unused-deps
         label: Unused dependencies
-        command: bin/ci-builder run nightly bin/unused-deps
+        command: bin/ci-builder run stable bin/unused-deps
         inputs:
           - Cargo.lock
           - Cargo.toml
@@ -161,7 +158,7 @@ steps:
         artifact_paths: [sbom.json, inspector-results.json]
 
   - id: miri-test
-    topics: [kafka, postgres]
+    topics: [kafka, mysql, postgres]
     label: ":rust: Miri test (full)"
     depends_on: []
     timeout_in_minutes: 60
@@ -179,6 +176,7 @@ steps:
       - id: feature-benchmark
         topics: [cockroach, copy-to-s3, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
         label: "Feature benchmark against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 12
@@ -194,6 +192,7 @@ steps:
       - id: scalability-benchmark-dml-dql
         topics: [postgres]
         label: "Scalability benchmark (read & write) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         env:
@@ -220,9 +219,9 @@ steps:
       - id: scalability-benchmark-ddl
         topics: [postgres]
         label: "Scalability benchmark (DDL) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
-        parallelism: 2
         env:
           # Runs against Dockerhub directly
           MZ_GHCR: 0
@@ -250,6 +249,7 @@ steps:
       - id: scalability-benchmark-connection
         topics: [postgres]
         label: "Scalability benchmark (connection) against merge base or 'latest'"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 2
@@ -278,6 +278,7 @@ steps:
       - id: parallel-benchmark
         topics: [cockroach, kafka, mysql, postgres]
         label: "Parallel Benchmark"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 5
@@ -297,6 +298,7 @@ steps:
       - id: workload-replay
         topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
         label: "Workload Replay (1% initial data)"
+        sanitizer: skip
         depends_on: build-x86_64
         timeout_in_minutes: 120
         parallelism: 5
@@ -311,6 +313,26 @@ steps:
                 - common-ancestor
         agents:
           queue: hetzner-x86-64-dedi-8cpu-32gb
+
+      - id: console-scalability
+        topics: [iceberg, kafka, mysql, postgres, sql-server, ssh-tunnel]
+        label: "Console scalability (workload replay)"
+        sanitizer: skip
+        depends_on: build-x86_64
+        timeout_in_minutes: 120
+        parallelism: 3
+        artifact_paths:
+          - console/test-results/**/*
+          - console/e2e-tests/k6/queries-*.json
+          - console/e2e-tests/k6/summary-*.json
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: workload-replay
+              run: console-scalability
+              args: [--skip-large]
+        agents:
+          # Larger instance is more stable in performance
+          queue: hetzner-x86-64-dedi-16cpu-64gb
 
   - group: Kafka
     key: kafka
@@ -371,6 +393,7 @@ steps:
       - id: testdrive-replicas-4
         topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive 4 replicas"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -397,6 +420,7 @@ steps:
       - id: testdrive-size-8
         topics: [copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with SIZE 8"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -438,6 +462,7 @@ steps:
       - id: azurite-testdrive-size-8
         topics: [azurite, copy-to-s3, kafka, kafka-sink, mysql, postgres]
         label: ":racing_car: testdrive with SIZE 8 and :azure: blob store"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 2
@@ -494,7 +519,7 @@ steps:
               composition: limits
               run: main
         timeout_in_minutes: 60
-        parallelism: 3
+        parallelism: 2
 
       - id: limits-instance-size
         topics: [cockroach, iceberg, kafka, kafka-sink, mysql, postgres, sql-server]
@@ -511,9 +536,10 @@ steps:
       - id: bounded-memory
         topics: [copy-to-s3, iceberg, kafka, mysql, postgres]
         label: "Bounded Memory"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 3
+        parallelism: 2
         agents:
           queue: hetzner-aarch64-4cpu-8gb
         plugins:
@@ -522,6 +548,7 @@ steps:
       - id: bounded-memory-search
         topics: [copy-to-s3, iceberg, kafka, mysql, postgres]
         label: "Bounded Memory Search (materialized only)"
+        sanitizer: skip
         depends_on: build-aarch64
         timeout_in_minutes: 60
         parallelism: 8
@@ -569,7 +596,7 @@ steps:
   - id: ssh-connection-extended
     topics: [kafka, kafka-sink, mysql, postgres, sql-server, ssh-tunnel]
     label: Extended SSH connection
-    depends_on: build-aarch64
+    depends_on: build-x86_64
     timeout_in_minutes: 45
     plugins:
       - ./ci/plugins/mzcompose:
@@ -769,7 +796,7 @@ steps:
         depends_on: build-aarch64
         timeout_in_minutes: 60
         agents:
-          queue: hetzner-aarch64-8cpu-16gb
+          queue: hetzner-aarch64-16cpu-32gb
         plugins:
           - ./ci/plugins/mzcompose:
               composition: zippy
@@ -804,7 +831,6 @@ steps:
       - id: mysql-cdc-resumption
         topics: [mysql]
         label: MySQL CDC resumption
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/mysql-cdc-resumption]
@@ -817,7 +843,6 @@ steps:
       - id: pg-cdc-resumption
         topics: [postgres]
         label: Postgres CDC resumption
-        parallelism: 2
         depends_on: build-aarch64
         timeout_in_minutes: 60
         inputs: [test/pg-cdc-resumption]
@@ -874,7 +899,6 @@ steps:
         label: MySQL CDC resumption (before source versioning)
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: mysql-cdc-resumption-old-syntax
@@ -909,7 +933,6 @@ steps:
         label: Postgres CDC source-versioning migration
         depends_on: build-aarch64
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: pg-cdc-old-syntax
@@ -1208,7 +1231,7 @@ steps:
         label: "Checks Self-Managed upgrade, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1221,7 +1244,7 @@ steps:
         label: "Checks Self-Managed upgrade from previous, whole-Mz restart"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1234,7 +1257,7 @@ steps:
         label: "Checks upgrade v80 migration"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -1261,7 +1284,7 @@ steps:
         label: "Checks 0dt restart of the entire Mz with forced migrations"
         depends_on: build-x86_64
         timeout_in_minutes: 60
-        parallelism: 4
+        parallelism: 2
         agents:
           queue: hetzner-x86-64-12cpu-24gb
         plugins:
@@ -2387,11 +2410,21 @@ steps:
     label: "Txn-wal fencing with :azure: blob store"
     depends_on: build-aarch64
     timeout_in_minutes: 60
-    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: txn-wal-fencing
           args: [--azurite]
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: occ-mixed-mode-read-then-write
+    label: "Read-then-write sequencing split across two environmentd processes"
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: txn-wal-fencing
+          run: mixed-mode-read-then-write
     agents:
       queue: hetzner-aarch64-4cpu-8gb
 
@@ -2461,7 +2494,7 @@ steps:
     label: Zero downtime
     depends_on: build-x86_64
     timeout_in_minutes: 60
-    parallelism: 4
+    parallelism: 2
     plugins:
       - ./ci/plugins/mzcompose:
           composition: 0dt
@@ -2537,7 +2570,6 @@ steps:
         artifact_paths: ["mz_debug_*.zip"]
         depends_on: devel-docker-tags
         timeout_in_minutes: 60
-        parallelism: 2
         plugins:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
@@ -2640,6 +2672,20 @@ steps:
           - ./ci/plugins/mzcompose:
               composition: orchestratord
               run: rollout-timeout
+              ci-builder: stable
+        agents:
+          queue: hetzner-aarch64-16cpu-32gb
+
+      - id: orchestratord-leader-failover
+        topics: [self-managed]
+        label: Orchestratord leader election failover
+        artifact_paths: ["mz_debug_*.zip"]
+        depends_on: devel-docker-tags
+        timeout_in_minutes: 60
+        plugins:
+          - ./ci/plugins/mzcompose:
+              composition: orchestratord
+              run: leader-failover
               ci-builder: stable
         agents:
           queue: hetzner-aarch64-16cpu-32gb
@@ -2857,6 +2903,124 @@ steps:
           ci-builder: stable
     agents:
       queue: hetzner-x86-64-4cpu-8gb
+
+  - id: clusterd-test-driver
+    label: Clusterd test driver
+    depends_on: build-aarch64
+    timeout_in_minutes: 20
+    inputs: [test/clusterd-test-driver]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: clusterd-test-driver
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: dbt-materialize
+    topics: [kafka]
+    label: dbt-materialize
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    parallelism: 2
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dbt-materialize
+    agents:
+      queue: hetzner-aarch64-8cpu-16gb
+
+  - id: storage-usage
+    topics: [kafka, postgres]
+    label: Storage usage table
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: storage-usage
+
+  - id: tracing
+    label: Tracing fast path
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/tracing]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: tracing
+    agents:
+      # Requires BUILDKITE_SENTRY_DSN
+      queue: linux-aarch64-small
+
+  - id: rtr-combined
+    topics: [kafka, mysql, postgres]
+    label: RTR with all sources
+    depends_on: build-aarch64
+    timeout_in_minutes: 30
+    inputs: [test/rtr-combined]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: rtr-combined
+    agents:
+      queue: hetzner-aarch64-16cpu-32gb
+
+  - id: dyncfg
+    label: "Dyncfg"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    inputs: [test/dyncfg]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: dyncfg
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: secrets-logging
+    topics: [kafka, mysql, postgres]
+    label: "Secrets Logging"
+    depends_on: build-aarch64
+    timeout_in_minutes: 45
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: secrets-logging
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: chbench-demo
+    topics: [debezium, kafka, mysql]
+    label: chbench smoke
+    depends_on: build-aarch64
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: chbench
+          run: no-load
+          args: [--run-seconds=10, --wait]
+    timeout_in_minutes: 30
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+  - id: metabase-demo
+    label: Metabase
+    depends_on: build-x86_64
+    timeout_in_minutes: 30
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: metabase
+    agents:
+      # too slow to run emulated on aarch64, Metabase'ss docker image is not yet available for aarch64 natively yet: https://github.com/metabase/metabase/issues/13119
+      queue: hetzner-x86-64-4cpu-8gb
+
+  - id: fdb
+    topics: [cockroach]
+    label: "FoundationDB"
+    depends_on: build-aarch64
+    timeout_in_minutes: 40
+    inputs: [test/foundationdb]
+    plugins:
+      - ./ci/plugins/mzcompose:
+          composition: foundationdb
+    agents:
+      queue: hetzner-aarch64-4cpu-8gb
+
+
 
   - group: Language
     key: language-tests

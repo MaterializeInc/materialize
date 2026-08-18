@@ -51,4 +51,8 @@ To help you get started, the following integration guides are available:
 ## Considerations
 
 {{% include-from-yaml data="postgres_source_details"
-name="postgres-considerations" %}}
+name="postgres-considerations-body" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}

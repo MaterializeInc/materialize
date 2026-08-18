@@ -518,7 +518,7 @@ async fn run(context: Context) -> Result<(), anyhow::Error> {
 
     info!("Zipping debug directory");
 
-    let zip_file_name = format!("{}.zip", &context.base_path.display());
+    let zip_file_name = format!("{}.zip", context.base_path.display());
 
     if let Err(e) = zip_debug_folder(PathBuf::from(&zip_file_name), &context.base_path) {
         warn!("Failed to zip debug directory: {:#}", e);

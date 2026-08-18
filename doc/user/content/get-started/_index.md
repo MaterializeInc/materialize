@@ -45,25 +45,26 @@ this exact purpose.
 
 ### Standard SQL support
 
-Like most databases, you interact with Materialize using **SQL**. You can build
-complex analytical
-workloads using **[any type of join](/sql/select/join/)** (including
-non-windowed joins and joins on arbitrary conditions) as well as leverage new
-SQL patterns enabled by streaming like [**Change Data Capture
-(CDC)**](/ingest-data/), [**temporal
-filters**](/sql/patterns/temporal-filters/), and
+With Materialize, you use SQL to transform your fast-changing data into **live
+data products**: the business objects (e.g., a customer, an order, a store) that
+your applications, services, dashboards, and AI agents read.
+
+You can express complex transformations using **[any type of
+join](/sql/select/join/)** (including non-windowed joins and joins on arbitrary
+conditions), as well as SQL patterns
+enabled by streaming like [**Change Data Capture (CDC)**](/ingest-data/),
+[**temporal filters**](/sql/patterns/temporal-filters/), and
 [**subscriptions**](/sql/subscribe/).
 
 {{% include-from-yaml data="materialize_details" name="postgres-compatibility" %}}
 
 ### Real-time data ingestion
 
-Materialize provides **native connectors** that allow ingesting data from various external systems:
+Materialize supports ingesting data from various external systems:
 
-{{% include-headless "/headless/multilink-box-native-connectors" %}}
+{{% include-headless "/headless/ingest-connectors-table" %}}
 
-For more information, see [Ingest Data](/ingest-data/) and
-[Integrations](/integrations/).
+For more information, see [Ingest Data](/ingest-data/).
 
 ### PostgreSQL wire-compatibility
 
@@ -72,19 +73,15 @@ world. Materialize uses the [PostgreSQL wire protocol](https://datastation.multi
 which allows it to integrate out-of-the-box with many SQL clients and other
 tools in the data ecosystem that support PostgreSQL — like [dbt](/integrations/dbt/).
 
-Don't see the a tool that you’d like to use with Materialize listed under
-[Tools and integrations](/integrations/)? Let us know by submitting a
-[feature request](https://github.com/MaterializeInc/materialize/discussions/new?category=feature-requests&labels=A-integration)!
-
 ### Strong consistency guarantees
 
 By default, Materialize provides the highest level of transaction isolation:
-[**strict serializability**](https://jepsen.io/consistency/models/strict-serializable).
-This means that it presents as if it were a single process, despite spanning a
-large number of threads, processes, and machines. Strict serializability avoids
-common pitfalls like eventual consistency and dual writes, which affect the
-correctness of your results. You can [adjust the transaction isolation level](/overview/isolation-level/)
-depending on your consistency and performance requirements.
+**strict serializability**. This means that it presents as if it were a single
+process, despite spanning a large number of threads, processes, and machines.
+Strict serializability avoids common pitfalls like eventual consistency and dual
+writes, which affect the correctness of your results. You can [adjust the
+transaction isolation level](/overview/isolation-level/) depending on your
+consistency and performance requirements.
 
 ## Learn more
 

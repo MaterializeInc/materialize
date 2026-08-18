@@ -1,6 +1,6 @@
 # Materialize Kubernetes Operator Helm Chart
 
-![Version: v26.36.0-dev.0](https://img.shields.io/badge/Version-v26.36.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.36.0-dev.0](https://img.shields.io/badge/AppVersion-v26.36.0--dev.0-informational?style=flat-square)
+![Version: v26.39.0-dev.0](https://img.shields.io/badge/Version-v26.39.0--dev.0-informational?style=flat-square) ![Type: application](https://img.shields.io/badge/Type-application-informational?style=flat-square) ![AppVersion: v26.39.0-dev.0](https://img.shields.io/badge/AppVersion-v26.39.0--dev.0-informational?style=flat-square)
 
 Materialize Kubernetes Operator Helm Chart
 
@@ -154,7 +154,11 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.cloudProvider.providers.aws.enabled` |  | ``false`` |
 | `operator.cloudProvider.providers.aws.iam.roles.connection` | ARN for CREATE CONNECTION feature | ``""`` |
 | `operator.cloudProvider.providers.aws.iam.roles.environment` | ARN of the IAM role for environmentd | ``""`` |
-| `operator.cloudProvider.providers.gcp` | GCP Configuration (placeholder for future use) | ``{"enabled":false}`` |
+| `operator.cloudProvider.providers.gcp` | GCP Configuration | ``{"enabled":false,"nodeUpgradeRolloutTrigger":{"clusterLocation":"","clusterName":"","enabled":false,"notificationSubscription":"","watchedNodePools":[]}}`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterLocation` | The location (region or zone) of the GKE cluster. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.clusterName` | The name of the GKE cluster. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.notificationSubscription` | The Pub/Sub subscription receiving GKE cluster notifications for this cluster, in `projects/{project}/subscriptions/{subscription}` form. The cluster must be configured to publish upgrade notifications to the corresponding topic, and the operator's service account must be able to subscribe to it and to read the cluster's node pools. | ``""`` |
+| `operator.cloudProvider.providers.gcp.nodeUpgradeRolloutTrigger.watchedNodePools` | The node pools to watch. An empty list watches all node pools. | ``[]`` |
 | `operator.cloudProvider.region` | Common cloud provider settings | ``"kind"`` |
 | `operator.cloudProvider.type` | Specifies cloud provider. Valid values are 'aws', 'gcp', 'azure' , 'generic', or 'local' | ``"local"`` |
 | `operator.clusters.defaultReplicationFactor.analytics` |  | ``0`` |
@@ -170,14 +174,18 @@ The following table lists the configurable parameters of the Materialize operato
 | `operator.clusters.swap_enabled` | Configure sizes such that the pod QoS class is not Guaranteed, as is required for swap to be enabled. Disk doesn't make much sense with swap, as swap performs better than lgalloc, so it also gets disabled. | ``true`` |
 | `operator.image.pullPolicy` | Policy for pulling the image: "IfNotPresent" avoids unnecessary re-pulling of images | ``"IfNotPresent"`` |
 | `operator.image.repository` | The Docker repository for the operator image | ``"materialize/orchestratord"`` |
-| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.34.1"`` |
+| `operator.image.tag` | The tag/version of the operator image to be used | ``"v26.37.0"`` |
 | `operator.nodeSelector` | Node selector to use for the operator pod | ``{}`` |
+| `operator.podDisruptionBudget.enabled` | Whether to create a PodDisruptionBudget for the operator. Only created when `replicas` is greater than 1, since a budget over a single replica either blocks node drains or protects nothing. | ``true`` |
+| `operator.podDisruptionBudget.maxUnavailable` | Maximum number of operator pods that may be unavailable at once during voluntary disruptions. Expressed as a maximum rather than a minimum so that node drains are never blocked outright, they are only serialized. | ``1`` |
+| `operator.replicas` | Number of operator replicas. The operator uses leader election so that only one replica reconciles at a time. Running more than one replica avoids downtime of the CRD conversion webhook during rollouts and node drains. | ``2`` |
 | `operator.resources.limits` | Resource limits for the operator's CPU and memory | ``{"memory":"512Mi"}`` |
 | `operator.resources.requests` | Resources requested by the operator for CPU and memory | ``{"cpu":"100m","memory":"512Mi"}`` |
 | `operator.secretsController` | Which secrets controller to use for storing secrets. Valid values are 'kubernetes' and 'aws-secrets-manager'. Setting 'aws-secrets-manager' requires a configured AWS cloud provider and IAM role for the environment with Secrets Manager permissions. | ``"kubernetes"`` |
 | `operator.tolerations` | Tolerations to use for the operator pod | ``{}`` |
 | `rbac.create` | Whether to create necessary RBAC roles and bindings | ``true`` |
 | `schedulerName` | Optionally use a non-default kubernetes scheduler. | ``nil`` |
+| `serviceAccount.annotations` | Annotations to add to the service account, e.g. `iam.gke.io/gcp-service-account` to link it to a GCP service account via workload identity. | ``{}`` |
 | `serviceAccount.create` | Whether to create a new service account for the operator | ``true`` |
 | `serviceAccount.name` | The name of the service account to be created | ``"orchestratord"`` |
 | `storage.storageClass.allowVolumeExpansion` |  | ``false`` |
@@ -196,7 +204,7 @@ Specify each parameter using the `--set key=value[,key=value]` argument to `helm
 
 ```shell
 helm install my-materialize-operator \
-  --set operator.image.tag=v26.36.0-dev.0 \
+  --set operator.image.tag=v26.39.0-dev.0 \
   materialize/materialize-operator
 ```
 
@@ -231,7 +239,7 @@ metadata:
   name: 12345678-1234-1234-1234-123456789012
   namespace: materialize-environment
 spec:
-  environmentdImageRef: materialize/environmentd:v26.36.0-dev.0
+  environmentdImageRef: materialize/environmentd:v26.39.0-dev.0
   backendSecretName: materialize-backend
   environmentdResourceRequirements:
     limits:

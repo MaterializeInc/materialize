@@ -195,7 +195,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     aws_prefetch_sts_connect_timeout
     catalog_info_metrics_reconcile_interval
     cluster_alter_check_ready_interval
-    cluster_check_scheduling_policies_interval
     cluster_controller_tick_interval
     cluster_enable_topology_spread
     cluster_multi_process_replica_az_affinity_weight
@@ -234,15 +233,14 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_caught_up_replica_status_check
     enable_0dt_caught_up_stability_check
     enable_0dt_deployment_panic_after_timeout
+    enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
     enable_auto_scaling_strategy
     enable_background_alter_cluster
     enable_statement_arrival_logging
     enable_binary_date_bin
     enable_bounded_staleness_isolation
-    enable_cluster_controller
     enable_coalesce_case_transform
-    enable_cluster_controller
     enable_compute_half_join2
     enable_compute_render_fueled_as_specific_collection
     enable_date_bin_hopping
@@ -250,6 +248,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_dequadratic_eqprop_map
     enable_envelope_materialize
     enable_eq_classes_withholding_errors
+    enable_extended_protocol_implicit_transaction
     enable_fixed_correlated_cte_lowering
     enable_frontend_subscribes
     enable_hydration_burst
@@ -262,6 +261,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
+    enable_metric_sink
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -301,8 +301,10 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     keep_n_sink_status_history_entries
     keep_n_source_status_history_entries
     log_filter_defaults
+    max_concurrent_occ_writes
     max_copy_from_row_size
     max_network_policies
+    max_occ_retries
     max_rules_per_network_policy
     max_sql_server_connections
     max_timestamp_interval
@@ -313,6 +315,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     mysql_source_connect_timeout
     mysql_source_snapshot_lock_wait_timeout
     mysql_source_snapshot_max_execution_time
+    mysql_source_snapshot_wait_timeout
     mysql_source_tcp_keepalive
     network_policy
     oidc_audience
@@ -500,7 +503,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "column_paged_batcher_lz4",
     "compute_logical_backpressure_inflight_slack",
     "enable_lgalloc",
-    "enable_scoped_system_parameters",
     "enable_timely_zero_copy_lgalloc",
     "enable_upsert_paged_spill",
     "enable_zero_downtime_cluster_reconfiguration",

@@ -24,7 +24,7 @@ INSERT INTO t_using_dataflow_rendering VALUES
  (2, 2, 2, 32767::INT2, 1::INT2);
 
 # DIFF TO CONSTANT FOLDING ([SUM, AVG] with types [REAL, DOUBLE])!
-# to be addressed with https://github.com/MaterializeInc/database-issues/issues/4341
+# to be addressed with DB-191
 # The dataflow float sum accumulates in a fixed-point domain that cannot
 # represent values this large (|x| > ~1.01e31). Such values wrap modulo 2^128
 # (database-issues#11265), so SUM/AVG over REAL/DOUBLE here are nonsensical; the

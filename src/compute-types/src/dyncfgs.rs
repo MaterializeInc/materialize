@@ -187,7 +187,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
 /// Use sync Timely operators with Tokio tasks for the MV sink.
 pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     "enable_compute_sync_mv_sink",
-    true,
+    false,
     "Use sync Timely operators with Tokio tasks for the MV sink.",
 );
 
@@ -449,11 +449,11 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
 /// production-ready, and the name is meant to make that unmissable at the
 /// `ALTER SYSTEM SET` call site rather than relying on out-of-band warnings.
 ///
-/// Disposition: added 2026-06-09, default off; solicit feedback for one month
-/// and remove in the absence of a positive response.
+/// Disposition: added 2026-06-09; solicit feedback for one month and remove in
+/// the absence of a positive response.
 pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config::new(
     "enable_arrangement_dictionary_compression_alpha",
-    false,
+    true,
     "Enable arrangement dictionary compression (alpha; not yet production-ready).",
 );
 

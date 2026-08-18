@@ -14,8 +14,10 @@ use itertools::Itertools;
 use maplit::btreeset;
 use mz_adapter_types::cluster_state::ReconfigurationAudit;
 use mz_catalog::builtin::BUILTINS;
+use mz_catalog::durable::managed_cluster_replica_name;
+use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
-    ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged,
+    Cluster, ClusterConfig, ClusterReplica, ClusterVariant, ClusterVariantManaged, DataSourceDesc,
     ManagedReplicaConfigShape, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
@@ -30,7 +32,8 @@ use mz_repr::Timestamp;
 use mz_repr::adt::numeric::Numeric;
 use mz_repr::role_id::RoleId;
 use mz_sql::ast::{Ident, QualifiedReplica};
-use mz_sql::catalog::{CatalogCluster, ObjectType};
+use mz_sql::catalog::{CatalogCluster, CatalogError, ObjectType};
+use mz_sql::names::QualifiedItemName;
 use mz_sql::plan::{
     self, AlterClusterPlanStrategy, AlterClusterRenamePlan, AlterClusterReplicaRenamePlan,
     AlterClusterSwapPlan, AlterOptionParameter, AlterSetClusterPlan,
@@ -42,11 +45,11 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::{
     MAX_CREDIT_CONSUMPTION_RATE, MAX_REPLICAS_PER_CLUSTER, SystemVars, Var,
 };
+use mz_storage_types::sources::SourceConnection;
 use tracing::{Instrument, Span, debug};
 
 use mz_adapter_types::dyncfgs::{
     DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT, ENABLE_BACKGROUND_ALTER_CLUSTER,
-    ENABLE_CLUSTER_CONTROLLER,
 };
 
 use super::return_if_err;
@@ -60,7 +63,7 @@ use crate::coord::{
     AlterClusterWaitForHydrated, ClusterReplicaStatuses, ClusterStage, Coordinator, Message,
     PlanValidity, StageResult, Staged,
 };
-use crate::{AdapterError, ExecuteContext, ExecuteResponse, session::Session};
+use crate::{AdapterError, AdapterNotice, ExecuteContext, ExecuteResponse, session::Session};
 
 const PENDING_REPLICA_SUFFIX: &str = "-pending";
 
@@ -309,15 +312,6 @@ impl Coordinator {
             Unchanged => {}
         }
 
-        // The controller owns only *user* managed clusters (see `ManagedClusterIds`
-        // in cluster_controller.rs and `controller_owns` in the managed-to-managed
-        // path below). A system/builtin cluster is never converged by the
-        // controller, so it must not be reshaped into a durable reconfiguration
-        // record nobody would cut over. It takes the direct realized-config path
-        // below, exactly as it does with the controller off.
-        let cluster_controller_owns = ENABLE_CLUSTER_CONTROLLER
-            .get(self.catalog().system_config().dyncfgs())
-            && cluster_id.is_user();
         let reconfiguration_in_flight = matches!(
             &config.variant,
             Managed(managed) if managed
@@ -331,23 +325,17 @@ impl Coordinator {
         // never writes a reconfiguration record for a scheduled cluster (see
         // the routing below). Refuse flipping the schedule under an in-flight
         // record rather than let the two ownership regimes overlap mid-flight.
-        if cluster_controller_owns
-            && reconfiguration_in_flight
-            && !matches!(options.schedule, Unchanged)
-        {
+        if reconfiguration_in_flight && !matches!(options.schedule, Unchanged) {
             return Err(AdapterError::AlterClusterScheduleWhileReconfiguring);
         }
 
-        // Replication factor is one of the four dimensions the cut-over sets
+        // Replication factor is one of the dimensions the cut-over sets
         // atomically from the record's target (`fold_reconfiguration_target`),
         // so a change applied independently while a reconfiguration is in
         // flight would be silently clobbered at cut-over. Refused even when the
         // same statement also re-targets the shape, so a record's target
         // replication factor is always the one it started with.
-        if cluster_controller_owns
-            && reconfiguration_in_flight
-            && !matches!(options.replication_factor, Unchanged)
-        {
+        if reconfiguration_in_flight && !matches!(options.replication_factor, Unchanged) {
             return Err(AdapterError::AlterClusterReplicationFactorWhileReconfiguring);
         }
 
@@ -357,69 +345,93 @@ impl Coordinator {
         // the reshape path below to cancel the record.
         let cancels_or_retargets =
             reconfiguration_in_flight && alter_changes_replica_shape(options);
-        if new_config == config && !(cluster_controller_owns && cancels_or_retargets) {
+        if new_config == config && !cancels_or_retargets {
             return Ok(StageResult::Response(ExecuteResponse::AlteredObject(
                 ObjectType::Cluster,
             )));
         }
 
-        // When the controller owns the replica set, a shape-changing `ALTER`
-        // reshapes into a durable `reconfiguration` record (starting,
-        // retargeting, or cancelling one) instead of going through the legacy
-        // 3-stage machine. Everything else falls through to the realized-config
-        // update below without touching the record, in flight or not.
+        // An `ALTER` that raises a managed cluster's replication factor above
+        // one deserves a notice when the cluster contains sources that run on
+        // only one replica, since the additional replicas do not benefit those
+        // sources. Computed here, emitted only after the alter succeeds. The
+        // unmanaged conversion paths never change the replica count, so only
+        // the managed-to-managed transition is of interest.
+        let single_replica_sources_notice = match (&config.variant, &new_config.variant) {
+            (Managed(old_managed), Managed(new_managed))
+                if new_managed.replication_factor > old_managed.replication_factor
+                    && new_managed.replication_factor > 1 =>
+            {
+                let sources = self.single_replica_source_names(cluster);
+                (!sources.is_empty()).then(|| {
+                    AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster {
+                        cluster: cluster.name.clone(),
+                        sources,
+                    }
+                })
+            }
+            _ => None,
+        };
+
+        // A shape-changing `ALTER` reshapes into a durable `reconfiguration`
+        // record (starting, retargeting, or cancelling one) instead of going
+        // through the legacy 3-stage machine. Everything else falls through to
+        // the realized-config update below without touching the record, in
+        // flight or not.
         //
         // With a record in flight the statement decides: an `ALTER` back to the
         // realized shape is value-identical yet must reach the reshape path to
         // cancel. With nothing in flight the values decide: a shape option set
         // to its current value reconfigures nothing, and reshaping it anyway
         // would write a spurious pre-cancelled record.
-        if cluster_controller_owns {
-            if let (Managed(old_managed), Managed(new_managed)) =
-                (&config.variant, &new_config.variant)
-            {
-                let needs_record = if reconfiguration_in_flight {
-                    alter_changes_replica_shape(options)
-                } else {
-                    new_managed.replica_config_shape() != old_managed.replica_config_shape()
-                };
-                // A scheduled (non-MANUAL) cluster holds its replication factor
-                // at 0 and the on-refresh strategy owns its replica set, so a
-                // graceful hydrate-overlap has nothing meaningful to wait for.
-                // A config-shape `ALTER` on such a cluster takes the direct
-                // path below instead of writing a record: with the controller
-                // owning the cluster the direct path only updates the realized
-                // config, and the controller reconciles any in-window replica
-                // to the new shape on its next tick. The schedule guard above
-                // keeps a schedule change from reaching here mid-record, so a
-                // record on a scheduled cluster can only pre-date the schedule
-                // (written on an older version). For that case the reshape
-                // path stays reachable, so the record can still be retargeted
-                // or cancelled until it settles.
-                let scheduled_direct =
-                    !matches!(new_managed.schedule, mz_sql::plan::ClusterSchedule::Manual)
-                        && !reconfiguration_in_flight;
-                // A `WAIT` option would be silently vacuous on the direct
-                // path: there may be no replica at all (window closed), and
-                // an in-window replica is bounced to the new shape without a
-                // hydrate-overlap to wait on. Reject it rather than return an
-                // instant success that waited for nothing, mirroring the
-                // planner's rejection of a `WAIT` without a shape change.
-                if scheduled_direct && !matches!(strategy, AlterClusterPlanStrategy::None) {
-                    return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
+        if let (Managed(old_managed), Managed(new_managed)) = (&config.variant, &new_config.variant)
+        {
+            let needs_record = if reconfiguration_in_flight {
+                alter_changes_replica_shape(options)
+            } else {
+                new_managed.replica_config_shape() != old_managed.replica_config_shape()
+            };
+            // A scheduled (non-MANUAL) cluster holds its replication factor
+            // at 0 and the on-refresh strategy owns its replica set, so a
+            // graceful hydrate-overlap has nothing meaningful to wait for.
+            // A config-shape `ALTER` on such a cluster takes the direct
+            // path below instead of writing a record: that path only updates
+            // the realized config, and the controller reconciles any in-window
+            // replica to the new shape on its next tick. The schedule guard
+            // above keeps a schedule change from reaching here mid-record, so a
+            // record on a scheduled cluster can only pre-date the schedule
+            // (written on an older version). For that case the reshape
+            // path stays reachable, so the record can still be retargeted
+            // or cancelled until it settles.
+            let scheduled_direct =
+                !matches!(new_managed.schedule, mz_sql::plan::ClusterSchedule::Manual)
+                    && !reconfiguration_in_flight;
+            // A `WAIT` option would be silently vacuous on the direct
+            // path: there may be no replica at all (window closed), and
+            // an in-window replica is bounced to the new shape without a
+            // hydrate-overlap to wait on. Reject it rather than return an
+            // instant success that waited for nothing, mirroring the
+            // planner's rejection of a `WAIT` without a shape change.
+            if scheduled_direct && !matches!(strategy, AlterClusterPlanStrategy::None) {
+                return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
+            }
+            if needs_record && !scheduled_direct {
+                let result = self
+                    .reshape_alter_cluster_managed(
+                        session,
+                        cluster_id,
+                        new_config.clone(),
+                        options,
+                        strategy,
+                        validity,
+                    )
+                    .await;
+                if result.is_ok() {
+                    if let Some(notice) = single_replica_sources_notice {
+                        session.add_notice(notice);
+                    }
                 }
-                if needs_record && !scheduled_direct {
-                    return self
-                        .reshape_alter_cluster_managed(
-                            session,
-                            cluster_id,
-                            new_config.clone(),
-                            options,
-                            strategy,
-                            validity,
-                        )
-                        .await;
-                }
+                return result;
             }
         }
 
@@ -434,6 +446,9 @@ impl Coordinator {
                         strategy.clone(),
                     )
                     .await?;
+                if let Some(notice) = single_replica_sources_notice {
+                    session.add_notice(notice);
+                }
                 if alter_followup == NeedsFinalization::Yes {
                     // For non backgrounded zero-downtime alters, store the
                     // cluster_id in the ConnMeta to allow for cancellation.
@@ -531,8 +546,10 @@ impl Coordinator {
         cluster_id: ClusterId,
         target: &ReconfigurationTarget,
     ) -> Result<(), AdapterError> {
-        // Only user clusters are converged by the controller and counted against
-        // these limits. A system cluster never reshapes into a record.
+        // System clusters are exempt from `max_replicas_per_cluster` and from
+        // credit accounting everywhere else (see the `is_user` guards in
+        // `catalog_transact`'s validation), so a reconfiguration of one has no
+        // budget to fit either.
         if !cluster_id.is_user() {
             return Ok(());
         }
@@ -780,10 +797,10 @@ impl Coordinator {
         };
 
         // Build the durable write from `new_config`, which carries every field the
-        // `ALTER` changed, then reset the config *shape* (size, replication factor,
-        // availability zones, logging) back to the realized values: that transition
-        // is deferred to the `reconfiguration` record and applied at cut-over. This
-        // applies non-shape changes (`workload_class`, `schedule`,
+        // `ALTER` changed, then reset the config *shape* (every
+        // `ReconfigurationTarget` dimension) back to the realized values: that
+        // transition is deferred to the `reconfiguration` record and applied at
+        // cut-over. This applies non-shape changes (`workload_class`, `schedule`,
         // `auto_scaling_strategy`, ...) immediately, matching the legacy path,
         // rather than silently dropping them. Any existing record is folded over by
         // the `record` we just built.
@@ -794,10 +811,7 @@ impl Coordinator {
                 "reshape_alter_cluster_managed requires a managed realized config".into(),
             ));
         };
-        let realized_size = realized_now.size.clone();
-        let realized_replication_factor = realized_now.replication_factor;
-        let realized_availability_zones = realized_now.availability_zones.clone();
-        let realized_logging = realized_now.logging.clone();
+        let realized_target = realized_now.realized_reconfiguration_target();
         // The status and the audit intent are two views of the same decision,
         // made together here: an ALTER back to the realized shape is a cancel,
         // anything else starts (or re-targets) a reconfiguration.
@@ -825,10 +839,7 @@ impl Coordinator {
                 "reshape_alter_cluster_managed requires a managed target config".into(),
             ));
         };
-        realized_managed.size = realized_size;
-        realized_managed.replication_factor = realized_replication_factor;
-        realized_managed.availability_zones = realized_availability_zones;
-        realized_managed.logging = realized_logging;
+        realized_managed.apply_reconfiguration_target(realized_target);
         realized_managed.reconfiguration = Some(record);
 
         self.catalog_transact(
@@ -1209,6 +1220,7 @@ impl Coordinator {
             name,
             variant,
             workload_class,
+            if_not_exists,
         }: CreateClusterPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         tracing::debug!("sequence_create_cluster");
@@ -1259,14 +1271,26 @@ impl Coordinator {
 
         match variant {
             CreateClusterVariant::Managed(plan) => {
-                self.sequence_create_managed_cluster(session, plan, id, name, ops)
+                self.sequence_create_managed_cluster(session, plan, id, name.clone(), ops)
                     .await
             }
             CreateClusterVariant::Unmanaged(plan) => {
-                self.sequence_create_unmanaged_cluster(session, plan, id, name, ops)
+                self.sequence_create_unmanaged_cluster(session, plan, id, name.clone(), ops)
                     .await
             }
         }
+        .or_else(|err| match err {
+            AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::ClusterAlreadyExists(_)),
+            }) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name,
+                    ty: "cluster",
+                });
+                Ok(ExecuteResponse::CreatedCluster)
+            }
+            err => Err(err),
+        })
     }
 
     #[mz_ore::instrument(level = "debug")]
@@ -1659,6 +1683,101 @@ impl Coordinator {
         Ok(ExecuteResponse::CreatedCluster)
     }
 
+    /// Returns the full names of all sources bound to `cluster` whose
+    /// connections prefer to run on a single replica, so additional replicas
+    /// do not make them more fault tolerant or increase their throughput.
+    fn single_replica_source_names(&self, cluster: &Cluster) -> Vec<String> {
+        cluster
+            .bound_objects
+            .iter()
+            .filter_map(|id| {
+                let entry = self.catalog().get_entry(id);
+                let single_replica =
+                    entry
+                        .source()
+                        .is_some_and(|source| match &source.data_source {
+                            DataSourceDesc::Ingestion { desc, .. }
+                            | DataSourceDesc::OldSyntaxIngestion { desc, .. } => {
+                                desc.connection.prefers_single_replica()
+                            }
+                            _ => false,
+                        });
+                single_replica.then(|| {
+                    self.catalog()
+                        .resolve_full_name(entry.name(), None)
+                        .to_string()
+                })
+            })
+            .collect()
+    }
+
+    /// The number of replicas `cluster` aims to run, for deciding whether to
+    /// emit the single-replica-sources notice.
+    ///
+    /// For a managed cluster this is the replication factor, taking the target
+    /// of an in-progress reconfiguration over the realized one, plus any
+    /// INTERNAL or BILLED AS replicas, which are manually managed outside the
+    /// replication-factor domain. Replicas belonging to a reconfiguration's
+    /// hydrate-overlap are deliberately not counted: they replace the serving
+    /// set at cut-over rather than adding to it. Counting the replication
+    /// factor instead of replicas excludes them under both reconfiguration
+    /// mechanisms, the legacy graceful alter (which marks them pending) and
+    /// the cluster controller (which creates them as ordinary replicas of the
+    /// target shape).
+    fn notice_relevant_replica_count(&self, cluster: &Cluster) -> usize {
+        match &cluster.config.variant {
+            ClusterVariant::Managed(managed) => {
+                let replication_factor = managed
+                    .reconfiguration
+                    .as_ref()
+                    .filter(|record| record.is_in_progress())
+                    .map_or(managed.replication_factor, |record| {
+                        record.target.replication_factor
+                    });
+                let manual_replicas = cluster
+                    .replicas()
+                    .filter(|r| {
+                        r.config.location.internal() || r.config.location.billed_as().is_some()
+                    })
+                    .count();
+                usize::cast_from(replication_factor) + manual_replicas
+            }
+            ClusterVariant::Unmanaged => cluster.replicas().count(),
+        }
+    }
+
+    /// Emits a notice if `cluster` aims to run more than one replica while
+    /// containing sources that run on only one replica. Call after a command
+    /// that added a replica or such a source.
+    ///
+    /// `creating_source` names a source the current command is creating in
+    /// `cluster`. It is included in the notice even when it is not yet visible
+    /// in the catalog, which happens when the creation is staged in a DDL
+    /// transaction that commits later.
+    pub(crate) fn notify_single_replica_sources(
+        &self,
+        session: &Session,
+        cluster: &Cluster,
+        creating_source: Option<&QualifiedItemName>,
+    ) {
+        if self.notice_relevant_replica_count(cluster) <= 1 {
+            return;
+        }
+        let mut sources = self.single_replica_source_names(cluster);
+        if let Some(name) = creating_source {
+            let full_name = self.catalog().resolve_full_name(name, None).to_string();
+            if !sources.contains(&full_name) {
+                sources.push(full_name);
+            }
+        }
+        if !sources.is_empty() {
+            session.add_notice(AdapterNotice::SingleReplicaSourcesOnMultiReplicaCluster {
+                cluster: cluster.name.clone(),
+                sources,
+            });
+        }
+    }
+
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn sequence_create_cluster_replica(
         &mut self,
@@ -1667,6 +1786,7 @@ impl Coordinator {
             name,
             cluster_id,
             config,
+            if_not_exists,
         }: CreateClusterReplicaPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         // Choose default AZ if necessary
@@ -1764,6 +1884,9 @@ impl Coordinator {
 
         let cluster_name = cluster.name.clone();
         let is_builtin = cluster_id.is_system();
+        // A replica name is only unique within its cluster, so the notice on the
+        // `IF NOT EXISTS` path below has to name both.
+        let qualified_name = format!("{cluster_name}.{name}");
 
         // Pre-allocate the replica id out-of-band via the durable allocator,
         // picking the id type from the target cluster, which may be a system
@@ -1821,9 +1944,28 @@ impl Coordinator {
             }
         }
 
-        self.catalog_transact(Some(session), ops).await?;
-
-        Ok(ExecuteResponse::CreatedClusterReplica)
+        match self.catalog_transact(Some(session), ops).await {
+            Ok(()) => {
+                // The commit made the new replica visible in the catalog, so
+                // the check sees the updated replica count.
+                self.notify_single_replica_sources(
+                    session,
+                    self.catalog().get_cluster(cluster_id),
+                    None,
+                );
+                Ok(ExecuteResponse::CreatedClusterReplica)
+            }
+            Err(AdapterError::Catalog(mz_catalog::memory::error::Error {
+                kind: ErrorKind::Sql(CatalogError::DuplicateReplica(_, _)),
+            })) if if_not_exists => {
+                session.add_notice(AdapterNotice::ObjectAlreadyExists {
+                    name: qualified_name,
+                    ty: "cluster replica",
+                });
+                Ok(ExecuteResponse::CreatedClusterReplica)
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// When this is called by the automated cluster scheduling, `scheduling_decision_reason` should
@@ -1978,21 +2120,20 @@ impl Coordinator {
             }
         }
 
-        // When the controller owns the managed replica set (master gate on, user
-        // cluster), a non-record change reaching this path is replication-factor
-        // only. Config-shape changes (size/logging/AZ) are reshaped into a durable
+        // The controller owns the replica set of every managed cluster, so a
+        // non-record change reaching this path is replication-factor only.
+        // Config-shape changes (size/logging/AZ) are reshaped into a durable
         // reconfiguration record before they get here. The controller reconciles
         // the replica set to the realized config's new count on its next tick, so
         // we update only the realized config and emit no create/drop here. Doing
         // both fights the controller. It derives replica names from the observed
         // set, so an adapter create by canonical `rN` can collide with a
         // controller-chosen name, and an adapter drop by canonical `rN` can miss a
-        // churned one. With the gate off (or a system cluster, which the
-        // controller never owns) the legacy path below still does the create/drop
-        // directly.
-        let controller_owns = ENABLE_CLUSTER_CONTROLLER
-            .get(self.catalog().system_config().dyncfgs())
-            && cluster_id.is_user();
+        // churned one.
+        //
+        // The direct create/drop branches below are unreachable while this holds.
+        // They go together with the staged reconfiguration machine.
+        let controller_owns = true;
 
         // Count exactly as many replica ids as the branches below consume. The
         // config-changed branches recreate all replicas. A pure scale-up creates
@@ -2212,18 +2353,9 @@ impl Coordinator {
         }
 
         // If finalization is needed, finalization should update the cluster
-        // config. Otherwise the config write happens here. With the controller
-        // owning the cluster, a record still in progress belongs to a live,
-        // converging reconfiguration this write didn't touch: carry it through
-        // untouched. Without (gate off, or a system cluster), such a record is
-        // orphaned, so retain it as cancelled with the matching audit intent
-        // rather than risk a bogus revival if the gate comes back on.
-        //
-        // NOTE: `handle_scheduling_decisions` also calls this function and
-        // bypasses the sequencer's guards. It runs only while the controller
-        // gate is off, where the cancel-carried write below retires any
-        // in-progress record instead of leaving it behind for a controller
-        // that is not running.
+        // config. Otherwise the config write happens here. A record still in
+        // progress belongs to a live, converging reconfiguration this write
+        // didn't touch, so carry it through untouched.
         match finalization_needed {
             NeedsFinalization::No => {
                 let mut new_config = new_config;
@@ -2566,10 +2698,6 @@ impl Coordinator {
     }
 }
 
-fn managed_cluster_replica_name(index: u32) -> String {
-    format!("r{}", index + 1)
-}
-
 /// Which reconfiguration-target dimensions an `ALTER` left unset (`Unchanged`).
 /// Drives [`fold_reconfiguration_target`]. Logging is two sub-dimensions
 /// because `INTROSPECTION DEBUGGING` and `INTROSPECTION INTERVAL` are
@@ -2583,20 +2711,14 @@ struct ReconfigurationDimensionsUnchanged {
     arrangement_compression: bool,
 }
 
-/// Retains a stale in-progress reconfiguration record carried by a legacy-path
+/// Retains a stale in-progress reconfiguration record carried by a direct
 /// config write as cancelled, returning the audit intent to declare with the
 /// write.
 ///
-/// The legacy write paths (controller gate off), the ALTER sequencer and the
-/// legacy scheduler, change the realized config directly and know nothing
-/// about reconfiguration records. Nothing on those
-/// paths ever settles a record, and carrying an in-progress one forward invites
-/// a bogus revival, up to a forced cut-over to an obsolete target, if the gate
-/// is turned back on later. A record can only be in progress here if it was
-/// written while the gate was on.
-pub(crate) fn cancel_carried_reconfiguration(
-    config: &mut ClusterConfig,
-) -> Option<ReconfigurationAudit> {
+/// A direct write reshapes the replica set itself, superseding whatever target
+/// the record carries. Leaving the record in progress would have the controller
+/// keep converging on that stale target.
+fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<ReconfigurationAudit> {
     let ClusterVariant::Managed(managed) = &mut config.variant else {
         return None;
     };
@@ -2609,8 +2731,9 @@ pub(crate) fn cancel_carried_reconfiguration(
 }
 
 /// Whether an `ALTER` statement sets a replica config shape dimension (`SIZE`,
-/// `AVAILABILITY ZONES`, or either `INTROSPECTION` option), the changes that
-/// need a durable `reconfiguration` record and a hydrate-overlap.
+/// `AVAILABILITY ZONES`, either `INTROSPECTION` option, or `EXPERIMENTAL
+/// ARRANGEMENT COMPRESSION`), the changes that need a durable
+/// `reconfiguration` record and a hydrate-overlap.
 ///
 /// A statement-level check, used while a reconfiguration is in flight: an
 /// `ALTER` back to the realized shape sets a shape option without changing its

@@ -34,7 +34,6 @@ tonic-prost.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
 tokio-stream = { workspace = true, features = ["net"] }
-tokio-util = { workspace = true, features = ["io"] }
 tracing.workspace = true
 tracing-core.workspace = true
 tracing-subscriber.workspace = true

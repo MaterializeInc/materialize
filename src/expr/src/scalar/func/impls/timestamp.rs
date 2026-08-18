@@ -9,18 +9,18 @@
 
 use std::fmt;
 
-use chrono::{
-    DateTime, Duration, FixedOffset, NaiveDateTime, NaiveTime, Offset, TimeZone, Timelike, Utc,
-};
+use chrono::{DateTime, Duration, NaiveDateTime, NaiveTime, Offset, TimeZone, Utc};
 use mz_expr_derive::sqlfunc;
-use mz_lowertest::MzReflect;
 use mz_ore::result::ResultExt;
 use mz_pgtz::timezone::{Timezone, TimezoneSpec};
 use mz_repr::adt::date::Date;
 use mz_repr::adt::datetime::DateTimeUnits;
 use mz_repr::adt::interval::Interval;
 use mz_repr::adt::numeric::{DecimalLike, Numeric};
-use mz_repr::adt::timestamp::{CheckedTimestamp, MAX_PRECISION, TimestampPrecision};
+use mz_repr::adt::timestamp::{
+    CheckedTimestamp, MAX_PRECISION, TimestampPrecision, checked_add_with_leapsecond,
+    checked_sub_with_leapsecond,
+};
 use mz_repr::{SqlColumnType, SqlScalarType, strconv};
 use serde::{Deserialize, Serialize};
 
@@ -80,8 +80,7 @@ fn cast_timestamp_tz_to_date(a: CheckedTimestamp<DateTime<Utc>>) -> Result<Date,
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastTimestampToTimestampTz {
     pub from: Option<TimestampPrecision>,
@@ -137,8 +136,7 @@ impl fmt::Display for CastTimestampToTimestampTz {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct AdjustTimestampPrecision {
     pub from: Option<TimestampPrecision>,
@@ -193,8 +191,7 @@ impl fmt::Display for AdjustTimestampPrecision {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastTimestampTzToTimestamp {
     pub from: Option<TimestampPrecision>,
@@ -249,8 +246,7 @@ impl fmt::Display for CastTimestampTzToTimestamp {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct AdjustTimestampTzPrecision {
     pub from: Option<TimestampPrecision>,
@@ -350,8 +346,7 @@ where
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ExtractInterval(pub DateTimeUnits);
 
@@ -383,8 +378,7 @@ impl fmt::Display for ExtractInterval {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct DatePartInterval(pub DateTimeUnits);
 
@@ -462,8 +456,7 @@ pub(crate) fn most_significant_unit(unit: DateTimeUnits) -> bool {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ExtractTimestamp(pub DateTimeUnits);
 
@@ -499,8 +492,7 @@ impl fmt::Display for ExtractTimestamp {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct ExtractTimestampTz(pub DateTimeUnits);
 
@@ -539,8 +531,7 @@ impl fmt::Display for ExtractTimestampTz {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct DatePartTimestamp(pub DateTimeUnits);
 
@@ -572,8 +563,7 @@ impl fmt::Display for DatePartTimestamp {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct DatePartTimestampTz(pub DateTimeUnits);
 
@@ -634,8 +624,7 @@ pub fn date_trunc_inner<T: TimestampLike>(units: DateTimeUnits, ts: &T) -> Resul
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct DateTruncTimestamp(pub DateTimeUnits);
 
@@ -671,8 +660,7 @@ impl fmt::Display for DateTruncTimestamp {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct DateTruncTimestampTz(pub DateTimeUnits);
 
@@ -743,42 +731,6 @@ pub fn timezone_timestamptz(tz: Timezone, utc: DateTime<Utc>) -> Result<NaiveDat
     checked_add_with_leapsecond(&utc.naive_utc(), &offset).ok_or(EvalError::TimestampOutOfRange)
 }
 
-/// Checked addition that is missing from chrono. Adapt its methods here but add a check.
-fn checked_add_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option<NaiveDateTime> {
-    // extract and temporarily remove the fractional part and later recover it
-    let nanos = lhs.nanosecond();
-    let lhs = lhs.with_nanosecond(0).unwrap();
-    let rhs = rhs.local_minus_utc();
-    let dt = lhs.checked_add_signed(chrono::Duration::try_seconds(i64::from(rhs))?)?;
-    // chrono represents a leap second as `nanos >= 1_000_000_000`, but only on a
-    // second-of-minute of 59. If the offset shifted us off `:59`, we can't keep
-    // the leap-second representation: the resulting `NaiveTime` would be
-    // unconstructable via `from_num_seconds_from_midnight_opt` and would panic
-    // when round-tripped through `Row` encoding. In that case, fold the leap
-    // second into the next regular second.
-    if nanos >= 1_000_000_000 && dt.second() != 59 {
-        dt.checked_add_signed(chrono::Duration::nanoseconds(i64::from(nanos)))
-    } else {
-        Some(dt.with_nanosecond(nanos).unwrap())
-    }
-}
-
-/// Checked subtraction that is missing from chrono. Adapt its methods here but add a check.
-fn checked_sub_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option<NaiveDateTime> {
-    // extract and temporarily remove the fractional part and later recover it
-    let nanos = lhs.nanosecond();
-    let lhs = lhs.with_nanosecond(0).unwrap();
-    let rhs = rhs.local_minus_utc();
-    let dt = lhs.checked_sub_signed(chrono::Duration::try_seconds(i64::from(rhs))?)?;
-    // See `checked_add_with_leapsecond` for why we have to special-case
-    // leap-second nanos that no longer land on `:59` after applying the offset.
-    if nanos >= 1_000_000_000 && dt.second() != 59 {
-        dt.checked_add_signed(chrono::Duration::nanoseconds(i64::from(nanos)))
-    } else {
-        Some(dt.with_nanosecond(nanos).unwrap())
-    }
-}
-
 #[derive(
     Ord,
     PartialOrd,
@@ -788,8 +740,7 @@ fn checked_sub_with_leapsecond(lhs: &NaiveDateTime, rhs: &FixedOffset) -> Option
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct TimezoneTimestamp(pub Timezone);
 
@@ -821,8 +772,7 @@ impl fmt::Display for TimezoneTimestamp {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct TimezoneTimestampTz(pub Timezone);
 
@@ -856,8 +806,7 @@ impl fmt::Display for TimezoneTimestampTz {
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 pub struct ToCharTimestamp {
     pub format_string: String,
@@ -892,8 +841,7 @@ impl fmt::Display for ToCharTimestamp {
     Ord,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 pub struct ToCharTimestampTz {
     pub format_string: String,

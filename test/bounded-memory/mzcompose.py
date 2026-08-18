@@ -533,7 +533,6 @@ SCENARIOS = [
         + KafkaScenario.END_MARKER
         # Ensure this config works.
         + dedent("""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET storage_upsert_max_snapshot_batch_buffering = 2;
             """)
@@ -608,7 +607,6 @@ SCENARIOS = [
     Scenario(
         name="table-insert-delete",
         pre_restart=dedent("""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET max_result_size = 2147483648;
 
@@ -873,7 +871,6 @@ SCENARIOS = [
     Scenario(
         name="cardinality-estimate-disjunction",
         pre_restart=dedent("""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET ENABLE_CARDINALITY_ESTIMATES TO TRUE;
 
@@ -1190,7 +1187,6 @@ SCENARIOS = [
             # * Lgalloc disabled to force more memory pressure.
             # * Index options to enable retained history.
             # * Finally, enable backpressure.
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET min_timestamp_interval = '10ms';
             ALTER SYSTEM SET enable_lgalloc = false;
@@ -1299,7 +1295,6 @@ SCENARIOS = [
     Scenario(
         name="copy-to-from-s3",
         pre_restart=dedent(f"""
-            $ postgres-connect name=mz_system url=postgres://mz_system:materialize@${{testdrive.materialize-internal-sql-addr}}
             $ postgres-execute connection=mz_system
             ALTER SYSTEM SET max_result_size = 2147483648;
 

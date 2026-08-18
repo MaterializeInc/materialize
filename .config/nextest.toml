@@ -20,7 +20,7 @@ retries = 2
 priority = 100
 
 [[profile.default.overrides]]
-filter = "package(mz-environmentd) and test(test_concurrent_id_reuse)"
+filter = "package(mz-environmentd) and test(test_termination_races)"
 priority = 100
 
 [[profile.default.overrides]]

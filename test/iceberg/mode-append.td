@@ -40,6 +40,21 @@
     MODE APPEND
     WITH (COMMIT INTERVAL '1s');
 
+# MODE APPEND is the only way to get envelope_type = append, and the catalog
+# relations read it back out of create_sql.
+> SELECT type, envelope_type, format, key_format, value_format, size,
+    connection_id = (SELECT id FROM mz_connections WHERE name = 'append_polaris')
+  FROM mz_sinks WHERE name = 'append_demo'
+iceberg append <null> <null> <null> <null> true
+
+> SELECT namespace, "table" FROM mz_iceberg_sinks
+  WHERE id = (SELECT id FROM mz_sinks WHERE name = 'append_demo')
+default_namespace append_demo_table
+
+> SELECT count(*) FROM mz_kafka_sinks
+  WHERE id = (SELECT id FROM mz_sinks WHERE name = 'append_demo')
+0
+
 # Iceberg sinks commit data asynchronously; wait for at least one commit interval to elapse
 # before querying the table.
 $ sleep-is-probably-flaky-i-have-justified-my-need-with-a-comment duration=5s
@@ -101,6 +116,15 @@ SELECT a, b, _mz_diff FROM polaris.default_namespace.append_demo_table ORDER BY 
 2 two -1
 1 ONE 1
 1 one -1
+
+# Once the sink has committed everything, staged and committed counts must
+# agree. Staged is counted once per input row, so a mismatch here means rows
+# are being double-counted somewhere in the write path.
+> SELECT ss.messages_staged, ss.messages_committed
+  FROM mz_internal.mz_sink_statistics ss
+  JOIN mz_catalog.mz_sinks s ON s.id = ss.id
+  WHERE s.name = 'append_demo'
+6 6
 
 # Test: table with columns named "_mz_diff" and "_mz_timestamp" — these clash with
 # the columns that MODE APPEND automatically appends to the Iceberg schema.

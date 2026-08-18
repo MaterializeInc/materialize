@@ -12,7 +12,6 @@ expression: "#[sqlfunc(test = true)]\n#[allow(dead_code)]\nfn fallible2(a: Optio
     serde::Serialize,
     serde::Deserialize,
     Hash,
-    mz_lowertest::MzReflect,
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(proptest_derive::Arbitrary))]
 pub struct Fallible2;
@@ -47,6 +46,9 @@ impl std::fmt::Display for Fallible2 {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         f.write_str(stringify!(fallible2))
     }
+}
+impl crate::func::FuncName for Fallible2 {
+    const NAME: &'static str = stringify!(fallible2);
 }
 #[allow(dead_code)]
 fn fallible2(a: Option<f32>, b: Option<f32>) -> Result<f32, EvalError> {

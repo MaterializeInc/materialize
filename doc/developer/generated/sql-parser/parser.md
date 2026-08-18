@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: fca741734d
+revision: 447da2b53e
 ---
 
 # mz-sql-parser::parser
@@ -15,6 +15,7 @@ The right-hand side of `IS [NOT] DISTINCT FROM` is parsed at the precedence of t
 `parse_raw_ident_str` rejects empty identifiers so that resolved names like `[""]` (which display as `[]` and fail to reparse) are caught at parse time.
 A parenthesized `(SHOW …)` query at statement level is unwrapped to a bare `Statement::Show` when it carries no CTEs, ORDER BY, LIMIT, or OFFSET, keeping the AST independent of redundant outer parens.
 Iceberg sink mode parsing accepts `UPSERT` or `APPEND` as valid values.
+`parse_option_map` peeks ahead for `[` before committing to a map literal; a bare `map` identifier in an option-value position therefore falls through to `parse_item_name` rather than causing a parse error.
 `EXECUTE UNIT TEST <name> FOR <target> [AT TIME <expr>] [MOCK <view_def>, ...] EXPECTED <result_def>` is parsed by `parse_execute_unit_test`; individual mock clauses are parsed by `parse_mock_view_def`. Both methods are called from `parse_execute` after the leading `EXECUTE UNIT TEST` tokens are consumed.
 The private method `parse_list_value<T, F>` optionally consumes `=`, then parses a comma-separated list enclosed in parentheses or brackets using a provided closure, returning `Vec<T>`.
 `CREATE CONNECTION ... TO AWS` dispatches on the next keyword: `PRIVATELINK` yields `CreateConnectionType::AwsPrivatelink`, `GLUE` (followed by `SCHEMA REGISTRY`) yields `CreateConnectionType::GlueSchemaRegistry`, and no keyword yields `CreateConnectionType::Aws`. `CREATE CONNECTION ... TO GCP` yields `CreateConnectionType::Gcp`.

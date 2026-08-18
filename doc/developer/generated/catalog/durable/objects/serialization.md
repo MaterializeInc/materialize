@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/objects/serialization.rs
-revision: fca741734d
+revision: f3b4f3f
 ---
 
 # catalog::durable::objects::serialization

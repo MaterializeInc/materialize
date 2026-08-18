@@ -18,16 +18,22 @@ import {
   Table,
   Tbody,
   Td,
+  Tfoot,
   Th,
   Thead,
   Tooltip,
   Tr,
   useTheme,
 } from "@chakra-ui/react";
-import { flexRender, Header, SortDirection } from "@tanstack/react-table";
+import { flexRender, Header, Row, SortDirection } from "@tanstack/react-table";
 import React from "react";
 
-import { ChevronDownIcon, FilterIcon, InfoIcon } from "~/icons";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  FilterIcon,
+  InfoIcon,
+} from "~/icons";
 import { MaterializeTheme } from "~/theme";
 import { viewportOverflowModifier } from "~/theme/components/Popover";
 
@@ -106,6 +112,7 @@ const ColumnHeader = <TData,>({
   const tooltip = header.column.columnDef.meta?.tooltip;
   const canSort = header.column.getCanSort();
   const canFilter = !!header.column.columnDef.meta?.renderFilter;
+  const isNumeric = header.column.columnDef.meta?.isNumeric;
 
   return (
     <Th
@@ -124,6 +131,7 @@ const ColumnHeader = <TData,>({
         alignItems="center"
         flexWrap="nowrap"
         whiteSpace="nowrap"
+        justifyContent={isNumeric ? "flex-end" : undefined}
       >
         {header.isPlaceholder
           ? null
@@ -137,6 +145,97 @@ const ColumnHeader = <TData,>({
         {canFilter && <ColumnFilterTrigger header={header} />}
       </Box>
     </Th>
+  );
+};
+
+// Caret width (4) + caret/label gap (2), so an indented child row's label
+// lines up just past its parent row's caret.
+const CHILD_ROW_INDENT = 6;
+
+const GroupRowCaret = ({ isOpen }: { isOpen: boolean }) => (
+  <ChevronRightIcon
+    aria-hidden="true"
+    flexShrink={0}
+    marginRight={2}
+    transform={isOpen ? "rotate(90deg)" : undefined}
+    transition="transform 0.1s"
+  />
+);
+
+const BodyRow = <TData,>({
+  row,
+  onRowClick,
+  rowSx,
+  rowTestId,
+}: {
+  row: Row<TData>;
+  onRowClick?: (row: TData) => void;
+  rowSx?: UniversalTableProps<TData>["rowSx"];
+  rowTestId?: UniversalTableProps<TData>["rowTestId"];
+}) => {
+  // NOTE: an expandable row is assumed to be a group heading from
+  // getSubRows. A row-detail expander via getRowCanExpand on flat data
+  // would need its own treatment.
+  const isGroupRow = row.getCanExpand();
+  const needsIndent = isGroupRow || row.depth > 0;
+  const handleClick = isGroupRow
+    ? row.getToggleExpandedHandler()
+    : onRowClick
+      ? () => onRowClick(row.original)
+      : undefined;
+  const groupRowProps = isGroupRow
+    ? {
+        "aria-expanded": row.getIsExpanded(),
+        tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            row.toggleExpanded();
+          }
+        },
+      }
+    : undefined;
+
+  return (
+    <Tr
+      onClick={handleClick}
+      data-testid={rowTestId?.(row)}
+      {...groupRowProps}
+      sx={{
+        cursor: handleClick ? "pointer" : undefined,
+        ...(isGroupRow && { td: { textStyle: "heading-xs" } }),
+        ...rowSx,
+      }}
+    >
+      {row.getVisibleCells().map((cell, cellIndex) => {
+        const content = flexRender(
+          cell.column.columnDef.cell,
+          cell.getContext(),
+        );
+        return (
+          <Td
+            key={cell.id}
+            textAlign={
+              cell.column.columnDef.meta?.isNumeric ? "end" : undefined
+            }
+            {...cell.column.columnDef.meta?.cellProps}
+          >
+            {cellIndex === 0 && needsIndent ? (
+              <Box
+                display="flex"
+                alignItems="center"
+                paddingLeft={row.depth * CHILD_ROW_INDENT}
+              >
+                {isGroupRow && <GroupRowCaret isOpen={row.getIsExpanded()} />}
+                {content}
+              </Box>
+            ) : (
+              content
+            )}
+          </Td>
+        );
+      })}
+    </Tr>
   );
 };
 
@@ -167,11 +266,17 @@ export const UniversalTable = <TData,>({
   isLoading = false,
   skeletonRowCount = SKELETON_ROW_COUNT,
   rowSx,
+  rowTestId,
+  footerSx,
+  footerTestId,
   "data-testid": testId,
 }: UniversalTableProps<TData>) => {
   const headerGroups = table.getHeaderGroups();
   const rows = table.getRowModel().rows;
   const columnCount = table.getAllColumns().length;
+  const hasFooter = table
+    .getAllLeafColumns()
+    .some((column) => column.columnDef.footer);
 
   return (
     <Table variant={variant} data-testid={testId} borderRadius="xl">
@@ -189,23 +294,40 @@ export const UniversalTable = <TData,>({
           <LoadingRows columnCount={columnCount} rowCount={skeletonRowCount} />
         ) : (
           rows.map((row) => (
-            <Tr
+            <BodyRow
               key={row.id}
-              onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-              sx={{
-                cursor: onRowClick ? "pointer" : undefined,
-                ...rowSx,
-              }}
-            >
-              {row.getVisibleCells().map((cell) => (
-                <Td key={cell.id} {...cell.column.columnDef.meta?.cellProps}>
-                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                </Td>
-              ))}
-            </Tr>
+              row={row}
+              onRowClick={onRowClick}
+              rowSx={rowSx}
+              rowTestId={rowTestId}
+            />
           ))
         )}
       </Tbody>
+      {hasFooter && !isLoading && (
+        <Tfoot>
+          {table.getFooterGroups().map((footerGroup) => (
+            <Tr key={footerGroup.id} sx={footerSx} data-testid={footerTestId}>
+              {footerGroup.headers.map((header) => (
+                <Td
+                  key={header.id}
+                  textAlign={
+                    header.column.columnDef.meta?.isNumeric ? "end" : undefined
+                  }
+                  {...header.column.columnDef.meta?.cellProps}
+                >
+                  {header.isPlaceholder
+                    ? null
+                    : flexRender(
+                        header.column.columnDef.footer,
+                        header.getContext(),
+                      )}
+                </Td>
+              ))}
+            </Tr>
+          ))}
+        </Tfoot>
+      )}
     </Table>
   );
 };

@@ -276,6 +276,26 @@ pub const WEBHOOK_MAX_REQUEST_SIZE_BYTES: Config<usize> = Config::new(
     "The maximum size in bytes of a webhook request body, measured after decompression.",
 );
 
+/// Maximum temporary storage a webhook `CHECK` expression may allocate while
+/// validating one request. A `CHECK` that exceeds it fails the request with HTTP
+/// 400 rather than holding the memory.
+///
+/// A `CHECK` can allocate a multiple of the request body, and `environmentd`
+/// evaluates one per in-flight request. Without a bound proportionate to the
+/// request, bounded network input becomes unbounded heap on a process shared by
+/// every connection. The default is 4x `WEBHOOK_MAX_REQUEST_SIZE_BYTES`, well
+/// above what a realistic `CHECK` (an HMAC, a `decode`, a `concat` with a
+/// secret) needs and well below the 100 MiB per-call ceiling used in a cluster.
+///
+/// NOTE: this is runtime-reconfigurable, so it must only bound a single webhook
+/// validation. Do not feed it (or any mutable budget) to a `RowArena` used in a
+/// compute dataflow (see `mz_repr::RowArena::with_budget`).
+pub const WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
+    "webhook_validation_memory_budget_bytes",
+    20 * 1024 * 1024,
+    "The maximum bytes of temporary storage a webhook CHECK expression may allocate while validating one request.",
+);
+
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
 /// a persist write + oracle call per DDL statement.
 pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
@@ -342,34 +362,7 @@ pub const PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT: Config<Duration> = Config::new(
     Postgres/CRDB timestamp oracle. A value of zero leaves the statement timeout unset.",
 );
 
-/// Whether per-cluster and per-replica scoped system parameters are evaluated.
-/// Off by default: the parameter sync loop evaluates no cluster/replica
-/// contexts and resolution falls back to the environment-wide value everywhere
-/// (the pre-scoped behavior). Enabling it (e.g. from LaunchDarkly) turns on
-/// scoped evaluation without a deploy.
-pub const ENABLE_SCOPED_SYSTEM_PARAMETERS: Config<bool> = Config::new(
-    "enable_scoped_system_parameters",
-    false,
-    "Whether per-cluster and per-replica scoped system parameters are evaluated and applied.",
-);
-
-/// Top-level gate for the cluster controller. When on, the controller owns the
-/// managed-cluster replica set and the legacy paths (the graceful 3-stage
-/// machine and `cluster_scheduling.rs`) are bypassed. The replica set cannot
-/// have two writers, so this is a clean switch, not a per-strategy toggle.
-///
-/// Defaults on. This is the break-glass switch to fall back to the legacy
-/// paths if the controller misbehaves.
-pub const ENABLE_CLUSTER_CONTROLLER: Config<bool> = Config::new(
-    "enable_cluster_controller",
-    true,
-    "Whether the cluster controller owns the managed-cluster replica set. When false, the legacy scheduling and graceful-reconfiguration paths run instead.",
-);
-
 /// Cadence of the cluster controller's reconcile tick.
-///
-/// Replaces `cluster_check_scheduling_policies_interval` once the controller is
-/// the sole owner; while the controller is dark both intervals exist.
 pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
     "cluster_controller_tick_interval",
     Duration::from_secs(5),
@@ -379,9 +372,6 @@ pub const CLUSTER_CONTROLLER_TICK_INTERVAL: Config<Duration> = Config::new(
 /// Whether a config-shape `ALTER CLUSTER` returns immediately, with the
 /// controller converging in the background, or blocks the session on a
 /// wait-shim until the reconfiguration completes or its deadline passes.
-///
-/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on, when the
-/// controller owns the reconfiguration.
 ///
 /// Defaults on. This is the break-glass switch back to the blocking wait-shim
 /// if returning immediately causes trouble.
@@ -404,9 +394,9 @@ pub const DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT: Config<Duration> = Config::ne
 /// runs a burst replica; graceful reconfiguration and `ON REFRESH` scheduling
 /// are unaffected.
 ///
-/// Only consulted while [`ENABLE_CLUSTER_CONTROLLER`] is on. A cluster can only
-/// carry an `AUTO SCALING STRATEGY` while its SQL acceptance feature flag is
-/// on, so this is the second of the two gates burst sits behind.
+/// A cluster can only carry an `AUTO SCALING STRATEGY` while its SQL acceptance
+/// feature flag is on, so this is the second of the two gates burst sits
+/// behind.
 pub const ENABLE_HYDRATION_BURST: Config<bool> = Config::new(
     "enable_hydration_burst",
     true,
@@ -422,11 +412,17 @@ pub const DEFAULT_HYDRATION_BURST_LINGER: Config<Duration> = Config::new(
     "The burst-replica linger duration written when an AUTO SCALING STRATEGY omits LINGER DURATION.",
 );
 
+pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
+    "enable_adapter_frontend_occ_read_then_write",
+    false,
+    "Use frontend sequencing (with optimistic concurrency control) for \
+     DELETE, UPDATE, and INSERT operations.",
+);
+
 /// Adds the full set of all adapter `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ALLOW_USER_SESSIONS)
-        .add(&ENABLE_CLUSTER_CONTROLLER)
         .add(&CLUSTER_CONTROLLER_TICK_INTERVAL)
         .add(&ENABLE_BACKGROUND_ALTER_CLUSTER)
         .add(&DEFAULT_CLUSTER_RECONFIGURATION_TIMEOUT)
@@ -465,6 +461,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MCP_MAX_RESPONSE_SIZE)
         .add(&MCP_REQUEST_TIMEOUT)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
+        .add(&WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
         .add(&CONSOLE_OIDC_CLIENT_ID)
@@ -473,5 +470,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ARRANGEMENT_SIZE_HISTORY_RETENTION_PERIOD)
         .add(&CATALOG_INFO_METRICS_RECONCILE_INTERVAL)
         .add(&PG_TIMESTAMP_ORACLE_STATEMENT_TIMEOUT)
-        .add(&ENABLE_SCOPED_SYSTEM_PARAMETERS)
+        .add(&FRONTEND_READ_THEN_WRITE)
 }

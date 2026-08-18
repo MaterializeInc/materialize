@@ -102,6 +102,10 @@ impl Coordinator {
         // batch. The push re-pushes the complete per-replica dyncfg layer, so we
         // only track that a change happened, not the individual rows.
         let mut replica_scoped_config_changed = false;
+        // Whether any environment-wide system-parameter changed in this batch.
+        // We re-run all `SystemVars` callbacks against the committed values, so
+        // we only track that a change happened, not the individual vars.
+        let mut system_config_changed = false;
 
         // Whether to wake the cluster controller once the implications below are
         // applied. Decided from the committed diff, see the method.
@@ -111,17 +115,6 @@ impl Coordinator {
             tracing::trace!(?update, "got parsed state update");
             match &update.kind {
                 ParsedStateUpdateKind::Item {
-                    durable_item,
-                    parsed_item: _,
-                    connection: _,
-                    parsed_full_name: _,
-                } => {
-                    let entry = catalog_implications
-                        .entry(durable_item.id.clone())
-                        .or_insert_with(|| CatalogImplication::None);
-                    entry.absorb(update);
-                }
-                ParsedStateUpdateKind::TemporaryItem {
                     durable_item,
                     parsed_item: _,
                     connection: _,
@@ -173,6 +166,12 @@ impl Coordinator {
                     // does not matter here.
                     replica_scoped_config_changed = true;
                 }
+                ParsedStateUpdateKind::SystemConfiguration { durable: _ } => {
+                    // Additions and retractions both re-run the callbacks
+                    // against the committed values, so the diff sign does not
+                    // matter here.
+                    system_config_changed = true;
+                }
             }
         }
 
@@ -183,6 +182,7 @@ impl Coordinator {
             cluster_replica_commands.into_iter().collect_vec(),
             introspection_source_indexes,
             replica_scoped_config_changed,
+            system_config_changed,
         )
         .await?;
 
@@ -208,10 +208,11 @@ impl Coordinator {
     /// We key the wake off the committed diff rather than the input ops so it
     /// fires the same way whether this node applied the change or is following
     /// another writer's diff. NOTE: environment-wide system-config changes (the
-    /// controller's gate and tick interval) are not represented as catalog
-    /// implications (`parse_state_update` drops them), so they do not wake the
-    /// controller. The controller re-reads both each tick, so a config change is
-    /// picked up on the next tick without a wake.
+    /// controller's gate and tick interval) do parse into
+    /// `ParsedStateUpdateKind::SystemConfiguration`, but we deliberately do not
+    /// match on them here, so they do not wake the controller. The controller
+    /// re-reads both each tick, so a config change is picked up on the next tick
+    /// without a wake.
     fn should_reconcile_now(updates: &[ParsedStateUpdate]) -> bool {
         updates.iter().any(|update| {
             matches!(
@@ -231,7 +232,17 @@ impl Coordinator {
         cluster_replica_commands: Vec<((ClusterId, ReplicaId), CatalogImplication)>,
         mut introspection_source_indexes: BTreeMap<ClusterId, BTreeMap<LogVariant, GlobalId>>,
         replica_scoped_config_changed: bool,
+        system_config_changed: bool,
     ) -> Result<(), AdapterError> {
+        // Re-run the `SystemVars` callbacks against the committed values.
+        // Deriving this from the committed diff, rather than the input ops, is
+        // what makes it also fire on a follower `environmentd` that only
+        // replays the catalog changes. The callbacks are order-independent
+        // idempotent reads, so we fire them once, up front.
+        if system_config_changed {
+            self.catalog().system_config().notify_all_callbacks();
+        }
+
         let mut tables_to_drop = BTreeSet::new();
         let mut sources_to_drop = vec![];
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
@@ -1610,7 +1621,8 @@ impl Coordinator {
                     | CatalogItem::Index(_)
                     | CatalogItem::Type(_)
                     | CatalogItem::Func(_)
-                    | CatalogItem::Secret(_) => {
+                    | CatalogItem::Secret(_)
+                    | CatalogItem::MetricSink(_) => {
                         // Other item types don't have connection dependencies
                         // that need updating.
                     }
@@ -1827,45 +1839,7 @@ impl CatalogImplication {
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
-            },
-            ParsedStateUpdateKind::TemporaryItem {
-                durable_item: _,
-                parsed_item,
-                connection,
-                parsed_full_name,
-            } => match parsed_item {
-                CatalogItem::Table(table) => {
-                    self.absorb_table(table, Some(parsed_full_name), catalog_update.diff)
-                }
-                CatalogItem::Source(source) => {
-                    self.absorb_source(
-                        (source, connection),
-                        Some(parsed_full_name),
-                        catalog_update.diff,
-                    );
-                }
-                CatalogItem::Sink(sink) => {
-                    self.absorb_sink(sink, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::Index(index) => {
-                    self.absorb_index(index, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::MaterializedView(mv) => {
-                    self.absorb_materialized_view(mv, Some(parsed_full_name), catalog_update.diff);
-                }
-                CatalogItem::View(view) => {
-                    self.absorb_view(view, Some(parsed_full_name), catalog_update.diff);
-                }
-
-                CatalogItem::Secret(secret) => {
-                    self.absorb_secret(secret, None, catalog_update.diff);
-                }
-                CatalogItem::Connection(connection) => {
-                    self.absorb_connection(connection, None, catalog_update.diff);
-                }
-                CatalogItem::Log(_) => {}
-                CatalogItem::Type(_) => {}
-                CatalogItem::Func(_) => {}
+                CatalogItem::MetricSink(_) => {}
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,
@@ -1895,6 +1869,11 @@ impl CatalogImplication {
                 // ReplicaSystemConfiguration updates are collected separately in
                 // apply_catalog_implications and not routed through absorb.
                 unreachable!("ReplicaSystemConfiguration should not be passed to absorb");
+            }
+            ParsedStateUpdateKind::SystemConfiguration { .. } => {
+                // SystemConfiguration updates are collected separately in
+                // apply_catalog_implications and not routed through absorb.
+                unreachable!("SystemConfiguration should not be passed to absorb");
             }
         }
     }

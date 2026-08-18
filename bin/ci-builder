@@ -16,7 +16,10 @@
 
 set -euo pipefail
 
-NIGHTLY_RUST_DATE=2026-06-01
+# NOTE: The 2026-08-03 nightly makes rustdoc run out of memory, which breaks the
+# Doctests job. Do not advance past 2026-08-02 until that is fixed.
+# See https://github.com/rust-lang/rust/issues/160439.
+NIGHTLY_RUST_DATE=2026-08-02
 
 workdir=$(pwd)
 cd "$(dirname "$0")/.."
@@ -43,6 +46,10 @@ fi
 
 cmd=$1 && shift
 flavor=$1 && shift
+
+if [[ ${CI_SANITIZER:-none} != none && $flavor = stable ]]; then
+    flavor=nightly
+fi
 
 rust_date=
 case "$flavor" in

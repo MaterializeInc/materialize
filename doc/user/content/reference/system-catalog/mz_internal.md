@@ -181,7 +181,7 @@ shape is in [`mz_clusters`](../mz_catalog/#mz_clusters).
 | `status`       | [`text`]         | The lifecycle status of the reconfiguration: `in-progress` while the controller converges on the target, then a terminal `finalized`, `timed-out`, `cancelled`, or `resource-exhausted`. The record is retained after it settles, so the latest outcome stays inspectable until a later reconfiguration overwrites it. |
 | `deadline`     | [`mz_timestamp`] | The deadline by which the reconfiguration must complete. After it passes, the `on_timeout` action applies. |
 | `on_timeout`   | [`text`]         | The action applied if `deadline` passes before the target hydrates: `commit` (cut over to the not-yet-hydrated target) or `rollback` (revert to the pre-reconfiguration shape). |
-| `target`       | [`jsonb`]        | The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`. |
+| `target`       | [`jsonb`]        | The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`. |
 | `changes`      | [`jsonb`]        | The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff. |
 
 ## `mz_cluster_auto_scaling_strategies`
@@ -806,7 +806,7 @@ table and the corresponding upstream Kafka topic being ingested.
 | ------------------- | ---------------- | --------                                                                                                       |
 | `id`                | [`text`]         | The ID of the table. Corresponds to [`mz_catalog.mz_tables.id`](../mz_catalog#mz_tables).                   |
 | `topic`             | [`text`]         | The topic being ingested. |
-| `envelope_type`     | [`text`]         | The [envelope](/sql/create-source/kafka/#envelopes) type: `none`, `upsert`, or `debezium`. `NULL` for other source types. |
+| `envelope_type`     | [`text`]         | The [envelope](/sql/create-source/kafka/#envelopes) type: `none`, `upsert`, or `debezium`. Defaults to `none` when the source table omits an explicit envelope. |
 | `key_format`        | [`text`]         | The [format](/sql/create-source/kafka/#syntax) of the Kafka message key: `avro`, `csv`, `regex`, `bytes`, `json`, `text`, or `NULL`. |
 | `value_format`      | [`text`]         | The [format](/sql/create-source/kafka/#syntax) of the Kafka message value: `avro`, `csv`, `regex`, `bytes`, `json`, `text`. `NULL` for other source types. |
 

@@ -13,7 +13,6 @@ use std::fmt;
 use chrono::FixedOffset;
 use chrono_tz::Tz;
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use serde::{Deserialize, Serialize};
 use uncased::UncasedStr;
 
@@ -24,17 +23,7 @@ pub const MZ_CATALOG_TIMEZONE_NAMES_SQL: &str =
     include_str!(concat!(env!("OUT_DIR"), "/timezone.gen.sql"));
 
 /// Parsed timezone.
-#[derive(
-    Debug,
-    Copy,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    MzReflect
-)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Timezone {
     #[serde(with = "fixed_offset_serde")]
     FixedOffset(FixedOffset),
@@ -356,10 +345,12 @@ fn build_timezone_offset_second(
 
                     return match Tz::from_str_insensitive(val) {
                         Ok(tz) => Ok(Timezone::Tz(tz)),
-                        Err(err) => Err(format!(
-                            "Invalid timezone string ({}): {}. \
-                            Failed to parse {} at token index {}",
-                            value, err, val, i
+                        // Preserves the error text this message has always
+                        // had, independent of the timezone library's own
+                        // error messages.
+                        Err(_) => Err(format!(
+                            "Invalid timezone string ({value}): '{val}' is not a valid timezone. \
+                            Failed to parse {val} at token index {i}"
                         )),
                     };
                 }

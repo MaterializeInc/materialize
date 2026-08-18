@@ -42,6 +42,13 @@ class Worker:
     ignored_errors: defaultdict[str, Counter[type[Action]]]
     composition: Composition | None
     occurred_exception: Exception | None
+    # Set for a worker whose action spends long stretches driving the mzcompose
+    # composition rather than its own session: sleeping, killing and restarting
+    # environmentd, backing up and restoring. `Executor.last_status` only tracks
+    # session round trips, so for such a worker it says nothing at all, and the
+    # end-of-run wedge check has to leave it out rather than read its stale
+    # status as evidence of a deadlock.
+    off_session_work: bool
 
     def __init__(
         self,
@@ -53,12 +60,14 @@ class Worker:
         system: bool,
         composition: Composition | None,
         action_list: ActionList | None = None,
+        off_session_work: bool = False,
     ):
         self.rng = rng
         self.action_list = action_list
         self.actions = actions
         self.weights = weights
         self.end_time = end_time
+        self.off_session_work = off_session_work
         self.num_queries = Counter()
         # Unlike num_queries, these are never cleared: they feed the
         # end-of-run action coverage check.
@@ -86,8 +95,16 @@ class Worker:
                 ws = websocket.WebSocket()
                 ws_conn_id, ws_secret_key = ws_connect(ws, host, http_port, user)
                 self.exe = Executor(self.rng, cur, ws, database, user=user)
+                # The session settings have to be applied in autocommit mode: a
+                # value set inside a transaction is only staged, and Materialize
+                # discards staged values when that transaction rolls back, which
+                # CommitRollbackAction does. The Executor is constructed before
+                # this, it picks up the worker's autocommit mode from the
+                # connection.
+                self.conn.autocommit = True
                 self.exe.set_isolation("SERIALIZABLE")
                 cur.execute("SET auto_route_catalog_queries TO false")
+                self.conn.autocommit = self.autocommit
                 if self.exe.use_ws:
                     self.exe.pg_pid = ws_conn_id
                 else:

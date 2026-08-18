@@ -1,6 +1,6 @@
 ---
 title: "Install on AWS"
-description: "Install Materialize on AWS using the new Terraform module."
+description: "Install Materialize on AWS using the Terraform module."
 aliases:
   - /self-hosted/install-on-aws/
   - /self-managed/v25.1/installation/install-on-aws/
@@ -48,7 +48,7 @@ This example provisions the following infrastructure:
 
 | Resource | Description |
 |----------|-------------|
-| EKS Cluster | Version 1.32 with CloudWatch logging (API, audit) |
+| EKS Cluster | Version 1.34 with CloudWatch logging (API, audit) |
 | Base Node Group | 2 nodes (t4g.medium) for Karpenter and CoreDNS |
 | Karpenter | Auto-scaling controller with two node classes: Generic nodepool (t4g.xlarge instances for general workloads) and Materialize nodepool (r7gd.2xlarge instances with swap enabled and dedicated taints to run materialize instance workloads) |
 
@@ -87,6 +87,22 @@ This example provisions the following infrastructure:
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Network Load Balancer | Dedicated NLB for access to Materialize {{< yaml-table data="self_managed/default_ports" >}} |
 
+### Observability
+
+Off by default in the simple example. Set `enable_observability = true` to
+create the following as well:
+
+| Resource | Description |
+|----------|-------------|
+| Monitoring stack | Grafana, Thanos, Loki, Grafana Alloy, and Alertmanager in the `monitoring` namespace, with the Materialize dashboards pre-installed |
+| S3 Buckets | Dedicated buckets for metrics and logs |
+| Grafana RDS PostgreSQL | `db.t4g.micro` instance holding Grafana's own state (users, API tokens, annotations, dashboard versions) |
+| Grafana Network Load Balancer | Internal NLB for reaching Grafana, allowlisted to `ingress_cidr_blocks` |
+
+This stack requires TF v10.0.0 or later, which replaced an earlier
+Prometheus-and-Grafana pair. The Grafana database and load balancer were added
+in v10.1.0, and are both billable. For details, see
+[Grafana](/manage/monitor/self-managed/grafana/).
 
 ## Prerequisites
 
@@ -124,9 +140,9 @@ An active AWS account with appropriate permissions to create:
 * {{% self-managed/terraform-simple-example-tip %}}
 
 * The simple example used in this tutorial enables [Password
-authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/aws/examples/simple/main.tf#L380)
+authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/aws/examples/simple/main.tf#L518)
 for the Materialize instance. To use a different authentication method, update
-[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
 See [Authentication](/security/self-managed/authentication/) for the supported
 authentication mechanisms.
 
@@ -180,7 +196,15 @@ authentication mechanisms.
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
+   # enable_observability = true   # Set to true to enable observability stack.
+   # grafana_host = "grafana.example.com"   # Only used when enable_observability = true.
    ```
+
+   {{< note >}}
+   `enable_observability = true` also creates a `db.t4g.micro` RDS instance for
+   Grafana's own state and an internal NLB to reach Grafana on. Both are
+   billable. See [Grafana](/manage/monitor/self-managed/grafana/).
+   {{< /note >}}
 
    {{% include-from-yaml data="self_managed/installation"
    name="installation-tfvars-variables-optional" %}}

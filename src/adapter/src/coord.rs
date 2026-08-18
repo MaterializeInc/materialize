@@ -91,9 +91,9 @@ use itertools::Itertools;
 use mz_adapter_types::bootstrap_builtin_cluster_config::BootstrapBuiltinClusterConfig;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
+use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_adapter_types::dyncfgs::{
-    ENABLE_SCOPED_SYSTEM_PARAMETERS, USER_ID_POOL_BATCH_SIZE,
-    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
@@ -176,7 +176,7 @@ use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
 use tokio::runtime::Handle as TokioHandle;
 use tokio::select;
-use tokio::sync::{Notify, OwnedMutexGuard, mpsc, oneshot, watch};
+use tokio::sync::{Notify, OwnedMutexGuard, Semaphore, mpsc, oneshot, watch};
 use tokio::time::{Interval, MissedTickBehavior};
 use tracing::{Instrument, Level, Span, debug, info, info_span, span, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
@@ -195,7 +195,6 @@ use crate::coord::appends::{
     PendingWriteTxn,
 };
 use crate::coord::caught_up::CaughtUpCheckContext;
-use crate::coord::cluster_scheduling::SchedulingDecision;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
 use crate::coord::peek::PendingPeek;
@@ -220,7 +219,6 @@ use crate::{AdapterNotice, ReadHolds, flags};
 pub(crate) mod appends;
 pub(crate) mod catalog_serving;
 pub(crate) mod cluster_controller;
-pub(crate) mod cluster_scheduling;
 pub(crate) mod consistency;
 pub(crate) mod id_bundle;
 pub(crate) mod in_memory_oracle;
@@ -362,6 +360,8 @@ pub enum Message {
         responses: Vec<crate::util::CompletedClientTransmitter>,
         /// Statement executions associated with this commit.
         statement_logging_ids: Vec<StatementLoggingId>,
+        /// Frontend-sequenced writes to complete after local timestamp bookkeeping.
+        internal_results: Vec<crate::coord::appends::InternalWriteResponder>,
         /// The applied write timestamp.
         write_ts: Timestamp,
     },
@@ -444,13 +444,6 @@ pub enum Message {
     },
     DrainStatementLog,
     PrivateLinkVpcEndpointEvents(Vec<VpcEndpointEvent>),
-    CheckSchedulingPolicies,
-
-    /// Scheduling policy decisions about turning clusters On/Off.
-    /// `Vec<(policy name, Vec of decisions by the policy)>`
-    /// A cluster will be On if and only if there is at least one On decision for it.
-    /// Scheduling decisions for clusters that have `SCHEDULE = MANUAL` are ignored.
-    SchedulingDecisions(Vec<(&'static str, Vec<(ClusterId, SchedulingDecision)>)>),
 
     /// One pull/apply call from the cluster controller task, answered on the main
     /// coordinator message loop from the catalog and live controller signals.
@@ -507,6 +500,10 @@ impl Message {
                 Command::FrontendStatementLogging(..) => "frontend-statement-logging",
                 Command::StartCopyFromStdin { .. } => "start-copy-from-stdin",
                 Command::InjectAuditEvents { .. } => "inject-audit-events",
+                Command::RegisterConnectionCancelWatch { .. } => "register-connection-cancel-watch",
+                Command::CreateInternalSubscribe { .. } => "create-internal-subscribe",
+                Command::AttemptWrite { .. } => "attempt-write",
+                Command::DropInternalSubscribe { .. } => "drop-internal-subscribe",
             },
             Message::ControllerReady {
                 controller: ControllerReadiness::Compute,
@@ -558,8 +555,6 @@ impl Message {
             Message::DrainStatementLog => "drain_statement_log",
             Message::AlterConnectionValidationReady(..) => "alter_connection_validation_ready",
             Message::PrivateLinkVpcEndpointEvents(_) => "private_link_vpc_endpoint_events",
-            Message::CheckSchedulingPolicies => "check_scheduling_policies",
-            Message::SchedulingDecisions { .. } => "scheduling_decision",
             Message::ClusterControllerRequest(_) => "cluster_controller_request",
             Message::DeferredStatementReady => "deferred_statement_ready",
         }
@@ -1733,6 +1728,10 @@ impl ExecuteContext {
     /// (possibly wrapped in a new `ExecuteContext`) is passed back to the coordinator for
     /// eventual retirement. The returned response barriers must stay attached
     /// to the user-visible response path.
+    ///
+    /// The returned parts lose the `Drop` backstop that answers the client on shutdown, so they
+    /// must not be held across an await point. A bare `ClientTransmitter` panics when dropped
+    /// unsent.
     pub fn into_parts(
         mut self,
     ) -> (
@@ -1755,26 +1754,23 @@ impl ExecuteContext {
     /// Retire the execution, by sending a message to the coordinator.
     #[instrument(level = "debug")]
     pub fn retire(mut self, result: Result<ExecuteResponse, AdapterError>) {
-        let ExecuteContextInner {
-            tx,
-            internal_cmd_tx,
-            session,
-            extra,
-            response_barriers,
-        } = *self.inner.take().expect("only consumed by value");
+        let response_barriers = std::mem::take(&mut self.response_barriers);
         if response_barriers.is_empty() {
+            let (tx, internal_cmd_tx, session, extra, _) = self.into_parts();
             retire_execution_context(tx, internal_cmd_tx, session, extra, result);
-        } else {
-            spawn(
-                || "execute_context::retire_after_response_barriers",
-                async move {
-                    for barrier in response_barriers {
-                        barrier.await;
-                    }
-                    retire_execution_context(tx, internal_cmd_tx, session, extra, result);
-                },
-            );
+            return;
         }
+        // Keep `self` intact across the wait: if shutdown drops this task, the context's `Drop`
+        // backstop answers the client. Barriers are empty on re-entry, so this terminates.
+        spawn(
+            || "execute_context::retire_after_response_barriers",
+            async move {
+                for barrier in response_barriers {
+                    barrier.await;
+                }
+                self.retire(result);
+            },
+        );
     }
 
     /// Delays sending this statement's response until `barrier` resolves.
@@ -2059,8 +2055,11 @@ pub struct Coordinator {
     /// Each entry is a watch channel whose value is `false` until cancellation
     /// is requested for that connection, at which point it is set to `true`.
     ///
-    /// Consumers install/remove these watches while they have cancellable work
-    /// in flight.
+    /// Consumers install these watches while they have cancellable work in
+    /// flight, always as a fresh channel, so nobody can observe a cancellation
+    /// aimed at an earlier statement. An entry is removed when a statement
+    /// starts, when a stage runs uncancelable, and when the connection's state
+    /// is cleared.
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
@@ -2072,6 +2071,24 @@ pub struct Coordinator {
 
     /// Pending writes waiting for a group commit.
     pending_writes: Vec<PendingWriteTxn>,
+
+    /// Semaphore to limit concurrent OCC (optimistic concurrency control)
+    /// read-then-write operations.
+    ///
+    /// Each operation maintains a subscribe that continually receives and
+    /// consolidates updates. With N concurrent loops, every successful write
+    /// forces the other N-1 to redo work, so total work scales as `O(n^2)`.
+    /// The semaphore caps concurrency to keep that bounded.
+    ///
+    /// NOTE: The number of permits is read from `max_concurrent_occ_writes` at
+    /// coordinator startup. Runtime changes require an `environmentd` restart.
+    occ_write_semaphore: Arc<Semaphore>,
+
+    /// Whether frontend OCC read-then-write is enabled. Read once at startup
+    /// from the `FRONTEND_READ_THEN_WRITE` dyncfg and fixed for the lifetime of
+    /// this process. See the module-level docs on `frontend_read_then_write`
+    /// for why mixed-mode operation is not allowed.
+    frontend_read_then_write_enabled: bool,
 
     /// For the realtime timeline, an explicit SELECT or INSERT on a table will bump the
     /// table's timestamps, but there are cases where timestamps are not bumped but
@@ -2130,14 +2147,6 @@ pub struct Coordinator {
     /// Optional config for the timestamp oracle. This is _required_ when
     /// a timestamp oracle backend is configured.
     timestamp_oracle_config: Option<TimestampOracleConfig>,
-
-    /// Periodically asks cluster scheduling policies to make their decisions.
-    check_cluster_scheduling_policies_interval: Interval,
-
-    /// This keeps the last On/Off decision for each cluster and each scheduling policy.
-    /// (Clusters that have been dropped or are otherwise out of scope for automatic scheduling are
-    /// periodically cleaned up from this Map.)
-    cluster_scheduling_decisions: BTreeMap<ClusterId, BTreeMap<&'static str, SchedulingDecision>>,
 
     /// When doing 0dt upgrades/in read-only mode, periodically ask all known
     /// clusters/collections whether they are caught up.
@@ -2212,7 +2221,7 @@ impl Coordinator {
     pub(crate) async fn reconcile_scoped_system_parameters(
         &mut self,
         scoped: ScopedParameters,
-        prune_scope: Option<ScopedParametersScope>,
+        prune_scope: ScopedParametersScope,
     ) {
         // Nothing changed: skip the durable write. This is the common case on
         // most sync ticks.
@@ -2254,10 +2263,10 @@ impl Coordinator {
     /// arrangement-build time) make a later push too late, which is why this
     /// happens in the create transaction rather than the next sync tick.
     ///
-    /// Returns `None` when the feature is gated off, the shared frontend is not
-    /// yet installed (e.g. before LaunchDarkly connects), or no override
-    /// applies. The new objects then resolve to the environment-wide value, and
-    /// the periodic sync loop remains the authoritative full-state reconciler.
+    /// Returns `None` when the shared frontend is not yet installed (e.g. before
+    /// LaunchDarkly connects), or when no override applies. The new objects then
+    /// resolve to the environment-wide value, and the periodic sync loop remains
+    /// the authoritative full-state reconciler.
     ///
     /// [`Op::UpdateScopedSystemParameters`]: crate::catalog::Op::UpdateScopedSystemParameters
     fn scoped_overrides_create_op(
@@ -2268,9 +2277,6 @@ impl Coordinator {
         let frontend = self.scoped_frontend.clone()?;
         let catalog = self.catalog();
         let system_config = catalog.system_config();
-        if !ENABLE_SCOPED_SYSTEM_PARAMETERS.get(system_config.dyncfgs()) {
-            return None;
-        }
 
         // Partition the synced parameters by scope class, as the sync loop does,
         // so we evaluate exactly the flags in use at each scope.
@@ -2308,7 +2314,7 @@ impl Coordinator {
         };
         Some(crate::catalog::Op::UpdateScopedSystemParameters {
             scoped: evaluated,
-            prune_scope: Some(prune_scope),
+            prune_scope,
         })
     }
 
@@ -2360,26 +2366,32 @@ impl Coordinator {
             }
         }
 
-        // Only the compute controller's per-replica dyncfg layer is pushed, but on
-        // `clusterd` that also reaches storage. Compute and storage share one
-        // process, and the compute worker's `handle_update_configuration` applies
-        // the pushed dyncfg updates both to compute's own worker `ConfigSet` and to
-        // the shared persist client `ConfigSet` (`persist_clients.cfg()`) that the
-        // co-located storage server reads from the same `Arc`. So persist-backed and
-        // process-global replica-local configs such as the persist pager, LZ4,
-        // persist client tuning, and `lgalloc` take effect on storage too. The only
-        // gap would be a future `Replica`-scoped config realized solely in the
-        // storage worker's own `ConfigSet`, of which none exists today.
+        // Both controllers carry a per-replica dyncfg layer, because the two
+        // protocols realize configs in different worker `ConfigSet`s on
+        // `clusterd`. The compute worker's `handle_update_configuration`
+        // applies the pushed dyncfg updates to compute's own worker
+        // `ConfigSet` and to the shared persist client `ConfigSet`
+        // (`persist_clients.cfg()`) that the co-located storage server reads
+        // from the same `Arc`, which covers persist-backed and process-global
+        // configs such as persist client tuning and `lgalloc`. Configs
+        // realized from the storage worker's own `ConfigSet` (read in its
+        // `UpdateConfiguration` handler) are reached only by the storage
+        // controller's layer.
         self.controller
             .compute
+            .update_replica_dyncfg_overrides(instance_overrides.clone());
+        self.controller
+            .storage
             .update_replica_dyncfg_overrides(instance_overrides);
-        // Re-push the env-wide compute config so existing replicas pick up their
-        // (possibly changed) overrides. This also reverts a removed override: the
-        // per-replica layer no longer carries the key, so the replica falls back
-        // to the env-wide value, which `compute_config` always includes because it
-        // renders the full dyncfg set.
+        // Re-push the env-wide configs so existing replicas pick up their
+        // (possibly changed) overrides. This also reverts a removed override:
+        // the per-replica layer no longer carries the key, so the replica
+        // falls back to the env-wide value, which both configs always include
+        // because they render the full dyncfg set.
         let compute_config = crate::flags::compute_config(self.catalog().system_config());
         self.controller.compute.update_configuration(compute_config);
+        let storage_config = crate::flags::storage_config(self.catalog().system_config());
+        self.controller.storage.update_parameters(storage_config);
     }
 
     /// Returns the cluster-coherent scoped optimizer-feature overrides for
@@ -2755,7 +2767,8 @@ impl Coordinator {
                 CatalogItem::Log(_)
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
-                | CatalogItem::Secret(_) => {}
+                | CatalogItem::Secret(_)
+                | CatalogItem::MetricSink(_) => {}
             }
         }
 
@@ -3340,7 +3353,10 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                | CatalogItem::Connection(_)
+                // Nothing to bootstrap: a metric sink has no storage collection, it publishes
+                // into the replica's metrics registry.
+                | CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3750,7 +3766,8 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => (),
+                | CatalogItem::Connection(_)
+                | CatalogItem::MetricSink(_) => (),
             }
         }
 
@@ -3782,7 +3799,8 @@ impl Coordinator {
                 | CatalogItem::Type(_)
                 | CatalogItem::Func(_)
                 | CatalogItem::Secret(_)
-                | CatalogItem::Connection(_) => continue,
+                | CatalogItem::Connection(_)
+                | CatalogItem::MetricSink(_) => continue,
             };
             if let Some(plan) = self.catalog.try_get_physical_plan(&gid) {
                 catalog_ids.push(gid);
@@ -3965,8 +3983,8 @@ impl Coordinator {
                         // and make it follow from all the Spans in the pending
                         // writes.
                         let user_write_spans = self.pending_writes.iter().flat_map(|x| match x {
-                            PendingWriteTxn::User{span, ..} => Some(span),
-                            PendingWriteTxn::System{..} => None,
+                            PendingWriteTxn::User { span, .. } => Some(span),
+                            PendingWriteTxn::System { .. } => None,
                         });
                         let span = match user_write_spans.exactly_one() {
                             Ok(span) => span.clone(),
@@ -4038,13 +4056,6 @@ impl Coordinator {
                         linearize_reads_notified.set(linearize_reads_notify.notified());
                         messages.push(Message::LinearizeReads);
                     }
-                    // `tick()` on `Interval` is cancel-safe:
-                    // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
-                    // Receive a single command.
-                    _ = self.check_cluster_scheduling_policies_interval.tick() => {
-                        messages.push(Message::CheckSchedulingPolicies);
-                    },
-
                     // `tick()` on `Interval` is cancel-safe:
                     // https://docs.rs/tokio/1.19.2/tokio/time/struct.Interval.html#cancel-safety
                     // Receive a single command.
@@ -4278,7 +4289,8 @@ impl Coordinator {
         ctx_extra: ExecuteContextExtra,
     ) {
         if let Some(uuid) = ctx_extra.retire() {
-            self.end_statement_execution(uuid, reason);
+            let ended_at = self.now();
+            self.end_statement_execution(uuid, reason, ended_at);
         }
     }
 
@@ -4924,12 +4936,6 @@ pub fn serve(
         let coord_now = now.clone();
         let advance_timelines_interval =
             tokio::time::interval(catalog.system_config().default_timestamp_interval());
-        let mut check_scheduling_policies_interval = tokio::time::interval(
-            catalog
-                .system_config()
-                .cluster_check_scheduling_policies_interval(),
-        );
-        check_scheduling_policies_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         let clusters_caught_up_check_interval = if read_only_controllers {
             let dyncfgs = catalog.system_config().dyncfgs();
@@ -5075,6 +5081,13 @@ pub fn serve(
                 }
 
                 let catalog = Arc::new(catalog);
+                // Both are read once at startup, see the field docs on
+                // `occ_write_semaphore` and `frontend_read_then_write_enabled`.
+                let max_concurrent_occ_writes =
+                    usize::cast_from(catalog.system_config().max_concurrent_occ_writes());
+                let frontend_read_then_write_enabled = {
+                                FRONTEND_READ_THEN_WRITE.get(catalog.system_config().dyncfgs())
+                };
 
                 let caching_secrets_reader = CachingSecretsReader::new(secrets_controller.reader());
                 let (group_committer_tx, group_committer_rx) = mpsc::unbounded_channel();
@@ -5103,6 +5116,8 @@ pub fn serve(
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),
+                    occ_write_semaphore: Arc::new(Semaphore::new(max_concurrent_occ_writes)),
+                    frontend_read_then_write_enabled,
                     advance_timelines_interval,
                     secrets_controller,
                     caching_secrets_reader,
@@ -5118,8 +5133,6 @@ pub fn serve(
                     statement_logging: StatementLogging::new(coord_now.clone()),
                     webhook_concurrency_limit,
                     timestamp_oracle_config,
-                    check_cluster_scheduling_policies_interval: check_scheduling_policies_interval,
-                    cluster_scheduling_decisions: BTreeMap::new(),
                     caught_up_check_interval: clusters_caught_up_check_interval,
                     caught_up_check: clusters_caught_up_check,
                     installed_watch_sets: BTreeMap::new(),
@@ -5515,6 +5528,46 @@ pub(crate) fn infer_sql_type_for_catalog(
     let mut typ = hir_expr.top_level_typ();
     typ.backport_nullability_and_keys(&mir_expr.typ());
     typ
+}
+
+#[cfg(test)]
+mod execute_context_tests {
+    use tokio::sync::{mpsc, oneshot};
+
+    use super::*;
+    use crate::session::Session;
+    use crate::util::ClientTransmitter;
+
+    /// Runtime shutdown drops the barrier-waiting task that `retire` spawns. The context's `Drop`
+    /// backstop must answer the client, rather than panicking on an unsent `ClientTransmitter`.
+    #[mz_ore::test]
+    fn test_retire_answers_client_when_runtime_shuts_down() {
+        let runtime = tokio::runtime::Runtime::new().expect("can build runtime");
+
+        let (client_tx, mut client_rx) = oneshot::channel();
+        let (internal_cmd_tx, _internal_cmd_rx) = mpsc::unbounded_channel();
+
+        runtime.block_on(async {
+            let ctx = ExecuteContext::from_parts_with_response_barriers(
+                ClientTransmitter::new(client_tx, internal_cmd_tx.clone()),
+                internal_cmd_tx,
+                Session::dummy(),
+                ExecuteContextGuard::default(),
+                // Stands in for a group commit that shutdown will never apply.
+                vec![Box::pin(std::future::pending())],
+            );
+            ctx.retire(Ok(ExecuteResponse::StartedTransaction));
+        });
+
+        drop(runtime);
+
+        let response = client_rx.try_recv().expect("client must be answered");
+        assert!(
+            matches!(response.result, Err(AdapterError::Internal(_))),
+            "expected an internal error, got {:?}",
+            response.result
+        );
+    }
 }
 
 #[cfg(test)]

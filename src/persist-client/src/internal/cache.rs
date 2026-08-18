@@ -224,7 +224,7 @@ mod lru {
 
         /// Returns the total number of entries in the cache.
         pub fn entry_count(&self) -> usize {
-            debug_assert_eq!(self.entries.len(), self.by_time.len());
+            mz_ore::soft_assert_eq_no_log!(self.entries.len(), self.by_time.len());
             self.entries.len()
         }
 

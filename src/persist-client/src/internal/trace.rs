@@ -920,8 +920,8 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     fn id(&self) -> SpineId {
-        debug_assert_eq!(self.parts.first().map(|x| x.id.0), Some(self.id.0));
-        debug_assert_eq!(self.parts.last().map(|x| x.id.1), Some(self.id.1));
+        mz_ore::soft_assert_eq_no_log!(self.parts.first().map(|x| x.id.0), Some(self.id.0));
+        mz_ore::soft_assert_eq_no_log!(self.parts.last().map(|x| x.id.1), Some(self.id.1));
         self.id
     }
 
@@ -1581,12 +1581,17 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
     ///
     /// If `fuel` is non-zero after the call, the merging is complete and one
     /// should call `done` to extract the merged results.
-    // TODO(benesch): rewrite to avoid usage of `as`.
-    #[allow(clippy::as_conversions)]
     fn work(&mut self, _: &[SpineBatch<T>], fuel: &mut isize) {
-        let used = std::cmp::min(*fuel as usize, self.remaining_work);
+        // A negative `fuel` means a caller already overspent, so there is
+        // nothing to spend here. Reading it as a `usize` instead would wrap to a
+        // huge budget, spend `remaining_work` against it, and then underflow the
+        // subtraction below.
+        let available = usize::try_from(*fuel).unwrap_or(0);
+        let used = std::cmp::min(available, self.remaining_work);
         self.remaining_work = self.remaining_work.saturating_sub(used);
-        *fuel -= used as isize;
+        // `used <= available <= isize::MAX`, so neither conversion nor the
+        // subtraction can overflow.
+        *fuel -= isize::try_from(used).expect("used is bounded by fuel");
     }
 
     /// Extracts merged results.
@@ -1626,7 +1631,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
             merged_parts.extend(b.parts)
         }
         // Sanity check the pre-size code.
-        debug_assert_eq!(merged_parts.len(), merged_parts_len);
+        mz_ore::soft_assert_eq_no_log!(merged_parts.len(), merged_parts_len);
 
         if let SpineLog::Enabled { merge_reqs } = log {
             merge_reqs.push(FueledMergeReq {
@@ -1922,14 +1927,21 @@ impl<T: Timestamp + Lattice> Spine<T> {
         // batches. We could try and make this be less, or be scaled to merges
         // based on their deficit at time of instantiation. For now, we remain
         // conservative.
-        let mut fuel = 8 << batch_index;
-        // Scale up by the effort parameter, which is calibrated to one as the
-        // minimum amount of effort.
-        fuel *= self.effort;
-        // Convert to an `isize` so we can observe any fuel shortfall.
-        // TODO(benesch): avoid dangerous usage of `as`.
-        #[allow(clippy::as_conversions)]
-        let fuel = fuel as isize;
+        //
+        // `batch_index` is derived from a batch's `len`, which for a trace
+        // reconstructed from an untrusted blob can be large enough that
+        // `8 << batch_index` overflows. Saturate at `isize::MAX` rather than
+        // wrapping: fuel is a budget, so more of it only completes merges sooner,
+        // whereas a wrapped value can land negative and starve them. The result
+        // is an `isize` so a fuel shortfall stays observable.
+        let fuel = u32::try_from(batch_index)
+            .ok()
+            .and_then(|shift| 8usize.checked_shl(shift))
+            // Scale up by the effort parameter, which is calibrated to one as the
+            // minimum amount of effort.
+            .and_then(|fuel| fuel.checked_mul(self.effort))
+            .and_then(|fuel| isize::try_from(fuel).ok())
+            .unwrap_or(isize::MAX);
 
         // Step 1.  Apply fuel to each in-progress merge.
         //
@@ -2748,5 +2760,34 @@ pub(crate) mod tests {
         assert!(matches!(result, ApplyMergeResult::NotAppliedTooManyUpdates));
         assert_eq!(sb_too_big.parts.len(), 3);
         assert_eq!(sb_too_big.len(), 30);
+    }
+
+    /// Inserting a batch whose `len` is large enough to saturate the fuel
+    /// computation must not disturb an in-progress merge's accounting.
+    ///
+    /// `introduce_batch` derives its fuel from `8 << batch_index`, where
+    /// `batch_index` is `len.next_power_of_two().trailing_zeros()`. A `len` near
+    /// `2^60` pushes that past what an `isize` holds, and `Trace::unflatten`
+    /// accepts such a `len` from an untrusted blob: its `MAX_TOTAL_LEN` guard
+    /// only caps the total at `usize::MAX >> 3`.
+    #[mz_ore::test]
+    fn spine_fuel_isize_overflow() {
+        let mut trace = Trace::<u64>::default();
+        let mut push = |lower, upper, key: &str, len| {
+            trace.push_batch_no_merge_reqs(crate::internal::state::tests::hollow::<u64>(
+                lower,
+                upper,
+                &[key],
+                len,
+            ));
+        };
+        // Two same-size batches fill a level and begin a merge whose
+        // `remaining_work` (the sum of their lens) far exceeds the `8 << 0` fuel
+        // that a subsequent len-1 batch delivers, so the merge is still in
+        // progress when the saturating batch arrives.
+        push(0, 1, "a", 100);
+        push(1, 2, "b", 100);
+        push(2, 3, "c", 1);
+        push(3, 4, "d", 1 << 60);
     }
 }

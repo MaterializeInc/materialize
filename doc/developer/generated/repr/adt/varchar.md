@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/adt/varchar.rs
-revision: c0559e3dbe
+revision: 37d0a1c9ac
 ---
 
 # mz-repr::adt::varchar

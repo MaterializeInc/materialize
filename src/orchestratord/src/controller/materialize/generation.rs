@@ -763,7 +763,7 @@ fn create_environmentd_statefulset_object(
         "--orchestrator=kubernetes".into(),
         format!(
             "--orchestrator-kubernetes-service-account={}",
-            &mz.service_account_name()
+            mz.service_account_name()
         ),
         format!(
             "--orchestrator-kubernetes-image-pull-policy={}",
@@ -942,7 +942,7 @@ fn create_environmentd_statefulset_object(
     // Add URL for internal user impersonation endpoint
     args.push(format!(
         "--internal-console-redirect-url={}",
-        &config.internal_console_proxy_url,
+        config.internal_console_proxy_url,
     ));
 
     if !config.collect_pod_metrics {
@@ -1293,7 +1293,7 @@ fn create_environmentd_statefulset_object(
         metadata: ObjectMeta {
             annotations: Some(btreemap! {
                 "materialize.cloud/generation".to_owned() => generation.to_string(),
-                "materialize.cloud/force".to_owned() => mz.spec.force_rollout.to_string(),
+                "materialize.cloud/force".to_owned() => mz.force_rollout_value(),
             }),
             ..mz.managed_resource_meta(mz.environmentd_statefulset_name(generation))
         },

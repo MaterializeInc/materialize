@@ -21,7 +21,6 @@
 
 use std::fmt;
 
-use mz_lowertest::MzReflect;
 use mz_repr::{Datum, Row, RowArena, SqlColumnType};
 use serde::{Deserialize, Serialize};
 
@@ -39,12 +38,10 @@ use crate::{Eval, EvalError};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CaseLiteralEntry {
     /// The literal value (as a single-datum `Row`).
-    #[mzreflect(ignore)]
     pub literal: Row,
     /// Index into the `exprs` vector of the corresponding result expression.
     pub expr_index: usize,
@@ -66,8 +63,7 @@ pub struct CaseLiteralEntry {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CaseLiteral {
     /// Sorted vec of literal-to-index entries for binary-search lookup.

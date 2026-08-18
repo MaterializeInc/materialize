@@ -47,7 +47,11 @@ import {
   fetchLargestClusterReplica,
   LargestClusterReplicaParams,
 } from "~/api/materialize/cluster/largestClusterReplica";
-import { fetchLargestMaintainedQueries } from "~/api/materialize/cluster/largestMaintainedQueries";
+import {
+  fetchLargestMaintainedObjectSizes,
+  fetchLargestMaintainedQueries,
+  fetchMaintainedObjectNames,
+} from "~/api/materialize/cluster/largestMaintainedQueries";
 import {
   fetchMaterializationLag,
   LagInfo,
@@ -80,8 +84,10 @@ import {
 } from "~/api/materialize/cluster/replicaUtilizationHistory";
 import { fetchLagHistory } from "~/api/materialize/freshness/lagHistory";
 import { assertNoMoreThanOneRow } from "~/api/materialize/MoreThanOneRowError";
+import { fetchOwners } from "~/api/materialize/owners";
 import { useSubscribe } from "~/api/materialize/useSubscribe";
 import { DataPoint, GraphLineSeries } from "~/components/FreshnessGraph/types";
+import { roleQueryKeys } from "~/platform/roles/queries";
 import { useEnvironmentGate } from "~/store/environments";
 import { notNullOrUndefined, sumPostgresIntervalMs } from "~/util";
 import { sortLagInfo } from "~/utils/freshness";
@@ -121,7 +127,9 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("largestClusterReplica", params),
     ] as const,
-  largestMaintainedQueries: (params: UseLargestMaintainedQueriesParams) =>
+  largestMaintainedQueries: (
+    params: UseLargestMaintainedQueriesParams & { unifiedSizes: boolean },
+  ) =>
     [
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("largestMaintainedQueries", params),
@@ -174,6 +182,14 @@ export const clusterQueryKeys = {
       ...clusterQueryKeys.all(),
       buildQueryKeyPart("clusterFreshness", params),
     ] as const,
+  maintainedObjectNames: (objectIds: string[]) =>
+    [
+      ...clusterQueryKeys.all(),
+      // Sort so the key tracks set membership, not the size ranking.
+      buildQueryKeyPart("maintainedObjectNames", {
+        objectIds: [...objectIds].sort().join(","),
+      }),
+    ] as const,
 };
 
 export function useClusters(filters?: ClusterListFilters) {
@@ -209,6 +225,43 @@ export function useClusters(filters?: ClusterListFilters) {
     refetch,
     getClusterById,
   };
+}
+
+// Declared at module scope so react-query's select memoization holds. An inline
+// select is a new function every render, which makes react-query re-run it and
+// hand back a fresh Map, which in turn breaks `isOwner`'s referential stability.
+const selectOwnersById = (result: Awaited<ReturnType<typeof fetchOwners>>) =>
+  new Map(result.rows.map((row) => [row.id, row.isOwner]));
+
+/**
+ * Returns `isOwner`, a predicate on an object's owner id, for deriving
+ * ownership on rows from the allClusters subscribe.
+ *
+ * An unknown owner id and an in-flight query both resolve to false, so
+ * owner-only controls stay hidden until ownership is known rather than
+ * appearing and then disappearing.
+ *
+ * `isOwner` keeps a stable reference while the underlying data is unchanged, so
+ * callers can safely put it in a dependency array.
+ */
+export function useOwners() {
+  const { data: ownersById, isPending } = useQuery({
+    // Role mutations invalidate this key, so this long interval is only a
+    // backstop for external role changes while the page stays open.
+    refetchInterval: 300_000,
+    queryKey: roleQueryKeys.owners(),
+    queryFn: ({ queryKey, signal }) => {
+      return fetchOwners({ queryKey, requestOptions: { signal } });
+    },
+    select: selectOwnersById,
+  });
+
+  const isOwner = useCallback(
+    (ownerId: string) => !isPending && (ownersById?.get(ownerId) ?? false),
+    [isPending, ownersById],
+  );
+
+  return { isOwner };
 }
 
 export type AlterClusterParams = AlterClusterSettingsParams &
@@ -268,6 +321,7 @@ export function useLargestClusterReplica(params: LargestClusterReplicaParams) {
 const STRIP_DATAFLOW_PREFIX = /^Dataflow: /;
 
 export type UseLargestMaintainedQueriesParams = {
+  clusterId: string;
   clusterName: string;
   limit?: number;
   replicaName: string | undefined;
@@ -276,10 +330,19 @@ export type UseLargestMaintainedQueriesParams = {
 export function useLargestMaintainedQueries(
   params: UseLargestMaintainedQueriesParams,
 ) {
+  // mz_object_arrangement_sizes reports sizes reliably from v26.35, where
+  // they no longer go stale across replica restarts.
+  const unifiedSizes = useEnvironmentGate("26.35.0-dev") ?? false;
+  const queryClient = useQueryClient();
+  // queryClient is a stable singleton, not query input.
+  // eslint-disable-next-line @tanstack/query/exhaustive-deps
   return useSuspenseQuery({
     refetchInterval: 60_000,
-    queryKey: clusterQueryKeys.largestMaintainedQueries(params),
-    queryFn: ({ queryKey, signal }) => {
+    queryKey: clusterQueryKeys.largestMaintainedQueries({
+      ...params,
+      unifiedSizes,
+    }),
+    queryFn: async ({ queryKey, signal }) => {
       const [, paramsFromKey] = queryKey;
       if (
         paramsFromKey.replicaHeapLimit === null ||
@@ -288,6 +351,52 @@ export function useLargestMaintainedQueries(
       )
         return null;
 
+      if (paramsFromKey.unifiedSizes) {
+        const sizes = await fetchLargestMaintainedObjectSizes({
+          queryKey,
+          params: {
+            clusterId: paramsFromKey.clusterId,
+            replicaName: paramsFromKey.replicaName,
+            replicaHeapLimit: paramsFromKey.replicaHeapLimit,
+            limit: paramsFromKey.limit ?? 10,
+          },
+          requestOptions: { signal },
+        });
+        const objectIds = sizes.rows.map((row) => row.object_id);
+        // Names are stable, so serve them from the query cache keyed by the
+        // id set: the lookup only refires when the top-N membership changes.
+        const namesById = objectIds.length
+          ? await queryClient
+              .fetchQuery({
+                queryKey: clusterQueryKeys.maintainedObjectNames(objectIds),
+                staleTime: 5 * 60_000,
+                queryFn: ({ signal: namesSignal }) =>
+                  fetchMaintainedObjectNames({
+                    objectIds,
+                    queryKey: clusterQueryKeys.maintainedObjectNames(objectIds),
+                    requestOptions: { signal: namesSignal },
+                  }),
+              })
+              .then((names) => new Map(names.rows.map((row) => [row.id, row])))
+          : undefined;
+        return {
+          ...sizes,
+          rows: sizes.rows.map((row) => {
+            const named = namesById?.get(row.object_id);
+            return {
+              id: row.object_id as string | null,
+              name: named?.name ?? null,
+              size: row.size,
+              memoryPercentage: row.memoryPercentage,
+              type: (named?.type ?? null) as "materialized-view" | "index",
+              schemaName: named?.schemaName ?? null,
+              databaseName: named?.databaseName ?? null,
+              dataflowId: null as string | null,
+              dataflowName: null as string | null,
+            };
+          }),
+        };
+      }
       return fetchLargestMaintainedQueries({
         queryKey,
         params: {
@@ -311,11 +420,14 @@ export function useLargestMaintainedQueries(
           name = row.name;
 
         if (isOrphanedDataflow) {
-          const fullyQualifiedName = row.dataflowName
+          const fullyQualifiedName = (row.dataflowName ?? "")
             .replace(STRIP_DATAFLOW_PREFIX, "")
             .split(".");
           if (fullyQualifiedName.length === 3) {
             [databaseName, schemaName, name] = fullyQualifiedName;
+          } else if (!name) {
+            // Unified rows carry no dataflow name, fall back to the object id.
+            name = row.id;
           }
         }
 

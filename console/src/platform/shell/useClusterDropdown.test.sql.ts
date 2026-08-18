@@ -35,6 +35,7 @@ describe("useClustersDropdown subscribe", () => {
       mz_progressed: false,
       mz_state: "upsert",
       id: expect.any(String),
+      ownerId: expect.any(String),
       name: "quickstart",
       disk: true,
       managed: true,

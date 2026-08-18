@@ -14,28 +14,29 @@
 //! the controller as a **separate task** and implements the ctx by marshaling
 //! each pull/apply to the Coordinator over the internal command channel, because
 //! the catalog and the live compute/storage signals are reachable only from the
-//! coordinator loop. The two whole-tick reads are batched; the per-cluster live
-//! signals are pulled on demand, so a tick's round-trips scale with the number of
-//! managed clusters that need a live signal, not with a constant.
+//! coordinator loop. Whole-tick reads are batched. Refresh-window catalog inputs
+//! are pulled one cluster at a time and completed with one shared oracle read.
+//! The remaining per-cluster live signals are pulled on demand, so steady
+//! clusters do not pay for signals they do not use.
 //!
-//! Everything here is gated by [`ENABLE_CLUSTER_CONTROLLER`] (default on). With
-//! the gate off the task does not tick, so the legacy scheduling and graceful
-//! paths remain the sole writers of the replica set. With the gate on the
-//! controller owns the *user* managed-cluster replica set; the legacy entry
-//! points no-op. (System/builtin clusters are never controller-owned. The
-//! catalog's bootstrap migration owns their replicas.)
+//! The controller owns the replica set of every managed cluster, user and
+//! system alike. A builtin cluster's config-implied replicas are additionally
+//! materialized by `reconcile_builtin_cluster_replicas` at catalog open, which
+//! derives the same target from the same config, so the two converge rather
+//! than compete.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use mz_adapter_types::dyncfgs::{CLUSTER_CONTROLLER_TICK_INTERVAL, ENABLE_CLUSTER_CONTROLLER};
+use mz_adapter_types::dyncfgs::CLUSTER_CONTROLLER_TICK_INTERVAL;
 use mz_catalog::memory::objects::{ClusterConfig, ClusterVariant};
 use mz_cluster_controller::ClusterController;
 use mz_cluster_controller::ctx::{
     ApplyOutcome, AvailabilityZones, ClusterControllerCtx, ClusterState, CreateReason, Decision,
     ExpectedClusterState, ObservedReplica, OnTimeout, ReconfigurationRecord, ReconfigurationStatus,
-    ReconfigurationTarget, RefreshMvInfo, RefreshWindowInputs, ReplicaShape, StateWrite,
+    ReconfigurationTarget, RefreshMvInfo, RefreshWindowClusterInputs, RefreshWindowInputsBatch,
+    ReplicaShape, StateWrite,
 };
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::ClusterStatus;
@@ -53,13 +54,12 @@ use crate::error::AdapterError;
 /// [`ClusterControllerCtx`] call. Each variant carries a oneshot for the reply.
 ///
 /// `ManagedClusterIds` and `ClusterStates` are the per-tick batched reads. The
-/// `ClusterStates` reply also carries `now`. `HydratedReplicas` is a
-/// per-cluster live signal a strategy pulls on demand.
+/// `ClusterStates` reply also carries `now`. Refresh-window catalog inputs are
+/// pulled one cluster at a time, followed by one shared oracle read.
+/// `HydratedReplicas` is a per-cluster live signal a strategy pulls on demand.
 #[derive(Debug)]
 pub enum ClusterControllerRequest {
-    /// The ids of all *user* managed clusters the controller owns this tick.
-    /// System/builtin clusters are excluded. Their replica set is owned by the
-    /// catalog's bootstrap migration, not the controller.
+    /// The ids of all managed clusters the controller owns this tick.
     ManagedClusterIds { tx: oneshot::Sender<Vec<ClusterId>> },
     /// A consistent durable view of the given clusters and their replicas, plus
     /// the current time.
@@ -80,13 +80,14 @@ pub enum ClusterControllerRequest {
         cluster_id: ClusterId,
         tx: oneshot::Sender<bool>,
     },
-    /// The refresh-window live signals for one scheduled cluster (read ts,
-    /// compaction estimate, bound REFRESH MVs). `None` for a cluster that is not
-    /// scheduled `ON REFRESH`.
-    RefreshWindowInputs {
+    /// The catalog and storage refresh-window inputs for one scheduled cluster.
+    /// `None` if the cluster no longer qualifies at pull time.
+    RefreshWindowClusterInputs {
         cluster_id: ClusterId,
-        tx: oneshot::Sender<Option<RefreshWindowInputs>>,
+        tx: oneshot::Sender<Option<RefreshWindowClusterInputs>>,
     },
+    /// One timestamp-oracle read for a completed refresh-window input batch.
+    RefreshWindowReadTs { tx: oneshot::Sender<Timestamp> },
     /// Apply a tick's batch of decisions under their compare-and-append guards.
     Apply {
         decisions: Vec<Decision>,
@@ -183,11 +184,38 @@ impl ClusterControllerCtx for CoordCtx {
 
     async fn refresh_window_inputs(
         &mut self,
-        cluster_id: ClusterId,
-    ) -> Option<RefreshWindowInputs> {
-        self.request(|tx| ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx })
-            .await
-            .flatten()
+        cluster_ids: &[ClusterId],
+    ) -> Option<RefreshWindowInputsBatch> {
+        let mut cluster_inputs = BTreeMap::new();
+        for (index, &cluster_id) in cluster_ids.iter().enumerate() {
+            if index > 0 {
+                // The coordinator prioritizes its internal command channel. Give
+                // it a chance to service already-queued user commands instead of
+                // keeping that channel continuously ready for the whole batch.
+                tokio::task::yield_now().await;
+            }
+            let inputs = self
+                .request(|tx| ClusterControllerRequest::RefreshWindowClusterInputs {
+                    cluster_id,
+                    tx,
+                })
+                .await
+                .flatten();
+            if let Some(inputs) = inputs {
+                cluster_inputs.insert(cluster_id, inputs);
+            }
+        }
+        if cluster_inputs.is_empty() {
+            return None;
+        }
+
+        let read_ts = self
+            .request(|tx| ClusterControllerRequest::RefreshWindowReadTs { tx })
+            .await?;
+        Some(RefreshWindowInputsBatch {
+            read_ts,
+            cluster_inputs,
+        })
     }
 
     async fn apply(&mut self, decisions: Vec<Decision>) -> ApplyOutcome {
@@ -202,13 +230,10 @@ impl ClusterControllerCtx for CoordCtx {
 impl Coordinator {
     /// Spawn the cluster controller task.
     ///
-    /// The task ticks at [`CLUSTER_CONTROLLER_TICK_INTERVAL`] and reconciles when
-    /// [`ENABLE_CLUSTER_CONTROLLER`] is on; while the gate is off it ticks but
-    /// each tick is an early no-op. Both the gate and the interval are re-read
-    /// each tick (the interval via a [`ClusterControllerRequest::TickInterval`]
-    /// round-trip), so a runtime change to either takes effect without a restart.
-    /// It owns the controller and a [`CoordCtx`] that marshals back to this
-    /// Coordinator.
+    /// The task ticks at [`CLUSTER_CONTROLLER_TICK_INTERVAL`], re-read each tick
+    /// via a [`ClusterControllerRequest::TickInterval`] round-trip so a runtime
+    /// change takes effect without a restart. It owns the controller and a
+    /// [`CoordCtx`] that marshals back to this Coordinator.
     ///
     /// The interval is the fallback cadence: `reconcile_now` cuts the
     /// sleep short after a catalog transaction changes durable cluster state.
@@ -254,41 +279,27 @@ impl Coordinator {
 
     /// Handle one [`ClusterControllerRequest`] on the coordinator loop.
     ///
-    /// The controller is inactive when the gate is off, or while the deployment
-    /// is in read-only mode (a 0dt upgrade, where it must not write the catalog).
-    /// When inactive, reads report no managed clusters (so the controller finds
-    /// nothing to reconcile) and applies are rejected: the task still wakes each
-    /// tick and sends one `ManagedClusterIds` request, but that request
-    /// early-returns here and no catalog state is read or written, so the legacy
-    /// paths remain the sole writers of the replica set. The task keeps ticking,
-    /// so the controller reactivates on its own once the deployment promotes out
-    /// of read-only mode.
+    /// The controller is inactive while the deployment is in read-only mode (a
+    /// 0dt upgrade, where it must not write the catalog). When inactive, reads
+    /// report no managed clusters (so the controller finds nothing to
+    /// reconcile) and applies are rejected: the task still wakes each tick and
+    /// sends one `ManagedClusterIds` request, but that request early-returns
+    /// here and no catalog state is read or written. The task keeps ticking, so
+    /// the controller reactivates on its own once the deployment promotes out of
+    /// read-only mode.
     #[mz_ore::instrument(level = "debug")]
     pub(crate) async fn handle_cluster_controller_request(
         &mut self,
         request: ClusterControllerRequest,
     ) {
-        let active = ENABLE_CLUSTER_CONTROLLER.get(self.catalog().system_config().dyncfgs())
-            && !self.controller.read_only();
+        let active = !self.controller.read_only();
 
         match request {
             ClusterControllerRequest::ManagedClusterIds { tx } => {
                 let ids = if active {
                     self.catalog()
                         .clusters()
-                        // Only *user* managed clusters. System/builtin clusters
-                        // (mz_system, mz_catalog_server, …) are also managed, but
-                        // their replica set is owned by the bootstrap migration
-                        // (`add_new_remove_old_builtin_cluster_replicas_migration`),
-                        // which holds exactly the `BUILTIN_CLUSTER_REPLICAS`-defined
-                        // replicas regardless of the cluster's `replication_factor`.
-                        // Letting the controller own them too would make two writers
-                        // of one replica set: the baseline would, for example, add a
-                        // replica to reach a builtin cluster's `replication_factor`,
-                        // which the bootstrap migration then tears down on the next
-                        // open. The legacy scheduler likewise only ever acted on user
-                        // clusters.
-                        .filter(|c| c.is_managed() && c.id.is_user())
+                        .filter(|c| c.is_managed())
                         .map(|c| c.id)
                         .collect()
                 } else {
@@ -329,36 +340,18 @@ impl Coordinator {
             ClusterControllerRequest::HasHydratableObjects { cluster_id, tx } => {
                 let _ = tx.send(self.cluster_has_hydratable_objects(cluster_id));
             }
-            ClusterControllerRequest::RefreshWindowInputs { cluster_id, tx } => {
-                // Gather the catalog- and storage-derived inputs on the loop,
-                // then complete the reply from a spawned task: the oracle
-                // read is a network round-trip (to the Postgres/CRDB-backed
-                // timestamp oracle) and must never run on the serial
-                // coordinator loop. The legacy `check_refresh_policy` makes
-                // the same split.
-                match self.refresh_window_catalog_inputs(cluster_id) {
-                    None => {
-                        let _ = tx.send(None);
-                    }
-                    Some((compaction_estimate, refresh_mvs)) => {
-                        let oracle = self.get_local_timestamp_oracle();
-                        // NOTE: this is one oracle read per scheduled cluster
-                        // per tick, and the controller awaits each pull before
-                        // the next, so the reads are sequential and the
-                        // batching oracle cannot coalesce them. Fine at the
-                        // tick cadence for realistic scheduled-cluster counts.
-                        // TODO: hoist to one read per tick if that stops
-                        // holding.
-                        spawn(|| "cluster_controller_refresh_window_read_ts", async move {
-                            let read_ts = oracle.read_ts().await;
-                            let _ = tx.send(Some(RefreshWindowInputs {
-                                read_ts,
-                                compaction_estimate,
-                                refresh_mvs,
-                            }));
-                        });
-                    }
-                }
+            ClusterControllerRequest::RefreshWindowClusterInputs { cluster_id, tx } => {
+                let _ = tx.send(self.refresh_window_catalog_inputs(cluster_id));
+            }
+            ClusterControllerRequest::RefreshWindowReadTs { tx } => {
+                // The oracle read is a network round trip to the Postgres or
+                // CRDB-backed timestamp oracle. It must not run on the serial
+                // coordinator loop.
+                let oracle = self.get_local_timestamp_oracle();
+                spawn(|| "cluster_controller_refresh_window_read_ts", async move {
+                    let read_ts = oracle.read_ts().await;
+                    let _ = tx.send(read_ts);
+                });
             }
             ClusterControllerRequest::Apply { decisions, tx } => {
                 let outcome = if active {
@@ -514,21 +507,20 @@ impl Coordinator {
     /// cluster (the system compaction estimate and each bound REFRESH
     /// materialized view's storage write frontier and refresh schedule), or
     /// `None` if the cluster is missing, unmanaged, or not scheduled `ON
-    /// REFRESH`. These are the same signals the legacy `check_refresh_policy`
-    /// reads.
+    /// REFRESH`.
     ///
-    /// The oracle read timestamp completing [`RefreshWindowInputs`] is
+    /// The oracle read timestamp completing [`RefreshWindowInputsBatch`] is
     /// deliberately not fetched here: this runs on the coordinator loop, and
     /// the oracle read is a network round-trip the request handler performs on
     /// a spawned task instead.
     ///
     /// The MV write frontier is carried through with full fidelity as the
-    /// `Antichain` the storage controller reports, matching the legacy refresh
-    /// policy; the on-refresh strategy compares against it directly.
+    /// `Antichain` the storage controller reports. The on-refresh strategy
+    /// compares against it directly.
     fn refresh_window_catalog_inputs(
         &self,
         cluster_id: ClusterId,
-    ) -> Option<(Duration, Vec<RefreshMvInfo>)> {
+    ) -> Option<RefreshWindowClusterInputs> {
         use mz_catalog::memory::objects::CatalogItem;
 
         let cluster = self.catalog().try_get_cluster(cluster_id)?;
@@ -571,7 +563,10 @@ impl Coordinator {
             .system_config()
             .cluster_refresh_mv_compaction_estimate();
 
-        Some((compaction_estimate, refresh_mvs))
+        Some(RefreshWindowClusterInputs {
+            compaction_estimate,
+            refresh_mvs,
+        })
     }
 
     /// Apply one batch of decisions under their compare-and-append guards.

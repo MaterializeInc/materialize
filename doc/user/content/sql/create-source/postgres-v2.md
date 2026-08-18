@@ -9,13 +9,11 @@ menu:
     weight: 20
 ---
 
-{{< public-preview />}}
-
 {{< source-versioning-disambiguation is_new=true
 other_ref="[old reference page](/sql/create-source/postgres/)" include_blurb=true >}}
 
 {{% create-source-intro external_source="PostgreSQL" version="11+"
-create_table="/sql/create-table/" %}}
+create_table="/sql/create-table/postgres/" %}}
 
 PostgreSQL 16+ is required for connecting Materialize to a physical replica.
 
@@ -46,7 +44,10 @@ SOURCE`](/sql/create-table/) allows for the handling of certain upstream DDL
 changes without downtime.
 
 See [`CREATE TABLE FROM
-SOURCE`](/sql/create-table/#handling-table-schema-changes) for details.
+SOURCE`](/sql/create-table/postgres/#handling-table-schema-changes) for details.
+
+See also [Handling upstream operations](#handling-upstream-operations) for
+additional upstream operation considerations.
 
 #### Supported types
 
@@ -59,13 +60,6 @@ name="postgres-supported-types" %}}
 
 For more information, including strategies for handling unsupported types,
 see [`CREATE TABLE FROM SOURCE`](/sql/create-table/).
-
-#### Upstream table truncation restrictions
-
-{{% include-from-yaml data="postgres_source_details"
-name="postgres-truncation-restriction" %}}
-
-For additional considerations, see also [`CREATE TABLE`](/sql/create-table/).
 
 ### Publication membership
 
@@ -111,6 +105,10 @@ name="postgres-replication-slots-tip-list" %}}
 
 {{% include-from-yaml data="postgres_source_details"
 name="postgres-physical-standby" %}}
+
+## Handling upstream operations
+
+{{% upstream-schema-change-behavior connector="postgres" %}}
 
 ## Examples
 

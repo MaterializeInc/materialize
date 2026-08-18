@@ -13,6 +13,15 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+# No auto retry for this script!
+fail_without_job_retry() {
+  local code=$?
+  if [[ $code -eq 128 ]]; then
+    exit 1
+  fi
+}
+trap fail_without_job_retry EXIT
+
 CHARTS_DIR=misc/helm-charts
 GITHUB_PAGES_BRANCH=gh-pages
 RELEASE_DIR=.cr-release-packages
@@ -33,12 +42,13 @@ if [[ -z "$BUILDKITE_TAG" ]]; then
     exit
   fi
   echo "Running for version $BUILDKITE_TAG"
-  git fetch origin "$BUILDKITE_TAG"
+  retry git fetch origin "$BUILDKITE_TAG"
   git checkout "$BUILDKITE_TAG"
 fi
 
 : "${CI_DRY_RUN:=0}"
 : "${CI_NO_TERRAFORM_BUMP:=0}"
+: "${CI_NO_DOCS_BUMP:=0}"
 
 cat > ~/.netrc <<EOF
 machine github.com
@@ -85,7 +95,7 @@ open_self_managed_pr() {
 echo "--- Publishing Helm Chart $BUILDKITE_TAG"
 rm -rf gh-pages
 # No --depth=1 because we need history for the `created` dates
-git clone --branch "$GITHUB_PAGES_BRANCH" https://github.com/MaterializeInc/materialize.git gh-pages
+retry git clone --branch "$GITHUB_PAGES_BRANCH" https://github.com/MaterializeInc/materialize.git gh-pages
 
 mkdir -p $RELEASE_DIR
 CHANGES_MADE=0
@@ -175,8 +185,9 @@ if ! is_truthy "$CI_DRY_RUN"; then
   HIGHEST_HELM_CHART_VERSION=$(echo "$YAML" | yq '.entries["materialize-operator"][].version' | grep -v beta | grep -v -- '-rc\.' | sort -V | tail -n 1)
 
   if [ "$HIGHEST_HELM_CHART_VERSION" != "$BUILDKITE_TAG" ]; then
-    echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $BUILDKITE_TAG has already been released, not bumping terraform versions"
+    echo "--- Higher helm-chart version $HIGHEST_HELM_CHART_VERSION > $BUILDKITE_TAG has already been released, not bumping terraform or documentation versions"
     CI_NO_TERRAFORM_BUMP=1
+    CI_NO_DOCS_BUMP=1
   fi
 else
   echo "[DRY RUN] Nothing to verify"
@@ -185,56 +196,9 @@ fi
 if is_truthy "$CI_NO_TERRAFORM_BUMP"; then
   echo "--- Not bumping terraform versions"
 else
-  echo "--- Bumping terraform-helm-materialize"
-  rm -rf terraform-helm-materialize
-  git clone https://github.com/MaterializeInc/terraform-helm-materialize.git
-  cd terraform-helm-materialize
-  sed -i "s/\".*\"\(.*\) # META: helm-chart version/\"$BUILDKITE_TAG\"\\1 # META: helm-chart version/" variables.tf
-  sed -i "s/\".*\"\(.*\) # META: mz version/\"$BUILDKITE_TAG\"\\1 # META: mz version/" variables.tf
-  terraform-docs markdown table --output-file README.md --output-mode inject .
-  git config user.email "noreply@materialize.com"
-  git config user.name "Buildkite"
-  git add variables.tf README.md
-  git commit -m "Bump to helm-chart $BUILDKITE_TAG"
-  # Bump the patch version by one (v0.1.12 -> v0.1.13)
-  TERRAFORM_HELM_VERSION=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
-  git tag "$TERRAFORM_HELM_VERSION"
-  git --no-pager diff HEAD~
-  run_if_not_dry git push origin main "$TERRAFORM_HELM_VERSION"
-  cd ..
-
-  declare -A TERRAFORM_VERSION
-  for repo in terraform-aws-materialize terraform-azurerm-materialize terraform-google-materialize; do
-    echo "--- Bumping $repo"
-    rm -rf $repo
-    git clone https://github.com/MaterializeInc/$repo.git
-    cd $repo
-    sed -i "s|github.com/MaterializeInc/terraform-helm-materialize?ref=v[0-9.]*|github.com/MaterializeInc/terraform-helm-materialize?ref=$TERRAFORM_HELM_VERSION|" main.tf
-    terraform-docs markdown table --output-file README.md --output-mode inject .
-    # Initialize Terraform to update the lock file
-    if ! is_truthy "$CI_DRY_RUN"; then
-      terraform init -upgrade
-      # If lock file doesn't exist yet (unlikely but possible)
-      if [ ! -f .terraform.lock.hcl ]; then
-        echo "No lock file found. Creating it with terraform init."
-        terraform init
-      fi
-    fi
-    git config user.email "noreply@materialize.com"
-    git config user.name "Buildkite"
-    git add main.tf README.md .terraform.lock.hcl
-    git commit -m "Bump to terraform-helm-materialize $TERRAFORM_HELM_VERSION"
-    # Bump the patch version by one (v0.1.12 -> v0.1.13)
-    TERRAFORM_VERSION[$repo]=$(git for-each-ref --sort=creatordate --format '%(refname:strip=2)' refs/tags | grep '^v' | tail -n1 | awk -F. -v OFS=. '{$NF += 1; print}')
-    git tag "${TERRAFORM_VERSION[$repo]}"
-    git --no-pager diff HEAD~
-    run_if_not_dry git push origin main "${TERRAFORM_VERSION[$repo]}"
-    cd ..
-  done
-
-  echo "--- Bumping new terraform repository"
+  echo "--- Bumping terraform repository"
   rm -rf materialize-terraform-self-managed
-  git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
+  retry git clone https://github.com/MaterializeInc/materialize-terraform-self-managed.git
   cd materialize-terraform-self-managed
   BRANCH="bump-helm-chart-$BUILDKITE_TAG"
   git checkout -b "$BRANCH"
@@ -255,10 +219,12 @@ else
   cd ..
 fi
 
-if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
+if is_truthy "$CI_NO_DOCS_BUMP"; then
+  echo "--- Not bumping versions in Self-Managed Materialize documentation"
+elif [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   echo "--- Bumping versions in Self-Managed Materialize documentation"
   ORCHESTRATORD_VERSION=$(yq -r '.operator.image.tag' misc/helm-charts/operator/values.yaml)
-  git fetch origin main
+  retry git fetch origin main
   git checkout origin/main
   git config user.email "noreply@materialize.com"
   git config user.name "Buildkite"
@@ -266,12 +232,6 @@ if [[ "$BUILDKITE_TAG" != *"-rc."* ]]; then
   yq -i ".operator_helm_chart_version = \"$BUILDKITE_TAG\"" $VERSIONS_YAML_PATH
   yq -i ".environmentd_version = \"$BUILDKITE_TAG\"" $VERSIONS_YAML_PATH
   yq -i ".orchestratord_version = \"$ORCHESTRATORD_VERSION\"" $VERSIONS_YAML_PATH
-  if ! is_truthy "$CI_NO_TERRAFORM_BUMP"; then
-    yq -i ".terraform_helm_version= \"$TERRAFORM_HELM_VERSION\"" $VERSIONS_YAML_PATH
-    yq -i ".terraform_gcp_version= \"${TERRAFORM_VERSION[terraform-google-materialize]}\"" $VERSIONS_YAML_PATH
-    yq -i ".terraform_azure_version= \"${TERRAFORM_VERSION[terraform-azurerm-materialize]}\"" $VERSIONS_YAML_PATH
-    yq -i ".terraform_aws_version= \"${TERRAFORM_VERSION[terraform-aws-materialize]}\"" $VERSIONS_YAML_PATH
-  fi
 
   git add $VERSIONS_YAML_PATH
   git commit -m "docs: Bump self-managed to $BUILDKITE_TAG"

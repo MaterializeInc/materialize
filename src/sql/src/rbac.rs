@@ -532,6 +532,7 @@ fn generate_rbac_requirements(
             name: _,
             variant: _,
             workload_class: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             privileges: vec![(SystemObjectId::System, AclMode::CREATE_CLUSTER, role_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -541,6 +542,7 @@ fn generate_rbac_requirements(
             cluster_id,
             name: _,
             config: _,
+            if_not_exists: _,
         }) => RbacRequirements {
             ownership: vec![ObjectId::Cluster(*cluster_id)],
             item_usage: &CREATE_ITEM_USAGE,
@@ -715,6 +717,33 @@ fn generate_rbac_requirements(
                         role_id,
                     ),
                 ],
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
+        Plan::CreateMetricSink(plan::CreateMetricSinkPlan {
+            name,
+            metric_sink,
+            if_not_exists: _,
+        }) => {
+            // A metric sink republishes the FROM relation's rows on the replica's scrape
+            // endpoint, so it is an egress path for that relation's contents, exactly like
+            // CREATE SINK. The guard is therefore read privileges on the source, not
+            // ownership of it.
+            let mut privileges = vec![(
+                SystemObjectId::Object(name.qualifiers.clone().into()),
+                AclMode::CREATE,
+                role_id,
+            )];
+            let items = iter::once(metric_sink.from).map(|gid| catalog.resolve_item_id(&gid));
+            privileges.extend_from_slice(&generate_read_privileges(catalog, items, role_id));
+            privileges.push((
+                SystemObjectId::Object(metric_sink.cluster_id.into()),
+                AclMode::CREATE,
+                role_id,
+            ));
+            RbacRequirements {
+                privileges,
                 item_usage: &CREATE_ITEM_USAGE,
                 ..Default::default()
             }
@@ -1772,7 +1801,10 @@ fn generate_read_privileges_inner(
                 CatalogItemType::Type | CatalogItemType::Secret | CatalogItemType::Connection => {
                     privileges.push((SystemObjectId::Object(id.into()), AclMode::USAGE, role_id));
                 }
-                CatalogItemType::Sink | CatalogItemType::Index | CatalogItemType::Func => {}
+                CatalogItemType::Sink
+                | CatalogItemType::MetricSink
+                | CatalogItemType::Index
+                | CatalogItemType::Func => {}
             }
         }
     }
@@ -1886,6 +1918,7 @@ pub const fn all_object_privileges(object_type: SystemObjectType) -> AclMode {
         SystemObjectType::Object(ObjectType::MaterializedView) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Source) => AclMode::SELECT,
         SystemObjectType::Object(ObjectType::Sink) => EMPTY_ACL_MODE,
+        SystemObjectType::Object(ObjectType::MetricSink) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Index) => EMPTY_ACL_MODE,
         SystemObjectType::Object(ObjectType::Type) => AclMode::USAGE,
         SystemObjectType::Object(ObjectType::Role) => EMPTY_ACL_MODE,
@@ -1917,6 +1950,7 @@ const fn default_builtin_object_acl_mode(object_type: ObjectType) -> AclMode {
         | ObjectType::Source => AclMode::SELECT,
         ObjectType::Type | ObjectType::Schema => AclMode::USAGE,
         ObjectType::Sink
+        | ObjectType::MetricSink
         | ObjectType::Index
         | ObjectType::Role
         | ObjectType::Cluster

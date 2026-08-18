@@ -18,7 +18,7 @@
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -157,7 +157,7 @@ async fn test_no_block() {
             let result = client
                     .batch_execute(&format!(
                         "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
-                        &*KAFKA_ADDRS,
+                        *KAFKA_ADDRS,
                     ))
                     .await;
             println!("test_no_block: in thread; create Kafka conn done");
@@ -237,7 +237,7 @@ async fn test_drop_connection_race() {
     client
         .batch_execute(&format!(
             "CREATE CONNECTION kafka_conn TO KAFKA (BROKER '{}', SECURITY PROTOCOL PLAINTEXT) WITH (VALIDATE = false)",
-            &*KAFKA_ADDRS,
+            *KAFKA_ADDRS,
         ))
         .await
         .unwrap();
@@ -359,6 +359,51 @@ fn test_time() {
         "start.elapsed() = {:?}",
         elapsed
     );
+}
+
+/// The builtin `mz_internal.mz_analytics` connection is an assume-role AWS
+/// connection present on every environment. Its row in
+/// `mz_internal.mz_aws_connections` is reconstructed from the plan-time AWS
+/// context functions. Without the AWS context those functions fold to NULL, and
+/// the view must drop the row entirely, matching the packer it replaced, which
+/// bailed and wrote no row in that case. See MZ_AWS_CONNECTIONS in
+/// src/catalog/src/builtin/mz_internal.rs.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_mz_aws_connections_context_dependent_row() {
+    // With the AWS context configured (the default), the assume-role row is
+    // present and fully populated.
+    let server = test_util::TestHarness::default().start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_internal.mz_aws_connections", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1, "mz_analytics row present with AWS context");
+
+    // Without the AWS context, the assume-role row is dropped rather than
+    // emitted with a malformed example_trust_policy.
+    let server = test_util::TestHarness::default()
+        .without_aws_connection_context()
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    let count: i64 = client
+        .query_one("SELECT count(*) FROM mz_internal.mz_aws_connections", &[])
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 0, "mz_analytics row dropped without AWS context");
+
+    // The connection object itself still exists; only its derived view row is
+    // suppressed.
+    let count: i64 = client
+        .query_one(
+            "SELECT count(*) FROM mz_catalog.mz_connections \
+             WHERE name = 'mz_analytics' AND type = 'aws'",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_eq!(count, 1, "mz_analytics connection object still present");
 }
 
 #[mz_ore::test]
@@ -1716,8 +1761,12 @@ fn test_subscribe_outlive_cluster() {
         .batch_execute("CREATE CLUSTER newcluster REPLICAS (r1 (size 'scale=1,workers=1'))")
         .unwrap();
     client2_cancel.cancel_query(postgres::NoTls).unwrap();
-    client2
-        .batch_execute("ROLLBACK; SET CLUSTER = default")
+    // The cancel is asynchronous and might race with subsequent commands.
+    // Retry ROLLBACK in a loop in case it gets canceled.
+    Retry::default()
+        .max_tries(5)
+        .clamp_backoff(Duration::from_millis(100))
+        .retry(|_| client2.batch_execute("ROLLBACK; SET CLUSTER = default"))
         .unwrap();
     assert_eq!(
         client2
@@ -1728,10 +1777,114 @@ fn test_subscribe_outlive_cluster() {
     );
 }
 
+/// Regression test for SQL-267. A blind INSERT packs its rows against the table's RelationDesc as
+/// of when it ran, but group commit resolves the append to whatever version is latest by the time
+/// it commits. An ALTER TABLE ADD COLUMN landing in between used to leave group commit encoding
+/// those rows against a wider descriptor, which panicked the persist table write worker and took
+/// environmentd down with it.
+///
+/// The window is a cross-thread gap, so the test drives it through the
+/// `insert_after_pack_before_commit` failpoint as a rendezvous: the INSERT blocks there and tells
+/// the test it has arrived, the test widens the table, then the test hands it back. No wall-clock
+/// waiting is involved, so there is no window to miss.
+///
+/// The reported repro widened the same window instead, by getting the INSERT deferred behind a
+/// write lock another session held. Both paths stage the write through `stage_group_commit`, which
+/// is where the check lives.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_insert_concurrent_alter_table() {
+    let server = test_util::TestHarness::default().start_blocking();
+    server.enable_feature_flags(&["enable_alter_table_add_column"]);
+
+    let mut ddl_client = server.connect(postgres::NoTls).unwrap();
+    ddl_client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    ddl_client
+        .batch_execute("INSERT INTO t VALUES (1)")
+        .unwrap();
+
+    // Arm only once setup is done, so it's the INSERT below that parks and not one of these.
+    let packed = Arc::new(Barrier::new(2));
+    let resume = Arc::new(Barrier::new(2));
+    fail::cfg_callback("insert_after_pack_before_commit", {
+        let packed = Arc::clone(&packed);
+        let resume = Arc::clone(&resume);
+        move || {
+            packed.wait();
+            resume.wait();
+        }
+    })
+    .unwrap();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    let (writer_tx, writer_rx) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let _ = writer_tx.send(writer.batch_execute("INSERT INTO t VALUES (100)"));
+    });
+
+    // Returns once the INSERT has packed its rows and reached the failpoint, so the ALTER below
+    // cannot land too early.
+    packed.wait();
+
+    // Widen the table while the INSERT's rows sit packed against the old schema.
+    ddl_client
+        .batch_execute("ALTER TABLE t ADD COLUMN b int")
+        .unwrap();
+
+    // Disarm before handing the INSERT back, so the one at the end of this test doesn't park at a
+    // rendezvous nobody is waiting on.
+    fail::remove("insert_after_pack_before_commit");
+    resume.wait();
+
+    let insert_res = writer_rx
+        .recv_timeout(Duration::from_secs(60))
+        .expect("INSERT finished");
+
+    // The rows were packed against the old schema, so this should come back as a serialization
+    // failure instead of getting appended.
+    let err = insert_res
+        .expect_err("stale write must be rejected")
+        .unwrap_db_error();
+    assert_eq!(err.code(), &SqlState::T_R_SERIALIZATION_FAILURE);
+    assert_contains!(err.message(), "was concurrently modified");
+
+    // The table still works at its new schema, and the rejected row didn't land.
+    let rows = ddl_client
+        .query("SELECT a, b FROM t ORDER BY a", &[])
+        .unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].get::<_, i32>(0), 1);
+    assert_eq!(rows[0].get::<_, Option<i32>>(1), None);
+    ddl_client
+        .batch_execute("INSERT INTO t VALUES (9, 10)")
+        .unwrap();
+}
+
 #[mz_ore::test]
 #[allow(clippy::disallowed_methods)]
 fn test_read_then_write_serializability() {
-    let server = test_util::TestHarness::default().start_blocking();
+    test_read_then_write_serializability_inner(false);
+}
+
+// Same as `test_read_then_write_serializability`, but exercising the frontend
+// OCC read-then-write path. Concurrent `INSERT INTO t SELECT * FROM t` must
+// still double the row count exactly, i.e. OCC retries must prevent lost
+// updates.
+#[mz_ore::test]
+fn test_read_then_write_serializability_frontend_occ() {
+    test_read_then_write_serializability_inner(true);
+}
+
+#[allow(clippy::disallowed_methods)]
+fn test_read_then_write_serializability_inner(frontend_occ: bool) {
+    let mut harness = test_util::TestHarness::default();
+    if frontend_occ {
+        harness = harness.with_system_parameter_default(
+            "enable_adapter_frontend_occ_read_then_write".to_string(),
+            "true".to_string(),
+        );
+    }
+    let server = harness.start_blocking();
 
     // Create table with initial value
     {

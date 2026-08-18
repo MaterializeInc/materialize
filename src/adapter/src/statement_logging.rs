@@ -230,6 +230,7 @@ impl From<&ExecuteResponse> for StatementEndedExecutionReason {
             | ExecuteResponse::CreatedClusterReplica
             | ExecuteResponse::CreatedIndex
             | ExecuteResponse::CreatedIntrospectionSubscribe
+            | ExecuteResponse::CreatedMetricSink
             | ExecuteResponse::CreatedSecret
             | ExecuteResponse::CreatedSink
             | ExecuteResponse::CreatedSource
@@ -797,7 +798,7 @@ fn serialize_params(params: &Params) -> Vec<Option<String>> {
         .map(|(index, (r#type, datum))| {
             mz_pgrepr::Value::from_datum(datum, r#type).map(|val| {
                 let mut buf = BytesMut::new();
-                val.encode_text(&mut buf);
+                val.encode_text(&mut buf, mz_pgrepr::TextEncodeSettings::STABLE);
                 // NOTE: `encode_text` can emit non-UTF-8 bytes for `"char"`
                 // (`PgLegacyChar`) params, which write their byte verbatim.
                 // Log the raw bytes so operators can recover what came in.

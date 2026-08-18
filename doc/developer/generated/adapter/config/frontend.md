@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/config/frontend.rs
-revision: 34effa9dc0
+revision: 26305d8cb0
 ---
 
 # adapter::config::frontend

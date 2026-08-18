@@ -10,7 +10,6 @@
 use std::fmt;
 
 use itertools::Itertools;
-use mz_lowertest::MzReflect;
 use mz_repr::{Datum, RowArena, SqlColumnType, SqlScalarType};
 use serde::{Deserialize, Serialize};
 
@@ -26,8 +25,7 @@ use crate::{Eval, EvalError, MirScalarExpr};
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct CastRecordToString {
     pub ty: SqlScalarType,
@@ -96,15 +94,14 @@ impl fmt::Display for CastRecordToString {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
-pub struct CastRecord1ToRecord2 {
+pub struct CastRecord1ToRecord2<E = MirScalarExpr> {
     pub return_ty: SqlScalarType,
-    pub cast_exprs: Box<[MirScalarExpr]>,
+    pub cast_exprs: Box<[E]>,
 }
 
-impl LazyUnaryFunc for CastRecord1ToRecord2 {
+impl<E: Eval> LazyUnaryFunc for CastRecord1ToRecord2<E> {
     fn eval<'a>(
         &'a self,
         datums: &[Datum<'a>],
@@ -157,7 +154,34 @@ impl LazyUnaryFunc for CastRecord1ToRecord2 {
     }
 }
 
-impl fmt::Display for CastRecord1ToRecord2 {
+impl<E> CastRecord1ToRecord2<E> {
+    /// Rebuilds this function with the field cast expressions converted to
+    /// `E2`. Reports the first failing field, not all of them. Callers treat
+    /// any failure as a lowering bug.
+    pub fn try_map_expr<'a, E2: TryFrom<&'a E>>(
+        &'a self,
+    ) -> Result<CastRecord1ToRecord2<E2>, E2::Error> {
+        Ok(CastRecord1ToRecord2 {
+            return_ty: self.return_ty.clone(),
+            cast_exprs: self
+                .cast_exprs
+                .iter()
+                .map(E2::try_from)
+                .collect::<Result<Box<[E2]>, _>>()?,
+        })
+    }
+
+    /// Rebuilds this function with the field cast expressions converted to
+    /// `E2`.
+    pub fn map_expr<'a, E2: From<&'a E>>(&'a self) -> CastRecord1ToRecord2<E2> {
+        CastRecord1ToRecord2 {
+            return_ty: self.return_ty.clone(),
+            cast_exprs: self.cast_exprs.iter().map(E2::from).collect(),
+        }
+    }
+}
+
+impl<E> fmt::Display for CastRecord1ToRecord2<E> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_str("record1torecord2")
     }
@@ -172,8 +196,7 @@ impl fmt::Display for CastRecord1ToRecord2 {
     PartialEq,
     Serialize,
     Deserialize,
-    Hash,
-    MzReflect
+    Hash
 )]
 pub struct RecordGet(pub usize);
 

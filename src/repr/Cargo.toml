@@ -41,7 +41,6 @@ differential-dataflow.workspace = true
 enum-kinds.workspace = true
 hex.workspace = true
 itertools.workspace = true
-mz-lowertest = { path = "../lowertest", default-features = false }
 mz-ore = { path = "../ore", features = [
     "bytes",
     "id_gen",
@@ -62,6 +61,7 @@ ordered-float.workspace = true
 postgres-protocol.workspace = true
 prost.workspace = true
 regex.workspace = true
+regex-syntax.workspace = true
 ryu.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision", "preserve_order"] }
@@ -71,7 +71,6 @@ strsim.workspace = true
 timely.workspace = true
 tokio-postgres.workspace = true
 tracing-core.workspace = true
-url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["serde"] }
 proptest = { workspace = true, optional = true }
 proptest-derive = { workspace = true, optional = true }

@@ -42,7 +42,6 @@ members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/expr-test-util",
     "src/fivetran-destination",
     "src/foundationdb",
     "src/frontegg-auth",
@@ -52,9 +51,6 @@ members = [
     "src/interchange",
     "src/kafka-util",
     "src/license-keys",
-    "src/lowertest",
-    "src/lowertest-derive",
-    "src/materialized",
     "src/materialized",
     "src/metabase",
     "src/metrics",
@@ -93,7 +89,6 @@ members = [
     "src/proto",
     "src/regexp",
     "src/repr",
-    "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
     "src/row-spine",
@@ -175,7 +170,6 @@ default-members = [
     "src/expr-derive",
     "src/expr-derive-impl",
     "src/expr-parser",
-    "src/expr-test-util",
     "src/foundationdb",
     "src/frontegg-auth",
     "src/frontegg-client",
@@ -184,8 +178,6 @@ default-members = [
     "src/interchange",
     "src/kafka-util",
     "src/license-keys",
-    "src/lowertest",
-    "src/lowertest-derive",
     "src/materialized",
     "src/metabase",
     "src/metrics",
@@ -224,7 +216,6 @@ default-members = [
     "src/proto",
     "src/regexp",
     "src/repr",
-    "src/repr-test-util",
     "src/rocksdb",
     "src/rocksdb-types",
     "src/row-spine",
@@ -277,7 +268,7 @@ resolver = "3"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.96.0"
+rust-version = "1.97.1"
 
 [workspace.dependencies]
 ahash = { version = "0.8.12", default-features = false }
@@ -308,7 +299,7 @@ aws-smithy-runtime = { version = "1.9.8", features = ["connector-hyper-0-14-x"] 
 aws-smithy-runtime-api = "1.10.0"
 aws-smithy-types = { version = "1.1.8", features = ["byte-stream-poll-next"] }
 aws-types = "1.3.9"
-axum = { version = "0.8.8", features = ["ws"] }
+axum = { version = "0.8.9", features = ["ws"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
 azure_core = "0.21.0"
@@ -328,7 +319,7 @@ bytesize = "2.3.1"
 cc = "1.2.62"
 cfg-if = "1.0.4"
 chrono = { version = "0.4.39", default-features = false, features = ["clock", "serde", "std"] }
-chrono-tz = { version = "0.8.1", features = ["case-insensitive", "serde"] }
+chrono-tz = { version = "0.10.4", features = ["case-insensitive", "serde"] }
 clap = { version = "4.6.1", features = ["derive"] }
 clap_complete = "4.6.2"
 columnar = "0.13.0"
@@ -344,7 +335,7 @@ crossterm = { version = "0.28.1", default-features = false }
 csv = "1.4.0"
 csv-async = { version = "1.3.1", features = ["tokio"] }
 csv-core = "0.1.13"
-ctor = "0.9.1"
+ctor = "1.0.10"
 custom-labels = "0.4.6"
 darling = "0.23.0"
 datadriven = "0.9.0"
@@ -406,9 +397,9 @@ itertools = "0.14.0"
 jemalloc_pprof = "0.8.2"
 jsonwebtoken = { version = "10.3.0", features = ["aws_lc_rs"] }
 junit-report = "0.8.3"
-k8s-controller = "0.11.0"
+k8s-controller = "0.12.0"
 k8s-openapi = { version = "0.27.0", features = ["schemars", "v1_32"] }
-kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime", "ws"] }
+kube = { version = "3.1.0", default-features = false, features = ["client", "derive", "openssl-tls", "runtime"] }
 launchdarkly-server-sdk = { version = "3.1.1", default-features = false, features = ["hyper-rustls-native-roots", "crypto-aws-lc-rs"] }
 launchdarkly-sdk-transport = "0.1.4"
 lgalloc = "0.6.0"
@@ -437,9 +428,9 @@ openssh-mux-client = "0.17.9"
 openssl = { version = "0.10.80", features = ["vendored"] }
 openssl-probe = "0.1.6"
 openssl-sys = { version = "0.9.108", features = ["vendored"] }
-opentelemetry = { version = "0.31.0", features = ["trace"] }
-opentelemetry-otlp = { version = "0.31.1", features = ["grpc-tonic"] }
-opentelemetry_sdk = { version = "0.31.0", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
+opentelemetry = { version = "0.32.0", features = ["trace"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["grpc-tonic"] }
+opentelemetry_sdk = { version = "0.32.1", features = ["experimental_trace_batch_span_processor_with_async_runtime", "rt-tokio"] }
 ordered-float = { version = "5.1.0", features = ["serde"] }
 os_info = "3.11.0"
 owo-colors = "4.3.0"
@@ -497,9 +488,9 @@ scopeguard = "1.2.0"
 seahash = "4.1.0"
 segment = { version = "0.2.6", default-features = false, features = ["native-tls-vendored"] }
 semver = "1.0.28"
-sentry = { version = "0.48.2", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
-sentry-panic = "0.48.2"
-sentry-tracing = "0.48.2"
+sentry = { version = "0.49.1", default-features = false, features = ["backtrace", "contexts", "debug-images", "transport"] }
+sentry-panic = "0.49.1"
+sentry-tracing = "0.49.1"
 serde = { version = "1.0.219", features = ["derive"] }
 serde-aux = "4.7.0"
 serde_bytes = "0.11.19"
@@ -523,7 +514,7 @@ static_assertions = "1.1"
 strsim = "0.11.1"
 subtle = "2.6.1"
 supports-color = "3.0.2"
-syn = { version = "2.0.117", features = ["extra-traits", "full", "parsing", "printing"] }
+syn = { version = "2.0.119", features = ["extra-traits", "full", "parsing", "printing"] }
 sysctl = "0.7.1"
 sysinfo = "0.29.11"
 tabled = "0.20.0"
@@ -557,9 +548,14 @@ tower-sessions-memory-store = "0.14.0"
 tracing = "0.1.44"
 tracing-capture = "0.1.0"
 tracing-core = "0.1.35"
-tracing-opentelemetry = "0.32.1"
+tracing-opentelemetry = "0.33.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt", "json", "tracing-log"] }
-tungstenite = "0.28.0"
+# Held back: must match the `tungstenite` that `axum`'s `ws` feature pulls in
+# via `tokio-tungstenite`, else the two versions coexist in the dependency
+# graph. `axum` 0.8.9 is on `tokio-tungstenite` 0.29, which pins this to 0.29.
+# 0.30 additionally moves to `sha1` 0.11, duplicating the whole RustCrypto
+# hashing stack.
+tungstenite = "0.29.0"
 turmoil = "0.7.2"
 uncased = "0.9.10"
 unicode-normalization = "0.1.25"

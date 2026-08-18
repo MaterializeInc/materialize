@@ -79,12 +79,10 @@ rm -rf /tmp/awscli.zip /tmp/aws) &
 # uv
 (curl -fsSL https://astral.sh/uv/install.sh | sudo -u ubuntu sh >/dev/null 2>&1) &
 
-# kubectl + kind + k9s. kind and kubectl mirror ci/builder/Dockerfile, which
-# deliberately holds them back: newer versions break Cloudtest (minio fails to
-# come up on the kind cluster).
-(curl -fsSL "https://dl.k8s.io/release/v1.24.3/bin/linux/$ARCH_GO/kubectl" -o /usr/local/bin/kubectl
+# kubectl + kind + k9s. kind and kubectl mirror ci/builder/Dockerfile.
+(curl -fsSL "https://dl.k8s.io/release/v1.34.10/bin/linux/$ARCH_GO/kubectl" -o /usr/local/bin/kubectl
 chmod +x /usr/local/bin/kubectl) &
-(curl -fsSL "https://kind.sigs.k8s.io/dl/v0.29.0/kind-linux-$ARCH_GO" -o /usr/local/bin/kind
+(curl -fsSL "https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-$ARCH_GO" -o /usr/local/bin/kind
 chmod +x /usr/local/bin/kind) &
 (curl -fsSL "https://github.com/derailed/k9s/releases/download/v0.50.18/k9s_Linux_$ARCH_GO.tar.gz" \
     | tar xzf - -C /usr/local/bin k9s

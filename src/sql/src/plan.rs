@@ -147,6 +147,7 @@ pub enum Plan {
     CreateMaterializedView(CreateMaterializedViewPlan),
     CreateNetworkPolicy(CreateNetworkPolicyPlan),
     CreateIndex(CreateIndexPlan),
+    CreateMetricSink(CreateMetricSinkPlan),
     CreateType(CreateTypePlan),
     Comment(CommentPlan),
     DiscardTemp,
@@ -280,6 +281,7 @@ impl Plan {
             StatementKind::CreateSchema => &[PlanKind::CreateSchema],
             StatementKind::CreateSecret => &[PlanKind::CreateSecret],
             StatementKind::CreateSink => &[PlanKind::CreateSink],
+            StatementKind::CreateMetricSink => &[PlanKind::CreateMetricSink],
             StatementKind::CreateSource | StatementKind::CreateSubsource => {
                 &[PlanKind::CreateSource]
             }
@@ -349,6 +351,7 @@ impl Plan {
             Plan::CreateView(_) => "create view",
             Plan::CreateMaterializedView(_) => "create materialized view",
             Plan::CreateIndex(_) => "create index",
+            Plan::CreateMetricSink(_) => "create metric sink",
             Plan::CreateType(_) => "create type",
             Plan::CreateNetworkPolicy(_) => "create network policy",
             Plan::Comment(_) => "comment",
@@ -360,6 +363,7 @@ impl Plan {
                 ObjectType::MaterializedView => "drop materialized view",
                 ObjectType::Source => "drop source",
                 ObjectType::Sink => "drop sink",
+                ObjectType::MetricSink => "drop metric sink",
                 ObjectType::Index => "drop index",
                 ObjectType::Type => "drop type",
                 ObjectType::Role => "drop roles",
@@ -400,6 +404,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view",
                 ObjectType::Source => "alter source",
                 ObjectType::Sink => "alter sink",
+                ObjectType::MetricSink => "alter metric sink",
                 ObjectType::Index => "alter index",
                 ObjectType::Type => "alter type",
                 ObjectType::Role => "alter role",
@@ -435,6 +440,7 @@ impl Plan {
                 ObjectType::MaterializedView => "alter materialized view owner",
                 ObjectType::Source => "alter source owner",
                 ObjectType::Sink => "alter sink owner",
+                ObjectType::MetricSink => "alter metric sink owner",
                 ObjectType::Index => "alter index owner",
                 ObjectType::Type => "alter type owner",
                 ObjectType::Role => "alter role owner",
@@ -566,6 +572,7 @@ pub struct CreateClusterPlan {
     pub name: String,
     pub variant: CreateClusterVariant,
     pub workload_class: Option<String>,
+    pub if_not_exists: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -597,6 +604,7 @@ pub struct CreateClusterReplicaPlan {
     pub cluster_id: ClusterId,
     pub name: String,
     pub config: ReplicaConfig,
+    pub if_not_exists: bool,
 }
 
 /// Configuration of introspection for a cluster replica.
@@ -805,6 +813,13 @@ pub struct AlterNetworkPolicyPlan {
 pub struct CreateIndexPlan {
     pub name: QualifiedItemName,
     pub index: Index,
+    pub if_not_exists: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreateMetricSinkPlan {
+    pub name: QualifiedItemName,
+    pub metric_sink: MetricSink,
     pub if_not_exists: bool,
 }
 
@@ -1863,7 +1878,7 @@ impl TryFrom<&str> for NetworkPolicyRuleDirection {
 pub struct PolicyAddress(pub IpNet);
 impl std::fmt::Display for PolicyAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", &self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 impl From<String> for PolicyAddress {
@@ -1885,7 +1900,7 @@ impl Serialize for PolicyAddress {
     where
         S: serde::Serializer,
     {
-        serializer.serialize_str(&format!("{}", &self.0))
+        serializer.serialize_str(&format!("{}", self.0))
     }
 }
 
@@ -1975,6 +1990,18 @@ pub struct Index {
     pub keys: Vec<mz_expr::MirScalarExpr>,
     pub compaction_window: Option<CompactionWindow>,
     pub cluster_id: ClusterId,
+}
+
+#[derive(Clone, Debug)]
+pub struct MetricSink {
+    /// Parse-able SQL that defines this metric sink.
+    pub create_sql: String,
+    /// Collection we read into this metric sink.
+    pub from: GlobalId,
+    pub cluster_id: ClusterId,
+    /// Prepended to every metric name this sink publishes, so that the families it registers
+    /// cannot collide with another sink's or with the platform's own.
+    pub prefix: String,
 }
 
 #[derive(Clone, Debug)]

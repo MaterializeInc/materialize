@@ -668,6 +668,7 @@ mod columnation {
                         | e @ EvalError::InvalidTimezoneInterval
                         | e @ EvalError::InvalidTimezoneConversion
                         | e @ EvalError::LengthTooLarge
+                        | e @ EvalError::TempStorageBudgetExceeded
                         | e @ EvalError::AclArrayNullElement
                         | e @ EvalError::MzAclArrayNullElement => e.clone(),
                         EvalError::Unsupported {
@@ -924,8 +925,8 @@ mod columnation {
                     DataflowError::EnvelopeError(boxed)
                 }
             };
-            // Debug-only check that we're returning an equal object.
-            debug_assert_eq!(item, &err);
+            // Soft-assert-only check that we're returning an equal object.
+            mz_ore::soft_assert_eq_no_log!(item, &err);
             err
         }
 

@@ -82,6 +82,23 @@ This example provisions the following infrastructure:
 | Instance | Single Materialize instance in the `materialize-environment` namespace |
 | Load Balancers | GCP Load Balancers for access to Materialize {{< yaml-table data="self_managed/default_ports" >}} |
 
+### Observability
+
+Off by default in the simple example. Set `enable_observability = true` to
+create the following as well:
+
+| Resource | Description |
+|----------|-------------|
+| Monitoring stack | Grafana, Thanos, Loki, Grafana Alloy, and Alertmanager in the `monitoring` namespace, with the Materialize dashboards pre-installed |
+| Cloud Storage Buckets | Dedicated buckets for metrics and logs |
+| Grafana Cloud SQL PostgreSQL | `db-f1-micro` instance holding Grafana's own state (users, API tokens, annotations, dashboard versions) |
+| Grafana Load Balancer | Internal GCP Load Balancer for reaching Grafana, allowlisted to `ingress_cidr_blocks` |
+
+This stack requires TF v10.0.0 or later, which replaced an earlier
+Prometheus-and-Grafana pair. The Grafana database and load balancer were added
+in v10.1.0, and are both billable. For details, see
+[Grafana](/manage/monitor/self-managed/grafana/).
+
 ## Prerequisites
 
 ### GCP Account Requirements
@@ -120,9 +137,9 @@ A Google account with permission to:
 * {{% self-managed/terraform-simple-example-tip %}}
 
 * The simple example used in this tutorial enables [Password
-authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/gcp/examples/simple/main.tf#L332)
+authentication](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/gcp/examples/simple/main.tf#L500)
 for the Materialize instance. To use a different authentication method, update
-[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/main/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
+[`authenticator_kind`](https://github.com/MaterializeInc/materialize-terraform-self-managed/blob/v10.1.0/kubernetes/modules/materialize-instance/README.md#input_authenticator_kind).
 See [Authentication](/security/self-managed/authentication/) for the supported
 authentication mechanisms.
 
@@ -206,7 +223,16 @@ authentication mechanisms.
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
+   # enable_observability = true   # Set to true to enable observability stack.
+   # grafana_host = "grafana.example.com"   # Only used when enable_observability = true.
    ```
+
+   {{< note >}}
+   `enable_observability = true` also creates a `db-f1-micro` Cloud SQL instance
+   for Grafana's own state and an internal load balancer to reach Grafana on.
+   Both are billable. See
+   [Grafana](/manage/monitor/self-managed/grafana/).
+   {{< /note >}}
 
    {{% include-from-yaml data="self_managed/installation"
    name="installation-tfvars-variables-optional" %}}

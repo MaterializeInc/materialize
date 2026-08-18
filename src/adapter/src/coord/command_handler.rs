@@ -62,7 +62,7 @@ use mz_sql_parser::ast::{
 };
 use mz_storage_types::sources::Timeline;
 use opentelemetry::trace::TraceContextExt;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tracing::{Instrument, debug_span, info, warn};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
@@ -71,7 +71,7 @@ use crate::command::{
     CatalogSnapshot, Command, ExecuteResponse, Response, SASLChallengeResponse,
     SASLVerifyProofResponse, StartupResponse, SuperuserAttribute,
 };
-use crate::coord::appends::{PendingWriteTxn, UserWriteResponder};
+use crate::coord::appends::{PendingWriteTxn, UserWriteResponder, WriteResult};
 use crate::coord::peek::PendingPeek;
 use crate::coord::{
     ConnMeta, Coordinator, DeferredPlanStatement, Message, PendingTxn, PlanStatement, PlanValidity,
@@ -81,13 +81,13 @@ use crate::error::{AdapterError, AuthenticationError};
 use crate::notice::AdapterNotice;
 use crate::session::{Session, TransactionOps, TransactionStatus};
 use crate::statement_logging::{StatementEndedExecutionReason, WatchSetCreation};
-use crate::util::{ClientTransmitter, ResultExt};
+use crate::util::ClientTransmitter;
 use crate::webhook::{
     AppendWebhookResponse, AppendWebhookValidator, WebhookAppender, WebhookAppenderInvalidator,
 };
 use crate::{AppendWebhookError, ExecuteContext, catalog, metrics};
 
-use super::ExecuteContextGuard;
+use super::{ExecuteContextExtra, ExecuteContextGuard};
 
 /// The login status of a role, used by authentication handlers to check role
 /// existence and login permission before proceeding to credential verification.
@@ -130,8 +130,11 @@ impl Coordinator {
                     application_name,
                     notice_tx,
                 } => {
-                    // Note: We purposefully do not use a ClientTransmitter here because startup
-                    // handles errors and cleanup of sessions itself.
+                    // Note: A ClientTransmitter is not applicable here. Its purpose is to
+                    // rescue the Session from an undeliverable Response, and startup
+                    // responses carry no Session, the Session stays with the client. An
+                    // undeliverable startup response is instead handled by handle_startup's
+                    // failed-send path together with the cleanup guard in Client::startup.
                     self.handle_startup(
                         tx,
                         user,
@@ -614,6 +617,69 @@ impl Coordinator {
                 Command::FrontendStatementLogging(event) => {
                     self.handle_frontend_statement_logging_event(event);
                 }
+                Command::RegisterConnectionCancelWatch { conn_id, tx } => {
+                    // Always replace any existing entry. Another code path
+                    // (e.g. `sequence_staged`) may have left a stale watch
+                    // here, possibly already signaled `true` from a prior
+                    // cancel. Reusing it via `or_insert_with` would hand out
+                    // a `Receiver` that already reads `true`, causing the new
+                    // operation to immediately return `Canceled` even though
+                    // it hasn't been cancelled.
+                    let (watch_tx, watch_rx) = watch::channel(false);
+                    self.connection_cancel_watches
+                        .insert(conn_id, (watch_tx, watch_rx.clone()));
+                    let _ = tx.send(watch_rx);
+                }
+                Command::CreateInternalSubscribe {
+                    df_desc,
+                    cluster_id,
+                    replica_id,
+                    depends_on,
+                    as_of,
+                    arity,
+                    sink_id,
+                    conn_id,
+                    session_uuid,
+                    start_time,
+                    read_holds,
+                    tx,
+                } => {
+                    self.handle_create_internal_subscribe(
+                        *df_desc,
+                        cluster_id,
+                        replica_id,
+                        depends_on,
+                        as_of,
+                        arity,
+                        sink_id,
+                        conn_id,
+                        session_uuid,
+                        start_time,
+                        read_holds,
+                        tx,
+                    )
+                    .await;
+                }
+                Command::AttemptWrite {
+                    conn_id,
+                    target_id,
+                    target_global_id,
+                    diffs,
+                    write_ts,
+                    tx,
+                } => {
+                    self.handle_attempt_write(
+                        conn_id,
+                        target_id,
+                        target_global_id,
+                        diffs,
+                        write_ts,
+                        tx,
+                    );
+                }
+                Command::DropInternalSubscribe { sink_id } => {
+                    self.drop_internal_subscribe(sink_id).await;
+                }
             }
         }
         .instrument(debug_span!("handle_command"))
@@ -902,6 +968,10 @@ impl Coordinator {
                     persist_client: self.persist_client.clone(),
                     statement_logging_frontend,
                     superuser_attribute,
+                    occ_write_semaphore: Arc::clone(&self.occ_write_semaphore),
+                    frontend_read_then_write_enabled: self.frontend_read_then_write_enabled,
+                    group_commit_notifier: self.group_commit_tx.clone(),
+                    read_only: self.controller.read_only(),
                 });
                 if tx.send(resp).is_err() {
                     // Failed to send to adapter, but everything is setup so we can terminate
@@ -910,19 +980,29 @@ impl Coordinator {
                 }
             }
             Err(e) => {
-                // Error during startup or sending to adapter. A user may have been created and
-                // it can stay; no need to delete it.
-                // Note: Temporary schemas are created lazily, so there's nothing to clean up here.
-
-                // Communicate the error back to the client. No need to
-                // handle failures to send the error back; we've already
-                // cleaned up all necessary state.
+                // Nothing to clean up and `handle_terminate` must not be called. Per the
+                // `handle_startup_inner` invariant, no per-connection state exists and the
+                // connection was never registered in `active_conns`. An auto-provisioned role
+                // stays, it is role-scoped rather than tied to this connection. Temporary
+                // schemas are created lazily, so none exists yet. For the same reason, a
+                // failure to send the error back to the client needs no handling.
                 let _ = tx.send(Err(e));
             }
         }
     }
 
-    // Failible startup work that needs to be cleaned up on error.
+    /// Fallible startup work.
+    ///
+    /// Invariant: when this returns an error, no per-connection coordinator
+    /// state exists. Per-connection state is registered only in
+    /// `handle_startup`'s Ok arm, after this function has succeeded. The
+    /// cleanup guard in `Client::startup` relies on this invariant by not
+    /// sending `Terminate` when startup fails, and `handle_terminate` panics
+    /// on connections it does not know about.
+    ///
+    /// Durable catalog changes made before an error (an auto-provisioned
+    /// role, synced role memberships) are role-scoped rather than
+    /// connection-scoped and are intentionally kept.
     async fn handle_startup_inner(
         &mut self,
         user: &User,
@@ -1094,8 +1174,15 @@ impl Coordinator {
         // then `outer_context` should be `Some`.
         // This instructs the coordinator that the
         // outer execute should be considered finished once the inner one is.
-        outer_context: Option<ExecuteContextGuard>,
+        outer_context: Option<ExecuteContextExtra>,
     ) {
+        // Arm the obligation before anything can return: from here on, every
+        // exit either retires it or hands it to a guard whose `Drop` does.
+        // Nothing could have dropped it on the way here either, the command
+        // travels a channel that only this loop drains.
+        let outer_context = outer_context
+            .map(|extra| ExecuteContextGuard::new(extra.retire(), self.internal_cmd_tx.clone()));
+
         // A new statement is starting, so discard any cancellation that was signaled while no
         // statement was running. Such a cancellation targeted an earlier statement and must not
         // cancel the new one. (Like in PostgreSQL, a cancel request that arrives when nothing is
@@ -1253,6 +1340,10 @@ impl Coordinator {
         //    DDL. If the lock could not be acquired, the DDL is put into the VecDeque where it
         //    awaits dequeuing caused by the lock being released.
 
+        // For `Started`, this separates the first statement of an extended-protocol
+        // pipeline from a later one that joins the ops staged before it.
+        let txn_contains_ops = ctx.session().transaction().contains_ops();
+
         // Verify that this statement type can be executed in the current
         // transaction state.
         match ctx.session().transaction() {
@@ -1270,7 +1361,7 @@ impl Coordinator {
             // being executed, but there might be others after it before the Sync (commit)
             // message. Postgres handles this by teaching Started to eagerly commit certain
             // statements that can't be run in a transaction block.
-            TransactionStatus::Started(_) => {
+            TransactionStatus::Started(_) if !txn_contains_ops => {
                 if let Statement::Declare(_) = &*stmt {
                     // Declare is an exception. Although it's not against any spec to execute
                     // it, it will always result in nothing happening, since all portals will be
@@ -1291,7 +1382,13 @@ impl Coordinator {
             // transactions can do unless there's some additional checking to make sure
             // something disallowed in explicit transactions did not previously take place
             // in the implicit portion.
-            TransactionStatus::InTransactionImplicit(_) | TransactionStatus::InTransaction(_) => {
+            //
+            // A `Started` transaction with staged ops belongs here too: this statement
+            // runs alongside them, so a DDL or read-then-write that cannot see them must
+            // be rejected rather than run against a state that lacks them.
+            TransactionStatus::Started(_)
+            | TransactionStatus::InTransactionImplicit(_)
+            | TransactionStatus::InTransaction(_) => {
                 match &*stmt {
                     // Statements that are safe in a transaction. We still need to verify that we
                     // don't interleave reads and writes since we can't perform those serializably.
@@ -1379,6 +1476,7 @@ impl Coordinator {
                     | Statement::CreateSchema(_)
                     | Statement::CreateSecret(_)
                     | Statement::CreateSink(_)
+                    | Statement::CreateMetricSink(_)
                     | Statement::CreateSubsource(_)
                     | Statement::CreateTable(_)
                     | Statement::CreateType(_)
@@ -1902,20 +2000,41 @@ impl Coordinator {
     pub(crate) async fn handle_privileged_cancel(&mut self, conn_id: ConnectionId) {
         let mut maybe_ctx = None;
 
-        // Cancel pending writes. There is at most one pending write per session.
-        let pending_write_idx = self.pending_writes.iter().position(|pending_write_txn| {
-            matches!(pending_write_txn, PendingWriteTxn::User {
-                responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
-                ..
-            } if *ctx.session().conn_id() == conn_id)
-        });
-        if let Some(idx) = pending_write_idx {
-            if let PendingWriteTxn::User {
-                responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
-                ..
-            } = self.pending_writes.remove(idx)
-            {
-                maybe_ctx = Some(ctx);
+        // Cancel all pending writes for this connection:
+        // - At most one session-bound write (`UserWriteResponder::Session`),
+        //   retired via its `ExecuteContext` below.
+        // - Any frontend blind write that has not entered the committer. The
+        //   waiter receives `WriteResult::Canceled`. Timestamped writes already
+        //   in the committer have an indeterminate outcome until it responds.
+        let (cancelled, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.pending_writes)
+            .into_iter()
+            .partition(|pending_write_txn| match pending_write_txn {
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
+                    ..
+                } => *ctx.session().conn_id() == conn_id,
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Internal { conn_id: c, .. },
+                    ..
+                } => *c == conn_id,
+                PendingWriteTxn::System { .. } => false,
+            });
+        self.pending_writes = kept;
+        for pending in cancelled {
+            match pending {
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Session(PendingTxn { ctx, .. }),
+                    ..
+                } => {
+                    maybe_ctx = Some(ctx);
+                }
+                PendingWriteTxn::User {
+                    responder: UserWriteResponder::Internal { result, .. },
+                    ..
+                } => {
+                    result.send(WriteResult::Canceled);
+                }
+                PendingWriteTxn::System { .. } => unreachable!("filtered out above"),
             }
         }
 
@@ -1965,6 +2084,11 @@ impl Coordinator {
     /// Handle termination of a client session.
     ///
     /// This cleans up any state in the coordinator associated with the session.
+    ///
+    /// Must only be called for connections that completed a successful
+    /// startup, i.e. that are present in `active_conns`. A failed startup
+    /// leaves no state behind (see `handle_startup_inner`), so no Terminate
+    /// may be sent for it.
     #[mz_ore::instrument(level = "debug")]
     async fn handle_terminate(&mut self, conn_id: ConnectionId) {
         // If the session doesn't exist in `active_conns`, then this method will panic later on.
@@ -1984,13 +2108,11 @@ impl Coordinator {
         drop(retire_notify);
 
         self.drop_temp_items(&conn_id).await;
-        // Only call catalog_mut() if a temporary schema actually exists for this connection.
+        // Only call catalog_mut() if a temporary namespace actually exists for this connection.
         // This avoids an expensive Arc::make_mut clone for the common case where the connection
         // never created any temporary objects.
-        if self.catalog().state().has_temporary_schema(&conn_id) {
-            self.catalog_mut()
-                .drop_temporary_schema(&conn_id)
-                .unwrap_or_terminate("unable to drop temporary schema");
+        if self.catalog().state().has_temporary_namespace(&conn_id) {
+            self.catalog_mut().drop_temporary_namespace(&conn_id);
         }
         let conn = self.active_conns.remove(&conn_id).expect("conn must exist");
         let session_type = metrics::session_type_label_value(conn.user());

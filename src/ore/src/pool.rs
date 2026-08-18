@@ -94,7 +94,9 @@ use crate::pool::region::{Region, SIZE_CLASSES};
 /// (address space costs nothing, and touched pages are bounded by peak
 /// residency) so that no realistic budget, on any machine size, reaches the
 /// heap-fallback path.
-const CLASS_CAPACITY_BYTES: usize = 1 << 40;
+///
+/// NOTE: Seen OoMs with Miri since it actually allocates the capacity.
+const CLASS_CAPACITY_BYTES: usize = if cfg!(miri) { 16 << 20 } else { 1 << 40 };
 
 /// A chunk-provided transform between a chunk's body bytes and the stored
 /// bytes its extent holds. The pool owns scheduling: spill threads, the
@@ -372,6 +374,10 @@ struct PoolInner {
     extent_residents: AtomicU64,
     /// Single-flight claim for budget enforcement.
     enforcing: Mutex<()>,
+    /// Set by an insert turned away from `enforcing`. The holder re-runs its
+    /// pass while it is set, so a caller turned away after the holder's final
+    /// counter read still has its bytes enforced rather than dropped.
+    enforce_pending: std::sync::atomic::AtomicBool,
     counters: Counters,
     spill: Spill,
 }
@@ -519,6 +525,25 @@ pub struct ChunkHandle {
     meta: Arc<ChunkMeta>,
 }
 
+// Test hook fired inside `PoolInner::enforce_budget`, between a pass's final
+// counter read and the release of the `enforcing` guard. A test arms it on the
+// thread whose pass it wants to freeze, to interleave a concurrent over-budget
+// insert. One-shot: the hook is taken before it runs, so a re-enforcing pass
+// does not re-arm.
+#[cfg(test)]
+thread_local! {
+    static ENFORCE_BUDGET_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn run_enforce_budget_hook() {
+    let hook = ENFORCE_BUDGET_HOOK.with(|cell| cell.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
 impl Pool {
     /// Creates a pool, reserving one virtual region per size class. The
     /// pool starts with an unlimited budget — nothing is evicted until
@@ -545,6 +570,7 @@ impl Pool {
             live_chunks: AtomicU64::new(0),
             extent_residents: AtomicU64::new(0),
             enforcing: Mutex::new(()),
+            enforce_pending: std::sync::atomic::AtomicBool::new(false),
             counters: Counters::default(),
             spill: Spill::default(),
         })))
@@ -979,15 +1005,39 @@ impl PoolInner {
         // trips it (every insert), and concurrent passes would
         // convoy on the queue mutex doing redundant scans of the same
         // candidates. One pass at a time reaches the budget just as well;
-        // skipped callers rely on the in-progress pass. A poisoned claim
-        // means a prior pass panicked; recover and keep enforcing rather
-        // than silently disabling the budget for the process's lifetime.
+        // skipped callers hand their bytes to the in-progress pass through
+        // `enforce_pending`. A poisoned claim means a prior pass panicked.
+        // Recover and keep enforcing rather than silently disabling the
+        // budget for the process's lifetime.
         let guard = match self.enforcing.try_lock() {
             Ok(guard) => guard,
-            Err(std::sync::TryLockError::WouldBlock) => return,
+            Err(std::sync::TryLockError::WouldBlock) => {
+                // Release pairs with the holder's Acquire: the `resident_bytes`
+                // bump this caller just made must be visible to the re-read.
+                self.enforce_pending.store(true, Ordering::Release);
+                return;
+            }
             Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
         };
-        self.enforce_budget_inner();
+        loop {
+            self.enforce_budget_inner();
+            #[cfg(test)]
+            run_enforce_budget_hook();
+            // A caller turned away since this pass's counter reads may have
+            // left bytes unenforced. Re-run rather than drop them. The Acquire
+            // pairs with the turned-away Release so the re-read sees the bump.
+            //
+            // This swap is the only place the flag is cleared, so no set can be
+            // lost. The cost is that a flag left over from an earlier call's
+            // residual window buys one extra pass here, which is harmless.
+            //
+            // NOTE: a caller turned away between this swap and `drop(guard)`
+            // sets the flag but finds no re-reader. That residual window is a
+            // few instructions wide, versus the whole pass before.
+            if !self.enforce_pending.swap(false, Ordering::Acquire) {
+                break;
+            }
+        }
         drop(guard);
         // Inline evictions above may have grown the compressed tier.
         self.enforce_or_defer_compressed_cap();
@@ -2122,7 +2172,7 @@ impl Drop for ChunkHandle {
             }
             Residency::Evicted => {
                 // Eviction already released the slot.
-                debug_assert!(state.slot.is_none(), "evicted chunk holds no slot");
+                crate::soft_assert_no_log!(state.slot.is_none(), "evicted chunk holds no slot");
                 if let Some(extent) = &state.extent {
                     pool.note_extent_released(extent);
                 }
@@ -2939,6 +2989,7 @@ mod tests {
     /// the same victims (the pool's only two-chunk lock edge). Contents are
     /// asserted on every read.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn concurrent_admits_exercise_the_steal_path() {
         const CHUNKS: u64 = 8;
         let pool = test_pool(usize::MAX);
@@ -3021,6 +3072,7 @@ mod tests {
     /// contents stay correct, contended steals degrade to skips, and the
     /// accounting identity settles to zero.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn concurrent_admits_race_cleanly() {
         let pool = test_pool(64 << 10);
         let per_thread = rounds(50, 3);
@@ -3149,6 +3201,55 @@ mod tests {
         assert_eq!(resident, 2, "budget holds exactly two small chunks");
     }
 
+    /// Budget enforcement is single-flight: an insert that trips it while a
+    /// pass holds the `enforcing` guard bails on `WouldBlock`, trusting that
+    /// pass. If the holder is already past its final `resident_bytes` read, the
+    /// bailed insert's bytes are neither read by the holder nor enforced by the
+    /// bailer, and no later insert re-trips enforcement, so the pool stays over
+    /// budget. The fix re-runs the pass while any caller was turned away.
+    ///
+    /// The test hook freezes the holder's pass in that window to make the race
+    /// deterministic: the holder parks having found the budget satisfied, the
+    /// main thread inserts over budget and is turned away, then the holder
+    /// resumes. The `gate` is used for both rendezvous.
+    #[mz_ore::test]
+    fn racing_insert_is_not_dropped_by_budget_single_flight() {
+        // Budget for exactly one small chunk.
+        let budget = 64 << 10;
+        let pool = test_pool(budget);
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+        let holder = {
+            let pool = pool.clone();
+            let gate = std::sync::Arc::clone(&gate);
+            std::thread::spawn(move || -> ChunkHandle {
+                ENFORCE_BUDGET_HOOK.with(|cell| {
+                    *cell.borrow_mut() = Some(Box::new(move || {
+                        gate.wait(); // parked, holding the guard
+                        gate.wait(); // resume once the race is done
+                    }));
+                });
+                // At budget: the pass finds it satisfied and parks at the hook.
+                insert(&pool, &mut payload(SMALL, 1))
+            })
+        };
+
+        gate.wait(); // holder is parked in enforcement, holding the guard
+        // Push over budget; this insert is turned away by the held guard.
+        let _over = insert(&pool, &mut payload(SMALL, 2));
+        gate.wait(); // let the holder resume and release the guard
+        // Kept alive past the assert: freeing it would drop its bytes and mask
+        // the overshoot.
+        let _held = holder.join().expect("holder panicked");
+
+        // Nothing re-trips enforcement, so the pool must not be left over budget.
+        let resident = pool.stats().resident_bytes;
+        assert!(
+            resident <= u64::cast_from(budget),
+            "resident {resident} exceeds budget {budget}: racing insert escaped enforcement",
+        );
+    }
+
     #[mz_ore::test]
     fn set_budget_retunes_in_place() {
         let pool = test_pool(usize::MAX);
@@ -3267,6 +3368,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn multithreaded_smoke() {
         // Budget of one small chunk: four inserting threads keep the pool
         // over budget, so every insert's enforcement pass selects victims
@@ -3302,6 +3404,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn concurrent_read_enforce_churn() {
         // Races the three actors that can touch one chunk's slot: readers
         // copying shared chunks out and verifying them, an enforcer evicting
@@ -3383,6 +3486,7 @@ mod tests {
     /// drops) extent-queue entries, and pruning alone must keep the queue
     /// proportional to the live resident extents.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn extent_queue_stays_bounded_under_cap() {
         let pool = test_pool(256 << 20);
         pool.set_rss_target(1 << 40);
@@ -3539,6 +3643,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn spill_threads_end_to_end() {
         let pool = test_pool(128 << 10);
         pool.set_spill_threads(2);

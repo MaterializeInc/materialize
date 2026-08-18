@@ -16,7 +16,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use chrono::{NaiveDate, NaiveTime, Timelike};
-use mz_lowertest::MzReflect;
 use mz_persist_types::columnar::FixedSizeCodec;
 use mz_pgtz::timezone::Timezone;
 #[cfg(any(test, feature = "proptest"))]
@@ -39,8 +38,7 @@ use crate::adt::interval::Interval;
     Eq,
     Hash,
     Serialize,
-    Deserialize,
-    MzReflect
+    Deserialize
 )]
 #[cfg_attr(any(test, feature = "proptest"), derive(Arbitrary))]
 pub enum DateTimeUnits {
@@ -3669,6 +3667,7 @@ mod tests {
     }
 
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
     fn proptest_packed_naive_time_sort_order() {
         let time = add_arb_duration(NaiveTime::from_hms_opt(0, 0, 0).unwrap());
         let strat = proptest::collection::vec(time, 0..128);
