@@ -48,6 +48,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
+use crate::extensions::reduce::MzReduce;
 use crate::render::columnar::CollectionEdge;
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
@@ -435,6 +436,41 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
         }
     }
 }
+/// Rewrites an arranged error collection to hold each of its errors once.
+///
+/// Sound because query semantics depend only on whether an error is present, and correct under
+/// retraction only because it reads the accumulated collection: no pointwise function of the input
+/// diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the errors
+/// retract.
+///
+/// NOTE: One consumer does read the multiplicity. Error-count introspection reports it as the
+/// number of failing rows, so `log_dataflow_errors` must see the collection before this collapses
+/// it, or a dataflow reports one error however many rows failed. Collapse after the logging, never
+/// before.
+pub(crate) fn distinct_arranged_errs<'a, T: RenderTimestamp>(
+    errs: Arranged<'a, ErrAgent<T, Diff>>,
+    name: &str,
+) -> Arranged<'a, ErrAgent<T, Diff>> {
+    errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
+        name,
+        |_err, _input, output| output.push(((), Diff::ONE)),
+    )
+}
+
+/// Rewrites an error collection to hold each of its errors once.
+///
+/// Costs an arrangement more than [`distinct_arranged_errs`], which reuses the arrangement its
+/// input already has.
+pub(crate) fn distinct_errs_collection<'a, T: RenderTimestamp>(
+    errs: VecCollection<'a, T, DataflowErrorSer, Diff>,
+) -> VecCollection<'a, T, DataflowErrorSer, Diff> {
+    let errs: KeyCollection<_, _, _> = errs.into();
+    let errs = errs
+        .mz_arrange::<ColumnationChunker<_>, ErrBatcher<_, _>, ErrBuilder<_, _>, ErrSpine<_, _>>(
+            "Arrange errors",
+        );
+    distinct_arranged_errs(errs, "Distinct errors").as_collection(|err, _| err.clone())
+}
 
 /// A bundle of the various ways a collection can be represented.
 ///
@@ -505,6 +541,50 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                 .expect("Must contain a valid collection")
                 .scope()
         }
+    }
+
+    /// Collapses the multiplicity of every error this bundle carries to one.
+    ///
+    /// Belongs at the definition of a binding that more than one `Get` reads. Each reader
+    /// propagates the binding's errors independently, so a binding read `f` times contributes its
+    /// errors `f` times to the dataflow's error output, and those factors apply again at every
+    /// further level of sharing: a chain of diamonds multiplies rather than adds, and reaches
+    /// `Diff` overflow at a depth plans really do have. Collapsing at each definition holds the
+    /// dataflow's error multiplicity to the fan-out of a single level.
+    ///
+    /// Sound because error semantics depend only on whether an error is present, and correct under
+    /// retraction only because it reads the accumulated collection: no pointwise function of the
+    /// input diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the
+    /// errors retract.
+    ///
+    /// Collapses every form the bundle offers, not just one. Each form carries its own error
+    /// stream, and those streams differ in content as well as identity: an arrangement's errors
+    /// include the key-formation errors that the raw collection's do not. Which form a consumer
+    /// reads is the consumer's choice, and a delta join reads both within one operator, so a
+    /// binding's definition cannot know which form to collapse.
+    ///
+    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
+    /// this dataflow cannot rewrite in place. Their errors arrive bounded by the exporting
+    /// dataflow's last level of sharing rather than collapsed to one, since nothing collapses at an
+    /// export. A global read more than once within one dataflow is not collapsed either, because
+    /// only local bindings reach this.
+    pub fn distinct_errs(mut self) -> Self {
+        if let Some((oks, errs)) = self.collection.take() {
+            self.collection = Some((oks, distinct_errs_collection(errs)));
+        }
+        for (key, flavor) in std::mem::take(&mut self.arranged) {
+            let flavor = match flavor {
+                ArrangementFlavor::Local(oks, errs) => {
+                    // Names the key, not the binding: an operator name carrying a `LocalId` would
+                    // churn the introspection goldens every time the optimizer renumbers locals.
+                    let name = format!("Distinct errors[{key:?}]");
+                    ArrangementFlavor::Local(oks, distinct_arranged_errs(errs, &name))
+                }
+                flavor @ ArrangementFlavor::Trace(..) => flavor,
+            };
+            self.arranged.insert(key, flavor);
+        }
+        self
     }
 
     /// Brings the collection bundle into a region.
