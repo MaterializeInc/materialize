@@ -71,17 +71,9 @@ skip = [
 
     { name = "memmap2", version = "0.5.4" },
 
-    { name = "async-channel", version = "1.9.0" },
-    { name = "event-listener", version = "2.5.3" },
-    { name = "fastrand", version = "1.9.0" },
-    { name = "futures-lite", version = "1.13.0" },
-    { name = "getrandom", version = "0.1.16" },
     { name = "getrandom", version = "0.2.10" },
-    { name = "rand", version = "0.7.3" },
     { name = "rand", version = "0.8.5" },
-    { name = "rand_chacha", version = "0.2.2" },
     { name = "rand_chacha", version = "0.3.0" },
-    { name = "rand_core", version = "0.5.1" },
     { name = "rand_core", version = "0.6.2" },
     # Used by reqwest
     { name = "thiserror", version = "1.0.61" },
@@ -100,14 +92,14 @@ skip = [
     { name = "nix", version = "0.26.4" },
     # Held back by mysql_async `v0.36.1`
     { name = "socket2", version = "0.5.10" },
-    # Used by azure_core
+    # Used by junit-report
     { name = "quick-xml", version = "0.31.0" },
     # Used by reqsign (via iceberg); opendal pulls quick-xml 0.38
     { name = "quick-xml", version = "0.37.5" },
     # Used by opendal via iceberg
     { name = "quick-xml", version = "0.38.4" },
-    # Used by sentry
-    { name = "reqwest", version = "0.13.3" },
+    # Used by sentry and the Azure SDK; see `reqwest_0_13` in Cargo.toml.
+    { name = "reqwest", version = "0.13.4" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
     { name = "darling_macro", version = "0.20.11" },
     { name = "darling_core", version = "0.20.11" },
@@ -198,7 +190,6 @@ name = "strum-macros"
 [[bans.deny]]
 name = "log"
 wrappers = [
-    "azure_svc_blobstorage",
     "apache-avro",
     "bindgen",
     "buildid",
@@ -221,6 +212,8 @@ wrappers = [
     "reqsign",
     "reqwest",
     "rustls",
+    # Pulled in by reqwest 0.13's rustls backend, which the Azure SDK uses.
+    "rustls-platform-verifier",
     "sqlparser",
     "tokio-postgres",
     "tokio-tungstenite",
@@ -270,10 +263,6 @@ ignore = [
     # unmaintained. Pulled in transitively via `tabled` -> `tabled_derive`. No
     # safe upgrade is available.
     "RUSTSEC-2026-0173",
-    # `http-types`'s `Authorization::value`/`WwwAuthenticate::value` can violate
-    # ASCII invariants. The crate is unmaintained and pulled in transitively via
-    # the `azure_*` crates. No safe upgrade is available.
-    "RUSTSEC-2026-0174",
     # `derivative` is unmaintained; consider using an alternative (unmaintained)
     "RUSTSEC-2024-0388",
     # The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) that this project is not longer maintained as well as archived the repository
@@ -281,7 +270,7 @@ ignore = [
     # Bincode is unmaintained, the team considers version 1.3.3 a complete version of bincode that is not in need of any updates.
     "RUSTSEC-2025-0141",
     # rand unsoundness when a custom logger accesses ThreadRng during reseeding.
-    # Affects transitive deps (rand 0.7.3 via http-types, rand 0.8.5 via fail/quickcheck/etc).
+    # Affects transitive deps (rand 0.8.5 via fail/quickcheck/etc).
     "RUSTSEC-2026-0097",
     # Allows private key leakage through timing information
     # rsa is required through iceberg-storage-opendal

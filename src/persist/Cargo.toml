@@ -30,10 +30,9 @@ aws-config.workspace = true
 aws-credential-types.workspace = true
 aws-sdk-s3.workspace = true
 aws-types.workspace = true
-azure_identity.workspace = true
-azure_storage.workspace = true
-azure_storage_blobs.workspace = true
 azure_core.workspace = true
+azure_identity.workspace = true
+azure_storage_blob.workspace = true
 base64.workspace = true
 bytes.workspace = true
 deadpool-postgres.workspace = true
@@ -56,10 +55,10 @@ proptest.workspace = true
 proptest-derive.workspace = true
 prost.workspace = true
 rand = { workspace = true, features = ["small_rng"] }
-reqwest.workspace = true
+# Transport client for the Azure SDK; see the workspace Cargo.toml.
+reqwest_0_13.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, optional = true }
-time.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
