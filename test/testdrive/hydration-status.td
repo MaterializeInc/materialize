@@ -23,6 +23,14 @@
 # introspection relations are asynchronously updated, so DDL commands are not
 # immediately reflected there.
 
+# Durable hydration history is collected by a background sweep. Shorten its
+# cadence so episodes land within this test's retry budget.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET hydration_history_collection_interval = '1s';
+# Pin retention too: CI randomizes it, and a short period would prune the
+# episodes asserted below before the assertions run.
+ALTER SYSTEM SET hydration_history_retention_period = '30d';
+
 > CREATE CLUSTER test REPLICAS (hydrated_test_1 (SIZE 'scale=1,workers=1'))
 > SET cluster = test
 
@@ -65,6 +73,24 @@ si true
 idx      hydrated_test_1 true true
 mv       hydrated_test_1 true true
 mv_const hydrated_test_1 true false
+
+# Durable history for the objects that hydrated on this replica. `mv_const` is
+# included in the filter to assert it is absent: its log row stays live but never
+# reports a completion time, so the sweep's requirement that every worker report
+# one is never met. Collection also samples current state, so an object that
+# disappears before its replica's turn is not recorded either.
+# The recorded interval must be ordered, and a start is only recorded when the
+# replica observed one, so a NULL start is legal and satisfies the second column.
+> SELECT o.name, r.name, h.status,
+         h.installed_at <= h.finished_at,
+         coalesce(h.installed_at <= h.started_at AND h.started_at <= h.finished_at, true)
+  FROM mz_internal.mz_object_hydration_history AS h
+  JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  WHERE o.name IN ('idx', 'mv', 'mv_const')
+  ORDER BY o.name, r.name;
+idx hydrated_test_1 hydrated true true
+mv  hydrated_test_1 hydrated true true
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
@@ -109,6 +135,17 @@ mv       hydrated_test_2 true true
 mv_const hydrated_test_1 true false
 mv_const hydrated_test_2 true false
 
+> SELECT o.name, r.name, h.status
+  FROM mz_internal.mz_object_hydration_history AS h
+  JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+  JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
+  WHERE o.name IN ('idx', 'mv', 'mv_const')
+  ORDER BY o.name, r.name;
+idx hydrated_test_1 hydrated
+idx hydrated_test_2 hydrated
+mv  hydrated_test_1 hydrated
+mv  hydrated_test_2 hydrated
+
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h
   JOIN mz_cluster_replicas r ON (r.id = h.replica_id)
@@ -139,6 +176,14 @@ mv       hydrated_test_2 true
 # Test dropping replicas.
 
 > DROP CLUSTER REPLICA test.hydrated_test_1
+
+# History outlives the replica it describes, so dropping a replica retracts
+# nothing. Repeated sweeps must also not duplicate an already recorded episode.
+> SELECT count(*)
+  FROM mz_internal.mz_object_hydration_history AS h
+  JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+  WHERE o.name IN ('idx', 'mv', 'mv_const');
+4
 
 > SELECT o.name, r.name, h.hydrated, h.hydration_time IS NOT NULL
   FROM mz_internal.mz_compute_hydration_statuses h
@@ -340,6 +385,14 @@ snk           hydrated_test_4 true
 > DROP SINK snk
 > DROP SOURCE src CASCADE
 > DROP MATERIALIZED VIEW mv
+
+# Retention retracts aged-out rows through the same OCC path, in bounded
+# batches. A zero retention period expires everything.
+$ postgres-execute connection=mz_system
+ALTER SYSTEM SET hydration_history_retention_period = '0s';
+
+> SELECT count(*) FROM mz_internal.mz_object_hydration_history;
+0
 
 > SELECT o.name, r.name, h.hydrated
   FROM mz_internal.mz_hydration_statuses h

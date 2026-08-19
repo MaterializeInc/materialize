@@ -130,7 +130,7 @@ use mz_ore::channel::trigger::Trigger;
 use mz_ore::future::TimeoutError;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::{EpochMillis, NowFn};
-use mz_ore::task::{JoinHandle, spawn};
+use mz_ore::task::{AbortOnDropHandle, JoinHandle, spawn};
 use mz_ore::thread::JoinHandleExt;
 use mz_ore::tracing::{OpenTelemetryContext, TracingHandle};
 use mz_ore::url::SensitiveUrl;
@@ -236,6 +236,7 @@ mod caught_up;
 mod command_handler;
 mod ddl;
 pub(crate) mod group_sync;
+mod hydration_history;
 mod indexes;
 mod info_metrics;
 mod introspection;
@@ -386,6 +387,8 @@ pub enum Message {
     ArrangementSizesSnapshot,
     ArrangementSizesWrite(Vec<ArrangementSizeRecord>),
     ArrangementSizesPrune(Vec<BuiltinTableUpdate>),
+    HydrationHistorySchedule,
+    HydrationHistoryRun,
     /// Performs any cleanup and logging actions necessary for
     /// finalizing a statement execution.
     RetireExecute {
@@ -536,6 +539,8 @@ impl Message {
             Message::ArrangementSizesSnapshot => "arrangement_sizes_snapshot",
             Message::ArrangementSizesWrite(_) => "arrangement_sizes_write",
             Message::ArrangementSizesPrune(_) => "arrangement_sizes_prune",
+            Message::HydrationHistorySchedule => "hydration_history_schedule",
+            Message::HydrationHistoryRun => "hydration_history_run",
             Message::RetireExecute { .. } => "retire_execute",
             Message::ExecuteSingleStatementTransaction { .. } => {
                 "execute_single_statement_transaction"
@@ -2064,6 +2069,10 @@ pub struct Coordinator {
     connection_cancel_watches: BTreeMap<ConnectionId, (watch::Sender<bool>, watch::Receiver<bool>)>,
     /// Active introspection subscribes.
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
+    /// The last replica visited by the sequential hydration-history sweep.
+    hydration_history_replica_cursor: Option<ReplicaId>,
+    /// The in-flight hydration-history sweep. Aborted when we are dropped.
+    hydration_history_sweep: Option<AbortOnDropHandle<()>>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -3899,6 +3908,7 @@ impl Coordinator {
 
             self.schedule_storage_usage_collection().await;
             self.schedule_arrangement_sizes_collection().await;
+            self.schedule_hydration_history_collection();
             self.spawn_privatelink_vpc_endpoints_watch_task();
             self.spawn_statement_logging_task();
             self.spawn_catalog_info_metrics_task();
@@ -5104,6 +5114,8 @@ pub fn serve(
                     active_copies: BTreeMap::new(),
                     connection_cancel_watches: BTreeMap::new(),
                     introspection_subscribes: BTreeMap::new(),
+                    hydration_history_replica_cursor: None,
+                    hydration_history_sweep: None,
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

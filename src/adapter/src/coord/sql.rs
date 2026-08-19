@@ -269,14 +269,19 @@ impl Coordinator {
         id: GlobalId,
         active_sink: ActiveComputeSink,
     ) -> BuiltinTableAppendNotify {
-        let user = self.active_conns()[active_sink.connection_id()].user();
-        let session_type = metrics::session_type_label_value(user);
-
-        self.active_conns
-            .get_mut(active_sink.connection_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .insert(id);
+        let session_type = match active_sink.connection_id() {
+            Some(conn_id) => {
+                let session_type =
+                    metrics::session_type_label_value(self.active_conns()[conn_id].user());
+                self.active_conns
+                    .get_mut(conn_id)
+                    .expect("must exist for active sessions")
+                    .drop_sinks
+                    .insert(id);
+                session_type
+            }
+            None => "system",
+        };
 
         let ret_fut: BuiltinTableAppendNotify = match &active_sink {
             ActiveComputeSink::Subscribe(active_subscribe) => {
@@ -345,14 +350,19 @@ impl Coordinator {
         id: GlobalId,
     ) -> Option<(ActiveComputeSink, BuiltinTableAppendNotify)> {
         if let Some(sink) = self.active_compute_sinks.remove(&id) {
-            let user = self.active_conns()[sink.connection_id()].user();
-            let session_type = metrics::session_type_label_value(user);
-
-            self.active_conns
-                .get_mut(sink.connection_id())
-                .expect("must exist for active compute sink")
-                .drop_sinks
-                .remove(&id);
+            let session_type = match sink.connection_id() {
+                Some(conn_id) => {
+                    let session_type =
+                        metrics::session_type_label_value(self.active_conns()[conn_id].user());
+                    self.active_conns
+                        .get_mut(conn_id)
+                        .expect("must exist for active compute sink")
+                        .drop_sinks
+                        .remove(&id);
+                    session_type
+                }
+                None => "system",
+            };
 
             let write_notify: BuiltinTableAppendNotify = match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {

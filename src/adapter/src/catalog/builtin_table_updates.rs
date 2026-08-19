@@ -931,7 +931,11 @@ impl CatalogState {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::Uuid(subscribe.session_uuid));
+        packer.push(Datum::Uuid(
+            subscribe
+                .session_uuid()
+                .expect("a subscribe with an introspection row is session-owned"),
+        ));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);

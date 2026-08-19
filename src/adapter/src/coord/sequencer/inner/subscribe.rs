@@ -27,7 +27,7 @@ use tokio::sync::mpsc;
 use tracing::{Instrument, Span};
 use uuid::Uuid;
 
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner};
 use crate::command::ExecuteResponse;
 use crate::coord::appends::BuiltinTableAppendNotify;
 use crate::coord::sequencer::inner::{return_if_err, spawn_linearized_read_ts};
@@ -549,8 +549,10 @@ impl Coordinator {
 
         let (tx, rx) = mpsc::unbounded_channel();
         let active_subscribe = ActiveSubscribe {
-            conn_id: conn_id.clone(),
-            session_uuid,
+            owner: ActiveSubscribeOwner::Session {
+                conn_id: conn_id.clone(),
+                session_uuid,
+            },
             channel: tx,
             emit_progress: plan.emit_progress,
             as_of: df_desc
