@@ -383,6 +383,17 @@ created_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠when�
 dropped_at  timestamp␠with␠time␠zone  Wall-clock␠timestamp␠of␠when␠the␠object␠was␠dropped.␠`NULL`␠for␠built␠in␠system␠objects␠or␠if␠the␠object␠hasn't␠been␠dropped.
 
 query TTT
+SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_hydration_history' ORDER BY position
+----
+object_id  text  The␠ID␠of␠the␠index␠or␠materialized␠view.␠May␠name␠an␠object␠that␠no␠longer␠exists.
+cluster_id  text  The␠ID␠of␠the␠object's␠cluster.
+replica_id  text  The␠ID␠of␠the␠cluster␠replica.␠May␠name␠a␠replica␠that␠no␠longer␠exists.
+installed_at  timestamp␠with␠time␠zone  When␠the␠object's␠dataflow␠was␠installed␠on␠the␠replica.
+started_at  timestamp␠with␠time␠zone  When␠hydration␠work␠began,␠or␠`NULL`␠if␠the␠replica␠did␠not␠observe␠a␠start␠for␠this␠episode.
+finished_at  timestamp␠with␠time␠zone  When␠hydration␠finished.
+status  text  The␠terminal␠status.␠Currently␠always␠`hydrated`.
+
+query TTT
 SELECT name, type, comment FROM objects WHERE schema = 'mz_internal' AND object = 'mz_object_transitive_dependencies' ORDER BY position
 ----
 object_id  text  The␠ID␠of␠the␠dependent␠object.␠Corresponds␠to␠`mz_objects.id`.
@@ -830,6 +841,7 @@ mz_object_dependencies
 mz_object_fully_qualified_names
 mz_object_global_ids
 mz_object_history
+mz_object_hydration_history
 mz_object_lifetimes
 mz_object_oid_alias
 mz_object_transitive_dependencies

@@ -1665,6 +1665,19 @@ Target cluster: mz_catalog_server
 EOF
 
 query T multiline
+EXPLAIN INDEX "mz_internal"."mz_object_hydration_history_ind";
+----
+mz_internal.mz_object_hydration_history_ind:
+  →Arrange (#0{object_id})
+    →Stream mz_internal.mz_object_hydration_history
+
+Source mz_internal.mz_object_hydration_history
+
+Target cluster: mz_catalog_server
+
+EOF
+
+query T multiline
 EXPLAIN INDEX "mz_internal"."mz_object_lifetimes_ind";
 ----
 mz_internal.mz_object_lifetimes_ind:
@@ -4811,7 +4824,7 @@ mz_catalog.mz_indexes:
           Project: #2, #0, #1, #3, #4, #7, #5, #6
           Map: "s1"
       →Arrange (#1{name}) (#2{on_schema}, #3{on_name})
-        →Constant (80 rows)
+        →Constant (81 rows)
       →Arrange (empty key) (#1{name})
         →Fused with Child Map/Filter/Project
           Project: #4, #3
