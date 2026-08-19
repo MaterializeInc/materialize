@@ -270,11 +270,10 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
     mz_alloc::register_metrics_into(&metrics_registry).await;
     mz_metrics::register_metrics_into(&metrics_registry, mz_dyncfgs::all_dyncfgs()).await;
 
-    if let Some(heap_limit) = args.heap_limit {
-        mz_compute::memory_limiter::start_limiter(heap_limit, &metrics_registry);
-    } else {
-        info!("no heap limit announced; disabling memory limiter");
+    if args.heap_limit.is_none() {
+        info!("no heap limit announced; memory limiter running in observe-only mode");
     }
+    mz_compute::memory_limiter::start_limiter(args.heap_limit, &metrics_registry);
 
     let secrets_reader = args
         .secrets
