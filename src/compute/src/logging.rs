@@ -12,6 +12,7 @@
 pub mod compute;
 mod differential;
 pub(super) mod initialize;
+mod peak_usage;
 mod prometheus;
 mod reachability;
 mod timely;

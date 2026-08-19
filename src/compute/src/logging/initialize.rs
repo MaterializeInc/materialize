@@ -182,6 +182,17 @@ impl LoggingContext<'_> {
             );
             collections.extend(prometheus_collections);
 
+            let super::peak_usage::Return {
+                collections: peak_usage_collections,
+            } = super::peak_usage::construct(
+                scope,
+                self.config,
+                self.now,
+                self.start_offset,
+                self.workers_per_process,
+            );
+            collections.extend(peak_usage_collections);
+
             let errs = scope.scoped("logging errors", |scope| {
                 let collection: KeyCollection<_, DataflowErrorSer, Diff> =
                     VecCollection::empty(scope).into();

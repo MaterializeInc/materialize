@@ -17,6 +17,7 @@
 
 #![warn(missing_docs, missing_debug_implementations)]
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use mz_dyncfg::{ConfigSet, ConfigUpdates};
@@ -28,6 +29,7 @@ pub use dyncfgs::all_dyncfgs;
 mod dyncfgs;
 pub mod lgalloc;
 pub mod rusage;
+pub mod usage;
 
 /// Handle to metrics defined in this crate.
 #[derive(Debug)]
@@ -36,6 +38,7 @@ pub struct Metrics {
     lgalloc: MetricsTask,
     lgalloc_map: MetricsTask,
     rusage: MetricsTask,
+    peak_usage: MetricsTask,
 }
 
 static METRICS: std::sync::Mutex<Option<Metrics>> = std::sync::Mutex::new(None);
@@ -47,8 +50,15 @@ static METRICS: std::sync::Mutex<Option<Metrics>> = std::sync::Mutex::new(None);
 /// remove the shared static mutex and make this function return a handle to the metrics.
 ///
 /// This function is async, because it needs to be called from a tokio runtime context.
+///
+/// `disk_root` is a directory whose filesystem usage should be tracked, or `None` for processes
+/// that do not use disk.
 #[allow(clippy::unused_async)]
-pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_set: ConfigSet) {
+pub async fn register_metrics_into(
+    metrics_registry: &MetricsRegistry,
+    config_set: ConfigSet,
+    disk_root: Option<PathBuf>,
+) {
     let update_duration_metric = metrics_registry.register(mz_ore::metric!(
         name: "mz_metrics_update_duration",
         help: "The time it took to update lgalloc stats",
@@ -75,10 +85,18 @@ pub async fn register_metrics_into(metrics_registry: &MetricsRegistry, config_se
         &update_duration_metric,
     );
 
+    let peak_usage = Metrics::new_metrics_task(
+        metrics_registry,
+        |registry| usage::register_metrics_into(registry, disk_root),
+        dyncfgs::MZ_METRICS_PEAK_USAGE_REFRESH_INTERVAL,
+        &update_duration_metric,
+    );
+
     *METRICS.lock().expect("lock poisoned") = Some(Metrics {
         lgalloc,
         lgalloc_map,
         rusage,
+        peak_usage,
         config_set,
     });
 }
@@ -146,6 +164,7 @@ impl Metrics {
         self.lgalloc.update_dyncfg(&self.config_set);
         self.lgalloc_map.update_dyncfg(&self.config_set);
         self.rusage.update_dyncfg(&self.config_set);
+        self.peak_usage.update_dyncfg(&self.config_set);
     }
 
     fn new_metrics_task<T: MetricsUpdate>(

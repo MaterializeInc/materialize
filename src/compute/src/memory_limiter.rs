@@ -15,11 +15,11 @@
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use anyhow::Context;
 use mz_compute_types::dyncfgs::{
     MEMORY_LIMITER_BURST_FACTOR, MEMORY_LIMITER_INTERVAL, MEMORY_LIMITER_USAGE_BIAS,
 };
 use mz_dyncfg::ConfigSet;
+use mz_metrics::usage::ProcStatus;
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::metric;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -315,14 +315,6 @@ impl LimiterMetrics {
     }
 }
 
-/// Helper for reading and parsing `/proc/self/status` on Linux.
-pub struct ProcStatus {
-    /// Resident Set Size (RSS) in bytes.
-    pub vm_rss: usize,
-    /// Swap memory in bytes.
-    pub vm_swap: usize,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,36 +373,5 @@ mod tests {
         task.apply_config(LimiterConfig::disabled());
 
         assert_eq!(task.last_check, stale);
-    }
-}
-
-impl ProcStatus {
-    /// Populate a new `ProcStatus` with information in /proc/self/status.
-    pub fn from_proc() -> anyhow::Result<Self> {
-        let contents = std::fs::read_to_string("/proc/self/status")?;
-        let mut vm_rss = 0;
-        let mut vm_swap = 0;
-
-        for line in contents.lines() {
-            if line.starts_with("VmRSS:") {
-                vm_rss = line
-                    .split_whitespace()
-                    .nth(1)
-                    .ok_or_else(|| anyhow::anyhow!("failed to parse VmRSS"))?
-                    .parse::<usize>()
-                    .context("failed to parse VmRSS")?
-                    * 1024
-            } else if line.starts_with("VmSwap:") {
-                vm_swap = line
-                    .split_whitespace()
-                    .nth(1)
-                    .ok_or_else(|| anyhow::anyhow!("failed to parse VmSwap"))?
-                    .parse::<usize>()
-                    .context("failed to parse VmSwap")?
-                    * 1024;
-            }
-        }
-
-        Ok(Self { vm_rss, vm_swap })
     }
 }

@@ -153,6 +153,26 @@ The `mz_compute_operator_durations_histogram` view describes a histogram of the 
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_per_worker -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_introspection.mz_compute_operator_durations_histogram_raw -->
 
+## `mz_cluster_peak_usage`
+
+The `mz_cluster_peak_usage` source describes the peak resource usage of each process of a cluster
+replica, as a high-water mark measured since the process started. Peaks never decrease and are
+never reset, so a replica that has just finished hydrating reports the peak usage of its
+hydration.
+
+Peaks are measured by sampling, so a spike shorter than the sampling interval can be missed and
+the reported values are lower bounds. The exception is `memory_bytes`, which the operating system
+tracks itself and which is therefore exact. A `NULL` means the value could not be measured, for
+example because the replica has no disk.
+
+<!-- RELATION_SPEC mz_introspection.mz_cluster_peak_usage NO_COMMENTS -->
+| Field          | Type      | Meaning                                                                       |
+|----------------|-----------|-------------------------------------------------------------------------------|
+| `process_id`   | [`uint8`] | The ID of the process within the replica.                                     |
+| `memory_bytes` | [`uint8`] | Peak memory (RAM) usage, in bytes.                                            |
+| `heap_bytes`   | [`uint8`] | Peak heap (RAM + swap) usage, in bytes. Always at least `memory_bytes`.       |
+| `disk_bytes`   | [`uint8`] | Peak disk usage, in bytes.                                                    |
+
 ## `mz_cluster_prometheus_metrics`
 
 The `mz_cluster_prometheus_metrics` source exposes Prometheus metrics collected from each cluster replica process's internal metrics registry.

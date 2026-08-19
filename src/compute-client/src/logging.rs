@@ -184,6 +184,8 @@ pub enum ComputeLog {
     DataflowGlobal,
     /// Prometheus metrics gathered from the metrics registry.
     PrometheusMetrics,
+    /// Peak resource usage of each replica process.
+    PeakUsage,
 }
 
 impl LogVariant {
@@ -400,6 +402,14 @@ impl LogVariant {
                 .with_column("value", SqlScalarType::Float64.nullable(false))
                 .with_column("help", SqlScalarType::String.nullable(false))
                 .with_key(vec![0, 1, 3])
+                .finish(),
+
+            LogVariant::Compute(ComputeLog::PeakUsage) => RelationDesc::builder()
+                .with_column("process_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("memory_bytes", SqlScalarType::UInt64.nullable(true))
+                .with_column("heap_bytes", SqlScalarType::UInt64.nullable(true))
+                .with_column("disk_bytes", SqlScalarType::UInt64.nullable(true))
+                .with_key(vec![0])
                 .finish(),
         }
     }

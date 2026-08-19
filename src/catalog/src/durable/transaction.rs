@@ -949,6 +949,7 @@ impl<'a> Transaction<'a> {
             LogVariant::Compute(ComputeLog::DataflowGlobal) => 31,
             LogVariant::Compute(ComputeLog::OperatorHydrationStatus) => 32,
             LogVariant::Compute(ComputeLog::PrometheusMetrics) => 33,
+            LogVariant::Compute(ComputeLog::PeakUsage) => 34,
         };
 
         let mut id: u64 = u64::from(cluster_variant) << 56;
