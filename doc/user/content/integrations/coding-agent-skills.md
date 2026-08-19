@@ -34,7 +34,22 @@ Install the Materialize agent skills with a single command:
 npx skills add MaterializeInc/agent-skills
 ```
 
-Once installed, you can update installed skills by running `npx skills update`.
+## Upgrade skills
+
+We publish upgrades to the Materialize agent skills weekly, so check back
+regularly to pick up the latest documentation and reference material. To upgrade
+the skills you already have installed:
+
+```bash
+npx skills update MaterializeInc/agent-skills
+```
+
+To upgrade every skill installed on your machine, regardless of source, omit the
+repository:
+
+```bash
+npx skills update
+```
 
 ## Claude Code plugins
 
