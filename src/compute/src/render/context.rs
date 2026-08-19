@@ -419,14 +419,6 @@ pub struct CollectionBundle<'scope, T: RenderTimestamp> {
 }
 
 impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
-    /// Construct a new collection bundle from update streams.
-    pub fn from_collections(
-        oks: VecCollection<'scope, T, Row, Diff>,
-        errs: VecCollection<'scope, T, DataflowErrorSer, Diff>,
-    ) -> Self {
-        Self::from_edge(CollectionEdge::Vec(oks), errs)
-    }
-
     /// Construct a new collection bundle from a [`CollectionEdge`] and an error stream.
     pub fn from_edge(
         oks: CollectionEdge<'scope, T>,
