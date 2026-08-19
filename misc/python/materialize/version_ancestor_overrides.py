@@ -28,6 +28,12 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
+    if scenario_class_name == "MySqlInitialLoadMultiWorkerSampled":
+        # PR#38094 (storage: Fast approximate snapshot partitioning) increased wallclock by ~30%
+        min_ancestor_mz_version_per_commit[
+            "de8eac0d1683ffd788dfba6edaa88aef7f0f1740"
+        ] = MzVersion.parse_mz("v26.39.0")
+
     if scenario_class_name == "FastPathFilterNoIndex":
         # PR#38151 (Sql-150: Temporary objects to the catalog) increased wallclock by ~10%
         min_ancestor_mz_version_per_commit[
