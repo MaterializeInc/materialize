@@ -1372,8 +1372,6 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Source(&MZ_MATERIALIZED_VIEW_REFRESHES),
         Builtin::Source(&MZ_COMPUTE_DEPENDENCIES),
         Builtin::View(&MZ_MATERIALIZATION_DEPENDENCIES),
-        // Registered after mz_materialization_dependencies: builtin views must
-        // follow the views they depend on.
         Builtin::View(&MZ_OBJECT_GRAPH_EDGES),
         Builtin::View(&MZ_MATERIALIZATION_LAG),
         Builtin::View(&MZ_CONSOLE_CLUSTER_UTILIZATION_OVERVIEW),

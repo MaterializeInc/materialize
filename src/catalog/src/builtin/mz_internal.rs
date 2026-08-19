@@ -3941,6 +3941,9 @@ SELECT od.object_id, od.referenced_object_id
 FROM mz_internal.mz_object_dependencies od
 JOIN mz_catalog.mz_sources ps ON ps.id = od.referenced_object_id
 JOIN mz_catalog.mz_sources cs ON cs.id = od.object_id
+-- Progress collections are deliberately left out: their dependency edge points
+-- source -> progress, and they only exist for old-syntax sources, which the
+-- source-table migration is removing.
 WHERE ps.id LIKE 'u%' AND cs.type = 'subsource'
 UNION
 -- Select the (non-null) source id from the join rather than the nullable
@@ -3949,6 +3952,9 @@ SELECT t.id, ps.id
 FROM mz_catalog.mz_tables t
 JOIN mz_catalog.mz_sources ps ON ps.id = t.source_id",
     access: vec![PUBLIC_SELECT],
+    // No ontology entity: these edges are already in the ontology via the
+    // DependsOn links of mz_object_dependencies and
+    // mz_materialization_dependencies. An entity here would duplicate them.
     ontology: None,
 });
 
