@@ -156,15 +156,37 @@ true true true
 $ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
 ALTER SYSTEM RESET compute_hydration_concurrency;
 
+# An import-free dataflow has nothing to suspend, so it carries `started_at`
+# from creation rather than acquiring it when its `Schedule` lands. That keeps the
+# row truthful while it hydrates: it reads as hydrating rather than as queued
+# behind something that is not queueing it.
+#
+# An index is used rather than a materialized view because a constant
+# materialized view runs to the empty frontier and its dataflow shuts down,
+# taking the row with it. The two stamps land in the same turn but are separate
+# log events, so they are microseconds apart rather than equal.
+
+> CREATE VIEW v_const AS SELECT 1 AS a
+> CREATE INDEX idx_const IN CLUSTER test ON v_const (a)
+
+> SELECT DISTINCT
+      h.installed_at IS NOT NULL,
+      h.started_at >= h.installed_at,
+      h.started_at - h.installed_at < '1 second'::interval,
+      h.hydrated_at >= h.started_at
+  FROM mz_introspection.mz_compute_hydration_times_per_worker h
+  JOIN mz_indexes i ON (i.id = h.export_id)
+  WHERE i.name = 'idx_const'
+true true true true
+
+> DROP INDEX idx_const
+> DROP VIEW v_const
+
 # The ordering invariant `installed_at <= started_at <= hydrated_at` must hold
 # for every row, and no row may report a later stage without its predecessors.
-# Import-free dataflows are the interesting case: their operators are not gated
-# on the suspension token, so they can hydrate before their `Schedule` arrives.
-#
-# Such dataflows advance to the empty frontier and have their replica state
-# cleaned up promptly, so we cannot reliably observe an individual one. Assert
-# the invariant repeatedly instead, while they are being created and torn down.
-# Retries are disabled from here on, so that a violation cannot be retried away.
+# Assert it repeatedly while import-free dataflows are created and torn down,
+# since those are the paths that stamp outside `handle_schedule`. Retries are
+# disabled from here on, so that a violation cannot be retried away.
 
 $ set-max-tries max-tries=1
 

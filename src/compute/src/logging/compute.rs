@@ -1102,12 +1102,15 @@ impl DemuxHandler<'_, '_, '_> {
 
         let old_timestamps = export.hydration_timestamps;
         export.hydration_timestamps.hydrated_at = Some(hydrated_at);
-        // `StartSignal` gates only imported collections, so an import-free dataflow can hydrate
-        // before its `Schedule` arrives. Its operators were never suspended, so hydration really
-        // began when the dataflow was installed: backfilling `installed_at` reports the queueing
-        // interval as zero and the whole elapsed time as hydration work, which is what happened.
-        // Backfilling `hydrated_at` instead would invert that, reporting every such dataflow as
-        // hydrating instantaneously after queueing for its entire life.
+        // A dataflow can reach hydration before its `Schedule` arrives, and not only when it has
+        // no imports to suspend: an index over an already-hydrated arrangement reports hydration
+        // while still suspended, which happens for a handful of `mz_catalog_server` indexes on
+        // every bootstrap. So this is a normal path, not a repair for an exotic one.
+        //
+        // Stamp `started_at` from `installed_at`, which keeps `installed_at <= started_at <=
+        // hydrated_at` total and reports the queueing interval as zero. Stamping `hydrated_at`
+        // instead would invert it, charging the whole life to queueing and reporting zero
+        // hydration time for a dataflow that only ever hydrated.
         if export.hydration_timestamps.started_at.is_none() {
             export.hydration_timestamps.started_at = Some(export.hydration_timestamps.installed_at);
         }

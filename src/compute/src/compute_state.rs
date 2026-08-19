@@ -668,6 +668,16 @@ impl<'a> ActiveComputeState<'a> {
             .chain(dataflow.copy_to_ids())
             .collect();
 
+        // `StartSignal` is attached only to imported sources and imported indexes, and
+        // `import_ids` is exactly those two sets, so a dataflow with no imports has nothing
+        // suspended and begins computing as soon as it is rendered. Such a dataflow can reach
+        // hydration before its `Schedule` arrives, and the controller sends one anyway to keep
+        // protocol communication predictable, so a `started_at` stamped only from
+        // `handle_schedule` would land after `hydrated_at`. Stamping it here also keeps the row
+        // truthful from the moment it appears, rather than reporting the object as queued while
+        // nothing is queueing it.
+        let starts_immediately = dataflow.import_ids().next().is_none();
+
         // Initialize compute and logging state for each object.
         for object_id in dataflow.export_ids() {
             let is_subscribe_or_copy = subscribe_copy_ids.contains(&object_id);
@@ -686,6 +696,9 @@ impl<'a> ActiveComputeState<'a> {
                     *dataflow_index,
                     dataflow.import_ids(),
                 );
+                if starts_immediately {
+                    logging.set_hydration_start();
+                }
                 collection.logging = Some(logging);
             }
 
