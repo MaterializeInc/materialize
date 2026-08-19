@@ -4268,7 +4268,7 @@ def workflow_test_subscribe_hydration_status(
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
-              JOIN mz_tables t ON (t.id = sroi.id)
+              JOIN mz_materialized_views t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             true
             """))
@@ -4283,7 +4283,7 @@ def workflow_test_subscribe_hydration_status(
               FROM mz_internal.mz_subscriptions s,
               unnest(s.referenced_object_ids) as sroi(id)
               JOIN mz_introspection.mz_compute_hydration_times_per_worker h ON h.export_id = s.id
-              JOIN mz_tables t ON (t.id = sroi.id)
+              JOIN mz_materialized_views t ON (t.id = sroi.id)
               WHERE t.name = 'mz_tables'
             """))
 
@@ -6003,9 +6003,9 @@ def workflow_test_adhoc_system_indexes(
         WHERE i.name = 'mz_test_idx1'
         """)
     assert output[0] == ("u1", "mz_tables", "mz_catalog_server"), output
-    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    output = c.sql_query("EXPLAIN SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert "mz_test_idx1" in output[0][0], output
-    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 9")
+    output = c.sql_query("SELECT * FROM mz_tables WHERE char_length(name) = 8")
     assert len(output) > 0
 
     # The system user should be able to create a new index on an unstable

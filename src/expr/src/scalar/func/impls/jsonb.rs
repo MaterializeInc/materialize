@@ -458,7 +458,15 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "connection"
             }
-            CreateView(_) => "view",
+            CreateView(stmt) => {
+                let mut definition = stmt.definition.query.to_ast_string_stable();
+                // PostgreSQL appends a semicolon in `pg_views.definition`, we
+                // do the same for compatibility's sake.
+                definition.push(';');
+                info.insert("definition", json!(definition));
+
+                "view"
+            }
             CreateMaterializedView(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
@@ -475,7 +483,13 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
                 "materialized-view"
             }
-            CreateTable(_) | CreateTableFromSource(_) => "table",
+            CreateTable(_) => "table",
+            CreateTableFromSource(stmt) => {
+                let source_id = get_item_id(stmt.source)?;
+                info.insert("source_id", json!(source_id));
+
+                "table"
+            }
             CreateSource(stmt) => {
                 let Some(in_cluster) = stmt.in_cluster else {
                     return Err("missing IN CLUSTER".into());
@@ -2071,6 +2085,246 @@ mod tests {
     fn sink_arm_leaves_other_item_types_alone() {
         let sql = "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1";
         let out = super::parse_catalog_create_sql(sql).expect("ok");
-        assert_eq!(as_serde(out), json!({ "type": "view" }));
+        assert_eq!(
+            as_serde(out),
+            json!({ "type": "view", "definition": "SELECT 1;" })
+        );
+    }
+
+    // --- parse_catalog_create_sql --------------------------------------------
+
+    /// `type` for a `create_sql`, or the error message if parsing failed.
+    fn item_type(sql: &str) -> Result<String, String> {
+        match super::parse_catalog_create_sql(sql) {
+            Ok(out) => match as_serde(out) {
+                serde_json::Value::Object(mut m) => match m.remove("type") {
+                    Some(serde_json::Value::String(s)) => Ok(s),
+                    other => panic!("no string `type` key: {other:?}"),
+                },
+                other => panic!("not a JSON object: {other:?}"),
+            },
+            Err(EvalError::InvalidCatalogJson(msg)) => Err(msg.to_string()),
+            Err(e) => panic!("unexpected error variant: {e:?}"),
+        }
+    }
+
+    fn view_sql(query: &str) -> String {
+        format!("CREATE VIEW \"materialize\".\"public\".\"v\" AS {query}")
+    }
+
+    /// `definition` for a `CREATE VIEW` whose query is `query`.
+    fn view_definition(query: &str) -> String {
+        match as_serde(super::parse_catalog_create_sql(&view_sql(query)).expect("ok")) {
+            serde_json::Value::Object(mut m) => match m.remove("definition") {
+                Some(serde_json::Value::String(s)) => s,
+                other => panic!("no string `definition` key: {other:?}"),
+            },
+            other => panic!("not a JSON object: {other:?}"),
+        }
+    }
+
+    /// `mz_tables` and `mz_views` select rows by
+    /// `parse_catalog_create_sql(...)->>'type'`, and the function runs over
+    /// every `Item` row in the catalog, so a statement kind that changes its
+    /// reported type silently gains or loses rows in those relations. Pin the
+    /// type of every kind the catalog can hold.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_item_type_per_statement_kind() {
+        let cases = [
+            (
+                "CREATE TABLE \"materialize\".\"public\".\"t\" (a int4)",
+                "table",
+            ),
+            // A table created from a source, and a webhook table, are both
+            // `table`, so both land in mz_tables.
+            (
+                "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+                 FROM SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+                 (REFERENCE = \"topic\") FORMAT TEXT",
+                "table",
+            ),
+            (
+                "CREATE TABLE \"materialize\".\"public\".\"wht\" FROM WEBHOOK BODY FORMAT JSON",
+                "table",
+            ),
+            (
+                "CREATE VIEW \"materialize\".\"public\".\"v\" AS SELECT 1",
+                "view",
+            ),
+            (
+                "CREATE MATERIALIZED VIEW \"materialize\".\"public\".\"mv\" \
+                 IN CLUSTER [u1] AS SELECT 1",
+                "materialized-view",
+            ),
+            (
+                "CREATE SOURCE \"materialize\".\"public\".\"lg\" \
+                 IN CLUSTER [u1] FROM LOAD GENERATOR COUNTER",
+                "source",
+            ),
+            (
+                "CREATE SOURCE \"materialize\".\"public\".\"wh\" \
+                 IN CLUSTER [u1] FROM WEBHOOK BODY FORMAT JSON",
+                "source",
+            ),
+            (
+                "CREATE SUBSOURCE \"materialize\".\"public\".\"sub\" (id int4) \
+                 OF SOURCE [u1 AS \"materialize\".\"public\".\"src\"]",
+                "subsource",
+            ),
+            (
+                "CREATE SUBSOURCE \"materialize\".\"public\".\"progress\" (id int4) \
+                 WITH (PROGRESS)",
+                "subsource",
+            ),
+            (
+                "CREATE SINK \"materialize\".\"public\".\"snk\" IN CLUSTER [u1] \
+                 FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+                 INTO KAFKA CONNECTION [u2 AS \"materialize\".\"public\".\"c\"] \
+                 (TOPIC 'tp') FORMAT JSON ENVELOPE DEBEZIUM",
+                "sink",
+            ),
+            (
+                "CREATE INDEX \"i\" IN CLUSTER [u1] \
+                 ON [u1 AS \"materialize\".\"public\".\"t\"] (\"a\")",
+                "index",
+            ),
+            (
+                "CREATE TYPE \"materialize\".\"public\".\"ty\" AS LIST (ELEMENT TYPE = int4)",
+                "type",
+            ),
+            (
+                "CREATE SECRET \"materialize\".\"public\".\"s\" AS 'x'",
+                "secret",
+            ),
+            (
+                "CREATE CONNECTION \"materialize\".\"public\".\"c\" \
+                 TO KAFKA (BROKER 'b', SECURITY PROTOCOL PLAINTEXT)",
+                "connection",
+            ),
+        ];
+        for (sql, expected) in cases {
+            assert_eq!(item_type(sql).as_deref(), Ok(expected), "for {sql}");
+        }
+    }
+
+    /// `mz_views.definition` is produced here. It used to be produced by
+    /// `pack_view_update` in the adapter, so the exact rendering is a
+    /// compatibility surface: `pg_views.definition` reads it.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_view_definition() {
+        // Identifiers and function names come back fully quoted, literals
+        // untouched, and PostgreSQL's trailing semicolon is appended.
+        assert_eq!(view_definition("SELECT 1"), "SELECT 1;");
+        assert_eq!(
+            view_definition("WITH c AS (SELECT 1 AS a) SELECT a FROM c"),
+            "WITH \"c\" AS (SELECT 1 AS \"a\") SELECT \"a\" FROM \"c\";"
+        );
+        assert_eq!(
+            view_definition("SELECT 1 UNION ALL SELECT 2"),
+            "SELECT 1 UNION ALL SELECT 2;"
+        );
+        assert_eq!(
+            view_definition("SELECT (SELECT max(a) FROM [u1 AS \"materialize\".\"public\".\"t\"])"),
+            "SELECT (SELECT \"max\"(\"a\") FROM [u1 AS \"materialize\".\"public\".\"t\"]);"
+        );
+        // Identifiers needing quotes, an embedded double quote, non-ASCII, an
+        // embedded single quote in a literal, and ORDER BY all survive.
+        assert_eq!(
+            view_definition(
+                "SELECT \"a b\", \"héllo\", \"q\"\"x\" \
+                 FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+                 WHERE s = 'lit''eral' AND n = 42 ORDER BY 1"
+            ),
+            "SELECT \"a b\", \"héllo\", \"q\"\"x\" \
+             FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             WHERE \"s\" = 'lit''eral' AND \"n\" = 42 ORDER BY 1;"
+        );
+    }
+
+    /// The rendering must be a fixed point: `pg_views` consumers re-issue
+    /// `definition` as the body of a new view, so a second pass through the
+    /// parser has to produce the identical string. The trailing `;` is part of
+    /// what gets re-parsed.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_view_definition_is_idempotent() {
+        for query in [
+            "SELECT 1",
+            "WITH c AS (SELECT 1 AS a) SELECT a FROM c",
+            "SELECT 1 UNION ALL SELECT 2",
+            "SELECT \"a b\", \"q\"\"x\" FROM [u1 AS \"materialize\".\"public\".\"t\"] \
+             WHERE s = 'lit''eral' ORDER BY 1",
+        ] {
+            let once = view_definition(query);
+            assert_eq!(
+                view_definition(&once),
+                once,
+                "not a fixed point for {query}"
+            );
+        }
+    }
+
+    /// `mz_tables.source_id` comes from this key. A table with no source must
+    /// omit it entirely, so the MV's `->>'source_id'` yields SQL NULL.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_table_source_id() {
+        let from_source = as_serde(
+            super::parse_catalog_create_sql(
+                "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+                 FROM SOURCE [u1 AS \"materialize\".\"public\".\"src\"] \
+                 (REFERENCE = \"topic\") FORMAT TEXT",
+            )
+            .expect("ok"),
+        );
+        assert_eq!(from_source, json!({ "type": "table", "source_id": "u1" }));
+
+        for sql in [
+            "CREATE TABLE \"materialize\".\"public\".\"t\" (a int4)",
+            "CREATE TABLE \"materialize\".\"public\".\"wht\" FROM WEBHOOK BODY FORMAT JSON",
+        ] {
+            assert_eq!(
+                as_serde(super::parse_catalog_create_sql(sql).expect("ok")),
+                json!({ "type": "table" }),
+                "for {sql}"
+            );
+        }
+    }
+
+    /// Every error here is fatal to the whole of `mz_tables`/`mz_views`, not to
+    /// one row: the MVs call this function inside their `WHERE` clause, so an
+    /// item the parser rejects makes the relation unreadable for everyone.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn catalog_create_sql_errors() {
+        assert_eq!(
+            item_type("this is not sql"),
+            Err(
+                "failed to parse create_sql: Expected a keyword at the beginning of a statement, \
+                 found identifier \"this\""
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            item_type("CREATE TABLE t (a int4); CREATE TABLE u (b int4)"),
+            Err("expected a single statement, found 2".to_string())
+        );
+        // A statement that is not a CREATE of a catalog item, e.g. if a future
+        // change persists something else in an Item record.
+        assert_eq!(
+            item_type("SELECT 1"),
+            Err("not a CREATE item statement".to_string())
+        );
+        // Catalog `create_sql` always names items by id. An unresolved name
+        // means the record was written wrong.
+        assert_eq!(
+            item_type(
+                "CREATE TABLE \"materialize\".\"public\".\"tbl\" \
+                 FROM SOURCE src (REFERENCE = \"topic\")"
+            ),
+            Err("unresolved item name".to_string())
+        );
     }
 }

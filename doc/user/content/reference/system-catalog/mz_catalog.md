@@ -671,6 +671,11 @@ Field          | Type                 | Meaning
 
 The `mz_views` table contains a row for each view in the system.
 
+A few generated system views in `mz_internal` (the `mz_builtin_*` views,
+which list every builtin object) are shown with a short placeholder in
+`definition`, `create_sql`, and `redacted_create_sql` instead of their full
+SQL, which would embed metadata about every builtin object.
+
 <!-- RELATION_SPEC mz_catalog.mz_views -->
 Field          | Type                 | Meaning
 ---------------|----------------------|----------

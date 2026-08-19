@@ -57,9 +57,9 @@ _STABLE_BUILTINS: dict[str, MzVersion | None] = {
     "mz_sinks": MzVersion.parse_mz("v26.38.0"),
     "mz_ssh_tunnel_connections": MzVersion.parse_mz("v26.37.0"),
     "mz_system_privileges": MzVersion.parse_mz("v26.30.0"),
-    "mz_tables": None,
+    "mz_tables": MzVersion.parse_mz("v26.39.0"),
     "mz_types": None,
-    "mz_views": None,
+    "mz_views": MzVersion.parse_mz("v26.39.0"),
 }
 
 
