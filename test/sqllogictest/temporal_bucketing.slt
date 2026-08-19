@@ -278,12 +278,12 @@ Target cluster: quickstart
 EOF
 
 # -----------------------------------------------------------------------------
-# Runtime tests (node Ta). With `enable_compute_temporal_bucketing` on, the
+# Runtime tests. With `enable_compute_temporal_bucketing` on, the
 # bucketed dataflow edges are re-encoded to the columnar representation instead
 # of re-wrapping `Vec`. These tests turn the flag on and assert the bucketed
 # dataflows still produce the correct logical results, and that a consolidating
 # `Union` concatenating a bucketed input with a `Direct` input yields the right
-# output (the mixed `concat_many` case, now columnar on both legs).
+# output, which reaches `concat_many` as a columnar edge like the other leg.
 # -----------------------------------------------------------------------------
 
 simple conn=mz_system,user=mz_system
@@ -344,7 +344,7 @@ SELECT * FROM rt_topk
 
 # Mixed Union: `EXCEPT ALL` of a temporal-filtered leg (bucketed) against a
 # plain relation (Direct) lowers to a consolidating `Union` with per-input
-# strategies `[TemporalBucketing, Direct]`. After node Ta both legs reach
+# strategies `[TemporalBucketing, Direct]`. Both legs reach
 # `concat_many` as columnar edges.
 query T multiline
 EXPLAIN PHYSICAL PLAN AS VERBOSE TEXT FOR
