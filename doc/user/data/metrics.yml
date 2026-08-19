@@ -500,6 +500,90 @@ metrics:
   - server_name
   source: src/service/src/transport/metrics.rs
   visibility: internal
+- name: mz_column_align_buffer_bytes_minted_total
+  help: Allocation bytes of serialized column bodies minted.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_drops_total
+  help: Serialized column bodies dropped.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_inflight_bytes
+  help: Allocation bytes of serialized column bodies currently alive.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_inflight_bytes_peak
+  help: High-water mark of allocation bytes of serialized column bodies alive at once.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_inflight_count
+  help: Serialized column bodies currently alive.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_lifetime_max_nanoseconds
+  help: High-water mark of a serialized column body's life, uncapped by histogram buckets.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_lifetime_seconds_bucket
+  help: Time from minting a serialized column body to dropping it.
+  labels:
+  - le
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_lifetime_seconds_count
+  help: Time from minting a serialized column body to dropping it.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_lifetime_seconds_sum
+  help: Time from minting a serialized column body to dropping it.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_mints_total
+  help: Serialized column bodies minted.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_size_bytes_bucket
+  help: Allocation size of serialized column bodies at mint.
+  labels:
+  - le
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_size_bytes_count
+  help: Allocation size of serialized column bodies at mint.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_size_bytes_sum
+  help: Allocation size of serialized column bodies at mint.
+  labels:
+  - origin
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
+- name: mz_column_align_buffer_tracking_enabled
+  help: Whether align-buffer lifetime recording is on. Every other align-buffer metric is frozen while this is zero.
+  source: src/timely-util/src/columnar/align_buffer/metrics.rs
+  visibility: internal
 - name: mz_column_pager_budget_configured_bytes
   help: Most-recently-configured total budget for the column-pager tiered policy.
   source: src/timely-util/src/column_pager/metrics.rs

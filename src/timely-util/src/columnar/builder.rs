@@ -17,12 +17,12 @@
 
 use std::collections::VecDeque;
 
-use columnar::bytes::indexed;
 use columnar::{Clear, Columnar, Len, Push};
 use timely::container::PushInto;
 use timely::container::{ContainerBuilder, LengthPreservingContainerBuilder};
 
 use crate::columnar::Column;
+use crate::columnar::align_buffer::{AlignBuffer, Origin};
 
 /// A container builder for `Column<C>`.
 pub struct ColumnBuilder<C: Columnar> {
@@ -35,6 +35,24 @@ pub struct ColumnBuilder<C: Columnar> {
     finished: Option<Column<C>>,
     /// Completed containers pending to be sent.
     pending: VecDeque<Column<C>>,
+    /// The origin stamped on every buffer this builder mints.
+    origin: Origin,
+}
+
+impl<C: Columnar> ColumnBuilder<C> {
+    /// A builder that stamps its buffers with `origin` rather than the
+    /// [`Origin::Ship`] that [`Default`] uses.
+    ///
+    /// For builders whose chunks are retained rather than sent, so their
+    /// lifetimes do not land in the same metric series as bodies in flight on a
+    /// dataflow edge. Timely constructs container builders through `Default`,
+    /// which is why shipping is the default and retention is the opt-in.
+    pub fn with_origin(origin: Origin) -> Self {
+        ColumnBuilder {
+            origin,
+            ..Default::default()
+        }
+    }
 }
 
 impl<C: Columnar, T> PushInto<T> for ColumnBuilder<C>
@@ -47,22 +65,23 @@ where
         // Mint a container once the serialized size reaches the ship threshold.
         use columnar::Borrow;
         if crate::columnar::at_serialized_capacity(&self.current.borrow()) {
-            /// Move the contents from `current` to a `Vec<u64>` allocation built via
-            /// `indexed::encode` (so no zero-init pre-pass), and push it to `pending`.
+            /// Move the contents from `current` into a fitting [`AlignBuffer`]
+            /// and push it to `pending`.
             #[cold]
-            fn outlined_align<C>(current: &mut C::Container, pending: &mut VecDeque<Column<C>>)
-            where
+            fn outlined_align<C>(
+                current: &mut C::Container,
+                pending: &mut VecDeque<Column<C>>,
+                origin: Origin,
+            ) where
                 C: Columnar,
             {
                 use columnar::Borrow;
-                let words = indexed::length_in_words(&current.borrow());
-                let mut alloc: Vec<u64> = Vec::with_capacity(words);
-                indexed::encode(&mut alloc, &current.borrow());
-                pending.push_back(Column::Align(alloc));
+                let buffer = AlignBuffer::encode(origin, &current.borrow());
+                pending.push_back(Column::Align(buffer));
                 current.clear();
             }
 
-            outlined_align(&mut self.current, &mut self.pending);
+            outlined_align(&mut self.current, &mut self.pending, self.origin);
         }
     }
 }
@@ -74,6 +93,7 @@ impl<C: Columnar> Default for ColumnBuilder<C> {
             current: Default::default(),
             finished: None,
             pending: Default::default(),
+            origin: Origin::Ship,
         }
     }
 }

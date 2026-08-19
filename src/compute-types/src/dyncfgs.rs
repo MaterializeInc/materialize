@@ -176,6 +176,26 @@ pub const COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION: Config<f64> = Config::n
 )
 .scoped(ParameterScope::Replica);
 
+/// Record how long serialized column bodies (`Column::Align` payloads) live
+/// and how many bytes of them are alive at once, per producing origin, as
+/// `mz_column_align_buffer_*`.
+///
+/// A body on a dataflow edge is owned by whoever holds the container, outside
+/// the buffer pool's ledger, so its bytes are invisible to pool pressure
+/// decisions. That is the population the metrics are for; bodies retained by a
+/// sink or a merge chain, and bodies a read produced, are recorded under their
+/// own origins so they can be told apart from the edges.
+///
+/// Off in production because recording costs an `Instant::now` and a handful
+/// of atomics per body, on a path that mints one per shipped chunk. On in the
+/// test configuration so the recording path is exercised.
+pub const ENABLE_COLUMN_ALIGN_BUFFER_TRACKING: Config<bool> = Config::new(
+    "enable_column_align_buffer_tracking",
+    false,
+    "Record lifetime and in-flight-byte metrics for serialized column bodies, per origin.",
+)
+.scoped(ParameterScope::Replica);
+
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     "enable_mz_join_core",
@@ -404,13 +424,6 @@ pub const COMPUTE_FLAT_MAP_FUEL: Config<usize> = Config::new(
     "The amount of output the flat-map operator produces before yielding.",
 );
 
-/// Whether to render `as_specific_collection` using a fueled flat-map operator.
-pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Config::new(
-    "enable_compute_render_fueled_as_specific_collection",
-    true,
-    "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
-);
-
 /// Whether to apply logical backpressure in compute dataflows.
 pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
@@ -578,7 +591,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&COMPUTE_FLAT_MAP_FUEL)
         .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
-        .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK)
@@ -601,4 +613,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
+        .add(&ENABLE_COLUMN_ALIGN_BUFFER_TRACKING)
 }

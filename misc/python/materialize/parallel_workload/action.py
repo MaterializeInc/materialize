@@ -3058,6 +3058,9 @@ class FlipFlagsAction(Action):
             "0.01",
             "0.02",
         ]
+        self.flags_with_values["enable_column_align_buffer_tracking"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
         # 0 forces the estimated-size path for every table, the default forces
         # the exact COUNT(*) path for workload-sized tables.
@@ -3142,7 +3145,6 @@ class FlipFlagsAction(Action):
             "enable_compute_replica_expiration",
             "compute_mv_sink_advance_persist_frontiers",
             "compute_replica_expiration_offset",
-            "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
             "enable_compute_logical_backpressure",
             "enable_replica_targeted_materialized_views",

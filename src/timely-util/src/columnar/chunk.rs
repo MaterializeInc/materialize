@@ -62,6 +62,7 @@ use timely::dataflow::channels::ContainerBytes;
 use timely::progress::Timestamp;
 use timely::progress::frontier::AntichainRef;
 
+use crate::columnar::align_buffer::{AlignBuffer, Origin};
 use crate::columnar::batcher::{ColumnChunker, gallop};
 use crate::columnar::unload::UnloadChunk;
 use crate::columnar::{Column, at_serialized_capacity};
@@ -252,9 +253,9 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 Rc::try_unwrap(col).unwrap_or_else(|shared| copy_column(&shared))
             }
             ColumnChunk::Spilled(body) => {
-                let mut words = Vec::new();
-                body.handle.read_into(&mut words);
-                Column::Align(words)
+                Column::Align(AlignBuffer::build(Origin::Fetch, |words| {
+                    body.handle.read_into(words)
+                }))
             }
         }
     }
@@ -1745,13 +1746,13 @@ mod tests {
         let Column::Align(words) = &column else {
             panic!("a spilled body reads back as Column::Align");
         };
-        let words = words.clone();
+        let words = words.as_words().to_vec();
         let respilled = force_spill(ColumnChunk::from_column(column), &pool);
         let reread = respilled.into_column();
         let Column::Align(words2) = &reread else {
             panic!("a spilled body reads back as Column::Align");
         };
-        assert_eq!(&words, words2, "byte-identical round trip");
+        assert_eq!(words, words2.as_words(), "byte-identical round trip");
         assert_eq!(collect_column(&reread), data);
     }
 
