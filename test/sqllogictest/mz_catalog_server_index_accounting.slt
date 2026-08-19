@@ -345,6 +345,9 @@ mz_compute_hydration_times  object_id
 mz_compute_hydration_times  replica_id
 mz_compute_hydration_times  time_ns
 mz_compute_hydration_times_per_worker  export_id
+mz_compute_hydration_times_per_worker  hydrated_at
+mz_compute_hydration_times_per_worker  installed_at
+mz_compute_hydration_times_per_worker  started_at
 mz_compute_hydration_times_per_worker  time_ns
 mz_compute_hydration_times_per_worker  worker_id
 mz_compute_import_frontiers_per_worker  export_id
