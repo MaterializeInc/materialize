@@ -493,6 +493,10 @@ mz_object_global_ids
 BASE TABLE
 materialize
 mz_internal
+mz_object_graph_edges
+VIEW
+materialize
+mz_internal
 mz_object_history
 VIEW
 materialize

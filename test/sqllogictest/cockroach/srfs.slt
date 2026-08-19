@@ -1472,6 +1472,7 @@ mz_object_arrangement_size_history  2
 mz_object_arrangement_size_history  4
 mz_object_arrangement_sizes  1
 mz_object_dependencies  1
+mz_object_graph_edges  1
 mz_object_history  1
 mz_object_lifetimes  1
 mz_object_transitive_dependencies  1
