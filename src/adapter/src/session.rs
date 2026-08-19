@@ -48,7 +48,7 @@ use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use timely::progress::Timestamp as _;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -1069,8 +1069,14 @@ impl InProgressRows {
     }
 }
 
-/// A channel of batched rows.
-pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
+/// A stream of batched rows delivered to a client writer.
+///
+/// This is a boxed stream, not a bare channel receiver, so the coordinator can
+/// insert an adapter between itself and the client writer. The SUBSCRIBE path
+/// wraps the receiver in a byte-accounting `map` whose closure type cannot be
+/// named, so it has to be boxed. Consumers box the receiver into a
+/// `RecordFirstRowStream` regardless, so this adds no allocation.
+pub type RowBatchStream = Box<dyn futures::Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>;
 
 /// Part of statement lifecycle. These are timestamps that come from the Adapter frontend
 /// (`mz-pgwire`) part of the lifecycle.

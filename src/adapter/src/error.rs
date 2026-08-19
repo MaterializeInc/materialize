@@ -21,6 +21,7 @@ use mz_compute_client::controller::error::InstanceMissing;
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
 use mz_expr::EvalError;
+use mz_ore::cast::CastFrom;
 use mz_ore::error::ErrorExt;
 use mz_ore::stack::RecursionLimitError;
 use mz_ore::str::StrExt;
@@ -180,6 +181,16 @@ pub enum AdapterError {
     },
     /// Result size of a query is too large.
     ResultSize(String),
+    /// A `SUBSCRIBE` (or `COPY (SUBSCRIBE ...) TO STDOUT`) buffered more bytes in
+    /// environmentd than its budget allows because the client was not reading
+    /// fast enough. The subscribe is retired rather than let one slow client
+    /// grow the shared process's memory without bound.
+    SubscribeFellBehind {
+        /// Bytes buffered when the budget was exceeded.
+        buffered_bytes: usize,
+        /// The `subscribe_max_buffered_bytes` budget that was exceeded.
+        max_buffered_bytes: usize,
+    },
     /// The specified feature is not permitted in safe mode.
     SafeModeViolation(String),
     /// The current transaction had the wrong set of write locks.
@@ -743,6 +754,11 @@ impl AdapterError {
             ),
             AdapterError::Catalog(c) => c.hint(),
             AdapterError::Eval(e) => e.hint(),
+            AdapterError::SubscribeFellBehind { .. } => Some(
+                "The client is not reading results fast enough. Use a client that reads output \
+                without buffering, or raise the subscribe_max_buffered_bytes system variable."
+                    .to_string(),
+            ),
             AdapterError::AlterClusterUnmanagedWhileReconfiguring => Some(
                 "Cancel the reconfiguration by altering the cluster back to its current \
                 configuration, or wait for it to settle, then convert."
@@ -936,6 +952,7 @@ impl AdapterError {
             AdapterError::RelationOutsideTimeDomain { .. } => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::ResourceExhaustion { .. } => SqlState::INSUFFICIENT_RESOURCES,
             AdapterError::ResultSize(_) => SqlState::OUT_OF_MEMORY,
+            AdapterError::SubscribeFellBehind { .. } => SqlState::OUT_OF_MEMORY,
             AdapterError::SafeModeViolation(_) => SqlState::INTERNAL_ERROR,
             AdapterError::SubscribeOnlyTransaction => SqlState::INVALID_TRANSACTION_STATE,
             AdapterError::Optimizer(e) => match e {
@@ -1345,6 +1362,20 @@ impl fmt::Display for AdapterError {
                 )
             }
             AdapterError::ResultSize(e) => write!(f, "{e}"),
+            AdapterError::SubscribeFellBehind {
+                buffered_bytes,
+                max_buffered_bytes,
+            } => {
+                use bytesize::ByteSize;
+                let buffered = u64::cast_from(*buffered_bytes);
+                let max = u64::cast_from(*max_buffered_bytes);
+                write!(
+                    f,
+                    "SUBSCRIBE fell behind: the client did not read results fast enough, so its backlog reached {}, exceeding the {} budget",
+                    ByteSize::b(buffered),
+                    ByteSize::b(max),
+                )
+            }
             AdapterError::SafeModeViolation(feature) => {
                 write!(f, "cannot create {} in safe mode", feature)
             }

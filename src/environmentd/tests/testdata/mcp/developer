@@ -38,14 +38,14 @@ mcp-developer
 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":10,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
 
 # Query with qualified schema should work.
 mcp-developer
 {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT name FROM mz_catalog.mz_databases WHERE name = 'materialize'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\n    \"materialize\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":11,"result":{"content":[{"type":"text","text":"[\n  [\"materialize\"]\n]"}],"isError":false}}
 
 # =============================================================================
 # query_system_catalog - pg_catalog and information_schema
@@ -56,14 +56,14 @@ mcp-developer
 {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT typname FROM pg_catalog.pg_type WHERE typname = 'bool'"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\n    \"bool\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":12,"result":{"content":[{"type":"text","text":"[\n  [\"bool\"]\n]"}],"isError":false}}
 
 # information_schema should be accessible.
 mcp-developer
 {"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"query_system_catalog","arguments":{"sql_query":"SELECT table_schema FROM information_schema.tables WHERE table_name = 'mz_databases' AND table_schema = 'mz_catalog' LIMIT 1"}}}
 ----
 200 OK
-{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\n    \"mz_catalog\"\n  ]\n]"}],"isError":false}}
+{"jsonrpc":"2.0","id":13,"result":{"content":[{"type":"text","text":"[\n  [\"mz_catalog\"]\n]"}],"isError":false}}
 
 # =============================================================================
 # query_system_catalog - non-system tables rejected

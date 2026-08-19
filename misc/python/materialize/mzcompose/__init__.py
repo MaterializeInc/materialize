@@ -781,6 +781,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
     "webhook_validation_memory_budget_bytes",
+    "subscribe_max_buffered_bytes",
     "cluster_controller_tick_interval",
     "default_cluster_reconfiguration_timeout",
     "read_then_write_max_dependencies",
