@@ -24,15 +24,32 @@ Materialize.
 
 To help you get started, the following guides are available:
 
-- [Grafana](/manage/monitor/self-managed/grafana/), for the monitoring stack the
-  Terraform modules install. Enabled by default starting in TF v12.0.0.
+The Terraform modules install a monitoring stack alongside your deployment,
+enabled by default starting in TF v12.0.0. Start with what it stores and where
+else that data can go:
 
-- [Datadog](/manage/monitor/self-managed/datadog/), for exporting the collected
-  metrics to Datadog.
+- [Metric storage](/manage/monitor/self-managed/metric-store/)
 
-- [OpenTelemetry and remote
-  write](/manage/monitor/self-managed/opentelemetry/), for exporting to an OTLP
-  endpoint, a Prometheus remote-write store, or Google Cloud Monitoring.
+- [Log storage](/manage/monitor/self-managed/log-store/)
+
+- [Grafana](/manage/monitor/self-managed/grafana/), the dashboards and query
+  interface that ship with the stack.
+
+To send metrics and logs to a platform you already run, a guide is available for
+each destination:
+
+- [Datadog](/manage/monitor/self-managed/datadog/)
+
+- [Honeycomb](/manage/monitor/self-managed/honeycomb/)
+
+- [OpenTelemetry](/manage/monitor/self-managed/opentelemetry/), for any other OTLP
+  endpoint, including your own collector.
+
+- [Google Cloud Monitoring](/manage/monitor/self-managed/google-cloud-monitoring/)
+
+- [Prometheus remote
+  write](/manage/monitor/self-managed/prometheus-remote-write/), for Mimir,
+  Amazon Managed Prometheus, Grafana Cloud, or a Thanos you run elsewhere.
 
 
 ### Alerting

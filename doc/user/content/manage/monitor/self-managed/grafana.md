@@ -1,45 +1,29 @@
 ---
 title: "Grafana"
-description: "How to deploy Grafana and the Materialize monitoring stack using the Materialize Terraform modules."
+description: "How to enable, reach, and use the Grafana that ships with the Self-Managed Materialize monitoring stack."
 aliases:
   - /manage/monitor/self-managed/prometheus/
 menu:
   main:
     parent: "monitor-sm"
-    weight: 1
+    weight: 3
     identifier: "grafana-sm"
 ---
 
-The [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules) deploy a
-monitoring stack alongside your Materialize deployment. Starting in **TF
-v12.0.0**, `enable_observability` defaults to `true`, so the stack is installed
-unless you turn it off. The modules install:
+**Grafana** is the dashboarding and query interface for the monitoring stack the
+[Materialize Terraform
+modules](/self-managed-deployments/installation/#install-using-terraform-modules)
+install. It is deployed with the stack, with the Materialize dashboards and their
+data sources pre-installed, so there is nothing to import or wire up yourself.
 
-| Component | Purpose |
-|-----------|---------|
-| **Grafana** | Dashboards and query UI, with the Materialize dashboards pre-installed. |
-| **Thanos** | Metrics storage backed by object storage, with a Prometheus-compatible query endpoint. |
-| **Loki** | Log storage backed by object storage. |
-| **Grafana Alloy** | Collection of metrics and logs from Materialize and from the cluster. |
-| **Alertmanager** | Alert routing. |
+It queries the two stores the stack runs:
+[metrics](/manage/monitor/self-managed/metric-store/) and
+[logs](/manage/monitor/self-managed/log-store/). Those pages cover what is stored
+and how to send it elsewhere. This page covers Grafana itself: turning it on,
+reaching it, keeping its state, and finding the dashboards.
 
-The stack comes from the [`materialize-monitoring`
-⧉](https://github.com/MaterializeInc/materialize-monitoring) charts. The
-Terraform modules also create the object storage and the cloud identities the
-stack needs, so you do not have to configure scrape targets, data sources, or
-dashboards yourself.
-
-The gateway also fans metrics out to destinations outside the cluster, in
-addition to Thanos. See [Datadog](/manage/monitor/self-managed/datadog/) and
-[OpenTelemetry and remote
-write](/manage/monitor/self-managed/opentelemetry/).
-
-This stack was introduced in **TF v10.0.0**, replacing an earlier
-Prometheus-and-Grafana pair that collected metrics only. **TF v10.1.0** then
-added durable state for Grafana and a load balancer to reach it on, and **TF
-v12.0.0** turned `enable_observability` on by default. If you are upgrading from
-before v10.0.0, read [Upgrading from the previous
-stack](#upgrading-from-the-previous-stack) first.
+If you are upgrading from a previous version of the Terraform modules, read
+[Upgrading from the previous stack](#upgrading-from-the-previous-stack) first.
 
 ## Before you begin
 
@@ -96,32 +80,7 @@ guide for your cloud: [AWS](/self-managed-deployments/upgrading/upgrade-on-aws/)
 
 ## Step 1. Enable observability
 
-Each cloud's `simple` and `enterprise` examples take an `enable_observability`
-variable. Starting in **TF v12.0.0** it defaults to `true`, so a fresh apply
-installs the stack without any configuration, and bumping `ref=<tag>` to
-v12.0.0 or later installs it on a deployment that never set the variable.
-
-1. To confirm the setting, or to change it, set it explicitly in your
-   `terraform.tfvars`:
-
-   ```hcl
-   enable_observability = true    # default starting in TF v12.0.0
-   ```
-
-1. Apply the configuration:
-
-   ```bash
-   terraform apply
-   ```
-
-   The apply creates the object storage and cloud identities for metrics and
-   logs, and installs the stack into the `monitoring` namespace.
-
-{{< warning >}}
-The stack and its supporting resources are billable, and the `generic` node pool
-may need to grow before the first apply can schedule everything. If you do not
-want it, set `enable_observability = false` before upgrading to TF v12.0.0.
-{{< /warning >}}
+{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
 
 Starting in **v10.1.0**, the examples also create two resources for Grafana
 itself whenever `enable_observability` is on:
@@ -293,23 +252,15 @@ For the list of dashboards and what each one covers, see [Grafana dashboards
 
 ## Connect existing tooling
 
-If you already run Grafana, or want to point other tools at the collected data,
-the examples output the metric and logging query endpoints:
+If you already run Grafana, or another tool that should read the collected data,
+the examples publish the query endpoints for both stores as Terraform outputs. See
+[Metric storage](/manage/monitor/self-managed/metric-store/#connect-existing-tooling)
+and [Log
+storage](/manage/monitor/self-managed/log-store/#connect-existing-tooling).
 
-| Terraform Output | Description |
-|------------------|-------------|
-| `metrics_url` | Thanos Query endpoint. Prometheus-API-compatible, so anything that supports the PromQL query API will work with it. |
-| `logs_url` | Loki read endpoint. |
-
-```bash
-terraform output -raw metrics_url
-terraform output -raw logs_url
-```
-
-Those two endpoints are pull-based: your tooling queries the stack. To have the
-stack push a copy of its metrics to an external backend instead, see
-[Datadog](/manage/monitor/self-managed/datadog/) or [OpenTelemetry and remote
-write](/manage/monitor/self-managed/opentelemetry/).
+To have the stack push its metrics or logs to a platform you already run rather
+than being queried, see the destinations listed under [Metric
+storage](/manage/monitor/self-managed/metric-store/#other-metric-storage-backends).
 
 ## Advanced configuration
 

@@ -1,6 +1,6 @@
 ---
 title: "Datadog"
-description: "How to export metrics from Self-Managed Materialize to Datadog."
+description: "How to monitor the performance and overall health of Self-Managed Materialize using Datadog."
 menu:
   main:
     parent: "monitor-sm"
@@ -8,16 +8,15 @@ menu:
     identifier: "datadog-sm"
 ---
 
-The [monitoring stack](/manage/monitor/self-managed/grafana/) collects metrics
-from Materialize and from the cluster into a Grafana Alloy gateway, and that
-gateway can export them to [Datadog ⧉](https://www.datadoghq.com/) in addition
-to storing them in the bundled Thanos. Datadog receives a copy of the metrics;
-Thanos, Grafana, and Alertmanager keep working as before.
+This guide walks you through the steps required to monitor the performance and
+overall health of your Materialize region using [Datadog
+⧉](https://www.datadoghq.com/). Self-Managed Materialize pushes metrics, and
+optionally logs, to Datadog from the monitoring stack the Materialize Terraform
+modules install.
 
-Nothing runs alongside Materialize for this. There is no SQL exporter to
-operate, no Datadog Agent to install next to Materialize, and no scrape config
-to maintain: the gateway is already collecting these metrics, and Datadog becomes
-one more place it writes them.
+Nothing extra runs alongside Materialize for this. There is no SQL exporter to
+operate, no Datadog Agent to install next to Materialize, and no scrape
+configuration to maintain.
 
 {{< note >}}
 This page covers Self-Managed Materialize. For Materialize Cloud, where the
@@ -25,25 +24,39 @@ monitoring stack is not part of the deployment, see [Datadog for
 Cloud](/manage/monitor/cloud/datadog/).
 {{< /note >}}
 
+## How it works
+
+{{< include-md file="content/headless/monitoring/how-it-works.md" >}}
+
+Datadog is an **additive** destination. It receives its own filtered copy of the
+metrics, and the bundled [Thanos](/manage/monitor/self-managed/metric-store/),
+Grafana, and Alertmanager keep working as before. You do not give anything up by
+turning it on.
+
+The exporter authenticates directly against the Datadog intake with an API key,
+so the only decisions are which site to send to and how much to send.
+
 ## Before you begin
 
-Ensure you have:
+{{< include-md file="content/headless/monitoring/before-you-begin.md" >}}
 
-- The monitoring stack installed, with `enable_observability = true`. See
-  [Grafana](/manage/monitor/self-managed/grafana/). Datadog export requires **TF
-  v12.0.0** or later.
+You also need:
 
 - A [Datadog API key
-  ⧉](https://docs.datadoghq.com/account_management/api-app-keys/). An
-  application key is not needed and is not accepted: the metrics intake
-  authenticates with the API key alone.
+  ⧉](https://docs.datadoghq.com/account_management/api-app-keys/). An application
+  key is not needed and is not accepted: the metrics intake authenticates with
+  the API key alone.
 
 - Your [Datadog site ⧉](https://docs.datadoghq.com/getting_started/site/), such
   as `datadoghq.com`, `datadoghq.eu`, or `us3.datadoghq.com`. A wrong site is a
   403 from the intake rather than a routing error, so confirm it before you
   apply.
 
-## Step 1. Configure the Datadog destination
+## Step 1. Enable observability
+
+{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
+
+## Step 2. Configure the Datadog destination
 
 Datadog is configured on the `monitoring` module block, not through a root
 variable of the examples. It provisions no cloud resources, so there is no
@@ -68,18 +81,18 @@ variable of the examples. It provisions no cloud resources, so there is no
    | Field | Default | Purpose |
    |-------|---------|---------|
    | `site` | `datadoghq.com` | Your Datadog site. Determines the intake the exporter writes to. |
-   | `min_importance` | `essential` | Which metrics to send. See [Controlling what Datadog receives](#controlling-what-datadog-receives). |
+   | `min_importance` | `essential` | Which metrics to send. See [How to control which metrics Datadog receives](#how-to-control-which-metrics-datadog-receives). |
    | `metric_endpoint` | derived from `site` | Override the metrics intake URL. Only for a proxy or PrivateLink. |
    | `logs_endpoint` | derived from `site` | Override the logs intake URL. Only for a proxy or PrivateLink. |
 
    {{< warning >}}
    A hand-written `metric_endpoint` or `logs_endpoint` that disagrees with `site`
-   fails at the intake, not at plan time. Leave both unset unless you are
-   routing through a proxy.
+   fails at the intake, not at plan time. Leave both unset unless you are routing
+   through a proxy.
    {{< /warning >}}
 
-1. Supply the API key. Declare it as a sensitive variable and pass it in the way
-   you pass other secrets, for example through an environment variable:
+1. Declare the API key as a sensitive variable and pass it in the way you pass
+   other secrets, for example through an environment variable:
 
    ```hcl
    variable "datadog_api_key" {
@@ -98,117 +111,93 @@ variable of the examples. It provisions no cloud resources, so there is no
    terraform apply
    ```
 
-The API key does not travel through the Helm values. The module puts it in a
-Kubernetes Secret that the gateway mounts, so it is not recoverable with `helm
-get values`. Rotating the key rolls the gateway, because environment variables
-are fixed at container start and a running pod would otherwise keep
-authenticating with the key it started with.
+{{< include-md file="content/headless/monitoring/gateway-credentials.md" >}}
 
-## Step 2. Confirm metrics are arriving
+## Step 3. Confirm metrics are arriving
 
-1. Check that the gateway restarted and is healthy:
+{{< include-md file="content/headless/monitoring/confirm-metrics.md" >}}
 
-   ```bash
-   kubectl -n monitoring rollout status deployment/alloy-gateway
-   ```
+In Datadog, **Metrics > Summary** filtered to `mz_` is the quickest place to look.
 
-1. In Datadog, open **Metrics > Summary** and search for `mz_`.
+## Step 4. Build alerts
 
-{{< note >}}
-Datadog's metric summary is cumulative: a metric appearing there is not proof it
-is arriving right now. Query for recent samples to confirm what is currently
-flowing.
-{{< /note >}}
+With metrics in Datadog, build [monitors ⧉](https://docs.datadoghq.com/monitors/)
+from the metrics and thresholds in
+[Alerting](/manage/monitor/self-managed/alerting/).
 
-## Controlling what Datadog receives
+The monitoring stack also ships Alertmanager rules that evaluate against the
+bundled Thanos. Decide which system owns which alerts rather than running both
+against the same thresholds and paging twice.
+
+## How to control which metrics Datadog receives
 
 Datadog bills per custom metric, so the volume you send is a cost decision.
-Every metric the stack collects carries an *importance* tier, and each
-destination keeps only the metrics at or above a chosen floor. The tiers below
-run from most to least important, and the floor is cumulative: it keeps that
-tier and every tier above it.
 
-| Tier | What it covers |
-|------|----------------|
-| `essential` | The metrics that are critical and that you would always want available. These are the ones used in alerting. |
-| `recommended` | The metrics used in dashboards, and generally desirable for troubleshooting. |
-| `extended` | The metrics used by optional and experimental dashboards. |
-| `diagnostic` | The metrics used for in-depth troubleshooting and analysis. |
-| `all` | Absolutely everything scraped, including metrics no tier classifies. Suited to cheap storage such as the bundled Thanos, not to a metered backend. |
+{{< include-md file="content/headless/monitoring/metric-tiers.md" >}}
 
-`datadog_metrics.min_importance` defaults to `essential`, a tighter floor than
-the other destinations use, for exactly this reason. `all` is a diagnostic
-setting, not a steady state.
+`datadog_metrics.min_importance` defaults to `essential`, a tighter floor than the
+other destinations use, for exactly this reason. `all` is a diagnostic setting,
+not a steady state.
 
-The tiers are shared with the rest of the stack, so a tier selected here means
-the same set of metrics as the same tier selected in Helm. For the membership of
-each tier, see [List of metrics
-⧉](https://materializeinc.github.io/materialize-monitoring/reference/stable-metrics/list-metrics/).
-For the metrics Materialize recommends dashboarding and alerting on, see
-[essential metrics](/manage/monitor/essential-metrics/), and for everything it
-exposes, the [appendix of all metrics](/manage/monitor/appendix-metrics/).
+## How to forward logs
 
-{{< note >}}
-The `extended` and `diagnostic` tiers are still being populated, so today they
-resolve to the same set as `recommended`. To send everything that is scraped,
-use `all`, not `diagnostic`.
-{{< /note >}}
+{{< include-md file="content/headless/monitoring/forward-logs.md" >}}
 
-{{< warning >}}
-The filter fails open. If the allowlist reaches the gateway empty, the gateway
-sends everything to that destination rather than nothing. That is safe for
-visibility and expensive on a metered backend, so check your Datadog metric
-volume after a configuration change.
-{{< /warning >}}
+Datadog bills for logs separately from custom metrics. For the log storage
+options in full, see [Log storage](/manage/monitor/self-managed/log-store/).
 
-## Forwarding logs as well
+## Instructions when using Helm
 
-The same exporter can also carry the logs the stack collects, alongside the
-metrics. Loki continues to receive them either way. Enable it through
-`additional_values` on the `monitoring` module block:
+If you install the `materialize-monitoring` chart directly rather than through the
+Terraform modules, the Datadog destination is a chart value and the API key is a
+Secret you create.
 
-```hcl
-additional_values = [
-  <<-EOT
-    pipeline:
-      logging:
-        gateway:
-          destination:
-            otel:
-              enabled: true
-  EOT
-]
-```
+1. Enable the exporter:
 
-This switch is not Datadog-specific: it turns on the log path to every
-logs-capable exporter the gateway has enabled, so if you also configure an [OTLP
-destination](/manage/monitor/self-managed/opentelemetry/), that one receives the
-logs too.
+   ```yaml
+   pipeline:
+     metrics:
+       gateway:
+         destination:
+           otel:
+             enabled: true
+             datadogExporter:
+               enabled: true
+               url: datadoghq.com
+               minMetricImportance: essential
+   ```
 
-Logs are considerably higher volume than metrics, and Datadog bills for them
-separately from custom metrics. Turn this on deliberately.
+1. Create the gateway Secret with the API key. The chart does not create it, and
+   mounts it optionally, so a wrong name or namespace is ignored silently rather
+   than failing:
 
-## Building monitors and dashboards
+   ```bash
+   kubectl create secret generic mzmon-alloy-gateway-env \
+     --namespace monitoring \
+     --from-literal=GATEWAY_OTEL_DEST_DATADOG_API_KEY='<your-datadog-api-key>'
+   ```
 
-With metrics in Datadog, build monitors from the thresholds in
-[Alerting](/manage/monitor/self-managed/alerting/). Materialize also ships
-Alertmanager rules with the monitoring stack, so decide which system owns which
-alerts rather than running both against the same thresholds.
+   {{< warning >}}
+   The Secret name must match the release, so with the default
+   `fullnameOverride: mzmon` it is `mzmon-alloy-gateway-env`, in the namespace the
+   gateway runs in. In production, source it from Sealed Secrets, External
+   Secrets, or SOPS rather than committing a raw credential.
+   {{< /warning >}}
 
-## Installing with Helm
+For a ready-made starting point that fans metrics out to several backends at
+once, see the [`otel-metrics-fanout.values.yaml`
+⧉](https://github.com/MaterializeInc/materialize-monitoring/blob/main/charts/materialize-monitoring/profiles/otel-metrics-fanout.values.yaml)
+profile, and for the full value reference, [Metrics > Storing
+⧉](https://materializeinc.github.io/materialize-monitoring/metrics/storing/).
 
-If you install the `materialize-monitoring` chart directly rather than through
-the Terraform modules, the Datadog destination is a chart value and the API key
-is a Secret you create. See [Metrics > Storing
-⧉](https://materializeinc.github.io/materialize-monitoring/metrics/storing/) for
-the values, the Secret's name and keys, and the environment variable the API key
-becomes.
+## See also
 
-## Other destinations
+- [Metric storage](/manage/monitor/self-managed/metric-store/), for the bundled
+  store and the other backends you can send metrics to.
 
-- [OpenTelemetry and remote
-  write](/manage/monitor/self-managed/opentelemetry/), for OTLP endpoints,
-  Prometheus remote-write stores, and Google Cloud Monitoring.
+- [Honeycomb](/manage/monitor/self-managed/honeycomb/) and
+  [OpenTelemetry](/manage/monitor/self-managed/opentelemetry/), which follow the
+  same additive model over OTLP.
 
-- [Grafana](/manage/monitor/self-managed/grafana/), for the bundled stack and
-  the query endpoints that existing tooling can read.
+- [Alerting](/manage/monitor/self-managed/alerting/), for the metrics and
+  thresholds to alert on.
