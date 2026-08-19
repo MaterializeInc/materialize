@@ -44,6 +44,7 @@
 //! resident fence metadata so a probe set faults only the chunk bodies it
 //! actually touches.
 
+use std::borrow::Cow;
 #[cfg(test)]
 use std::cell::Cell;
 use std::cell::RefCell;
@@ -58,6 +59,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::Chunk;
 use mz_ore::cast::CastFrom;
 use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, IDENTITY_CODEC, Pool};
+use smallvec::SmallVec;
 use timely::Accountable;
 use timely::PartialOrder;
 use timely::container::{ContainerBuilder, PushInto};
@@ -273,8 +275,9 @@ pub struct SpilledBody<D: Columnar, T> {
     time_lower: Antichain<T>,
     /// The maximal times in the body. Some contained time is
     /// greater-or-equal to a frontier exactly when some maximal time is,
-    /// which is `extract`'s ship-whole test.
-    time_upper: Vec<T>,
+    /// which is `extract`'s ship-whole test. A single element for totally
+    /// ordered times, hence the inline capacity.
+    time_upper: SmallVec<[T; 1]>,
     /// The chunk's generational depth, mirrored into the pool's
     /// [`ChunkHints`] at spill time.
     depth: u8,
@@ -418,7 +421,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
             records,
             fences,
             time_lower,
-            time_upper,
+            time_upper: time_upper.into(),
             depth,
             handle,
         }))
@@ -465,16 +468,23 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
         }
     }
 
-    /// The chunk's time bounds: stored metadata for spilled bodies, a scan
-    /// of the time column for resident ones. The scan costs less than the
-    /// copy it lets `extract` avoid when the chunk passes through whole.
-    fn chunk_time_bounds(&self) -> (Antichain<T>, Vec<T>)
+    /// The chunk's time bounds: borrowed from the stored metadata for
+    /// spilled bodies, computed by a time-column scan for resident ones. The
+    /// scan costs less than the copy it lets `extract` avoid when the chunk
+    /// passes through whole.
+    fn chunk_time_bounds(&self) -> (Cow<'_, Antichain<T>>, Cow<'_, [T]>)
     where
         T: Timestamp,
     {
         match self {
-            ColumnChunk::Resident(col, _) => Self::time_bounds(col),
-            ColumnChunk::Spilled(body) => (body.time_lower.clone(), body.time_upper.clone()),
+            ColumnChunk::Resident(col, _) => {
+                let (lower, upper) = Self::time_bounds(col);
+                (Cow::Owned(lower), Cow::Owned(upper))
+            }
+            ColumnChunk::Spilled(body) => (
+                Cow::Borrowed(&body.time_lower),
+                Cow::Borrowed(&body.time_upper[..]),
+            ),
         }
     }
 
@@ -486,17 +496,20 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     where
         T: Timestamp,
     {
-        let view = column.borrow();
-        let times = view.1;
+        let (_, times, _) = column.borrow();
         let mut lower = Antichain::new();
         let mut upper: Vec<T> = Vec::new();
+        // One owned time reused across the scan, so times with owned
+        // allocations do not allocate per element; the bound sets clone only
+        // the elements they retain.
+        let mut time = T::minimum();
         for i in 0..times.len() {
-            let t = T::into_owned(rr::<T>(times.get(i)));
-            if !upper.iter().any(|u| PartialOrder::less_equal(&t, u)) {
-                upper.retain(|u| !PartialOrder::less_equal(u, &t));
-                upper.push(t.clone());
+            time.copy_from(rr::<T>(times.get(i)));
+            if !upper.iter().any(|u| PartialOrder::less_equal(&time, u)) {
+                upper.retain(|u| !PartialOrder::less_equal(u, &time));
+                upper.push(time.clone());
             }
-            lower.insert(t);
+            lower.insert_ref(&time);
         }
         (lower, upper)
     }
@@ -721,7 +734,7 @@ where
             // The residual must lower-bound every kept time, which is the
             // chunk's lower bound antichain by construction.
             for m in time_lower.elements() {
-                residual.insert(m.clone());
+                residual.insert_ref(m);
             }
             keep.push_back(chunk);
             return;
@@ -1651,6 +1664,7 @@ mod tests {
     /// Extracting a large chunk at an intermediate frontier cuts both sides
     /// into several chunks and partitions exactly by time.
     #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
     fn extract_cuts_large_output() {
         let records: Vec<Tuple> = (0..300_000u64).map(|k| ((k, 0), k % 2, 1)).collect();
         let mut input = VecDeque::from([ColumnChunk::from_column(build_column(&records))]);
