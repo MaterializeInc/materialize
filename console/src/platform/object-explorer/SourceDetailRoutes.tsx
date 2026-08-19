@@ -13,7 +13,6 @@ import { Navigate, Outlet, Route, useNavigate } from "react-router-dom";
 import { Source } from "~/api/materialize/source/sourceList";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
 import { LoadingContainer } from "~/components/LoadingContainer";
-import WorkflowGraph from "~/components/WorkflowGraph/WorkflowGraph";
 import { Tab } from "~/layouts/BaseLayout";
 import { useSourcesList } from "~/platform/sources/queries";
 import SourceErrors from "~/platform/sources/SourceErrors";
@@ -28,6 +27,10 @@ import { SchemaObjectHeader } from "./SchemaObjectHeader";
 import { SimpleObjectDetailsContainer } from "./SimpleObjectDetailRoutes";
 import { useSchemaObjectParams } from "./useSchemaObjectParams";
 import { useToastIfObjectNotExtant } from "./useToastIfObjectNotExtant";
+
+const WorkflowGraph = React.lazy(
+  () => import("~/components/WorkflowGraph/WorkflowGraph"),
+);
 
 export const SourceOverviewContainer = () => {
   return (
@@ -173,7 +176,11 @@ export const SourceDetailRoutes = () => {
             <Route path="columns" element={<ObjectColumns />} />
             <Route
               path="workflow"
-              element={<WorkflowGraph focusedObjectId={id} />}
+              element={
+                <React.Suspense fallback={<LoadingContainer />}>
+                  <WorkflowGraph focusedObjectId={id} />
+                </React.Suspense>
+              }
             />
           </>
         ) : (
@@ -183,7 +190,11 @@ export const SourceDetailRoutes = () => {
             <Route path="columns" element={<ObjectColumns />} />
             <Route
               path="workflow"
-              element={<WorkflowGraph focusedObjectId={id} />}
+              element={
+                <React.Suspense fallback={<LoadingContainer />}>
+                  <WorkflowGraph focusedObjectId={id} />
+                </React.Suspense>
+              }
             />
             <Route path="errors" element={<SourceErrorsContainer />} />
             <Route path="tables" element={<SourceTablesContainer />} />

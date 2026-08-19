@@ -79,3 +79,5 @@ export const ShowCreateBlockInner = ({
 
   return <ExpandableCodeBlock text={tryPrettyStr(showCreate.sql, 100)} />;
 };
+
+export default ShowCreateBlock;
