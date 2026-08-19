@@ -45,6 +45,7 @@ use mz_timestamp_oracle::TimestampOracle;
 use tokio::sync::{Semaphore, mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use crate::active_compute_sink::ActiveSubscribeOwner;
 use crate::catalog::Catalog;
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
 use crate::coord::appends::{BuiltinTableAppendNotify, WriteResult};
@@ -419,8 +420,7 @@ pub enum Command {
         as_of: mz_repr::Timestamp,
         arity: usize,
         sink_id: GlobalId,
-        conn_id: ConnectionId,
-        session_uuid: Uuid,
+        owner: ActiveSubscribeOwner,
         start_time: mz_ore::now::EpochMillis,
         read_holds: ReadHolds,
         tx: oneshot::Sender<Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>>,
@@ -437,10 +437,10 @@ pub enum Command {
     ///   including read-only, a changed target and cancellation, is reported the
     ///   same way in both modes.
     AttemptWrite {
-        /// Connection originating the write. Used so the coordinator can
-        /// cancel this pending write if the connection is cancelled before
-        /// the write commits.
-        conn_id: ConnectionId,
+        /// Connection originating the write, so the coordinator can cancel this
+        /// pending write if the connection is cancelled before it commits.
+        /// `None` for coordinator background work, which has no connection.
+        conn_id: Option<ConnectionId>,
         target_id: CatalogItemId,
         target_global_id: GlobalId,
         diffs: Vec<(Row, Diff)>,

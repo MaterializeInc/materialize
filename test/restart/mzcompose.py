@@ -1234,6 +1234,77 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
             )
 
 
+def workflow_hydration_history_survives_restart(c: Composition) -> None:
+    """`mz_object_hydration_history` rows outlive the process that wrote them.
+
+    Killing the service also restarts clusterd, so the replica hydrates again
+    and legitimately records a *second* episode with a fresh `installed_at`.
+    What must hold is that the pre-restart episode is still there afterwards,
+    unchanged, and that repeated sweeps do not duplicate it. Asserting a total
+    row count of one would instead assert that rehydration goes unrecorded.
+    """
+
+    def episodes() -> list[list]:
+        return c.sql_query("""
+            SELECT h.installed_at::text, h.started_at::text,
+                   h.finished_at::text, h.status
+            FROM mz_internal.mz_object_hydration_history AS h
+            JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+            WHERE o.name = 'hydration_history_i'
+            ORDER BY h.installed_at""")
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "hydration_history_collection_interval": "1s",
+                # Pin retention: CI randomizes it, and a short period would
+                # prune the episode this test restarts around.
+                "hydration_history_retention_period": "30d",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent("""\
+            CREATE CLUSTER hydration_history SIZE 'scale=1,workers=2';
+            CREATE TABLE hydration_history_t (a int);
+            CREATE INDEX hydration_history_i
+                IN CLUSTER hydration_history ON hydration_history_t (a);
+            """))
+
+        deadline = time.time() + 120
+        before = []
+        while time.time() < deadline:
+            before = episodes()
+            if before:
+                break
+            time.sleep(0.5)
+        assert (
+            len(before) == 1
+        ), f"expected exactly one episode, got {before} (empty means it timed out)"
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        # The pre-restart episode must still be present and byte-identical.
+        after = episodes()
+        assert (
+            before[0] in after
+        ), f"restart lost the pre-restart episode: had {before}, now {after}"
+
+        # Let several sweeps run. The pre-restart episode must not be duplicated,
+        # and the post-restart episode must settle at one row too.
+        time.sleep(10)
+        settled = episodes()
+        assert (
+            before[0] in settled
+        ), f"pre-restart episode disappeared: had {before}, now {settled}"
+        assert len(settled) == len(
+            set(tuple(row) for row in settled)
+        ), f"sweeps duplicated a hydration episode: {settled}"
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":

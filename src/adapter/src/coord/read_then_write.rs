@@ -26,7 +26,7 @@ use tokio::sync::mpsc;
 use tracing::Span;
 
 use crate::PeekResponseUnary;
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner};
 use crate::catalog::Catalog;
 use crate::coord::Coordinator;
 use crate::coord::appends::{
@@ -67,8 +67,8 @@ impl Coordinator {
     /// Takes ownership of `read_holds` and drops them only once the dataflow is
     /// shipped, so the `since` cannot advance past `as_of` in between.
     ///
-    /// Answers through `response_tx`, with an error if the connection went away
-    /// or if a dependency was dropped since the plan was optimized.
+    /// Answers through `response_tx`, with an error if the owning connection
+    /// went away or if a dependency was dropped since the plan was optimized.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_create_internal_subscribe(
         &mut self,
@@ -79,25 +79,26 @@ impl Coordinator {
         as_of: Timestamp,
         arity: usize,
         sink_id: GlobalId,
-        conn_id: mz_adapter_types::connection::ConnectionId,
-        session_uuid: uuid::Uuid,
+        owner: ActiveSubscribeOwner,
         start_time: mz_ore::now::EpochMillis,
         read_holds: crate::ReadHolds,
         response_tx: tokio::sync::oneshot::Sender<
             Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>,
         >,
     ) {
-        // Client disconnected while waiting for the semaphore.
-        if !self.active_conns.contains_key(&conn_id) {
-            let _ = response_tx.send(Err(AdapterError::Canceled));
-            return;
+        // Client disconnected while waiting for the semaphore. Background work
+        // has no connection to lose.
+        if let ActiveSubscribeOwner::Session { conn_id, .. } = &owner {
+            if !self.active_conns.contains_key(conn_id) {
+                let _ = response_tx.send(Err(AdapterError::Canceled));
+                return;
+            }
         }
 
         let (tx, rx) = mpsc::unbounded_channel();
 
         let active_subscribe = ActiveSubscribe {
-            conn_id: conn_id.clone(),
-            session_uuid,
+            owner,
             channel: tx,
             emit_progress: true, // We need progress updates for OCC
             as_of,
@@ -152,9 +153,13 @@ impl Coordinator {
     /// valid at and goes straight to the committer, pinned to the `GlobalId`
     /// validated here. `None` is a blind write that rides the next group
     /// commit, whose staging re-checks the target generation.
+    ///
+    /// `conn_id` is the connection the write is cancelled with. Coordinator
+    /// background work passes `None`, and always names a timestamp, since the
+    /// blind path needs a connection to answer through.
     pub(crate) fn handle_attempt_write(
         &mut self,
-        conn_id: mz_adapter_types::connection::ConnectionId,
+        conn_id: Option<mz_adapter_types::connection::ConnectionId>,
         target_id: mz_repr::CatalogItemId,
         target_global_id: GlobalId,
         diffs: Vec<(Row, Diff)>,
@@ -162,9 +167,11 @@ impl Coordinator {
         result_tx: tokio::sync::oneshot::Sender<WriteResult>,
     ) {
         let result = InternalWriteResponder::new(result_tx);
-        if !self.active_conns.contains_key(&conn_id) {
-            result.send(WriteResult::Canceled);
-            return;
+        if let Some(conn_id) = &conn_id {
+            if !self.active_conns.contains_key(conn_id) {
+                result.send(WriteResult::Canceled);
+                return;
+            }
         }
         if self.controller.read_only() {
             result.send(WriteResult::ReadOnly);
@@ -204,7 +211,7 @@ impl Coordinator {
                     writes,
                     write_locks: None,
                     responder: UserWriteResponder::Internal {
-                        conn_id,
+                        conn_id: conn_id.expect("blind writes come from a session"),
                         target: WriteTarget {
                             item_id: target_id,
                             global_id: target_global_id,
