@@ -836,6 +836,14 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION: LazyLock<SystemObject
         object_type: CatalogItemType::Table,
         object_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name.to_string(),
     });
+
+/// Identifies [`MZ_OBJECT_HYDRATION_HISTORY`] for the schema-migration guard.
+pub static MZ_OBJECT_HYDRATION_HISTORY_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_OBJECT_HYDRATION_HISTORY.schema.to_string(),
+        object_type: CatalogItemType::Table,
+        object_name: MZ_OBJECT_HYDRATION_HISTORY.name.to_string(),
+    });
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -1463,6 +1471,13 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::View(&MZ_INDEX_ADVICE),
         Builtin::View(&MZ_MCP_DATA_PRODUCTS),
         Builtin::View(&MZ_MCP_DATA_PRODUCT_DETAILS),
+        // NOTE: This list is a dependency order, and in a fresh environment it
+        // is also the order builtin ids are handed out in. Appending keeps a new
+        // builtin from shifting the ids of the ones before it, which is what the
+        // catalog goldens record. An existing environment is unaffected either
+        // way: its builtins keep the ids stored under their names.
+        Builtin::Table(&MZ_OBJECT_HYDRATION_HISTORY),
+        Builtin::Index(&MZ_OBJECT_HYDRATION_HISTORY_IND),
     ];
 
     builtin_items.extend(notice::builtins());

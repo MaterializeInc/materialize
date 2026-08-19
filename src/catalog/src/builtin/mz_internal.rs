@@ -4965,6 +4965,83 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
+/// Completed hydration episodes, one row per object, replica, and installation.
+///
+/// Durability here is best effort, in both directions. We keep the contents out
+/// of the bootstrap reset and out of forced schema migrations, because a sampled
+/// history cannot be rebuilt from anything else once it is gone. But we do not
+/// promise to preserve it forever: a future schema change may be worth more than
+/// the accumulated rows, and clearing the table is an acceptable price to pay for
+/// one. Nothing may depend on a row still being here.
+pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_object_hydration_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_OBJECT_HYDRATION_HISTORY_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "installed_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "started_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "finished_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .with_key(vec![0, 2, 3])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the index or materialized view. May name an object that no longer exists.",
+        ),
+        ("cluster_id", "The ID of the object's cluster."),
+        (
+            "replica_id",
+            "The ID of the cluster replica. May name a replica that no longer exists.",
+        ),
+        (
+            "installed_at",
+            "When the object's dataflow was installed on the replica.",
+        ),
+        (
+            "started_at",
+            "When hydration work began, or `NULL` if the replica did not observe a start for this episode.",
+        ),
+        ("finished_at", "When hydration finished."),
+        (
+            "status",
+            "The terminal status. Currently always `hydrated`.",
+        ),
+    ]),
+    is_retained_metrics_object: true,
+    access: vec![PUBLIC_SELECT],
+    // No ontology links: a history row deliberately outlives the object and the
+    // replica it describes, so a foreign key to either would dangle for exactly
+    // the rows that make this table worth keeping.
+    ontology: None,
+});
+
+pub static MZ_OBJECT_HYDRATION_HISTORY_IND: LazyLock<BuiltinIndex> =
+    LazyLock::new(|| BuiltinIndex {
+        name: "mz_object_hydration_history_ind",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::INDEX_MZ_OBJECT_HYDRATION_HISTORY_IND_OID,
+        // Keyed for the question users ask of this table, "how long did this
+        // object take to hydrate". The collector's own anti-join looks the same
+        // but cannot use this arrangement: its subscribe runs on the targeted
+        // user replica, where the index does not exist.
+        sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_object_hydration_history (object_id)",
+        is_retained_metrics_object: true,
+    });
+
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
