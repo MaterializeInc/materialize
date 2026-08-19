@@ -306,9 +306,15 @@ so it is executed.""",
         and fail_build_reason is None
     ):
         trim_test_selection_id(pipeline, set())
-        # Make the website always deploy
+        # lint-docs is required for website deploy, the others are free because an agent is always around anyway
         for step in steps(pipeline):
-            if step.get("id") == "lint-docs":
+            if step.get("id") in (
+                "lint-docs",
+                "lint-macos",
+                "lint-fast",
+                "lint-clippy",
+                "lint-doctests",
+            ):
                 step.pop("skip", None)
 
     # Surface label-driven changes as a Buildkite annotation, since otherwise

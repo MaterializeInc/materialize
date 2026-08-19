@@ -13,6 +13,11 @@ set -euo pipefail
 
 . misc/shlib/shlib.bash
 
+# mzcompose (and the compositions it runs) hands repository paths to the host
+# Docker daemon as bind mount sources, which requires container paths to equal
+# host paths. See CI_BUILDER_FIXED_WORKDIR in bin/ci-builder.
+export CI_BUILDER_FIXED_WORKDIR=0
+
 builder=${BUILDKITE_PLUGIN_MZCOMPOSE_CI_BUILDER:-min}
 
 if is_truthy "${CI_HEAP_PROFILES:-}"; then
