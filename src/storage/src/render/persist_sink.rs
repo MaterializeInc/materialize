@@ -282,6 +282,7 @@ pub(crate) fn render<'scope>(
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
+    is_upsert_pipeline: bool,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, ()>,
     StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
@@ -323,6 +324,7 @@ pub(crate) fn render<'scope>(
         storage_state,
         metrics,
         Arc::clone(&busy_signal),
+        is_upsert_pipeline,
     );
 
     (
@@ -893,6 +895,7 @@ fn append_batches<'scope>(
     storage_state: &StorageState,
     metrics: SourcePersistSinkMetrics,
     busy_signal: Arc<Semaphore>,
+    is_upsert_pipeline: bool,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, ()>,
     StreamVec<'scope, mz_repr::Timestamp, Rc<anyhow::Error>>,
@@ -902,13 +905,19 @@ fn append_batches<'scope>(
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
 
-    // We can only be lenient with concurrent modifications when we know that
-    // this source pipeline is using the feedback upsert operator, which works
-    // correctly when multiple instances of an ingestion pipeline produce
-    // different updates, because of concurrency/non-determinism.
+    // We can only be lenient with concurrent modifications when this export's
+    // pipeline uses the feedback upsert operator, which reconciles the shard's
+    // actual contents with its own output and so converges even when multiple
+    // instances of an ingestion produce different updates. Pipelines without
+    // that feedback (e.g. ENVELOPE NONE CDC sources) have no reconciliation:
+    // a concurrent writer is a replaced incarnation of this same ingestion
+    // whose output can reflect a different snapshot point, and trimming our
+    // batches against its upper fuses the two into a state that never existed
+    // upstream. For those, bail and restart the dataflow instead, which
+    // resumes from the shard's actual committed state.
     let use_continual_feedback_upsert = dyncfgs::STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT
         .get(storage_state.storage_configuration.config_set());
-    let bail_on_concurrent_modification = !use_continual_feedback_upsert;
+    let bail_on_concurrent_modification = !(use_continual_feedback_upsert && is_upsert_pipeline);
 
     let mut read_only_rx = storage_state.read_only_rx.clone();
 
