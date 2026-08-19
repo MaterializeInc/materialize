@@ -14,12 +14,11 @@
 //! * At some cadence `timestamp_interval` will probe the source for the max
 //!   [`Lsn`], emit the upstream known offset, and update `SourceStatistics`.
 //! * Listen to a provided [`futures::Stream`] of resume uppers, which represents
-//!   the durably committed upper for _all_ of the subsources/exports associated
-//!   with this source. As the source makes progress this operator does two
-//!   things:
+//!   the durably committed uppers of the subsources/exports associated with
+//!   this source. As the source makes progress this operator does two things:
 //!     1. If [`CDC_CLEANUP_CHANGE_TABLE`] is enabled, will delete entries from
-//!        the upstream change table that we've already ingested.
-//!     2. Update `SourceStatistics` to notify listeners of a new
+//!        the upstream change table that _all_ exports have ingested.
+//!     2. Update each export's `SourceStatistics` to notify listeners of its new
 //!        "committed LSN".
 //!
 //! [`SqlServerSourceConnection`]: mz_storage_types::sources::SqlServerSourceConnection
@@ -44,7 +43,7 @@ use timely::dataflow::{Scope, StreamVec};
 use timely::progress::Antichain;
 
 use crate::source::sql_server::{ReplicationError, SourceOutputInfo, TransientError};
-use crate::source::types::Probe;
+use crate::source::types::{Probe, ResumeUppers};
 use crate::source::{RawSourceCreationConfig, probe};
 
 /// Used as a partition ID to determine the worker that is responsible for
@@ -56,7 +55,7 @@ pub(crate) fn render<'scope>(
     config: RawSourceCreationConfig,
     connection: SqlServerConnectionDetails,
     outputs: BTreeMap<GlobalId, SourceOutputInfo>,
-    committed_uppers: impl futures::Stream<Item = Antichain<Lsn>> + 'static,
+    committed_uppers: impl futures::Stream<Item = ResumeUppers<Lsn>> + 'static,
     extras: SqlServerSourceExtras,
 ) -> (
     StreamVec<'scope, Lsn, ReplicationError>,
@@ -113,7 +112,7 @@ pub(crate) fn render<'scope>(
             // is a very obscure edge case where a user has a CDC enabled table, creates a new one
             // and configures a source for at least the second table immediately after, without
             // performing any DML operations.
-            let mut max_committed_lsn = outputs
+            let seeded_lsn = outputs
                 .values()
                 // resume_lsn_or will panic if info resume_upper is empty
                 .map(|info| info.resume_lsn_or(next_upstream_lsn))
@@ -122,7 +121,7 @@ pub(crate) fn render<'scope>(
 
             for stat in config.statistics.values() {
                 stat.set_offset_known(next_upstream_lsn.abbreviate());
-                stat.set_offset_committed(max_committed_lsn.abbreviate());
+                stat.set_offset_committed(seeded_lsn.abbreviate());
             }
 
 
@@ -196,11 +195,26 @@ pub(crate) fn render<'scope>(
                         emit_probe(&probe_cap[0], probe);
                         prev_offset_known = Some(known_lsn);
                     },
-                    Some(committed_upper) = committed_uppers.next() => {
-                        let Some(committed_upper) = committed_upper.as_option() else {
-                            // It's possible that the source has been dropped, in which case this can
-                            // observe an empty upper. This operator should continue to loop until
-                            // the drop dataflow propagates.
+                    Some(uppers) = committed_uppers.next() => {
+                        // Never regress below the seeded resumption LSN. During the initial
+                        // snapshot an export's resume upper sits at the minimum, which would
+                        // otherwise drag its committed offset back to 0 and reintroduce the bogus
+                        // lag.
+                        for (id, upper) in &uppers.exports {
+                            let stat = config.statistics.get(id);
+                            if let (Some(lsn), Some(stat)) = (upper.as_option(), stat) {
+                                let lsn = std::cmp::max(*lsn, seeded_lsn);
+                                stat.set_offset_committed(lsn.abbreviate());
+                            }
+                        }
+
+                        let committed_upper = uppers.source.as_ref();
+                        let Some(committed_upper) = committed_upper.and_then(|u| u.as_option())
+                        else {
+                            // The upper of all exports is unknown while an export snapshots. It's
+                            // also possible that the source has been dropped, in which case this
+                            // can observe an empty upper. This operator should continue to loop
+                            // until the drop dataflow propagates.
                             continue;
                         };
 
@@ -224,15 +238,6 @@ pub(crate) fn render<'scope>(
                                     tracing::warn!(?err, %instance, "cleanup of change table failed!");
                                 }
                             }
-                        }
-                        // Never regress below the seeded resumption LSN. During the initial
-                        // snapshot the resume upper sits at the minimum, which would otherwise
-                        // drag the committed offset back to 0 and reintroduce the bogus lag.
-                        if *committed_upper > max_committed_lsn {
-                            max_committed_lsn = *committed_upper;
-                        }
-                        for stat in config.statistics.values() {
-                            stat.set_offset_committed(max_committed_lsn.abbreviate());
                         }
                     }
                 };
