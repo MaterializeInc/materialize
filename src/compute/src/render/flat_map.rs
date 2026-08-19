@@ -20,8 +20,6 @@ use mz_repr::{Diff, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::Column;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::operator::StreamExt;
-use timely::Container;
-use timely::container::DrainContainer;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::Capability;
 use timely::dataflow::operators::generic::Session;
@@ -81,48 +79,16 @@ type FlatMapOk<T> = ConsolidatingColumnBuilder<Row, T, Diff>;
 /// Output err-session container builder for [`flat_map_stage`].
 type FlatMapErr<T> = ConsolidatingContainerBuilder<Vec<(DataflowErrorSer, T, Diff)>>;
 
-/// Yields the `(row, time, diff)` records of one queued FlatMap input batch.
+/// The fueled FlatMap operator.
 ///
-/// The two edge arms differ only in how records are read from a queued batch:
-/// the `Vec` arm drains owned rows, the `Column` arm iterates the borrowed
-/// column and never materializes an owned [`Row`]. Everything else in the
-/// FlatMap operator (the fuel queue, budget, and re-activation) is shared
-/// through [`flat_map_stage`].
-trait FlatMapBatch<T> {
-    /// Calls `logic` once per record, presenting the row as a borrowed
-    /// [`RowRef`] and the time and diff by reference.
-    fn for_each_record(&mut self, logic: impl FnMut(&RowRef, &T, &Diff));
-}
-
-impl<T: RenderTimestamp> FlatMapBatch<T> for Vec<(Row, T, Diff)> {
-    fn for_each_record(&mut self, mut logic: impl FnMut(&RowRef, &T, &Diff)) {
-        for (row, time, diff) in self.drain(..) {
-            logic(&row, &time, &diff);
-        }
-    }
-}
-
-impl<T: RenderTimestamp> FlatMapBatch<T> for Column<(Row, T, Diff)> {
-    fn for_each_record(&mut self, mut logic: impl FnMut(&RowRef, &T, &Diff)) {
-        // Rows are read from the borrowed column, never materialized as owned
-        // `Row`s. Times and diffs are owned only to hand `logic` a reference.
-        for (row, t, d) in self.borrow().into_index_iter() {
-            logic(row, &Columnar::into_owned(t), &Columnar::into_owned(d));
-        }
-    }
-}
-
-/// The fueled FlatMap operator, generic over the input edge arm.
-///
-/// This is the sole owner of the fuel machinery, so the `Vec` and `Column`
-/// arms cannot drift apart. Incoming batches are queued; each activation
-/// processes queued batches and drains each record's table-function expansion
-/// through the mfp, decrementing a per-activation `budget`. When the budget is
-/// exhausted the operator re-activates itself and stops, deferring the rest of
-/// the queue to a later activation. This bounds the work a single
-/// `generate_series` can do before yielding the worker.
-fn flat_map_stage<'scope, T, C>(
-    stream: Stream<'scope, T, C>,
+/// Incoming batches are queued; each activation processes queued batches and
+/// drains each record's table-function expansion through the mfp, decrementing
+/// a per-activation `budget`. When the budget is exhausted the operator
+/// re-activates itself and stops, deferring the rest of the queue to a later
+/// activation. This bounds the work a single `generate_series` can do before
+/// yielding the worker.
+fn flat_map_stage<'scope, T>(
+    stream: Stream<'scope, T, Column<(Row, T, Diff)>>,
     scope: Scope<'scope, T>,
     exprs: Vec<LirScalarExpr>,
     func: TableFunc,
@@ -135,7 +101,6 @@ fn flat_map_stage<'scope, T, C>(
 )
 where
     T: RenderTimestamp,
-    C: Container + DrainContainer + Clone + Default + FlatMapBatch<T> + 'static,
 {
     stream.unary_fallible::<FlatMapOk<T>, FlatMapErr<T>, _, _>(
         Pipeline,
@@ -156,15 +121,20 @@ where
                     queue.push_back((cap.retain(0), cap.retain(1), std::mem::take(data)))
                 });
 
-                while let Some((ok_cap, err_cap, mut data)) = queue.pop_front() {
+                while let Some((ok_cap, err_cap, data)) = queue.pop_front() {
                     let mut ok_session = ok_output.session_with_builder(&ok_cap);
                     let mut err_session = err_output.session_with_builder(&err_cap);
 
-                    data.for_each_record(|input_row, time, diff| {
+                    // Rows are read from the borrowed column, never materialized
+                    // as owned `Row`s. Times and diffs are owned only to pass
+                    // them by reference.
+                    for (input_row, t, d) in data.borrow().into_index_iter() {
+                        let time = Columnar::into_owned(t);
+                        let diff = Columnar::into_owned(d);
                         process_flat_map_row(
                             input_row,
-                            time,
-                            diff,
+                            &time,
+                            &diff,
                             &exprs,
                             &func,
                             &mfp_plan,
@@ -176,7 +146,7 @@ where
                             &mut err_session,
                             &mut budget,
                         );
-                    });
+                    }
                     if budget == 0 {
                         activator.activate();
                         break;
@@ -359,7 +329,9 @@ mod tests {
             let mut input = worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (input, collection) = scope.new_collection();
                 let (exprs, func, mfp) = flat_map_args();
-                let stream = collection.inner;
+                // Feed the operator the columnar edge it is given in production,
+                // so the fuel assertions below cover the shipped path.
+                let stream = vec_to_columnar(collection).inner;
                 let scope = stream.scope();
                 let (oks, _errs) =
                     flat_map_stage(stream, scope, exprs, func, mfp, Antichain::new(), budget);
@@ -508,7 +480,7 @@ mod tests {
                     .project(vec![2])
                     .into_plan()
                     .expect("project mfp");
-                let stream = collection.inner;
+                let stream = vec_to_columnar(collection).inner;
                 let scope = stream.scope();
                 let (oks, _errs) = flat_map_stage(
                     stream,

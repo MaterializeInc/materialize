@@ -20,7 +20,7 @@
 //! `ColumnarToVec`), so those leaf seams stay visible in dataflow
 //! introspection.
 
-use columnar::{Columnar, Index};
+use columnar::{Borrow, Columnar, Container, Index, Len, Push};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
@@ -127,16 +127,56 @@ where
     (ok_stream, err_stream)
 }
 
+/// Negates the diff of every record in `column`, rebuilding only the diff column.
+///
+/// A `Typed` input hands its row and time columns over untouched, so only the
+/// diffs are rebuilt, which is 8 bytes per record. A serialized input keeps all
+/// three columns in one buffer, so its rows and times are copied in bulk.
+///
+/// Negation stays checked: `Neg for Overflowing` runs `overflowing_neg` and
+/// reports overflow, which `-Diff::MIN` triggers.
+///
+/// TODO: Negate a `Typed` input's diffs in place rather than rebuilding them.
+/// This cannot go through `columnar::IndexMut`: `Overflows` stores the raw
+/// integer and materializes `Overflowing` on read, so there is no wrapper in
+/// memory to borrow mutably, and handing out `&mut` to the raw integer would let
+/// writes bypass the checked arithmetic. It needs a checked bulk operation on the
+/// container instead, keeping the overflow check inside.
+fn negate_column<T>(column: Column<(Row, T, Diff)>) -> Column<(Row, T, Diff)>
+where
+    T: RenderTimestamp,
+{
+    /// Collects the negation of every diff in `diffs` into a fresh column.
+    fn negated_diffs<'a, D>(diffs: &'a D) -> <Diff as Columnar>::Container
+    where
+        D: Len + Index<Ref = Diff> + 'a,
+    {
+        let mut negated = <Diff as Columnar>::Container::default();
+        for index in 0..diffs.len() {
+            negated.push(-diffs.get(index));
+        }
+        negated
+    }
+
+    match column {
+        Column::Typed((rows, times, diffs)) => {
+            let negated = negated_diffs(&diffs.borrow());
+            Column::Typed((rows, times, negated))
+        }
+        column => {
+            let view = column.borrow();
+            let len = view.len();
+            let mut negated = <(Row, T, Diff) as Columnar>::Container::default();
+            let (rows, times, diffs) = &mut negated;
+            rows.extend_from_self(view.0, 0..len);
+            times.extend_from_self(view.1, 0..len);
+            *diffs = negated_diffs(&view.2);
+            Column::Typed(negated)
+        }
+    }
+}
+
 /// Negates the diff of every record in a [`ColumnarCollection`].
-///
-/// Rows and times are pushed from their borrowed forms. Only the diff is
-/// materialized, and it is `Copy`.
-///
-/// TODO: Rebuild only the diff column. Borrow the input column, build one owned
-/// negated diff column from the borrowed diffs, and re-encode using the borrowed
-/// row and time columns directly, so row and time bytes are copied once rather
-/// than pushed per record. The serialized (`Align` / `Bytes`) input case needs
-/// care, since all columns share a single buffer.
 pub fn columnar_negate<'scope, T>(
     collection: ColumnarCollection<'scope, T, Row, Diff>,
 ) -> ColumnarCollection<'scope, T, Row, Diff>
@@ -145,17 +185,14 @@ where
 {
     collection
         .inner
-        .unary::<ColumnBuilder<(Row, T, Diff)>, _, _, _>(
+        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
             Pipeline,
             "ColumnarNegate",
             |_cap, _info| {
                 move |input, output| {
                     input.for_each(|time, data| {
-                        let mut session = output.session_with_builder(&time);
-                        for (v, t, d) in data.borrow().into_index_iter() {
-                            let d = -Diff::into_owned(d);
-                            session.give((v, t, &d));
-                        }
+                        let mut negated = negate_column(std::mem::take(data));
+                        output.session(&time).give_container(&mut negated);
                     });
                 }
             },
