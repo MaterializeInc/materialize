@@ -568,7 +568,6 @@ pub fn render_statistics_operator<'scope>(
         if !offset_worker {
             // Emit 0, to mark this worker as having started up correctly.
             for stat in source_statistics.values() {
-                stat.set_offset_committed(0);
                 stat.set_offset_known(0);
             }
             return;
@@ -579,7 +578,6 @@ pub fn render_statistics_operator<'scope>(
                 Some(frontier) => {
                     if let Some(offset) = frontier.as_option() {
                         for stat in source_statistics.values() {
-                            stat.set_offset_committed(offset.offset);
                             stat.set_offset_known(offset.offset);
                         }
                     }

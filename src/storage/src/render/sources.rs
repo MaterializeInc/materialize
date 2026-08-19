@@ -63,7 +63,7 @@ pub fn render_source<'scope, 'root, C>(
     dataflow_debug_name: &String,
     connection: C,
     description: IngestionDescription<CollectionMetadata>,
-    resume_stream: StreamVec<'scope, mz_repr::Timestamp, ()>,
+    committed_uppers: BTreeMap<GlobalId, StreamVec<'scope, mz_repr::Timestamp, ()>>,
     storage_state: &crate::storage_state::StorageState,
     base_source_config: RawSourceCreationConfig,
 ) -> (
@@ -107,7 +107,7 @@ where
         scope,
         root_scope,
         storage_state,
-        resume_stream,
+        committed_uppers,
         &base_source_config,
         connection,
         start_signal,

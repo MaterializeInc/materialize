@@ -25,6 +25,7 @@ use mz_timely_util::order::{Extrema, Partitioned};
 use rdkafka::admin::AdminClient;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use timely::progress::frontier::AntichainRef;
 
 use crate::connections::inline::{
     ConnectionAccess, ConnectionResolver, InlinedConnection, IntoInlineConnection,
@@ -526,6 +527,19 @@ impl SourceTimestamp for KafkaTimestamp {
             }
             invalid_binding => unreachable!("invalid binding {:?}", invalid_binding),
         }
+    }
+
+    fn to_offset_stat(frontier: AntichainRef<'_, Self>) -> Option<u64> {
+        // The sum over partitions of the frontier offsets. Note that the frontier offset is
+        // not adjusted down by one: a frontier of 2 for a partition means offsets 0 and 1
+        // are processed, which is 2 offsets.
+        let mut sum = 0;
+        for ts in frontier.iter() {
+            if ts.interval().singleton().is_some() {
+                sum += ts.timestamp().offset;
+            }
+        }
+        Some(sum)
     }
 }
 

@@ -55,7 +55,7 @@ use timely::dataflow::operators::core::Map as _;
 use timely::dataflow::operators::generic::OutputBuilder;
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder as OperatorBuilderRc;
 use timely::dataflow::operators::vec::Broadcast;
-use timely::dataflow::operators::{CapabilitySet, InspectCore, Leave};
+use timely::dataflow::operators::{CapabilitySet, Concatenate, InspectCore, Leave};
 use timely::dataflow::{Scope, StreamVec};
 use timely::order::TotalOrder;
 use timely::progress::frontier::MutableAntichain;
@@ -160,13 +160,15 @@ impl RawSourceCreationConfig {
 /// See the [`source` module docs](crate::source) for more details about how raw
 /// sources are used.
 ///
-/// The `resume_stream` parameter will contain frontier updates whenever times are durably
-/// recorded which allows the ingestion to release upstream resources.
+/// The `committed_uppers` parameter contains one stream per export whose frontier advances
+/// whenever times are durably recorded for that export. Their meet is what allows the
+/// ingestion to release upstream resources, and each individual stream drives that export's
+/// `offset_committed` statistic.
 pub fn create_raw_source<'scope, 'root, C>(
     scope: Scope<'scope, mz_repr::Timestamp>,
     root_scope: Scope<'root, ()>,
     storage_state: &crate::storage_state::StorageState,
-    committed_upper: StreamVec<'scope, mz_repr::Timestamp, ()>,
+    committed_uppers: BTreeMap<GlobalId, StreamVec<'scope, mz_repr::Timestamp, ()>>,
     config: &RawSourceCreationConfig,
     source_connection: C,
     start_signal: impl std::future::Future<Output = ()> + 'static,
@@ -198,7 +200,7 @@ where
     let timestamp_desc = source_connection.timestamp_desc();
 
     let (remap_collection, remap_token) = remap_operator(
-        scope,
+        scope.clone(),
         storage_state,
         config.clone(),
         probed_upper_rx,
@@ -208,6 +210,12 @@ where
     let remap_collection = remap_collection.inner.broadcast().as_collection();
     tokens.push(remap_token);
 
+    export_committed_offset_stats(&remap_collection, config, &committed_uppers);
+
+    // The source-wide committed upper is the meet of the per-export committed uppers. It
+    // determines what the source can release upstream, which must respect the slowest
+    // export.
+    let committed_upper = scope.concatenate(committed_uppers.into_values().collect::<Vec<_>>());
     let committed_upper = reclock_committed_upper(
         remap_collection.clone(),
         config.as_of.clone(),
@@ -551,6 +559,140 @@ where
     });
 
     (remap_stream.as_collection(), button.press_on_drop())
+}
+
+/// Reports the per-export `offset_committed` statistic by inverting each export's committed
+/// upper through the remap bindings, in the same way [`reclock_committed_upper`] inverts the
+/// source-wide committed upper.
+///
+/// The statistic must be derived per export rather than from the source-wide committed upper:
+/// that one is the meet across all exports, so a single hydrating export would hold back the
+/// reported offset of every other export.
+///
+/// The controller sums the per-worker values of the statistic, so each export is reported by
+/// exactly one worker.
+fn export_committed_offset_stats<'scope, FromTime>(
+    bindings: &VecCollection<'scope, mz_repr::Timestamp, FromTime, Diff>,
+    config: &RawSourceCreationConfig,
+    committed_uppers: &BTreeMap<GlobalId, StreamVec<'scope, mz_repr::Timestamp, ()>>,
+) where
+    FromTime: SourceTimestamp,
+{
+    let scope = bindings.scope().clone();
+    let name = format!("ExportOffsetCommittedStats({})", config.id);
+    let mut builder = OperatorBuilderRc::new(name, scope);
+
+    let mut bindings_input = builder.new_input(bindings.inner.clone(), Pipeline);
+    // One frontier-only input per export. An export's input index is offset by one for the
+    // bindings input. Only the entries for exports this worker reports carry state.
+    let mut exports = Vec::with_capacity(committed_uppers.len());
+    for (export_id, upper_stream) in committed_uppers {
+        let _ = builder.new_input(upper_stream.clone(), Pipeline);
+        let stats = config.statistics.get(export_id).cloned();
+        // The controller only aggregates this gauge once every worker has reported a value
+        // for it, so every worker initializes it to zero. Only the worker responsible for
+        // the export ever reports more, so the sum across workers is that worker's value.
+        if let Some(stats) = &stats {
+            stats.set_offset_committed(0);
+        }
+        let responsible = config.responsible_for(*export_id);
+        exports.push(
+            stats
+                .filter(|_| responsible)
+                .map(|stats| (stats, MutableAntichain::new(), 0usize)),
+        );
+    }
+    let as_of = config.as_of.clone();
+
+    builder.build(move |_| {
+        use timely::progress::ChangeBatch;
+        // Remap bindings beyond the bindings upper.
+        let mut accepted_times: ChangeBatch<(mz_repr::Timestamp, FromTime)> = ChangeBatch::new();
+        // The upper frontier of the bindings.
+        let mut upper = Antichain::from_elem(mz_repr::Timestamp::minimum());
+        // Remap bindings not beyond the bindings upper, in `into` time order. Unlike
+        // `reclock_committed_upper`, entries cannot be dropped as they are applied: the
+        // exports' committed uppers advance independently, so an entry is retained until
+        // every reported export has passed it.
+        let mut ready_times: VecDeque<(FromTime, mz_repr::Timestamp, i64)> = VecDeque::new();
+        // The number of entries popped off the front of `ready_times`, which makes the
+        // per-export `applied` counts absolute rather than deque indices.
+        let mut trimmed: usize = 0;
+
+        move |frontiers| {
+            bindings_input.for_each(|_, data| {
+                accepted_times.extend(data.drain(..).map(|(from, mut into, diff)| {
+                    into.advance_by(as_of.borrow());
+                    ((into, from), diff.into_inner())
+                }));
+            });
+            // Extract ready bindings.
+            let new_upper = frontiers[0].frontier();
+            if PartialOrder::less_than(&upper.borrow(), &new_upper) {
+                upper = new_upper.to_owned();
+                let mut pending_times = std::mem::take(&mut accepted_times).into_inner();
+                // These should already be sorted, as part of `.into_inner()`, but sort
+                // defensively in case.
+                pending_times.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+                for ((into, from), diff) in pending_times.drain(..) {
+                    if !upper.less_equal(&into) {
+                        ready_times.push_back((from, into, diff));
+                    } else {
+                        accepted_times.update((into, from), diff);
+                    }
+                }
+            }
+
+            // The received times only accumulate correctly for times beyond the as_of.
+            if !as_of.iter().all(|t| !upper.less_equal(t)) {
+                return;
+            }
+
+            // When this worker reports no exports this stays at the deque's end, so the
+            // trim below keeps `ready_times` empty rather than accumulating forever.
+            let mut min_applied = trimmed + ready_times.len();
+            for (i, export) in exports.iter_mut().enumerate() {
+                let Some((stats, source_upper, applied)) = export else {
+                    continue;
+                };
+                let committed_upper = frontiers[1 + i].frontier();
+                if !as_of.iter().all(|t| !committed_upper.less_equal(t)) {
+                    min_applied = std::cmp::min(min_applied, *applied);
+                    continue;
+                }
+                match committed_upper.as_option() {
+                    Some(t_next) => {
+                        // Apply the bindings between this export's last position and its
+                        // committed upper. See [`reclock_committed_upper`] for why applying
+                        // all bindings with time less than `t_next` inverts the frontier to
+                        // remap[t_prev].
+                        let start = *applied - trimmed;
+                        let end = ready_times.partition_point(|(_, t, _)| t < t_next);
+                        if start < end {
+                            let updates = ready_times
+                                .range(start..end)
+                                .map(|(from, _, diff)| (from.clone(), *diff));
+                            source_upper.update_iter(updates);
+                            *applied = trimmed + end;
+                        }
+                        if let Some(offset) = FromTime::to_offset_stat(source_upper.frontier()) {
+                            stats.set_offset_committed(offset);
+                        }
+                    }
+                    // An empty committed upper means the export will never commit anything
+                    // again. Leave the statistic at its last value and stop holding back
+                    // binding cleanup.
+                    None => *applied = trimmed + ready_times.len(),
+                }
+                min_applied = std::cmp::min(min_applied, *applied);
+            }
+            // Drop the bindings every reported export has applied.
+            while trimmed < min_applied {
+                ready_times.pop_front();
+                trimmed += 1;
+            }
+        }
+    });
 }
 
 /// Reclocks an `IntoTime` frontier stream into a `FromTime` frontier stream. This is used for the
