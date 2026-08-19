@@ -15,12 +15,14 @@ use std::fmt::{Display, Write};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
 use columnar::{Columnar, Index, Ref};
 use differential_dataflow::VecCollection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
 use mz_compute_types::plan::LirId;
 use mz_ore::cast::CastFrom;
+use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
 use mz_timely_util::columnar::batcher;
 use mz_timely_util::columnar::builder::ColumnBuilder;
@@ -163,6 +165,13 @@ pub struct Hydration {
     pub export_id: GlobalId,
 }
 
+/// An export began hydrating.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct HydrationStart {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+}
+
 /// An operator's hydration status changed.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct OperatorHydration {
@@ -225,6 +234,8 @@ pub enum ComputeEvent {
     DataflowShutdown(DataflowShutdown),
     /// The number of errors in a dataflow export has changed.
     ErrorCount(ErrorCount),
+    /// A dataflow export began hydrating.
+    HydrationStart(HydrationStart),
     /// A dataflow export was hydrated.
     Hydration(Hydration),
     /// A dataflow operator's hydration status changed.
@@ -620,11 +631,17 @@ impl DemuxState {
         &mut self,
         export_id: GlobalId,
         time_ns: Option<u64>,
+        installed_at: CheckedTimestamp<DateTime<Utc>>,
+        started_at: Option<CheckedTimestamp<DateTime<Utc>>>,
+        hydrated_at: Option<CheckedTimestamp<DateTime<Utc>>>,
     ) -> (&RowRef, &RowRef) {
         self.hydration_time_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::from(time_ns),
+            Datum::TimestampTz(installed_at),
+            started_at.map_or(Datum::Null, Datum::TimestampTz),
+            hydrated_at.map_or(Datum::Null, Datum::TimestampTz),
         ])
     }
 
@@ -732,6 +749,12 @@ struct ExportState {
     error_count: Diff,
     /// When this export was created.
     created_at: Instant,
+    /// Wall-clock time at which this export was installed.
+    installed_at: CheckedTimestamp<DateTime<Utc>>,
+    /// Wall-clock time at which this export began hydrating.
+    started_at: Option<CheckedTimestamp<DateTime<Utc>>>,
+    /// Wall-clock time at which this export finished hydrating.
+    hydrated_at: Option<CheckedTimestamp<DateTime<Utc>>>,
     /// Whether the exported collection is hydrated.
     hydration_time_ns: Option<u64>,
     /// Hydration status of operators feeding this export.
@@ -739,11 +762,14 @@ struct ExportState {
 }
 
 impl ExportState {
-    fn new(dataflow_index: usize) -> Self {
+    fn new(dataflow_index: usize, installed_at: CheckedTimestamp<DateTime<Utc>>) -> Self {
         Self {
             dataflow_index,
             error_count: Diff::ZERO,
             created_at: Instant::now(),
+            installed_at,
+            started_at: None,
+            hydrated_at: None,
             hydration_time_ns: None,
             operator_hydration: BTreeMap::new(),
         }
@@ -799,6 +825,21 @@ impl DemuxHandler<'_, '_, '_> {
         rounded.try_into().expect("must fit")
     }
 
+    /// Returns the event's wall-clock time, unrounded.
+    ///
+    /// Unlike `ts`, which rounds up to the logging interval to publish an update,
+    /// this is the time the event actually happened. Reading `self.time` as a
+    /// Unix duration is only valid because the logging clock is anchored at the
+    /// epoch. A boot-relative anchor would silently yield 1970 timestamps in a
+    /// durable table.
+    fn event_timestamp(&self) -> CheckedTimestamp<DateTime<Utc>> {
+        let seconds = i64::try_from(self.time.as_secs()).expect("event timestamp must fit");
+        DateTime::from_timestamp(seconds, self.time.subsec_nanos())
+            .expect("event timestamp must be valid")
+            .try_into()
+            .expect("event timestamp must fit")
+    }
+
     /// Handle the given compute event.
     fn handle(&mut self, event: Ref<'_, ComputeEvent>) {
         use ComputeEventReference::*;
@@ -818,6 +859,7 @@ impl DemuxHandler<'_, '_, '_> {
             }
             DataflowShutdown(shutdown) => self.handle_dataflow_shutdown(shutdown),
             ErrorCount(error_count) => self.handle_error_count(error_count),
+            HydrationStart(hydration) => self.handle_hydration_start(hydration),
             Hydration(hydration) => self.handle_hydration(hydration),
             OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
             LirMapping(mapping) => self.handle_lir_mapping(mapping),
@@ -834,19 +876,36 @@ impl DemuxHandler<'_, '_, '_> {
     ) {
         let export_id = Columnar::into_owned(export_id);
         let ts = self.ts();
+        let installed_at = self.event_timestamp();
         let datum = self.state.pack_export_update(export_id, dataflow_index);
         self.output.export.give((datum, ts, Diff::ONE));
 
         let existing = self
             .state
             .exports
-            .insert(export_id, ExportState::new(dataflow_index));
-        if existing.is_some() {
+            .insert(export_id, ExportState::new(dataflow_index, installed_at));
+        if let Some(existing) = existing {
             error!(%export_id, "export already registered");
+            // The stale row's value carries its own timestamps, so it is not
+            // identical to the one we are about to insert. Retract it here or it
+            // stays in the collection forever: the drop handler only ever sees
+            // the state we just overwrote it with.
+            let datum = self.state.pack_hydration_time_update(
+                export_id,
+                existing.hydration_time_ns,
+                existing.installed_at,
+                existing.started_at,
+                existing.hydrated_at,
+            );
+            self.output
+                .hydration_time
+                .give((datum, ts, Diff::MINUS_ONE));
         }
 
         // Insert hydration time logging for this export.
-        let datum = self.state.pack_hydration_time_update(export_id, None);
+        let datum =
+            self.state
+                .pack_hydration_time_update(export_id, None, installed_at, None, None);
         self.output.hydration_time.give((datum, ts, Diff::ONE));
     }
 
@@ -875,9 +934,13 @@ impl DemuxHandler<'_, '_, '_> {
         }
 
         // Remove hydration time logging for this export.
-        let datum = self
-            .state
-            .pack_hydration_time_update(export_id, export.hydration_time_ns);
+        let datum = self.state.pack_hydration_time_update(
+            export_id,
+            export.hydration_time_ns,
+            export.installed_at,
+            export.started_at,
+            export.hydrated_at,
+        );
         self.output
             .hydration_time
             .give((datum, ts, Diff::MINUS_ONE));
@@ -961,31 +1024,105 @@ impl DemuxHandler<'_, '_, '_> {
         }
     }
 
-    fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
+    fn handle_hydration_start(
+        &mut self,
+        HydrationStartReference { export_id }: Ref<'_, HydrationStart>,
+    ) {
         let ts = self.ts();
+        let started_at = self.event_timestamp();
         let export_id = Columnar::into_owned(export_id);
 
-        let Some(export) = self.state.exports.get_mut(&export_id) else {
-            error!(%export_id, "hydration event for unknown export");
-            return;
+        let (old, new) = {
+            let Some(export) = self.state.exports.get_mut(&export_id) else {
+                error!(%export_id, "hydration start event for unknown export");
+                return;
+            };
+            // A `Schedule` is delivered even for a collection that already
+            // hydrated, because `StartSignal` gates only imported inputs and an
+            // import-free dataflow is never suspended. Recording that late
+            // arrival as the start of hydration would invent an interval that
+            // was never observed, so leave `started_at` NULL instead. Repeat
+            // events after reconciliation are ignored for the same reason.
+            if export.started_at.is_some() || export.hydrated_at.is_some() {
+                return;
+            }
+
+            let old = (
+                export.hydration_time_ns,
+                export.installed_at,
+                export.started_at,
+                export.hydrated_at,
+            );
+            export.started_at = Some(started_at);
+            let new = (
+                export.hydration_time_ns,
+                export.installed_at,
+                export.started_at,
+                export.hydrated_at,
+            );
+            (old, new)
         };
-        if export.hydration_time_ns.is_some() {
-            // Hydration events for already hydrated dataflows can occur when a dataflow is reused
-            // after reconciliation. We can simply ignore these.
-            return;
-        }
 
-        let duration = export.created_at.elapsed();
-        let nanos = u64::try_from(duration.as_nanos()).expect("must fit");
-        export.hydration_time_ns = Some(nanos);
-
-        let retraction = self.state.pack_hydration_time_update(export_id, None);
+        let retraction = self
+            .state
+            .pack_hydration_time_update(export_id, old.0, old.1, old.2, old.3);
         self.output
             .hydration_time
             .give((retraction, ts, Diff::MINUS_ONE));
         let insertion = self
             .state
-            .pack_hydration_time_update(export_id, Some(nanos));
+            .pack_hydration_time_update(export_id, new.0, new.1, new.2, new.3);
+        self.output.hydration_time.give((insertion, ts, Diff::ONE));
+    }
+
+    fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
+        let ts = self.ts();
+        let hydrated_at = self.event_timestamp();
+        let export_id = Columnar::into_owned(export_id);
+
+        let (old, new) = {
+            let Some(export) = self.state.exports.get_mut(&export_id) else {
+                error!(%export_id, "hydration event for unknown export");
+                return;
+            };
+            if export.hydration_time_ns.is_some() {
+                // Hydration events for already hydrated dataflows can occur when a dataflow is
+                // reused after reconciliation. We can simply ignore these.
+                return;
+            }
+
+            let old = (
+                export.hydration_time_ns,
+                export.installed_at,
+                export.started_at,
+                export.hydrated_at,
+            );
+            let duration = export.created_at.elapsed();
+            export.hydration_time_ns = Some(u64::try_from(duration.as_nanos()).expect("must fit"));
+            // `started_at` stays as it is, including NULL. An import-free
+            // dataflow can hydrate without ever being suspended, and we do not
+            // invent a start we never observed. Consumers read a NULL start as
+            // "not observed", which keeps `installed_at <= started_at <=
+            // hydrated_at` true for every non-NULL pair.
+            export.hydrated_at = Some(hydrated_at);
+            let new = (
+                export.hydration_time_ns,
+                export.installed_at,
+                export.started_at,
+                export.hydrated_at,
+            );
+            (old, new)
+        };
+
+        let retraction = self
+            .state
+            .pack_hydration_time_update(export_id, old.0, old.1, old.2, old.3);
+        self.output
+            .hydration_time
+            .give((retraction, ts, Diff::MINUS_ONE));
+        let insertion = self
+            .state
+            .pack_hydration_time_update(export_id, new.0, new.1, new.2, new.3);
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
     }
 
@@ -1392,6 +1529,14 @@ impl CollectionLogging {
             let events = retraction.as_ref().into_iter().chain(insertion.as_ref());
             self.logger.log_many(events);
         }
+    }
+
+    /// Records that the collection began hydrating.
+    pub fn set_started(&self) {
+        self.logger
+            .log(&ComputeEvent::HydrationStart(HydrationStart {
+                export_id: self.export_id,
+            }));
     }
 
     /// Set the collection as hydrated.
