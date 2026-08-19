@@ -381,7 +381,11 @@ impl ComputeState {
 
             let compute_spill = ENABLE_COLUMN_PAGED_BATCHER_SPILL.get(config);
             let storage_spill = mz_storage_types::dyncfgs::ENABLE_UPSERT_PAGED_SPILL.get(config);
-            if !(compute_spill || storage_spill) {
+            // Edge paging is a third consumer of the same singleton, and
+            // installs it on the same terms: whichever gate is on first
+            // reserves the address space and spawns the spill threads.
+            let edge_paging = ENABLE_COLUMN_EDGE_PAGING.get(config);
+            if !(compute_spill || storage_spill || edge_paging) {
                 debug!("chunk spill: gates off, leaving the buffer pool uninstalled");
             } else {
                 let spill_threads = COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT.get(config);
@@ -416,6 +420,7 @@ impl ComputeState {
                     info!(
                         compute_spill,
                         storage_spill,
+                        edge_paging,
                         fraction,
                         ram,
                         budget_bytes = total,
@@ -429,6 +434,19 @@ impl ComputeState {
                 }
             }
         }
+
+        // Serialized column bodies are minted from operator code with no
+        // handle on the config set, so the gate is a process-global flag the
+        // config apply writes. Flips take effect for bodies minted afterwards.
+        mz_timely_util::columnar::align_buffer::metrics::set_tracking_enabled(
+            ENABLE_COLUMN_ALIGN_BUFFER_TRACKING.get(config),
+        );
+        // Written unconditionally, including when no pool was installed above,
+        // so turning the flag back off takes effect. With no pool the paging
+        // path is inert anyway.
+        mz_timely_util::columnar::align_buffer::set_edge_paging_enabled(
+            ENABLE_COLUMN_EDGE_PAGING.get(config),
+        );
 
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.

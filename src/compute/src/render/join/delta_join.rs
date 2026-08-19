@@ -39,6 +39,7 @@ use timely::dataflow::operators::vec::Map;
 use timely::progress::Antichain;
 
 use crate::render::RenderTimestamp;
+use crate::render::columnar::{CollectionEdge, flat_map_datums, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{RowRowAgent, RowRowEnter};
@@ -245,7 +246,13 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .leave_region(self.scope),
             )
         });
-        CollectionBundle::from_collections(oks, errs)
+        // The delta join is Vec-internal (half_join, the `ok_err` demux, the
+        // time-unpair map, and the per-path finalization all operate on `Vec`).
+        // Encode the concatenated node output to the columnar edge once here.
+        // This is the sanctioned leaf-encode; a columnar `half_join`/algorithm is
+        // a differential-side follow-up. Non-consolidating: the per-path
+        // finalization already consolidated whatever it consolidates.
+        CollectionBundle::from_edge(vec_to_columnar(oks), errs)
     }
 }
 
@@ -679,8 +686,7 @@ where
             .collection
             .clone()
             .expect("The unarranged collection doesn't exist.");
-        let (oks, errs2) =
-            build_update_stream_stream(oks.into_vec(), as_of, source_relation, initial_closure);
+        let (oks, errs2) = build_update_stream_stream(oks, as_of, source_relation, initial_closure);
         return (oks, errs2.concat(errs));
     };
     match bundle.arrangement(&source_key) {
@@ -828,7 +834,7 @@ where
 /// first relation can be seeded from a raw collection, since the as-of filtering that the other
 /// paths rely on is only available from an arrangement's times. We assert that here.
 fn build_update_stream_stream<'scope, T>(
-    stream: VecCollection<'scope, T, Row, Diff>,
+    edge: CollectionEdge<'scope, T>,
     _as_of: Antichain<mz_repr::Timestamp>,
     source_relation: usize,
     initial_closure: JoinClosure,
@@ -844,18 +850,38 @@ where
     assert_eq!(source_relation, 0);
 
     type CB<C> = ConsolidatingContainerBuilder<C>;
-    stream.flat_map_fallible::<CB<_>, CB<_>, _, _, _, _>("UpdateStream", {
-        // Reuseable allocation for unpacking.
-        let mut datums = DatumVec::new();
-        move |row| {
+    // The closure reads datums and builds a fresh row, so the input row is only
+    // ever borrowed. Reading it from the column directly keeps this path from
+    // materializing an owned `Row` per record.
+    let (oks, errs) = flat_map_datums::<_, CB<Vec<(Row, T, Diff)>>, _>(edge, usize::MAX, {
+        let mut datum_vec = DatumVec::new();
+        move |row_datums, time, diff, ok_session, err_session| {
             let mut row_builder = SharedRow::get();
             let temp_storage = RowArena::new();
-            let mut datums_local = datums.borrow_with(&row);
-            initial_closure
-                .apply(&mut datums_local, &temp_storage, &mut row_builder)
+            // `JoinClosure::apply` unifies the lifetimes of `&self`, the datums,
+            // and the arena. Copying the datums into a local vec lets that
+            // lifetime shrink to this call. The copy moves datum references, not
+            // row data.
+            let mut datums = datum_vec.borrow();
+            datums.extend(row_datums.iter());
+            // `cloned` detaches the result from `temp_storage` and the shared row
+            // builder, both of which drop at the end of this call.
+            match initial_closure
+                .apply(&mut datums, &temp_storage, &mut row_builder)
                 .map(|row| row.cloned())
-                .map_err(DataflowErrorSer::from)
                 .transpose()
+            {
+                Some(Ok(row)) => {
+                    ok_session.give((row, time, diff));
+                    1
+                }
+                None => 0,
+                Some(Err(e)) => {
+                    err_session.give((DataflowErrorSer::from(e), time, diff));
+                    1
+                }
+            }
         }
-    })
+    });
+    (oks.as_collection(), errs.as_collection())
 }

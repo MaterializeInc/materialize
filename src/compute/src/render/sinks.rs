@@ -30,6 +30,7 @@ use timely::progress::Antichain;
 
 use crate::compute_state::SinkToken;
 use crate::logging::compute::LogDataflowErrors;
+use crate::render::columnar::columnar_to_vec;
 use crate::render::context::Context;
 use crate::render::errors::DataflowErrorSer;
 use crate::render::{RenderTimestamp, StartSignal};
@@ -68,7 +69,7 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             .lookup_id(mz_expr::Id::Global(sink.from))
             .expect("Sink source collection not loaded");
         let (ok_collection, mut err_collection) = if let Some((oks, errs)) = &bundle.collection {
-            (oks.clone().into_vec(), errs.clone())
+            (columnar_to_vec(oks.clone()), errs.clone())
         } else {
             let (key, _arrangement) = bundle
                 .arranged
@@ -80,12 +81,12 @@ impl<'g, T: RenderTimestamp> Context<'g, T> {
             let mut mfp = MapFilterProject::<LirScalarExpr>::new(unthinned_arity);
             mfp.permute_fn(|c| permutation[c], thinning.len() + key.len());
             let mfp_plan = mfp.into_plan().expect("MFP planning failed");
-            bundle.as_collection_core(
-                mfp_plan,
-                Some((key.clone(), None)),
-                self.until.clone(),
-                &self.config_set,
-            )
+            // The sink serializes rows, so decode to `Vec` here. This is the
+            // sanctioned sink leaf, the same seam as the raw-collection arm
+            // above.
+            let (oks, errs) =
+                bundle.as_collection_core(mfp_plan, Some((key.clone(), None)), self.until.clone());
+            (columnar_to_vec(oks), errs)
         };
 
         // Attach logging of dataflow errors.

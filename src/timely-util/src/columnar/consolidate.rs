@@ -42,6 +42,7 @@ use differential_dataflow::difference::Semigroup;
 use timely::container::{ContainerBuilder, PushInto};
 
 use crate::columnar::Column;
+use crate::columnar::align_buffer::{AlignBuffer, Origin};
 
 /// Per-buffer byte budget for the staging cap. Matches the 8 KiB basis DD's
 /// `ConsolidatingContainerBuilder` uses via `timely::container::buffer::default_capacity`.
@@ -180,7 +181,7 @@ where
         self.staging.drain(..consumed);
     }
 
-    /// Serialize the SoA accumulator into a `Column::Align` via `indexed::encode`, which
+    /// Serialize the SoA accumulator into a fitting [`AlignBuffer`], which
     /// builds the buffer with `Vec::push`/`extend_from_slice` so no memory is initialized
     /// twice.
     #[cold]
@@ -193,11 +194,11 @@ where
             std::mem::take(&mut self.cur_t),
             std::mem::take(&mut self.cur_r),
         );
+        let records = self.cur_len;
         self.cur_len = 0;
 
-        let mut buf: Vec<u64> = Vec::with_capacity(indexed::length_in_words(&cur.borrow()));
-        indexed::encode(&mut buf, &cur.borrow());
-        self.pending.push_back(Column::Align(buf));
+        let buffer = AlignBuffer::encode(Origin::Consolidate, records, &cur.borrow());
+        self.pending.push_back(Column::Align(buffer));
     }
 }
 

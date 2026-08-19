@@ -17,6 +17,7 @@
 
 #![deny(missing_docs)]
 
+pub mod align_buffer;
 pub mod batcher;
 pub mod builder;
 pub mod builder_input;
@@ -39,6 +40,7 @@ use timely::bytes::arc::Bytes;
 use timely::container::{DrainContainer, PushInto, SizableContainer};
 use timely::dataflow::channels::ContainerBytes;
 
+use crate::columnar::align_buffer::{AlignBuffer, Origin};
 use crate::columnation::ColInternalMerger;
 
 /// A batcher for columnar storage.
@@ -79,8 +81,8 @@ pub enum Column<C: Columnar> {
     /// Reasons could include misalignment, cloning of data, or wanting
     /// to release the `Bytes` as a scarce resource.
     ///
-    /// `Vec<u64>` guarantees `u64` alignment for the contained bytes.
-    Align(Vec<u64>),
+    /// [`AlignBuffer`] guarantees `u64` alignment for the contained bytes.
+    Align(AlignBuffer),
 }
 
 impl<C: Columnar> Column<C> {
@@ -107,6 +109,9 @@ impl<C: Columnar> Column<C> {
     pub fn is_empty(&self) -> bool {
         match self {
             Column::Typed(t) => t.is_empty(),
+            // The `Align` arm avoids decoding whenever the producer recorded a
+            // count, which matters for a paged body: see `record_count`.
+            Column::Align(a) if a.records().is_some() => a.records() == Some(0),
             Column::Bytes(_) | Column::Align(_) => self.borrow().is_empty(),
         }
     }
@@ -143,7 +148,10 @@ where
             Column::Typed(t) => Column::Typed(t.clone()),
             Column::Bytes(b) => {
                 assert_eq!(b.len() % 8, 0);
-                Self::Align(bytemuck::allocation::pod_collect_to_vec(b))
+                Self::Align(AlignBuffer::from_words(
+                    Origin::Decode,
+                    bytemuck::allocation::pod_collect_to_vec(b),
+                ))
             }
             Column::Align(a) => Column::Align(a.clone()),
         }
@@ -153,7 +161,18 @@ where
 impl<C: Columnar> Accountable for Column<C> {
     #[inline]
     fn record_count(&self) -> i64 {
-        self.borrow().len().try_into().expect("Must fit")
+        // Timely asks for this at both push and pull. A paged body answers
+        // from its resident count rather than decoding, because materializing
+        // here would pull it back onto the heap before it ever sat in a queue,
+        // which is the entire interval paging covers.
+        let records = match self {
+            Column::Align(a) => a.records(),
+            _ => None,
+        };
+        records
+            .unwrap_or_else(|| self.borrow().len())
+            .try_into()
+            .expect("Must fit")
     }
 }
 impl<C: Columnar> DrainContainer for Column<C> {
@@ -246,7 +265,10 @@ impl<C: Columnar> ContainerBytes for Column<C> {
         } else {
             // We failed to cast the slice, so we'll reallocate. `Vec<u64>`
             // is u64-aligned by construction.
-            Self::Align(bytemuck::allocation::pod_collect_to_vec(&bytes[..]))
+            Self::Align(AlignBuffer::from_words(
+                Origin::Decode,
+                bytemuck::allocation::pod_collect_to_vec(&bytes[..]),
+            ))
         }
     }
 
@@ -264,7 +286,9 @@ impl<C: Columnar> ContainerBytes for Column<C> {
         match self {
             Column::Typed(t) => indexed::write(writer, &t.borrow()).unwrap(),
             Column::Bytes(b) => writer.write_all(b).unwrap(),
-            Column::Align(a) => writer.write_all(bytemuck::cast_slice(a)).unwrap(),
+            Column::Align(a) => writer
+                .write_all(bytemuck::cast_slice(a.as_words()))
+                .unwrap(),
         }
     }
 }
@@ -328,7 +352,8 @@ mod tests {
         let mut region: Vec<u64> = vec![0; raw.len() / 8];
         let region_bytes = bytemuck::cast_slice_mut(&mut region[..]);
         region_bytes[..raw.len()].copy_from_slice(&raw);
-        let column_align: Column<i32> = Column::Align(region);
+        let column_align: Column<i32> =
+            Column::Align(AlignBuffer::from_words(Origin::Decode, region));
         let column_align2 = column_align.clone();
 
         assert_eq!(

@@ -146,6 +146,7 @@ use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
 use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::ToStream;
 use timely::dataflow::operators::vec::{BranchWhen, Filter};
 use timely::dataflow::operators::{Capability, Operator, Probe, probe};
@@ -164,11 +165,14 @@ use crate::extensions::temporal_bucket::TemporalBucketing;
 use crate::logging::compute::{
     ComputeEvent, DataflowGlobal, LirMapping, LirMetadata, LogDataflowErrors, OperatorHydration,
 };
-use crate::render::columnar::CollectionEdge;
+use crate::render::columnar::{
+    columnar_consolidate, columnar_negate, columnar_to_vec, concat_many, vec_to_columnar,
+};
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
+use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 
 pub(crate) mod columnar;
 pub mod context;
@@ -372,8 +376,11 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter(region),
+                    // Imports read row-shaped data from persist. Encode it to the
+                    // columnar edge at the boundary. The batches are already
+                    // consolidated, so this leaf-encode is non-consolidating.
+                    let bundle = crate::render::CollectionBundle::from_edge(
+                        vec_to_columnar(oks.enter(region)),
                         errs.enter(region),
                     );
                     // Associate collection bundle with the source identifier.
@@ -472,8 +479,11 @@ pub fn build_compute_dataflow(
                 );
 
                 for (id, (oks, errs)) in imported_sources.into_iter() {
-                    let bundle = crate::render::CollectionBundle::from_collections(
-                        oks.enter_region(region),
+                    // Imports read row-shaped data from persist. Encode it to the
+                    // columnar edge at the boundary. The batches are already
+                    // consolidated, so this leaf-encode is non-consolidating.
+                    let bundle = crate::render::CollectionBundle::from_edge(
+                        vec_to_columnar(oks.enter_region(region)),
                         errs.enter_region(region),
                     );
                     // Associate collection bundle with the source identifier.
@@ -665,7 +675,10 @@ where
                         start_signal,
                         |e, _| e.clone(),
                     );
-                    CollectionBundle::from_collections(oks, errs)
+                    // The filtered index collection is row-shaped. Encode it to
+                    // the columnar edge at the boundary. It is already
+                    // consolidated, so this leaf-encode is non-consolidating.
+                    CollectionBundle::from_edge(vec_to_columnar(oks), errs)
                 }
             };
             self.update_id(Id::Global(idx.on_id), bundle);
@@ -923,13 +936,24 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 let (err_v, err_collection) =
                     Variable::new(self.scope, Product::new(Default::default(), inner));
 
+                // Re-encode the read-edge to columnar so `Get`s on this rec
+                // binding (e.g. as a Union input) see a columnar edge. The
+                // feedback `Variable` itself stays `Vec` (set at `oks_v.set`
+                // below), so each iteration crosses the container boundary
+                // twice: encoded here for the readers, decoded once per binding
+                // where the value is fed back. The re-encode is a stateless,
+                // timestamp-agnostic pass-through, so it does not alter the
+                // iterative frontier or fixpoint behavior.
                 self.insert_id(
                     Id::Local(*id),
-                    CollectionBundle::from_collections(oks_collection, err_collection),
+                    CollectionBundle::from_edge(vec_to_columnar(oks_collection), err_collection),
                 );
                 variables.insert(Id::Local(*id), (oks_v, err_v));
             }
-            // Now render each of the rec bindings.
+            // Now render each of the rec bindings. The decoded value is kept so
+            // the extraction below reuses it instead of decoding the same stream
+            // a second time.
+            let mut decoded_oks = BTreeMap::new();
             let mut rec_iter = recs.into_iter().peekable();
             while let Some(RecBind { id, value, limit }) = rec_iter.next() {
                 let last = rec_iter.peek().is_none();
@@ -938,7 +962,8 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
                 // We need to ensure that the raw collection exists, but do not have enough information
                 // here to cause that to happen.
                 let (oks, mut err) = bundle.collection.clone().unwrap();
-                let oks = oks.into_vec();
+                let oks = columnar_to_vec(oks);
+                decoded_oks.insert(id, oks.clone());
                 self.insert_id(Id::Local(id), bundle);
                 let (oks_v, err_v) = variables.remove(&Id::Local(id)).unwrap();
 
@@ -993,12 +1018,18 @@ impl<'scope> Context<'scope, Product<mz_repr::Timestamp, PointStamp<u64>>> {
             // Now extract each of the rec bindings into the outer scope.
             for id in rec_ids.into_iter() {
                 let bundle = self.remove_id(Id::Local(id)).unwrap();
-                let (oks, err) = bundle.collection.unwrap();
-                let oks = oks.into_vec();
+                let (_, err) = bundle.collection.unwrap();
+                let oks = decoded_oks
+                    .remove(&id)
+                    .expect("rec binding decoded while rendering above");
+                // Extract into the outer scope and re-encode the read-edge to
+                // columnar, so `Get`s on the extracted binding see a columnar
+                // edge. `leave_dynamic` has already stripped the iteration
+                // coordinate, so this runs in the parent scope.
                 self.insert_id(
                     Id::Local(id),
-                    CollectionBundle::from_collections(
-                        oks.leave_dynamic(level + 1),
+                    CollectionBundle::from_edge(
+                        vec_to_columnar(oks.leave_dynamic(level + 1)),
                         err.leave_dynamic(level + 1),
                     ),
                 );
@@ -1177,6 +1208,12 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 // We should advance times in constant collections to start from `as_of`.
                 let as_of_frontier = self.as_of_frontier.clone();
                 let until = self.until.clone();
+                // Build the ok rows columnar, so this literal source emits the
+                // columnar edge. Advancing times to `as_of` can collapse
+                // distinct original times onto one time, so rows the planner
+                // left distinct may become duplicates here; a
+                // `ConsolidatingColumnBuilder` folds those within the batch (the
+                // rows are already owned, so the give is a move into staging).
                 let ok_collection = rows
                     .into_iter()
                     .filter_map(move |(row, mut time, diff)| {
@@ -1191,7 +1228,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             None
                         }
                     })
-                    .to_stream(self.scope)
+                    .to_stream_with_builder::<_, ConsolidatingColumnBuilder<Row, T, Diff>>(
+                        self.scope,
+                    )
                     .as_collection();
 
                 let mut error_time: mz_repr::Timestamp = Timestamp::minimum();
@@ -1208,7 +1247,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .to_stream(self.scope)
                     .as_collection();
 
-                CollectionBundle::from_collections(ok_collection, err_collection)
+                CollectionBundle::from_edge(ok_collection, err_collection)
             }
             Get { id, keys, plan } => {
                 // Recover the collection from `self` and then apply `mfp` to it.
@@ -1236,18 +1275,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             mfp,
                             Some((key, row)),
                             self.until.clone(),
-                            &self.config_set,
                         );
-                        CollectionBundle::from_collections(oks, errs)
+                        CollectionBundle::from_edge(oks, errs)
                     }
                     mz_compute_types::plan::GetPlan::Collection(mfp) => {
-                        let (oks, errs) = collection.as_collection_core(
-                            mfp,
-                            None,
-                            self.until.clone(),
-                            &self.config_set,
-                        );
-                        CollectionBundle::from_collections(oks, errs)
+                        let (oks, errs) =
+                            collection.as_collection_core(mfp, None, self.until.clone());
+                        CollectionBundle::from_edge(oks, errs)
                     }
                 }
             }
@@ -1261,13 +1295,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                 if mfp.is_identity() {
                     input
                 } else {
-                    let (oks, errs) = input.as_collection_core(
-                        mfp,
-                        input_key_val,
-                        self.until.clone(),
-                        &self.config_set,
-                    );
-                    CollectionBundle::from_collections(oks, errs)
+                    let (oks, errs) =
+                        input.as_collection_core(mfp, input_key_val, self.until.clone());
+                    CollectionBundle::from_edge(oks, errs)
                 }
             }
             FlatMap {
@@ -1324,7 +1354,7 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .collection
                     .clone()
                     .expect("Negate input must be an unarranged collection");
-                CollectionBundle::from_edge(oks.negate(), errs)
+                CollectionBundle::from_edge(columnar_negate(oks), errs)
             }
             Threshold {
                 input,
@@ -1355,8 +1385,11 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        let os = os.into_vec();
-                        CollectionEdge::Vec(T::maybe_apply_temporal_bucketing(
+                        // Temporal bucketing operates on `Vec`: decode the edge
+                        // into it, then re-encode the result so this Union input
+                        // is a columnar edge like every other.
+                        let os = columnar_to_vec(os);
+                        vec_to_columnar(T::maybe_apply_temporal_bucketing(
                             os.inner,
                             self.as_of_frontier.clone(),
                             summary,
@@ -1367,9 +1400,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     oks.push(os);
                     errs.push(es);
                 }
-                let oks = CollectionEdge::concat_many(self.scope, oks);
+                let oks = concat_many(self.scope, oks);
                 let oks = if consolidate_output {
-                    oks.consolidate_named("UnionConsolidation")
+                    columnar_consolidate(oks, "UnionConsolidation")
                 } else {
                     oks
                 };
@@ -1450,16 +1483,8 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     .collection
                     .as_mut()
                     .expect("CollectionBundle invariant");
-                match oks {
-                    CollectionEdge::Vec(c) => {
-                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
-                        *c = stream.as_collection();
-                    }
-                    CollectionEdge::Columnar(c) => {
-                        let stream = self.log_operator_hydration_inner(c.inner.clone(), lir_id);
-                        *c = stream.as_collection();
-                    }
-                }
+                let stream = self.log_operator_hydration_inner(oks.inner.clone(), lir_id);
+                *oks = stream.as_collection();
             }
         }
     }
