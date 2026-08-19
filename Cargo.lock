@@ -9021,6 +9021,7 @@ dependencies = [
  "proptest",
  "rand 0.9.4",
  "serde",
+ "smallvec",
  "tempfile",
  "timely",
  "tokio",
