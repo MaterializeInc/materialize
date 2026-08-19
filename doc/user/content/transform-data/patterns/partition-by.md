@@ -18,17 +18,17 @@ Internally, each collection is stored as a set of **runs** of data, each of whic
 
 For [materialized views](/sql/create-materialized-view/) and
 [tables](/sql/create-table) (including read-only tables created from sources),
-you can use the `PARTITION BY` option to declare the internal ordering that
-Materialize uses to sort, partition, and store these runs of data. That ordering
-is what makes optimizations like [filter pushdown](#filter-pushdown) effective,
-which in turn can make queries and other operations more efficient.
+you can use the `PARTITION BY` option to declare the **expected** internal
+ordering of the data. If the data has that ordering, optimizations like [filter
+pushdown](#filter-pushdown) can be more effective, which in turn can make
+queries and other operations more efficient.
 
 {{< warning >}}
-The `PARTITION BY` option is a declaration, not a directive: it does not change
-how your data is stored. Materialize validates the option against the
-[requirements](#requirements) below and then stores your data exactly as it
-would have without it, so adding or removing the option does not change the
-performance of your queries.
+The `PARTITION BY` option declares the expected layout of your data. It does not
+change how the data is stored. Materialize validates the option against the
+[requirements](#requirements) below, but otherwise stores your data as it would
+without the option. As a result, adding or removing `PARTITION BY` does not
+affect query performance.
 
 The requirements are what make this possible. The option can only name a prefix
 of the collection's columns, which is the ordering Materialize already uses
@@ -105,15 +105,16 @@ If rows with similar `event_ts` values are stored close together, the rows that 
 
 Materialize tracks a small amount of metadata for every part, including the range of possible values for many columns. When it can determine that none of the data in a part will match a filter, it will skip fetching that data from object storage. This optimization is called _filter pushdown_, and when you're querying with a selective filter against a large collection, it can save a great deal of time and computation.
 
-Materialize will always try to apply filter pushdown to your query, but that filtering is usually only effective when similar rows are stored together.
-Whether that holds depends on your data and on the order in which it was written, and it is not something you can currently declare: as described above, a `PARTITION BY` clause states the layout you expect rather than creating it.
+Materialize always attempts to apply filter pushdown, but it is most effective when similar rows are stored together.
+Whether rows are stored together depends on your data and the order in which the data was written.
+You cannot currently control this layout. `PARTITION BY` declares the layout you expect rather than creating it.
 
-To give filter pushdown the best chance of being effective for your query, you can:
+To maximize the effectiveness of filter pushdown, you can:
 
 - Add a filter that only matches a narrow range of values in a single column.
-- Filter on a column that appears early in the collection's column list, and whose values correlate with the order in which rows were written. A timestamp on an append-only collection is the clearest case, but any column with that property works: an identifier that increases over time, such as a UUIDv7, is another.
+- Filter on a column that appears early in the collection's column list, and whose values correlate with the order in which rows were written. A timestamp on an append-only collection is a straightforward example, as is an identifier that increases over time (e.g., UUIDv7).
 
-Rather than predicting whether pushdown will be effective, measure it with [`EXPLAIN FILTER PUSHDOWN`](/sql/explain-filter-pushdown/), which reports how many parts and bytes your query had to fetch.
+To measure the effectiveness of filter pushdown, use [`EXPLAIN FILTER PUSHDOWN`](/sql/explain-filter-pushdown/) to see the number of parts and bytes your query would need to fetch.
 
 Filters that consist of arithmetic, date math, and comparisons are generally eligible for pushdown, including all the examples in this page. However, more complex filters might not be. You can check whether the filters in your query can be pushed down using [an `EXPLAIN` statement](/sql/explain-plan/). In the following example, we can be confident our temporal filter will be pushed down because it's present in the `pushdown` list at the bottom of the output.
 
@@ -133,7 +134,7 @@ Some common functions, such as casting from a string to a timestamp, can prevent
 
 These examples create real objects. After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
 
-The `PARTITION BY` clauses below document the ordering each collection expects. Because the option does not change how data is stored, the same examples behave the same way without them.
+The `PARTITION BY` clauses below declare the ordering each collection expects. Because the option does not change how data is stored, these examples store and fetch the same data without them. The clause still records the expected ordering, and Materialize validates it when you create the object.
 
 ### Partitioning by timestamp
 
@@ -213,6 +214,6 @@ Other datasets don't have a strong timeseries component, but they do have a clea
 
 {{< note >}}
 
-As before, we're not guaranteed to see much or any benefit from filter pushdown on small collections. Larger datasets often can be filtered down to a subset of the parts we'd otherwise need to fetch, but a category column like `country_code` is a weaker case than a timestamp: nothing about how the data is written groups venues from the same country together, so the benefit here depends on the order the rows happened to arrive in.
+As before, filter pushdown on small collections may provide little or no benefit. With larger datasets, filter pushdown can reduce the number of parts that need to be fetched. However, a category column like `country_code` is less favorable for filter pushdown than a timestamp: venues from the same country aren't necessarily grouped into the same parts, so the benefit depends on the order in which rows arrived.
 
 {{< /note >}}

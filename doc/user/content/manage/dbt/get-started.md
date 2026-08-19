@@ -545,10 +545,8 @@ For guidance and best practices on how to use `PARTITION BY` in Materialize,
 see [Partitioning and filter pushdown](/transform-data/patterns/partition-by/).
 {{</ tip >}}
 
-To declare the internal storage order that Materialize uses for a
-materialized view, use the `partition_by` configuration. This declares the
-columns that Materialize sorts by when writing the underlying data into
-storage, so that rows with similar values are stored together.
+To declare the expected internal storage order for a materialized view, use the
+`partition_by` configuration.
 
 The `PARTITION BY` option that this compiles to is validated when the
 materialized view is created, but it does not change how the data is stored.
