@@ -105,7 +105,7 @@ use iceberg::spec::{
 };
 use iceberg::spec::{Schema, SchemaRef};
 use iceberg::table::Table;
-use iceberg::transaction::{ApplyTransactionAction, Transaction};
+use iceberg::transaction::{RowDeltaAction, TransactionAction};
 use iceberg::writer::base_writer::data_file_writer::DataFileWriterBuilder;
 use iceberg::writer::base_writer::equality_delete_writer::{
     EqualityDeleteFileWriterBuilder, EqualityDeleteWriterConfig,
@@ -120,7 +120,7 @@ use iceberg::writer::file_writer::location_generator::{
 };
 use iceberg::writer::file_writer::rolling_writer::RollingFileWriterBuilder;
 use iceberg::writer::{IcebergWriter, IcebergWriterBuilder};
-use iceberg::{Catalog, NamespaceIdent, TableCreation, TableIdent};
+use iceberg::{Catalog, NamespaceIdent, TableCommit, TableCreation, TableIdent};
 use itertools::Itertools;
 use mz_arrow_util::builder::{ARROW_EXTENSION_NAME_KEY, ArrowBuilder};
 use mz_interchange::avro::DiffPair;
@@ -909,9 +909,7 @@ async fn try_commit_batch(
         }
     };
 
-    let tx = Transaction::new(&table);
-    let mut action = tx
-        .row_delta()
+    let mut action = RowDeltaAction::new()
         .set_snapshot_properties(snapshot_properties.into_iter().collect())
         .with_check_duplicate(false);
 
@@ -921,12 +919,17 @@ async fn try_commit_batch(
             .add_delete_files(delete_files);
     }
 
-    let tx = match action
-        .apply(tx)
-        .context("Failed to apply data file addition to iceberg table transaction")
-    {
-        Ok(tx) => tx,
+    // Build the commit's metadata updates and requirements against our own view of
+    // the table and send them to the catalog directly, instead of going through
+    // `Transaction::commit`. That path reloads the table and rebases the commit onto
+    // whatever it finds, retrying conflicts internally, so it would silently commit
+    // over another writer. Generated this way, the requirements pin the table state
+    // we know, and any interleaved write surfaces as a commit conflict below, where
+    // `check_fencing` decides whether retrying is safe.
+    let mut action_commit = match Arc::new(action).commit(&table).await {
+        Ok(action_commit) => action_commit,
         Err(e) => {
+            // Nothing was sent to the catalog, so this commit definitely didn't happen.
             let reloaded = match reload_table(
                 catalog,
                 conn_namespace.to_string(),
@@ -945,15 +948,18 @@ async fn try_commit_batch(
             };
             return (
                 CommitState::Known(reloaded),
-                RetryResult::RetryableErr(anyhow!(
-                    "Failed to apply data file addition to iceberg table transaction: {}",
-                    e
-                )),
+                RetryResult::RetryableErr(anyhow!("Failed to build iceberg table commit: {}", e)),
             );
         }
     };
 
-    let new_table = tx.commit(catalog).await;
+    let table_commit = TableCommit::builder()
+        .ident(table.identifier().clone())
+        .updates(action_commit.take_updates())
+        .requirements(action_commit.take_requirements())
+        .build();
+
+    let new_table = catalog.update_table(table_commit).await;
     match new_table {
         Err(e) if matches!(e.kind(), ErrorKind::CatalogCommitConflicts) => {
             metrics.commit_conflicts.inc();
