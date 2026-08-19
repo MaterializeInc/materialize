@@ -522,12 +522,17 @@ pub fn optimize_dataflow_snapshot(dataflow: &mut DataflowDesc) -> Result<(), Tra
 /// can drop the last `Get` of one, for instance by folding a selection to a constant.
 ///
 /// An import that survives that is not free. Every worker builds a `persist_source` for it and
-/// decodes a shard into a stream nobody consumes, the controller takes a read hold that pins the
-/// collection's `since` for as long as the dataflow lives, and the dataflow reports a wall-clock
-/// dependence none of its exports have. The last of those is the dangerous one. It earns a dataflow
-/// whose exports can never change again an expiration, and that pins their output frontier at the
-/// expiration time rather than letting it reach the empty antichain, so nothing downstream learns
-/// the collection is final.
+/// decodes a shard into a stream nobody consumes, and the controller takes a read hold that pins
+/// the collection's `since` for as long as the dataflow lives. Both are read off the import list
+/// directly, so pruning is what reclaims them.
+///
+/// A third consumer, the wall-clock dependence a dataflow reports, is the one whose wrong answer
+/// does real damage: it earns a dataflow whose exports can never change again an expiration, which
+/// pins their output frontier at the expiration time rather than letting it reach the empty
+/// antichain, so nothing downstream learns the collection is final.
+/// `ComputeController::determine_time_dependence` derives that from the read set rather than from
+/// the import list, so it does not depend on this pass having run. `create_dataflow` also reports a
+/// list this pass left loose.
 ///
 /// The input plans should be normalized with `NormalizeLets`, for the same reason
 /// [`prune_and_annotate_dataflow_index_imports`] wants them to be: an unused `Let` binding can

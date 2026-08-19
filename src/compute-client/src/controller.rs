@@ -52,7 +52,7 @@ use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
-use mz_ore::soft_assert_no_log;
+use mz_ore::soft_assert_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
@@ -816,25 +816,43 @@ impl ComputeController {
             return Err(EmptyAsOfForCopyTo);
         }
 
+        // Validation: the dataflow exports something
+        //
+        // An export-less description has nothing to render and no answer to "what do the exports
+        // read", which the checks below are phrased in terms of. `optimize_dataflow` leaves such a
+        // description's imports alone for that reason, so one arriving here would fail the import
+        // check for the wrong reason.
+        soft_assert_or_log!(
+            !dataflow.index_exports.is_empty() || !dataflow.sink_exports.is_empty(),
+            "dataflow {} has no exports",
+            dataflow.debug_name,
+        );
+
+        // The imports the exports actually read. `optimize_dataflow` prunes the import list to
+        // exactly this set, so the two agree unless a producer stopped pruning.
+        //
+        // Computed once and used twice: the check below reports a loose list, and
+        // `determine_time_dependence` counts through it rather than over the raw list. That
+        // consumer is the one whose wrong answer hangs an environment: an import no export reads
+        // would report wall-clock dependence for a dataflow whose exports are constant, earning it
+        // a dataflow expiration that pins the output frontier days short of the empty antichain,
+        // and nothing downstream would learn the collection is final. Deriving it from this set
+        // makes that correct by construction, leaving the prune to reclaim the read hold and the
+        // persist source.
+        let used_imports = dataflow.used_import_ids();
+
         // Validation: every import is read
         //
-        // The import list is meant to be exactly the imports the exports read. `optimize_dataflow`
-        // prunes it to that, and the read holds, the time dependence, and the persist sources the
-        // replicas build are all derived from it below, so each of them describes a dataflow other
-        // than the one that will run once the list is loose. This catches a producer that stops
-        // pruning.
-        //
-        // `soft_assert_no_log!` rather than a logging variant because the check walks the plan and
-        // this runs per peek, and the walk is worth paying for only where it can fail a test.
-        soft_assert_no_log!(
-            {
-                let used = dataflow.used_import_ids();
-                dataflow.import_ids().all(|id| used.contains(&id))
-            },
+        // The read holds and the persist sources the replicas build are still derived from the raw
+        // list below, so a loose one describes a dataflow other than the one that will run. A
+        // logging variant rather than `soft_assert_no_log!`: the walk is paid for above either way,
+        // so reporting it in production costs only the comparison.
+        soft_assert_or_log!(
+            dataflow.import_ids().all(|id| used_imports.contains(&id)),
             "dataflow {} imports collections no export reads: imports {:?}, read {:?}",
             dataflow.debug_name,
             dataflow.import_ids().collect::<Vec<_>>(),
-            dataflow.used_import_ids(),
+            used_imports,
         );
 
         // Validation: input collections
@@ -857,7 +875,7 @@ impl ComputeController {
             }
         }
         let time_dependence = self
-            .determine_time_dependence(instance_id, &dataflow)
+            .determine_time_dependence(instance_id, &dataflow, &used_imports)
             .expect("must exist");
 
         let instance = self.instance_mut(instance_id).expect("validated");
@@ -1039,31 +1057,43 @@ impl ComputeController {
     }
 
     /// Determine the time dependence for a dataflow.
+    ///
+    /// `used_imports` are the imports the exports read, as
+    /// [`DataflowDescription::used_import_ids`] reports them. Only those count: an import no export
+    /// reads would report wall-clock dependence for a dataflow whose exports are constant, and that
+    /// earns it a dataflow expiration, which pins its output frontier at the expiration time. A
+    /// constant export's frontier is the empty antichain, so the pin would hold it days short of
+    /// the truth and whoever reads that frontier would never learn the collection can no longer
+    /// change.
+    ///
+    /// `optimize_dataflow` prunes the import list to this set, so the two agree and the filtering
+    /// is a no-op. It is here because this is the consumer whose wrong answer hangs an environment,
+    /// and deriving the answer from the read set makes it independent of the list staying tight.
     fn determine_time_dependence(
         &self,
         instance_id: ComputeInstanceId,
         dataflow: &DataflowDescription<mz_compute_types::plan::LirRelationExpr, ()>,
+        used_imports: &BTreeSet<GlobalId>,
     ) -> Result<Option<TimeDependence>, TimeDependenceError> {
         let instance = self
             .instance(instance_id)
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
         let mut time_dependencies = Vec::new();
 
-        // Every import counts, which is only the right answer because the import list is the set of
-        // imports the exports read. An import no export reads would report wall-clock dependence
-        // for a dataflow whose exports are constant, and that earns it a dataflow expiration, which
-        // pins its output frontier at the expiration time. A constant export's frontier is the
-        // empty antichain, so the pin would hold it days short of the truth and whoever reads that
-        // frontier would never learn the collection can no longer change. `create_dataflow` asserts
-        // the list is tight before we get here.
-        for id in dataflow.imported_index_ids() {
+        for id in dataflow
+            .imported_index_ids()
+            .filter(|id| used_imports.contains(id))
+        {
             let dependence = instance
                 .get_time_dependence(id)
                 .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
             time_dependencies.push(dependence);
         }
 
-        'source: for id in dataflow.imported_source_ids() {
+        'source: for id in dataflow
+            .imported_source_ids()
+            .filter(|id| used_imports.contains(id))
+        {
             // We first check whether the id is backed by a compute object, in which case we use
             // the time dependence we know. This is true for storage sinks.
             for instance in self.instances.values() {
