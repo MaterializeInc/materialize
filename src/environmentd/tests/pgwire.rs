@@ -1277,8 +1277,10 @@ fn test_many_bind_params() {
     assert_eq!(row.get::<_, i32>(0), LAST_VALUE);
 }
 
-/// The frontend OCC read-then-write path must refuse DML that is pipelined
-/// behind a write in the same extended-protocol implicit transaction.
+/// How the frontend OCC read-then-write path behaves inside an extended-protocol
+/// pipeline: a write that reads nothing stages its rows and rolls back with the
+/// pipeline, one that reads persisted state is either refused or commits as its
+/// own transaction.
 #[mz_ore::test]
 fn test_pgtest_mz_frontend_occ_pipelined_dml() {
     pg_test_harness(

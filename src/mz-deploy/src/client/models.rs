@@ -13,7 +13,7 @@
 //! a type-safe interface over raw database rows.
 
 use chrono::{DateTime, Utc};
-use mz_sql::plan::AutoScalingStrategy;
+use mz_sql_parser::ast::{CreateClusterStatement, Raw};
 use std::fmt;
 use std::str::FromStr;
 
@@ -97,48 +97,12 @@ pub struct Cluster {
     pub id: String,
     /// Cluster name (e.g., "quickstart")
     pub name: String,
+    /// Whether the cluster is managed
+    pub managed: bool,
     /// Cluster size (e.g., "M.1-large"), None for unmanaged clusters
     pub size: Option<String>,
     /// Number of replicas for fault tolerance (stored as i64 to handle postgres uint4 type)
     pub replication_factor: Option<i64>,
-    /// The configured autoscaling policy. `None` for unmanaged clusters,
-    /// clusters without a policy, and regions that predate the feature.
-    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
-}
-
-/// Options for creating a new managed cluster.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClusterOptions {
-    /// Cluster size (e.g., "M.1-large", "M.1-small")
-    pub size: String,
-    /// Number of replicas (default: 1)
-    pub replication_factor: u32,
-    /// The autoscaling policy, if one is configured.
-    pub auto_scaling_strategy: Option<AutoScalingStrategy>,
-}
-
-impl ClusterOptions {
-    /// Create cluster options from a production cluster configuration.
-    pub fn from_cluster(cluster: &Cluster) -> Result<Self, String> {
-        let size = cluster.size.clone().ok_or_else(|| {
-            format!(
-                "Cluster '{}' has no size (unmanaged cluster?)",
-                cluster.name
-            )
-        })?;
-
-        let replication_factor = cluster
-            .replication_factor
-            .unwrap_or(1)
-            .try_into()
-            .map_err(|_| format!("Invalid replication_factor for cluster '{}'", cluster.name))?;
-
-        Ok(Self {
-            size,
-            replication_factor,
-            auto_scaling_strategy: cluster.auto_scaling_strategy.clone(),
-        })
-    }
 }
 
 /// Configuration for a cluster replica (used for unmanaged clusters).
@@ -167,10 +131,11 @@ pub struct ObjectGrant {
 /// including its replicas (for unmanaged clusters) and privilege grants.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClusterConfig {
-    /// Managed cluster with a size, replication factor, and optional autoscaling policy
+    /// Managed cluster, captured as the canonical `CREATE CLUSTER` statement the
+    /// server renders for it. Cloning replays it under a new name.
     Managed {
-        /// Cluster options (size, replication factor, autoscaling policy)
-        options: ClusterOptions,
+        /// The production cluster's `CREATE CLUSTER` statement
+        create_stmt: CreateClusterStatement<Raw>,
         /// Privilege grants on the cluster
         grants: Vec<ObjectGrant>,
     },
@@ -418,6 +383,15 @@ pub struct PendingStatement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mz_sql_parser::ast::Statement;
+    use mz_sql_parser::parser::parse_statements;
+
+    fn create_cluster(sql: &str) -> CreateClusterStatement<Raw> {
+        match parse_statements(sql).unwrap().pop().unwrap().ast {
+            Statement::CreateCluster(stmt) => stmt,
+            other => panic!("expected CREATE CLUSTER, got {:?}", other),
+        }
+    }
 
     #[mz_ore::test]
     fn test_deployment_kind_display() {
@@ -460,119 +434,33 @@ mod tests {
     }
 
     #[mz_ore::test]
-    fn test_cluster_options_from_cluster_success() {
-        let cluster = Cluster {
-            id: "u1".to_string(),
-            name: "quickstart".to_string(),
-            size: Some("25cc".to_string()),
-            replication_factor: Some(2),
-            auto_scaling_strategy: None,
-        };
-
-        let options = ClusterOptions::from_cluster(&cluster).unwrap();
-        assert_eq!(options.size, "25cc");
-        assert_eq!(options.replication_factor, 2);
-    }
-
-    #[mz_ore::test]
-    fn test_cluster_options_from_cluster_default_replication() {
-        let cluster = Cluster {
-            id: "u1".to_string(),
-            name: "quickstart".to_string(),
-            size: Some("25cc".to_string()),
-            replication_factor: None, // Should default to 1
-            auto_scaling_strategy: None,
-        };
-
-        let options = ClusterOptions::from_cluster(&cluster).unwrap();
-        assert_eq!(options.size, "25cc");
-        assert_eq!(options.replication_factor, 1);
-    }
-
-    #[mz_ore::test]
-    fn test_cluster_options_from_cluster_no_size() {
-        let cluster = Cluster {
-            id: "u1".to_string(),
-            name: "unmanaged".to_string(),
-            size: None, // Unmanaged cluster
-            replication_factor: Some(1),
-            auto_scaling_strategy: None,
-        };
-
-        let result = ClusterOptions::from_cluster(&cluster);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err();
-        assert!(err_msg.contains("unmanaged"));
-        assert!(err_msg.contains("has no size"));
-    }
-
-    #[mz_ore::test]
-    fn test_cluster_options_from_cluster_negative_replication() {
-        let cluster = Cluster {
-            id: "u1".to_string(),
-            name: "test".to_string(),
-            size: Some("25cc".to_string()),
-            replication_factor: Some(-1), // Invalid negative value
-            auto_scaling_strategy: None,
-        };
-
-        let result = ClusterOptions::from_cluster(&cluster);
-        assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Invalid replication_factor"));
-    }
-
-    #[mz_ore::test]
     fn test_cluster_equality() {
         let cluster1 = Cluster {
             id: "u1".to_string(),
             name: "test".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
-            auto_scaling_strategy: None,
         };
 
         let cluster2 = Cluster {
             id: "u1".to_string(),
             name: "test".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
-            auto_scaling_strategy: None,
         };
 
         let cluster3 = Cluster {
             id: "u2".to_string(), // Different ID
             name: "test".to_string(),
+            managed: true,
             size: Some("25cc".to_string()),
             replication_factor: Some(1),
-            auto_scaling_strategy: None,
         };
 
         assert_eq!(cluster1, cluster2);
         assert_ne!(cluster1, cluster3);
-    }
-
-    #[mz_ore::test]
-    fn test_cluster_options_equality() {
-        let opts1 = ClusterOptions {
-            size: "25cc".to_string(),
-            replication_factor: 2,
-            auto_scaling_strategy: None,
-        };
-
-        let opts2 = ClusterOptions {
-            size: "25cc".to_string(),
-            replication_factor: 2,
-            auto_scaling_strategy: None,
-        };
-
-        let opts3 = ClusterOptions {
-            size: "50cc".to_string(),
-            replication_factor: 2,
-            auto_scaling_strategy: None,
-        };
-
-        assert_eq!(opts1, opts2);
-        assert_ne!(opts1, opts3);
     }
 
     #[mz_ore::test]
@@ -623,11 +511,7 @@ mod tests {
     #[mz_ore::test]
     fn test_cluster_config_managed() {
         let config = ClusterConfig::Managed {
-            options: ClusterOptions {
-                size: "25cc".to_string(),
-                replication_factor: 2,
-                auto_scaling_strategy: None,
-            },
+            create_stmt: create_cluster("CREATE CLUSTER c (SIZE = '25cc')"),
             grants: vec![ObjectGrant {
                 grantee: "reader".to_string(),
                 privilege_type: "USAGE".to_string(),

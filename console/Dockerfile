@@ -7,10 +7,14 @@
 # the Business Source License, use of this software will be governed
 # by the Apache License, Version 2.0.
 
-FROM node:22-alpine AS builder
+FROM node:26-alpine AS builder
 
 WORKDIR /app
-RUN corepack enable
+
+# Node 25 dropped corepack from the distribution, but the console pins its
+# package manager through `packageManager` in package.json. Reinstall corepack
+# so it can provision that yarn version. Same reason as in ci/builder/Dockerfile.
+RUN npm install -g corepack && corepack enable
 
 COPY . .
 

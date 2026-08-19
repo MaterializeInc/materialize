@@ -49,9 +49,13 @@ a subscribe that continually tracks the current state of the data.
 - Removing the in-process locks immediately. During rollout, the old lock-based
   path and the new OCC path coexist behind a feature flag. The locks can be
   removed once the OCC path is fully rolled out.
-- Mixed read/write transactions. A write on this path commits at the frontier it
-  observed, which it cannot postpone until COMMIT, so it runs only as a single
-  statement.
+- Mixed read/write transactions. A write that reads persisted state commits at
+  the frontier it observed, which it cannot postpone until COMMIT, so it runs
+  only as a single statement. A write that reads nothing does compose with
+  transactions: its diffs are frontier-independent, so they are buffered as
+  session write ops and land when the transaction commits. That covers, for
+  example, `INSERT INTO t SELECT generate_series(1, 20000)`, whose values are
+  constant but too large to fold into a literal.
 
 ## Overview
 
@@ -332,6 +336,20 @@ that the next reader does not take them for bugs.
   because it hands the read-then-write's inner peek a trivial logging context
   and so logs nothing for it. We keep the extra event, it is real information
   about a statement the user did run.
+- **`execution_timestamp` for a write that reads.** The frontend path records an
+  `execution_timestamp` in `mz_statement_execution_history` for a read-then-write
+  that reads persisted state, the coordinator path leaves it NULL. The OCC loop
+  picks the write timestamp inside the statement's lifetime, so there is
+  something true to record. The coordinator stages the diffs instead, and the
+  statement retires before the commit that gives them a timestamp, so nothing
+  back-fills it. We keep the frontend's: it is accurate, it is additive, and a
+  query that tolerates NULL today keeps working. Enabling the path therefore
+  starts populating the column for `UPDATE`, `DELETE` and `INSERT ... SELECT`.
+- **`execution_timestamp` for a write that reads nothing (parity).** Such a
+  write stages its rows on both paths, so its rows take the transaction's commit
+  timestamp rather than one the statement chose, and neither path records
+  anything. `test_statement_logging_dml_path_parity` pins both of these cases,
+  so the divergence above cannot spread to the rest by accident.
 - **`max_result_size` accounting.** The coordinator sums one row length per diff
   entry before consolidation. The frontend recomputes the total from the
   consolidated set, which counts one row length per distinct row and ignores

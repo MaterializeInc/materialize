@@ -2740,8 +2740,19 @@ fn serialize_part_stats<S: Serializer>(
     val: &Option<LazyPartStats>,
     s: S,
 ) -> Result<S::Ok, S::Error> {
-    let val = val.as_ref().map(|x| x.decode().key);
-    val.serialize(s)
+    // These bytes come from blob and are never validated on the way in, so a
+    // malformed or newer-version encoding reaches here intact. Report it as
+    // absent rather than panicking, and keep the field's shape stable for
+    // consumers of the inspect-state output by logging the failure instead of
+    // serializing a differently typed value in its place.
+    let stats = val.as_ref().and_then(|x| match x.try_decode() {
+        Ok(stats) => Some(stats.key),
+        Err(err) => {
+            tracing::warn!("undecodable part stats, reporting as absent: {err}");
+            None
+        }
+    });
+    stats.serialize(s)
 }
 
 fn serialize_diffs_sum<S: Serializer>(val: &Option<[u8; 8]>, s: S) -> Result<S::Ok, S::Error> {
