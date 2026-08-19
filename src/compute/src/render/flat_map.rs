@@ -54,17 +54,14 @@ impl<'scope, T: crate::render::RenderTimestamp> Context<'scope, T> {
 
         // The unarranged path (no key) reads the input `CollectionEdge` directly,
         // so the columnar arm never decodes rows at the input. The keyed path
-        // reads an existing arrangement, already columnar internally, and is
-        // presented as a `Vec` edge here.
+        // materializes an existing arrangement, which `as_specific_collection`
+        // presents as a columnar edge.
         let (edge, err_collection) = match input_key.as_deref() {
             None => input
                 .collection
                 .clone()
                 .expect("The unarranged collection doesn't exist."),
-            Some(key) => {
-                let (oks, errs) = input.as_specific_collection(Some(key), &self.config_set);
-                (CollectionEdge::Vec(oks), errs)
-            }
+            Some(key) => input.as_specific_collection(Some(key), &self.config_set),
         };
 
         let (oks, errs) = match edge {
