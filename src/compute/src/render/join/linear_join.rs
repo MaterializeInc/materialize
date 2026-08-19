@@ -561,9 +561,9 @@ where
 /// Keys a row-formatted join input stream into columnar `((key, value), t, d)`
 /// updates, splitting off key-evaluation errors into a separate stream.
 ///
-/// The key and value are pushed borrowed into a `ColumnBuilder` (C1's
-/// zero-allocation pattern: no owned `Row` per record on the ok path); the error
-/// path owns time and diff. Shared by the `Vec` arm of [`arrange_join_input`]
+/// The key and value are pushed borrowed into a `ColumnBuilder`, so the ok path
+/// materializes no owned `Row` per record. The error path owns time and diff.
+/// Shared by the `Vec` arm of [`arrange_join_input`]
 /// (source edge) and by [`arrange_join_collection`] (the intra-operator
 /// accumulator), both of which key a `Vec`-formatted stream.
 fn key_join_input_vec<'s, T>(
