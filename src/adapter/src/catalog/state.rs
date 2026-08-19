@@ -3127,7 +3127,9 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn validate_read_then_write_deep_chain_no_stack_overflow() {
-        use crate::coord::read_then_write::validate_read_then_write_dependencies;
+        use crate::coord::read_then_write::{
+            DependencyPolicy, validate_read_then_write_dependencies,
+        };
 
         Catalog::with_debug(|mut catalog| async move {
             // Deep enough that the previous recursive implementation overflowed
@@ -3142,6 +3144,7 @@ mod tests {
                 &catalog,
                 [CatalogItemId::User(BASE)],
                 usize::MAX,
+                DependencyPolicy::UserDml,
             )
             .expect("deep chain of user views is valid for read-then-write");
 
@@ -3156,7 +3159,9 @@ mod tests {
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn validate_read_then_write_dependency_limit() {
-        use crate::coord::read_then_write::validate_read_then_write_dependencies;
+        use crate::coord::read_then_write::{
+            DependencyPolicy, validate_read_then_write_dependencies,
+        };
         use crate::error::AdapterError;
 
         Catalog::with_debug(|mut catalog| async move {
@@ -3168,14 +3173,20 @@ mod tests {
             const OBJECTS: usize = DEPTH + 1;
 
             // Exactly at the limit is allowed.
-            validate_read_then_write_dependencies(&catalog, [CatalogItemId::User(BASE)], OBJECTS)
-                .expect("chain at the limit is valid");
+            validate_read_then_write_dependencies(
+                &catalog,
+                [CatalogItemId::User(BASE)],
+                OBJECTS,
+                DependencyPolicy::UserDml,
+            )
+            .expect("chain at the limit is valid");
 
             // One below the limit is rejected with a clean error.
             let err = validate_read_then_write_dependencies(
                 &catalog,
                 [CatalogItemId::User(BASE)],
                 OBJECTS - 1,
+                DependencyPolicy::UserDml,
             )
             .expect_err("chain over the limit is rejected");
             assert!(matches!(

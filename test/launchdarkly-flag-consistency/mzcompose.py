@@ -288,6 +288,8 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_will_distinct_propagation
     enable_with_ordinality_legacy_fallback
     grpc_client_connect_timeout
+    hydration_history_collection_interval
+    hydration_history_retention_period
     kafka_buffered_event_resize_threshold_elements
     kafka_default_aws_privatelink_endpoint_identification_algorithm
     kafka_poll_max_wait

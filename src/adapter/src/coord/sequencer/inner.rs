@@ -113,7 +113,7 @@ use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
 };
-use crate::coord::read_then_write::validate_read_then_write_dependencies;
+use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_dependencies};
 use crate::coord::sequencer::emit_optimizer_notices;
 use crate::coord::{
     AlterConnectionValidationReady, AlterMaterializedViewReadyContext, AlterSinkReadyContext,
@@ -2878,6 +2878,7 @@ impl Coordinator {
             self.catalog(),
             dependency_ids,
             max_rw_dependencies,
+            DependencyPolicy::UserDml,
         ) {
             ctx.retire(Err(err));
             return;

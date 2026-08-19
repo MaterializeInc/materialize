@@ -2949,6 +2949,16 @@ class FlipFlagsAction(Action):
             "'1h'",
             "'7d'",
         ]
+        self.flags_with_values["hydration_history_collection_interval"] = [
+            "'0s'",
+            "'1s'",
+            "'1min'",
+        ]
+        self.flags_with_values["hydration_history_retention_period"] = [
+            "'1min'",
+            "'1h'",
+            "'30d'",
+        ]
         # Keep these generous: a tight timeout would abort the oracle's own
         # queries (they are retried, but it adds noise). "0s" leaves it unset.
         self.flags_with_values["pg_timestamp_oracle_statement_timeout"] = [
