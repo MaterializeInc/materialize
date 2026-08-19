@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/consistency.rs
-revision: 699d823624
+revision: 39dcae2fba
 ---
 
 # adapter::catalog::consistency

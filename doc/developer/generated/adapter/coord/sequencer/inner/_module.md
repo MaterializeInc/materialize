@@ -1,12 +1,12 @@
 ---
 source: src/adapter/src/coord/sequencer/inner.rs
-revision: 6f5533eaa0
+revision: 00299a05e3
 ---
 
 # adapter::coord::sequencer::inner
 
 Houses the per-statement sequencing implementations split into child files for the most complex statement types.
-`inner.rs` itself handles the majority of DDL and DML statements; the child modules (`peek`, `subscribe`, `cluster`, `copy_from`, `create_index`, `create_materialized_view`, `create_view`, `secret`, `explain_timestamp`) each own one focused area of the sequencing logic.
+`inner.rs` itself handles the majority of DDL and DML statements; the child modules (`peek`, `subscribe`, `cluster`, `copy_from`, `create_index`, `create_materialized_view`, `create_metric_sink`, `create_view`, `secret`, `explain_timestamp`) each own one focused area of the sequencing logic.
 Together they implement the full `sequence_plan` dispatch surface for every SQL plan kind.
 The generic `sequence_staged` driver and the `Staged` / `StagedContext` / `StageResult` traits live in `inner.rs`, providing the common loop that advances multi-stage plans either immediately or by spawning background tasks and re-queuing via the coordinator's message channel.
 `validate_role_attributes` permits the `LOGIN` attribute even when password auth is disabled, restricting the unavailable-feature gate to `SUPERUSER` and `PASSWORD` attributes.
@@ -15,5 +15,6 @@ The generic `sequence_staged` driver and the `Staged` / `StagedContext` / `Stage
 `execute_side_effecting_func` (used by the frontend peek path) performs no RBAC check itself; RBAC is pre-checked by the caller via `rbac::check_plan` before `Command::ExecuteSideEffectingFunc` is sent.
 Connection secret content is validated through `check_connection_secret_content_guards` for `CREATE CONNECTION` and `ALTER CONNECTION`, and through `check_secret_content_guards_of_dependents` when a secret's value changes, before any catalog entry is installed or persisted.
 `inner.rs` includes a test-only failpoint `insert_after_pack_before_commit` that parks a blind INSERT after its rows are packed but before the implicit commit stages them for group commit, enabling tests to land a concurrent `ALTER TABLE` in that window.
+`sequence_read_then_write` returns `AdapterError::Internal` immediately when `self.frontend_read_then_write_enabled` is true; the lock-based coordinator path and the OCC frontend path do not synchronize with each other, so reaching the coordinator's read-then-write path while the frontend is enabled is a routing bug.
 Privilege grant/revoke operations group all grantee changes for the same target object into a single `Op::UpdatePrivilege` carrying a `privileges: Vec<MzAclItem>`, so a bulk grant/revoke affecting one object is a single durable write rather than one per grantee.
 `sequence_alter_sink` handles `ALTER SINK` operations including `SET FROM` and option changes (e.g. `COMMIT INTERVAL`). It syncs `resolved_ids` to match the new `create_sql` and `from` target before constructing the updated `Sink` and emitting `Op::UpdateItem`. The `resolved_ids` derived from the old `create_sql` still references the old input; without this sync the in-memory catalog disagrees with `create_sql` until the next reload, and the temporary-dependency check in `Op::UpdateItem` (which reads `uses()`) would not see the new input. Option edits from the plan's `set_options` and `reset_options` fields are applied to the `CREATE SINK` statement via `plan::apply_sink_option_edits` after name resolution.

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/metrics.rs
-revision: 38a95cefe2
+revision: 4f0805a4d8
 ---
 
 # adapter::metrics
@@ -15,3 +15,4 @@ Several public metrics carry `MetricTag` annotations for categorization: `mz_que
 Helper functions `session_type_label_value`, `statement_type_label_value`, and `subscribe_output_label_value` produce the label strings used for partitioning these metrics.
 `Metrics` includes a `subscribe_outputs` `IntCounterVec` (labeled via `subscribe_output_label_value`) counting subscribe output rows; `SessionMetrics` vends per-call counters from it via `Metrics::subscribe_outputs`.
 `Metrics` includes `active_internal_subscribes: IntGaugeVec` (labeled by `session_type`) tracking the number of active internal subscribes, which serve frontend-sequenced read-then-write operations. Internal subscribes are not reflected in `active_subscribes` or in the `mz_subscriptions` builtin table.
+`Metrics` includes `occ_retry_count: Histogram` recording the number of OCC retry attempts made per frontend read-then-write execution before it either succeeds or exhausts its retry budget.

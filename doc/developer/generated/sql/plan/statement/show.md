@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/show.rs
-revision: 6c07c975be
+revision: 39dcae2fba
 ---
 
 # mz-sql::plan::statement::show
@@ -13,3 +13,4 @@ The `ensure_no_from` helper enforces that `FROM` is absent for `SHOW` commands t
 `plan_show_create_type` uses the fully-qualified type name (schema + item) in the output row rather than just the bare item name, and rejects system types with an error.
 `humanize_sql_for_show_create` strips the `Version` option from `CREATE SINK` SQL output, since that option does not roundtrip (a SQL string containing `VERSION` cannot be used as-is to recreate the sink). It also strips the internal `DETAILS` option from `CREATE TABLE ... FROM SOURCE` statements, retaining only `TEXT COLUMNS`, `EXCLUDE COLUMNS`, `PARTITION BY`, and `RETAIN HISTORY`; the omitted options are not user-typeable but remain accessible in the raw `create_sql` and `redacted_create_sql` columns of catalog builtins. In addition, column definitions populated during purification (the `Defined` variant of `TableFromSourceColumns`) and constraints are stripped from `CREATE TABLE ... FROM SOURCE` output, since `CREATE TABLE ... FROM SOURCE` rejects column definitions as input; a user-typed `Named` column list is left intact. The full column schema remains available via `SHOW COLUMNS`, `mz_columns`, and the raw `create_sql` column of `mz_catalog.mz_tables`.
 Role names embedded in `pg_has_role` filter expressions are passed through `escaped_string_literal` to ensure correct SQL quoting.
+`CatalogItemType::MetricSink` is grouped with other non-relation item types (indexes, functions, secrets, types, sinks) in `show_columns`: attempting `SHOW COLUMNS` on a metric sink produces the error that it does not have columns.

@@ -1,6 +1,6 @@
 ---
 source: src/clusterd-test-driver/src/text.rs
-revision: 141cb2a0a5
+revision: cd52678037
 ---
 
 # mz-clusterd-test-driver::text

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/read_then_write.rs
-revision: 50f9dad7b2
+revision: 39dcae2fba
 ---
 
 # adapter::coord::read_then_write
@@ -14,3 +14,4 @@ User tables (that are not source exports), user-defined views, user-defined mate
 On failure, the function returns `AdapterError::Unsupported` (for `mz_now()` usage), `AdapterError::ReadThenWriteDependencyLimitExceeded` (when the dependency bound is exceeded), or `AdapterError::InvalidTableMutationSelection` with the offending object's name and type.
 
 `Coordinator::handle_create_internal_subscribe` creates a subscribe that introspection does not see (`internal: true` on `ActiveSubscribe`). It takes ownership of `read_holds` and drops them only after the dataflow is shipped, preventing the `since` from advancing past `as_of` in the interim. The dataflow is shipped via `try_ship_dataflow` before the sink is registered, so a failure (e.g. a dependency dropped since optimization) leaves nothing to unwind. Results are delivered through a `response_tx` oneshot; if the receiver is gone when the handler runs, the internal subscribe is immediately retired via `drop_internal_subscribe`. `Coordinator::drop_internal_subscribe` cancels the dataflow on the compute side by delegating to `drop_compute_sink`.
+`Coordinator::handle_attempt_write` enqueues a write attempt from the frontend read-then-write path. It checks that the connection is still active and the coordinator is not in read-only mode, then validates the target's current `GlobalId` generation against the caller's `target_global_id`; a generation mismatch sends `WriteResult::TargetChanged`. When `write_ts` is `Some`, the write is submitted as a `TimestampedWriteRequest` via the group committer; when `None`, it rides the next group commit as a blind write.

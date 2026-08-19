@@ -1,6 +1,6 @@
 ---
 source: src/avro/src/schema.rs
-revision: 548ddc2a3f
+revision: f0cdedca04
 ---
 
 Parses JSON Avro schemas into an Arena-based `Schema` struct and performs schema resolution.
