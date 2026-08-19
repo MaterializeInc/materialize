@@ -5142,6 +5142,106 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_TS_IND: LazyLock<BuiltinIndex> =
         is_retained_metrics_object: true,
     });
 
+/// Completed hydration episodes, one row per object, replica, and installation.
+///
+/// Exempt from the bootstrap reset and from forced shard replacement, since the
+/// contents cannot be rebuilt from anything else. Schema evolution keeps them and
+/// applies normally. Clearing them for a schema change is still allowed, see the
+/// tripwire in `validate_migration_steps`.
+pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|| BuiltinTable {
+    name: "mz_object_hydration_history",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::TABLE_MZ_OBJECT_HYDRATION_HISTORY_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("cluster_id", SqlScalarType::String.nullable(false))
+        .with_column("replica_id", SqlScalarType::String.nullable(false))
+        .with_column(
+            "installed_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(false),
+        )
+        .with_column(
+            "started_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column(
+            "hydrated_at",
+            SqlScalarType::TimestampTz { precision: None }.nullable(true),
+        )
+        .with_column("status", SqlScalarType::String.nullable(false))
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view, which may no longer exist.",
+        ),
+        ("cluster_id", "The ID of the object's cluster."),
+        (
+            "replica_id",
+            "The ID of the cluster replica. May name a replica that no longer exists.",
+        ),
+        (
+            "installed_at",
+            "When the object's dataflow was installed on the replica.",
+        ),
+        (
+            "started_at",
+            "When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately.",
+        ),
+        ("hydrated_at", "When hydration finished."),
+        (
+            "status",
+            "The terminal status. Currently always `hydrated`.",
+        ),
+    ]),
+    // Not a retained-metrics object: that would pin a 30 day compaction window,
+    // and our history lives in the rows, which the retention sweep retracts on
+    // its own schedule. Nothing reads this table at an old timestamp.
+    is_retained_metrics_object: false,
+    access: vec![PUBLIC_SELECT],
+    ontology: Some(Ontology {
+        entity_name: "object_hydration_event",
+        description: "Completed hydration of an index or materialized view on a replica",
+        // NOTE: These references outlive what they point at. A row deliberately
+        // survives the object and the replica it describes, so resolving one
+        // against the catalog can come up empty.
+        links: &const {
+            [
+                OntologyLink {
+                    name: "hydration_of_dataflow",
+                    target: "object_global_id",
+                    properties: LinkProperties::fk_typed(
+                        "object_id",
+                        "global_id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::GlobalId,
+                    ),
+                },
+                OntologyLink {
+                    name: "hydrated_on_cluster",
+                    target: "cluster",
+                    properties: LinkProperties::fk("cluster_id", "id", Cardinality::ManyToOne),
+                },
+                OntologyLink {
+                    name: "hydrated_on_replica",
+                    target: "replica",
+                    properties: LinkProperties::fk_typed(
+                        "replica_id",
+                        "id",
+                        Cardinality::ManyToOne,
+                        mz_repr::SemanticType::CatalogItemId,
+                    ),
+                },
+            ]
+        },
+        column_semantic_types: &[
+            ("object_id", SemanticType::GlobalId),
+            ("cluster_id", SemanticType::ClusterId),
+            ("replica_id", SemanticType::ReplicaId),
+        ],
+    }),
+});
+
 pub static MZ_COMPUTE_HYDRATION_STATUSES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_compute_hydration_statuses",
     schema: MZ_INTERNAL_SCHEMA,
