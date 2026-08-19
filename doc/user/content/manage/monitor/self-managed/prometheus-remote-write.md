@@ -13,7 +13,7 @@ Materialize region in an external Prometheus remote-write store, such as Grafana
 Mimir, Amazon Managed Prometheus, Grafana Cloud, or a Thanos you run elsewhere.
 
 {{< warning >}}
-Unlike every other destination in this section, remote write is a **replacement**,
+Unlike other destinations, remote write is a **replacement**,
 not an addition. It is the single sink the bundled Thanos already occupies, so
 pointing it at an external store means Thanos stops receiving metrics, and the
 bundled Grafana dashboards go empty unless you also repoint their data source.

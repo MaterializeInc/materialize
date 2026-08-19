@@ -84,7 +84,8 @@ This example provisions the following infrastructure:
 
 ### Observability
 
-On by default starting in TF v12.0.0. Whenever `enable_observability` is `true`,
+On by default starting with v12.0.0 of the Materialize Terraform Modules.
+Whenever `enable_observability` is `true`,
 the following are created as well:
 
 | Resource | Description |
@@ -94,12 +95,12 @@ the following are created as well:
 | Grafana Cloud SQL PostgreSQL | `db-f1-micro` instance holding Grafana's own state (users, API tokens, annotations, dashboard versions) |
 | Grafana Load Balancer | Internal GCP Load Balancer for reaching Grafana, allowlisted to `ingress_cidr_blocks` |
 
-This stack requires TF v10.0.0 or later, which replaced an earlier
-Prometheus-and-Grafana pair. The Grafana database and load balancer were added
-in v10.1.0, and are both billable. Starting in TF v12.0.0,
-`enable_observability` defaults to `true`, so set it to `false` if you do not
-want the stack. For what the stack stores and where else it can send it, see
-[Metric storage](/manage/monitor/self-managed/metric-store/) and [Log
+This stack requires v10.0.0 or later of the Materialize Terraform Modules,
+which replaced an earlier Prometheus-and-Grafana pair. The Grafana database
+and load balancer were added in v10.1.0, and are both billable. Starting with
+v12.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
+do not want the stack. For what the stack stores and where else it can send
+it, see [Metric storage](/manage/monitor/self-managed/metric-store/) and [Log
 storage](/manage/monitor/self-managed/log-store/). For reaching Grafana, see
 [Grafana](/manage/monitor/self-managed/grafana/).
 
@@ -208,7 +209,7 @@ authentication mechanisms.
    | `name_prefix` | Set a prefix for all resource names (e.g., `simple-demo`) as well as your release name for the Operator |
    | `region`      | Set the GCP region for the deployment (e.g., `us-central1`).  |
    | `license_key` | Set to your Materialize license key.     |
-   | `crd_version` | CRD API version to use for the Materialize instance: `v1` (default starting in TF v4.0.0) or `v1alpha1`. |
+   | `crd_version` | CRD API version to use for the Materialize instance: `v1` (default starting with Materialize Terraform Modules v4.0.0) or `v1alpha1`. |
    | `labels`      | Set to the labels to apply to resources. |
 
    {{% include-from-yaml data="self_managed/installation"
@@ -219,7 +220,7 @@ authentication mechanisms.
    name_prefix = "simple-demo"
    region      = "us-central1"
    license_key = "your-materialize-license-key"
-   crd_version = "v1"   # Default starting in TF v4.0.0. v1 requires Materialize v26.30+.
+   crd_version = "v1"   # Default starting with Materialize Terraform Modules v4.0.0. v1 requires Materialize v26.30+.
    labels = {
      environment = "demo"
      created_by  = "terraform"
