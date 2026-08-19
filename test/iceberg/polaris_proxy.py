@@ -8,6 +8,7 @@
 # by the Apache License, Version 2.0.
 
 import http.server
+import json
 import os
 import socketserver
 import sys
@@ -21,6 +22,9 @@ UPSTREAM_PORT = int(os.environ.get("UPSTREAM_PORT", "8181"))
 
 _lock = threading.Lock()
 _drop_armed = False
+# Successful (2xx upstream) table commits seen, including ones whose response we dropped.
+_commits_ok = 0
+_commits_dropped = 0
 
 
 def _log(msg: str) -> None:
@@ -45,6 +49,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"armed\n")
             return True
+        if self.path == "/__control/status" and self.command == "GET":
+            with _lock:
+                payload = json.dumps(
+                    {"commits_ok": _commits_ok, "commits_dropped": _commits_dropped}
+                ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return True
         self.send_response(404)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -58,7 +73,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return idx < len(parts) - 1 and parts[idx + 1] != ""
 
     def _forward(self, body: bytes | None) -> None:
-        global _drop_armed
+        global _drop_armed, _commits_ok, _commits_dropped
         upstream_url = f"http://{UPSTREAM_HOST}:{UPSTREAM_PORT}{self.path}"
         headers = {
             k: v
@@ -85,9 +100,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             and 200 <= status < 300
         ):
             with _lock:
+                _commits_ok += 1
                 if _drop_armed:
                     _drop_armed = False
                     should_drop = True
+                    _commits_dropped += 1
 
         if should_drop:
             _log(f"dropping response for {self.command} {self.path}")
