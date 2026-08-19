@@ -11,6 +11,7 @@
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -50,6 +51,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::future::{InTask, OreFutureExt};
 use mz_ore::netio::resolve_address;
 use mz_ore::num::NonNeg;
+use mz_ore::str::StrExt;
 use mz_repr::{CatalogItemId, GlobalId};
 use mz_secrets::SecretsReader;
 use mz_sql_parser::ast::ConnectionRulePattern;
@@ -543,6 +545,8 @@ pub enum ConnectionValidationError {
     Aws(#[from] AwsConnectionValidationError),
     #[error(transparent)]
     Gcp(#[from] gcp::GcpConnectionValidationError),
+    #[error(transparent)]
+    AwsPrivatelinkServiceName(#[from] InvalidAwsPrivatelinkServiceName),
     #[error("{}", .0.display_with_causes())]
     Other(#[from] anyhow::Error),
 }
@@ -556,6 +560,7 @@ impl ConnectionValidationError {
             ConnectionValidationError::SqlServer(e) => e.detail(),
             ConnectionValidationError::Aws(e) => e.detail(),
             ConnectionValidationError::Gcp(e) => e.detail(),
+            ConnectionValidationError::AwsPrivatelinkServiceName(_) => None,
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -568,6 +573,7 @@ impl ConnectionValidationError {
             ConnectionValidationError::SqlServer(e) => e.hint(),
             ConnectionValidationError::Aws(e) => e.hint(),
             ConnectionValidationError::Gcp(e) => e.hint(),
+            ConnectionValidationError::AwsPrivatelinkServiceName(e) => Some(e.hint()),
             ConnectionValidationError::Other(_) => None,
         }
     }
@@ -1011,6 +1017,51 @@ impl AlterCompatible for AwsPrivatelinkConnection {
     fn alter_compatible(&self, _id: GlobalId, _other: &Self) -> Result<(), AlterError> {
         // Every element of the AwsPrivatelinkConnection connection is configurable.
         Ok(())
+    }
+}
+
+/// A `SERVICE NAME` that cannot name an AWS VPC endpoint service.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct InvalidAwsPrivatelinkServiceName {
+    pub name: String,
+}
+
+impl fmt::Display for InvalidAwsPrivatelinkServiceName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "invalid AWS PrivateLink service name {}",
+            self.name.quoted()
+        )
+    }
+}
+
+impl std::error::Error for InvalidAwsPrivatelinkServiceName {}
+
+impl InvalidAwsPrivatelinkServiceName {
+    /// Explains how to find the right value.
+    pub fn hint(&self) -> String {
+        "SERVICE NAME must name an AWS VPC endpoint service, for example \
+         `com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc`. Endpoint service names are \
+         listed in the AWS console under VPC > Endpoint services."
+            .into()
+    }
+}
+
+impl AwsPrivatelinkConnection {
+    /// Checks that `service_name` could name an AWS VPC endpoint service.
+    ///
+    /// Every endpoint service name starts with `com.amazonaws.`, whether the
+    /// service is customer-owned (`com.amazonaws.vpce.<region>.vpce-svc-<id>`)
+    /// or AWS-managed (`com.amazonaws.<region>.<service>`). Only the prefix is
+    /// checked, so a name AWS would accept is never rejected here.
+    pub fn check_service_name(service_name: &str) -> Result<(), InvalidAwsPrivatelinkServiceName> {
+        if service_name.starts_with("com.amazonaws.") {
+            return Ok(());
+        }
+        Err(InvalidAwsPrivatelinkServiceName {
+            name: service_name.to_string(),
+        })
     }
 }
 
@@ -3213,12 +3264,16 @@ impl AwsPrivatelinkConnection {
         &self,
         id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), ConnectionValidationError> {
+        // An endpoint for an unusable service name reports a misleading
+        // condition (missing availability zones), so check the name first.
+        Self::check_service_name(&self.service_name)?;
+
         let Some(ref cloud_resource_reader) = storage_configuration
             .connection_context
             .cloud_resource_reader
         else {
-            return Err(anyhow!("AWS PrivateLink connections are unsupported"));
+            return Err(anyhow!("AWS PrivateLink connections are unsupported").into());
         };
 
         // No need to optionally run this in a task, as we are just validating from envd.
@@ -3231,12 +3286,47 @@ impl AwsPrivatelinkConnection {
 
         match availability {
             Some(condition) if condition.status == "True" => Ok(()),
-            Some(condition) => Err(anyhow!("{}", condition.message)),
-            None => Err(anyhow!("Endpoint availability is unknown")),
+            Some(condition) => Err(anyhow!("{}", condition.message).into()),
+            None => Err(anyhow!("Endpoint availability is unknown").into()),
         }
     }
 
     fn validate_by_default(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[mz_ore::test]
+    fn test_check_service_name() {
+        // Customer-owned and AWS-managed endpoint services are both accepted,
+        // as is anything else that could be an endpoint service name.
+        for name in [
+            "com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc",
+            "com.amazonaws.vpce.test.vpce-svc-e2e-test",
+            "com.amazonaws.us-east-1.s3",
+            "com.amazonaws.anything",
+        ] {
+            assert_eq!(
+                AwsPrivatelinkConnection::check_service_name(name),
+                Ok(()),
+                "expected {name} to be accepted"
+            );
+        }
+
+        for name in [
+            "",
+            "com.amazonaws",
+            "vpce-svc-0e123abc123198abc",
+            "my-db-lb-0123456789abcdef.elb.eu-central-1.amazonaws.com",
+            "db.internal.example.org",
+        ] {
+            let err = AwsPrivatelinkConnection::check_service_name(name)
+                .expect_err("service name should be rejected");
+            assert_eq!(err.name, name);
+        }
     }
 }
