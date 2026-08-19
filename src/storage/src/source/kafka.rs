@@ -66,9 +66,10 @@ use tracing::{error, info, trace};
 
 use crate::healthcheck::{HealthStatusMessage, HealthStatusUpdate, StatusNamespace};
 use crate::metrics::source::kafka::KafkaSourceMetrics;
-use crate::source::types::{FuelSize, Probe, SignaledFuture, SourceRender, StackedCollection};
+use crate::source::types::{
+    FuelSize, Probe, ResumeUppers, SignaledFuture, SourceRender, StackedCollection,
+};
 use crate::source::{RawSourceCreationConfig, SourceMessage, probe};
-use crate::statistics::SourceStatistics;
 
 #[derive(
     Clone,
@@ -144,12 +145,11 @@ struct PartitionCapability {
 type PartitionWatermark = u64;
 
 /// Processes `resume_uppers` stream updates, committing them upstream and
-/// storing them in the `progress_statistics` to be emitted later.
+/// reporting each export's `offset_committed`.
 pub struct KafkaResumeUpperProcessor {
     config: RawSourceCreationConfig,
     topic_name: String,
     consumer: Arc<BaseConsumer<TunnelingClientContext<GlueConsumerContext>>>,
-    statistics: Vec<SourceStatistics>,
 }
 
 /// Computes whether this worker is responsible for consuming a partition. It assigns partitions to
@@ -180,7 +180,7 @@ impl SourceRender for KafkaSourceConnection {
         self,
         scope: Scope<'scope, KafkaTimestamp>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
+        resume_uppers: impl futures::Stream<Item = ResumeUppers<KafkaTimestamp>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<
@@ -232,7 +232,7 @@ fn render_reader<'scope>(
     scope: Scope<'scope, KafkaTimestamp>,
     connection: KafkaSourceConnection,
     config: RawSourceCreationConfig,
-    resume_uppers: impl futures::Stream<Item = Antichain<KafkaTimestamp>> + 'static,
+    resume_uppers: impl futures::Stream<Item = ResumeUppers<KafkaTimestamp>> + 'static,
     metadata_stream: StreamVec<'scope, KafkaTimestamp, (mz_repr::Timestamp, MetadataUpdate)>,
     start_signal: impl std::future::Future<Output = ()> + 'static,
 ) -> (
@@ -666,15 +666,18 @@ fn render_reader<'scope>(
                 config: config.clone(),
                 topic_name: topic.clone(),
                 consumer,
-                statistics: all_export_stats.clone(),
             };
 
-            // Seed the progress metrics with `0` if we are snapshotting.
+            // Seed the progress metrics from the resume uppers if we are snapshotting.
             if !snapshot_export_stats.is_empty() {
-                if let Err(e) = offset_committer
-                    .process_frontier(resume_upper.clone())
-                    .await
-                {
+                let seed = ResumeUppers {
+                    source: Some(resume_upper.clone()),
+                    exports: outputs
+                        .iter()
+                        .map(|output| (output.id, output.resume_upper.clone()))
+                        .collect(),
+                };
+                if let Err(e) = offset_committer.process_frontier(&seed).await {
                     offset_commit_metrics.offset_commit_failures.inc();
                     tracing::warn!(
                         %e,
@@ -695,15 +698,14 @@ fn render_reader<'scope>(
 
             let resume_uppers_process_loop = async move {
                 tokio::pin!(resume_uppers);
-                while let Some(frontier) = resume_uppers.next().await {
-                    if let Err(e) = offset_committer.process_frontier(frontier.clone()).await {
+                while let Some(uppers) = resume_uppers.next().await {
+                    if let Err(e) = offset_committer.process_frontier(&uppers).await {
                         offset_commit_metrics.offset_commit_failures.inc();
                         tracing::warn!(
                             %e,
-                            "timely-{worker_id} source({source_id}) failed to commit offsets: resume_upper={upper}",
+                            "timely-{worker_id} source({source_id}) failed to commit offsets: {uppers}",
                             worker_id = config.worker_id,
                             source_id = config.id,
-                            upper = frontier.pretty()
                         );
                     }
                 }
@@ -1130,32 +1132,28 @@ fn render_reader<'scope>(
 impl KafkaResumeUpperProcessor {
     async fn process_frontier(
         &self,
-        frontier: Antichain<KafkaTimestamp>,
+        uppers: &ResumeUppers<KafkaTimestamp>,
     ) -> Result<(), anyhow::Error> {
         use rdkafka::consumer::CommitMode;
 
-        // Generate a list of partitions that this worker is responsible for
-        let mut offsets = vec![];
-        let mut offset_committed = 0;
-        for ts in frontier.iter() {
-            if let Some(pid) = ts.interval().singleton() {
-                let pid = pid.unwrap_exact();
-                if responsible_for_pid(&self.config, *pid) {
-                    offsets.push((pid.clone(), *ts.timestamp()));
-
-                    // Note that we do not subtract 1 from the frontier. Imagine
-                    // that frontier is 2 for this pid. That means we have
-                    // full processed offset 0 and offset 1, which means we have
-                    // processed _2_ offsets.
-                    offset_committed += ts.timestamp().offset;
-                }
+        for (id, frontier) in &uppers.exports {
+            if let Some(stat) = self.config.statistics.get(id) {
+                // Note that we do not subtract 1 from the frontier. Imagine
+                // that frontier is 2 for this pid. That means we have
+                // full processed offset 0 and offset 1, which means we have
+                // processed _2_ offsets.
+                let offset_committed = self
+                    .responsible_offsets(frontier)
+                    .map(|(_, offset)| offset.offset)
+                    .sum();
+                stat.set_offset_committed(offset_committed);
             }
         }
 
-        for export_stat in self.statistics.iter() {
-            export_stat.set_offset_committed(offset_committed);
-        }
-
+        let Some(frontier) = &uppers.source else {
+            return Ok(());
+        };
+        let offsets: Vec<_> = self.responsible_offsets(frontier).collect();
         if !offsets.is_empty() {
             let mut tpl = TopicPartitionList::new();
             for (pid, offset) in offsets {
@@ -1172,6 +1170,17 @@ impl KafkaResumeUpperProcessor {
             .await?;
         }
         Ok(())
+    }
+
+    /// The offsets of `frontier` in the partitions this worker is responsible for.
+    fn responsible_offsets<'a>(
+        &'a self,
+        frontier: &'a Antichain<KafkaTimestamp>,
+    ) -> impl Iterator<Item = (PartitionId, MzOffset)> + 'a {
+        frontier.iter().filter_map(|ts| {
+            let pid = *ts.interval().singleton()?.unwrap_exact();
+            responsible_for_pid(&self.config, pid).then(|| (pid, *ts.timestamp()))
+        })
     }
 }
 

@@ -13,7 +13,7 @@
 // #![allow(missing_docs)]
 
 use std::collections::BTreeMap;
-use std::fmt::Debug;
+use std::fmt::{self, Debug, Display, Formatter};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ use differential_dataflow::Collection;
 use mz_repr::{Diff, GlobalId, Row};
 use mz_storage_types::errors::{DataflowError, DecodeError};
 use mz_storage_types::sources::SourceTimestamp;
+use mz_timely_util::antichain::AntichainExt;
 use mz_timely_util::builder_async::PressOnDropButton;
 use pin_project::pin_project;
 use serde::{Deserialize, Serialize};
@@ -54,6 +55,42 @@ pub enum ProgressStatisticsUpdate {
 
 pub type StackedCollection<'scope, T, D> = Collection<'scope, T, Vec<(D, T, Diff)>>;
 
+/// The durably committed progress of an ingestion, in the source's timestamp type.
+///
+/// Each value is a complete snapshot, so a consumer that skips values only misses intermediate
+/// progress.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResumeUppers<T> {
+    /// The frontier every export has committed through. `None` while some export has not yet
+    /// committed beyond the ingestion's as_of, for example while it snapshots.
+    pub source: Option<Antichain<T>>,
+    /// The frontier each export has committed through. An export is absent until it commits
+    /// beyond the ingestion's as_of.
+    // TODO(maz): Report `offset_committed` and `offset_known` from the source pipeline, derived from
+    // these frontiers and the probes, so sources only supply their seeds and we can maintain
+    // SourceStatistics outside source operators.
+    pub exports: BTreeMap<GlobalId, Antichain<T>>,
+}
+
+/// Formats as `source={..} exports={id: {..}, ..}`, with `source=pending` while
+/// [`ResumeUppers::source`] is `None`.
+impl<T: Display + 'static> Display for ResumeUppers<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match &self.source {
+            Some(source) => write!(f, "source={}", source.pretty())?,
+            None => f.write_str("source=pending")?,
+        }
+        f.write_str(" exports={")?;
+        for (i, (id, upper)) in self.exports.iter().enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write!(f, "{id}: {}", upper.pretty())?;
+        }
+        f.write_str("}")
+    }
+}
+
 /// Describes a source that can render itself in a timely scope.
 pub trait SourceRender {
     type Time: SourceTimestamp;
@@ -61,12 +98,13 @@ pub trait SourceRender {
 
     /// Renders the source in the provided timely scope.
     ///
-    /// The `resume_uppers` stream can be used by the source to observe the overall progress of the
-    /// ingestion. When a frontier appears in this stream the source implementation can be certain
-    /// that future ingestion instances will request to read the external data only at times beyond
-    /// that frontier. Therefore, the source implementation can react to this stream by e.g
-    /// committing offsets upstream or advancing the LSN of a replication slot. It is safe to
-    /// ignore this argument.
+    /// The `resume_uppers` stream can be used by the source to observe the progress of the
+    /// ingestion. When a frontier appears as [`ResumeUppers::source`] the source implementation
+    /// can be certain that future ingestion instances will request to read the external data only
+    /// at times beyond that frontier. Therefore, the source implementation can react to this
+    /// stream by e.g committing offsets upstream or advancing the LSN of a replication slot. The
+    /// [`ResumeUppers::exports`] are what the source reports as each export's `offset_committed`
+    /// statistic.
     ///
     /// Rendering a source is expected to return four things.
     ///
@@ -86,7 +124,7 @@ pub trait SourceRender {
         self,
         scope: Scope<'scope, Self::Time>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<Self::Time>> + 'static,
+        resume_uppers: impl futures::Stream<Item = ResumeUppers<Self::Time>> + 'static,
         start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<
@@ -277,5 +315,34 @@ impl<F: Future> Future for SignaledFuture<F> {
         let ret = this.fut.poll(cx);
         drop(permit);
         ret
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_storage_types::sources::MzOffset;
+
+    use super::*;
+
+    #[mz_ore::test]
+    fn resume_uppers_display() {
+        let offset = |o| Antichain::from_elem(MzOffset::from(o));
+        let uppers = ResumeUppers {
+            source: Some(offset(10)),
+            exports: BTreeMap::from([
+                (GlobalId::User(3), offset(30)),
+                (GlobalId::User(4), offset(10)),
+            ]),
+        };
+        assert_eq!(
+            uppers.to_string(),
+            "source={10} exports={u3: {30}, u4: {10}}"
+        );
+
+        let pending = ResumeUppers {
+            source: None,
+            exports: BTreeMap::from([(GlobalId::User(3), Antichain::<MzOffset>::new())]),
+        };
+        assert_eq!(pending.to_string(), "source=pending exports={u3: {}}");
     }
 }
