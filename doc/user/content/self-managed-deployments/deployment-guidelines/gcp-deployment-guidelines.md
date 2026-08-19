@@ -100,11 +100,13 @@ recommend:
   metadata database. Avoid shared-core machine types (`db-f1-micro`,
   `db-g1-small`) in production.
 - A **regional (highly available)** configuration for production.
+- **SSD** storage. IOPS and throughput cannot be configured independently: they
+  scale with the provisioned size at 30 IOPS and 0.48 MB/s per GB.
 
-| Deployment size | `tier` | vCPU / memory | Continuously-active objects (~60% CPU) |
-|---|---|---|---|
-| Entry / small production | `db-perf-optimized-N-4` | 4 / 32 GB | ~4,500 |
-| Recommended default | `db-perf-optimized-N-16` | 16 / 128 GB | ~18,000 |
+| Deployment size | `tier` | vCPU / memory | Storage | Provisioned IOPS | Continuously-active objects (~60% CPU) |
+|---|---|---|---|---|---|
+| Entry / small production | `db-perf-optimized-N-4` | 4 / 32 GB | 200 GB | 6,000 (set by size) | ~4,500 |
+| Recommended default | `db-perf-optimized-N-16` | 16 / 128 GB | 500 GB | 15,000 (set by size) | ~18,000 |
 
 ## TLS
 
