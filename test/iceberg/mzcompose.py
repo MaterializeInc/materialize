@@ -18,6 +18,7 @@ from collections.abc import Callable
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.composition import Service as UpService
 from materialize.mzcompose.helpers.iceberg import (
+    get_polaris_access_token,
     setup_polaris_for_iceberg,
 )
 from materialize.mzcompose.service import Service
@@ -443,6 +444,154 @@ def workflow_idempotent_retry(c: Composition) -> None:
         "--var=aws-endpoint=minio:9000",
         "idempotent-retry-verify.td",
     )
+
+
+def workflow_fenced_writer(c: Composition) -> None:
+    """Regression test: once a snapshot with a newer mz-sink-version is on the
+    table, the running sink must stop committing.
+
+    Currently fails: iceberg-rust's commit path reloads the table and rebases
+    onto the newest snapshot before every attempt, so the fenced sink never
+    sees a conflict and commits right over the newer writer. Its snapshot then
+    becomes the latest one, so even the startup fencing check of a later
+    restart no longer notices the newer writer."""
+    key = _setup(c)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "fenced-writer-setup.td",
+    )
+
+    token = get_polaris_access_token(c)
+    table_url = (
+        f"http://localhost:{c.port('polaris', 8181)}"
+        "/api/catalog/v1/default_catalog/namespaces/default_namespace/tables/fence_table"
+    )
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    def load_metadata() -> dict | None:
+        req = urllib.request.Request(table_url, headers=headers)
+        try:
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read())["metadata"]
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            raise
+
+    def await_condition(what: str, timeout: float, check: Callable[[], bool]) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if check():
+                return
+            time.sleep(0.5)
+        raise AssertionError(f"timed out waiting for {what}")
+
+    def first_commit_done() -> bool:
+        meta = load_metadata()
+        return meta is not None and meta.get("current-snapshot-id") not in (None, -1)
+
+    await_condition("first sink commit", timeout=60, check=first_commit_done)
+
+    def forge_newer_writer_snapshot() -> int:
+        """Commit a snapshot that claims mz-sink-version 999, as a sink with a
+        newer version would. Reuses the current snapshot's manifest list so the
+        table stays readable without writing new files. Returns the forged
+        snapshot's sequence number."""
+        meta = load_metadata()
+        assert meta is not None
+        current_id = meta["refs"]["main"]["snapshot-id"]
+        current = next(s for s in meta["snapshots"] if s["snapshot-id"] == current_id)
+        forged_seq = meta["last-sequence-number"] + 1
+        body = json.dumps(
+            {
+                "requirements": [
+                    {
+                        "type": "assert-ref-snapshot-id",
+                        "ref": "main",
+                        "snapshot-id": current_id,
+                    }
+                ],
+                "updates": [
+                    {
+                        "action": "add-snapshot",
+                        "snapshot": {
+                            "snapshot-id": current_id + 1,
+                            "parent-snapshot-id": current_id,
+                            "sequence-number": forged_seq,
+                            "timestamp-ms": int(time.time() * 1000),
+                            "manifest-list": current["manifest-list"],
+                            "schema-id": meta["current-schema-id"],
+                            "summary": {
+                                "operation": "append",
+                                "mz-sink-id": "u0",
+                                "mz-frontier": current["summary"]["mz-frontier"],
+                                "mz-sink-version": "999",
+                            },
+                        },
+                    },
+                    {
+                        "action": "set-snapshot-ref",
+                        "ref-name": "main",
+                        "type": "branch",
+                        "snapshot-id": current_id + 1,
+                    },
+                ],
+            }
+        ).encode()
+        req = urllib.request.Request(
+            table_url, data=body, headers=headers, method="POST"
+        )
+        with urllib.request.urlopen(req) as resp:
+            resp.read()
+        return forged_seq
+
+    # The sink may commit between reading the metadata and posting the forged
+    # snapshot, failing our requirement. Retry on conflict with fresh metadata.
+    for attempt in range(5):
+        try:
+            forged_seq = forge_newer_writer_snapshot()
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 409 or attempt == 4:
+                raise
+    else:
+        raise AssertionError("unreachable")
+
+    # Give the fenced sink something to commit.
+    for i in range(5):
+        c.sql(f"INSERT INTO fence_src VALUES ({i + 4}, 'row_{i + 4}')")
+        time.sleep(1)
+
+    deadline = time.time() + 90
+    while True:
+        meta = load_metadata()
+        assert meta is not None
+        for snapshot in meta["snapshots"]:
+            if (
+                snapshot["sequence-number"] > forged_seq
+                and snapshot["summary"].get("mz-sink-version") != "999"
+            ):
+                raise AssertionError(
+                    "fenced sink committed past the newer writer: "
+                    f"snapshot {snapshot['snapshot-id']} "
+                    f"summary {snapshot['summary']}"
+                )
+
+        status_rows = c.sql_query(
+            "SELECT s.status, COALESCE(s.error, '') "
+            "FROM mz_internal.mz_sink_statuses s "
+            "JOIN mz_sinks ON s.id = mz_sinks.id "
+            "WHERE mz_sinks.name = 'fence_sink'"
+        )
+        assert status_rows, "fence_sink not found in mz_sink_statuses"
+        status, error = status_rows[0]
+        if status != "running" and ("another writer" in error or "Fenced off" in error):
+            return
+        if time.time() > deadline:
+            raise AssertionError(f"sink not fenced: status={status!r} error={error!r}")
+        time.sleep(1)
 
 
 def workflow_large_upsert_batch(c: Composition) -> None:
