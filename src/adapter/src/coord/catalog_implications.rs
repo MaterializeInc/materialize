@@ -35,7 +35,7 @@ use itertools::Itertools;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_catalog::memory::objects::{
     CatalogItem, Cluster, ClusterReplica, Connection, DataSourceDesc, Index, MaterializedView,
-    Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
+    MetricSink, Secret, Sink, Source, StateDiff, Table, TableDataSource, View,
 };
 use mz_cloud_resources::VpcEndpointConfig;
 use mz_compute_client::logging::LogVariant;
@@ -447,6 +447,23 @@ impl Coordinator {
                     indexes_to_drop.push((index.cluster_id, index.global_id()));
                     dropped_item_names.insert(index.global_id(), full_name);
                 }
+                CatalogImplication::MetricSink(CatalogImplicationKind::Added(_metric_sink)) => {
+                    // Nothing to do, mirroring `Index`: shipping the dataflow at create time is
+                    // the sequencer's job (`create_metric_sink_finish`), and re-rendering it after
+                    // a restart happens during bootstrap (`bootstrap_dataflow_plans`).
+                }
+                CatalogImplication::MetricSink(CatalogImplicationKind::Altered { .. }) => {
+                    // Nothing to do: owner, privilege, and rename changes are catalog-only.
+                }
+                CatalogImplication::MetricSink(CatalogImplicationKind::Dropped(
+                    metric_sink,
+                    full_name,
+                )) => {
+                    // A metric sink is a non-readable leaf compute dataflow, like an MV's write
+                    // side, so it drops through the same path as other compute sinks.
+                    compute_sinks_to_drop.push((metric_sink.cluster_id, metric_sink.global_id));
+                    dropped_item_names.insert(metric_sink.global_id, full_name);
+                }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Added(mv)) => {
                     tracing::debug!(?mv, "not handling AddMaterializedView in here yet");
                 }
@@ -598,6 +615,7 @@ impl Coordinator {
                 | CatalogImplication::Source(CatalogImplicationKind::None)
                 | CatalogImplication::Sink(CatalogImplicationKind::None)
                 | CatalogImplication::Index(CatalogImplicationKind::None)
+                | CatalogImplication::MetricSink(CatalogImplicationKind::None)
                 | CatalogImplication::MaterializedView(CatalogImplicationKind::None)
                 | CatalogImplication::View(CatalogImplicationKind::None)
                 | CatalogImplication::Secret(CatalogImplicationKind::None)
@@ -1683,6 +1701,7 @@ enum CatalogImplication {
     Source(CatalogImplicationKind<(Source, Option<GenericSourceConnection>)>),
     Sink(CatalogImplicationKind<Sink>),
     Index(CatalogImplicationKind<Index>),
+    MetricSink(CatalogImplicationKind<MetricSink>),
     MaterializedView(CatalogImplicationKind<MaterializedView>),
     View(CatalogImplicationKind<View>),
     Secret(CatalogImplicationKind<Secret>),
@@ -1836,10 +1855,16 @@ impl CatalogImplication {
                 CatalogItem::Connection(connection) => {
                     self.absorb_connection(connection, None, catalog_update.diff);
                 }
+                CatalogItem::MetricSink(metric_sink) => {
+                    self.absorb_metric_sink(
+                        metric_sink,
+                        Some(parsed_full_name),
+                        catalog_update.diff,
+                    );
+                }
                 CatalogItem::Log(_) => {}
                 CatalogItem::Type(_) => {}
                 CatalogItem::Func(_) => {}
-                CatalogItem::MetricSink(_) => {}
             },
             ParsedStateUpdateKind::Cluster {
                 durable_cluster: _,
@@ -1886,6 +1911,7 @@ impl CatalogImplication {
     );
     impl_absorb_method!(absorb_sink, Sink, Sink);
     impl_absorb_method!(absorb_index, Index, Index);
+    impl_absorb_method!(absorb_metric_sink, MetricSink, MetricSink);
     impl_absorb_method!(absorb_materialized_view, MaterializedView, MaterializedView);
     impl_absorb_method!(absorb_view, View, View);
 
