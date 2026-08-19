@@ -1835,27 +1835,41 @@ async fn test_termination_races() {
         .unwrap();
 
     let adapter_client = server.inner.adapter_client();
-    let conn_id = adapter_client.new_conn_id().unwrap();
-    let session = adapter_client.new_session(
-        SessionConfig {
-            conn_id,
-            uuid: Uuid::new_v4(),
-            user: "materialize".to_string(),
-            client_ip: None,
-            external_metadata_rx: None,
-            helm_chart_version: None,
-            authenticator_kind: AuthenticatorKind::None,
-            groups: None,
-        },
-        Authenticated,
-    );
 
-    // Box the future so that dropping it below drops the future itself, not
-    // just a reference to it.
-    let mut fut = Box::pin(adapter_client.startup(session));
-    // The first poll sends the Startup command to the Coordinator and installs
-    // the cleanup guard around the response channel.
-    assert!(futures::poll!(&mut fut).is_pending());
+    // The cleanup guard only runs on a response the startup future never observed, so
+    // the future has to be left pending on its first poll. That poll both sends the
+    // Startup command and polls the response channel, and the Coordinator runs on its
+    // own thread, so it can answer in between and resolve the future right away. Retry
+    // until the poll lands while the response is still in flight. A lost attempt
+    // leaves nothing behind, a failed startup registers no state in the Coordinator.
+    let mut fut = None;
+    for _ in 0..100 {
+        let conn_id = adapter_client.new_conn_id().unwrap();
+        let session = adapter_client.new_session(
+            SessionConfig {
+                conn_id,
+                uuid: Uuid::new_v4(),
+                user: "materialize".to_string(),
+                client_ip: None,
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups: None,
+            },
+            Authenticated,
+        );
+        // Box the future so that dropping it below drops the future itself, not
+        // just a reference to it.
+        let mut candidate = Box::pin(adapter_client.startup(session));
+        // The first poll sends the Startup command to the Coordinator and installs
+        // the cleanup guard around the response channel.
+        if futures::poll!(&mut candidate).is_pending() {
+            fut = Some(candidate);
+            break;
+        }
+    }
+    let fut = fut.expect("startup always answered before its first poll finished");
+
     // Wait for the Coordinator to process the Startup command and place the
     // startup error in the response channel. Commands on the client channel
     // are processed in order, so a completed round trip implies the Startup
