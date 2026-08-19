@@ -400,6 +400,7 @@ help
 hint
 hmac
 hydrated
+hydrated_at
 hydration
 hydration_complete
 hydration_time
@@ -430,6 +431,7 @@ inhseqno
 initcap
 initial_application_name
 initially_deferred
+installed_at
 _int2
 int2in
 int2recv
@@ -1456,6 +1458,7 @@ sql
 sql_hash
 sql_type
 sqrt
+started_at
 starts_with
 statement_id
 statement_type
