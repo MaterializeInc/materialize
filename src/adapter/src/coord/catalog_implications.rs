@@ -248,7 +248,6 @@ impl Coordinator {
         let mut replication_slots_to_drop: Vec<(PostgresConnection, String)> = vec![];
         let mut storage_sink_gids_to_drop = vec![];
         let mut indexes_to_drop = vec![];
-        let mut metric_sinks_to_drop = vec![];
         let mut compute_sinks_to_drop = vec![];
         let mut view_gids_to_drop = vec![];
         let mut secrets_to_drop = vec![];
@@ -460,7 +459,9 @@ impl Coordinator {
                     metric_sink,
                     full_name,
                 )) => {
-                    metric_sinks_to_drop.push((metric_sink.cluster_id, metric_sink.global_id));
+                    // A metric sink is a non-readable leaf compute dataflow, like an MV's write
+                    // side, so it drops through the same path as other compute sinks.
+                    compute_sinks_to_drop.push((metric_sink.cluster_id, metric_sink.global_id));
                     dropped_item_names.insert(metric_sink.global_id, full_name);
                 }
                 CatalogImplication::MaterializedView(CatalogImplicationKind::Added(mv)) => {
@@ -910,7 +911,6 @@ impl Coordinator {
             .collect();
         let compute_gids_to_drop: Vec<_> = indexes_to_drop
             .iter()
-            .chain(metric_sinks_to_drop.iter())
             .chain(compute_sinks_to_drop.iter())
             .copied()
             .collect();
