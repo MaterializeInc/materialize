@@ -922,6 +922,7 @@ mz_object_fully_qualified_names
 mz_object_global_ids
 mz_object_history
 mz_object_history_ind
+mz_object_hydration_history
 mz_object_lifetimes
 mz_object_lifetimes_ind
 mz_object_oid_alias

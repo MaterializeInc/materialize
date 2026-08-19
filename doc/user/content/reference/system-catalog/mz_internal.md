@@ -704,6 +704,28 @@ The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/reference/s
 | `created_at`    | [`timestamp with time zone`]                       | Wall-clock timestamp of when the object was created. `NULL` for built in system objects.                                                                                                |
 | `dropped_at`   | [`timestamp with time zone`]   | Wall-clock timestamp of when the object was dropped. `NULL` for built in system objects or if the object hasn't been dropped.                                              |
 
+## `mz_object_hydration_history`
+
+The `mz_object_hydration_history` table records completed hydration of indexes and
+materialized views, with one row for each time a dataflow hydrated on a replica. Rows
+are retained for 30 days, and `object_id`, `cluster_id`, and `replica_id` may name
+objects that no longer exist.
+
+Recording is best effort. Only successful hydration is recorded, an episode can be
+missed if the object or its replica goes away before the episode is recorded, and a
+schema change to this table in a future release may clear its contents.
+
+<!-- RELATION_SPEC mz_internal.mz_object_hydration_history -->
+| Field          | Type                         | Meaning                                                                                                                  |
+| -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `object_id`    | [`text`]                     | The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view, which may no longer exist. |
+| `cluster_id`   | [`text`]                     | The ID of the object's cluster.                                                                                          |
+| `replica_id`   | [`text`]                     | The ID of the cluster replica. May name a replica that no longer exists.                                                 |
+| `installed_at` | [`timestamp with time zone`] | When the object's dataflow was installed on the replica.                                                                 |
+| `started_at`   | [`timestamp with time zone`] | When hydration work began, or `NULL` if the replica reported none. A replica that observed no start reports the installation time instead, so a zero interval between the two does not mean the dataflow started immediately. |
+| `hydrated_at`  | [`timestamp with time zone`] | When hydration finished.                                                                                                 |
+| `status`       | [`text`]                     | The terminal status. Currently always `hydrated`.                                                                        |
+
 ## `mz_object_transitive_dependencies`
 
 The `mz_object_transitive_dependencies` view describes the transitive dependency structure between
