@@ -20,8 +20,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.38.0
-*Released to Materialize Cloud: 2026-08-20* <br>
-*Released to Materialize Self-Managed: 2026-08-21* <br>
+*Released to Materialize Cloud: 2026-08-19* <br>
+*Released to Materialize Self-Managed: 2026-08-20* <br>
 
 ### Improvements {#v26.38-improvements}
 - **Notice for single-replica sources on multi-replica clusters**: Materialize now warns when a command leaves a cluster holding more than one replica alongside PostgreSQL, MySQL, or SQL Server sources, which always run on a single replica, since the extra replicas make those sources neither more fault tolerant nor faster to ingest.
