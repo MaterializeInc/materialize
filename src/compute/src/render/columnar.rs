@@ -560,14 +560,17 @@ mod tests {
         }
         let mut bytes: Vec<u8> = Vec::new();
         column.into_bytes(&mut bytes);
-        // `into_bytes` writes whole `u64` words, and `Align` wants them as
-        // words. Native byte order, matching how the words were written.
-        assert_eq!(bytes.len() % 8, 0);
-        let words = bytes
-            .chunks_exact(8)
-            .map(|w| u64::from_ne_bytes(w.try_into().expect("chunk is 8 bytes")))
-            .collect();
-        Column::Align(words)
+        // Round-trip through the container's own byte form rather than building a
+        // serialized variant by hand, so this does not depend on which payload
+        // type that variant holds.
+        let serialized = <Column<(Row, Timestamp, Diff)> as ContainerBytes>::from_bytes(
+            timely::bytes::arc::BytesMut::from(bytes).freeze(),
+        );
+        assert!(
+            !matches!(serialized, Column::Typed(_)),
+            "round-trip should produce a serialized column"
+        );
+        serialized
     }
 
     #[mz_ore::test]
