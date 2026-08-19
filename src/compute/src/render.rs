@@ -712,12 +712,16 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
         let key = &idx.key;
         match bundle.arrangement(key) {
             Some(ArrangementFlavor::Local(mut oks, mut errs)) => {
-                // NOTE: The exported error trace is deliberately not collapsed. `output_probe`
-                // below watches `oks.stream` only, so the controller's index frontier tracks the ok
-                // trace; putting an operator on the error path desynchronizes the two, and a peek
-                // that derives `upper` from oks then calls `cursor_through(upper)` on the error
-                // trace panics with `upper` straddles batch. Cross-object error multiplicity has to
-                // be bounded on the import side instead.
+                // NOTE: Do not give an exported arrangement a second reader that holds a trace
+                // handle, such as a `reduce`. Such a reader pins the shared spine's physical
+                // frontier at its own lagging progress, and `ArrangementManager::maintenance` can
+                // then no longer advance it, so batches pile up in `Spine::pending`. A cursor is
+                // only checked for straddling over pending batches, so an importing dataflow's
+                // `cursor_through` eventually panics with `upper` straddles batch. Watching
+                // `errs.stream` in `output_probe` does not help, and neither does discarding the
+                // reader's output. Stream-level readers like `as_collection` are unaffected. This is
+                // why error multiplicity is not collapsed here, leaving multiplicity that crosses
+                // an index boundary unbounded.
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
