@@ -49,7 +49,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::columnar::{CollectionEdge, columnar_to_vec, vec_to_columnar};
+use crate::render::columnar::{CollectionEdge, columnar_to_vec, flat_map_datums, vec_to_columnar};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -158,23 +158,38 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                     // the expression might still return a negative limit and
                     // thus needs to be checked.
                     let expr = expr.clone();
-                    let mut datum_vec = mz_repr::DatumVec::new();
                     // A literal, non-negative limit skips this branch entirely, so this
                     // per-row evaluation only runs for column or otherwise fallible
-                    // limits. The columnar decode is a narrow sanctioned leaf confined
-                    // to this rare path.
-                    let errors = columnar_to_vec(ok_input.clone()).flat_map(move |row| {
-                        let temp_storage = mz_repr::RowArena::new();
-                        let datums = datum_vec.borrow_with(&row);
-                        match expr.eval(&datums[..], &temp_storage) {
-                            Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
-                                Some(EvalError::NegLimit.into())
+                    // limits. The limit expression only reads datums, so they come
+                    // from the borrowed column and no owned `Row` is built. This
+                    // stage emits errors only; its ok output stays empty.
+                    let (_, errors) = flat_map_datums::<
+                        _,
+                        CapacityContainerBuilder<Vec<(Row, T, Diff)>>,
+                        _,
+                    >(ok_input.clone(), usize::MAX, {
+                        let mut datum_vec = mz_repr::DatumVec::new();
+                        move |row_datums, time, diff, _ok_session, err_session| {
+                            let temp_storage = mz_repr::RowArena::new();
+                            // `eval` unifies the lifetimes of the expression, the
+                            // datums, and the arena. Copying the datums into a local
+                            // vec lets that lifetime shrink to this call.
+                            let mut datums = datum_vec.borrow();
+                            datums.extend(row_datums.iter());
+                            match expr.eval(&datums[..], &temp_storage) {
+                                Ok(l) if l != Datum::Null && l.unwrap_int64() < 0 => {
+                                    err_session.give((EvalError::NegLimit.into(), time, diff));
+                                    1
+                                }
+                                Ok(_) => 0,
+                                Err(e) => {
+                                    err_session.give((e.into(), time, diff));
+                                    1
+                                }
                             }
-                            Ok(_) => None,
-                            Err(e) => Some(e.into()),
                         }
                     });
-                    err_collection = err_collection.concat(errors);
+                    err_collection = err_collection.concat(errors.as_collection());
                 }
             }
 

@@ -1521,8 +1521,8 @@ mod tests {
 
     // `DataflowErrorSer` is not `Ord`, so project the error to its debug string
     // to get a stable, comparable ordering. The time and diff still ride along,
-    // so this verifies the columnar arm's `into_owned` on the error path
-    // reconstructs the same `(time, diff)` as the `Vec` arm.
+    // so an assertion on the result also covers `into_owned`'s reconstruction of
+    // them on the error path.
     fn extract_err(captured: Captured<ErrUpdate>) -> Vec<(String, Timestamp, Diff)> {
         let mut updates: Vec<_> = captured
             .extract()
@@ -1782,7 +1782,7 @@ mod tests {
     /// by column 0 and thinning the value to column 1 reconstructs the original
     /// two-column row. No-decode is a by-inspection property: the fueled path
     /// builds a `ColumnBuilder` via `flat_map_ok` and never calls
-    /// `columnar_to_vec`; the `into_vec` below is the capture harness only.
+    /// `columnar_to_vec`; the decode below is the capture harness only.
     #[mz_ore::test]
     fn as_specific_collection_materializes_columnar() {
         let rows = test_rows();
