@@ -2111,6 +2111,9 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
 
 
 class SourceIngestionScenario(ClusterScalingScenario):
+    # 1.1.0: MySQL RDS instance type changed
+    VERSION: str = "1.1.0"
+
     def name(self) -> str:
         return "source_ingestion"
 
