@@ -12,15 +12,17 @@ import { useAtom } from "jotai";
 import React, { useState } from "react";
 import { useParams } from "react-router-dom";
 
+import ErrorBox from "~/components/ErrorBox";
 import SideDrawer from "~/components/SideDrawer";
 import { useAppConfig } from "~/config/useAppConfig";
 import { User } from "~/external-library-wrappers/frontegg";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
-import { ConnectionIcon, MonitorIcon, Terminal } from "~/icons";
+import { ConnectionIcon, MonitorIcon, TerminalIcon } from "~/icons";
 import { ClusterDetailParams } from "~/platform/clusters/ClusterRoutes";
 import {
   currentEnvironmentState,
+  Environment,
   useEnvironmentGate,
 } from "~/store/environments";
 
@@ -33,6 +35,13 @@ import { ConnectTerminalPanel } from "./ConnectTerminalPanel";
 const OIDC_USERNAME_PLACEHOLDER = "<your_oidc_username>";
 const PASSWORD_USERNAME_PLACEHOLDER = "<your_username>";
 const HOST_PLACEHOLDER = "<host>";
+
+/**
+ * First version that advertises OAuth via RFC 9728, letting MCP clients log in
+ * through the browser instead of using a Basic-auth token. Must match
+ * region-controller's gate for `--frontegg-oauth-issuer-url`.
+ */
+const MCP_OAUTH_MIN_VERSION = "26.30.0";
 
 type ConnectMethodId = "mcp" | "external-tools" | "terminal";
 
@@ -58,7 +67,7 @@ const CONNECT_METHODS: {
     id: "terminal",
     label: "Terminal",
     sublabel: "psql",
-    icon: <Terminal w="4" h="4" color="inherit" />,
+    icon: <TerminalIcon w="4" h="4" color="inherit" />,
   },
 ];
 
@@ -97,6 +106,22 @@ const LoadingPanel = () => (
   </Flex>
 );
 
+/** Shown when the region cannot serve connection details, so the drawer does
+ * not spin forever on an environment that will never come up. */
+const UnavailablePanel = () => (
+  <ErrorBox
+    py="16"
+    message="Connection details are unavailable while this region is not running."
+  />
+);
+
+/** Environments still resolving get a spinner, ones known not to be running
+ * get an error. */
+const environmentPanel = (environment: Environment | undefined) => {
+  if (environment?.state === "disabled") return <UnavailablePanel />;
+  return <LoadingPanel />;
+};
+
 const CloudConnectContent = ({
   user,
   forAppPassword,
@@ -106,10 +131,10 @@ const CloudConnectContent = ({
 }) => {
   const [currentEnvironment] = useAtom(currentEnvironmentState);
   const { clusterName } = useParams<ClusterDetailParams>();
-  const oauthAvailable = useEnvironmentGate("26.30.0") === true;
+  const oauthAvailable = useEnvironmentGate(MCP_OAUTH_MIN_VERSION) === true;
 
   if (currentEnvironment?.state !== "enabled") {
-    return <LoadingPanel />;
+    return environmentPanel(currentEnvironment);
   }
 
   const [host, port] = currentEnvironment.sqlAddress.split(":");
@@ -144,17 +169,16 @@ const SelfManagedConnectContent = ({
   const [currentEnvironment] = useAtom(currentEnvironmentState);
   const { clusterName } = useParams<ClusterDetailParams>();
   const { sqlRole } = useSelfManagedProfile(auth);
-  // Envs >= 26.30.0 advertise OAuth via RFC 9728, so MCP clients log in
-  // through the browser instead of using a Basic-auth token. Requires OIDC on
-  // self-managed. The version must match region-controller's gate for
-  // `--frontegg-oauth-issuer-url` (precedence >= 26.30.0).
-  const oauthAvailable = useEnvironmentGate("26.30.0") === true && oidcEnabled;
+  // The browser flow additionally requires OIDC on self-managed. Password auth
+  // has no issuer to redirect to, so those deployments stay on tokens.
+  const oauthAvailable =
+    useEnvironmentGate(MCP_OAUTH_MIN_VERSION) === true && oidcEnabled;
 
   if (
     appConfig.mode !== "self-managed" ||
     currentEnvironment?.state !== "enabled"
   ) {
-    return <LoadingPanel />;
+    return environmentPanel(currentEnvironment);
   }
 
   const balancerdHost = appConfig.balancerdDnsNames?.[0];

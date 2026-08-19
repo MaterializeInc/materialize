@@ -16,6 +16,7 @@ import server from "~/api/mocks/server";
 import { dummyValidUser } from "~/external-library-wrappers/__mocks__/frontegg";
 import {
   defaultRegionId,
+  disabledEnvironment,
   healthyEnvironment,
   renderComponent,
   setFakeEnvironment,
@@ -70,6 +71,23 @@ describe("ConnectDrawer", () => {
     expect(await screen.findByText(/materialize-agent/)).toBeVisible();
     expect(
       screen.queryByText("Install agent skills (optional)"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reports that a disabled region cannot serve connection details", async () => {
+    await renderComponent(
+      <ConnectDrawer isOpen onClose={vi.fn()} user={dummyValidUser} />,
+      {
+        initializeState: ({ set }) =>
+          setFakeEnvironment(set, defaultRegionId, disabledEnvironment),
+      },
+    );
+
+    expect(
+      await screen.findByText(/Connection details are unavailable/),
+    ).toBeVisible();
+    expect(
+      screen.queryByText("Choose your MCP server"),
     ).not.toBeInTheDocument();
   });
 

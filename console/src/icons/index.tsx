@@ -82,7 +82,7 @@ export { default as SortIcon } from "~/icon/SortIcon.svg?react";
 export { default as SourcesIcon } from "~/icon/SourcesIcon.svg?react";
 export { default as StopIcon } from "~/icon/StopIcon.svg?react";
 export { default as TableIcon } from "~/icon/TableIcon.svg?react";
-export { default as Terminal } from "~/icon/Terminal.svg?react";
+export { default as TerminalIcon } from "~/icon/TerminalIcon.svg?react";
 export { default as ThumbIcon } from "~/icon/ThumbIcon.svg?react";
 export { default as ViewIcon } from "~/icon/ViewIcon.svg?react";
 export { default as VsCodeLogoIcon } from "~/icon/VsCodeLogoIcon.svg?react";
