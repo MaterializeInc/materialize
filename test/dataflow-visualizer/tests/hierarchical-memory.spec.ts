@@ -7,7 +7,22 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
+import { FIXTURE_INDEX, fixturePage } from './fixture';
+
+/**
+ * Wait for the page to render its dataflow graphs.
+ *
+ * Scope graphs live inside collapsed `.content` divs, so assert on presence
+ * rather than visibility. The graphs are the page's actual output: the dropdown
+ * appearing only means the replica list came back, and asserting on that alone
+ * passes while the rest of the page still says `Loading...`.
+ */
+async function expectGraphs(page: Page) {
+  await expect
+    .poll(() => page.locator('#content2 svg').count())
+    .toBeGreaterThan(0);
+}
 
 test.describe('/hierarchical-memory page', () => {
   test('page loads without crashing', async ({ page }) => {
@@ -28,9 +43,8 @@ test.describe('/hierarchical-memory page', () => {
     await page.goto('/hierarchical-memory');
 
     // The dropdown should appear after initial data loads
-    // Use a longer timeout as the page queries the database
     const dropdown = page.locator('#cluster_replica');
-    await expect(dropdown).toBeVisible({ timeout: 20000 });
+    await expect(dropdown).toBeVisible();
 
     // Should have at least one option (check count, not visibility since options are inside select)
     const options = dropdown.locator('option');
@@ -46,24 +60,20 @@ test.describe('/hierarchical-memory page', () => {
 
     await page.goto('/hierarchical-memory');
 
-    // Wait for dropdown to appear (indicates initial load complete)
-    const dropdown = page.locator('#cluster_replica');
-    await expect(dropdown).toBeVisible({ timeout: 20000 });
-
-    // The page queries data and renders - give it time
-    await page.waitForTimeout(3000);
-
-    await expect(dropdown).toBeVisible();
+    await expectGraphs(page);
+    await expect(page.locator('#cluster_replica')).toBeVisible();
     await expect(page.locator('#content2')).not.toContainText('error:');
     expect(pageErrors.map(String)).toEqual([]);
   });
 
-  test('URL updates with cluster parameters after selection', async ({ page }) => {
+  test('URL updates with cluster parameters after selection', async ({
+    page,
+  }) => {
     await page.goto('/hierarchical-memory');
 
     // Wait for dropdown
     const dropdown = page.locator('#cluster_replica');
-    await expect(dropdown).toBeVisible({ timeout: 20000 });
+    await expect(dropdown).toBeVisible();
 
     // URL should have been updated with cluster params
     await expect(page).toHaveURL(/cluster_name=/);
@@ -72,45 +82,23 @@ test.describe('/hierarchical-memory page', () => {
 
   test('renders graphs for operator names containing double quotes', async ({
     page,
-    request,
   }) => {
     // An arrangement operator embeds the debug formatting of its key in its
-    // name, so an index on a named column is called something like
+    // name, so the fixture index on a named column is called something like
     // `ArrangeBy[[Column(0, "id")]]`. Those double quotes have to be escaped
     // before they reach a DOT label, otherwise they terminate the label early
     // and GraphViz rejects the whole graph.
-    for (const query of [
-      'CREATE TABLE IF NOT EXISTS quoted_name_regression (id int, other int)',
-      'CREATE INDEX IF NOT EXISTS quoted_name_regression_idx ON quoted_name_regression (id)',
-    ]) {
-      const response = await request.post('/api/sql', { data: { query } });
-      // /api/sql reports SQL failures in the body, not the status code.
-      const body = response.ok() ? await response.json() : null;
-      const failure = !body
-        ? `HTTP ${response.status()}`
-        : body.results?.find((result) => result.error)?.error?.message;
-      // The endpoint runs as an unprivileged role, so DDL may be refused
-      // depending on how the environment is configured. Skip visibly rather
-      // than reporting a visualizer bug that isn't one.
-      test.skip(!!failure, `could not set up test index: ${failure}`);
-    }
-
     const pageErrors: Error[] = [];
     page.on('pageerror', (error) => pageErrors.push(error));
 
-    await page.goto(
-      '/hierarchical-memory?cluster_name=quickstart&replica_name=r1'
-    );
+    await page.goto(fixturePage('/hierarchical-memory'));
 
+    await expectGraphs(page);
+
+    // The fixture's dataflow rendered, and with it the arrangement label,
+    // quotes and all.
     const content = page.locator('#content2');
-
-    // Scope graphs live inside collapsed `.content` divs, so assert on
-    // presence rather than visibility.
-    await expect
-      .poll(() => content.locator('svg').count(), { timeout: 20000 })
-      .toBeGreaterThan(0);
-
-    // The arrangement label rendered, quotes and all.
+    await expect(content).toContainText(FIXTURE_INDEX);
     await expect(content).toContainText('ArrangeBy');
     await expect(content).not.toContainText('error:');
     expect(pageErrors.map(String)).toEqual([]);
@@ -120,7 +108,7 @@ test.describe('/hierarchical-memory page', () => {
     await page.goto('/hierarchical-memory');
 
     const dropdown = page.locator('#cluster_replica');
-    await expect(dropdown).toBeVisible({ timeout: 20000 });
+    await expect(dropdown).toBeVisible();
 
     const options = dropdown.locator('option');
     const optionCount = await options.count();
@@ -131,18 +119,18 @@ test.describe('/hierarchical-memory page', () => {
       return;
     }
 
-    // Get initial URL
-    const initialUrl = page.url();
+    // Pick an option other than the one the page settled on, so the URL has to
+    // change rather than being rewritten to the same value.
+    const selected = await dropdown.inputValue();
+    const values = await options.evaluateAll((els) =>
+      els.map((el) => (el as HTMLOptionElement).value)
+    );
+    const newValue = values.find((value) => value !== selected)!;
+    const [clusterName, replicaName] = JSON.parse(newValue);
 
-    // Select a different option
-    const secondOption = options.nth(1);
-    const newValue = await secondOption.getAttribute('value');
-    if (newValue) {
-      await dropdown.selectOption(newValue);
+    await dropdown.selectOption(newValue);
 
-      // URL should update
-      await page.waitForTimeout(1000);
-      expect(page.url()).not.toBe(initialUrl);
-    }
+    await expect(page).toHaveURL(new RegExp(`cluster_name=${clusterName}`));
+    await expect(page).toHaveURL(new RegExp(`replica_name=${replicaName}`));
   });
 });

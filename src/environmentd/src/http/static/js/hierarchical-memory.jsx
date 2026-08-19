@@ -17,102 +17,11 @@ function formatNameForQuery(name) {
 
 const { useState, useEffect } = React;
 
-function ClusterReplicaView() {
-  const [currentClusterName, setCurrentClusterName] = useState(null);
-  const [currentReplicaName, setCurrentReplicaName] = useState(null);
-  const [sqlResponse, setSqlResponse] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  const queryClusterReplicas = `
-    SELECT
-      clusters.name AS cluster_name, replicas.name AS replica_name
-    FROM
-      mz_catalog.mz_cluster_replicas replicas
-      LEFT JOIN mz_catalog.mz_clusters clusters ON clusters.id = replicas.cluster_id
-    ORDER BY cluster_name ASC, replica_name ASC
-  `;
-
-  useEffect(() => {
-    const search = new URLSearchParams(location.search);
-    const clusterName = search.get('cluster_name');
-    const replicaName = search.get('replica_name');
-    if (clusterName) {
-      setCurrentClusterName(clusterName);
-    }
-    if (replicaName) {
-      setCurrentReplicaName(replicaName);
-    }
-    query(queryClusterReplicas)
-      .then((data) => {
-        const results = data.results[0].rows;
-        setSqlResponse(results);
-        if (!replicaName && results.length > 0) {
-          if(results.some(
-            result => ('default' == result[0]) && ('r1' == result[1]))) {
-            setCurrentClusterName('default');
-            setCurrentReplicaName('r1');
-          } else {
-            setCurrentClusterName(results[0][0]);
-            setCurrentReplicaName(results[0][1]);
-          }
-        }
-        setLoading(false);
-      })
-      .catch((error) => {
-        setError(error);
-        setLoading(false);
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!currentReplicaName) return;
-    const params = new URLSearchParams(location.search);
-    params.set('cluster_name', currentClusterName);
-    params.set('replica_name', currentReplicaName);
-    window.history.replaceState({}, '', `${location.pathname}?${params}`);
-  }, [currentClusterName, currentReplicaName]);
-
-  return (
-    <div>
-      {loading ? (
-        <div>Loading...</div>
-      ) : error ? (
-        <div>error: {String(error)}</div>
-      ) : (
-        <div>
-          <label htmlFor="cluster_replica">Cluster Replica </label>
-          <select
-            id="cluster_replica"
-            name="cluster_replica"
-            onChange={(event) => {
-              const clusterReplicaJson = event.target.value;
-              const clusterReplica = JSON.parse(clusterReplicaJson);
-              setCurrentClusterName(clusterReplica[0]);
-              setCurrentReplicaName(clusterReplica[1]);
-            }}
-            defaultValue={JSON.stringify([currentClusterName, currentReplicaName])}
-          >
-            {sqlResponse.map((v) => (
-              <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
-                {`${v[0]}.${v[1]}`}
-              </option>
-            ))}
-          </select>
-          <Dataflows clusterName={currentClusterName} replicaName={currentReplicaName} />
-        </div>
-      )}
-    </div>
-  );
-}
-
 function Dataflows(props) {
-  const [stats, setStats] = useState(null);
   const [addrs, setAddrs] = useState(null);
   const [records, setRecords] = useState(null);
   const [opers, setOpers] = useState(null);
   const [chans, setChans] = useState(null);
-  const [view, setView] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [page, setPage] = useState(null);
@@ -173,14 +82,6 @@ function Dataflows(props) {
         records_table.rows.map(([id, records, size]) => [id, [records, size]])
       )
       setRecords(records);
-
-      try {
-        const view = await getCreateView(stats.name);
-        setView(view);
-      } catch (error) {
-        console.debug('could not get create view:', error);
-        setView(null);
-      }
 
       console.log("Loaded");
       setLoading(false);
@@ -337,68 +238,6 @@ function Dataflows(props) {
 }
 
 
-async function getCreateView(dataflow_name) {
-  // dataflow_name is the full name of the dataflow operator. It is generally
-  // of the form "Dataflow: <database>.<schema>.<index name>". We will use a
-  // regex to parse these out and use them to get the fully qualified view name
-  // which we will use with SHOW CREATE VIEW to show the SQL that created this
-  // dataflow.
-  //
-  // There are known problems with this method. It doesn't know anything about
-  // SQL parsing or escaping, assumes the dataflow operator's name is of a very
-  // specific shape, and assumes a CREATE VIEW statement made an index which made
-  // this dataflow. So we assume that problems can happen at any level here and
-  // will cleanly bail if anything doesn't exactly match what we want. In that
-  // case we will not show the SQL. This is intended to be good enough for most
-  // users for now.
-  const match = dataflow_name.match(/^Dataflow: (.*)\.(.*)\.(.*)$/);
-  if (!match) {
-    throw 'unknown dataflow name pattern';
-  }
-  const view_name_table = await query(`
-    SELECT
-      d.name AS database, s.schema, s.view
-    FROM
-      mz_catalog.mz_databases AS d
-      JOIN (
-          SELECT
-            s.database_id, s.name AS schema, v.view
-          FROM
-            mz_catalog.mz_schemas AS s
-            JOIN (
-                SELECT
-                  name AS view, schema_id
-                FROM
-                  mz_catalog.mz_views
-                WHERE
-                  id
-                  = (
-                      SELECT
-                        DISTINCT idx.on_id
-                      FROM
-                        mz_catalog.mz_databases AS db,
-                        mz_catalog.mz_schemas AS sc,
-                        mz_catalog.mz_indexes AS idx
-                      WHERE
-                        db.name = '${match[1]}'
-                        AND sc.name = '${match[2]}'
-                        AND idx.name = '${match[3]}'
-                    )
-              )
-                AS v ON s.id = v.schema_id
-        )
-          AS s ON d.id = s.database_id;
-  `);
-  if (view_name_table.rows.length !== 1) {
-    throw 'could not determine view';
-  }
-  const name = view_name_table.rows[0];
-  const create_table = await query(
-    `SHOW CREATE VIEW "${name[0]}"."${name[1]}"."${name[2]}"`
-  );
-  return { name: create_table.rows[0][0], create: create_table.rows[0][1] };
-}
-
 function addrStr(addr) {
   return addr.join(', ');
 }
@@ -423,4 +262,11 @@ function toggle_active(e) {
 }
 
 const content = document.getElementById('content2');
-ReactDOM.render(<ClusterReplicaView />, content);
+ReactDOM.render(
+  <ClusterReplicaView>
+    {(clusterName, replicaName) => (
+      <Dataflows clusterName={clusterName} replicaName={replicaName} />
+    )}
+  </ClusterReplicaView>,
+  content
+);
