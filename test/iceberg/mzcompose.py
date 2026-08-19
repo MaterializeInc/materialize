@@ -13,6 +13,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 
 from materialize.mzcompose.composition import Composition
 from materialize.mzcompose.composition import Service as UpService
@@ -380,14 +381,52 @@ def workflow_idempotent_retry(c: Composition) -> None:
         ) as resp:
             resp.read()
 
-    time.sleep(15)
+    def proxy_status() -> dict[str, int]:
+        with urllib.request.urlopen(f"{proxy_base}/__control/status") as resp:
+            return json.loads(resp.read())
+
+    def await_condition(what: str, timeout: float, check: Callable[[], bool]) -> None:
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            if check():
+                return
+            time.sleep(0.5)
+        raise AssertionError(f"timed out waiting for {what}")
+
+    # Arm the drop only once the sink has a commit through the proxy, so the
+    # dropped commit is a steady-state one rather than table bootstrap.
+    await_condition(
+        "first sink commit",
+        timeout=60,
+        check=lambda: proxy_status()["commits_ok"] >= 1,
+    )
     proxy_post("/__control/drop_next_commit")
 
     for i in range(10):
         c.sql(f"INSERT INTO retry_src VALUES ({i + 4}, 'row_{i + 4}')")
         time.sleep(1)
 
-    time.sleep(60)
+    await_condition(
+        "dropped commit response",
+        timeout=60,
+        check=lambda: proxy_status()["commits_dropped"] >= 1,
+    )
+
+    def messages_committed() -> int:
+        rows = c.sql_query(
+            "SELECT COALESCE(SUM(messages_committed), 0) "
+            "FROM mz_internal.mz_sink_statistics st "
+            "JOIN mz_sinks s ON st.id = s.id "
+            "WHERE s.name = 'retry_sink'"
+        )
+        return int(rows[0][0])
+
+    # 3 initial rows + 10 inserted rows, all committed despite the dropped response.
+    await_condition(
+        "all 13 rows committed",
+        timeout=120,
+        check=lambda: messages_committed() >= 13,
+    )
 
     status_rows = c.sql_query(
         "SELECT s.status, COALESCE(s.error, '') "
