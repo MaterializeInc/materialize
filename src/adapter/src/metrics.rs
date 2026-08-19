@@ -88,7 +88,7 @@ impl Metrics {
             )),
             active_internal_subscribes: registry.register(metric!(
                 name: "mz_active_internal_subscribes",
-                help: "The number of active internal subscribes, which serve frontend-sequenced read-then-write.",
+                help: "The number of active internal subscribes used by read-then-write operations and background maintenance.",
                 var_labels: ["session_type"],
             )),
             active_copy_tos: registry.register(metric!(

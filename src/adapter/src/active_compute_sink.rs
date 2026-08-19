@@ -51,10 +51,10 @@ impl ActiveComputeSink {
     }
 
     /// Reports the ID of the connection which created the sink.
-    pub fn connection_id(&self) -> &ConnectionId {
+    pub fn connection_id(&self) -> Option<&ConnectionId> {
         match &self {
-            ActiveComputeSink::Subscribe(subscribe) => &subscribe.conn_id,
-            ActiveComputeSink::CopyTo(copy_to) => &copy_to.conn_id,
+            ActiveComputeSink::Subscribe(subscribe) => subscribe.connection_id(),
+            ActiveComputeSink::CopyTo(copy_to) => Some(&copy_to.conn_id),
         }
     }
 
@@ -147,13 +147,26 @@ impl SubscribeBacklogAccounting {
     }
 }
 
+/// Ownership and cleanup scope of an active subscribe.
+#[derive(Debug)]
+pub enum ActiveSubscribeOwner {
+    /// The subscribe belongs to a SQL session.
+    Session {
+        conn_id: ConnectionId,
+        session_uuid: Uuid,
+    },
+    /// The subscribe belongs to a coordinator background task.
+    ///
+    /// Always `internal`, since there is no session to attribute a
+    /// `mz_subscriptions` row to.
+    Background,
+}
+
 /// A description of an active subscribe from coord's perspective
 #[derive(Debug)]
 pub struct ActiveSubscribe {
-    /// The ID of the connection which created the subscribe.
-    pub conn_id: ConnectionId,
-    /// The UUID of the session which created the subscribe.
-    pub session_uuid: Uuid,
+    /// The owner responsible for retiring the subscribe.
+    pub owner: ActiveSubscribeOwner,
     /// The ID of the cluster on which the subscribe is running.
     pub cluster_id: ClusterId,
     /// The IDs of the objects on which the subscribe depends.
@@ -189,6 +202,33 @@ pub struct ActiveSubscribe {
 }
 
 impl ActiveSubscribe {
+    /// The session uuid for this subscribe's `mz_subscriptions` row, or `None`
+    /// if it does not appear there.
+    pub fn introspection_session_uuid(&self) -> Option<Uuid> {
+        match &self.owner {
+            ActiveSubscribeOwner::Session { session_uuid, .. } if !self.internal => {
+                Some(*session_uuid)
+            }
+            _ => None,
+        }
+    }
+
+    /// Returns the owning connection, if this is a session subscribe.
+    pub fn connection_id(&self) -> Option<&ConnectionId> {
+        match &self.owner {
+            ActiveSubscribeOwner::Session { conn_id, .. } => Some(conn_id),
+            ActiveSubscribeOwner::Background => None,
+        }
+    }
+
+    /// Returns the owning session UUID, if this is a session subscribe.
+    pub fn session_uuid(&self) -> Option<Uuid> {
+        match self.owner {
+            ActiveSubscribeOwner::Session { session_uuid, .. } => Some(session_uuid),
+            ActiveSubscribeOwner::Background => None,
+        }
+    }
+
     /// Initializes the subscription.
     ///
     /// This method must be called exactly once, after constructing an

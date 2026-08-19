@@ -147,6 +147,9 @@ def get_minimal_system_parameters(
     if version < MzVersion.parse_mz("v26.25.0-dev"):
         config["enable_multi_replica_sources"] = "true"
 
+    if version >= MzVersion.parse_mz("v26.39.0-dev"):
+        config["hydration_history_collection_interval"] = "60s"
+
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
 
@@ -494,6 +497,9 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "arrangement_size_history_retention_period", "7d", ["1min", "1h", "7d"]
+        ),
+        VariableSystemParameter(
+            "hydration_history_retention_period", "30d", ["1min", "1h", "30d"]
         ),
         VariableSystemParameter(
             "persist_validate_part_bounds_on_read", "false", ["true", "false"]

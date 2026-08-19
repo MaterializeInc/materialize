@@ -97,7 +97,7 @@ metrics:
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_active_internal_subscribes
-  help: The number of active internal subscribes, which serve frontend-sequenced read-then-write.
+  help: The number of active internal subscribes used by read-then-write operations and background maintenance.
   labels:
   - session_type
   source: src/adapter/src/metrics.rs

@@ -26,14 +26,16 @@ use tokio::sync::mpsc;
 use tracing::Span;
 
 use crate::PeekResponseUnary;
-use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe};
+use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner};
 use crate::catalog::Catalog;
+use crate::command::WriteAttempt;
 use crate::coord::Coordinator;
 use crate::coord::appends::{
     InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
     UserWriteResponder, WriteResult, WriteTarget,
 };
 use crate::error::AdapterError;
+use mz_ore::soft_panic_or_log;
 
 /// Adds `id` to the worklist the first time it is seen, enforcing the
 /// dependency bound.
@@ -67,8 +69,8 @@ impl Coordinator {
     /// Takes ownership of `read_holds` and drops them only once the dataflow is
     /// shipped, so the `since` cannot advance past `as_of` in between.
     ///
-    /// Answers through `response_tx`, with an error if the connection went away
-    /// or if a dependency was dropped since the plan was optimized.
+    /// Answers through `response_tx`, with an error if the owning connection
+    /// went away or if a dependency was dropped since the plan was optimized.
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn handle_create_internal_subscribe(
         &mut self,
@@ -79,25 +81,29 @@ impl Coordinator {
         as_of: Timestamp,
         arity: usize,
         sink_id: GlobalId,
-        conn_id: mz_adapter_types::connection::ConnectionId,
-        session_uuid: uuid::Uuid,
+        owner: ActiveSubscribeOwner,
         start_time: mz_ore::now::EpochMillis,
         read_holds: crate::ReadHolds,
         response_tx: tokio::sync::oneshot::Sender<
             Result<mpsc::UnboundedReceiver<PeekResponseUnary>, AdapterError>,
         >,
     ) {
-        // Client disconnected while waiting for the semaphore.
-        if !self.active_conns.contains_key(&conn_id) {
-            let _ = response_tx.send(Err(AdapterError::Canceled));
-            return;
+        match &owner {
+            // The client may have disconnected while we waited for the semaphore.
+            ActiveSubscribeOwner::Session { conn_id, .. } => {
+                if !self.active_conns.contains_key(conn_id) {
+                    let _ = response_tx.send(Err(AdapterError::Canceled));
+                    return;
+                }
+            }
+            // Background work has no connection to lose.
+            ActiveSubscribeOwner::Background => {}
         }
 
         let (tx, rx) = mpsc::unbounded_channel();
 
         let active_subscribe = ActiveSubscribe {
-            conn_id: conn_id.clone(),
-            session_uuid,
+            owner,
             channel: tx,
             backlog_accounting: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::active_compute_sink::SubscribeBacklogAccounting::default(),
@@ -162,19 +168,24 @@ impl Coordinator {
     /// valid at and goes straight to the committer, pinned to the `GlobalId`
     /// validated here. `None` is a blind write that rides the next group
     /// commit, whose staging re-checks the target generation.
+    ///
     pub(crate) fn handle_attempt_write(
         &mut self,
-        conn_id: mz_adapter_types::connection::ConnectionId,
+        attempt: WriteAttempt,
         target_id: mz_repr::CatalogItemId,
         target_global_id: GlobalId,
         diffs: Vec<(Row, Diff)>,
-        write_ts: Option<Timestamp>,
         result_tx: tokio::sync::oneshot::Sender<WriteResult>,
     ) {
         let result = InternalWriteResponder::new(result_tx);
-        if !self.active_conns.contains_key(&conn_id) {
-            result.send(WriteResult::Canceled);
-            return;
+        match &attempt {
+            WriteAttempt::Session { conn_id, .. } => {
+                if !self.active_conns.contains_key(conn_id) {
+                    result.send(WriteResult::Canceled);
+                    return;
+                }
+            }
+            WriteAttempt::Background { .. } => {}
         }
         if self.controller.read_only() {
             result.send(WriteResult::ReadOnly);
@@ -191,7 +202,11 @@ impl Coordinator {
         }
 
         let table_data = TableData::Rows(diffs);
-        match write_ts {
+        let timestamped = match &attempt {
+            WriteAttempt::Session { write_ts, .. } => *write_ts,
+            WriteAttempt::Background { write_ts } => Some(*write_ts),
+        };
+        match timestamped {
             Some(target_timestamp) => {
                 let request = TimestampedWriteRequest {
                     appends: vec![(target_global_id, vec![table_data])],
@@ -207,7 +222,15 @@ impl Coordinator {
                     tracing::warn!("group committer task gone, dropping timestamped write");
                 }
             }
+            // Only a session reaches this: `WriteAttempt::Background` always
+            // names a timestamp, and group commit needs a connection to answer
+            // through.
             None => {
+                let WriteAttempt::Session { conn_id, .. } = attempt else {
+                    soft_panic_or_log!("background write reached the blind write path");
+                    result.send(WriteResult::Indeterminate);
+                    return;
+                };
                 let writes = BTreeMap::from([(target_id, smallvec![table_data])]);
                 self.pending_writes.push(PendingWriteTxn::User {
                     span: Span::current(),
@@ -237,6 +260,15 @@ impl Coordinator {
 
 /// Validates that all dependencies are valid for read-then-write operations.
 ///
+/// Which dependency rules a read-then-write is held to.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum DependencyPolicy {
+    /// A user statement, which may only read user tables and views over them.
+    UserDml,
+    /// Coordinator background work, which reads system relations by design.
+    SystemReads,
+}
+
 /// Ensures all objects the selection transitively depends on (seeded by `ids`) are valid for
 /// `ReadThenWrite` operations:
 ///
@@ -253,6 +285,7 @@ pub(crate) fn validate_read_then_write_dependencies(
     catalog: &Catalog,
     ids: impl IntoIterator<Item = CatalogItemId>,
     max_rw_dependencies: usize,
+    policy: DependencyPolicy,
 ) -> Result<(), AdapterError> {
     use CatalogItemType::*;
     use mz_catalog::memory::objects;
@@ -306,6 +339,13 @@ pub(crate) fn validate_read_then_write_dependencies(
                 }
             }
             None => false,
+        };
+        // Which relations may be read is a user-DML rule. The `mz_now()`
+        // rejection above is not, and still applies to every view body the
+        // traversal reaches.
+        let valid = match policy {
+            DependencyPolicy::UserDml => valid,
+            DependencyPolicy::SystemReads => catalog.try_get_entry(&id).is_some(),
         };
         if !valid {
             let (object_name, object_type) = match catalog.try_get_entry(&id) {

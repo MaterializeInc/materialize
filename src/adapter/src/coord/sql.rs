@@ -269,49 +269,58 @@ impl Coordinator {
         id: GlobalId,
         active_sink: ActiveComputeSink,
     ) -> BuiltinTableAppendNotify {
-        let user = self.active_conns()[active_sink.connection_id()].user();
-        let session_type = metrics::session_type_label_value(user);
-
-        self.active_conns
-            .get_mut(active_sink.connection_id())
-            .expect("must exist for active sessions")
-            .drop_sinks
-            .insert(id);
+        let session_type = match active_sink.connection_id() {
+            Some(conn_id) => {
+                let session_type =
+                    metrics::session_type_label_value(self.active_conns()[conn_id].user());
+                self.active_conns
+                    .get_mut(conn_id)
+                    .expect("must exist for active sessions")
+                    .drop_sinks
+                    .insert(id);
+                session_type
+            }
+            None => "system",
+        };
 
         let ret_fut: BuiltinTableAppendNotify = match &active_sink {
             ActiveComputeSink::Subscribe(active_subscribe) => {
-                if active_subscribe.internal {
+                match active_subscribe.introspection_session_uuid() {
                     // An internal subscribe writes no `mz_subscriptions` row, so
                     // it stays out of the public `mz_active_subscribes` gauge
                     // too. Counting it there would report subscribes that
                     // introspection deliberately shows nothing of. It gets its
                     // own internal gauge instead, since it is still a dataflow
                     // holding cluster resources.
-                    self.metrics
-                        .active_internal_subscribes
-                        .with_label_values(&[session_type])
-                        .inc();
+                    None => {
+                        self.metrics
+                            .active_internal_subscribes
+                            .with_label_values(&[session_type])
+                            .inc();
 
-                    Box::pin(std::future::ready(()))
-                } else {
-                    let update = self.catalog().state().pack_subscribe_update(
-                        id,
-                        active_subscribe,
-                        Diff::ONE,
-                    );
-                    let update = self.catalog().state().resolve_builtin_table_update(update);
+                        Box::pin(std::future::ready(()))
+                    }
+                    Some(session_uuid) => {
+                        let update = self.catalog().state().pack_subscribe_update(
+                            id,
+                            active_subscribe,
+                            session_uuid,
+                            Diff::ONE,
+                        );
+                        let update = self.catalog().state().resolve_builtin_table_update(update);
 
-                    self.metrics
-                        .active_subscribes
-                        .with_label_values(&[session_type])
-                        .inc();
+                        self.metrics
+                            .active_subscribes
+                            .with_label_values(&[session_type])
+                            .inc();
 
-                    // Defer the introspection-row write to a group commit instead of
-                    // committing it inline. An inline `execute` would block the coordinator
-                    // loop on a timestamp-oracle round trip and stall every other session.
-                    // `implement_subscribe` waits for this write before returning the
-                    // `SUBSCRIBE` response to the subscribing session.
-                    self.builtin_table_update().defer(vec![update])
+                        // Defer the introspection-row write to a group commit instead of
+                        // committing it inline. An inline `execute` would block the coordinator
+                        // loop on a timestamp-oracle round trip and stall every other session.
+                        // `implement_subscribe` waits for this write before returning the
+                        // `SUBSCRIBE` response to the subscribing session.
+                        self.builtin_table_update().defer(vec![update])
+                    }
                 }
             }
             ActiveComputeSink::CopyTo(_) => {
@@ -345,46 +354,56 @@ impl Coordinator {
         id: GlobalId,
     ) -> Option<(ActiveComputeSink, BuiltinTableAppendNotify)> {
         if let Some(sink) = self.active_compute_sinks.remove(&id) {
-            let user = self.active_conns()[sink.connection_id()].user();
-            let session_type = metrics::session_type_label_value(user);
-
-            self.active_conns
-                .get_mut(sink.connection_id())
-                .expect("must exist for active compute sink")
-                .drop_sinks
-                .remove(&id);
+            let session_type = match sink.connection_id() {
+                Some(conn_id) => {
+                    let session_type =
+                        metrics::session_type_label_value(self.active_conns()[conn_id].user());
+                    self.active_conns
+                        .get_mut(conn_id)
+                        .expect("must exist for active compute sink")
+                        .drop_sinks
+                        .remove(&id);
+                    session_type
+                }
+                None => "system",
+            };
 
             let write_notify: BuiltinTableAppendNotify = match &sink {
                 ActiveComputeSink::Subscribe(active_subscribe) => {
-                    if active_subscribe.internal {
+                    match active_subscribe.introspection_session_uuid() {
                         // No introspection row to retract, see
                         // `add_active_compute_sink`. The internal gauge is
                         // decremented here to stay symmetric with it.
-                        self.metrics
-                            .active_internal_subscribes
-                            .with_label_values(&[session_type])
-                            .dec();
+                        None => {
+                            self.metrics
+                                .active_internal_subscribes
+                                .with_label_values(&[session_type])
+                                .dec();
 
-                        Box::pin(std::future::ready(()))
-                    } else {
-                        let update = self.catalog().state().pack_subscribe_update(
-                            id,
-                            active_subscribe,
-                            Diff::MINUS_ONE,
-                        );
-                        let update = self.catalog().state().resolve_builtin_table_update(update);
+                            Box::pin(std::future::ready(()))
+                        }
+                        Some(session_uuid) => {
+                            let update = self.catalog().state().pack_subscribe_update(
+                                id,
+                                active_subscribe,
+                                session_uuid,
+                                Diff::MINUS_ONE,
+                            );
+                            let update =
+                                self.catalog().state().resolve_builtin_table_update(update);
 
-                        self.metrics
-                            .active_subscribes
-                            .with_label_values(&[session_type])
-                            .dec();
+                            self.metrics
+                                .active_subscribes
+                                .with_label_values(&[session_type])
+                                .dec();
 
-                        // Defer the retraction to a group commit, for the same reason we
-                        // defer the insert (see `add_active_compute_sink`): committing inline
-                        // would block the coordinator loop. Callers that expose the
-                        // retirement wait on the notify off the coordinator loop
-                        // before responding.
-                        self.builtin_table_update().defer(vec![update])
+                            // Defer the retraction to a group commit, for the same reason we
+                            // defer the insert (see `add_active_compute_sink`): committing inline
+                            // would block the coordinator loop. Callers that expose the
+                            // retirement wait on the notify off the coordinator loop
+                            // before responding.
+                            self.builtin_table_update().defer(vec![update])
+                        }
                     }
                 }
                 ActiveComputeSink::CopyTo(_) => {
