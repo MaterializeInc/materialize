@@ -68,6 +68,7 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
+use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 use tracing::trace;
 
@@ -868,9 +869,8 @@ mod write {
                 )
                 .await;
 
-                // Reading the consolidated updates back only clones them into the batch builder,
-                // which awaits at every part flush, so it stays on the async task. Chain ok and
-                // err correction iterators directly, avoiding an intermediate Vec allocation.
+                // Chain ok and err correction iterators directly, avoiding an intermediate Vec
+                // allocation.
                 let oks = corrections
                     .ok
                     .consolidated_updates_before(&desc.upper)
@@ -888,10 +888,17 @@ mod write {
                     return corrections;
                 }
 
-                let batch = writer
-                    .batch(updates, desc.lower, desc.upper)
-                    .await
-                    .expect("valid usage");
+                // Feeding the builder pulls the updates out of the correction buffers on the
+                // calling thread: every pull clones a row and can page a chunk back in, while the
+                // builder only awaits once a part fills, i.e. after `blob_target_size` times
+                // `batch_builder_max_outstanding_parts` worth of updates. That is the same stall
+                // the consolidation above avoids, so it gets the same treatment.
+                // `block_in_place` rather than `spawn_blocking`, because the updates borrow the
+                // buffers and the builder needs an async context.
+                let batch = tokio::task::block_in_place(|| {
+                    Handle::current().block_on(writer.batch(updates, desc.lower, desc.upper))
+                })
+                .expect("valid usage");
                 let proto_batch = batch.into_transmittable_batch();
                 if let Err(err) = resp_tx.send(WriteResponse {
                     batch: Some(proto_batch),
