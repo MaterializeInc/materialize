@@ -30,7 +30,7 @@
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_expr::{func, Eval, MirScalarExpr, UnaryFunc};
+use mz_expr::{Eval, MirScalarExpr, UnaryFunc, func};
 use mz_repr::{Datum, ReprScalarType, RowArena};
 
 const HEX: &[u8] = b"0123456789abcdefABCDEF";

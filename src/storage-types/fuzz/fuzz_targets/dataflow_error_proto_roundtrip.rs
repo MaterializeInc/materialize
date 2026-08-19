@@ -30,9 +30,9 @@
 use libfuzzer_sys::fuzz_target;
 use mz_proto::ProtoType;
 use mz_storage_types::errors::{DataflowError, ProtoDataflowError};
-use prost::Message;
 use proptest::strategy::{Strategy, ValueTree};
 use proptest::test_runner::{Config, RngAlgorithm, TestRng, TestRunner};
+use prost::Message;
 
 /// Build a 32-byte proptest seed from `bytes` (zero-padded / truncated).
 fn seed_from(bytes: &[u8]) -> [u8; 32] {
@@ -66,8 +66,8 @@ fuzz_target!(|data: &[u8]| {
             Config::default(),
             TestRng::from_seed(RngAlgorithm::ChaCha, &seed),
         );
-        let Ok(tree) = <DataflowError as proptest::arbitrary::Arbitrary>::arbitrary()
-            .new_tree(&mut runner)
+        let Ok(tree) =
+            <DataflowError as proptest::arbitrary::Arbitrary>::arbitrary().new_tree(&mut runner)
         else {
             return;
         };

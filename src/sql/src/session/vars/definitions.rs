@@ -2427,6 +2427,12 @@ mod tests {
         // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
         // then assigning them to their respective system vars, to ensure we don't forget to update
         // this test when new optimizer features are added.
+        //
+        // NOTE: if the new feature ships enabled, also turn it on in
+        // `mz_transform_fuzz::fuzz_features`, which the cargo-fuzz optimizer targets plan with.
+        // That helper falls back to `Default` (all-`false`) for anything it does not name, so a
+        // flag missing from it silently fuzzes the disabled path. This exhaustive destructuring is
+        // the tripwire for both.
         let false_features = OptimizerFeatures::default();
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
