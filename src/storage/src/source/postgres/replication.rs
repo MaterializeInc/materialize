@@ -201,7 +201,6 @@ pub(crate) fn render<'scope>(
                 // Emit 0, to mark this worker as having started up correctly.
                 for stat in config.statistics.values() {
                     stat.set_offset_known(0);
-                    stat.set_offset_committed(0);
                 }
                 return Ok(());
             }
@@ -322,12 +321,6 @@ pub(crate) fn render<'scope>(
                 std::future::pending::<()>().await;
                 return Ok(());
             };
-            // If we don't set "offset_committed" now, it'll be stuck at 0 (the default value)
-            // until we finish processing the table snapshot. If the snapshot is large, that could be a long time.
-            // This confuses the ingestion lag calculation in the UI, causing it to yield erroneously high values.
-            for stat in config.statistics.values() {
-                stat.set_offset_committed(resume_lsn.offset);
-            }
             trace!(%id, "timely-{worker_id} replication reader started lsn={resume_lsn}");
 
             // Emitting an initial probe before we start waiting for rewinds ensures that we will
@@ -900,11 +893,10 @@ async fn raw_stream<'a>(
                 },
                 Some(upper) = uppers.next() => match upper.into_option() {
                     Some(lsn) => {
+                        // `offset_committed` is reported per export by the source pipeline,
+                        // this only drives the slot feedback.
                         if last_committed_upper < lsn {
                             last_committed_upper = lsn;
-                            for stat in config.statistics.values() {
-                                stat.set_offset_committed(last_committed_upper.offset);
-                            }
                         }
                         Ok(())
                     }

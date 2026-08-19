@@ -105,7 +105,7 @@ impl SourceRender for MySqlSourceConnection {
         self,
         scope: Scope<'scope, GtidPartition>,
         config: &RawSourceCreationConfig,
-        resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
+        _resume_uppers: impl futures::Stream<Item = Antichain<GtidPartition>> + 'static,
         _start_signal: impl std::future::Future<Output = ()> + 'static,
     ) -> (
         BTreeMap<
@@ -178,7 +178,6 @@ impl SourceRender for MySqlSourceConnection {
             scope.clone(),
             config.clone(),
             self,
-            resume_uppers,
             snapshot_err.clone().concat(repl_err.clone()),
         );
 

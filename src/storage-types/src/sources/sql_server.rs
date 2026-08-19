@@ -19,6 +19,7 @@ use mz_repr::{CatalogItemId, Datum, GlobalId, RelationDesc, Row, SqlScalarType};
 use mz_sql_server_util::cdc::Lsn;
 use serde::{Deserialize, Serialize};
 use timely::progress::Antichain;
+use timely::progress::frontier::AntichainRef;
 
 use crate::AlterCompatible;
 use crate::connections::inline::{
@@ -285,5 +286,9 @@ impl SourceTimestamp for Lsn {
             }
             _ => panic!("invalid row {row:?}"),
         }
+    }
+
+    fn to_offset_stat(frontier: AntichainRef<'_, Self>) -> Option<u64> {
+        frontier.as_option().map(Lsn::abbreviate)
     }
 }

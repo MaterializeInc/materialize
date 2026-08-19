@@ -23,6 +23,7 @@ use mz_timely_util::order::Step;
 use serde::{Deserialize, Serialize};
 use timely::order::{PartialOrder, TotalOrder};
 use timely::progress::Antichain;
+use timely::progress::frontier::AntichainRef;
 use timely::progress::timestamp::{PathSummary, Refines, Timestamp};
 use uuid::Uuid;
 
@@ -370,6 +371,24 @@ impl SourceTimestamp for GtidPartition {
             }
             _ => panic!("invalid row {row:?}"),
         }
+    }
+
+    fn to_offset_stat(frontier: AntichainRef<'_, Self>) -> Option<u64> {
+        // The sum over sources of the _number of transactions_ each frontier entry
+        // represents.
+        let mut sum = 0;
+        for ts in frontier.iter() {
+            // We assume source ids don't disappear once they appear.
+            if ts.interval().singleton().is_some() {
+                sum += match ts.timestamp() {
+                    GtidState::Absent => 0,
+                    // Txids in mysql start at 1, so we subtract 1 from the _frontier_
+                    // to get the _number of transactions_.
+                    GtidState::Active(id) => id.get().saturating_sub(1),
+                };
+            }
+        }
+        Some(sum)
     }
 }
 
