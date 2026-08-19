@@ -44,7 +44,9 @@
 //! resident fence metadata so a probe set faults only the chunk bodies it
 //! actually touches.
 
-use std::cell::{Cell, RefCell};
+#[cfg(test)]
+use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -79,8 +81,9 @@ thread_local! {
     static SPILL_OVERRIDE: RefCell<Option<Pool>> = const { RefCell::new(None) };
 
     /// A thread-scoped depth-floor override, taking precedence over the
-    /// global value. Lets tests and benches pin the floor without racing
-    /// concurrently running tests on the process-global state.
+    /// global value. Lets tests pin the floor without racing concurrently
+    /// running tests on the process-global state.
+    #[cfg(test)]
     static COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
 
     /// Reusable staging for call-scoped reads of spilled bodies.
@@ -140,17 +143,20 @@ pub fn set_compress_min_depth(depth: u8) {
 }
 
 /// Set or unset a thread-scoped depth-floor override, taking precedence over
-/// [`set_compress_min_depth`]. For tests and benches, which run concurrently
-/// and must not race on the process-global floor.
+/// [`set_compress_min_depth`]. Tests run concurrently and must not race on
+/// the process-global floor.
+#[cfg(test)]
 pub fn set_compress_min_depth_override(depth: Option<u8>) {
     COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.set(depth));
 }
 
 /// The depth floor in effect for this thread's commits.
 fn compress_min_depth() -> u8 {
-    COMPRESS_MIN_DEPTH_OVERRIDE
-        .with(|cell| cell.get())
-        .unwrap_or_else(|| COMPRESS_MIN_DEPTH.load(Ordering::Relaxed))
+    #[cfg(test)]
+    if let Some(depth) = COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.get()) {
+        return depth;
+    }
+    COMPRESS_MIN_DEPTH.load(Ordering::Relaxed)
 }
 
 /// The codec a body at `depth` stores under: identity below the compression
