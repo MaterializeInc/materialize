@@ -272,8 +272,8 @@ where
                     // If there is no starting arrangement, then we can run filters
                     // directly on the starting collection.
                     // If there is only one input, we are done joining, so run filters.
-                    // A columnar source decodes here, but current lowering never takes this
-                    // branch.
+                    // The closure is `Vec`-internal, so the edge decodes here. Current
+                    // lowering never takes this branch.
                     let name = "LinearJoinInitialization";
                     type CB<C> = ConsolidatingContainerBuilder<C>;
                     let (j, errs) = columnar_to_vec(joined)
@@ -547,9 +547,9 @@ where
 ///
 /// The key and value are pushed borrowed into a `ColumnBuilder`, so the ok path
 /// materializes no owned `Row` per record. The error path owns time and diff.
-/// Shared by the `Vec` arm of [`arrange_join_input`]
-/// (source edge) and by [`arrange_join_collection`] (the intra-operator
-/// accumulator), both of which key a `Vec`-formatted stream.
+/// Called by [`arrange_join_collection`] for the intra-operator accumulator,
+/// which is row-formatted. [`arrange_join_input`] does the same job for the
+/// columnar source edge, reading records from the borrowed column instead.
 fn key_join_input_vec<'s, T>(
     stream: Stream<'s, T, Vec<(Row, T, Diff)>>,
     stream_key: Vec<LirScalarExpr>,
@@ -563,7 +563,7 @@ where
 {
     stream.unary_fallible::<ColumnBuilder<((Row, Row), T, Diff)>, _, _, _>(
         Pipeline,
-        "LinearJoinKeyPreparation",
+        "LinearJoinAccumulatorKeyPreparation",
         |_, _| {
             Box::new(move |input, ok, errs| {
                 let mut temp_storage = RowArena::new();
