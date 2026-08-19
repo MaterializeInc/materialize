@@ -722,7 +722,7 @@ where
                 // We decode the datums once, into a common buffer for efficiency.
                 // Each row should contain `arity` columns; we should check that.
                 let temp_storage = mz_repr::RowArena::new();
-                let mut buffer = datum_vec.borrow();
+                let mut buffer = Vec::with_capacity(arity * source.len());
                 for (index, (datums, _)) in source.iter().enumerate() {
                     datums.extend_datums(&temp_storage, &mut buffer, None);
                     assert_eq!(buffer.len(), arity * (index + 1));
