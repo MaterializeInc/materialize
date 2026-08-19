@@ -2,7 +2,42 @@
 headless: true
 ---
 
-Collection is the same regardless of where the data ends up:
+Materialize captures and stores logs and metrics.
+
+```mermaid
+flowchart LR
+    subgraph src["Sources in your cluster"]
+        MZ["Materialize pods<br/>(environmentd, clusterd, operator)"]
+        INFRA["Cluster telemetry<br/>(kube-state-metrics, node exporter, cAdvisor)"]
+        LOGS[("Container logs<br/>and node journals")]
+        EV["Kubernetes events"]
+    end
+
+    AGENT["Alloy agent<br/>(DaemonSet, one per node)"]
+    GW["Alloy gateway<br/>(scrape, normalize, enrich, fan out)"]
+
+    subgraph bundled["Bundled stores, in your cluster"]
+        THANOS[("Thanos<br/>metrics")]
+        LOKI[("Loki<br/>logs")]
+    end
+
+    OBJ[("Your object storage")]
+    GRAF["Grafana<br/>(dashboards and alerts)"]
+    EXT["Platforms you already run<br/>(Datadog, Honeycomb, any OTLP<br/>endpoint, Prometheus remote write)"]
+
+    LOGS --> AGENT
+    AGENT -- "logs" --> GW
+    MZ -- "metrics, via ServiceMonitor and PodMonitor" --> GW
+    INFRA -- "metrics" --> GW
+    EV -- "as logs" --> GW
+    GW -- "metrics" --> THANOS
+    GW -- "logs" --> LOKI
+    GW -- "metrics and logs" --> EXT
+    THANOS --> OBJ
+    LOKI --> OBJ
+    THANOS -- "PromQL" --> GRAF
+    LOKI -- "LogQL" --> GRAF
+```
 
 1. A **Grafana Alloy agent** runs as a DaemonSet on every node and tails
    container logs.

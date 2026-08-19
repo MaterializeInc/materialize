@@ -35,10 +35,10 @@ prevent operational incidents. For alert rules guidelines, see
 You can monitor the performance and overall health of your Self-Managed
 Materialize.
 
-{{< include-md file="content/headless/monitoring/self-managed-stack.md" >}}
+{{% include-headless "/headless/monitoring/self-managed-stack" %}}
 
-{{< include-md file="content/headless/monitoring/self-managed-destinations.md" >}}
+{{% include-headless "/headless/monitoring/self-managed-destinations" %}}
 
 ### Alerting
 
-{{< include-md file="content/headless/monitoring/self-managed-alerting.md" >}}
+{{% include-headless "/headless/monitoring/self-managed-alerting" %}}

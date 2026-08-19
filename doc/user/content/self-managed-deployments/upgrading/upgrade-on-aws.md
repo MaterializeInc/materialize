@@ -262,9 +262,8 @@ may need to grow before the apply can schedule all of them.
 For accessing Grafana, pointing the stack at a database you already run, sizing
 profiles, and retention, see
 [Grafana](/manage/monitor/self-managed/grafana/). For what the stack stores and
-the backends it can forward to, see [Metric
-storage](/manage/monitor/self-managed/metric-store/) and [Log
-storage](/manage/monitor/self-managed/log-store/).
+the backends it can forward to, see [How logs and metrics are
+stored](/manage/monitor/self-managed/storage/).
 
 ## See also
 

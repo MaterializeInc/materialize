@@ -10,38 +10,25 @@ menu:
 
 This guide walks you through the steps required to monitor the performance and
 overall health of your Materialize region using any OpenTelemetry-compatible
-destination, such as Honeycomb, Grafana Cloud, or an OpenTelemetry Collector you
-run yourself. Self-Managed Materialize pushes metrics, and optionally logs, over
+destination. Self-Managed Materialize pushes metrics, and optionally logs, over
 OTLP from the monitoring stack the Materialize Terraform modules install.
-
-Some destinations have their own guide, because their endpoint and authentication
-are specific enough to be worth spelling out:
-
-| Destination | Guide |
-|-------------|-------|
-| Honeycomb | [Honeycomb](/manage/monitor/self-managed/honeycomb/) |
-| Datadog | [Datadog](/manage/monitor/self-managed/datadog/) |
-| Google Cloud Monitoring | [Google Cloud Monitoring](/manage/monitor/self-managed/google-cloud-monitoring/) |
-| Grafana Cloud, an OpenTelemetry Collector, or any other OTLP endpoint | This page |
-
-If your platform speaks Prometheus remote write rather than OTLP, see
-[Prometheus remote
-write](/manage/monitor/self-managed/prometheus-remote-write/) instead. Prefer OTLP
-where a platform accepts both: the OTLP path runs alongside the bundled metric
-store, and remote write replaces it.
 
 ## How it works
 
-{{< include-md file="content/headless/monitoring/how-it-works.md" >}}
+The stack collects metrics and logs before any destination is involved. For the
+collection pipeline and where that data is stored by default, see [How logs and
+metrics are stored](/manage/monitor/self-managed/storage/#how-it-works).
 
 An OTLP destination is **additive**. It receives its own filtered copy of the
-metrics, and the bundled [Thanos](/manage/monitor/self-managed/metric-store/),
+metrics, and the bundled [Thanos](/manage/monitor/self-managed/storage/),
 Grafana, and Alertmanager keep working as before. Several additive destinations
 can run at once, each with its own filter.
 
-## Before you begin
+## Instructions
 
-{{< include-md file="content/headless/monitoring/before-you-begin.md" >}}
+### Before you begin
+
+{{% include-headless "/headless/monitoring/before-you-begin" %}}
 
 You also need:
 
@@ -51,23 +38,23 @@ You also need:
 - The credential it expects. The gateway supports an API-key request header or a
   bearer token, and the two are mutually exclusive.
 
-## Step 1. Enable observability
+### Step 1. Enable observability
 
-{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
+{{% include-headless "/headless/monitoring/enable-observability" %}}
 
-## Step 2. Choose which metrics to deliver
+### Step 2. Choose which metrics to deliver
 
 Most OTLP platforms are metered, so the volume you send is a cost decision. Decide
 the floor before you configure the destination, because it is the input you are
 most likely to want to change later.
 
-{{< include-md file="content/headless/monitoring/metric-tiers.md" >}}
+{{% include-headless "/headless/monitoring/metric-tiers" %}}
 
 `otlp_metrics.min_importance` defaults to `recommended`, which covers the metrics
 the dashboards and alerts use. The bundled Thanos keeps `all` regardless, so
 lowering this floor does not cost you local fidelity.
 
-## Step 3. Export to an OTLP endpoint
+### Step 3. Export to an OTLP endpoint
 
 The destination is configured on the `monitoring` module block, not through a root
 variable of the examples. It provisions no cloud resources, so there is no
@@ -138,13 +125,13 @@ variable of the examples. It provisions no cloud resources, so there is no
    terraform apply
    ```
 
-{{< include-md file="content/headless/monitoring/gateway-credentials.md" >}}
+{{% include-headless "/headless/monitoring/gateway-credentials" %}}
 
-## Step 4. Confirm metrics are being delivered
+### Step 4. Confirm metrics are being delivered
 
-{{< include-md file="content/headless/monitoring/confirm-metrics.md" >}}
+{{% include-headless "/headless/monitoring/confirm-metrics" %}}
 
-## Step 5. Configure alerts
+### Step 5. Configure alerts
 
 Build alerts in your destination from the metrics and thresholds in
 [Alerting](/manage/monitor/self-managed/alerting/).
@@ -155,10 +142,10 @@ against the same thresholds and paging twice.
 
 ## How to forward logs
 
-{{< include-md file="content/headless/monitoring/forward-logs.md" >}}
+{{% include-headless "/headless/monitoring/forward-logs" %}}
 
-For the log storage options in full, see [Log
-storage](/manage/monitor/self-managed/log-store/).
+For the log storage options in full, see
+[How logs and metrics are stored](/manage/monitor/self-managed/storage/).
 
 ## Instructions when using Helm
 
@@ -218,11 +205,8 @@ For the full value reference, see [Metrics > Storing
 
 ## See also
 
-- [Metric storage](/manage/monitor/self-managed/metric-store/), for the bundled
-  store and the other backends you can send metrics to.
-
-- [Log storage](/manage/monitor/self-managed/log-store/), for the same picture on
-  the logging side.
+- [How logs and metrics are stored](/manage/monitor/self-managed/storage/), for the
+  bundled stores and the other backends you can send metrics and logs to.
 
 - [Alerting](/manage/monitor/self-managed/alerting/), for the metrics and
   thresholds to alert on.

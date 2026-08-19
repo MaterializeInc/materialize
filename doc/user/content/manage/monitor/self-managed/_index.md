@@ -19,12 +19,12 @@ This section covers monitoring and alerting for Self-Managed Materialize.
 
 ## Built-in monitoring stack
 
-{{< include-md file="content/headless/monitoring/self-managed-stack.md" >}}
+{{% include-headless "/headless/monitoring/self-managed-stack" %}}
 
 ## Deliver data to your observability platform
 
-{{< include-md file="content/headless/monitoring/self-managed-destinations.md" >}}
+{{% include-headless "/headless/monitoring/self-managed-destinations" %}}
 
 ## Alerting
 
-{{< include-md file="content/headless/monitoring/self-managed-alerting.md" >}}
+{{% include-headless "/headless/monitoring/self-managed-alerting" %}}

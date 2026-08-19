@@ -21,10 +21,12 @@ and which of them is a secret.
 
 ## How it works
 
-{{< include-md file="content/headless/monitoring/how-it-works.md" >}}
+The stack collects metrics and logs before any destination is involved. For the
+collection pipeline and where that data is stored by default, see [How logs and
+metrics are stored](/manage/monitor/self-managed/storage/#how-it-works).
 
 Honeycomb is an **additive** destination. It receives its own filtered copy of the
-metrics, and the bundled [Thanos](/manage/monitor/self-managed/metric-store/),
+metrics, and the bundled [Thanos](/manage/monitor/self-managed/storage/),
 Grafana, and Alertmanager keep working as before.
 
 Honeycomb authenticates with an API-key **request header** rather than a bearer
@@ -33,9 +35,11 @@ here, because the two headers are configured in different places: the dataset
 renders into the gateway's configuration as a literal, and the API key is
 delivered through a Secret.
 
-## Before you begin
+## Instructions
 
-{{< include-md file="content/headless/monitoring/before-you-begin.md" >}}
+### Before you begin
+
+{{% include-headless "/headless/monitoring/before-you-begin" %}}
 
 You also need:
 
@@ -50,11 +54,11 @@ You also need:
 - Your Honeycomb region's endpoint: `api.honeycomb.io`, or
   `api.eu1.honeycomb.io` for the EU instance.
 
-## Step 1. Enable observability
+### Step 1. Enable observability
 
-{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
+{{% include-headless "/headless/monitoring/enable-observability" %}}
 
-## Step 2. Configure the Honeycomb destination
+### Step 2. Configure the Honeycomb destination
 
 Honeycomb is configured on the `monitoring` module block, not through a root
 variable of the examples. It provisions no cloud resources, so there is no
@@ -118,11 +122,11 @@ variable of the examples. It provisions no cloud resources, so there is no
    terraform apply
    ```
 
-{{< include-md file="content/headless/monitoring/gateway-credentials.md" >}}
+{{% include-headless "/headless/monitoring/gateway-credentials" %}}
 
-## Step 3. Confirm metrics are arriving
+### Step 3. Confirm metrics are arriving
 
-{{< include-md file="content/headless/monitoring/confirm-metrics.md" >}}
+{{% include-headless "/headless/monitoring/confirm-metrics" %}}
 
 In Honeycomb, select the dataset you named and query for a recent metric.
 
@@ -131,7 +135,7 @@ Honeycomb's schema view is cumulative, so a metric shown there may predate a
 configuration change. Confirm against a recent time window.
 {{< /note >}}
 
-## Step 4. Build alerts
+### Step 4. Build alerts
 
 Build Honeycomb [triggers
 ⧉](https://docs.honeycomb.io/investigate/alerts/triggers/) from the metrics and
@@ -145,17 +149,17 @@ against the same thresholds.
 
 Honeycomb is metered, so the volume you send is a cost decision.
 
-{{< include-md file="content/headless/monitoring/metric-tiers.md" >}}
+{{% include-headless "/headless/monitoring/metric-tiers" %}}
 
 `otlp_metrics.min_importance` defaults to `recommended`, which covers the metrics
 the dashboards and alerts use. `all` is a diagnostic setting, not a steady state.
 
 ## How to forward logs
 
-{{< include-md file="content/headless/monitoring/forward-logs.md" >}}
+{{% include-headless "/headless/monitoring/forward-logs" %}}
 
-For the log storage options in full, see [Log
-storage](/manage/monitor/self-managed/log-store/).
+For the log storage options in full, see
+[How logs and metrics are stored](/manage/monitor/self-managed/storage/).
 
 ## Instructions when using Helm
 
@@ -218,8 +222,8 @@ A ready-made starting point for exactly this setup lives at
   destinations generally, including bearer-token authentication and your own
   collector.
 
-- [Metric storage](/manage/monitor/self-managed/metric-store/), for the bundled
-  store and the other backends you can send metrics to.
+- [How logs and metrics are stored](/manage/monitor/self-managed/storage/), for the
+  bundled stores and the other backends you can send metrics and logs to.
 
 - [Alerting](/manage/monitor/self-managed/alerting/), for the metrics and
   thresholds to alert on.

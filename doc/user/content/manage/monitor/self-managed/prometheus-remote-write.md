@@ -27,7 +27,9 @@ those the choice really is external store or bundled store, not both.
 
 ## How it works
 
-{{< include-md file="content/headless/monitoring/how-it-works.md" >}}
+The stack collects metrics and logs before any destination is involved. For the
+collection pipeline and where that data is stored by default, see [How logs and
+metrics are stored](/manage/monitor/self-managed/storage/#how-it-works).
 
 The gateway writes metrics with the Prometheus remote-write protocol, and the
 bundled Thanos is simply the default endpoint for that write. Repointing it is a
@@ -37,9 +39,11 @@ exporter and why there can only be one of them.
 Because the external store replaces Thanos, consider turning the bundled one off
 in the same change rather than paying to run a store nothing writes to.
 
-## Before you begin
+## Instructions
 
-{{< include-md file="content/headless/monitoring/before-you-begin.md" >}}
+### Before you begin
+
+{{% include-headless "/headless/monitoring/before-you-begin" %}}
 
 You also need:
 
@@ -54,11 +58,11 @@ You also need:
   you retire Thanos you either repoint that data source at the external store or
   use the external platform's own query interface.
 
-## Step 1. Enable observability
+### Step 1. Enable observability
 
-{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
+{{% include-headless "/headless/monitoring/enable-observability" %}}
 
-## Step 2. Repoint the remote-write destination
+### Step 2. Repoint the remote-write destination
 
 Remote write is not modelled as a Terraform input, because unlike the additive
 destinations it changes where the stack's own storage lives. Set it through
@@ -134,7 +138,7 @@ wins over anything the modules compute.
    terraform apply
    ```
 
-## Step 3. Amazon Managed Prometheus
+### Step 3. Amazon Managed Prometheus
 
 Amazon Managed Prometheus is the one remote-write store that needs no credential
 in the cluster at all. `sigv4` signs requests with the gateway pod's IRSA
@@ -169,7 +173,7 @@ A ready-made starting point lives at [`aws-amp-example.values.yaml`
 ⧉](https://github.com/MaterializeInc/materialize-monitoring/blob/main/charts/materialize-monitoring/profiles/aws-amp-example.values.yaml).
 Note that it also sets `thanos.enabled: false`, which is the next step.
 
-## Step 4. Retire the bundled metric store
+### Step 4. Retire the bundled metric store
 
 Once the external store is receiving metrics, the bundled Thanos is a component
 nothing writes to. Turning it off frees its compute and stops new writes to its
@@ -191,11 +195,11 @@ queries against them while it is off. Repoint the bundled Grafana's data source 
 the external store in the same change, or its dashboards will show no data.
 {{< /warning >}}
 
-## Step 5. Confirm metrics are arriving
+### Step 5. Confirm metrics are arriving
 
-{{< include-md file="content/headless/monitoring/confirm-metrics.md" >}}
+{{% include-headless "/headless/monitoring/confirm-metrics" %}}
 
-## Step 6. Configure alerts
+### Step 6. Configure alerts
 
 The Alertmanager rules the stack ships evaluate against the bundled Thanos, so
 retiring it moves alerting to the external platform. Rebuild the alerts there from
@@ -203,7 +207,7 @@ the metrics and thresholds in [Alerting](/manage/monitor/self-managed/alerting/)
 
 ## How to control which metrics the store receives
 
-{{< include-md file="content/headless/monitoring/metric-tiers.md" >}}
+{{% include-headless "/headless/monitoring/metric-tiers" %}}
 
 The remote-write destination defaults to `all`, on the assumption that it is
 backed by cheap storage. If you repoint it at a metered platform, lower the floor
@@ -229,8 +233,8 @@ TLS settings, see [Metrics > Storing
 
 ## See also
 
-- [Metric storage](/manage/monitor/self-managed/metric-store/), for the bundled
-  store and the additive backends that keep it in place.
+- [How logs and metrics are stored](/manage/monitor/self-managed/storage/), for the
+  bundled stores and the additive backends that keep them in place.
 
 - [OpenTelemetry](/manage/monitor/self-managed/opentelemetry/), the additive
   alternative where your platform accepts OTLP.

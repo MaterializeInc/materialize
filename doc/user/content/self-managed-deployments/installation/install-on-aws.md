@@ -105,8 +105,8 @@ which replaced an earlier Prometheus-and-Grafana pair. The Grafana database
 and load balancer were added in v10.1.0, and are both billable. Starting with
 v12.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
 do not want the stack. For what the stack stores and where else it can send
-it, see [Metric storage](/manage/monitor/self-managed/metric-store/) and [Log
-storage](/manage/monitor/self-managed/log-store/). For reaching Grafana, see
+it, see [How logs and metrics are
+stored](/manage/monitor/self-managed/storage/). For reaching Grafana, see
 [Grafana](/manage/monitor/self-managed/grafana/).
 
 ## Prerequisites

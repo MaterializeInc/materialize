@@ -13,12 +13,21 @@ menu:
 **Grafana** is the dashboarding and query interface for the monitoring stack the
 [Materialize Terraform
 modules](/self-managed-deployments/installation/#install-using-terraform-modules)
-install. This guide will help you can deploy Grafana, with all data sources wired up to our template dashboards. This means you can start monitoring Materialize immediately.
+install. This guide will help you deploy Grafana, with all data sources wired up
+to our template dashboards. This means you can start monitoring Materialize
+immediately.
 
 If you are upgrading from a previous version of the Materialize Terraform
 Modules, read [How to upgrade from previous
 versions](#how-to-upgrade-from-previous-versions-of-the-materialize-terraform-modules)
 first.
+
+## How it works
+
+The dashboards read the two stores the monitoring stack runs: Thanos for metrics
+and Loki for logs. For how that data is collected, and where it is stored, see
+[How logs and metrics are
+stored](/manage/monitor/self-managed/storage/#how-it-works).
 
 ## Installation
 
@@ -36,7 +45,7 @@ Ensure you have:
 
 ### Step 1. Enable observability
 
-{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
+{{% include-headless "/headless/monitoring/enable-observability" %}}
 
 Starting in **v10.1.0**, the examples also create two resources for Grafana
 itself whenever `enable_observability` is on:
@@ -251,14 +260,12 @@ guide for your cloud: [AWS](/self-managed-deployments/upgrading/upgrade-on-aws/)
 ## Connect existing tooling
 
 If you already run Grafana, or another tool that should read the collected data,
-the examples publish the query endpoints for both stores as Terraform outputs. See
-[Metric storage](/manage/monitor/self-managed/metric-store/#connect-existing-tooling)
-and [Log
-storage](/manage/monitor/self-managed/log-store/#connect-existing-tooling).
+the examples publish the query endpoints for both stores as Terraform outputs.
+See [How logs and metrics are stored](/manage/monitor/self-managed/storage/#connect-existing-tooling).
 
 To have the stack push its metrics or logs to a platform you already run rather
-than being queried, see the destinations listed under [Metric
-storage](/manage/monitor/self-managed/metric-store/#other-metric-storage-backends).
+than being queried, see the destinations listed in [How logs and metrics are
+stored](/manage/monitor/self-managed/storage/#sending-metrics-and-logs-elsewhere).
 
 ## Advanced configuration
 

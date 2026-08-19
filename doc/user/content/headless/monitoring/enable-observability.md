@@ -2,11 +2,10 @@
 headless: true
 ---
 
-Each cloud's `simple` and `enterprise` examples take an `enable_observability`
-variable. Starting with **v12.0.0** of the Materialize Terraform Modules it
-defaults to `true`, so a fresh apply installs the monitoring stack without any
-configuration, and bumping `ref=<tag>` to v12.0.0 or later installs it on a
-deployment that never set the variable.
+The Materialize Terraform Modules take an `enable_observability` variable.
+Starting with **v12.0.0** it defaults to `true`, so a fresh apply installs the
+monitoring stack without any configuration, and bumping `ref=<tag>` to v12.0.0
+or later installs it on a deployment that never set the variable.
 
 1. To confirm the setting, or to change it, set it explicitly in your
    `terraform.tfvars`:

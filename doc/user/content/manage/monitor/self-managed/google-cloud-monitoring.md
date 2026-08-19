@@ -22,10 +22,12 @@ that authenticate it.
 
 ## How it works
 
-{{< include-md file="content/headless/monitoring/how-it-works.md" >}}
+The stack collects metrics and logs before any destination is involved. For the
+collection pipeline and where that data is stored by default, see [How logs and
+metrics are stored](/manage/monitor/self-managed/storage/#how-it-works).
 
 Cloud Monitoring is an **additive** destination. It receives its own filtered copy
-of the metrics, and the bundled [Thanos](/manage/monitor/self-managed/metric-store/),
+of the metrics, and the bundled [Thanos](/manage/monitor/self-managed/storage/),
 Grafana, and Alertmanager keep working as before.
 
 Authentication is **ambient**, not a credential you supply. The module creates a
@@ -38,12 +40,14 @@ Cloud Monitoring is metrics-only. Its exporter cannot receive logs, and enabling
 the log path with Cloud Monitoring as the only OpenTelemetry destination fails the
 install rather than silently dropping them. For logs on GCP, use an [OTLP
 destination](/manage/monitor/self-managed/opentelemetry/) or keep them in the
-bundled [log store](/manage/monitor/self-managed/log-store/).
+bundled [Loki](/manage/monitor/self-managed/storage/).
 {{< /note >}}
 
-## Before you begin
+## Instructions
 
-{{< include-md file="content/headless/monitoring/before-you-begin.md" >}}
+### Before you begin
+
+{{% include-headless "/headless/monitoring/before-you-begin" %}}
 
 You also need:
 
@@ -52,11 +56,11 @@ You also need:
 
 - Permission to create a service account and IAM bindings in the project.
 
-## Step 1. Enable observability
+### Step 1. Enable observability
 
-{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
+{{% include-headless "/headless/monitoring/enable-observability" %}}
 
-## Step 2. Configure the Cloud Monitoring destination
+### Step 2. Configure the Cloud Monitoring destination
 
 1. On the `monitoring` module block of your Terraform, set:
 
@@ -88,14 +92,14 @@ to the node's service account, which works only if that account happens to hold
 `roles/monitoring.metricWriter`, and fails opaquely if it does not.
 {{< /warning >}}
 
-## Step 3. Confirm metrics are arriving
+### Step 3. Confirm metrics are arriving
 
-{{< include-md file="content/headless/monitoring/confirm-metrics.md" >}}
+{{% include-headless "/headless/monitoring/confirm-metrics" %}}
 
 In Cloud Monitoring, use **Metrics explorer** and filter to the prefix, which is
 `workload.googleapis.com/mzmon` unless you changed it.
 
-## Step 4. Build alerts
+### Step 4. Build alerts
 
 Build Cloud Monitoring [alerting policies
 ⧉](https://cloud.google.com/monitoring/alerts) from the metrics and thresholds in
@@ -110,7 +114,7 @@ against the same thresholds.
 Cloud Monitoring bills per custom metric and per sample, so the tier you pick sets
 the bill.
 
-{{< include-md file="content/headless/monitoring/metric-tiers.md" >}}
+{{% include-headless "/headless/monitoring/metric-tiers" %}}
 
 `google_cloud_metrics_min_importance` defaults to `recommended`, which covers the
 metrics the dashboards and alerts use. `all` is a diagnostic setting, not a steady
@@ -154,8 +158,8 @@ For the full value reference, see [Metrics > Storing
 
 ## See also
 
-- [Metric storage](/manage/monitor/self-managed/metric-store/), for the bundled
-  store and the other backends you can send metrics to.
+- [How logs and metrics are stored](/manage/monitor/self-managed/storage/), for the
+  bundled stores and the other backends you can send metrics and logs to.
 
 - [OpenTelemetry](/manage/monitor/self-managed/opentelemetry/), for OTLP
   destinations, which can also carry logs.

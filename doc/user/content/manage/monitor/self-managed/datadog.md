@@ -14,31 +14,25 @@ overall health of your Materialize region using [Datadog
 optionally logs, to Datadog from the monitoring stack the Materialize Terraform
 modules install.
 
-Nothing extra runs alongside Materialize for this. There is no SQL exporter to
-operate, no Datadog Agent to install next to Materialize, and no scrape
-configuration to maintain.
-
-{{< note >}}
-This page covers Self-Managed Materialize. For Materialize Cloud, where the
-monitoring stack is not part of the deployment, see [Datadog for
-Cloud](/manage/monitor/cloud/datadog/).
-{{< /note >}}
-
 ## How it works
 
-{{< include-md file="content/headless/monitoring/how-it-works.md" >}}
+The stack collects metrics and logs before any destination is involved. For the
+collection pipeline and where that data is stored by default, see [How logs and
+metrics are stored](/manage/monitor/self-managed/storage/#how-it-works).
 
 Datadog is an **additive** destination. It receives its own filtered copy of the
-metrics, and the bundled [Thanos](/manage/monitor/self-managed/metric-store/),
+metrics, and the bundled [Thanos](/manage/monitor/self-managed/storage/),
 Grafana, and Alertmanager keep working as before. You do not give anything up by
 turning it on.
 
 The exporter authenticates directly against the Datadog intake with an API key,
 so the only decisions are which site to send to and how much to send.
 
-## Before you begin
+## Instructions
 
-{{< include-md file="content/headless/monitoring/before-you-begin.md" >}}
+### Before you begin
+
+{{% include-headless "/headless/monitoring/before-you-begin" %}}
 
 You also need:
 
@@ -52,11 +46,11 @@ You also need:
   403 from the intake rather than a routing error, so confirm it before you
   apply.
 
-## Step 1. Enable observability
+### Step 1. Enable observability
 
-{{< include-md file="content/headless/monitoring/enable-observability.md" >}}
+{{% include-headless "/headless/monitoring/enable-observability" %}}
 
-## Step 2. Configure the Datadog destination
+### Step 2. Configure the Datadog destination
 
 Datadog is configured on the `monitoring` module block, not through a root
 variable of the examples. It provisions no cloud resources, so there is no
@@ -111,15 +105,15 @@ variable of the examples. It provisions no cloud resources, so there is no
    terraform apply
    ```
 
-{{< include-md file="content/headless/monitoring/gateway-credentials.md" >}}
+{{% include-headless "/headless/monitoring/gateway-credentials" %}}
 
-## Step 3. Confirm metrics are arriving
+### Step 3. Confirm metrics are arriving
 
-{{< include-md file="content/headless/monitoring/confirm-metrics.md" >}}
+{{% include-headless "/headless/monitoring/confirm-metrics" %}}
 
 In Datadog, **Metrics > Summary** filtered to `mz_` is the quickest place to look.
 
-## Step 4. Build alerts
+### Step 4. Build alerts
 
 With metrics in Datadog, build [monitors ⧉](https://docs.datadoghq.com/monitors/)
 from the metrics and thresholds in
@@ -133,7 +127,7 @@ against the same thresholds and paging twice.
 
 Datadog bills per custom metric, so the volume you send is a cost decision.
 
-{{< include-md file="content/headless/monitoring/metric-tiers.md" >}}
+{{% include-headless "/headless/monitoring/metric-tiers" %}}
 
 `datadog_metrics.min_importance` defaults to `essential`, a tighter floor than the
 other destinations use, for exactly this reason. `all` is a diagnostic setting,
@@ -141,10 +135,10 @@ not a steady state.
 
 ## How to forward logs
 
-{{< include-md file="content/headless/monitoring/forward-logs.md" >}}
+{{% include-headless "/headless/monitoring/forward-logs" %}}
 
 Datadog bills for logs separately from custom metrics. For the log storage
-options in full, see [Log storage](/manage/monitor/self-managed/log-store/).
+options in full, see [How logs and metrics are stored](/manage/monitor/self-managed/storage/).
 
 ## Instructions when using Helm
 
@@ -192,8 +186,8 @@ profile, and for the full value reference, [Metrics > Storing
 
 ## See also
 
-- [Metric storage](/manage/monitor/self-managed/metric-store/), for the bundled
-  store and the other backends you can send metrics to.
+- [How logs and metrics are stored](/manage/monitor/self-managed/storage/), for the
+  bundled stores and the other backends you can send metrics and logs to.
 
 - [Honeycomb](/manage/monitor/self-managed/honeycomb/) and
   [OpenTelemetry](/manage/monitor/self-managed/opentelemetry/), which follow the
