@@ -24,8 +24,8 @@
 //! See [`metrics`] for what is recorded and how to turn recording on.
 
 use std::ops::Deref;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use columnar::AsBytes;
 use columnar::bytes::indexed;
@@ -153,9 +153,16 @@ pub struct AlignBuffer {
 enum Body {
     /// Words on the heap.
     Heap(Vec<u64>),
-    /// Words in the buffer pool, copied out on first access.
+    /// Words in the buffer pool, copied out and freed on first access.
     Paged {
-        handle: ChunkHandle,
+        /// The pool chunk, present until the body is materialized.
+        ///
+        /// A `Mutex` rather than a `RefCell` because a `Column` crosses
+        /// worker threads, and taking the handle out is what lets
+        /// materialization free the chunk: holding both the slot and the
+        /// heap copy for the rest of the body's life would make paging cost
+        /// memory rather than save it.
+        spilled: Mutex<Option<ChunkHandle>>,
         resident: OnceLock<Vec<u64>>,
     },
 }
@@ -243,7 +250,7 @@ impl AlignBuffer {
         let charge = metrics::record_mint(origin, words);
         Some(AlignBuffer {
             body: Body::Paged {
-                handle,
+                spilled: Mutex::new(Some(handle)),
                 resident: OnceLock::new(),
             },
             words,
@@ -280,9 +287,9 @@ impl AlignBuffer {
         self.release();
         match std::mem::replace(&mut self.body, Body::Heap(Vec::new())) {
             Body::Heap(words) => words,
-            Body::Paged { handle, resident } => {
-                resident.into_inner().unwrap_or_else(|| read_out(&handle))
-            }
+            Body::Paged { spilled, resident } => resident
+                .into_inner()
+                .unwrap_or_else(|| Self::take_spilled(&spilled)),
         }
     }
 
@@ -315,11 +322,28 @@ impl AlignBuffer {
         matches!(&self.body, Body::Paged { resident, .. } if resident.get().is_none())
     }
 
+    /// Copies a paged body out of the pool and frees the chunk, at most once.
+    fn take_spilled(spilled: &Mutex<Option<ChunkHandle>>) -> Vec<u64> {
+        let handle = spilled
+            .lock()
+            .expect("spill mutex poisoned")
+            .take()
+            .expect("the handle is present until the body is materialized");
+        let mut words = Vec::new();
+        // `take` copies out and frees, where `read_into` would leave the chunk
+        // allocated and hold the body twice for the rest of its life.
+        handle.take(&mut words);
+        metrics::record_unpage(words.capacity());
+        words
+    }
+
     /// The words, copying a paged body out of the pool on first call.
     fn resident_words(&self) -> &[u64] {
         match &self.body {
             Body::Heap(words) => words,
-            Body::Paged { handle, resident } => resident.get_or_init(|| read_out(handle)),
+            Body::Paged { spilled, resident } => {
+                resident.get_or_init(|| Self::take_spilled(spilled))
+            }
         }
     }
 
@@ -344,14 +368,6 @@ impl AlignBuffer {
             metrics::record_drop(self.origin, charge);
         }
     }
-}
-
-/// Copies a paged body out of the pool, counting the round trip.
-fn read_out(handle: &ChunkHandle) -> Vec<u64> {
-    let mut words = Vec::new();
-    handle.read_into(&mut words);
-    metrics::record_unpage(words.capacity());
-    words
 }
 
 impl Deref for AlignBuffer {

@@ -46,6 +46,13 @@ fn encode(records: u64) -> AlignBuffer {
     AlignBuffer::encode(Origin::Ship, usize::try_from(records).unwrap(), &view)
 }
 
+/// Live chunks in the process pool, or 0 before one is installed.
+fn pool_live_chunks() -> u64 {
+    mz_timely_util::pool_config::active_pool()
+        .map(|p| p.stats().live_chunks)
+        .unwrap_or(0)
+}
+
 /// The decoded `(u64, u64)` pairs a column holds.
 fn decode(column: &Column<(u64, u64)>) -> Vec<(u64, u64)> {
     use columnar::{Index, Len};
@@ -132,6 +139,26 @@ fn edge_paging() {
         Some(usize::try_from(RECORDS).unwrap()),
         "materializing keeps the resident record count",
     );
+
+    // Materializing frees the pool chunk rather than holding the body in both
+    // places: a run where every body is borrowed would otherwise cost more
+    // memory than not paging at all.
+    let before = pool_live_chunks();
+    let transient = encode(RECORDS);
+    assert!(transient.is_paged());
+    assert_eq!(
+        pool_live_chunks(),
+        before + 1,
+        "a paged body holds exactly one chunk",
+    );
+    let _ = transient.as_words();
+    assert!(!transient.is_paged());
+    assert_eq!(
+        pool_live_chunks(),
+        before,
+        "materializing must release the chunk, not keep a second copy",
+    );
+    drop(transient);
 
     // A clone of a paged body is a heap body with the same contents: the pool
     // hands out no second owner, so the clone pays the copy.
