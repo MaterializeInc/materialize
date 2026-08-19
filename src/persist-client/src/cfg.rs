@@ -387,7 +387,8 @@ impl PersistConfig {
 
 /// Sets the maximum size of the connection pool that is used by consensus.
 ///
-/// Requires a restart of the process to take effect.
+/// Applies to existing pools without a restart. Each pool picks up a changed
+/// value the next time a connection is requested from it.
 pub const CONSENSUS_CONNECTION_POOL_MAX_SIZE: Config<usize> = Config::new(
     "persist_consensus_connection_pool_max_size",
     50,
