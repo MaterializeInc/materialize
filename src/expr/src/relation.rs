@@ -56,6 +56,7 @@ use crate::{
 pub mod canonicalize;
 pub mod func;
 pub mod join_input_mapper;
+pub mod unique_keys;
 
 /// A recursion limit to be used for stack-safe traversals of [`MirRelationExpr`] trees.
 ///
