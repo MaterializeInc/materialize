@@ -598,6 +598,79 @@ SELECT c.name FROM mz_indexes i JOIN mz_clusters c ON c.id = i.cluster_id WHERE 
 agent_compute
 COMPLETE 1
 
+# =============================================================================
+# DEX-71: hydration must describe the cluster the read will actually use. A
+# materialized view whose only index sits on a zero-replica cluster the agent
+# cannot use is advertised with a null cluster and read from persist on the
+# session's cluster, so readiness has to come from the view's own cluster.
+# Reporting the hidden index's cluster instead surfaced replica_count 0, which
+# the agent contract reads as "unreadable", hiding a working product.
+# =============================================================================
+
+simple conn=mz_system,user=mz_system
+CREATE CLUSTER agent_dead_idx REPLICAS ();
+----
+COMPLETE 0
+
+# The view lives on agent_serving (1 replica); its only index is on the
+# zero-replica cluster the agent has no USAGE on.
+simple conn=mz_system,user=mz_system
+CREATE MATERIALIZED VIEW agent_objects.fallback_mv IN CLUSTER agent_serving AS SELECT 1 AS id;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE INDEX fallback_mv_idx IN CLUSTER agent_dead_idx ON agent_objects.fallback_mv (id);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT SELECT ON agent_objects.fallback_mv TO agent;
+----
+COMPLETE 0
+
+# Sanity check: the index really is on the zero-replica cluster, so the
+# assertion below cannot pass vacuously.
+simple conn=mz_system,user=mz_system
+SELECT c.name, (SELECT count(*) FROM mz_cluster_replicas r WHERE r.cluster_id = c.id) FROM mz_indexes i JOIN mz_clusters c ON c.id = i.cluster_id WHERE i.name = 'fallback_mv_idx';
+----
+agent_dead_idx,0
+COMPLETE 1
+
+# Discovery hides the index cluster, as in DEX-66.
+simple conn=agent_restricted,user=agent
+SELECT object_name, cluster FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."fallback_mv"';
+----
+"materialize"."agent_objects"."fallback_mv",NULL
+COMPLETE 1
+
+# Hydration follows the fallback read path (agent_serving, 1 replica) rather
+# than the hidden zero-replica index cluster. `hydrated` is timing-dependent so
+# only the replica count is asserted here.
+simple conn=agent_restricted,user=agent
+SELECT (hydration->>'replica_count')::int FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."fallback_mv"';
+----
+1
+COMPLETE 1
+
+# A product whose advertised cluster IS usable keeps reporting that cluster's
+# readiness, unchanged by the fallback logic.
+simple conn=agent_restricted,user=agent
+SELECT (hydration->>'replica_count')::int FROM mz_internal.mz_mcp_data_product_details WHERE object_name = '"materialize"."agent_objects"."transfer_windows"';
+----
+1
+COMPLETE 1
+
+simple conn=mz_system,user=mz_system
+DROP MATERIALIZED VIEW agent_objects.fallback_mv CASCADE;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CLUSTER agent_dead_idx CASCADE;
+----
+COMPLETE 0
+
 # mz_session_role_memberships() is callable in a restricted session (it only
 # exposes the current session's role chain, not the full system graph).
 # Verify it walks the full transitive chain: grant agent membership in a parent
