@@ -15,8 +15,10 @@ menu:
 modules](/self-managed-deployments/installation/#install-using-terraform-modules)
 install. This guide will help you can deploy Grafana, with all data sources wired up to our template dashboards. This means you can start monitoring Materialize immediately.
 
-If you are upgrading from a previous version of the Terraform modules, read
-[Upgrading from the previous stack](#upgrading-from-the-previous-stack) first.
+If you are upgrading from a previous version of the Materialize Terraform
+Modules, read [How to upgrade from previous
+versions](#how-to-upgrade-from-previous-versions-of-the-materialize-terraform-modules)
+first.
 
 ## Installation
 
@@ -204,7 +206,7 @@ resources rather than the Helm release status.
 For the list of dashboards and what each one covers, see [Grafana dashboards
 ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/grafana/importing/).
 
-## How to upgrade from previous terraform versions
+## How to upgrade from previous versions of the Materialize Terraform Modules
 
 Before Terraform v10.0.0, `enable_observability = true` installed a single Prometheus
 and a Grafana from `kubernetes/modules/prometheus` and
