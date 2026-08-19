@@ -18,11 +18,29 @@ Internally, each collection is stored as a set of **runs** of data, each of whic
 
 For [materialized views](/sql/create-materialized-view/) and
 [tables](/sql/create-table) (including read-only tables created from sources),
-you can use the `PARTITION BY` option to specify the internal ordering that
-Materialize will use to sort, partition, and store these runs of data. A
-well-chosen partitioning can unlock optimizations like [filter
-pushdown](#filter-pushdown), which in turn can make queries and other operations
-more efficient.
+you can use the `PARTITION BY` option to declare the internal ordering that
+Materialize uses to sort, partition, and store these runs of data. That ordering
+is what makes optimizations like [filter pushdown](#filter-pushdown) effective,
+which in turn can make queries and other operations more efficient.
+
+{{< warning >}}
+The `PARTITION BY` option is a declaration, not a directive: it does not change
+how your data is stored. Materialize validates the option against the
+[requirements](#requirements) below and then stores your data exactly as it
+would have without it, so adding or removing the option does not change the
+performance of your queries.
+
+The requirements are what make this possible. The option can only name a prefix
+of the collection's columns, which is the ordering Materialize already uses
+internally, so a valid `PARTITION BY` clause never asks for a layout that
+differs from the default one. The option records your expectation so that
+Materialize can preserve it, and it lets you find out at creation time if the
+ordering you want is not one Materialize can provide.
+
+If you are adding `PARTITION BY` to make a specific query faster, see [Filter
+pushdown](#filter-pushdown) instead: whether pushdown helps depends on your data
+and your filters, not on this option.
+{{< /warning >}}
 
 {{< note >}}
 The `PARTITION BY` option has no impact on the order in which records are returned by queries.
@@ -43,6 +61,12 @@ WITH (
 
 This `PARTITION BY` clause declares that events with similar `event_ts` timestamps should be stored together.
 
+{{< note >}}
+The `PARTITION BY` option described here is unrelated to the `PARTITION BY`
+option of [`CREATE SINK ... INTO KAFKA`](/sql/create-sink/kafka/#partitioning),
+which chooses the Kafka partition that a sink writes each row to.
+{{< /note >}}
+
 When multiple columns are specified, rows are partitioned lexicographically.
 For example, `PARTITION BY (event_date, event_time)` would partition first by the created date;
 if many rows have the same `event_date`, those rows would be partitioned by the `event_time` column.
@@ -55,6 +79,7 @@ The `PARTITION BY` option does not mean that rows with different values for the 
 ## Requirements
 
 Materialize currently imposes some restrictions on the list of columns in the `PARTITION BY` clause.
+These restrictions describe the orderings Materialize can provide, and are enforced when you create the object.
 
 - This clause must list a prefix of the columns in the collection. For example:
   - if you're creating a table that partitions by a single column, that column must be the first column in the table's schema definition;
@@ -76,15 +101,19 @@ SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
 ```
 
 This query returns only rows with similar values for `event_ts`: timestamps in the last five minutes.
-Since we declared that our `events` table is partitioned by `event_ts`, that means all the rows that pass this filter will be stored in the same small subset of parts.
+If rows with similar `event_ts` values are stored close together, the rows that pass this filter live in a small subset of parts, and Materialize can skip fetching the rest.
 
 Materialize tracks a small amount of metadata for every part, including the range of possible values for many columns. When it can determine that none of the data in a part will match a filter, it will skip fetching that data from object storage. This optimization is called _filter pushdown_, and when you're querying with a selective filter against a large collection, it can save a great deal of time and computation.
 
 Materialize will always try to apply filter pushdown to your query, but that filtering is usually only effective when similar rows are stored together.
-If you want to make sure that the filter pushdown optimization is effective for your query, you can:
+Whether that holds depends on your data and on the order in which it was written, and it is not something you can currently declare: as described above, a `PARTITION BY` clause states the layout you expect rather than creating it.
 
-- Use a `PARTITION BY` clause on the relevant column to ensure that data with similar values for that column are stored close together.
-- Add a filter to your query that only returns true for a narrow range of values in that column.
+To give filter pushdown the best chance of being effective for your query, you can:
+
+- Add a filter that only matches a narrow range of values in a single column.
+- Filter on a column that appears early in the collection's column list, and whose values correlate with the order in which rows were written. A timestamp on an append-only collection is the clearest case, but any column with that property works: an identifier that increases over time, such as a UUIDv7, is another.
+
+Rather than predicting whether pushdown will be effective, measure it with [`EXPLAIN FILTER PUSHDOWN`](/sql/explain-filter-pushdown/), which reports how many parts and bytes your query had to fetch.
 
 Filters that consist of arithmetic, date math, and comparisons are generally eligible for pushdown, including all the examples in this page. However, more complex filters might not be. You can check whether the filters in your query can be pushed down using [an `EXPLAIN` statement](/sql/explain-plan/). In the following example, we can be confident our temporal filter will be pushed down because it's present in the `pushdown` list at the bottom of the output.
 
@@ -103,6 +132,8 @@ Some common functions, such as casting from a string to a timestamp, can prevent
 ## Examples
 
 These examples create real objects. After you have tried the examples, make sure to drop these objects and spin down any resources you may have created.
+
+The `PARTITION BY` clauses below document the ordering each collection expects. Because the option does not change how data is stored, the same examples behave the same way without them.
 
 ### Partitioning by timestamp
 
@@ -182,6 +213,6 @@ Other datasets don't have a strong timeseries component, but they do have a clea
 
 {{< note >}}
 
-As before, we're not guaranteed to see much or any benefit from filter pushdown on small collections... but for datasets of over a few gigabytes, we should reliably be able to filter down to a subset of the parts we'd otherwise need to fetch.
+As before, we're not guaranteed to see much or any benefit from filter pushdown on small collections. Larger datasets often can be filtered down to a subset of the parts we'd otherwise need to fetch, but a category column like `country_code` is a weaker case than a timestamp: nothing about how the data is written groups venues from the same country together, so the benefit here depends on the order the rows happened to arrive in.
 
 {{< /note >}}
