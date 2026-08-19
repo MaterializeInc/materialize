@@ -249,8 +249,8 @@ where
                 let (joined, errs) = match linear_plan.source_key.as_deref() {
                     // No source key: consume the input edge directly rather than
                     // decoding it to `Vec`. `differential_join` forms the source
-                    // arrangement key off this edge below (C1 borrowed-push
-                    // pattern), so a columnar source has no `ColumnarToVec` hop.
+                    // arrangement key off this edge below, pushing rows borrowed,
+                    // so a columnar source has no `ColumnarToVec` hop.
                     None => inputs[linear_plan.source_relation]
                         .collection
                         .clone()
