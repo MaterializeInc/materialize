@@ -76,34 +76,22 @@ These render empty and are not evidence of a healthy system. Verified against th
 
 **Serializable and strict serializable time-to-first-row are not comparable.** In production canary the p99 ran about 1.2 s for strict serializable and about 6.5 s for serializable over the same window. Compare each against its own history.
 
-## Measured baselines
+## Invariants
 
-Measured 2026-08-19 for v26.38.0-rc.3 against v26.37.0, twelve hour buckets, summed across the selected namespaces. Boundaries are production canary 2026-08-15, staging 2026-08-14, with a second `rc` on 2026-08-18.
+* `v2_mz_envd_up` should equal the environment count. It is the cheapest liveness check on the dashboard.
+* `environmentd` does not swap. A non-zero swap reading is itself the finding.
+* Catalog collection entries grow monotonically with catalog contents. A fall needs explaining.
+* Catalog snapshot latency is recorded at boot only, so it is NaN over a steady-state window and non-NaN in an upgrade bucket. Neither is a finding.
+* Serializable and strict serializable time-to-first-row differ by roughly a factor of five. Never aggregate across the `isolation_level` label, and compare each against its own history.
+* System queries outnumber user queries by an order of magnitude, and by far more in staging, where most environments are idle apart from introspection. Staging user-query numbers are not a workload signal.
+* Coordinator busy time, the `_sum` rate of `mz_slow_message_handling`, is the best single coordinator-load signal, because the message rate alone hides how expensive each message was.
+* `crdb_dedicated_*` metrics describe the whole regional CockroachDB cluster and cannot be attributed to the release under test.
 
-| Metric | Production canary us-east-1, 2 envs | Staging us-east-1, 16 envs |
-|---|---|---|
-| `v2_mz_envd_up` | 2 | 16 |
-| environmentd CPU, cores | 0.311 to 0.321, 0.345 to 0.418 after the second rc | 1.05 to 1.08 |
-| environmentd working set | 1.30 to 1.35 GB, 2.47 GB during upgrade | 5.7 to 6.2 GB |
-| environmentd swap | 0 | |
-| Catalog collection entries | 274k to 276k, growing about 0.1% per day | 511k to 525k |
-| Catalog commit latency, average | 8 to 20 ms | 8.0 to 10.7 ms |
-| Catalog sync latency, average | 0.7 to 4.2 ms | |
-| Catalog syncs per s | 0.0065 to 0.025 | |
-| Catalog commits per s | 0.002 to 0.006 | |
-| Catalog snapshot latency, average | 0.46 s, upgrade buckets only | |
-| Time to first row p99, strict serializable | 0.87 to 1.59 s | 0.80 to 0.85 s |
-| Time to first row p99, serializable | 5.8 to 10.3 s | |
-| Linearize message p99 | 0.15 to 0.70 ms | 0.17 to 0.20 ms |
-| Coordinator message rate | 1845 to 2235 per s | 6450 to 6600 per s |
-| Coordinator busy time | 0.031 to 0.043 s per s | 0.095 to 0.106 s per s |
-| Coordinator delays over 1s | 0, except 1 to 2 per upgrade | 0 |
-| Table append rate | 3.76 to 4.28 per s | |
-| Table append latency, average | 16.8 to 18.4 ms | 15.8 to 19.6 ms |
-| User queries per s | 13.3 to 18.8 | 0.53 to 0.61 |
-| System queries per s | 37.0 to 38.3 | 176 to 187 |
-| Active user sessions | 35 to 52 | |
-| Determine timestamp per s | 8.9 to 13.3 | |
-| Row set finishing, average | 3.4 to 4.1 microseconds | |
+## Order of magnitude
 
-Staging carries roughly 350 times the system query rate per environment relative to user queries, because most staging environments are idle apart from introspection. Do not read staging user-query numbers as a workload signal.
+Recorded 2026-08 for scope-checking only. Derive the real baseline from your own before-window.
+
+* `environmentd` CPU is a fraction of a core per environment, and working set is low single-digit GB per environment.
+* Coordinator message rate is thousands per second per environment, and coordinator busy time a few hundredths of a second per second.
+* Linearize and coordinator-message quantiles are sub-millisecond. Time to first row is order one second for strict serializable and several seconds for serializable.
+* Catalog commits are rare, well under one per second, so their latency average is noisy by construction.

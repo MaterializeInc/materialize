@@ -57,39 +57,25 @@ The remaining rows are for drill-down once the sweep flags something: `By Shard`
 
 **Two writers contend during a zero-downtime upgrade.** CAS mismatch rose roughly six-fold in production canary during each upgrade bucket, from about 0.4 to about 2.5 per second, then returned. This is the two generations writing the same shards and is expected.
 
-## Measured baselines
+## Invariants
 
-Measured 2026-08-19 for v26.38.0-rc.3 against v26.37.0, twelve hour buckets, summed across the selected namespaces. Boundaries are production canary 2026-08-15, staging 2026-08-14, with a second `rc` on 2026-08-18.
+* Every metric in the `should be small` list has no legitimate reason to grow with load, so any of them departing from zero is a finding rather than a scaling effect.
+* CAS mismatch must be normalized by `mz_persist_cmd_started_count`. The raw rate moves with command volume, which moves with fleet size, while the normalized ratio is stable to three significant figures within a release. That stability is what makes it a sharp instrument.
+* Compaction requested minus applied equals the noop plus dropped counts. If it does not, one of the three is broken.
+* The `compaction write amp` panel is a compression ratio and sits below one when healthy. A rise toward one is the bad direction.
+* Two writers contend during a zero-downtime upgrade, so CAS mismatch rises several-fold in the upgrade bucket and returns.
+* GC and decode move in opposite directions during an upgrade. GC dips because a restarting process stops collecting, while decode and unindexed reads spike because state is refetched. Both are artifacts.
+* Persist reports its own build via the `version` label on `mz_persist_metadata_seconds`, independent of `mz_version`. Use it to confirm a rollout reached the persist clients.
+* Counting distinct `shard` labels on `mz_persist_shard_upper` is how the shard count is obtained. There is no shard-count gauge.
 
-| Metric | Production canary us-east-1, 2 envs | Staging us-east-1, 16 envs |
-|---|---|---|
-| User bytes per s | 252 to 318 kB | 305 to 306 kB |
-| User goodbytes per s | 732 to 852 kB | |
-| Commands started per s | 537 to 590 | 1345 before, 1417 after, see findings |
-| Commands failed per s | 0 | 0, one bucket at 5e-5 |
-| CAS mismatch per s | 0.30 to 0.44, 2.5 during upgrades | 8.2 before, 14.1 after, 12.2 on rc.3 |
-| CAS mismatch per command | 0.00070 to 0.00076 | 0.00608 before, 0.00990 after, 0.00853 on rc.3 |
-| Command seconds per s | 4.1 to 4.9 | 11.8 to 14.4 |
-| External seconds per s | 7.0 to 8.7 | 19.4 to 25.1 |
-| External calls started per s | 636 to 802 | |
-| Encode seconds per s | 0.020 to 0.025 | |
-| Decode seconds per s | 0.17 to 0.21, 0.48 to 0.53 during upgrades | |
-| Compaction seconds per s | 0.57 to 0.72 | 1.61 to 1.83 |
-| Compaction requested per s | 12.6 to 13.9 | |
-| Compaction applied per s | 12.6 to 13.8 | 37.0 before, 37.6 after |
-| Compaction write amp, that is compression | 0.14 to 0.24 | |
-| Compaction noop per s | 0.048 to 0.072 | |
-| GC seconds per s | 0.28 to 0.33 | 0.71 to 0.79 |
-| GC finished per s | 6.6, dipping to 5.9 during upgrades | 13.26 before, 13.52 after |
-| Shards | 1451 to 1470 | 1709 to 1711 |
-| Unindexed read bytes per s | 28 to 37 MB, 103 to 112 MB during upgrades | 1.0 to 1.8 MB |
-| Pushdown filtered fraction | 0.064 to 0.28 | |
-| Blob cache hit bytes per s | 2.2 to 3.1 MB | |
-| Lease timeout reads per s | 0.0002 to 0.0006 | 0.0094 to 0.0123 |
-| Txn batches unapplied | about 1.0 to 1.2 | 0.07 to 0.57 |
-| Blob, consensus, compaction, external failures | 0 | 0 |
-| PubSub gRPC errors per s | 0 | 0, one bucket at 8e-4 |
-| Txn op retries and errors per s | 0 | |
+## Order of magnitude
+
+Recorded 2026-08 for scope-checking only.
+
+* External time dominates every other timing series, by roughly a factor of two over command time and an order of magnitude over compaction.
+* Command rates are hundreds per second for a handful of environments and low thousands across a staging fleet.
+* Shard counts are order a thousand per stack.
+* Normalized CAS mismatch is order 1e-3 in a two-environment canary and order 1e-2 in a dense staging fleet, so the two stacks are not comparable to each other.
 
 ## Open finding from the characterization run
 

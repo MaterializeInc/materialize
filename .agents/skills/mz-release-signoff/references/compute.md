@@ -75,71 +75,29 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 
 **Arrangement maintenance ramps after a restart.** Measured at 0.020 s/s one day after an upgrade and 0.030 s/s three days later on the same release, so an apparent increase across a boundary can be nothing more than a difference in age.
 
-## Measured baselines
+## Invariants
 
-Measured 2026-08-19 for v26.38.0-rc.3 against v26.37.0, six hour buckets, summed across the selected namespaces. These are reference values for calibration, not thresholds. Fleet size changes will move all of them.
+These hold at any fleet size, so they survive product change in a way that a recorded level does not.
 
-### Production canary, all clusters
+* OOM kills, dataflow errors, and orphan dataflows are absent rather than zero when healthy. Confirm the metric exists somewhere in the window before reporting zero.
+* `v2_mz_orphan_dataflow_count` above zero is always a bug, never a load effect.
+* Working set falls at every upgrade because arrangements are rebuilt, so judge memory by its slope within a release rather than by the step across the boundary.
+* Arrangement record and size gauges are bimodal, so only their base level is comparable.
+* Peak resident set resets on restart, so it describes the current generation only.
+* Compute time and park time are complementary. A CPU rise with a park fall localizes new work to the dataflow loop, while a CPU rise with park flat points outside it.
 
-| Metric | us-east-1, 2 envs | eu-west-1, 2 envs | us-west-2, 1 env |
-|---|---|---|---|
-| clusterd processes | 30 to 35 | | |
-| CPU, cores | 3.76 to 4.12 | 0.65 to 0.68 | 0.25 to 0.26 |
-| Working set | 236 to 257 GB | 10.8 to 13.4 GB | 8.8 to 11.8 GB |
-| Peak RSS sum | 360 to 376 GB | 24 to 30 GB | 19 to 27 GB |
-| Swap sum | 232 to 248 GB | | |
-| Capacity, percent of limit, max | 0.46, 0.61 at upgrade | | |
-| Restarts, OOM kills | 0, 0 | 0, 0 | 0, 0 |
-| Minor faults | 105k to 170k per s | | |
-| Major faults | 10 to 42 per s, 25k during rehydration | | |
-| utime, stime | 3.36 to 3.52, 0.38 to 0.46 | | |
-| Peeks per s | 7.1 to 8.6 | 3.10 | 1.927 |
-| Failed peeks per s | 0.007 to 0.016 | | |
-| Peek p99 | 4.2 to 7.0 s | 0.91 to 0.96 s | 0.79 to 0.93 s |
-| Dataflow elapsed per s | 1.6 to 4.4 | 0.33 to 1.64 | 0.09 to 0.77 |
-| Arrangement maintenance per s | 0.077 to 0.082 | 0.019 to 0.022 | 0.006 to 0.010 |
-| Park per s | 115 to 116 | | |
-| Arrangement records, base | 2.24e9 | | |
-| Arrangement size, base | 203 GB | 740 to 770 MB | 495 to 720 MB |
-| Arrangement size, spikes | 0.81 to 2.72 TB | | |
-| Commands, responses per s | 1620 to 1790, 1790 to 1930 | 750 to 890 | 500 to 680 |
-| Controller collections | 1348 to 1365 | | |
-| Dataflow errors, orphans | absent | absent | absent |
+## Known noise classes
 
-### Production canary us-east-1, system clusters only
+Some environments are unhealthy independently of the release, and their contribution is constant across the boundary rather than absent. Check for these first, because they can dominate a fleet aggregate.
 
-| Metric | Value |
-|---|---|
-| CPU, cores | 0.95 to 1.09 |
-| Working set | 17 to 41 GB |
-| Peeks per s | 2.63 to 2.75 |
-| Peek p99 | 0.66 to 0.81 s |
-| Arrangement maintenance per s | 0.030 |
-| Arrangement size, base | 2.6 GB |
+* Staging carries persistently crashlooping replicas. Their restart rate is high and flat, and flat means not release-related.
+* Some staging environments carry permanently erroring dataflows, likewise flat.
+* Where such an environment masks everything else, exclude it with the dashboard variables, as the panel instructions suggest.
 
-### Staging
+## Order of magnitude
 
-| Metric | us-east-1, 15 envs | us-east-1 system only | eu-west-1, 4 envs |
-|---|---|---|---|
-| clusterd processes | about 190 | | |
-| CPU, cores | 3.27 to 3.41 | 2.59 to 2.72 | 1.19 to 1.25 |
-| Working set | 168 to 183 GB | 30 to 40 GB | 9.6 to 15.2 GB |
-| Peak RSS sum | 69 to 85 GB | 45 to 53 GB | 15 to 22 GB |
-| Capacity, percent of limit | avg 0.05, max 0.58, spikes 0.91 | | |
-| Restarts per 6h | about 90, pre-existing crashloopers | | 0 |
-| Major faults | 1300 to 1500 per s | | |
-| Peeks per s | 25.87 | 19.33 | 5.45 |
-| Failed peeks per s | 0.080 | | |
-| Peek p99 | 0.92 to 0.94 s | 0.83 to 0.88 s | 0.91 to 0.95 s |
-| Dataflow elapsed per s | 1.8 to 9.3, sawtooth | | 0.77 to 6.3 |
-| Arrangement maintenance per s | 0.115 | 0.104 to 0.108 | 0.032 to 0.046 |
-| Park per s | 73 to 75 | | |
-| Arrangement records, base | 0.72e9, high state 2.86e9 | 105e6 | |
-| Arrangement size, base | 39 GB, high state 155 GB | 6.3 GB | 1.22 to 1.25 GB |
-| Commands, responses per s | 6680 to 7360, 6170 to 6480 | 4750 to 5060 | 1280 to 1530 |
-| Controller collections | 6130 to 6190 | | |
-| Dataflow errors | absent | | 50 to 400, pre-existing |
+Recorded 2026-08 for scope-checking a query, not for comparison. If a result sits an order of magnitude away from these, suspect a mis-scoped selector rather than a regression. Derive the actual baseline from the before-window of your own run.
 
-### Calibration reference
-
-Staging us-east-1 fleet clusterd CPU across three weeks to 2026-08-19, twelve hour buckets: 5.55, 4.09, 4.86, 2.83, 3.37 cores. Any step below roughly 10% in staging is inside this spread and carries no information on its own.
+* Production canary, two environments: a few cores of clusterd CPU, hundreds of GB of working set summed, single-digit peeks per second.
+* Staging, about fifteen environments: a few cores, low hundreds of GB, tens of peeks per second.
+* System clusters account for most of staging's dataflow time and roughly a quarter of production canary's CPU.

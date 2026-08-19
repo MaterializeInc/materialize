@@ -141,7 +141,7 @@ Run each area twice. Once across all clusters, and once restricted to the system
 
 There are no thresholds, so the discipline is in ruling out the confounders before believing a signal.
 
-**Calibrate before calling anything a regression.** Fleet composition and workload drift produce steps of the same size as most real regressions. Pull three weeks of the metric and look at its natural spread first. Staging fleet clusterd CPU ranged from 2.83 to 5.55 cores over three weeks in August 2026, so a 3% step across a release boundary carries no information there.
+**Calibrate before calling anything a regression.** Fleet composition and workload drift produce steps of the same size as most real regressions, so pull three weeks of the metric and look at its natural spread before believing a step. Do this live rather than against a recorded figure, because the spread itself changes as the fleet does. When this was first measured, staging fleet clusterd CPU ranged from 2.83 to 5.55 cores over three weeks, which put a 3% step across the boundary far inside the noise; the useful part of that observation is its size, roughly a factor of two, not the numbers.
 
 **Compare at equal post-restart age.** Every upgrade restarts `clusterd`, and a fresh process holds less memory than one that has been running for days. Comparing the pre-upgrade level against the post-upgrade level therefore flatters the new release, and comparing a post-upgrade level against a mid-week pre-upgrade level exaggerates a regression. Sample both sides at a similar age since restart, and treat a monotonic climb within one release as more informative than any level difference across the boundary.
 
@@ -193,7 +193,7 @@ The bot links one dashboard per area. All are on `grafana.dev.materialize.com`.
 | Reference | `release-health` | `zKe0K0N4z` | `references/reference-dashboards.md` |
 | Reference | `networking` | `bHQE8bN4k` | `references/reference-dashboards.md` |
 
-Each reference names the metrics, their types and labels, the hazards specific to that area, and measured baselines from 2026-08-19. Read the one for the area you are verifying before running a single query. The `Storage` label the bot still uses refers to work now split between Sources and Sinks and Persist.
+Each reference names the metrics, their types and labels, the invariants that hold at any fleet size, and the hazards specific to that area. Read the one for the area you are verifying before running a single query. The `Storage` label the bot still uses refers to work now split between Sources and Sinks and Persist.
 
 Sweep sizes differ by an order of magnitude. Compute has about 60 sweep-relevant panels, adapter about 45, storage-overview about 55, and persist 375 panel targets over roughly 230 metrics. For persist, the dashboard's own `should be small` panel defines the sweep; see its reference.
 
@@ -214,16 +214,19 @@ Staging us-west-2 held no compute environments in August 2026, so `v2_mz_compute
 
 ## Characterizing an area
 
-All seven dashboards have a reference as of 2026-08-19. Baselines cover production canary us-east-1 and staging us-east-1 for compute, adapter, sources and sinks, and persist; compute additionally covers production eu-west-1, production us-west-2, and staging eu-west-1. The reference dashboards were measured region-wide on production us-east-1 only. Filling in the remaining regions is a matter of rerunning step 5 against another datasource.
+All seven dashboards have a reference, written from a sweep of v26.38.0-rc.3 against v26.37.0 in August 2026 across production canary and staging in us-east-1, with compute additionally covering production eu-west-1, production us-west-2, and staging eu-west-1.
 
 To characterize a new dashboard, or to refresh one, run Steps 1 through 6 against it for one release and record in `references/<area>.md` what the run taught you:
 
 * Each metric with its type, the labels that select cluster and replica, and what it means.
 * Which metrics are bimodal, restart-sensitive, or absent when zero.
-* Measured baselines with their date, so the next run has something to compare against.
+* Invariants: relationships that hold at any fleet size, such as one counter equalling the difference of two others, a gauge whose only meaningful aggregate is a series count, or a metric that is structurally absent in one stack.
 * Label naming inconsistencies, duplicate-series hazards, and any panel expression whose filters are not what they appear to be.
+* Known noise classes, meaning the environments that are unhealthy independently of any release and whose flat contribution can dominate a fleet aggregate.
 
-Write down measured values, not expectations. A reference full of guesses is worse than an empty one, because the next reader cannot tell which numbers were observed.
+Record invariants, not levels. A recorded level is stale the week after it is written, because environments are created, deleted, and resized continuously, and a stale reference value is worse than none: it invites a comparison the reader should not make. The comparison that matters is always derived in-run, since the before-window of your own query is the only baseline guaranteed to describe the same fleet as the after-window.
+
+Coarse order-of-magnitude figures are worth keeping for one narrow purpose: catching a mis-scoped selector, for example a missing `container="clusterd"` that inflates a result tenfold. Keep them dated, keep them to one significant figure, and say plainly that they are not for comparison.
 
 ## Traps
 

@@ -107,31 +107,19 @@ This row selects every container in the matched pods, via `container!="POD", con
 
 **The version panel is known broken.** `storage-overview` titles its version panel `Materialize Version (currently broken?)`. Use the compute dashboard's version panel, or the query in the skill's step 1, to establish boundaries.
 
-## Measured baselines
+## Invariants
 
-Measured 2026-08-19 for v26.38.0-rc.3 against v26.37.0, twelve hour buckets, summed across the selected namespaces. Boundaries are production canary 2026-08-15, staging 2026-08-14, with a second `rc` on 2026-08-18.
+* `mz_source_progress` is a millisecond frontier timestamp, so each healthy series contributes exactly 1000 to its rate. Read the panel as a series count: a value below the expected multiple of 1000 means stalled frontiers, and the large spikes in every upgrade bucket are frontier reinitialization. The absolute number is meaningless on its own.
+* `mz_storage_upsert_state_rehydration_latency` is a last-value gauge that does not decay, so it forms a staircase with one step per upgrade. Each step is a direct measurement of the new version rehydrating, which makes it the most useful single release signal here. A flat line between upgrades carries no information.
+* Upsert state is absent from staging: records and bytes indexed sum to zero and the RocksDB and rehydration series are missing entirely. The upsert dashboard can only be verified from the production sandbox.
+* Object counts must be aggregated with the inner `group by (id, ...)` guard, or multi-replica objects are counted once per replica.
+* Staged and committed update rates track each other in production but sit persistently apart in staging. Compare each stack against its own history rather than expecting the two counters to match.
+* Shard finalization failures should be zero. Outstanding and pending counts spike at upgrades and then drain.
 
-| Metric | Production canary us-east-1, 2 envs | Staging us-east-1, 16 envs |
-|---|---|---|
-| Sources, deduplicated | 28 | 21 |
-| Sinks, deduplicated | 10 | 3 |
-| Active sources, replicas above zero | 27 | 20 |
-| Upstream messages per s | 144, 168 to 175 in upgrade buckets | 9.58 to 9.63 |
-| Upstream bytes per s | 39.3 to 39.9 kB, 43 kB in upgrade buckets | |
-| Updates staged per s | 145, 168 to 175 in upgrade buckets | 9.57 to 9.63 |
-| Updates committed per s | 145, unchanged during upgrades | 6.59 to 6.68 |
-| `mz_source_progress` rate | 87000, that is 87 advancing series | |
-| Records indexed | 1.4546e9, growing about 0.005% per day | 0 |
-| Bytes indexed | 176.8 GB | 0 |
-| Upsert rehydration latency, max | 4051, then 4474, then 4138, then 3650 ms | absent |
-| Workers spilling to disk | 0 | absent |
-| Sink messages staged per s | 850 to 899 | absent |
-| Sink messages committed per s | 850 to 899 | absent |
-| Sink bytes committed per s | 74.9 to 78.9 kB | absent |
-| Outstanding progress records | 0, series only intermittently present | absent |
-| Storage commands per s | 99.5 to 100.8 | 69.7 to 70.0 |
-| Storage responses per s | 114.9 to 116.0 | 67.0 to 69.2 |
-| Shard finalization outstanding | 0, with 6 and 2 during two upgrades | 0 |
-| Shard finalization failures per s | 0 | 0 |
+## Order of magnitude
 
-The rehydration staircase is the one number to carry forward every week. Each value is a single measurement of one version rehydrating the sandbox's upsert state, so the series only becomes meaningful once several releases are recorded.
+Recorded 2026-08 for scope-checking only.
+
+* Production canary carries tens of sources and a handful of sinks. Staging carries a similar number of sources and very few sinks.
+* Upstream read rates are order a hundred messages per second in production canary and order ten in staging.
+* Envelope state in the production sandbox is order a billion records and a hundred GB. Single-digit GB means the selector is wrong.

@@ -97,29 +97,24 @@ Three panels hardcode organization ids in `materialize_cloud_organization_id=~"3
 
 **`environmentd_needs_update` is the rollout clock.** It sat at zero except for one bucket at 74.4 during the production rollout, and under 1.0 during canary upgrades. If it is non-zero when you start a sign-off, the rollout you are trying to evaluate has not finished.
 
-## Measured baselines
+## Invariants
 
-Measured 2026-08-19 across production us-east-1, region-wide rather than restricted to the canary environments, twelve hour buckets. Boundary for the fleet was the v26.37.0 rollout on 2026-08-13; canary moved to v26.38.0-rc.1 on 2026-08-15 and rc.3 on 2026-08-18.
+* Availability metrics are booleans averaged into percentages, so one environment failing one scrape moves the fleet number by a fraction of a percent. Convert a dip into affected environment-samples before judging it.
+* The downtime panels count samples where the metric was zero, so their unit is only minutes if the scrape interval is one minute.
+* Crashloop series are absent when there are none. Absent is healthy and must not be reported as a checked zero without confirming the metric exists elsewhere.
+* `environmentd_needs_update` is the rollout clock. It jumps to the fleet size when a deploy starts and returns to zero when it finishes. If it is non-zero when you begin, the rollout you are evaluating has not completed and nothing else on the dashboard means what you think it does.
+* Balancer errors are a normal part of steady state here and run at a substantial fraction of successes. Only a change in the ratio is informative.
+* `crdb_dedicated_*` metrics are regional and shared across all environments, so they cannot be attributed to the release.
+* Exit code 166 is treated as an expected termination on this dashboard, in contrast to 137 as an OOM kill on the compute dashboard.
+* `mz_balancer_metadata_seconds` has no useful value of its own. Counting its series gives the balancer count.
 
-| Metric | Value |
-|---|---|
-| `v2_mz_can_connect`, mean | 100%, one bucket at 99.982% during the fleet rollout |
-| `v2_mz_views_query_successful`, mean | 100%, one bucket at 99.982% |
-| `mz_external_envd_up`, mean | 100% throughout |
-| CrashLoopBackOff containers, clusterd and other | no series, that is none |
-| Non-clusterd restarts per s | 0 to 0.0035, peak in the rollout bucket |
-| `environmentd_needs_update` | 0, 74.4 during the fleet rollout, 0.44 to 0.96 at canary upgrades |
-| CRDB CPU, max normalized | 0.45 to 0.59 |
-| CRDB disk used, fraction | 0.032 to 0.038 |
-| Upstream connection errors per s | 0.059 to 0.32 |
-| Cilium BPF map pressure, max | 0.10 to 0.15 |
-| Balancer errors per s | 2.9 to 5.3 |
-| Balancer successes per s | 5.2 to 21.3 |
-| Balancer active connections | 718 to 1333 |
-| Cilium drops per s | 1.0 to 7.9 |
-| Pod network errors per s | 5.8 to 29.9 |
-| Pod network packets dropped per s | 0, three buckets at 0.010 to 0.027 |
-| External calls failed per s | 0, one bucket at 9e-5 |
-| Egress reachability checks per s | 1.0, dipping to 0.985 |
+## Order of magnitude
 
-Staging was not measured for these two dashboards. The availability and control-plane metrics there describe a fleet nobody is paged for, so their baselines would carry little weight; the rollout-progress metrics are worth checking in staging only to confirm a deploy finished.
+Recorded 2026-08 for scope-checking only.
+
+* Availability metrics sit at 100% and dip to 99.98% for a single bucket during a fleet rollout.
+* Non-clusterd restarts, external call failures, and dropped packets are at or near zero, with isolated single-bucket blips.
+* CRDB CPU runs around half its normalized capacity, and disk under 5%.
+* Cilium drop rates and pod network error rates are single-digit to low tens per second region-wide, and noisy. Treat them as a floor to compare against, not a threshold.
+
+Staging was not measured for these two dashboards. Their availability and control-plane metrics describe a fleet nobody is paged for, so a staging baseline would carry little weight. The rollout-progress metrics are worth checking there only to confirm a deploy finished.
