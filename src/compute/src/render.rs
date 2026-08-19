@@ -721,7 +721,7 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // `errs.stream` in `output_probe` does not help, and neither does discarding the
                 // reader's output. Stream-level readers like `as_collection` are unaffected. This is
                 // why error multiplicity is not collapsed here, leaving multiplicity that crosses
-                // an index boundary unbounded.
+                // an index boundary unbounded. TODO(CPU-209): bound it without a trace reader.
 
                 // Ensure that the frontier does not advance past the expiration time, if set.
                 // Otherwise, we might write down incorrect data.
