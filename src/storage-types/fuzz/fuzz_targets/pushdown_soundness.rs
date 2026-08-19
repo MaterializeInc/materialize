@@ -36,9 +36,7 @@ use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::part::PartBuilder;
 use mz_persist_types::stats::{PartStats, PartStatsMetrics};
 use mz_repr::adt::numeric::Numeric;
-use mz_repr::{
-    Datum, Diff, RelationDesc, ReprScalarType, Row, RowArena, SqlScalarType, Timestamp,
-};
+use mz_repr::{Datum, Diff, RelationDesc, ReprScalarType, Row, RowArena, SqlScalarType, Timestamp};
 use mz_storage_types::errors::DataflowError;
 use mz_storage_types::sources::SourceData;
 use mz_storage_types::stats::RelationPartStats;
@@ -81,13 +79,28 @@ enum Cmp {
 #[derive(Arbitrary, Debug)]
 enum Pred {
     /// `col <cmp> lit`, the literal drawn like a row value.
-    CmpColLit { col: u8, cmp: Cmp, lit: FuzzDatum },
-    IsNull { col: u8, negate: bool },
+    CmpColLit {
+        col: u8,
+        cmp: Cmp,
+        lit: FuzzDatum,
+    },
+    IsNull {
+        col: u8,
+        negate: bool,
+    },
     /// `(json ->(>) 'key') IS NULL` over the Nested specs from real map stats.
-    JsonbKey { key: u8, stringify: bool },
+    JsonbKey {
+        key: u8,
+        stringify: bool,
+    },
     /// `(c_f64 + a) * b <cmp> c`, aimed at the infinity guard and NaN
     /// arithmetic, with fuzzer-chosen bit patterns.
-    FloatArith { cmp: Cmp, a: u64, b: u64, c: u64 },
+    FloatArith {
+        cmp: Cmp,
+        a: u64,
+        b: u64,
+        c: u64,
+    },
     And(Box<Pred>, Box<Pred>),
     Or(Box<Pred>, Box<Pred>),
     Not(Box<Pred>),
@@ -103,7 +116,10 @@ struct Input {
 
 fn schema() -> RelationDesc {
     RelationDesc::builder()
-        .with_column("c_num", SqlScalarType::Numeric { max_scale: None }.nullable(true))
+        .with_column(
+            "c_num",
+            SqlScalarType::Numeric { max_scale: None }.nullable(true),
+        )
         .with_column("c_f64", SqlScalarType::Float64.nullable(true))
         .with_column("c_str", SqlScalarType::String.nullable(true))
         .with_column("c_json", SqlScalarType::Jsonb.nullable(true))
