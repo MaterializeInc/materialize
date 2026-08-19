@@ -1,6 +1,6 @@
 ---
 source: src/mz-deploy/src/project/clusters.rs
-revision: 3f3bdb0535
+revision: 2e6c03ac43
 ---
 
 # mz-deploy::project::clusters
@@ -13,4 +13,3 @@ Cluster definition loading and validation.
 
 All variants of each cluster file are validated independently before the active variant is resolved, so structural errors in non-active profile variants are caught even when they would not be used.
 
-`extract_size`, `extract_replication_factor`, and `extract_auto_scaling_strategy` are helpers that pull specific option values out of a `CreateClusterStatement` for use by the apply command's drift detection.

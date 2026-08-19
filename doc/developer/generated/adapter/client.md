@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/client.rs
-revision: 8e2fe64727
+revision: 00299a05e3
 ---
 
 # adapter::client
@@ -12,7 +12,7 @@ During `startup`, `Client` constructs a `PeekClient` from the `StartupResponse` 
 `Client::update_scoped_system_parameters` sends `Command::UpdateScopedSystemParameters` to the coordinator to reconcile the scoped feature-flag working copy; `Client::install_scoped_system_parameter_frontend` fires and forgets `Command::InstallScopedSystemParameterFrontend` so the coordinator can share the frontend for synchronous create-time resolution. Both are called by the system-parameter sync loop.
 `SessionClient` wraps a `Session` and provides per-connection operations such as `execute`, `commit`, `declare`, and `inject_audit_events` for manually appending audit log entries.
 `SessionClient::catalog_snapshot` fetches the catalog through the session-side snapshot cache (delegating to `PeekClient::catalog_snapshot`), avoiding coordinator round-trips when the catalog's transient revision is unchanged.
-`SessionClient::execute` unrolls SQL `EXECUTE <prepared>` statements via `unroll_sql_execute` before attempting frontend peek sequencing via `try_frontend_peek`; if frontend sequencing declines, it falls back to `Command::Execute` through the coordinator.
+`SessionClient::execute` unrolls SQL `EXECUTE <prepared>` statements via `unroll_sql_execute` before attempting frontend peek sequencing via `try_frontend_peek`; if the peek path declines, it attempts frontend read-then-write sequencing via `try_frontend_read_then_write_with_cancel` (for INSERT/UPDATE/DELETE statements); if both frontend paths decline, it falls back to `Command::Execute` through the coordinator. Blind writes (constant INSERTs whose source folds to a literal after optimization) are dispatched through `insert_constant`, which stages the rows as session write ops (`TransactionOps::Writes`) committed at transaction end; read-dependent writes (those whose selection depends on persisted collections) go through the OCC path in `PeekClient::frontend_read_then_write`.
 `Handle` holds the coordinator's background task handle and is used to await coordinator shutdown.
 `RecordFirstRowStream` is an adapter stream that records the timestamp of the first row for metrics.
 `TimeoutType` enumerates session-level timeouts (currently `IdleInTransactionSession`); the `Timeout` struct manages active timeout tasks and delivers expired timeouts through `SessionClient::recv_timeout`.

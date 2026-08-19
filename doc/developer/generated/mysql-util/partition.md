@@ -1,6 +1,6 @@
 ---
 source: src/mysql-util/src/partition.rs
-revision: 9d524e817c
+revision: de8eac0d16
 ---
 
 # mysql-util::partition
