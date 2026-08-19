@@ -17,7 +17,9 @@
 
 use columnar::{Borrow, Push};
 use mz_timely_util::columnar::Column;
-use mz_timely_util::columnar::align_buffer::{AlignBuffer, Origin, set_edge_paging_enabled};
+use mz_timely_util::columnar::align_buffer::{
+    AlignBuffer, Origin, set_edge_paging_enabled, stashed_capacity,
+};
 use mz_timely_util::pool_config::{PoolPagerConfig, apply_pool_config};
 use timely::Accountable;
 use timely::dataflow::channels::ContainerBytes;
@@ -159,6 +161,34 @@ fn edge_paging() {
         "materializing must release the chunk, not keep a second copy",
     );
     drop(transient);
+
+    // The buffer a materialized body leaves behind is retired to this thread's
+    // slot and refilled by the next materialization, so a steady stream of
+    // paged bodies allocates once rather than once per body. Per thread and
+    // capacity one, never per operator: a per-builder buffer would be held by
+    // every idle operator on every worker.
+    let a = encode(RECORDS);
+    let _ = a.as_words();
+    drop(a);
+    let retired = stashed_capacity();
+    assert!(
+        retired.is_some_and(|c| c >= heap_words.len()),
+        "a materialized body retires its buffer, got {retired:?}",
+    );
+    let b = encode(RECORDS);
+    assert!(b.is_paged());
+    assert_eq!(
+        stashed_capacity(),
+        retired,
+        "an unmaterialized body must not disturb the slot",
+    );
+    assert_eq!(b.as_words(), &heap_words[..]);
+    assert_eq!(
+        stashed_capacity(),
+        None,
+        "materializing must consume the retired buffer, not allocate afresh",
+    );
+    drop(b);
 
     // A clone of a paged body is a heap body with the same contents: the pool
     // hands out no second owner, so the clone pays the copy.

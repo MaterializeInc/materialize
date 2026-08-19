@@ -23,6 +23,7 @@
 //!
 //! See [`metrics`] for what is recorded and how to turn recording on.
 
+use std::cell::RefCell;
 use std::ops::Deref;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -175,6 +176,66 @@ static EDGE_PAGING: AtomicBool = AtomicBool::new(false);
 /// Edge bodies cluster at ~1.8 MiB, so this only excludes the ragged tail a
 /// builder flushes at the end of a run.
 const PAGE_MIN_BYTES: usize = 64 << 10;
+
+thread_local! {
+    /// One retired heap body, kept for the next materialization on this thread
+    /// to refill.
+    ///
+    /// Capacity one, and per worker thread rather than per operator. That
+    /// distinction is the whole safety argument: a per-builder buffer would be
+    /// held by every idle operator on every worker, which is why Timely's own
+    /// container recycling is disabled. One body per thread is 2 MiB times the
+    /// worker count and does not grow with the dataflow.
+    static UNPAGE_STASH: RefCell<Option<Vec<u64>>> = const { RefCell::new(None) };
+}
+
+/// Words a stashed buffer may retain, one ship-sized body. Matches
+/// `SCRATCH_RETAIN_WORDS` in [`crate::columnar::chunk`], which bounds the
+/// equivalent read scratch on the chunk paths.
+const STASH_RETAIN_WORDS: usize = 1 << 18;
+
+/// Retires `words` into this thread's slot, if it is worth keeping and the slot
+/// is free.
+///
+/// `try_with` because a buffer can be dropped while the thread's locals are
+/// being torn down, where `with` would panic.
+fn stash_words(mut words: Vec<u64>) {
+    if words.capacity() == 0 || words.capacity() > STASH_RETAIN_WORDS {
+        return;
+    }
+    words.clear();
+    let _ = UNPAGE_STASH.try_with(|cell| {
+        let mut slot = cell.borrow_mut();
+        // Only fill an empty slot, so no `Vec` is dropped while the borrow is
+        // held and the slot cannot churn between two live bodies.
+        if slot.is_none() {
+            *slot = Some(words);
+        }
+    });
+}
+
+/// This thread's retired buffer, or a fresh empty one.
+fn take_stashed_words() -> Vec<u64> {
+    UNPAGE_STASH
+        .try_with(|cell| cell.borrow_mut().take())
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+}
+
+/// The capacity of this thread's retired buffer, or `None` when the slot is
+/// empty.
+///
+/// Exists so tests can assert the buffer is retired and then consumed. Pointer
+/// equality is not a sound substitute: the allocator may hand back the same
+/// address whether or not the slot was used.
+#[doc(hidden)]
+pub fn stashed_capacity() -> Option<usize> {
+    UNPAGE_STASH
+        .try_with(|cell| cell.borrow().as_ref().map(Vec::capacity))
+        .ok()
+        .flatten()
+}
 
 /// Turns edge paging on or off for this process. Takes effect for bodies
 /// minted after the call; bodies already paged stay paged.
@@ -329,7 +390,10 @@ impl AlignBuffer {
             .expect("spill mutex poisoned")
             .take()
             .expect("the handle is present until the body is materialized");
-        let mut words = Vec::new();
+        // Refill this thread's retired buffer rather than faulting a fresh
+        // one. `read_impl` clears the destination itself, so a stashed buffer
+        // with spare capacity is filled without allocating at all.
+        let mut words = take_stashed_words();
         // `take` copies out and frees, where `read_into` would leave the chunk
         // allocated and hold the body twice for the rest of its life.
         handle.take(&mut words);
@@ -407,6 +471,16 @@ impl Clone for AlignBuffer {
 impl Drop for AlignBuffer {
     fn drop(&mut self) {
         self.release();
+        // Retire the heap allocation, whichever state held it. A paged body
+        // that was never materialized has no heap buffer, and dropping the
+        // `spilled` handle here is what frees its pool chunk.
+        let words = match std::mem::replace(&mut self.body, Body::Heap(Vec::new())) {
+            Body::Heap(words) => Some(words),
+            Body::Paged { resident, .. } => resident.into_inner(),
+        };
+        if let Some(words) = words {
+            stash_words(words);
+        }
     }
 }
 
