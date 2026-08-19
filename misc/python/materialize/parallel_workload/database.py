@@ -195,6 +195,10 @@ class DBObject:
     # Bounded (UP TO) load generators seal once they finish, and views
     # propagate sealing from their inputs, materialized or not.
     can_seal: bool = False
+    # Whether a read-then-write's selection may (transitively) read this
+    # object. The adapter refuses one that reaches a source or a source-export
+    # table, so only plain tables and views over them qualify.
+    read_then_write_input: bool = False
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -207,6 +211,8 @@ class DBObject:
 
 
 class Table(DBObject):
+    read_then_write_input = True
+
     table_id: int
     rename: int
     num_rows: int
@@ -309,19 +315,24 @@ class View(DBObject):
 
         self.materialized = not self.temp and rng.choice([True, False])
 
-        self.refresh = (
-            rng.choice(
-                [
-                    "ON COMMIT",
-                    # TODO: Restore minute-scale intervals when CPU-196 is fixed
-                    f"EVERY '{rng.randint(1, 15)} seconds'",
-                    f"EVERY '{rng.randint(1, 15)} seconds' ALIGNED TO (mz_now())",
-                    # Always in the future of all refreshes of previously generated MVs
-                    "AT mz_now()::string::int8 + 1000",
-                ]
-            )
-            if self.materialized
-            else None
+        # (SQL, whether the view's shard seals during a run): a REFRESH AT view
+        # seals once its last refresh has passed.
+        refresh_options = [
+            ("ON COMMIT", False),
+            # TODO: Restore minute-scale intervals when CPU-196 is fixed
+            (f"EVERY '{rng.randint(1, 15)} seconds'", False),
+            (f"EVERY '{rng.randint(1, 15)} seconds' ALIGNED TO (mz_now())", False),
+            # Always in the future of all refreshes of previously generated MVs
+            ("AT mz_now()::string::int8 + 1000", True),
+            # The near refresh makes the view readable, the far one parks its
+            # write frontier a millennium out without ever sealing it. That is
+            # what separates a read-then-write's write timestamp taken from the
+            # oracle from one taken from the selection's frontier, which drags
+            # the monotone, durable oracle into the future with it.
+            ("AT mz_now()::string::int8 + 1000, REFRESH AT '3000-01-01'", False),
+        ]
+        self.refresh, refresh_seals = (
+            rng.choice(refresh_options) if self.materialized else (None, False)
         )
 
         # A materialized view's shard seals (its write frontier advances to the
@@ -333,10 +344,14 @@ class View(DBObject):
         # shards. Unmaterialized views have no shard, but a dataflow reading
         # one inlines its inputs, so sealing must propagate through them too.
         self.can_seal = (
-            (self.refresh or "").startswith("AT")
+            refresh_seals
             or self.repeat_row_const
             or base_object.can_seal
             or (base_object2 is not None and base_object2.can_seal)
+        )
+
+        self.read_then_write_input = base_object.read_then_write_input and (
+            base_object2 is None or base_object2.read_then_write_input
         )
 
         if base_object2:
