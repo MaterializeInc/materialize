@@ -20,7 +20,7 @@ query I
 SELECT * FROM t1 WHERE NOT (f1 = f1)
 ----
 
-# Constant collections render into a columnar edge (node P2). Duplicate constant
+# Constant collections render into a columnar edge. Duplicate constant
 # rows land at the same (advanced) time, so the producer folds them within the
 # batch; the query result must still show the correct multiplicity.
 query I rowsort
