@@ -309,13 +309,21 @@ SELECT array_fill(1, ARRAY[1,1,1,1,1,1,1,1,1,1], ARRAY[1,1,1,1,1,1,1,1,1,1]);
 
 # But large arrays are still ok
 
-# Regression test for database-issues#11267: the limit was previously parsed as
-# `1 << (28 - 1)` instead of `(1 << 28) - 1`, so arrays just below the intended
-# limit were rejected.
+# Regression test for database-issues#11267: the budget is `(1 << 28) - 1`
+# bytes, not `1 << (28 - 1)`, so this array of 150994944 bytes is accepted.
+#
+# NOTE: keep the byte size, not the element count, in that window. array_fill
+# builds a transient `Vec<Datum>` of 16 bytes per element, so 1-byte elements
+# would spike past 2 GiB and trip `statement_timeout` on a loaded CI agent.
 query I
-SELECT array_length(array_fill(false, ARRAY[134217728]), 1);
+SELECT array_length(array_fill(0::double, ARRAY[16777216]), 1);
 ----
-134217728
+16777216
+
+# The budget counts bytes, not elements: one element past 268435455 bytes is
+# rejected at a ninth of that element count.
+query error array size exceeds the maximum allowed \(268435455 bytes\)
+SELECT array_length(array_fill(0::double, ARRAY[29826162]), 1);
 
 query error array size exceeds the maximum allowed \(268435455 bytes\)
 SELECT array_length(array_fill(false, ARRAY[268435455]), 1);
