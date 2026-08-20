@@ -33,12 +33,15 @@ include!(concat!(
     "/mz_storage_types.sources.sql_server.rs"
 ));
 
+/// Environment-scoped because source purification reads it in `environmentd`
+/// (`mz_sql::pure`) as well as the source dataflow on the replica, and the
+/// purification read has no replica in scope.
 pub const MAX_LSN_WAIT: Config<Duration> = Config::new(
     "sql_server_max_lsn_wait",
     Duration::from_secs(30),
     "Maximum amount of time we'll wait for SQL Server to report an LSN (in other words for \
     CDC to be fully enabled)",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub const SNAPSHOT_PROGRESS_REPORT_INTERVAL: Config<Duration> = Config::new(
