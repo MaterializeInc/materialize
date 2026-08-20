@@ -102,27 +102,38 @@ You cannot drop the "progress subsource".
 
 ### Refreshing available upstream references
 
-When you create a source, Materialize asks the upstream system which objects
-the source could read and records them in
-`mz_internal.mz_source_references`. That list is a snapshot taken at creation
-time, and Materialize does not update it as the upstream system changes. A table
-added to a PostgreSQL publication after the source was created, for example,
-does not show up there.
+When you create a source, Materialize records the objects that source could read
+in `mz_internal.mz_source_references`. For a PostgreSQL, MySQL, or SQL Server
+source, that list comes from querying the upstream database. Either way the list
+is a snapshot taken at creation time, and Materialize does not update it as the
+upstream changes. A table added to a PostgreSQL publication after the source was
+created, for example, does not show up there.
 
-`ALTER SOURCE ... REFRESH REFERENCES` re-queries the upstream system and
-replaces the recorded references for that source. Objects that have appeared
-upstream are added, and objects that no longer exist upstream are removed.
+`ALTER SOURCE ... REFRESH REFERENCES` recomputes that list and replaces the
+recorded references for the source. Objects that have appeared since the last
+refresh are added, and objects that no longer exist are removed.
 
 Refreshing references only updates this metadata. It neither starts nor stops
-ingesting anything. To ingest a newly available upstream object, create a table
-from the source with [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/); to
+ingesting anything. To ingest a newly available object, create a table from the
+source with [`CREATE TABLE ... FROM SOURCE`](/sql/create-table/); to
 stop ingesting one, drop the corresponding table.
 
-Refreshing references is supported for PostgreSQL, MySQL, SQL Server, Kafka, and
-load generator sources. [Webhook sources](/sql/create-source/webhook/), which
-are written to rather than read from, do not support it. Because the statement
-contacts the upstream system, it fails if that system is unreachable or the
-source's [connection](/sql/create-connection/) is no longer valid.
+The statement is accepted for any source that ingests from an external system,
+but what it recomputes depends on the source type:
+
+| Source type | Effect of a refresh |
+| --- | --- |
+| PostgreSQL, MySQL, SQL Server | Queries the upstream database for the tables the source can read. |
+| Kafka | No practical effect. The only reference is the topic the source was configured with. |
+| Load generator | Re-reads the load generator's built-in views, which change only when a Materialize upgrade adds views. |
+
+[Webhook sources](/sql/create-source/webhook/), which are written to rather than
+read from, return an error.
+
+For PostgreSQL, MySQL, and SQL Server sources, the refresh connects to the
+upstream database, so it fails if that database is unreachable or the source's
+[connection](/sql/create-connection/) is no longer valid. For PostgreSQL
+sources, it also fails if the source's publication is empty.
 
 ## Examples
 

@@ -50,8 +50,9 @@
         AND refs.source_id = s.id;
         ```
 
-        This list is recorded when the source is created. To pick up upstream
-        tables added since then, run [`ALTER SOURCE <source_name> REFRESH
+        This list is recorded when the source is created. To update the list with
+        tables added to the upstream since source creation, run [`ALTER SOURCE
+        <source_name> REFRESH
         REFERENCES`](/sql/alter-source/#refreshing-available-upstream-references).
 
     - name: "**WITH (<with_option>[,...])**"
