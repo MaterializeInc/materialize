@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/message_handler.rs
-revision: 38a95cefe2
+revision: b0d4c751f6
 ---
 
 # adapter::coord::message_handler

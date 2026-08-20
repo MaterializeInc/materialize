@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/correction_v2.rs
-revision: f0cdedca04
+revision: 0f7e5b1872
 ---
 
 # mz-compute::sink::correction_v2

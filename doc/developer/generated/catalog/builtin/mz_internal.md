@@ -1,13 +1,13 @@
 ---
 source: src/catalog/src/builtin/mz_internal.rs
-revision: e3fe017dcb
+revision: 541fb018a2
 ---
 
 # catalog::builtin::mz_internal
 
 Defines all built-in catalog objects for the `mz_internal` SQL schema.
 
-This is the largest builtin submodule, exporting 199 public items: sources, tables, materialized views, views, indexes, and connections.
+This is the largest builtin submodule, exporting 201 public items: sources, tables, materialized views, views, indexes, and connections.
 
 **Sources** (`BuiltinSource`) — Backed by `DataSourceDesc::Catalog` or `IntrospectionType`. Key items include `MZ_CATALOG_RAW` (the raw persist-backed catalog source, system-only access), and storage statistics/status history sources such as `MZ_SOURCE_STATISTICS_RAW`, `MZ_SINK_STATISTICS_RAW`, `MZ_SOURCE_STATUS_HISTORY`, `MZ_SINK_STATUS_HISTORY`, `MZ_STATEMENT_EXECUTION_HISTORY`, `MZ_SESSION_HISTORY`, `MZ_SQL_TEXT`, `MZ_PREPARED_STATEMENT_HISTORY`, and replica metrics/status history sources.
 

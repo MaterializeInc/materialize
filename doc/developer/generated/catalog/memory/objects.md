@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/memory/objects.rs
-revision: 39dcae2fba
+revision: a702b8be70
 ---
 
 # catalog::memory::objects
@@ -17,6 +17,6 @@ Key types include `CatalogItem` (an enum over Table, Source, Log, View, Material
 `StateUpdate` and `StateUpdateKind` represent in-memory deltas applied during catalog replay and incremental updates. `StateUpdateKind` includes `ClusterSystemConfiguration` and `ReplicaSystemConfiguration` variants carrying the corresponding durable objects. Temporary items are represented as ordinary `Item` variants in `StateUpdateKind`, identified by `Item::ephemeral_owner_session`; there is no separate `TemporaryItem` variant.
 `DataSourceDesc` and `DataSource` describe how a source or table obtains its data (ingestion, introspection, webhook, progress, etc.).
 `Sink::envelope` returns `Some("append")` for the `SinkEnvelope::Append` variant in addition to `Some("debezium")` and `Some("upsert")`.
-`MetricSink` represents a metric sink catalog item: a relation exported as Prometheus metrics, bound to a cluster. It carries `create_sql`, `global_id`, `cluster_id`, `resolved_ids`, and optional plan fields (`optimized_plan`, `physical_plan`, `dataflow_metainfo`) populated after catalog replay; the plan fields are `#[serde(skip)]`. `MetricSink` is a compute object on its cluster (`is_compute_object_on_cluster` returns `Some(cluster_id)`) but reports `is_hydratable` as `false` until per-replica dataflows are implemented. `CatalogEntry::is_metric_sink` returns `true` for entries holding a `MetricSink` item. `plan_fields_mut` exposes all three plan fields for mutable access, consistent with `Index` and `MaterializedView`.
+`MetricSink` represents a metric sink catalog item: a relation exported as Prometheus metrics, bound to a cluster. It carries `create_sql`, `global_id`, `cluster_id`, `resolved_ids`, `prefix` (prepended to every metric name this sink publishes; not durable on its own but recovered from `create_sql` on restart), and optional plan fields (`optimized_plan`, `physical_plan`, `dataflow_metainfo`) populated after catalog replay; the plan fields are `#[serde(skip)]`. `MetricSink` is a compute object on its cluster (`is_compute_object_on_cluster` returns `Some(cluster_id)`) and reports `is_hydratable` as `true` (consistent with indexes, materialized views, and sinks). `CatalogEntry::is_metric_sink` returns `true` for entries holding a `MetricSink` item. `plan_fields_mut` exposes all three plan fields for mutable access, consistent with `Index` and `MaterializedView`.
 `Cluster::auto_scaling_strategy` (implementing `CatalogCluster`) returns the `AutoScalingStrategy` from a managed cluster's config, or `None` for unmanaged clusters.
 The `UpdateFrom` trait drives the incremental update pattern throughout this module.
