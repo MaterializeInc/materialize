@@ -255,14 +255,13 @@ where
                         .collection
                         .clone()
                         .expect("The unarranged collection doesn't exist."),
-                    // With a source key the input is read from an existing
-                    // arrangement, which is already columnar internally; wrap its
-                    // decoded rows as a `Vec` edge.
-                    Some(key) => {
-                        let (oks, errs) = inputs[linear_plan.source_relation]
-                            .as_specific_collection(Some(key), &self.config_set);
-                        (CollectionEdge::Vec(oks), errs)
-                    }
+                    // With a source key the input is materialized from an existing
+                    // arrangement, which `as_specific_collection` presents as a
+                    // columnar edge. `differential_join` forms the source key off
+                    // this edge below, so the columnar source has no `ColumnarToVec`
+                    // hop.
+                    Some(key) => inputs[linear_plan.source_relation]
+                        .as_specific_collection(Some(key), &self.config_set),
                 };
                 errors.push(errs.enter_region(inner));
                 let joined = joined.enter_region(inner);
