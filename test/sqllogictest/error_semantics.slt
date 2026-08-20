@@ -185,3 +185,56 @@ with
   c69 as (select a, q from c68 where a = 1 union select q, a from c68 where a = 2),
   c70 as (select a, q from c69 where a = 1 union select q, a from c69 where a = 2)
 select * from c70
+
+# An error collection whose accumulation is negative keeps its sign through the collapse of
+# error multiplicities. The peek path distinguishes a negative error trace from a positive one
+# and reports the corruption; collapsing a negative accumulation to `+1` would report it as an
+# ordinary evaluation error instead. `repeat_row` is what makes a negative accumulation
+# reachable from SQL.
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM SET enable_repeat_row = true
+----
+COMPLETE 0
+
+statement ok
+create table err_base (a bigint, b bigint, diff bigint)
+
+statement ok
+create materialized view err_data as select a, b from err_base, repeat_row(diff)
+
+statement ok
+insert into err_base values (1, 0, -1)
+
+query I
+select count(*) from err_data
+----
+-1
+
+# Two `Get`s of the same binding, so what the peek reads is the collapse at its definition.
+statement ok
+create view shared_err as
+with e as (select a / b as q from err_data)
+select q from e where q > 0 union all select q from e where q < 0
+
+statement ok
+create default index on shared_err
+
+query error Invalid data in source errors, saw retractions
+select * from shared_err
+
+# The sink collapses too, so the sign has to survive a round trip through the shard: the index
+# below re-derives the error from what the materialized view persisted.
+statement ok
+create materialized view err_mv as select a / b as q from err_data
+
+statement ok
+create default index on err_mv
+
+query error Invalid data in source errors, saw retractions
+select * from err_mv
+
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_repeat_row
+----
+COMPLETE 0

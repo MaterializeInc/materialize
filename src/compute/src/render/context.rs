@@ -443,6 +443,14 @@ impl<'scope, T: RenderTimestamp> ArrangementFlavor<'scope, T> {
 /// diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the errors
 /// retract.
 ///
+/// Clamps the magnitude and keeps the sign, rather than rewriting every present error to `+1`. A
+/// negative accumulation in an error collection is an invariant violation that consumers recognize
+/// by its sign: an index peek reports it as `saw retractions for row that does not exist` and logs
+/// it, and error-count introspection packs the count signed for the same reason. Rewriting `-N` to
+/// `+1` would report such an error as an ordinary one and drop that signal. Keeping the sign also
+/// keeps the collapse cancelling, so a `-N` reaching one binding still annihilates a `+N` reaching
+/// another.
+///
 /// NOTE: One consumer does read the multiplicity. Error-count introspection reports it as the
 /// number of failing rows, so `log_dataflow_errors` must see the collection before this collapses
 /// it, or a dataflow reports one error however many rows failed. Collapse after the logging, never
@@ -453,7 +461,20 @@ pub(crate) fn distinct_arranged_errs<'a, T: RenderTimestamp>(
 ) -> Arranged<'a, ErrAgent<T, Diff>> {
     errs.mz_reduce_abelian::<_, ErrBuilder<_, _>, ErrSpine<_, _>, _>(
         name,
-        |_err, _input, output| output.push(((), Diff::ONE)),
+        |_err, input: &[(_, Diff)], output| {
+            // Errors arrange under a unit value, so consolidation leaves at most one entry per key.
+            // Summing keeps that from being load-bearing.
+            let accum: Diff = input.iter().map(|(_unit, diff)| *diff).sum();
+            // A key accumulating to zero consolidates away, leaving an empty input that
+            // `reduce_abelian` does not run this closure for, so the sign is always decided here.
+            debug_assert_ne!(accum, Diff::ZERO, "collapsing an empty error accumulation");
+            let collapsed = if accum.is_negative() {
+                Diff::MINUS_ONE
+            } else {
+                Diff::ONE
+            };
+            output.push(((), collapsed));
+        },
     )
 }
 
@@ -543,7 +564,7 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
         }
     }
 
-    /// Collapses the multiplicity of every error this bundle carries to one.
+    /// Collapses the multiplicity of every error this bundle carries to a single copy.
     ///
     /// Belongs at the definition of a binding that more than one `Get` reads. Each reader
     /// propagates the binding's errors independently, so a binding read `f` times contributes its
@@ -555,7 +576,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// Sound because error semantics depend only on whether an error is present, and correct under
     /// retraction only because it reads the accumulated collection: no pointwise function of the
     /// input diffs (a saturating add, a sign) can collapse multiplicity and still cancel when the
-    /// errors retract.
+    /// errors retract. See [`distinct_arranged_errs`] for why the collapse keeps the sign of the
+    /// accumulation.
     ///
     /// Collapses every form the bundle offers, not just one. Each form carries its own error
     /// stream, and those streams differ in content as well as identity: an arrangement's errors

@@ -109,6 +109,40 @@ contains:on-positive accumulation
 #! SELECT max(unsigned_data) OVER () FROM data;
 #contains:Non-positive accumulation in ReduceInaccumulable
 
+# An error collection whose accumulation is negative reaches the index peek with its sign
+# intact. Rendering collapses error multiplicities at every binding definition and at the
+# materialized view sink, and that collapse clamps magnitude without touching the sign:
+# rewriting a negative accumulation to `+1` would report the corruption as an ordinary
+# evaluation error and lose the only signal there is that the error trace went negative.
+
+> CREATE TABLE err_base (a bigint, b bigint, diff bigint)
+
+> CREATE MATERIALIZED VIEW err_data AS SELECT a, b FROM err_base, repeat_row(diff)
+
+> INSERT INTO err_base VALUES (1, 0, -1)
+
+> SELECT count(*) FROM err_data
+-1
+
+# Two `Get`s of the same binding, so the collapse at its definition is what the peek reads.
+> CREATE VIEW shared_err AS
+  WITH e AS (SELECT a / b AS q FROM err_data)
+  SELECT q FROM e WHERE q > 0 UNION ALL SELECT q FROM e WHERE q < 0
+
+> CREATE DEFAULT INDEX ON shared_err
+
+! SELECT * FROM shared_err
+contains:Invalid data in source errors, saw retractions
+
+# The sink collapses too, so the sign has to survive a round trip through the shard: the
+# index below re-derives the error from what the materialized view persisted.
+> CREATE MATERIALIZED VIEW err_mv AS SELECT a / b AS q FROM err_data
+
+> CREATE DEFAULT INDEX ON err_mv
+
+! SELECT * FROM err_mv
+contains:Invalid data in source errors, saw retractions
+
 # Kafka sink over a collection with a net-negative accumulation.
 #
 # Current behavior: `combine_at_timestamp` (in `src/interchange/src/envelopes.rs`)

@@ -25,10 +25,11 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
 
 /// Whether rendering should collapse error multiplicities to one where it arranges errors.
 ///
-/// Error semantics depend only on whether an error is present, so its multiplicity carries no
-/// information a consumer reads. Left uncollapsed, a shared collection contributes its errors once
-/// per plan path that reads it, and because those factors apply again at each level of sharing they
-/// compound multiplicatively until the `Diff` overflows.
+/// Error semantics depend only on whether an error is present, so the magnitude of an error's
+/// multiplicity carries no information a consumer reads. The sign does, marking a corrupt error
+/// collection, and the collapse keeps it. Left uncollapsed, a shared collection contributes its
+/// errors once per plan path that reads it, and because those factors apply again at each level of
+/// sharing they compound multiplicatively until the `Diff` overflows.
 ///
 /// Governs sharing within a dataflow only. Sharing across objects is bounded unconditionally, by
 /// normalizing at every boundary another dataflow can read, so what this flag decides is never
