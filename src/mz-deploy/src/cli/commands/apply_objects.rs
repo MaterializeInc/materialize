@@ -10,13 +10,14 @@
 //! Shared helpers for apply commands that reconcile grants/comments on database objects.
 
 use crate::cli::CliError;
+use crate::cli::commands::comments::{self, CommentObject};
 use crate::cli::commands::grants;
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::Client;
 use crate::project::ir::compiled;
 use crate::project::ir::object_id::ObjectId;
 
-/// Reconcile grants and execute comment statements for one database object.
+/// Reconcile grants and comments for one database object.
 pub async fn reconcile_grants_and_comments(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
@@ -25,8 +26,6 @@ pub async fn reconcile_grants_and_comments(
     grant_kind: &grants::GrantObjectKind,
 ) -> Result<(), CliError> {
     grants::reconcile(client, executor, obj_id, &typed_obj.grants, grant_kind).await?;
-    for comment in &typed_obj.comments {
-        executor.execute_sql(comment).await?;
-    }
-    Ok(())
+    let comment_object = CommentObject::for_grant_kind(grant_kind, obj_id);
+    comments::reconcile(client, executor, &comment_object, &typed_obj.comments).await
 }

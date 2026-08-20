@@ -14,15 +14,16 @@ and GRANT statements, and cleans up stale grants and session defaults.
 2. For each role definition:
    - If the role does not exist, creates it.
    - Applies `ALTER ROLE` statements.
-   - Applies `GRANT ROLE` statements.
-   - Applies `COMMENT` statements.
-   - Queries current role members, revokes stale ones not in the
-     definition.
+   - Reconciles membership: grants the members the role is missing,
+     revokes the ones the definition no longer declares.
+   - Reconciles comments: sets what differs, clears what the definition
+     no longer declares.
    - Queries current session defaults, resets stale parameters not in
      the definition.
 3. Reports status per role:
    - `+` created
-   - `=` exists (statements applied idempotently)
+   - `~` altered (membership, comment, or session-default drift closed)
+   - `=` up-to-date (no changes needed)
    - `-` revoked stale member or reset stale default
 
 The command is **idempotent** — running it multiple times produces the

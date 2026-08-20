@@ -125,6 +125,16 @@ pub struct ObjectGrant {
     pub privilege_type: String,
 }
 
+/// A comment recorded in `mz_internal.mz_comments`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectComment {
+    /// `None` for a comment on the object itself, `Some(name)` for a comment on
+    /// one of its columns.
+    pub column: Option<String>,
+    /// The comment text.
+    pub comment: String,
+}
+
 /// Configuration for creating a cluster (managed or unmanaged).
 ///
 /// This captures all the information needed to clone a cluster's configuration

@@ -14,9 +14,10 @@
 //! Provides batch existence checks for schemas, clusters, and objects, as well
 //! as dependency lookups used during deployment planning and sink repointing.
 
+use crate::cli::commands::default_privileges::DefaultPrivilege;
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
-use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectGrant};
+use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectComment, ObjectGrant};
 use crate::client::sql_placeholders;
 use crate::client::staging_suffix_like_pattern;
 use crate::client::{parse_create_cluster, quote_identifier};
@@ -954,6 +955,83 @@ pub(super) async fn get_database_object_grants(
         .collect())
 }
 
+/// Get privilege grants on a schema.
+pub(super) async fn get_schema_grants(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = r#"
+        WITH privilege AS (
+            SELECT mz_internal.mz_aclexplode(s.privileges).*, s.owner_id
+            FROM mz_schemas s
+            JOIN mz_databases d ON s.database_id = d.id
+            WHERE d.name = $1 AND s.name = $2
+        )
+        SELECT
+            grantee.name AS grantee,
+            p.privilege_type
+        FROM privilege AS p
+        JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND p.grantee != p.owner_id
+        "#;
+
+    let rows = client.query(query, &[&database, &schema]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
+/// Get default privilege grants for a schema.
+///
+/// `ALTER DEFAULT PRIVILEGES ... ON SCHEMAS` can be scoped `IN DATABASE`, so
+/// unlike the named-object query this matches both global rules and rules
+/// scoped to the schema's own database.
+pub(super) async fn get_default_privilege_grants_for_schema(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = r#"
+        SELECT
+            grantee_role.name AS grantee,
+            dp_priv.privilege_type
+        FROM mz_default_privileges dp
+        CROSS JOIN LATERAL unnest(
+            mz_internal.mz_format_privileges(dp.privileges)
+        ) AS dp_priv(privilege_type)
+        JOIN mz_schemas s ON s.name = $2
+        JOIN mz_databases d ON s.database_id = d.id
+        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        WHERE d.name = $1
+          AND dp.object_type = 'schema'
+          -- Match rules targeting the schema's owner, or PUBLIC ('p') rules.
+          AND (dp.role_id = s.owner_id OR dp.role_id = 'p')
+          -- A schema lives in a database, so a rule scoped to that database
+          -- applies to it, as does a global rule.
+          AND (dp.database_id IS NULL OR dp.database_id = d.id)
+          -- Schemas are not themselves schema-scoped.
+          AND dp.schema_id IS NULL
+          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+        "#;
+
+    let rows = client.query(query, &[&database, &schema]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
 /// Get default privilege grants for a named infrastructure object (cluster, network policy).
 ///
 /// Queries `mz_default_privileges` to find grants that would be auto-applied
@@ -1072,6 +1150,185 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
         .map(|row| ObjectGrant {
             grantee: row.get("grantee"),
             privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
+/// Read the `ALTER DEFAULT PRIVILEGES` rules recorded against a database or
+/// schema scope.
+///
+/// `scope_predicate` narrows `mz_default_privileges` to the rules the scope owns
+/// by identity, not the rules that merely apply to objects inside it. Both the
+/// target role and the grantee can be the `p` pseudo-role, which stands for
+/// `PUBLIC` and has no `mz_roles` row, so both are resolved with an outer join
+/// and a `CASE` rather than an inner join that would drop those rules.
+async fn get_default_privileges(
+    client: &Client,
+    scope_predicate: &str,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Vec<DefaultPrivilege>, ConnectionError> {
+    let query = format!(
+        r#"
+        SELECT
+            CASE WHEN dp.role_id = 'p' THEN 'public' ELSE lower(target.name) END AS target_role,
+            dp.object_type,
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE lower(grantee.name) END AS grantee,
+            upper(dp_priv.privilege_type) AS privilege
+        FROM mz_default_privileges dp
+        -- Expand the privilege bitmap into individual privilege type strings.
+        CROSS JOIN LATERAL unnest(
+            mz_internal.mz_format_privileges(dp.privileges)
+        ) AS dp_priv(privilege_type)
+        LEFT JOIN mz_roles AS target ON dp.role_id = target.id
+        LEFT JOIN mz_roles AS grantee ON dp.grantee = grantee.id
+        WHERE {}
+        "#,
+        scope_predicate
+    );
+
+    let rows = client.query(&query, params).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| DefaultPrivilege {
+            target_role: row.get("target_role"),
+            object_type: row.get("object_type"),
+            grantee: row.get("grantee"),
+            privilege: row.get("privilege"),
+        })
+        .collect())
+}
+
+/// Get the default-privilege rules scoped to a database.
+pub(super) async fn get_database_default_privileges(
+    client: &Client,
+    database: &str,
+) -> Result<Vec<DefaultPrivilege>, ConnectionError> {
+    get_default_privileges(
+        client,
+        "dp.database_id = (SELECT id FROM mz_databases WHERE name = $1)
+           AND dp.schema_id IS NULL",
+        &[&database],
+    )
+    .await
+}
+
+/// Get the default-privilege rules scoped to a schema.
+///
+/// Schema ids are unique across databases, so matching on `schema_id` alone
+/// identifies the scope.
+pub(super) async fn get_schema_default_privileges(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<DefaultPrivilege>, ConnectionError> {
+    get_default_privileges(
+        client,
+        "dp.schema_id = (
+             SELECT s.id
+             FROM mz_schemas s
+             JOIN mz_databases d ON s.database_id = d.id
+             WHERE d.name = $1 AND s.name = $2
+         )",
+        &[&database, &schema],
+    )
+    .await
+}
+
+/// Get the comments on a database object (table, source, secret, connection),
+/// including comments on its columns.
+///
+/// `catalog_table` is the system catalog table name (e.g., `"mz_tables"`).
+pub(super) async fn get_database_object_comments(
+    client: &Client,
+    catalog_table: &str,
+    database: &str,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ObjectComment>, ConnectionError> {
+    let query = format!(
+        r#"
+        -- Locate the object by its fully-qualified name, then pick up every
+        -- comment recorded against it. `object_sub_id` is NULL for a comment on
+        -- the object itself and the 1-based column position otherwise, so the
+        -- LEFT JOIN resolves it to a column name and leaves object-level
+        -- comments with a NULL column.
+        SELECT
+            col.name AS column_name,
+            c.comment
+        FROM mz_internal.mz_comments c
+        JOIN {} t ON c.id = t.id
+        JOIN mz_schemas s ON t.schema_id = s.id
+        JOIN mz_databases d ON s.database_id = d.id
+        LEFT JOIN mz_columns col
+            ON col.id = c.id AND col.position::int4 = c.object_sub_id
+        WHERE d.name = $1 AND s.name = $2 AND t.name = $3
+        "#,
+        catalog_table
+    );
+
+    let rows = client.query(&query, &[&database, &schema, &name]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectComment {
+            column: row.get("column_name"),
+            comment: row.get("comment"),
+        })
+        .collect())
+}
+
+/// Get the comment on a named object (cluster, role, network policy, database).
+///
+/// `catalog_table` is the system catalog table (e.g., `"mz_clusters"`). These
+/// objects have no columns, so every result has a `None` column.
+pub(super) async fn get_named_object_comments(
+    client: &Client,
+    catalog_table: &str,
+    name: &str,
+) -> Result<Vec<ObjectComment>, ConnectionError> {
+    let query = format!(
+        r#"
+        SELECT c.comment
+        FROM mz_internal.mz_comments c
+        JOIN {} o ON c.id = o.id
+        WHERE o.name = $1 AND c.object_sub_id IS NULL
+        "#,
+        catalog_table
+    );
+
+    let rows = client.query(&query, &[&name]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectComment {
+            column: None,
+            comment: row.get("comment"),
+        })
+        .collect())
+}
+
+/// Get the comment on a schema.
+pub(super) async fn get_schema_comments(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<ObjectComment>, ConnectionError> {
+    let query = r#"
+        SELECT c.comment
+        FROM mz_internal.mz_comments c
+        JOIN mz_schemas s ON c.id = s.id
+        JOIN mz_databases d ON s.database_id = d.id
+        WHERE d.name = $1 AND s.name = $2 AND c.object_sub_id IS NULL
+        "#;
+
+    let rows = client.query(query, &[&database, &schema]).await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| ObjectComment {
+            column: None,
+            comment: row.get("comment"),
         })
         .collect())
 }
@@ -1362,6 +1619,92 @@ impl IntrospectionClient<'_> {
         name: &str,
     ) -> Result<Vec<ObjectGrant>, ConnectionError> {
         get_default_privilege_grants_for_network_policy(self.client, name).await
+    }
+
+    /// Get privilege grants on a database by name.
+    pub async fn get_database_grants(
+        &self,
+        database: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_named_object_grants(self.client, "mz_databases", database).await
+    }
+
+    /// Get privilege grants on a schema.
+    pub async fn get_schema_grants(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_schema_grants(self.client, database, schema).await
+    }
+
+    /// Get default privilege grants for a database by name.
+    pub async fn get_default_privilege_grants_for_database(
+        &self,
+        database: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_default_privilege_grants_for_named_object(
+            self.client,
+            "mz_databases",
+            database,
+            "database",
+        )
+        .await
+    }
+
+    /// Get default privilege grants for a schema.
+    pub async fn get_default_privilege_grants_for_schema(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_default_privilege_grants_for_schema(self.client, database, schema).await
+    }
+
+    /// Get the default-privilege rules scoped to a database.
+    pub async fn get_database_default_privileges(
+        &self,
+        database: &str,
+    ) -> Result<Vec<DefaultPrivilege>, ConnectionError> {
+        get_database_default_privileges(self.client, database).await
+    }
+
+    /// Get the default-privilege rules scoped to a schema.
+    pub async fn get_schema_default_privileges(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<DefaultPrivilege>, ConnectionError> {
+        get_schema_default_privileges(self.client, database, schema).await
+    }
+
+    /// Get the comments on a database object, including its column comments.
+    pub async fn get_database_object_comments(
+        &self,
+        catalog_table: &str,
+        database: &str,
+        schema: &str,
+        name: &str,
+    ) -> Result<Vec<ObjectComment>, ConnectionError> {
+        get_database_object_comments(self.client, catalog_table, database, schema, name).await
+    }
+
+    /// Get the comment on a named object (cluster, role, network policy, database).
+    pub async fn get_named_object_comments(
+        &self,
+        catalog_table: &str,
+        name: &str,
+    ) -> Result<Vec<ObjectComment>, ConnectionError> {
+        get_named_object_comments(self.client, catalog_table, name).await
+    }
+
+    /// Get the comment on a schema by name.
+    pub async fn get_schema_comments(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<ObjectComment>, ConnectionError> {
+        get_schema_comments(self.client, database, schema).await
     }
 
     /// Get default privilege grants for a database object.

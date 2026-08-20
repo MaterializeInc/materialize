@@ -103,10 +103,11 @@ pub async fn plan(
             ObjectAction::Created
         };
 
+        let statements = executor.take_statements();
         results.push(ObjectResult {
             object: obj_id.to_string(),
-            action,
-            statements: executor.take_statements(),
+            action: action.with_reconciled(!statements.is_empty()),
+            statements,
             redacted_statements: vec![],
             transaction_group: None,
             post_statements: vec![],

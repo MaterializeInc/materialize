@@ -12,6 +12,7 @@
 use std::collections::BTreeMap;
 
 use crate::cli::CliError;
+use crate::cli::commands::comments::{self, CommentObject};
 use crate::cli::commands::grants;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
@@ -146,15 +147,20 @@ async fn plan_cluster(
     )
     .await?;
 
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
+    // Reconcile comments
+    comments::reconcile(
+        client,
+        executor,
+        &CommentObject::Cluster(cluster_name),
+        &def.comments,
+    )
+    .await?;
 
+    let statements = executor.take_statements();
     Ok(ObjectResult {
         object: cluster_name.clone(),
-        action,
-        statements: executor.take_statements(),
+        action: action.with_reconciled(!statements.is_empty()),
+        statements,
         redacted_statements: vec![],
         transaction_group: None,
         post_statements: vec![],

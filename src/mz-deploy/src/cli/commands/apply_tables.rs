@@ -96,10 +96,11 @@ pub async fn plan(
                 &GRANT_KIND,
             )
             .await?;
+            let statements = executor.take_statements();
             results.push(ObjectResult {
                 object: obj_id.to_string(),
-                action: ObjectAction::UpToDate,
-                statements: executor.take_statements(),
+                action: ObjectAction::UpToDate.with_reconciled(!statements.is_empty()),
+                statements,
                 redacted_statements: vec![],
                 transaction_group: None,
                 post_statements: vec![],

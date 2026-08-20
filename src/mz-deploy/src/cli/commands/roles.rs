@@ -10,6 +10,7 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::commands::comments::{self, CommentObject};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
@@ -18,8 +19,9 @@ use crate::client::quote_identifier;
 use crate::config::Settings;
 use crate::project::roles::{self, RoleDefinition};
 use itertools::Itertools;
-use mz_sql_parser::ast::AlterRoleOption;
-use mz_sql_parser::ast::SetRoleVar;
+use mz_sql_parser::ast::{
+    AlterRoleOption, GrantRoleStatement, Ident, Raw, RevokeRoleStatement, SetRoleVar,
+};
 use std::collections::BTreeSet;
 
 /// Plan role changes without executing or printing.
@@ -57,7 +59,7 @@ pub async fn plan(
         statements.extend(executor.take_statements());
         object_results.push(ObjectResult {
             object: def.name.clone(),
-            action,
+            action: action.with_reconciled(!statements.is_empty()),
             statements,
             redacted_statements: vec![],
             transaction_group: None,
@@ -119,39 +121,17 @@ async fn configure_role(
         executor.execute_sql(alter).await?;
     }
 
-    // Execute GRANT ROLE statements
-    for grant in &def.grants {
-        executor.execute_sql(grant).await?;
-    }
+    // Reconcile role membership
+    reconcile_members(client, executor, def).await?;
 
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
-
-    // Revoke stale grants
-    let current_members = client
-        .introspection()
-        .get_role_members(role_name)
-        .await
-        .map_err(CliError::Connection)?;
-
-    let desired_members: BTreeSet<String> = def
-        .grants
-        .iter()
-        .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_lowercase()))
-        .collect();
-
-    for member in &current_members {
-        if !desired_members.contains(&member.to_lowercase()) {
-            let sql = format!(
-                "REVOKE {} FROM {}",
-                quote_identifier(role_name),
-                quote_identifier(member)
-            );
-            executor.execute_sql(&sql).await?;
-        }
-    }
+    // Reconcile comments
+    comments::reconcile(
+        client,
+        executor,
+        &CommentObject::Role(role_name),
+        &def.comments,
+    )
+    .await?;
 
     // Reset stale session defaults
     let current_params = client
@@ -180,6 +160,50 @@ async fn configure_role(
             );
             executor.execute_sql(&sql).await?;
         }
+    }
+
+    Ok(())
+}
+
+/// Reconcile the role's membership: grant the members it is missing, revoke the
+/// ones the project no longer declares.
+async fn reconcile_members(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    def: &RoleDefinition,
+) -> Result<(), CliError> {
+    let role_name = &def.name;
+    let current: BTreeSet<String> = client
+        .introspection()
+        .get_role_members(role_name)
+        .await
+        .map_err(CliError::Connection)?
+        .into_iter()
+        .map(|m| m.to_lowercase())
+        .collect();
+
+    let desired: BTreeSet<String> = def
+        .grants
+        .iter()
+        .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_lowercase()))
+        .collect();
+
+    let role = Ident::new_unchecked(role_name);
+
+    for member in desired.difference(&current) {
+        let stmt = GrantRoleStatement::<Raw> {
+            role_names: vec![role.clone()],
+            member_names: vec![Ident::new_unchecked(member)],
+        };
+        executor.execute_sql(&stmt).await?;
+    }
+
+    for member in current.difference(&desired) {
+        let stmt = RevokeRoleStatement::<Raw> {
+            role_names: vec![role.clone()],
+            member_names: vec![Ident::new_unchecked(member)],
+        };
+        executor.execute_sql(&stmt).await?;
     }
 
     Ok(())

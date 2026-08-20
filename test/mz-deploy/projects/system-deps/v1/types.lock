@@ -2,15 +2,6 @@
 # It is not intended for manual editing.
 version = 1
 
-[[table]]
-name = "mz_internal.mz_comments"
-columns = [
-    { name = "id", type = "text", nullable = false, comment = "The ID of the object. Corresponds to `mz_objects.id`." },
-    { name = "object_type", type = "text", nullable = false, comment = "The type of object the comment is associated with." },
-    { name = "object_sub_id", type = "integer", nullable = true, comment = "For a comment on a column of a relation, the column number. `NULL` for other object types." },
-    { name = "comment", type = "text", nullable = false, comment = "The comment itself." },
-]
-
 [[view]]
 name = "information_schema.tables"
 columns = [
@@ -59,4 +50,13 @@ columns = [
     { name = "relispartition", type = "boolean", nullable = false },
     { name = "relhasoids", type = "boolean", nullable = false },
     { name = "reloptions", type = "text[]", nullable = true },
+]
+
+[[materialized-view]]
+name = "mz_internal.mz_comments"
+columns = [
+    { name = "id", type = "text", nullable = false, comment = "The ID of the object. Corresponds to `mz_objects.id`." },
+    { name = "object_type", type = "text", nullable = false, comment = "The type of object the comment is associated with." },
+    { name = "object_sub_id", type = "integer", nullable = true, comment = "For a comment on a column of a relation, the column number. `NULL` for other object types." },
+    { name = "comment", type = "text", nullable = false, comment = "The comment itself." },
 ]

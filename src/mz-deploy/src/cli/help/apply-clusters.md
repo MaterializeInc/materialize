@@ -16,11 +16,14 @@ idempotently.
    - If the cluster does not exist, creates it.
    - If the cluster exists but size, replication factor, or the
      auto scaling strategy has drifted, alters it to match.
-   - Applies associated `GRANT` statements.
-   - Applies associated `COMMENT` statements.
+   - Reconciles grants: grants what the cluster is missing, revokes
+     what the definition no longer declares.
+   - Reconciles comments: sets what differs, clears what the definition
+     no longer declares.
 3. Reports status per cluster:
    - `+` created
-   - `~` altered (drift detected)
+   - `~` altered (drift detected, in the cluster's own configuration or
+     in its grants or comments)
    - `=` up-to-date (no changes needed)
 
 ## Examples
