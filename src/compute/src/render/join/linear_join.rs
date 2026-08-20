@@ -36,8 +36,11 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use timely::ContainerBuilder;
+use timely::container::{CapacityContainerBuilder, PushInto};
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
+use timely::dataflow::operators::generic::Operator;
 use timely::dataflow::{Scope, Stream};
 
 use crate::extensions::arrange::MzArrangeCore;
@@ -100,15 +103,21 @@ impl LinearJoinSpec {
         }
     }
 
-    /// Render a join operator according to this specification.
-    fn render<'s, T, Tr1, Tr2, L, I>(
+    /// Render a join operator according to this specification, assembling its
+    /// output through `CB`.
+    ///
+    /// The `DifferentialDataflow` implementation builds its own `Vec` output and
+    /// cannot be handed a container builder, so that arm re-encodes through `CB`.
+    /// The `Materialize` implementation writes `CB` directly.
+    fn render<'s, T, Tr1, Tr2, L, I, CB>(
         &self,
         arranged1: Arranged<'s, Tr1>,
         arranged2: Arranged<'s, Tr2>,
         result: L,
-    ) -> VecCollection<'s, T, I::Item, Diff>
+    ) -> Stream<'s, T, CB::Container>
     where
         T: Lattice + timely::progress::Timestamp,
+        CB: ContainerBuilder + PushInto<(I::Item, T, Diff)> + 'static,
         Tr1: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
         Tr2: TraceReader<Batch: Navigable, Time = T> + Clone + 'static,
         BatchCursor<Tr1>: Cursor<Time = T, Diff = Diff>,
@@ -123,23 +132,25 @@ impl LinearJoinSpec {
             self.yielding.after_work,
             self.yielding.after_time,
         ) {
-            (DifferentialDataflow, _, _) => arranged1.join_core(arranged2, result),
+            (DifferentialDataflow, _, _) => {
+                encode_updates::<_, _, CB>(arranged1.join_core(arranged2, result), "JoinCoreEncode")
+            }
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, CB>(arranged1, arranged2, result, yield_fn)
             }
         }
     }
@@ -198,9 +209,13 @@ enum JoinedFlavor<'scope, T: RenderTimestamp> {
     /// stage. `differential_join` forms its arrangement key off the edge, so a
     /// columnar source flows in without a `ColumnarToVec` decode.
     Edge(CollectionEdge<'scope, T>),
-    /// The intra-operator multi-stage accumulator. `mz_join_core` is
-    /// `Vec`-internal, so the accumulator is a bare `VecCollection`, not a
-    /// collection edge.
+    /// The intra-operator multi-stage accumulator.
+    ///
+    /// A stage whose output is consumed by another stage's arrangement or by a
+    /// finalization closure writes this. Both of those re-encode what they read,
+    /// and a `Vec` hands them moved `Row` allocations where a `Column` would
+    /// copy row bytes, so the accumulator stays `Vec`. Only a stage whose output
+    /// *is* the node's output writes [`JoinedFlavor::Edge`].
     Collection(VecCollection<'scope, T, Row, Diff>),
     /// A dataflow-local arrangement.
     Local(Arranged<'scope, RowRowAgent<T, Diff>>),
@@ -309,18 +324,23 @@ where
         };
 
         // progress through stages, updating partial results and errors.
-        for stage_plan in linear_plan.stage_plans.into_iter() {
+        //
+        // The last stage writes the node's output edge directly, but only when
+        // no finalization closure follows it. With a closure, the closure's
+        // builder writes the edge and the stage feeds it the `Vec` accumulator.
+        let stage_count = linear_plan.stage_plans.len();
+        let terminal_stage_writes_edge = linear_plan.final_closure.is_none();
+        for (index, stage_plan) in linear_plan.stage_plans.into_iter().enumerate() {
+            let terminal = index + 1 == stage_count && terminal_stage_writes_edge;
             // Different variants of `joined` implement this differently,
             // and the logic is centralized there.
-            let stream = self.differential_join(
+            joined = self.differential_join(
                 joined,
                 inputs[stage_plan.lookup_relation].enter_region(inner),
                 stage_plan,
+                terminal,
                 &mut errors,
             );
-            // Update joined results and capture any errors. `mz_join_core`
-            // produces a `Vec` collection, the intra-operator accumulator.
-            joined = JoinedFlavor::Collection(stream);
         }
 
         // We have completed the join building, but may have work remaining.
@@ -360,10 +380,14 @@ where
             errors.push(errs);
             updates
         } else {
-            // Identity finalization: the raw output is the result. The source edge
-            // (single-input join) is already columnar and passes through; the `Vec`
-            // accumulator encodes via `vec_to_columnar`, non-consolidating to match
-            // the raw output.
+            // Identity finalization: the raw output is the result. A
+            // single-input join passes its source edge through, and with stages
+            // the last one wrote the edge itself, because
+            // `terminal_stage_writes_edge` holds exactly here.
+            //
+            // The accumulator arm is reachable only through an initial closure
+            // on a stage-less join, which current lowering never emits. It
+            // encodes rather than panics, so a lowering change stays correct.
             match joined {
                 JoinedFlavor::Edge(edge) => edge,
                 JoinedFlavor::Collection(collection) => vec_to_columnar(collection),
@@ -381,6 +405,9 @@ where
 
     /// Looks up the arrangement for the next input and joins it to the arranged
     /// version of the join of previous inputs.
+    ///
+    /// `terminal` marks a stage whose output is the node's output, which makes
+    /// it write the output edge rather than the `Vec` accumulator.
     fn differential_join<'s>(
         &self,
         mut joined: JoinedFlavor<'s, T>,
@@ -392,8 +419,9 @@ where
             closure,
             lookup_relation: _,
         }: LinearStagePlan,
+        terminal: bool,
         errors: &mut Vec<VecCollection<'s, T, DataflowErrorSer, Diff>>,
-    ) -> VecCollection<'s, T, Row, Diff> {
+    ) -> JoinedFlavor<'s, T> {
         // If we have a streamed input, we must first form an arrangement. The
         // source edge keys off the `CollectionEdge` (a columnar source has no
         // `ColumnarToVec` hop); the intra-operator accumulator is a bare
@@ -432,7 +460,7 @@ where
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
                         .differential_join_inner::<RowRowAgent<_, _>, RowRowAgent<_, _>>(
-                            local, oks, closure,
+                            local, oks, closure, terminal,
                         );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -442,7 +470,7 @@ where
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
                         .differential_join_inner::<RowRowAgent<_, _>, RowRowEnter<_, _, _>>(
-                            local, oks, closure,
+                            local, oks, closure, terminal,
                         );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -454,7 +482,7 @@ where
                 ArrangementFlavor::Local(oks, errs1) => {
                     let (oks, errs2) = self
                         .differential_join_inner::<RowRowEnter<_, _, _>, RowRowAgent<_, _>>(
-                            trace, oks, closure,
+                            trace, oks, closure, terminal,
                         );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -464,7 +492,7 @@ where
                 ArrangementFlavor::Trace(_gid, oks, errs1) => {
                     let (oks, errs2) = self
                         .differential_join_inner::<RowRowEnter<_, _, _>, RowRowEnter<_, _, _>>(
-                            trace, oks, closure,
+                            trace, oks, closure, terminal,
                         );
 
                     errors.push(errs1.as_collection(|k, _v| k.clone()));
@@ -481,13 +509,19 @@ where
     ///
     /// The return type includes an optional error collection, which may be
     /// `None` if we can determine that `closure` cannot error.
+    /// `terminal` marks a stage whose output is the node's output, which makes
+    /// the ok side write a [`ColumnBuilder`] instead of the `Vec` accumulator,
+    /// so the node needs no leaf encode. An error-capable closure writes the
+    /// accumulator either way, because its output has to be demuxed by
+    /// `ok_err` before the ok side can be encoded.
     fn differential_join_inner<'s, Tr1, Tr2>(
         &self,
         prev_keyed: Arranged<'s, Tr1>,
         next_input: Arranged<'s, Tr2>,
         closure: JoinClosure,
+        terminal: bool,
     ) -> (
-        VecCollection<'s, T, Row, Diff>,
+        JoinedFlavor<'s, T>,
         Option<VecCollection<'s, T, DataflowErrorSer, Diff>>,
     )
     where
@@ -501,25 +535,22 @@ where
         // Reuseable allocation for unpacking.
         let mut datums = DatumVec::new();
 
+        // The `Vec` accumulator's builder. Named because the ok side picks
+        // between it and a `ColumnBuilder` on `terminal`.
+        type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
+
         if closure.could_error() {
             let (oks, err) = self
                 .linear_join_spec
-                .render(prev_keyed, next_input, move |key, old, new| {
-                    let mut row_builder = SharedRow::get();
-                    let temp_storage = RowArena::new();
-
-                    let mut datums_local = datums.borrow();
-                    key.extend_datums(&temp_storage, &mut datums_local, None);
-                    old.extend_datums(&temp_storage, &mut datums_local, None);
-                    new.extend_datums(&temp_storage, &mut datums_local, None);
-
-                    closure
-                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                        .map(|row| row.cloned())
-                        .map_err(DataflowErrorSer::from)
-                        .transpose()
-                })
-                .inner
+                .render::<T, _, _, _, _, VecCB<Result<Row, DataflowErrorSer>, T>>(
+                    prev_keyed,
+                    next_input,
+                    move |key, old, new| {
+                        apply_join_closure(&closure, &mut datums, key, old, new)
+                            .map_err(DataflowErrorSer::from)
+                            .transpose()
+                    },
+                )
                 .ok_err(|(x, t, d)| {
                     // TODO(mcsherry): consider `ok_err()` for `Collection`.
                     match x {
@@ -528,28 +559,99 @@ where
                     }
                 });
 
-            (oks.as_collection(), Some(err.as_collection()))
+            let oks = oks.as_collection();
+            let oks = if terminal {
+                // The demux already materialized the ok side as a `Vec`, so the
+                // leaf encode stands here.
+                JoinedFlavor::Edge(vec_to_columnar(oks))
+            } else {
+                JoinedFlavor::Collection(oks)
+            };
+            (oks, Some(err.as_collection()))
+        } else if terminal {
+            let oks = self
+                .linear_join_spec
+                .render::<T, _, _, _, _, ConsolidatingColumnBuilder<Row, T, Diff>>(
+                    prev_keyed,
+                    next_input,
+                    move |key, old, new| {
+                        apply_join_closure(&closure, &mut datums, key, old, new)
+                            .expect("Closure claimed to never error")
+                    },
+                );
+
+            (JoinedFlavor::Edge(oks.as_collection()), None)
         } else {
             let oks = self
                 .linear_join_spec
-                .render(prev_keyed, next_input, move |key, old, new| {
-                    let mut row_builder = SharedRow::get();
-                    let temp_storage = RowArena::new();
+                .render::<T, _, _, _, _, VecCB<Row, T>>(
+                    prev_keyed,
+                    next_input,
+                    move |key, old, new| {
+                        apply_join_closure(&closure, &mut datums, key, old, new)
+                            .expect("Closure claimed to never error")
+                    },
+                );
 
-                    let mut datums_local = datums.borrow();
-                    key.extend_datums(&temp_storage, &mut datums_local, None);
-                    old.extend_datums(&temp_storage, &mut datums_local, None);
-                    new.extend_datums(&temp_storage, &mut datums_local, None);
-
-                    closure
-                        .apply(&mut datums_local, &temp_storage, &mut row_builder)
-                        .expect("Closure claimed to never error")
-                        .cloned()
-                });
-
-            (oks, None)
+            (JoinedFlavor::Collection(oks.as_collection()), None)
         }
     }
+}
+
+/// Unpacks one join match into datums and applies `closure` to it.
+///
+/// `None` means the closure filtered the match out. The output row is owned
+/// because the row `closure` writes borrows the shared row builder, which the
+/// caller must not hold past this call.
+fn apply_join_closure<K, V1, V2>(
+    closure: &JoinClosure,
+    datums: &mut DatumVec,
+    key: K,
+    old: V1,
+    new: V2,
+) -> Result<Option<Row>, mz_expr::EvalError>
+where
+    K: ExtendDatums,
+    V1: ExtendDatums,
+    V2: ExtendDatums,
+{
+    let mut row_builder = SharedRow::get();
+    let temp_storage = RowArena::new();
+
+    let mut datums_local = datums.borrow();
+    key.extend_datums(&temp_storage, &mut datums_local, None);
+    old.extend_datums(&temp_storage, &mut datums_local, None);
+    new.extend_datums(&temp_storage, &mut datums_local, None);
+
+    closure
+        .apply(&mut datums_local, &temp_storage, &mut row_builder)
+        .map(|row| row.cloned())
+}
+
+/// Re-encodes a `Vec` collection through `CB`.
+///
+/// For a join implementation that builds its own `Vec` output and so cannot be
+/// handed a container builder.
+fn encode_updates<'s, T, D, CB>(
+    collection: VecCollection<'s, T, D, Diff>,
+    name: &str,
+) -> Stream<'s, T, CB::Container>
+where
+    T: timely::progress::Timestamp,
+    D: Data,
+    CB: ContainerBuilder + PushInto<(D, T, Diff)> + 'static,
+{
+    collection
+        .inner
+        .unary::<CB, _, _, _>(Pipeline, name, |_, _| {
+            move |input, output| {
+                input.for_each(|time, data| {
+                    output
+                        .session_with_builder(&time)
+                        .give_iterator(data.drain(..));
+                });
+            }
+        })
 }
 
 /// Keys a row-formatted join input stream into columnar `((key, value), t, d)`
