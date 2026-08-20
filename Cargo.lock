@@ -7146,6 +7146,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-postgres",
+ "tokio-stream",
  "tower 0.5.3",
  "tower-http",
  "tower-sessions",
