@@ -73,3 +73,26 @@ def test_credentials_type():
     assert credentials.type == "materialize"
     assert "cluster" in credentials._connection_keys()
     assert "options" in credentials._connection_keys()
+
+
+def test_backslashes_are_escaped():
+    options_string = _build_options_string({"application_name": "my\\app"}, None)
+
+    assert "--application_name=my\\\\app" in options_string
+
+
+def test_backslash_before_space_is_escaped_in_order():
+    # Backslashes must be escaped before spaces: the input backslash becomes
+    # two, and the space gains its own new one.
+    options_string = _build_options_string({"application_name": "my\\ app"}, None)
+
+    assert "--application_name=my\\\\\\ app" in options_string
+
+
+def test_non_string_values_are_stringified():
+    options = parse_options(
+        _build_options_string({"welcome_message": True, "statement_timeout": 5}, None)
+    )
+
+    assert options["welcome_message"] == "True"
+    assert options["statement_timeout"] == "5"

@@ -15,6 +15,8 @@
 
 import pytest
 from dbt.adapters.materialize.exceptions import (
+    IndexConfigError,
+    IndexConfigNotDictError,
     PartitionByConfigError,
     RefreshIntervalConfigError,
 )
@@ -50,6 +52,24 @@ class TestIndexConfig:
         assert index.default is True
         assert index.name == "my_idx"
         assert index.cluster == "my_cluster"
+
+    def test_invalid_columns_type(self):
+        with pytest.raises(IndexConfigError):
+            MaterializeIndexConfig.parse({"columns": "a"})
+
+    def test_not_dict_error_message(self):
+        # The defensive exception is not reachable through parse today (see
+        # test_not_a_dict), so pin its message rendering directly.
+        exc = IndexConfigNotDictError("a")
+        assert "Invalid index config" in str(exc)
+        assert 'Expected a dictionary with at minimum a "columns" key' in str(exc)
+
+    def test_not_a_dict(self):
+        # jsonschema reports non-dict input as a ValidationError, so it lands
+        # in IndexConfigError too; IndexConfigNotDictError stays as a defensive
+        # net for TypeErrors out of older validators.
+        with pytest.raises(IndexConfigError):
+            MaterializeIndexConfig.parse("a")
 
 
 class TestRefreshIntervalConfig:

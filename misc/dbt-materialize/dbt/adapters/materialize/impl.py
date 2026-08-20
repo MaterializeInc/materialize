@@ -19,7 +19,6 @@ from collections import namedtuple
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set
 
-import dbt_common.exceptions
 import psycopg2
 from dbt_common.contracts.constraints import (
     ColumnLevelConstraint,
@@ -38,6 +37,8 @@ from dbt.adapters.capability import (
 from dbt.adapters.events.logging import AdapterLogger
 from dbt.adapters.materialize.connections import MaterializeConnectionManager
 from dbt.adapters.materialize.exceptions import (
+    IndexConfigError,
+    IndexConfigNotDictError,
     PartitionByConfigError,
     RefreshIntervalConfigError,
     RefreshIntervalConfigNotDictError,
@@ -66,16 +67,11 @@ class MaterializeIndexConfig(dbtClassMixin):
             cls.validate(raw_index)
             return cls.from_dict(raw_index)
         except ValidationError as exc:
-            msg = dbt_common.exceptions.validator_error_message(exc)
-            dbt_common.exceptions.CompilationError(
-                f"Could not parse index config: {msg}"
-            )
+            raise IndexConfigError(exc)
+        # NOTE: the validator reports non-dict input as a ValidationError, so
+        # this is a defensive net for TypeErrors out of other validators.
         except TypeError:
-            dbt_common.exceptions.CompilationError(
-                "Invalid index config:\n"
-                f"  Got: {raw_index}\n"
-                '  Expected a dictionary with at minimum a "columns" key'
-            )
+            raise IndexConfigNotDictError(raw_index)
 
 
 # NOTE(morsapaes): Materialize allows configuring a refresh interval for the
@@ -244,10 +240,7 @@ class MaterializeAdapter(PostgresAdapter, SQLAdapter):
     @classmethod
     def render_column_constraint(cls, constraint: ColumnLevelConstraint) -> str:
         if constraint.type == ConstraintType.not_null:
-            rendered_column_constraint = None
-            rendered_column_constraint = "assert not null"
-
-            return rendered_column_constraint
+            return "assert not null"
         else:
             return ""
 
