@@ -173,7 +173,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
                     .get(&self.config_set)
                     .try_into()
                     .expect("must fit");
-                T::maybe_apply_temporal_bucketing(
+                T::maybe_apply_temporal_bucketing_vec(
                     key_val_collection.inner,
                     self.as_of_frontier.clone(),
                     summary,

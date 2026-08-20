@@ -50,7 +50,7 @@ use timely::progress::{Antichain, Timestamp};
 
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{KeyCollection, MzArrange, MzArrangeCore};
-use crate::render::columnar::{CollectionEdge, columnar_to_vec, flat_map_datums, vec_to_columnar};
+use crate::render::columnar::{CollectionEdge, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -1031,15 +1031,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 bucketed = true;
-                // Temporal bucketing is `Vec`-internal: it consumes and
-                // produces a `Vec` stream. Decode the edge into it, then re-encode
-                // the `Vec` result to columnar at the boundary so the bucketed
-                // output edge stays columnar like every other producer.
-                vec_to_columnar(T::maybe_apply_temporal_bucketing(
-                    columnar_to_vec(oks).inner,
-                    as_of.clone(),
-                    summary,
-                ))
+                // Temporal bucketing is columnar throughout, so the bucketed
+                // output edge needs no round-trip.
+                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
             } else {
                 oks
             };
@@ -1071,16 +1065,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         .try_into()
                         .expect("must fit");
                     bucketed = true;
-                    // Temporal bucketing is `Vec`-internal: it consumes
-                    // and produces a `Vec` stream. Decode the edge into it, then
-                    // re-encode the `Vec` result to columnar at the boundary so the
-                    // bucketed output edge stays columnar like every other producer.
-                    let oks = columnar_to_vec(oks);
-                    vec_to_columnar(T::maybe_apply_temporal_bucketing(
-                        oks.inner,
-                        as_of.clone(),
-                        summary,
-                    ))
+                    // Temporal bucketing is columnar throughout, so the bucketed
+                    // output edge needs no round-trip.
+                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
                 } else {
                     oks
                 };
@@ -1419,7 +1406,7 @@ mod tests {
     use timely::dataflow::operators::capture::{Event, Extract};
 
     use super::*;
-    use crate::render::columnar::vec_to_columnar;
+    use crate::render::columnar::{columnar_to_vec, vec_to_columnar};
 
     type OkUpdate = ((Row, Row), Timestamp, Diff);
     type ErrUpdate = (DataflowErrorSer, Timestamp, Diff);

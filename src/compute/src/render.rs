@@ -110,6 +110,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::task::Poll;
 
+use ::columnar::{Columnar as ColumnarData, Push as ColumnarPush};
 use differential_dataflow::dynamic::pointstamp::PointStamp;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::operators::arrange::Arranged;
@@ -117,7 +118,7 @@ use differential_dataflow::operators::arrange::ShutdownButton;
 use differential_dataflow::operators::iterate::Variable;
 use differential_dataflow::trace::cursor::{BatchCursor, BatchDiff, BatchKey, BatchVal};
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable, TraceReader};
-use differential_dataflow::{AsCollection, Data, VecCollection};
+use differential_dataflow::{AsCollection, Collection, Data, VecCollection};
 use futures::FutureExt;
 use futures::channel::oneshot;
 use itertools::Itertools;
@@ -139,12 +140,12 @@ use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{Datum, DatumVec, Diff, GlobalId, ReprRelationType, Row, RowArena, SharedRow};
 use mz_storage_operators::persist_source;
 use mz_storage_types::controller::CollectionMetadata;
+use mz_timely_util::columnar::Column;
 use mz_timely_util::columnation::ColumnationChunker;
 use mz_timely_util::operator::{CollectionExt, StreamExt};
 use mz_timely_util::probe::{Handle as MzProbeHandle, ProbeNotify};
 use mz_timely_util::scope_label::ScopeExt;
 use timely::PartialOrder;
-use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::Pipeline;
 use timely::dataflow::operators::core::to_stream::ToStreamBuilder;
 use timely::dataflow::operators::vec::ToStream;
@@ -1385,15 +1386,13 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                             .get(&self.config_set)
                             .try_into()
                             .expect("must fit");
-                        // Temporal bucketing operates on `Vec`: decode the edge
-                        // into it, then re-encode the result so this Union input
-                        // is a columnar edge like every other.
-                        let os = columnar_to_vec(os);
-                        vec_to_columnar(T::maybe_apply_temporal_bucketing(
+                        // Temporal bucketing is columnar throughout, so this
+                        // Union input stays a columnar edge with no round-trip.
+                        T::maybe_apply_temporal_bucketing(
                             os.inner,
                             self.as_of_frontier.clone(),
                             summary,
-                        ))
+                        )
                     } else {
                         os
                     };
@@ -1582,8 +1581,30 @@ pub trait RenderTimestamp: MzTimestamp + Default + Refines<mz_repr::Timestamp> {
 /// general property of a render timestamp, so the dispatch lives in its own trait.
 /// Total-ordered timestamps perform real bucketing; partially-ordered timestamps
 /// (e.g. `Product<…>` in iterative scopes) implement this as a no-op.
-pub trait MaybeBucketByTime: Timestamp {
+pub trait MaybeBucketByTime: Timestamp + ColumnarData {
+    /// Buckets a columnar dataflow edge, keeping it columnar.
     fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>;
+
+    /// Buckets a `Vec` stream, keeping it `Vec`.
+    ///
+    /// For a consumer that re-encodes what it reads, where a `Vec` hands it moved
+    /// allocations rather than copied bytes. The reduce key-value path is the one
+    /// such caller, since its bucketed output feeds an arrangement.
+    fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
@@ -1591,7 +1612,13 @@ pub trait MaybeBucketByTime: Timestamp {
     where
         D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + differential_dataflow::Hashable;
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>;
 }
 
 impl RenderTimestamp for mz_repr::Timestamp {
@@ -1617,6 +1644,25 @@ impl RenderTimestamp for mz_repr::Timestamp {
 
 impl MaybeBucketByTime for mz_repr::Timestamp {
     fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
+        as_of: Antichain<mz_repr::Timestamp>,
+        summary: mz_repr::Timestamp,
+    ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
+    {
+        stream.bucket(as_of, summary).as_collection()
+    }
+
+    fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         as_of: Antichain<mz_repr::Timestamp>,
         summary: mz_repr::Timestamp,
@@ -1624,11 +1670,15 @@ impl MaybeBucketByTime for mz_repr::Timestamp {
     where
         D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + differential_dataflow::Hashable,
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
     {
-        stream
-            .bucket::<CapacityContainerBuilder<_>>(as_of, summary)
-            .as_collection()
+        stream.bucket(as_of, summary).as_collection()
     }
 }
 
@@ -1663,6 +1713,26 @@ impl RenderTimestamp for Product<mz_repr::Timestamp, PointStamp<u64>> {
 
 impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     fn maybe_apply_temporal_bucketing<'scope, D>(
+        stream: Stream<'scope, Self, Column<(D, Self, Diff)>>,
+        _as_of: Antichain<mz_repr::Timestamp>,
+        _summary: mz_repr::Timestamp,
+    ) -> Collection<'scope, Self, Column<(D, Self, Diff)>>
+    where
+        D: differential_dataflow::ExchangeData
+            + crate::typedefs::MzData
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
+    {
+        // TODO: Implement bucketing on outer timestamp for iterative scopes.
+        stream.as_collection()
+    }
+
+    fn maybe_apply_temporal_bucketing_vec<'scope, D>(
         stream: StreamVec<'scope, Self, (D, Self, Diff)>,
         _as_of: Antichain<mz_repr::Timestamp>,
         _summary: mz_repr::Timestamp,
@@ -1670,7 +1740,13 @@ impl MaybeBucketByTime for Product<mz_repr::Timestamp, PointStamp<u64>> {
     where
         D: differential_dataflow::ExchangeData
             + crate::typedefs::MzData
-            + differential_dataflow::Hashable,
+            + differential_dataflow::Hashable
+            + ColumnarData,
+        for<'a> ::columnar::Ref<'a, D>: Copy + Ord + std::hash::Hash,
+        for<'a> ::columnar::Ref<'a, Self>: Copy + Ord,
+        for<'a> ::columnar::Ref<'a, Diff>: Ord,
+        for<'a> <(D, Self, Diff) as ColumnarData>::Container:
+            ColumnarPush<&'a (D, Self, Diff)> + ColumnarPush<::columnar::Ref<'a, (D, Self, Diff)>>,
     {
         // TODO: Implement bucketing on outer timestamp for iterative scopes.
         stream.as_collection()
