@@ -102,10 +102,8 @@ skip = [
     { name = "socket2", version = "0.5.10" },
     # Used by azure_core
     { name = "quick-xml", version = "0.31.0" },
-    # Used by reqsign (via iceberg); opendal pulls quick-xml 0.38
-    { name = "quick-xml", version = "0.37.5" },
-    # Used by opendal via iceberg
-    { name = "quick-xml", version = "0.38.4" },
+    # reqsign-aws (via iceberg) is ahead of opendal, which pulls 0.39.
+    { name = "quick-xml", version = "0.41.0" },
     # Used by sentry
     { name = "reqwest", version = "0.13.3" },
     # Conflicts between `bon` in apache-avro and `derive_builder` in iceberg
@@ -126,15 +124,41 @@ skip = [
     { name = "fallible-iterator", version = "0.3.0" },
     # arrow
     { name = "hashbrown", version = "0.16.1" },
+    { name = "hashbrown", version = "0.17.1" },
+    # duckdb pins arrow 57 while the workspace is on 58, so mz-testdrive links
+    # both majors. They never meet: duckdb's arrow stays inside duckdb's own API.
+    { name = "arrow", version = "57.1.0" },
+    { name = "arrow-arith", version = "57.1.0" },
+    { name = "arrow-array", version = "57.2.0" },
+    { name = "arrow-buffer", version = "57.3.0" },
+    { name = "arrow-cast", version = "57.2.0" },
+    { name = "arrow-data", version = "57.2.0" },
+    { name = "arrow-ord", version = "57.2.0" },
+    { name = "arrow-row", version = "57.1.0" },
+    { name = "arrow-schema", version = "57.2.0" },
+    { name = "arrow-select", version = "57.2.0" },
+    { name = "arrow-string", version = "57.1.0" },
+    # opendal 0.57 and reqsign 3.x (both via iceberg) are on the next generation
+    # of the RustCrypto crates, while the rest of the workspace is still on the
+    # current one.
+    { name = "base64", version = "0.23.1" },
+    { name = "block-buffer", version = "0.12.1" },
+    { name = "const-oid", version = "0.10.2" },
+    { name = "crypto-common", version = "0.2.2" },
+    { name = "digest", version = "0.11.3" },
+    { name = "hmac", version = "0.13.0" },
+    { name = "md-5", version = "0.11.0" },
+    { name = "sha1", version = "0.11.0" },
+    { name = "sha2", version = "0.11.0" },
+    # Held back by mz-timely-util; iceberg and the persist crates use 0.13.
+    { name = "lz4_flex", version = "0.12.1" },
     # Used by dynfmt; iceberg/typetag pulls in v0.4.
     { name = "erased-serde", version = "0.3.26" },
     # gcp_auth → hyper-rustls → rustls-native-certs pulls newer versions
     # while native-tls still pulls older versions.
     { name = "core-foundation", version = "0.10.1" },
-    # reqsign (via iceberg-storage-opendal / opendal) pins older deps
-    # than the workspace.
-    { name = "jsonwebtoken", version = "9.3.1" },
-    { name = "quick-xml", version = "0.37.5" },
+    { name = "security-framework", version = "3.7.0" },
+    { name = "openssl-probe", version = "0.2.1" },
     # aws-lc-rs (via jsonwebtoken 10) and ring pull different `untrusted`.
     { name = "untrusted", version = "0.7.1" },
     # Held back by lazy_static 1.4.0 (used by num-bigint-dig).
@@ -211,14 +235,20 @@ wrappers = [
     "launchdarkly-server-sdk-evaluation",
     "launchdarkly-sdk-transport",
     "native-tls",
-    "opendal",
+    "opendal-core",
+    "opendal-layer-retry",
+    "opendal-service-gcs",
+    "opendal-service-s3",
     "os_info",
     "postgres",
     "pprof",
     "prost-build",
     # TODO(guswynn): switch to tracing in rdkafka
     "rdkafka",
-    "reqsign",
+    "reqsign-aws-core",
+    "reqsign-aws-v4",
+    "reqsign-core",
+    "reqsign-google",
     "reqwest",
     "rustls",
     "sqlparser",
