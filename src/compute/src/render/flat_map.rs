@@ -329,7 +329,7 @@ mod tests {
     use differential_dataflow::input::Input;
     use mz_expr::MapFilterProject;
     use mz_repr::{Datum, ReprScalarType};
-    use timely::dataflow::operators::Inspect;
+    use timely::dataflow::operators::InspectCore;
     use timely::dataflow::operators::capture::{Capture, Extract};
 
     use super::*;
@@ -370,7 +370,15 @@ mod tests {
                 let scope = stream.scope();
                 let (oks, _errs) =
                     flat_map_stage(stream, scope, exprs, func, mfp, Antichain::new(), budget);
-                oks.inspect(move |_| *sink.borrow_mut() += 1);
+                // Count through the container rather than per record. A
+                // per-record `inspect` needs `&Container: IntoIterator`, and
+                // resolving that on macOS recurses through `objc2`'s blanket
+                // impls until the trait solver overflows.
+                oks.inspect_container(move |event| {
+                    if let Ok((_time, data)) = event {
+                        *sink.borrow_mut() += data.len();
+                    }
+                });
                 input
             });
 
