@@ -978,8 +978,8 @@ Arrange errors
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
-ArrangeBy[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ReprColumnType { scalar_type: Int64, nullable: false }))]]
-ArrangeBy[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ReprColumnType { scalar_type: Int64, nullable: false }))]]-errors
+ArrangeBy[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(StableRow(Row{[Int64(2)]})), ReprColumnType { scalar_type: Int64, nullable: false }))]]
+ArrangeBy[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(StableRow(Row{[Int64(2)]})), ReprColumnType { scalar_type: Int64, nullable: false }))]]-errors
 ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0, "id"))]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0, "data")]]
@@ -1017,7 +1017,7 @@ Distinct errors
 Distinct errors
 Distinct errors
 Distinct errors
-Distinct errors[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ReprColumnType { scalar_type: Int64, nullable: false }))]]
+Distinct errors[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(StableRow(Row{[Int64(2)]})), ReprColumnType { scalar_type: Int64, nullable: false }))]]
 Distinct errors[[Column(0)]]
 Distinct errors[[Column(0)]]
 Distinct errors[[]]

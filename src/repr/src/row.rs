@@ -351,6 +351,61 @@ impl Ord for Row {
     }
 }
 
+/// A [`Row`] that serializes as protobuf-encoded [`ProtoRow`] bytes.
+///
+/// `Row`'s own serde impl emits the raw bytes of the in-memory `Tag` based
+/// datum encoding, which is free to change between releases. Use this wrapper
+/// instead wherever a row is serialized into a durable, cross-version format,
+/// such as the stable LIR plan format. `ProtoRow` already carries the needed
+/// backward compatibility obligation: it is persist's storage codec for
+/// `SourceData`, and `row.proto` is covered by the buf breaking lint.
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+pub struct StableRow(#[serde(with = "stable_row_proto")] pub Row);
+
+impl From<Row> for StableRow {
+    fn from(row: Row) -> Self {
+        StableRow(row)
+    }
+}
+
+impl Deref for StableRow {
+    type Target = Row;
+
+    fn deref(&self) -> &Row {
+        &self.0
+    }
+}
+
+mod stable_row_proto {
+    use mz_proto::RustType;
+    use prost::Message;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::row::{ProtoRow, Row};
+
+    pub fn serialize<S: Serializer>(row: &Row, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&row.into_proto().encode_to_vec())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Row, D::Error> {
+        let bytes = serde_bytes::ByteBuf::deserialize(deserializer)?;
+        let proto = ProtoRow::decode(bytes.as_slice()).map_err(D::Error::custom)?;
+        Row::from_proto(proto).map_err(D::Error::custom)
+    }
+}
+
 #[allow(missing_debug_implementations)]
 mod columnation {
     use columnation::{Columnation, Region};
@@ -3604,6 +3659,34 @@ mod tests {
     use crate::SqlScalarType;
 
     use super::*;
+
+    // StableRow's wire format is proto bytes, not the in-memory datum
+    // encoding, so rows of every column type must roundtrip exactly through
+    // both a self-describing format (JSON) and a compact binary one
+    // (bincode). Equality on Row compares the packed in-memory bytes, so
+    // this also catches any datum normalization sneaking into the
+    // Row -> ProtoRow -> Row conversion.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow, and decNumber uses FFI
+        fn stable_row_serde_roundtrip(
+            stable in crate::relation::arb_relation_desc(1..8)
+                .prop_flat_map(|desc| crate::relation::arb_row_for_relation(&desc))
+                .prop_map(StableRow)
+        ) {
+            let json = serde_json::to_string(&stable).expect("serializes to JSON");
+            let from_json: StableRow =
+                serde_json::from_str(&json).expect("deserializes from JSON");
+            prop_assert_eq!(&stable, &from_json);
+
+            let bytes = bincode::serialize(&stable).expect("serializes to bincode");
+            let from_bincode: StableRow =
+                bincode::deserialize(&bytes).expect("deserializes from bincode");
+            prop_assert_eq!(&stable, &from_bincode);
+        }
+    }
 
     // Regression: comparing deeply nested list values must not overflow the
     // stack (STACK-7). `Datum` ordering recurses once per nesting level.

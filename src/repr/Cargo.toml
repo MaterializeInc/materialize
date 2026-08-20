@@ -64,6 +64,7 @@ regex.workspace = true
 regex-syntax.workspace = true
 ryu.workspace = true
 serde.workspace = true
+serde_bytes.workspace = true
 serde_json = { workspace = true, features = ["arbitrary_precision", "preserve_order"] }
 smallvec = { workspace = true, features = ["serde", "union"] }
 static_assertions.workspace = true

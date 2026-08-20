@@ -3472,6 +3472,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "erased-discriminant"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1a6df962265a53221f29081896c412ef325c17fa7d638cd9578febe53d3c82c"
+dependencies = [
+ "typeid",
+]
+
+[[package]]
 name = "erased-serde"
 version = "0.3.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6821,15 +6830,20 @@ dependencies = [
 name = "mz-compute-types"
 version = "0.0.0"
 dependencies = [
+ "chrono",
+ "chrono-tz",
  "columnar",
  "differential-dataflow",
  "itertools 0.14.0",
  "mz-dyncfg",
  "mz-expr",
  "mz-ore",
+ "mz-pgtz",
  "mz-repr",
  "mz-storage-types",
  "serde",
+ "serde-reflection",
+ "serde_json",
  "timely",
  "tracing",
 ]
@@ -7166,6 +7180,7 @@ dependencies = [
  "aho-corasick",
  "anyhow",
  "aws-lc-rs",
+ "bincode",
  "bytesize",
  "chrono",
  "chrono-tz",
@@ -7213,6 +7228,7 @@ dependencies = [
  "regex-syntax",
  "seahash",
  "serde",
+ "serde_bytes",
  "serde_json",
  "smallvec",
  "tracing",
@@ -8208,6 +8224,7 @@ dependencies = [
  "regex-syntax",
  "ryu",
  "serde",
+ "serde_bytes",
  "serde_json",
  "smallvec",
  "static_assertions",
@@ -12131,6 +12148,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11fc7cc2c76d73e0f27ee52abbd64eec84d46f370c88371120433196934e4b7f"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "serde-reflection"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68fb2363ca88876b3e16442b02dde5305646fd50df297c79a4b54fc5f5cf51d4"
+dependencies = [
+ "erased-discriminant",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "typeid",
 ]
 
 [[package]]
