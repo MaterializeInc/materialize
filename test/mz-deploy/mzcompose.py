@@ -2687,3 +2687,52 @@ def workflow_apply_all_role_ordering(
     assert len(rows) == 1, f"expected role 'reader' to exist, got {rows}"
     rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'reporting'")
     assert len(rows) == 1, f"expected cluster 'reporting' to exist, got {rows}"
+
+
+def workflow_source_references(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`apply tables` checks every `(REFERENCE ...)` against what its source can
+    read, and refreshes the source's references first so a table added upstream
+    after the source was created is still accepted."""
+    setup_base(c)
+
+    # v1 creates the source plus one table whose reference is valid.
+    result = run_mz_deploy(c, "source-references/v1", "apply")
+    assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+
+    with c.test_case("reject-unknown-reference"):
+        # v2 adds a table naming an upstream object that does not exist. Both
+        # the dry run and the real apply must refuse it.
+        for args in (["apply", "--dry-run"], ["apply"]):
+            result = run_mz_deploy(c, "source-references/v2", *args, check=False)
+            assert result.returncode != 0, f"{args} unexpectedly succeeded"
+            for expected in ("does not expose", "app.ingest.widgets", "public.widgets"):
+                assert (
+                    expected in result.stderr
+                ), f"{args} error missing {expected!r}:\n{result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT name FROM mz_tables WHERE name = 'widgets'", database="app"
+        )
+        assert len(rows) == 0, f"widgets must not have been created, got {rows}"
+
+    with c.test_case("accept-reference-added-upstream"):
+        # A table added upstream after the source was created is absent from the
+        # source's recorded references until they are refreshed. Applying it must
+        # still work.
+        c.exec(
+            "postgres",
+            "psql",
+            "-U",
+            "postgres",
+            "-c",
+            "CREATE TABLE gadgets (gadget_id INT PRIMARY KEY, name TEXT); "
+            "ALTER TABLE gadgets REPLICA IDENTITY FULL",
+        )
+
+        result = run_mz_deploy(c, "source-references/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT name FROM mz_tables WHERE name = 'gadgets'", database="app"
+        )
+        assert len(rows) == 1, f"expected table 'gadgets', got {rows}"
