@@ -284,6 +284,21 @@ where
     k.hashed()
 }
 
+/// Routes a `(D, T, R)` column by the hash of its data column.
+///
+/// Counterpart to [`columnar_exchange`] for collections whose data is not a
+/// key/value pair, for example a consolidate that keeps whole records as the
+/// key.
+pub fn columnar_exchange_data<D, T, R>((d, _, _): &Ref<'_, (D, T, R)>) -> u64
+where
+    D: Columnar,
+    for<'a> Ref<'a, D>: Hash,
+    T: Columnar,
+    R: Columnar,
+{
+    d.hashed()
+}
+
 #[cfg(test)]
 mod tests {
     use timely::bytes::arc::BytesMut;
