@@ -88,7 +88,7 @@ pub use literal_value_serde::LiteralValue;
 /// `Result` in `LirRelationNode::Constant`. The mirror has the same variant
 /// order as `Result`, so the encoded bytes are unchanged.
 mod literal_value_serde {
-    use mz_expr::EvalError;
+    use mz_expr::{EvalError, StableEvalError, StableEvalErrorRef};
     use mz_repr::StableRow;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -98,7 +98,7 @@ mod literal_value_serde {
         /// See `Result::Ok`.
         Ok(StableRow),
         /// See `Result::Err`.
-        Err(EvalError),
+        Err(StableEvalError),
     }
 
     /// Borrowing mirror of [`LiteralValue`], to serialize without cloning.
@@ -106,7 +106,7 @@ mod literal_value_serde {
     #[serde(rename = "LiteralValue")]
     enum LiteralValueRef<'a> {
         Ok(&'a StableRow),
-        Err(&'a EvalError),
+        Err(StableEvalErrorRef<'a>),
     }
 
     pub fn serialize<S: Serializer>(
@@ -115,7 +115,7 @@ mod literal_value_serde {
     ) -> Result<S::Ok, S::Error> {
         let mirror = match value {
             Ok(row) => LiteralValueRef::Ok(row),
-            Err(err) => LiteralValueRef::Err(err),
+            Err(err) => LiteralValueRef::Err(StableEvalErrorRef(err)),
         };
         mirror.serialize(serializer)
     }
@@ -125,7 +125,7 @@ mod literal_value_serde {
     ) -> Result<Result<StableRow, EvalError>, D::Error> {
         Ok(match LiteralValue::deserialize(deserializer)? {
             LiteralValue::Ok(row) => Ok(row),
-            LiteralValue::Err(err) => Err(err),
+            LiteralValue::Err(err) => Err(err.0),
         })
     }
 }

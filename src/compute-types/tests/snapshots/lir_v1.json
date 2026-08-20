@@ -2061,7 +2061,7 @@
     "ENUM": {
       "Err": {
         "NEWTYPE": {
-          "TYPENAME": "EvalError"
+          "TYPENAME": "StableEvalError"
         }
       },
       "Ok": {
@@ -2257,276 +2257,11 @@
   "DivUint16": "UNITSTRUCT",
   "DivUint32": "UNITSTRUCT",
   "DivUint64": "UNITSTRUCT",
-  "DomainLimit": {
-    "ENUM": {
-      "Exclusive": {
-        "NEWTYPE": "I64"
-      },
-      "Inclusive": {
-        "NEWTYPE": "I64"
-      },
-      "None": "UNIT"
-    }
-  },
   "ElementListConcat": "UNITSTRUCT",
   "Encode": "UNITSTRUCT",
   "EncodedBytesCharLength": "UNITSTRUCT",
   "Eq": "UNITSTRUCT",
   "ErrorIfNull": "UNITSTRUCT",
-  "EvalError": {
-    "ENUM": {
-      "AclArrayNullElement": "UNIT",
-      "ArrayFillWrongArraySubscripts": "UNIT",
-      "CharOutOfRange": "UNIT",
-      "CharacterNotValidForEncoding": {
-        "NEWTYPE": "I32"
-      },
-      "CharacterTooLargeForEncoding": {
-        "NEWTYPE": "I32"
-      },
-      "ComplexOutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "DateBinOutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "DateDiffOverflow": {
-        "STRUCT": {
-          "a": "STR",
-          "b": "STR",
-          "unit": "STR"
-        }
-      },
-      "DateOutOfRange": "UNIT",
-      "DivisionByZero": "UNIT",
-      "Float32OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "Float64OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "FloatOverflow": "UNIT",
-      "FloatUnderflow": "UNIT",
-      "IfNullError": {
-        "NEWTYPE": "STR"
-      },
-      "IncompatibleArrayDimensions": {
-        "STRUCT": {
-          "dims": {
-            "OPTION": {
-              "TUPLEARRAY": {
-                "CONTENT": "U64",
-                "SIZE": 2
-              }
-            }
-          }
-        }
-      },
-      "IndexOutOfRange": {
-        "STRUCT": {
-          "provided": "I32",
-          "valid_end": "I32"
-        }
-      },
-      "InfinityOutOfDomain": {
-        "NEWTYPE": "STR"
-      },
-      "Int16OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "Int32OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "Int64OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "Internal": {
-        "NEWTYPE": "STR"
-      },
-      "IntervalOutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidArray": {
-        "NEWTYPE": {
-          "TYPENAME": "InvalidArrayError"
-        }
-      },
-      "InvalidBase64EndSequence": "UNIT",
-      "InvalidBase64Equals": "UNIT",
-      "InvalidBase64Symbol": {
-        "NEWTYPE": "CHAR"
-      },
-      "InvalidByteSequence": {
-        "STRUCT": {
-          "byte_sequence": "STR",
-          "encoding_name": "STR"
-        }
-      },
-      "InvalidCatalogJson": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidDatePart": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidEncodingName": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidHashAlgorithm": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidIanaTimezoneId": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidIdentifier": {
-        "STRUCT": {
-          "detail": {
-            "OPTION": "STR"
-          },
-          "ident": "STR"
-        }
-      },
-      "InvalidJsonbCast": {
-        "STRUCT": {
-          "from": "STR",
-          "to": "STR"
-        }
-      },
-      "InvalidLayer": {
-        "STRUCT": {
-          "max_layer": "U64",
-          "val": "I64"
-        }
-      },
-      "InvalidParameterValue": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidPrivileges": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidRange": {
-        "NEWTYPE": {
-          "TYPENAME": "InvalidRangeError"
-        }
-      },
-      "InvalidRegex": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidRegexFlag": {
-        "NEWTYPE": "CHAR"
-      },
-      "InvalidRoleId": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidTimezone": {
-        "NEWTYPE": "STR"
-      },
-      "InvalidTimezoneConversion": "UNIT",
-      "InvalidTimezoneInterval": "UNIT",
-      "KeyCannotBeNull": "UNIT",
-      "LengthTooLarge": "UNIT",
-      "LetRecLimitExceeded": {
-        "NEWTYPE": "STR"
-      },
-      "LikeEscapeTooLong": "UNIT",
-      "LikePatternTooLong": "UNIT",
-      "MaxArraySizeExceeded": {
-        "NEWTYPE": "U64"
-      },
-      "MultiDimensionalArraySearch": "UNIT",
-      "MultidimensionalArrayRemovalNotSupported": "UNIT",
-      "MultipleRowsFromSubquery": "UNIT",
-      "MustNotBeNull": {
-        "NEWTYPE": "STR"
-      },
-      "MzAclArrayNullElement": "UNIT",
-      "MzTimestampOutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "MzTimestampStepOverflow": "UNIT",
-      "NegLimit": "UNIT",
-      "NegSqrt": "UNIT",
-      "NegativeOutOfDomain": {
-        "NEWTYPE": "STR"
-      },
-      "NegativeRowsFromSubquery": "UNIT",
-      "NullCharacterNotPermitted": "UNIT",
-      "NumericFieldOverflow": "UNIT",
-      "OidOutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "OutOfDomain": {
-        "TUPLE": [
-          {
-            "TYPENAME": "DomainLimit"
-          },
-          {
-            "TYPENAME": "DomainLimit"
-          },
-          "STR"
-        ]
-      },
-      "Parse": {
-        "NEWTYPE": {
-          "TYPENAME": "ParseError"
-        }
-      },
-      "ParseHex": {
-        "NEWTYPE": {
-          "TYPENAME": "ParseHexError"
-        }
-      },
-      "PrettyError": {
-        "NEWTYPE": "STR"
-      },
-      "RedactError": {
-        "NEWTYPE": "STR"
-      },
-      "StringValueTooLong": {
-        "STRUCT": {
-          "length": "U64",
-          "target_type": "STR"
-        }
-      },
-      "TimestampCannotBeNan": "UNIT",
-      "TimestampOutOfRange": "UNIT",
-      "TypeFromOid": {
-        "NEWTYPE": "STR"
-      },
-      "UInt16OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "UInt32OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "UInt64OutOfRange": {
-        "NEWTYPE": "STR"
-      },
-      "Undefined": {
-        "NEWTYPE": "STR"
-      },
-      "UnknownUnits": {
-        "NEWTYPE": "STR"
-      },
-      "Unsupported": {
-        "STRUCT": {
-          "discussion_no": {
-            "OPTION": "U64"
-          },
-          "feature": "STR"
-        }
-      },
-      "UnsupportedUnits": {
-        "TUPLE": [
-          "STR",
-          "STR"
-        ]
-      },
-      "UnterminatedLikeEscapeSequence": "UNIT",
-      "ZeroOutOfDomain": {
-        "NEWTYPE": "STR"
-      }
-    }
-  },
   "Exp": "UNITSTRUCT",
   "ExpNumeric": "UNITSTRUCT",
   "ExtractDate": {
@@ -2638,32 +2373,6 @@
     }
   },
   "Initcap": "UNITSTRUCT",
-  "InvalidArrayError": {
-    "ENUM": {
-      "TooManyDimensions": {
-        "NEWTYPE": "U64"
-      },
-      "WrongCardinality": {
-        "STRUCT": {
-          "actual": "U64",
-          "expected": "U64"
-        }
-      }
-    }
-  },
-  "InvalidRangeError": {
-    "ENUM": {
-      "CanonicalizationOverflow": {
-        "NEWTYPE": "STR"
-      },
-      "DiscontiguousDifference": "UNIT",
-      "DiscontiguousUnion": "UNIT",
-      "InvalidRangeBoundFlags": "UNIT",
-      "InvalidRangeData": "UNIT",
-      "MisorderedRangeBounds": "UNIT",
-      "NullRangeBoundFlags": "UNIT"
-    }
-  },
   "IsFalse": "UNITSTRUCT",
   "IsLikeMatch": {
     "NEWTYPESTRUCT": {
@@ -3140,7 +2849,7 @@
     "ENUM": {
       "Err": {
         "NEWTYPE": {
-          "TYPENAME": "EvalError"
+          "TYPENAME": "StableEvalError"
         }
       },
       "Ok": {
@@ -3360,32 +3069,6 @@
   "ParseCatalogId": "UNITSTRUCT",
   "ParseCatalogPrivileges": "UNITSTRUCT",
   "ParseConnectionDetails": "UNITSTRUCT",
-  "ParseError": {
-    "STRUCT": {
-      "details": {
-        "OPTION": "STR"
-      },
-      "input": "STR",
-      "kind": {
-        "TYPENAME": "ParseErrorKind"
-      },
-      "type_name": "STR"
-    }
-  },
-  "ParseErrorKind": {
-    "ENUM": {
-      "InvalidInputSyntax": "UNIT",
-      "OutOfRange": "UNIT"
-    }
-  },
-  "ParseHexError": {
-    "ENUM": {
-      "InvalidHexDigit": {
-        "NEWTYPE": "CHAR"
-      },
-      "OddLength": "UNIT"
-    }
-  },
   "ParseIdent": "UNITSTRUCT",
   "ParseKafkaSourceDetails": "UNITSTRUCT",
   "ParsePostgresSourceDetails": "UNITSTRUCT",
@@ -3752,6 +3435,9 @@
   },
   "SqrtFloat64": "UNITSTRUCT",
   "SqrtNumeric": "UNITSTRUCT",
+  "StableEvalError": {
+    "NEWTYPESTRUCT": "BYTES"
+  },
   "StableRow": {
     "NEWTYPESTRUCT": "BYTES"
   },

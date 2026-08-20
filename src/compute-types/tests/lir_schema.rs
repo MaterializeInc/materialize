@@ -12,21 +12,23 @@
 //! These tests trace the serde serialization surface reachable from
 //! [`LirRelationExpr`] into a [`serde_reflection::Registry`] and compare it
 //! against a checked-in snapshot, `tests/snapshots/lir_v{LIR_VERSION}.json`.
-//! Any change to the serialized format of LIR (including the `*Func` enums,
-//! `EvalError`, and everything else in the graph) changes the traced schema
-//! and fails `lir_schema_snapshot` until the snapshot is regenerated with
-//! `REWRITE=1`. The snapshot diff is the reviewable record of the format
-//! change.
+//! Any change to the serialized format of LIR (including the `*Func` enums
+//! and everything else in the graph) changes the traced schema and fails
+//! `lir_schema_snapshot` until the snapshot is regenerated with `REWRITE=1`.
+//! The snapshot diff is the reviewable record of the format change.
 //!
-//! Rows are the one place where the schema's guarantee is delegated rather
-//! than direct. `Row`'s own serde impl emits the raw bytes of the in-memory
-//! datum encoding, which is documented as free to change, so `Row` is a
-//! forbidden container here. The stable surface stores rows as `StableRow`,
-//! which serializes as protobuf-encoded `ProtoRow` bytes. The registry sees
-//! those as opaque BYTES, and the contract behind them is CI-guarded
-//! elsewhere: row.proto is covered by the buf breaking lint, and persist
-//! requires `ProtoRow` to stay backward compatible because it is the storage
-//! codec for `SourceData`.
+//! Rows and eval errors are the two places where the schema's guarantee is
+//! delegated rather than direct. `Row`'s serde impl emits the raw bytes of
+//! the in-memory datum encoding, which is documented as free to change, and
+//! `EvalError`'s serde impl mirrors a Rust enum that grows a variant
+//! whenever a new error is added. Both are forbidden containers here. The
+//! stable surface stores them as `StableRow` and `StableEvalError`, which
+//! serialize as protobuf-encoded `ProtoRow` and `ProtoEvalError` bytes. The
+//! registry sees those as opaque BYTES, and the contract behind them is
+//! CI-guarded elsewhere: the proto files are covered by the buf breaking
+//! lint, and persist requires both protos to stay backward compatible
+//! because they form the storage codec for `SourceData` (`ProtoRow` on the
+//! Ok side, `ProtoEvalError` inside `ProtoDataflowError` on the Err side).
 //!
 //! While a given LIR version is unshipped, regenerating its snapshot in place
 //! is fine. Once pinned plans are durably stored, a schema change must instead
@@ -53,14 +55,11 @@ use mz_compute_types::plan::{
 use mz_expr::func::{TimezoneTime, ToCharTimestamp};
 use mz_expr::like_pattern::Matcher;
 use mz_expr::{
-    AggregateFunc, BinaryFunc, DomainLimit, EvalError, Id, LagLeadType, LetRecLimit, TableFunc,
+    AggregateFunc, BinaryFunc, EvalError, Id, LagLeadType, LetRecLimit, StableEvalError, TableFunc,
     UnaryFunc, VariadicFunc, WindowFrameBound, WindowFrameUnits,
 };
 use mz_pgtz::timezone::Timezone;
-use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::datetime::DateTimeUnits;
-use mz_repr::adt::range::InvalidRangeError;
-use mz_repr::strconv::{ParseErrorKind, ParseHexError};
 use mz_repr::{CatalogItemId, GlobalId, ReprScalarType, SqlScalarType};
 use serde_reflection::{ContainerFormat, Registry, Samples, Tracer, TracerConfig};
 
@@ -195,10 +194,12 @@ fn diagnose(context: &str, err: serde_reflection::Error) -> ! {
             "A Deserialize impl rejected the value the tracer synthesized (for \
              example chrono types report 'premature end of input' when parsing \
              the synthesized \"\", chrono_tz reports 'not a valid timezone', \
-             and NonZero integers reject the synthesized 0). Record a valid \
-             sample of the smallest containing struct with tracer.trace_value \
-             in the samples section of run_traces. Keep samples minimal. A \
-             recorded sample is replayed wherever the type appears."
+             NonZero integers reject the synthesized 0, and StableEvalError \
+             rejects the synthesized empty bytes because they decode to a \
+             ProtoEvalError with no kind). Record a valid sample of the \
+             smallest containing struct with tracer.trace_value in the \
+             samples section of run_traces. Keep samples minimal. A recorded \
+             sample is replayed wherever the type appears."
         }
         Error::Incompatible(_, _) => {
             "Two types registered different formats under the same serde \
@@ -337,6 +338,14 @@ fn run_traces(
         .trace_value(samples, &timezone_time)
         .map_err(|err| ("TimezoneTime sample".to_string(), err))?;
 
+    // StableEvalError deserializes by decoding protobuf bytes, and the
+    // synthesized default "" decodes to a ProtoEvalError with no kind set,
+    // which from_proto rejects. (StableRow needs no sample: an empty
+    // ProtoRow is a valid empty row.)
+    tracer
+        .trace_value(samples, &StableEvalError(EvalError::DivisionByZero))
+        .map_err(|err| ("StableEvalError sample".to_string(), err))?;
+
     tracer
         .trace_type::<LirRelationExpr>(samples)
         .map_err(|err| ("LirRelationExpr".to_string(), err))?;
@@ -372,7 +381,6 @@ fn run_traces(
         VariadicFunc,
         TableFunc,
         AggregateFunc,
-        EvalError,
         ReprScalarType,
         ConstantRows,
         LiteralValue,
@@ -382,12 +390,7 @@ fn run_traces(
         GlobalId,
         SqlScalarType,
         DateTimeUnits,
-        DomainLimit,
-        InvalidArrayError,
-        InvalidRangeError,
         LagLeadType,
-        ParseErrorKind,
-        ParseHexError,
         WindowFrameBound,
         WindowFrameUnits,
         Timezone,
@@ -561,7 +564,7 @@ fn lir_schema_contains_expected_types() {
         "StableRow",
         "ReprScalarType",
         "ReprColumnType",
-        "EvalError",
+        "StableEvalError",
         "LetRecLimit",
         "Regex",
     ];
@@ -604,15 +607,17 @@ fn lir_schema_contains_only_stable_types() {
         "unexpected LirScalarExpr variants"
     );
 
-    // Row is forbidden because its serde impl emits the in-memory datum
-    // encoding, which is free to change between releases. Rows in the stable
-    // surface must go through StableRow (proto-encoded ProtoRow bytes).
+    // Row and EvalError are forbidden because their serde impls track
+    // unstable Rust definitions (the in-memory datum encoding, the error
+    // enum's variants). The stable surface must go through StableRow and
+    // StableEvalError, which serialize as proto-encoded bytes.
     for forbidden in [
         "MirScalarExpr",
         "UnmaterializableFunc",
         "AggregateExpr",
         "MirRelationExpr",
         "Row",
+        "EvalError",
     ] {
         assert!(
             !registry.contains_key(forbidden),

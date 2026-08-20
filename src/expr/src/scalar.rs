@@ -2531,10 +2531,103 @@ impl RustType<ProtoDims> for (usize, usize) {
     }
 }
 
+/// An [`EvalError`] that serializes as protobuf-encoded [`ProtoEvalError`]
+/// bytes.
+///
+/// `EvalError`'s own serde impl mirrors the Rust enum, so every added error
+/// variant or payload tweak would change a durable format. Use this wrapper
+/// instead wherever an eval error is serialized into a durable, cross-version
+/// format, such as the stable LIR plan format (the same role [`StableRow`]
+/// plays for rows). `ProtoEvalError` already carries the needed backward
+/// compatibility obligation: it is embedded in `ProtoDataflowError`, which
+/// persist stores in the error side of `SourceData`, and the proto files are
+/// covered by the buf breaking lint.
+///
+/// [`StableRow`]: mz_repr::StableRow
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize
+)]
+pub struct StableEvalError(#[serde(with = "stable_eval_error_proto")] pub EvalError);
+
+/// Borrowing twin of [`StableEvalError`], to serialize without cloning. Both
+/// serialize identically, under the `StableEvalError` container name.
+#[derive(Debug, Serialize)]
+#[serde(rename = "StableEvalError")]
+pub struct StableEvalErrorRef<'a>(#[serde(with = "stable_eval_error_proto")] pub &'a EvalError);
+
+impl From<EvalError> for StableEvalError {
+    fn from(err: EvalError) -> Self {
+        StableEvalError(err)
+    }
+}
+
+impl std::ops::Deref for StableEvalError {
+    type Target = EvalError;
+
+    fn deref(&self) -> &EvalError {
+        &self.0
+    }
+}
+
+mod stable_eval_error_proto {
+    use mz_proto::RustType;
+    use prost::Message;
+    use serde::de::Error;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    use crate::scalar::{EvalError, ProtoEvalError};
+
+    pub fn serialize<S: Serializer, E: std::borrow::Borrow<EvalError>>(
+        err: &E,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bytes(&err.borrow().into_proto().encode_to_vec())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<EvalError, D::Error> {
+        let bytes = serde_bytes::ByteBuf::deserialize(deserializer)?;
+        let proto = ProtoEvalError::decode(bytes.as_slice()).map_err(D::Error::custom)?;
+        EvalError::from_proto(proto).map_err(D::Error::custom)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::scalar::func::variadic::Coalesce;
+
+    // StableEvalError's wire format is proto bytes, so every EvalError
+    // variant must roundtrip exactly through both a self-describing format
+    // (JSON) and a compact binary one (bincode). This also exercises the
+    // EvalError -> ProtoEvalError -> EvalError conversion itself, which has
+    // no other roundtrip coverage.
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(1000))]
+
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)] // too slow
+        fn stable_eval_error_serde_roundtrip(err in any::<EvalError>()) {
+            let stable = StableEvalError(err);
+
+            let json = serde_json::to_string(&stable).expect("serializes to JSON");
+            let from_json: StableEvalError =
+                serde_json::from_str(&json).expect("deserializes from JSON");
+            prop_assert_eq!(&stable, &from_json);
+
+            let bytes = bincode::serialize(&stable).expect("serializes to bincode");
+            let from_bincode: StableEvalError =
+                bincode::deserialize(&bytes).expect("deserializes from bincode");
+            prop_assert_eq!(&stable, &from_bincode);
+        }
+    }
 
     /// An `OutOfDomain` with both limits unset is not constructible by any
     /// caller, but it decodes out of corrupted or forged `ProtoEvalError` bytes,

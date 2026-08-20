@@ -225,7 +225,7 @@ pub use constant_rows_serde::ConstantRows;
 /// `Result` in `LirScalarExpr::Literal`. The mirror has the same variant
 /// order as `Result`, so the encoded bytes are unchanged.
 mod constant_rows_serde {
-    use mz_expr::EvalError;
+    use mz_expr::{EvalError, StableEvalError, StableEvalErrorRef};
     use mz_repr::{Diff, StableRow, Timestamp};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -235,7 +235,7 @@ mod constant_rows_serde {
         /// See `Result::Ok`.
         Ok(Vec<(StableRow, Timestamp, Diff)>),
         /// See `Result::Err`.
-        Err(EvalError),
+        Err(StableEvalError),
     }
 
     /// Borrowing mirror of [`ConstantRows`], to serialize without cloning.
@@ -243,7 +243,7 @@ mod constant_rows_serde {
     #[serde(rename = "ConstantRows")]
     enum ConstantRowsRef<'a> {
         Ok(&'a Vec<(StableRow, Timestamp, Diff)>),
-        Err(&'a EvalError),
+        Err(StableEvalErrorRef<'a>),
     }
 
     pub fn serialize<S: Serializer>(
@@ -252,7 +252,7 @@ mod constant_rows_serde {
     ) -> Result<S::Ok, S::Error> {
         let mirror = match rows {
             Ok(rows) => ConstantRowsRef::Ok(rows),
-            Err(err) => ConstantRowsRef::Err(err),
+            Err(err) => ConstantRowsRef::Err(StableEvalErrorRef(err)),
         };
         mirror.serialize(serializer)
     }
@@ -262,7 +262,7 @@ mod constant_rows_serde {
     ) -> Result<Result<Vec<(StableRow, Timestamp, Diff)>, EvalError>, D::Error> {
         Ok(match ConstantRows::deserialize(deserializer)? {
             ConstantRows::Ok(rows) => Ok(rows),
-            ConstantRows::Err(err) => Err(err),
+            ConstantRows::Err(err) => Err(err.0),
         })
     }
 }

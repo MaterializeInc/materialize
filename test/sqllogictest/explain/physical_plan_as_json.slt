@@ -113,7 +113,10 @@ SELECT 1 / 0
         "node": {
           "Constant": {
             "rows": {
-              "Err": "DivisionByZero"
+              "Err": [
+                34,
+                0
+              ]
             }
           }
         }
