@@ -116,12 +116,15 @@ pub const KAFKA_POLL_MAX_WAIT: Config<Duration> = Config::new(
 
 /// Whether to check the low watermark for Kafka sources and error if the start offset/resume
 /// upper has been compacted away.
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
 pub const KAFKA_LOW_WATERMARK_CHECK: Config<bool> = Config::new(
     "kafka_low_watermark_check",
     true,
     "Whether to check the low watermark for Kafka sources and error if the start \
     offset/resume upper has been compacted away.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Config<&'static str> =
@@ -289,11 +292,14 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
 /// provide guarantees of failover without loss of data (e.g. CloudSQL maintenance). Changing this
 /// flag puts the onus on the customer to recreate the source if the upstream DB changes timeline
 /// in a way that introduces data loss (e.g. manual failover, restore, etc.).
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
 pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
     "pg_source_validate_timeline",
     true,
     "Whether to treat a timeline switch as a definite error",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Controls behavior of the SQL Server source when the upstream DB restore history changes. The
@@ -301,11 +307,14 @@ pub static PG_SOURCE_VALIDATE_TIMELINE: Config<bool> = Config::new(
 /// On Availability Group (AOAG), the upstream DB may guarantee continuity without loss of data.
 /// Changing this flag puts the onus on the customer to recreate the source if the upstream DB
 /// changes in a way that introduces data loss.
+/// Environment-scoped because it decides whether a definite error is emitted.
+/// Replicas of one cluster disagreeing would write different collection
+/// contents, so the value has to be coherent across them.
 pub static SQL_SERVER_SOURCE_VALIDATE_RESTORE_HISTORY: Config<bool> = Config::new(
     "sql_server_source_validate_restore_history",
     true,
     "Whether to treat a restore history change as a definite error",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 // AWS

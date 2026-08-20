@@ -352,6 +352,7 @@ pub const SUBSCRIBE_MAX_BUFFERED_BYTES: Config<usize> = Config::new(
     "subscribe_max_buffered_bytes",
     128 * 1024 * 1024,
     "Maximum bytes a SUBSCRIBE may buffer in environmentd for a slow client before it is retired with an error.",
+    ParameterScope::Environment,
 );
 
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
