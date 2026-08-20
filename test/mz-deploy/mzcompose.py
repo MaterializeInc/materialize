@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 
@@ -55,6 +57,9 @@ SERVICES = [
     # Kafka broker for the sinks workflow. Only started by workflows that
     # exercise sinks; the others never bring it up.
     Redpanda(),
+    # MySQL for the source-references-mysql workflow. Only started by workflows
+    # that exercise MySQL sources; the others never bring it up.
+    MySql(),
     # mz-deploy runs as a prebuilt mzbuild image (see src/mz-deploy/ci) rather
     # than a host `cargo build`, so CI doesn't recompile it on every run. The
     # projects directory is mounted at /projects; the binary reaches the
@@ -2736,3 +2741,58 @@ def workflow_source_references(c: Composition, parser: WorkflowArgumentParser) -
             "SELECT name FROM mz_tables WHERE name = 'gadgets'", database="app"
         )
         assert len(rows) == 1, f"expected table 'gadgets', got {rows}"
+
+
+def workflow_source_references_mysql(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """The source-reference check leaves MySQL's system schemas to the server.
+
+    `mz_source_references` never lists a table in `mysql`, `sys`,
+    `performance_schema`, or `information_schema`, because both `CREATE SOURCE`
+    and `ALTER SOURCE ... REFRESH REFERENCES` retrieve MySQL tables with system
+    schemas excluded. Creating a table from such a reference does resolve it, so
+    the check must skip those references rather than call them missing, while
+    still checking every other reference on the same source."""
+    setup_base(c)
+    c.up("mysql")
+
+    def mysql(sql: str) -> None:
+        c.exec(
+            "mysql",
+            "bash",
+            "-c",
+            f"export MYSQL_PWD={MySql.DEFAULT_ROOT_PASSWORD} && mysql -u root -e {shlex.quote(sql)}",
+        )
+
+    mysql(
+        "CREATE DATABASE inventory; "
+        "CREATE TABLE inventory.items (item_id INT PRIMARY KEY, name TEXT); "
+        "INSERT INTO inventory.items VALUES (1, 'widget'); "
+        "CREATE TABLE mysql.t_in_mysql (f1 INT); "
+        "INSERT INTO mysql.t_in_mysql VALUES (1)"
+    )
+
+    result = run_mz_deploy(c, "source-references-mysql/v1", "apply")
+    assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+
+    with c.test_case("accept-system-schema-reference"):
+        # `mysql.t_in_mysql` is readable but never recorded, so the check has to
+        # leave it alone.
+        result = run_mz_deploy(c, "source-references-mysql/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT name FROM mz_tables WHERE name = 't_in_mysql'", database="app"
+        )
+        assert len(rows) == 1, f"expected table 't_in_mysql', got {rows}"
+
+    with c.test_case("reject-unknown-reference"):
+        # Skipping system schemas must not stop the check from catching a
+        # reference the source genuinely cannot read.
+        result = run_mz_deploy(c, "source-references-mysql/v3", "apply", check=False)
+        assert result.returncode != 0, "apply v3 unexpectedly succeeded"
+        for expected in ("does not expose", "app.ingest.absent", "inventory.absent"):
+            assert (
+                expected in result.stderr
+            ), f"error missing {expected!r}:\n{result.stderr}"
