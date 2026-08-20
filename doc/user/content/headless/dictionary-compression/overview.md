@@ -15,5 +15,4 @@ preview**) for managed clusters. Dictionary compression reduces the memory that
 the same values repeatedly. Instead of storing a repeated column value each time
 it appears, Materialize stores that value once and has each row reference it. This can reduce steady state memory requirements after hydration has completed.
 
-Dictionary compression is off by default. You opt in per cluster with the
-`EXPERIMENTAL ARRANGEMENT COMPRESSION` option.
+Dictionary compression is specified per cluster replica, and is set to off by default. You opt in using the `EXPERIMENTAL ARRANGEMENT COMPRESSION` option, while creating or altering a cluster.
