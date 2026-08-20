@@ -129,6 +129,23 @@ test.describe('/memory page', () => {
     await expect(viz).toContainText('CREATE VIEW');
   });
 
+  test('SQL quoting escapes every quote, not just the first', async ({
+    page,
+  }) => {
+    // The pages build SQL by interpolating URL parameters and catalog names,
+    // and run it as whoever opened the page, so an escaper that stops after
+    // the first quote of a name is no better than none.
+    await openMemoryPage(page, '/memory');
+
+    const quoted = await page.evaluate(() => {
+      const w = window as any;
+      return { literal: w.sqlLiteral(`a'b'c`), ident: w.sqlIdent(`a"b"c`) };
+    });
+
+    expect(quoted.literal).toBe(`'a''b''c'`);
+    expect(quoted.ident).toBe(`"a""b""c"`);
+  });
+
   test('graphviz renders SVG when dataflow is expanded', async ({ page }) => {
     await openMemoryPage(page, fixturePage('/memory'));
     await expandFixtureDataflow(page);
