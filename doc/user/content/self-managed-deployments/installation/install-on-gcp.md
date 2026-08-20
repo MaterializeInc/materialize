@@ -84,8 +84,9 @@ This example provisions the following infrastructure:
 
 ### Observability
 
-Off by default in the simple example. Set `enable_observability = true` to
-create the following as well:
+On by default starting with v11.0.0 of the Materialize Terraform Modules.
+Whenever `enable_observability` is `true`,
+the following are created as well:
 
 | Resource | Description |
 |----------|-------------|
@@ -94,9 +95,13 @@ create the following as well:
 | Grafana Cloud SQL PostgreSQL | `db-f1-micro` instance holding Grafana's own state (users, API tokens, annotations, dashboard versions) |
 | Grafana Load Balancer | Internal GCP Load Balancer for reaching Grafana, allowlisted to `ingress_cidr_blocks` |
 
-This stack requires TF v10.0.0 or later, which replaced an earlier
-Prometheus-and-Grafana pair. The Grafana database and load balancer were added
-in v10.1.0, and are both billable. For details, see
+This stack requires v10.0.0 or later of the Materialize Terraform Modules,
+which replaced an earlier Prometheus-and-Grafana pair. The Grafana database
+and load balancer were added in v10.1.0, and are both billable. Starting with
+v11.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
+do not want the stack. For what the stack stores and where else it can send
+it, see [How logs and metrics are
+stored](/manage/monitor/self-managed/storage/). For reaching Grafana, see
 [Grafana](/manage/monitor/self-managed/grafana/).
 
 ## Prerequisites
@@ -204,7 +209,7 @@ authentication mechanisms.
    | `name_prefix` | Set a prefix for all resource names (e.g., `simple-demo`) as well as your release name for the Operator |
    | `region`      | Set the GCP region for the deployment (e.g., `us-central1`).  |
    | `license_key` | Set to your Materialize license key.     |
-   | `crd_version` | CRD API version to use for the Materialize instance: `v1` (default starting in TF v4.0.0) or `v1alpha1`. |
+   | `crd_version` | CRD API version to use for the Materialize instance: `v1` (default starting with Materialize Terraform Modules v4.0.0) or `v1alpha1`. |
    | `labels`      | Set to the labels to apply to resources. |
 
    {{% include-from-yaml data="self_managed/installation"
@@ -215,7 +220,7 @@ authentication mechanisms.
    name_prefix = "simple-demo"
    region      = "us-central1"
    license_key = "your-materialize-license-key"
-   crd_version = "v1"   # Default starting in TF v4.0.0. v1 requires Materialize v26.30+.
+   crd_version = "v1"   # Default starting with Materialize Terraform Modules v4.0.0. v1 requires Materialize v26.30+.
    labels = {
      environment = "demo"
      created_by  = "terraform"
@@ -223,13 +228,14 @@ authentication mechanisms.
    # internal_load_balancer = false   # default = true (internal load balancer). You can set to false = public load balancer.
    # ingress_cidr_blocks = ["x.x.x.x/n", ...]
    # k8s_apiserver_authorized_networks  = ["x.x.x.x/n", ...]
-   # enable_observability = true   # Set to true to enable observability stack.
+   # enable_observability = false   # default = true (install the observability stack).
    # grafana_host = "grafana.example.com"   # Only used when enable_observability = true.
    ```
 
    {{< note >}}
-   `enable_observability = true` also creates a `db-f1-micro` Cloud SQL instance
-   for Grafana's own state and an internal load balancer to reach Grafana on.
+   With `enable_observability` on, the modules also create a `db-f1-micro`
+   Cloud SQL instance for Grafana's own state and an internal load balancer to
+   reach Grafana on.
    Both are billable. See
    [Grafana](/manage/monitor/self-managed/grafana/).
    {{< /note >}}

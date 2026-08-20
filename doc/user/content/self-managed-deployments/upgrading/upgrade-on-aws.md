@@ -43,7 +43,7 @@ The following procedure performs a rolling upgrade, where both the old and new M
 
 {{</ important >}}
 
-### Step 1: Update TF module source version
+### Step 1: Update the Materialize Terraform Modules source version
 
 Update each module's `source` to point to the desired release tag, substituting
 `<RELEASE_TAG>` in the code block below with your tag version:
@@ -102,11 +102,11 @@ name="upgrade-tf-v4-crd-version-default" >}}
 {{< include-from-yaml data="self_managed/crd_version_checks"
 name="check-crd-version-tf" >}}
 
-- If you are using `v1`, skip to the [Apply the updated TF
-  step](#step-3-apply-the-updated-tf).
+- If you are using `v1`, skip to the [Apply the updated Terraform
+  step](#step-3-apply-the-updated-terraform).
 - {{< include-from-yaml data="self_managed/upgrades" name="upgrade-request_rollout" >}}
 
-### Step 3: Apply the updated TF
+### Step 3: Apply the updated Terraform
 
 {{% include-from-yaml data="self_managed/upgrades" name="upgrade-tf-apply" %}}
 
@@ -130,9 +130,17 @@ Grafana Alloy, and Alertmanager — alongside your deployment, with the
 Materialize dashboards pre-installed. You can turn it on during an upgrade, in
 the same `terraform apply` as the version bump.
 
-The stack below arrived in **TF v10.0.0**, replacing the earlier single
-Prometheus and Grafana. **TF v10.1.0** then added durable state for Grafana and
-a load balancer to reach it on.
+The stack below arrived in **v10.0.0** of the Materialize Terraform Modules,
+replacing the earlier single Prometheus and Grafana. **v10.1.0** then added
+durable state for Grafana and a load balancer to reach it on.
+
+{{< warning >}}
+Starting with **v11.0.0** of the Materialize Terraform Modules,
+`enable_observability` defaults to `true`. Bumping `ref=<RELEASE_TAG>` to
+v11.0.0 or later therefore installs the whole stack, and its billable
+supporting resources, on a deployment that never set the variable. Set
+`enable_observability = false` in the same change if you do not want it.
+{{< /warning >}}
 
 {{< warning >}}
 `kubernetes/modules/prometheus` and `kubernetes/modules/grafana` were **removed**
@@ -143,13 +151,15 @@ migrated.
 If you were running the old stack, upgrading **destroys** its Helm releases and
 PersistentVolumeClaims. Up to 15 days of local Prometheus data goes with them,
 along with anything hand-created in the old Grafana. There is no backfill. See
-[Upgrading from the previous
-stack](/manage/monitor/self-managed/grafana/#upgrading-from-the-previous-stack).
+[How to upgrade from previous versions of the Materialize Terraform
+Modules](/manage/monitor/self-managed/grafana/#how-to-upgrade-from-previous-versions-of-the-materialize-terraform-modules).
 {{< /warning >}}
 
 ### If you use the example configuration
 
-Set the following in your `terraform.tfvars`:
+Nothing is required starting with v11.0.0 of the Materialize Terraform
+Modules, where the variable defaults to `true`. To be explicit, or on an
+earlier release, set the following in your `terraform.tfvars`:
 
 ```hcl
 enable_observability = true
@@ -231,9 +241,10 @@ enable_observability = true
 
 ### What this creates
 
-Applying the above adds S3 buckets for metrics and logs, and — from TF v10.1.0 —
-a `db.t4g.micro` RDS instance for Grafana's own state and an internal NLB to
-reach Grafana on. The database and the load balancer are both billable.
+Applying the above adds S3 buckets for metrics and logs, and — from
+Materialize Terraform Modules v10.1.0 — a `db.t4g.micro` RDS instance for
+Grafana's own state and an internal NLB to reach Grafana on. The database and
+the load balancer are both billable.
 
 {{< warning >}}
 The Grafana load balancer terminates no TLS, and Grafana has no identity
@@ -250,7 +261,9 @@ may need to grow before the apply can schedule all of them.
 
 For accessing Grafana, pointing the stack at a database you already run, sizing
 profiles, and retention, see
-[Grafana](/manage/monitor/self-managed/grafana/).
+[Grafana](/manage/monitor/self-managed/grafana/). For what the stack stores and
+the backends it can forward to, see [How logs and metrics are
+stored](/manage/monitor/self-managed/storage/).
 
 ## See also
 

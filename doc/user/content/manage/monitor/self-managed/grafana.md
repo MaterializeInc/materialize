@@ -1,40 +1,37 @@
 ---
 title: "Grafana"
-description: "How to deploy Grafana and the Materialize monitoring stack using the Materialize Terraform modules."
+description: "How to enable, reach, and use the Grafana that ships with the Self-Managed Materialize monitoring stack."
 aliases:
   - /manage/monitor/self-managed/prometheus/
 menu:
   main:
     parent: "monitor-sm"
-    weight: 1
+    weight: 3
     identifier: "grafana-sm"
 ---
 
-The [Materialize Terraform modules](/self-managed-deployments/installation/#install-using-terraform-modules) can deploy a
-monitoring stack alongside your Materialize deployment.
-When you set `enable_observability = true`, the modules install:
+**Grafana** is the dashboarding and query interface for the monitoring stack the
+[Materialize Terraform
+modules](/self-managed-deployments/installation/#install-using-terraform-modules)
+install. This guide will help you deploy Grafana, with all data sources wired up
+to our template dashboards. This means you can start monitoring Materialize
+immediately.
 
-| Component | Purpose |
-|-----------|---------|
-| **Grafana** | Dashboards and query UI, with the Materialize dashboards pre-installed. |
-| **Thanos** | Metrics storage backed by object storage, with a Prometheus-compatible query endpoint. |
-| **Loki** | Log storage backed by object storage. |
-| **Grafana Alloy** | Collection of metrics and logs from Materialize and from the cluster. |
-| **Alertmanager** | Alert routing. |
+If you are upgrading from a previous version of the Materialize Terraform
+Modules, read [How to upgrade from previous
+versions](#how-to-upgrade-from-previous-versions-of-the-materialize-terraform-modules)
+first.
 
-The stack comes from the [`materialize-monitoring`
-⧉](https://github.com/MaterializeInc/materialize-monitoring) charts. The
-Terraform modules also create the object storage and the cloud identities the
-stack needs, so you do not have to configure scrape targets, data sources, or
-dashboards yourself.
+## How it works
 
-This stack was introduced in **TF v10.0.0**, replacing an earlier
-Prometheus-and-Grafana pair that collected metrics only. **TF v10.1.0** then
-added durable state for Grafana and a load balancer to reach it on. If you are
-upgrading from before v10.0.0, read [Upgrading from the previous
-stack](#upgrading-from-the-previous-stack) first.
+The dashboards read the two stores the monitoring stack runs: Thanos for metrics
+and Loki for logs. For how that data is collected, and where it is stored, see
+[How logs and metrics are
+stored](/manage/monitor/self-managed/storage/#how-it-works).
 
-## Before you begin
+## Installation
+
+### Before you begin
 
 Ensure you have:
 
@@ -46,66 +43,9 @@ Ensure you have:
 - [kubectl ⧉](https://kubernetes.io/docs/tasks/tools/) installed and configured
   to connect to your cluster.
 
-## Upgrading from the previous stack
+### Step 1. Enable observability
 
-Before TF v10.0.0, `enable_observability = true` installed a single Prometheus
-and a Grafana from `kubernetes/modules/prometheus` and
-`kubernetes/modules/grafana`. Those two modules were **removed** in v10.0.0 —
-not deprecated in place — and replaced by a `monitoring` module per cloud.
-
-{{< warning >}}
-Upgrading to v10.0.0 or later **destroys** the `prometheus` and `grafana` Helm
-releases and their PersistentVolumeClaims. Up to 15 days of local Prometheus
-data goes with them: there is no backfill, and the new stack begins collecting
-at install. Anything hand-created in the old Grafana — dashboards, users, saved
-queries — does not carry over either.
-{{< /warning >}}
-
-Other things that change on that upgrade:
-
-- If you referenced `kubernetes/modules/prometheus` or
-  `kubernetes/modules/grafana` directly rather than through an example, that
-  reference breaks. Pin the previous major until you have migrated to the
-  `monitoring` module for your cloud.
-
-- The `prometheus_url` output is gone, replaced by `metrics_url` (Thanos Query)
-  and `logs_url` (Loki). Thanos Query is Prometheus-API-compatible, so consumers
-  of the old URL work against the new one — only the host and port change.
-
-- `grafana_url` and `grafana_admin_password` keep their names and meaning.
-
-- New cloud resources are created: object storage for each backend (logs and
-  metrics), plus a per-backend cloud identity bound to the in-cluster
-  ServiceAccount.
-
-- If you set `install_metrics_server = false` on the operator module, set
-  `install_metrics_server = true` on the monitoring module in the same change.
-  The Materialize Console depends on the metrics API for cluster metrics.
-
-For the per-cloud module blocks and the full upgrade procedure, see the upgrade
-guide for your cloud: [AWS](/self-managed-deployments/upgrading/upgrade-on-aws/),
-[Azure](/self-managed-deployments/upgrading/upgrade-on-azure/), or
-[GCP](/self-managed-deployments/upgrading/upgrade-on-gcp/).
-
-## Step 1. Enable observability
-
-The `simple` example for each cloud takes an `enable_observability` variable,
-which defaults to `false`.
-
-1. In your `terraform.tfvars`, set:
-
-   ```hcl
-   enable_observability = true
-   ```
-
-1. Apply the configuration:
-
-   ```bash
-   terraform apply
-   ```
-
-   The apply creates the object storage and cloud identities for metrics and
-   logs, and installs the stack into the `monitoring` namespace.
+{{% include-headless "/headless/monitoring/enable-observability" %}}
 
 Starting in **v10.1.0**, the examples also create two resources for Grafana
 itself whenever `enable_observability` is on:
@@ -148,7 +88,7 @@ module "operator" {
 }
 ```
 
-## Step 2. Access Grafana
+### Step 2. Access Grafana
 
 Retrieve the `admin` password from the Terraform output. You need it for either
 access method below:
@@ -162,7 +102,7 @@ Your shell may show an ending marker (such as `%`) because the output did not
 end with a newline. Do not include the marker when using the value.
 {{< /tip >}}
 
-### Through the load balancer
+#### Through the load balancer
 
 Starting in v10.1.0, the examples put Grafana behind an L4 load balancer. It
 follows the same `internal_load_balancer` and `ingress_cidr_blocks` variables as
@@ -212,7 +152,7 @@ modules publishes DNS for that name — that record is yours to create.
 To skip the load balancer entirely and keep Grafana on a `ClusterIP` Service,
 set `grafana_load_balancer = null` on the `monitoring` module block.
 
-### Through port forwarding
+#### Through port forwarding
 
 Port forwarding stays the private path, and is the only option when the load
 balancer is internal and you are outside the network.
@@ -226,7 +166,7 @@ balancer is internal and you are outside the network.
 1. Open [http://localhost:3000](http://localhost:3000) in a browser and log in
    as `admin` with the password from above.
 
-## Step 3. Persist Grafana's own state
+### Step 3. Persist Grafana's own state
 
 Grafana keeps users, service accounts and API tokens, annotations, dashboard
 versions, preferences, and alert-rule state in its own database — separate from
@@ -253,7 +193,7 @@ To keep the previous SQLite behaviour, set `grafana_database = null` on the
 `grafana_database_port`, `grafana_database_name`, `grafana_database_user`,
 `grafana_database_password`, and `grafana_database_ssl_mode` variables instead.
 
-## Step 4. Open the Materialize dashboards
+### Step 4. Open the Materialize dashboards
 
 The dashboards and their data sources are installed by Grafana Operator from the
 released chart, so they track the chart version rather than a copy you maintain.
@@ -275,20 +215,57 @@ resources rather than the Helm release status.
 For the list of dashboards and what each one covers, see [Grafana dashboards
 ⧉](https://materializeinc.github.io/materialize-monitoring/dashboards/grafana/importing/).
 
+## How to upgrade from previous versions of the Materialize Terraform Modules
+
+Before Terraform v10.0.0, `enable_observability = true` installed a single Prometheus
+and a Grafana from `kubernetes/modules/prometheus` and
+`kubernetes/modules/grafana`. Those two modules were **removed** in v10.0.0 —
+not deprecated in place — and replaced by a `monitoring` module per cloud.
+
+{{< warning >}}
+Upgrading to v10.0.0 or later **destroys** the `prometheus` and `grafana` Helm
+releases and their PersistentVolumeClaims. Up to 15 days of local Prometheus
+data goes with them: there is no backfill, and the new stack begins collecting
+at install. Anything hand-created in the old Grafana — dashboards, users, saved
+queries — does not carry over either.
+{{< /warning >}}
+
+Other things that change on that upgrade:
+
+- If you referenced `kubernetes/modules/prometheus` or
+  `kubernetes/modules/grafana` directly rather than through an example, that
+  reference breaks. Pin the previous major until you have migrated to the
+  `monitoring` module for your cloud.
+
+- The `prometheus_url` output is gone, replaced by `metrics_url` (Thanos Query)
+  and `logs_url` (Loki). Thanos Query is Prometheus-API-compatible, so consumers
+  of the old URL work against the new one — only the host and port change.
+
+- `grafana_url` and `grafana_admin_password` keep their names and meaning.
+
+- New cloud resources are created: object storage for each backend (logs and
+  metrics), plus a per-backend cloud identity bound to the in-cluster
+  ServiceAccount.
+
+- If you set `install_metrics_server = false` on the operator module, set
+  `install_metrics_server = true` on the monitoring module in the same change.
+  The Materialize Console depends on the metrics API for cluster metrics.
+
+For the per-cloud module blocks and the full upgrade procedure, see the upgrade
+guide for your cloud: [AWS](/self-managed-deployments/upgrading/upgrade-on-aws/),
+[Azure](/self-managed-deployments/upgrading/upgrade-on-azure/), or
+[GCP](/self-managed-deployments/upgrading/upgrade-on-gcp/).
+
+
 ## Connect existing tooling
 
-If you already run Grafana, or want to point other tools at the collected data,
-the examples output the metric and logging query endpoints:
+If you already run Grafana, or another tool that should read the collected data,
+the examples publish the query endpoints for both stores as Terraform outputs.
+See [How logs and metrics are stored](/manage/monitor/self-managed/storage/#connect-existing-tooling).
 
-| Terraform Output | Description |
-|------------------|-------------|
-| `metrics_url` | Thanos Query endpoint. Prometheus-API-compatible, so anything that supports the PromQL query API will work with it. |
-| `logs_url` | Loki read endpoint. |
-
-```bash
-terraform output -raw metrics_url
-terraform output -raw logs_url
-```
+To have the stack push its metrics or logs to a platform you already run rather
+than being queried, see the destinations listed in [How logs and metrics are
+stored](/manage/monitor/self-managed/storage/#sending-metrics-and-logs-elsewhere).
 
 ## Advanced configuration
 

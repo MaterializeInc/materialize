@@ -35,16 +35,10 @@ prevent operational incidents. For alert rules guidelines, see
 You can monitor the performance and overall health of your Self-Managed
 Materialize.
 
-To help you get started, the following guides are available:
+{{% include-headless "/headless/monitoring/self-managed-stack" %}}
 
-- [Grafana](/manage/monitor/self-managed/grafana/)
-
-- [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
-
+{{% include-headless "/headless/monitoring/self-managed-destinations" %}}
 
 ### Alerting
 
-After setting up a monitoring tool, you can configure alert rules. Alert rules
-send a notification when a metric surpasses a threshold. This will help you
-prevent operational incidents. For alert rules guidelines, see
-[Alerting](/manage/monitor/self-managed/alerting/).
+{{% include-headless "/headless/monitoring/self-managed-alerting" %}}

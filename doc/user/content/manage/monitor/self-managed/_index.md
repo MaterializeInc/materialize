@@ -1,6 +1,6 @@
 ---
 title: "Self-Managed"
-description: "Monitor the performance of your Self-Managed Materialize region with Datadog and Grafana."
+description: "Monitor and alert on Self-Managed Materialize with the bundled monitoring stack or your own observability platform."
 disable_toc: true
 disable_list: true
 aliases:
@@ -17,21 +17,14 @@ menu:
 
 This section covers monitoring and alerting for Self-Managed Materialize.
 
-### Monitoring
+## Built-in monitoring stack
 
-You can monitor the performance and overall health of your Self-Managed
-Materialize.
+{{% include-headless "/headless/monitoring/self-managed-stack" %}}
 
-To help you get started, the following guides are available:
+## Deliver data to your observability platform
 
-- [Grafana](/manage/monitor/self-managed/grafana/)
+{{% include-headless "/headless/monitoring/self-managed-destinations" %}}
 
-- [Datadog using Prometheus SQL Exporter](/manage/monitor/self-managed/datadog/)
+## Alerting
 
-
-### Alerting
-
-After setting up a monitoring tool, you can configure alert rules. Alert rules
-send a notification when a metric surpasses a threshold. This will help you
-prevent operational incidents. For alert rules guidelines, see
-[Alerting](/manage/monitor/self-managed/alerting/).
+{{% include-headless "/headless/monitoring/self-managed-alerting" %}}
