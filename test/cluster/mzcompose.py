@@ -4845,13 +4845,33 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
     The `group_commit_before_apply_write` failpoint holds the winning writer
     inside that window, the same one a second `environmentd` process opens on
     its own with no ordering against local Persist visibility.
+
+    The winner is a blind INSERT into a second table rather than a write to the
+    target, because a blind write takes its timestamp from the oracle before it
+    parks. Its `W` is therefore below the target the UPDATE picks, so the UPDATE
+    folds the winner's effect into an empty payload and reaches its zero-row answer
+    without submitting anything, while the oracle still cannot serve reads at `W`.
+
+    A winner that took a timestamped write, an OCC `DELETE` on the target for
+    instance, does not witness this. `commit_timestamped` only peeks the oracle, so
+    a parked one leaves the write timestamp untouched, the UPDATE picks `W` itself,
+    and its submission queues behind the parked winner on the group committer. The
+    refusal then cannot come back until the winner has applied `W`, so the answer
+    is only ever reached after the oracle already covers it and the assertion below
+    holds whether or not the zero-row path linearizes at all.
+
+    NOTE: The premise relies on the UPDATE's frontier reaching `W + 1` even though
+    the winner wrote a different table, which holds because a txns-shard append
+    advances the readable upper of every registered table. If that ever stops
+    holding, the UPDATE waits for its frontier rather than for the oracle, and an
+    attempt passes without witnessing anything.
     """
 
     # Every txns-shard write parks here while armed, including the keepalives
     # that advance table uppers, so this has to be a bounded `sleep` and not a
-    # `pause`: a keepalive would take the `pause` first and the winning DELETE
-    # would never get to append. The window only has to outlast a peek and one
-    # subscribe dataflow installation.
+    # `pause`: a keepalive would take the `pause` first and the winning INSERT
+    # would never get to append. The window has to outlast a peek, one subscribe
+    # dataflow installation, and the UPDATE's own wait for the oracle.
     failpoint = "group_commit_before_apply_write"
     arm = f"SET failpoints = '{failpoint}=sleep(10000)'"
     disarm = f"SET failpoints = '{failpoint}=off'"
@@ -4870,8 +4890,9 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
         }
         return values[f"{metric}_count"], values[f"{metric}_sum"]
 
-    def count(cur: Cursor, key: int) -> int:
-        cur.execute(f"SELECT count(*) FROM t WHERE k = {key}".encode())
+    def guard_rows(cur: Cursor, key: int) -> int:
+        """Rows of `guard` for `key`, which is what the UPDATE's selection reads."""
+        cur.execute(f"SELECT count(*) FROM guard WHERE g = {key}".encode())
         row = cur.fetchone()
         assert row is not None
         return int(row[0])
@@ -4886,6 +4907,9 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
     ):
         c.up("materialized")
         c.sql("CREATE TABLE t (k int, v int)")
+        # A row here empties the UPDATE's selection. Keyed per attempt, so an
+        # attempt never starts from a selection an earlier one already emptied.
+        c.sql("CREATE TABLE guard (g int)")
 
         # Ask the process rather than the catalog which path it takes: the UPDATE
         # only reaches the histogram if the frontend sequenced it.
@@ -4909,78 +4933,94 @@ def workflow_test_occ_zero_row_write_linearization(c: Composition) -> None:
             # read cannot.
             probe.execute("SET transaction_isolation = 'serializable'")
 
-            # The UPDATE's subscribe can instead report progress at the table's
-            # pre-append upper, with the row still there, then submit a write,
-            # queue behind the parked committer, and conclude zero rows only once
-            # the oracle has caught up. That proves nothing either way, so such an
-            # attempt is retried; the write conflict count tells the two apart.
+            # An attempt only says something while the window is open. The
+            # failpoint's `sleep` can expire first, and then the guard row is
+            # readable through the oracle and the UPDATE reports zero rows for the
+            # ordinary reason. The witness below tells the two apart, and an
+            # attempt that lost the window is retried with a fresh key.
             for attempt in range(1, 4):
                 key = attempt
                 c.sql(f"INSERT INTO t VALUES ({key}, 1)")
                 armed = Event()
 
-                def delete_winner(key: int = key) -> None:
+                def guard_winner(key: int = key) -> None:
                     armed.wait()
-                    # Lands its append and advances t's upper, then the committer
+                    # Takes its timestamp from the oracle, lands its append, then
                     # parks before applying that timestamp to the oracle.
-                    winner_cur.execute(f"DELETE FROM t WHERE k = {key}".encode())
+                    winner_cur.execute(f"INSERT INTO guard VALUES ({key})".encode())
 
-                winner = PropagatingThread(target=delete_winner, name="winner")
+                winner = PropagatingThread(target=guard_winner, name="winner")
                 winner.start()
                 control.execute(arm)
                 armed.set()
 
                 # The winner's append is visible in Persist from here on ...
                 deadline = time.time() + 120
-                while count(probe, key) > 0:
+                while guard_rows(probe, key) == 0:
                     assert (
                         time.time() < deadline
-                    ), "the winning DELETE never became visible in Persist"
+                    ), "the winning INSERT never became visible in Persist"
                     time.sleep(0.1)
                 # ... and the oracle cannot serve reads at it yet, which is what
                 # puts us inside the window. This witness says nothing about the
                 # UPDATE, so it stays valid once the zero-row path waits.
-                before = count(session, key)
+                before = guard_rows(session, key)
 
                 conflicts = occ_writes()[1]
                 started = time.time()
-                session.execute(f"UPDATE t SET v = v + 1 WHERE k = {key}".encode())
+                session.execute(
+                    f"UPDATE t SET v = v + 1 WHERE k = {key} "
+                    f"AND NOT EXISTS (SELECT 1 FROM guard WHERE g = {key})".encode()
+                )
                 matched = session.rowcount
                 elapsed = time.time() - started
-                after = count(session, key)
+                after = guard_rows(session, key)
                 conflicts = occ_writes()[1] - conflicts
 
                 control.execute(disarm)
                 # `off` does not interrupt a `sleep` under way, so this waits out
                 # the rest of the window.
                 winner.join(timeout=120)
-                assert not winner.is_alive(), "the winning DELETE never finished"
+                assert not winner.is_alive(), "the winning INSERT never finished"
 
                 print(
                     f"attempt {attempt}: UPDATE matched {matched} row(s) in "
                     f"{elapsed:.1f}s with {conflicts} write conflict(s); "
-                    f"strict-serializable reads saw {before} row(s) before it and "
-                    f"{after} row(s) after"
+                    f"strict-serializable reads saw {before} guard row(s) before it "
+                    f"and {after} after"
                 )
                 assert matched == 0, (
-                    f"the UPDATE matched {matched} row(s) with the winner's delete "
-                    "already visible, so it never took the zero-row path"
+                    f"the UPDATE matched {matched} row(s) with the guard row already "
+                    "visible, so it never took the zero-row path"
                 )
-                if before == 0 or conflicts > 0:
+                if before > 0:
+                    # The guard row was already readable through the oracle, so
+                    # the zero-row answer needed no linearization and this attempt
+                    # witnesses nothing.
                     continue
 
-                assert after == 0, (
+                assert conflicts == 0, (
+                    f"the UPDATE lost {conflicts} write conflict(s), so it submitted "
+                    "a write and its answer came back only after the parked winner "
+                    "applied, which leaves the assertion below with nothing to witness"
+                )
+
+                # Without the linearization the UPDATE returns while the oracle is
+                # still below the guard row's timestamp, so this read lands below it
+                # too and reports 0: a statement that answered "no rows" from state
+                # the following read cannot see.
+                assert after == 1, (
                     "the UPDATE reported zero rows matched from state the oracle had "
-                    f"not applied yet, and a strict-serializable read after it saw "
-                    f"{after} row(s): the zero-row response was not linearized against "
-                    "the write that emptied the selection"
+                    "not applied yet, and a strict-serializable read after it saw "
+                    f"{after} guard row(s): the zero-row response was not linearized "
+                    "against the write that emptied the selection"
                 )
                 break
             else:
                 raise AssertionError(
-                    "no attempt got the UPDATE to report zero rows from the newer "
-                    "state without first submitting a write, so the window was never "
-                    "observed"
+                    "no attempt ran its UPDATE while the winning INSERT was "
+                    "visible in Persist but not yet through the oracle, so the "
+                    "window was never observed"
                 )
 
 
