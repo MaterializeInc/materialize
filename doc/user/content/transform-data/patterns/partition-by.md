@@ -94,20 +94,23 @@ These restrictions describe the orderings Materialize can provide, and are enfor
 
 ## Filter pushdown
 
-Suppose that our example `events` table has accumulated years' worth of data, but we're running a query with a [temporal filter](/transform-data/patterns/temporal-filters/) that matches only rows with recent timestamps.
+Suppose that our example `events` table has accumulated years' worth of data, but we're running a query that matches only rows from a narrow range of timestamps.
 
 ```mzsql
-SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
+SELECT * FROM events
+WHERE event_ts >= TIMESTAMPTZ '2024-10-01' AND event_ts < TIMESTAMPTZ '2024-10-02';
 ```
 
-This query returns only rows with similar values for `event_ts`: timestamps in the last five minutes.
+This query returns only rows with similar values for `event_ts`: timestamps within a single day.
 If rows with similar `event_ts` values are stored close together, the rows that pass this filter live in a small subset of parts, and Materialize can skip fetching the rest.
 
 Materialize tracks a small amount of metadata for every part, including the range of possible values for many columns. When it can determine that none of the data in a part will match a filter, it will skip fetching that data from object storage. This optimization is called _filter pushdown_, and when you're querying with a selective filter against a large collection, it can save a great deal of time and computation.
 
 Materialize always attempts to apply filter pushdown, but it is most effective when similar rows are stored together.
 Whether rows are stored together depends on your data and the order in which the data was written.
-You cannot currently control this layout. `PARTITION BY` declares the layout you expect rather than creating it.
+You cannot control this layout with the `PARTITION BY` option itself.
+In practice, Materialize currently stores data sorted by the collection's leading columns, so the order of columns in your schema influences it.
+The option declares that ordering rather than creating it.
 
 To maximize the effectiveness of filter pushdown, you can:
 
@@ -116,17 +119,7 @@ To maximize the effectiveness of filter pushdown, you can:
 
 To measure the effectiveness of filter pushdown, use [`EXPLAIN FILTER PUSHDOWN`](/sql/explain-filter-pushdown/) to see the number of parts and bytes your query would need to fetch.
 
-Filters that consist of arithmetic, date math, and comparisons are generally eligible for pushdown, including all the examples in this page. However, more complex filters might not be. You can check whether the filters in your query can be pushed down using [an `EXPLAIN` statement](/sql/explain-plan/). In the following example, we can be confident our temporal filter will be pushed down because it's present in the `pushdown` list at the bottom of the output.
-
-```mzsql
-EXPLAIN SELECT * FROM events WHERE mz_now() <= event_ts + INTERVAL '5min';
-----
-Explained Query:
-[...]
-Source materialize.public.events
-  [...]
-  pushdown=((mz_now() <= timestamp_to_mz_timestamp((#0 + 00:05:00))))
-```
+Filters that consist of arithmetic, date math, and comparisons are generally eligible for pushdown. More complex filters might not be. Note that eligibility is not the same as pruning: a filter can be eligible and still fetch every part, depending on how the data is laid out.
 
 Some common functions, such as casting from a string to a timestamp, can prevent filter pushdown for a query. For similar functions that _do_ allow pushdown, see [the pushdown functions documentation](/sql/functions/pushdown/).
 
@@ -154,23 +147,23 @@ For timeseries or "event"-type collections, it's often useful to partition the d
 
 1. Insert a few records, one "older" record and one more recent.
     ```mzsql
-    INSERT INTO events VALUES (now()::timestamp - '5 minutes', 'hello');
-    INSERT INTO events VALUES (now(), 'world');
+    INSERT INTO events VALUES (TIMESTAMPTZ '2024-10-01 12:00:00+00', 'hello');
+    INSERT INTO events VALUES (TIMESTAMPTZ '2025-10-01 12:00:00+00', 'world');
     ```
 
-1. Run a select statement against the data within the next five minutes. This should return only the more recent of the two rows.
+1. Run a select statement against a narrow range of timestamps. This should return only the more recent of the two rows.
     ```mzsql
-    SELECT * FROM events WHERE event_ts + '2 minutes' > mz_now();
+    SELECT * FROM events WHERE event_ts >= TIMESTAMPTZ '2025-01-01';
     ```
 
-1. To verify that Materialize fetched only the parts that contain data with the
-   recent timestamps, run an `EXPLAIN FILTER PUSHDOWN` statement.
+1. To verify that Materialize fetched only the parts that contain data in that
+   range, run an `EXPLAIN FILTER PUSHDOWN` statement.
     ```mzsql
     EXPLAIN FILTER PUSHDOWN FOR
-    SELECT * FROM events WHERE event_ts + '2 minutes' > mz_now();
+    SELECT * FROM events WHERE event_ts >= TIMESTAMPTZ '2025-01-01';
     ```
 
-If you wait a few minutes longer until there are no events that match the temporal filter, you'll notice that not only does the query return zero rows, but the explain shows that we fetched zero parts.
+If you query a range that no event falls into, you'll notice that not only does the query return zero rows, but the explain shows that we fetched zero parts.
 
 {{< note >}}
 
@@ -214,6 +207,6 @@ Other datasets don't have a strong timeseries component, but they do have a clea
 
 {{< note >}}
 
-As before, filter pushdown on small collections may provide little or no benefit. With larger datasets, filter pushdown can reduce the number of parts that need to be fetched. However, a category column like `country_code` is less favorable for filter pushdown than a timestamp: venues from the same country aren't necessarily grouped into the same parts, so the benefit depends on the order in which rows arrived.
+As before, filter pushdown on small collections may provide little or no benefit. With larger datasets, filter pushdown can reduce the number of parts that need to be fetched. However, a category column like `country_code` is less favorable for filter pushdown than a timestamp: venues from the same country are typically grouped within each internally sorted run, but a country's rows may be spread across several runs depending on when they arrived, so the benefit is usually smaller than for a timestamp filter and is best measured with `EXPLAIN FILTER PUSHDOWN`.
 
 {{< /note >}}
