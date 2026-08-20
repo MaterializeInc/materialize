@@ -10,7 +10,7 @@
 //! Dyncfgs used by the storage layer. Despite their name, these can be used
 //! "statically" during rendering, or dynamically within timely operators.
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use std::time::Duration;
 
 /// When dataflows observe an invariant violation it is either due to a bug or due to the cluster
@@ -346,22 +346,23 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     "Limit snapshot buffering in upsert.",
 );
 
-/// Allow the upsert-v2 source stash's chunk batcher to spill cold chains out
-/// of RSS via the process buffer pool. The stash draws from the same shared
-/// pool budget as the compute chunk batchers — there is one budget — but
-/// this flag gates the stash's participation independently of the
-/// compute-side `enable_column_paged_batcher_spill`.
+/// Storage's leg of the process-wide chunk spill gate
+/// (`mz_timely_util::columnar::chunk`). The gate is the OR of a compute leg
+/// (`enable_column_paged_batcher_spill`) and this storage leg: chunks spill
+/// while either is set, so this flag cannot veto spilling that the compute
+/// flag has enabled. Spilled chunks draw on the one shared pool budget.
 ///
-/// Off by default; the stash keeps every chunk resident until enabled.
-/// Enabling it also installs the process buffer pool (via compute's config
-/// handler, which reads this flag from the aggregate dyncfg set), so
-/// storage-only spilling needs no compute-side gate.
+/// Off by default. Enabling it also installs the process buffer pool (via
+/// compute's config handler, which reads this flag from the aggregate dyncfg
+/// set), so storage-only spilling needs no compute-side gate.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
     false,
-    "Allow the upsert-v2 source stash to spill chunks to the shared buffer pool, gated \
-     independently of the compute `enable_column_paged_batcher_spill`.",
-);
+    "Allow upsert-v2 chunks to spill to the shared buffer pool. Sets the storage leg of the \
+     process-wide spill gate, which is the OR of this flag and the compute \
+     `enable_column_paged_batcher_spill`.",
+)
+.scoped(ParameterScope::Replica);
 
 // RocksDB
 
