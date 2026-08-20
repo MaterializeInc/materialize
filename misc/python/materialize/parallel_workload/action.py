@@ -294,7 +294,7 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
-            "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
+            "Window function performance issue",  # TODO: Remove when SQL-640 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,

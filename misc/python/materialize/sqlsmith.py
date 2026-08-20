@@ -141,7 +141,7 @@ known_errors = [
     "regexp_extract must specify at least one capture group",
     "array_fill with arrays not yet supported",
     "not yet supported",
-    "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when database-issues#9644 is fixed
+    "Window function performance issue: `reduce_unnest_list_fusion` failed",  # TODO: Remove when SQL-640 is fixed
     "WITH ORDINALITY or ROWS FROM with ",
     "invalid normalization form",  # Expected with https://github.com/MaterializeInc/materialize/pull/33507
     "invalid catalog JSON",  # `parse_catalog_*` function invoked with an invalid JSON object
