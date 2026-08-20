@@ -846,7 +846,25 @@ fn drain_side<D, T, R>(
 
 #[cfg(test)]
 mod tests {
+    use timely::dataflow::channels::ContainerBytes;
+
     use super::*;
+
+    /// Re-encode `column` as the `Align` variant, so a caller can drive the
+    /// chunker over serialized input.
+    ///
+    /// `into_bytes` writes whole `u64` words and `Align` wants them as words,
+    /// read back in native byte order to match how they were written.
+    fn serialize<C: Columnar>(column: &Column<C>) -> Column<C> {
+        let mut bytes: Vec<u8> = Vec::new();
+        column.into_bytes(&mut bytes);
+        assert_eq!(bytes.len() % 8, 0);
+        let words = bytes
+            .chunks_exact(8)
+            .map(|w| u64::from_ne_bytes(w.try_into().expect("chunk is 8 bytes")))
+            .collect();
+        Column::Align(words)
+    }
 
     /// Drive a single `push_into` call with `inputs` and collect the
     /// consolidated output (if any) as owned tuples.
@@ -895,6 +913,36 @@ mod tests {
     fn unsorted_input_is_sorted() {
         let out = run_chunker(&[(3u64, 0u64, 1i64), (1u64, 0u64, 1i64), (2u64, 0u64, 1i64)]);
         assert_eq!(out, vec![(1, 0, 1), (2, 0, 1), (3, 0, 1)]);
+    }
+
+    #[mz_ore::test]
+    fn serialized_input_is_consolidated() {
+        // The chunker reads its input through `Column::borrow`, so a
+        // serialized input has to consolidate exactly like a typed one. Callers
+        // hand it whatever an upstream edge delivered, which is serialized
+        // whenever the data crossed an exchange.
+        let mut input: Column<(u64, u64, i64)> = Default::default();
+        for tuple in [
+            (2u64, 0u64, 1i64),
+            (1, 0, 1),
+            (2, 0, 2),
+            (3, 0, 1),
+            (3, 0, -1),
+        ] {
+            input.push_into(tuple);
+        }
+        let mut input = serialize(&input);
+
+        let mut chunker: ColumnChunker<(u64, u64, i64)> = Default::default();
+        chunker.push_into(&mut input);
+
+        let mut out = Vec::new();
+        while let Some(chunk) = chunker.extract() {
+            for (d, t, r) in chunk.borrow().into_index_iter() {
+                out.push((*d, *t, *r));
+            }
+        }
+        assert_eq!(out, vec![(1, 0, 1), (2, 0, 3)]);
     }
 
     #[mz_ore::test]
