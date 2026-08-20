@@ -36,6 +36,7 @@ use mz_timely_util::columnar::builder::ColumnBuilder;
 use mz_timely_util::columnar::consolidate::ConsolidatingColumnBuilder;
 use mz_timely_util::columnar::{Col2ValBatcher, Col2ValPagedBatcher, columnar_exchange};
 use mz_timely_util::operator::{CollectionExt, StreamExt};
+use timely::container::CapacityContainerBuilder;
 use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::OkErr;
 use timely::dataflow::{Scope, Stream};
@@ -118,6 +119,10 @@ impl LinearJoinSpec {
     {
         use LinearJoinImpl::*;
 
+        // `mz_join_core` builds its output through a container builder. The
+        // `Vec` accumulator this method returns needs the capacity builder.
+        type VecCB<D, T> = CapacityContainerBuilder<Vec<(D, T, Diff)>>;
+
         match (
             self.implementation,
             self.yielding.after_work,
@@ -127,19 +132,31 @@ impl LinearJoinSpec {
             (Materialize, Some(work_limit), Some(time_limit)) => {
                 let yield_fn =
                     move |start: Instant, work| work >= work_limit || start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, VecCB<I::Item, T>>(
+                    arranged1, arranged2, result, yield_fn,
+                )
+                .as_collection()
             }
             (Materialize, Some(work_limit), None) => {
                 let yield_fn = move |_start, work| work >= work_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, VecCB<I::Item, T>>(
+                    arranged1, arranged2, result, yield_fn,
+                )
+                .as_collection()
             }
             (Materialize, None, Some(time_limit)) => {
                 let yield_fn = move |start: Instant, _work| start.elapsed() >= time_limit;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, VecCB<I::Item, T>>(
+                    arranged1, arranged2, result, yield_fn,
+                )
+                .as_collection()
             }
             (Materialize, None, None) => {
                 let yield_fn = |_start, _work| false;
-                mz_join_core(arranged1, arranged2, result, yield_fn).as_collection()
+                mz_join_core::<_, _, _, _, _, _, VecCB<I::Item, T>>(
+                    arranged1, arranged2, result, yield_fn,
+                )
+                .as_collection()
             }
         }
     }
