@@ -2787,7 +2787,9 @@ def workflow_source_references_mysql(
         )
         assert len(rows) == 1, f"expected table 't_in_mysql', got {rows}"
 
-    with c.test_case("reject-unknown-reference"):
+    # Test-case names share one namespace across every workflow the `default`
+    # workflow chains, so this cannot reuse the Postgres workflow's name.
+    with c.test_case("reject-unknown-reference-mysql"):
         # Skipping system schemas must not stop the check from catching a
         # reference the source genuinely cannot read.
         result = run_mz_deploy(c, "source-references-mysql/v3", "apply", check=False)
