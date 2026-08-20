@@ -51,7 +51,7 @@ use timely::progress::{Antichain, Timestamp};
 use crate::compute_state::ComputeState;
 use crate::extensions::arrange::{ArrangementBatcher, KeyCollection, MzArrange, MzArrangeCore};
 use crate::extensions::reduce::MzReduce;
-use crate::render::columnar::{CollectionEdge, columnar_to_vec, flat_map_datums, vec_to_columnar};
+use crate::render::columnar::{CollectionEdge, flat_map_datums};
 use crate::render::errors::{DataflowErrorSer, ErrorLogger};
 use crate::render::{LinearJoinSpec, MaybeBucketByTime, RenderTimestamp};
 use crate::typedefs::{
@@ -1095,12 +1095,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     .try_into()
                     .expect("must fit");
                 bucketed = true;
-                // Temporal bucketing is `Vec`-internal, so decode in and encode out.
-                vec_to_columnar(T::maybe_apply_temporal_bucketing(
-                    columnar_to_vec(oks).inner,
-                    as_of.clone(),
-                    summary,
-                ))
+                // Temporal bucketing is columnar throughout, so no round trip here.
+                T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
             } else {
                 oks
             };
@@ -1132,13 +1128,8 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                         .try_into()
                         .expect("must fit");
                     bucketed = true;
-                    // Temporal bucketing is `Vec`-internal, so decode in and encode out.
-                    let oks = columnar_to_vec(oks);
-                    vec_to_columnar(T::maybe_apply_temporal_bucketing(
-                        oks.inner,
-                        as_of.clone(),
-                        summary,
-                    ))
+                    // Temporal bucketing is columnar throughout, so no round trip here.
+                    T::maybe_apply_temporal_bucketing(oks.inner, as_of.clone(), summary)
                 } else {
                     oks
                 };
@@ -1472,7 +1463,7 @@ mod tests {
     use timely::dataflow::operators::capture::{Event, Extract};
 
     use super::*;
-    use crate::render::columnar::vec_to_columnar;
+    use crate::render::columnar::{columnar_to_vec, vec_to_columnar};
 
     type OkUpdate = ((Row, Row), Timestamp, Diff);
     type ErrUpdate = (DataflowErrorSer, Timestamp, Diff);
