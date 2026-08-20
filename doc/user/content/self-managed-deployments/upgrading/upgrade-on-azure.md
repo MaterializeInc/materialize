@@ -134,9 +134,9 @@ replacing the earlier single Prometheus and Grafana. **v10.1.0** then added
 durable state for Grafana and a load balancer to reach it on.
 
 {{< warning >}}
-Starting with **v12.0.0** of the Materialize Terraform Modules,
+Starting with **v11.0.0** of the Materialize Terraform Modules,
 `enable_observability` defaults to `true`. Bumping `ref=<RELEASE_TAG>` to
-v12.0.0 or later therefore installs the whole stack, and its billable
+v11.0.0 or later therefore installs the whole stack, and its billable
 supporting resources, on a deployment that never set the variable. Set
 `enable_observability = false` in the same change if you do not want it.
 {{< /warning >}}
@@ -156,7 +156,7 @@ Modules](/manage/monitor/self-managed/grafana/#how-to-upgrade-from-previous-vers
 
 ### If you use the example configuration
 
-Nothing is required starting with v12.0.0 of the Materialize Terraform
+Nothing is required starting with v11.0.0 of the Materialize Terraform
 Modules, where the variable defaults to `true`. To be explicit, or on an
 earlier release, set the following in your `terraform.tfvars`:
 

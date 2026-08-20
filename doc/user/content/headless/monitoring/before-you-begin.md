@@ -14,7 +14,7 @@ Ensure you have:
   to connect to your cluster.
 
 {{< note >}}
-The Terraform steps on this page require **v12.0.0** or later of the Materialize
+The Terraform steps on this page require **v11.0.0** or later of the Materialize
 Terraform Modules, which is where the monitoring module accepts these
 destinations. If you install the
 `materialize-monitoring` chart with Helm rather than through the Terraform

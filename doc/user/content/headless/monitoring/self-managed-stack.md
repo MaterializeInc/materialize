@@ -9,7 +9,7 @@ The Materialize Terraform modules ([AWS
 [GCP
 ⧉](https://github.com/MaterializeInc/materialize-terraform-self-managed/tree/main/gcp))
 install a monitoring stack alongside your deployment. It is enabled by default
-starting with v12.0.0 of the Materialize Terraform Modules. For the module
+starting with v11.0.0 of the Materialize Terraform Modules. For the module
 install steps, see [Install using Terraform
 modules](/self-managed-deployments/installation/#install-using-terraform-modules).
 

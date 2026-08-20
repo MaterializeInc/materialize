@@ -89,7 +89,7 @@ This example provisions the following infrastructure:
 
 ### Observability
 
-On by default starting with v12.0.0 of the Materialize Terraform Modules.
+On by default starting with v11.0.0 of the Materialize Terraform Modules.
 Whenever `enable_observability` is `true`,
 the following are created as well:
 
@@ -103,7 +103,7 @@ the following are created as well:
 This stack requires v10.0.0 or later of the Materialize Terraform Modules,
 which replaced an earlier Prometheus-and-Grafana pair. The Grafana database
 and load balancer were added in v10.1.0, and are both billable. Starting with
-v12.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
+v11.0.0, `enable_observability` defaults to `true`, so set it to `false` if you
 do not want the stack. For what the stack stores and where else it can send
 it, see [How logs and metrics are
 stored](/manage/monitor/self-managed/storage/). For reaching Grafana, see
