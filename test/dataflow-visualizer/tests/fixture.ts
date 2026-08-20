@@ -27,8 +27,16 @@ export const FIXTURE_VIEW =
 export const FIXTURE_INDEX =
   process.env.FIXTURE_INDEX ?? 'visualizer_fixture_idx';
 
-// How the fixture's dataflow is named in the visualizer's dataflow table.
+// A view whose name carries both quote kinds, for the SQL quoting test. See
+// `mzcompose.py` on why the index name stays plain.
+export const FIXTURE_QUOTED_VIEW =
+  process.env.FIXTURE_QUOTED_VIEW ?? `visualizer_quoted"_'_view`;
+export const FIXTURE_QUOTED_INDEX =
+  process.env.FIXTURE_QUOTED_INDEX ?? 'visualizer_quoted_idx';
+
+// How the fixtures' dataflows are named in the visualizer's dataflow table.
 export const FIXTURE_DATAFLOW = `Dataflow: materialize.public.${FIXTURE_INDEX}`;
+export const FIXTURE_QUOTED_DATAFLOW = `Dataflow: materialize.public.${FIXTURE_QUOTED_INDEX}`;
 
 /** A page URL that pins the cluster replica the page should show. */
 export function replicaPage(

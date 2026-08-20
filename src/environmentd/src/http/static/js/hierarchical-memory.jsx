@@ -11,10 +11,6 @@
 
 const hpccWasm = window['@hpcc-js/wasm'];
 
-function formatNameForQuery(name) {
-  return `'${name.replace('\'', '\'\'')}'`;
-}
-
 const { useState, useEffect } = React;
 
 function Dataflows(props) {
@@ -34,8 +30,8 @@ function Dataflows(props) {
       const {
         results: [_set_cluster, _set_replica, addr_table, oper_table, chan_table, records_table],
       } = await query(`
-                SET cluster = ${formatNameForQuery(props.clusterName)};
-                SET cluster_replica = ${formatNameForQuery(props.replicaName)};
+                SET cluster = ${sqlLiteral(props.clusterName)};
+                SET cluster_replica = ${sqlLiteral(props.replicaName)};
                 SELECT
                     id, address
                 FROM

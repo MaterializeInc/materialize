@@ -11,6 +11,8 @@ import { test, expect, Page } from '@playwright/test';
 import {
   FIXTURE_CLUSTER,
   FIXTURE_DATAFLOW,
+  FIXTURE_QUOTED_DATAFLOW,
+  FIXTURE_QUOTED_VIEW,
   FIXTURE_REPLICA,
   FIXTURE_VIEW,
   fixturePage,
@@ -23,7 +25,7 @@ async function openMemoryPage(page: Page, url: string) {
 }
 
 /**
- * Expand the fixture dataflow.
+ * Expand a fixture dataflow by its name in the dataflow table.
  *
  * Addressing the row by name matters: the table is ordered by record count
  * descending, a dataflow that arranges nothing reports NULL rather than zero
@@ -32,10 +34,10 @@ async function openMemoryPage(page: Page, url: string) {
  * Expanding a transient one races its teardown, and the page then reports an
  * unknown dataflow id instead of a graph.
  */
-async function expandFixtureDataflow(page: Page) {
+async function expandDataflow(page: Page, dataflow = FIXTURE_DATAFLOW) {
   const row = page
     .locator('table.dataflows tbody tr')
-    .filter({ hasText: FIXTURE_DATAFLOW });
+    .filter({ hasText: dataflow });
   await expect(row).toBeVisible();
   await row.locator('button').click();
 }
@@ -109,7 +111,7 @@ test.describe('/memory page', () => {
     page,
   }) => {
     await openMemoryPage(page, fixturePage('/memory'));
-    await expandFixtureDataflow(page);
+    await expandDataflow(page);
 
     const viz = vizSection(page);
     await expect(viz).toBeVisible();
@@ -122,16 +124,50 @@ test.describe('/memory page', () => {
     // that reaches outside `mz_introspection`, so nothing else catches it
     // breaking.
     await openMemoryPage(page, fixturePage('/memory'));
-    await expandFixtureDataflow(page);
+    await expandDataflow(page);
 
     const viz = vizSection(page);
     await expect(viz).toContainText(`View: materialize.public.${FIXTURE_VIEW}`);
     await expect(viz).toContainText('CREATE VIEW');
   });
 
+  test('SQL quoting escapes every quote, not just the first', async ({
+    page,
+  }) => {
+    // The pages build SQL by interpolating URL parameters and catalog names,
+    // and run it as whoever opened the page, so an escaper that stops after
+    // the first quote of a name is no better than none.
+    await openMemoryPage(page, '/memory');
+
+    const quoted = await page.evaluate(() => {
+      const w = window as any;
+      return { literal: w.sqlLiteral(`a'b'c`), ident: w.sqlIdent(`a"b"c`) };
+    });
+
+    expect(quoted.literal).toBe(`'a''b''c'`);
+    expect(quoted.ident).toBe(`"a""b""c"`);
+  });
+
+  test('a view name that needs quoting still resolves to its SQL', async ({
+    page,
+  }) => {
+    // The fixture view's name carries both quote kinds. Interpolated raw into
+    // SHOW CREATE VIEW, the statement fails to parse and the page quietly
+    // drops the SQL panel (console.debug only), so the panel being present is
+    // what pins the quoting at its call sites.
+    await openMemoryPage(page, fixturePage('/memory'));
+    await expandDataflow(page, FIXTURE_QUOTED_DATAFLOW);
+
+    const viz = vizSection(page);
+    await expect(viz).toContainText(
+      `View: materialize.public.${FIXTURE_QUOTED_VIEW}`
+    );
+    await expect(viz).toContainText('CREATE VIEW');
+  });
+
   test('graphviz renders SVG when dataflow is expanded', async ({ page }) => {
     await openMemoryPage(page, fixturePage('/memory'));
-    await expandFixtureDataflow(page);
+    await expandDataflow(page);
 
     // Wait for SVG to be rendered by graphviz
     const svg = page.locator('svg').first();
