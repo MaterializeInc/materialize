@@ -25,7 +25,8 @@ pub mod consolidate;
 pub mod merge_batcher;
 pub mod unload;
 
-use std::hash::Hash;
+use std::hash::{BuildHasher, Hash, Hasher};
+use std::sync::LazyLock;
 
 use columnar::Borrow;
 use columnar::bytes::indexed;
@@ -291,6 +292,49 @@ where
     T: Columnar,
 {
     k.hashed()
+}
+
+/// Routes a `(D, T, R)` column by the hash of its data column.
+///
+/// Counterpart to [`columnar_exchange`] for collections whose data is not a
+/// key/value pair. Consolidation sites want [`columnar_consolidate_exchange`]
+/// instead.
+pub fn columnar_exchange_data<D, T, R>((d, _, _): &Ref<'_, (D, T, R)>) -> u64
+where
+    D: Columnar,
+    for<'a> Ref<'a, D>: Hash,
+    T: Columnar,
+    R: Columnar,
+{
+    d.hashed()
+}
+
+/// Routes a `(D, T, R)` column for consolidation, by a fixed-seed AHash of its
+/// data column.
+///
+/// Worker assignment is `hash % workers`, so the low bits alone decide the
+/// split, and the [`Hashable`] default the other exchange functions use (FNV)
+/// diffuses them poorly. [`CollectionExt::consolidate_named`] owns that
+/// rationale; this is the columnar counterpart of its exchange and has to hash
+/// the same way to distribute as evenly. The seed is fixed, so routing is
+/// identical across builds and replicas.
+///
+/// Spelled as a function rather than a closure over the hasher state: the
+/// argument is higher-ranked in its lifetime, which closure inference cannot
+/// express here.
+///
+/// [`CollectionExt::consolidate_named`]: crate::operator::CollectionExt::consolidate_named
+pub fn columnar_consolidate_exchange<D, T, R>((d, _, _): &Ref<'_, (D, T, R)>) -> u64
+where
+    D: Columnar,
+    for<'a> Ref<'a, D>: Hash,
+    T: Columnar,
+    R: Columnar,
+{
+    static STATE: LazyLock<ahash::RandomState> = LazyLock::new(crate::hash::fixed_state);
+    let mut hasher = STATE.build_hasher();
+    d.hash(&mut hasher);
+    hasher.finish()
 }
 
 #[cfg(test)]
