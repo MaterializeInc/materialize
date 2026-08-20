@@ -21,6 +21,7 @@ import {
 import server from "~/api/mocks/server";
 import { useAppConfig } from "~/config/useAppConfig";
 import { isSuperUserQueryKeys } from "~/hooks/useIsSuperUser";
+import docUrls from "~/mz-doc-urls.json";
 import { getQueryClient } from "~/queryClient";
 import { renderComponent } from "~/test/utils";
 
@@ -47,7 +48,12 @@ const buildIsSuperUserHandler = (isSuperUser: boolean) =>
     }),
   });
 
-const buildLicenseKeyHandler = (expiration: string | null) =>
+const buildLicenseKeyHandler = (
+  expiration: string | null,
+  // Community keys carry an email in the organization field, enterprise keys
+  // a UUID.
+  organization = "8b2c1e6a-1d1b-4f6e-9f0a-2b1a2c3d4e5f",
+) =>
   buildSqlQueryHandlerV2({
     queryKey: licenseKeysQueryKeys.detail(),
     results: mapKyselyToTabular({
@@ -67,7 +73,7 @@ const buildLicenseKeyHandler = (expiration: string | null) =>
                 expiration,
                 id: "license-1",
                 not_before: subDays(new Date(), 365).toISOString(),
-                organization: "acme-corp",
+                organization,
               },
             ],
     }),
@@ -98,19 +104,29 @@ describe("LicenseExpiredBanner", () => {
     ).toBeVisible();
     const supportLink = screen.getByRole("link", { name: "Contact support" });
     expect(supportLink).toBeVisible();
-    expect(supportLink).toHaveAttribute(
-      "href",
-      "https://materialize.com/s/chat",
-    );
+    expect(supportLink).toHaveAttribute("href", docUrls["/docs/support/"]);
+  });
+
+  it("points community licenses at the license page instead of support", async () => {
+    server.use(buildIsSuperUserHandler(true));
+    server.use(buildLicenseKeyHandler(EXPIRED_DATE(), "someone@example.com"));
+
+    renderComponent(<LicenseExpiredBanner />);
+
+    expect(await screen.findByTestId("license-expired-alert")).toBeVisible();
+    expect(
+      screen.getByText(/Your Materialize Community license has expired\./i),
+    ).toBeVisible();
+    const licensePageLink = screen.getByRole("link", { name: "license page" });
+    expect(licensePageLink).toBeVisible();
+    expect(licensePageLink).toHaveAttribute("href", "/license");
   });
 
   it("does not render when the app is not self-managed", async () => {
     setAppMode("cloud");
 
-    renderComponent(<LicenseExpiredBanner />);
+    await renderComponent(<LicenseExpiredBanner />);
 
-    // In cloud mode the inner content (and its SQL queries) never mounts, so we
-    // can assert absence directly.
     expect(
       screen.queryByTestId("license-expired-alert"),
     ).not.toBeInTheDocument();

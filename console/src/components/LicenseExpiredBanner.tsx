@@ -9,15 +9,16 @@
 
 import { CloseButton, Flex, Text } from "@chakra-ui/react";
 import * as React from "react";
+import { Link as RouterLink } from "react-router-dom";
 
 import { useLicenseKey } from "~/access/license/queries";
 import { AppConfigSwitch } from "~/config/AppConfigSwitch";
-import { SUPPORT_CHAT_URL } from "~/externalUrls";
 import { useIsSuperUser } from "~/hooks/useIsSuperUser";
 import useLocalStorage from "~/hooks/useLocalStorage";
 
 import { AlertBanner } from "./Alert";
 import SupportLink from "./SupportLink";
+import TextLink from "./TextLink";
 
 /** Stores the epoch milliseconds of the most recent dismissal, 0 if never. */
 export const LICENSE_EXPIRED_DISMISSED_AT_KEY =
@@ -37,7 +38,10 @@ const LicenseExpiredBannerContent = () => {
   const dismissed = Date.now() - dismissedAt < DISMISSAL_DURATION_MS;
 
   const licenseKey = data?.rows?.at(0);
-  const { expiration } = licenseKey ?? {};
+  const { expiration, organization } = licenseKey ?? {};
+  // Community keys carry the requester's email in the organization field,
+  // enterprise keys a UUID. Matches SelfManagedLicenseInformation.tsx.
+  const isCommunity = organization?.includes("@");
   // Canonical expiry check, matching licenseComponents.tsx (isActive).
   const expired = expiration && new Date() > new Date(expiration);
 
@@ -59,11 +63,21 @@ const LicenseExpiredBannerContent = () => {
       flexShrink="0"
     >
       <Flex justifyContent="center" width="100%">
-        <Text>
-          Your Materialize Enterprise license has expired.{" "}
-          <SupportLink href={SUPPORT_CHAT_URL}>Contact support</SupportLink> to
-          renew.
-        </Text>
+        {isCommunity ? (
+          <Text>
+            Your Materialize Community license has expired. Generate a new key
+            on the{" "}
+            <TextLink as={RouterLink} to="/license">
+              license page
+            </TextLink>
+            .
+          </Text>
+        ) : (
+          <Text>
+            Your Materialize Enterprise license has expired.{" "}
+            <SupportLink>Contact support</SupportLink> to renew.
+          </Text>
+        )}
       </Flex>
       <CloseButton
         position="relative"
@@ -79,8 +93,10 @@ const LicenseExpiredBannerContent = () => {
 
 /**
  * A full-width banner shown to self-managed super users when the environment's
- * enterprise license has expired. Dismissible, with the dismissal persisted in
- * local storage for a week, after which the banner shows again.
+ * license has expired. Community licenses point at the license page for
+ * self-service renewal, enterprise licenses at support. Dismissible, with the
+ * dismissal persisted in local storage for a week, after which the banner
+ * shows again.
  */
 export const LicenseExpiredBanner = () => (
   <AppConfigSwitch selfManagedConfigElement={<LicenseExpiredBannerContent />} />
