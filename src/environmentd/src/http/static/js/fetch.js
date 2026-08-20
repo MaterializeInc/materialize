@@ -18,7 +18,7 @@
  * interpolated value has to go through this or `sqlIdent`. Doubling the quote
  * is the whole of the escaping, as `standard_conforming_strings` is fixed on.
  *
- * @param {string} value - The value to quote
+ * @param {unknown} value - The value to quote, coerced to a string first
  * @returns {string} - The value as a SQL string literal, quotes included
  */
 function sqlLiteral(value) {
@@ -28,7 +28,7 @@ function sqlLiteral(value) {
 /**
  * Quote a name as a SQL identifier. See `sqlLiteral` on why this is required.
  *
- * @param {string} name - The name to quote
+ * @param {unknown} name - The name to quote, coerced to a string first
  * @returns {string} - The name as a quoted SQL identifier, quotes included
  */
 function sqlIdent(name) {

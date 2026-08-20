@@ -47,6 +47,13 @@ FIXTURE_TABLE = "visualizer_fixture"
 FIXTURE_VIEW = "visualizer_fixture_view"
 FIXTURE_INDEX = "visualizer_fixture_idx"
 
+# A second indexed view whose name carries both quote kinds: the /memory page
+# only renders its SHOW CREATE VIEW panel if it escapes what it interpolates.
+# The index name stays plain so the page's `Dataflow: <db>.<schema>.<index>`
+# parse still succeeds.
+FIXTURE_QUOTED_VIEW = "visualizer_quoted\"_'_view"
+FIXTURE_QUOTED_INDEX = "visualizer_quoted_idx"
+
 SERVICES = [
     Materialized(),
     Service(
@@ -62,6 +69,8 @@ SERVICES = [
                 f"FIXTURE_REPLICA={FIXTURE_REPLICA}",
                 f"FIXTURE_VIEW={FIXTURE_VIEW}",
                 f"FIXTURE_INDEX={FIXTURE_INDEX}",
+                f"FIXTURE_QUOTED_VIEW={FIXTURE_QUOTED_VIEW}",
+                f"FIXTURE_QUOTED_INDEX={FIXTURE_QUOTED_INDEX}",
             ],
         },
     ),
@@ -93,12 +102,17 @@ def create_fixture_dataflow(c: Composition) -> None:
     Idempotent, so that re-running the workflow against a composition that is
     already up does not have to start from `down -v`.
     """
+    quoted_view_ident = '"' + FIXTURE_QUOTED_VIEW.replace('"', '""') + '"'
     c.sql(f"""
         CREATE TABLE IF NOT EXISTS {FIXTURE_TABLE} (id int, other int);
         CREATE VIEW IF NOT EXISTS {FIXTURE_VIEW} AS
             SELECT id, other FROM {FIXTURE_TABLE};
         CREATE INDEX IF NOT EXISTS {FIXTURE_INDEX}
             IN CLUSTER {FIXTURE_CLUSTER} ON {FIXTURE_VIEW} (id);
+        CREATE VIEW IF NOT EXISTS {quoted_view_ident} AS
+            SELECT id, other FROM {FIXTURE_TABLE};
+        CREATE INDEX IF NOT EXISTS {FIXTURE_QUOTED_INDEX}
+            IN CLUSTER {FIXTURE_CLUSTER} ON {quoted_view_ident} (id);
         INSERT INTO {FIXTURE_TABLE} VALUES (1, 1);
         """)
 
@@ -109,19 +123,20 @@ def create_fixture_dataflow(c: Composition) -> None:
         startup_params={"cluster": FIXTURE_CLUSTER, "cluster_replica": FIXTURE_REPLICA}
     ) as conn:
         cursor = conn.cursor()
-        while True:
-            cursor.execute(
-                b"SELECT count(*) FROM mz_introspection.mz_records_per_dataflow "
-                b"WHERE name LIKE %s",
-                (f"Dataflow: %.{FIXTURE_INDEX}",),
-            )
-            row = cursor.fetchone()
-            assert row is not None
-            if row[0] > 0:
-                return
-            if time.time() > deadline:
-                raise AssertionError(
-                    f"index {FIXTURE_INDEX} did not show up in "
-                    f"mz_records_per_dataflow on {FIXTURE_CLUSTER}.{FIXTURE_REPLICA}"
+        for index in (FIXTURE_INDEX, FIXTURE_QUOTED_INDEX):
+            while True:
+                cursor.execute(
+                    b"SELECT count(*) FROM mz_introspection.mz_records_per_dataflow "
+                    b"WHERE name LIKE %s",
+                    (f"Dataflow: %.{index}",),
                 )
-            time.sleep(1)
+                row = cursor.fetchone()
+                assert row is not None
+                if row[0] > 0:
+                    break
+                if time.time() > deadline:
+                    raise AssertionError(
+                        f"index {index} did not show up in "
+                        f"mz_records_per_dataflow on {FIXTURE_CLUSTER}.{FIXTURE_REPLICA}"
+                    )
+                time.sleep(1)

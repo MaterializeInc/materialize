@@ -595,11 +595,12 @@ async function getCreateView(dataflow_name) {
   //
   // There are known problems with this method. It assumes the dataflow
   // operator's name is of a very specific shape, so a name containing a dot
-  // defeats the regex, and assumes a CREATE VIEW statement made an index which
-  // made this dataflow. So we assume that problems can happen at any level here
-  // and will cleanly bail if anything doesn't exactly match what we want. In
-  // that case we will not show the SQL. This is intended to be good enough for
-  // most users for now.
+  // splits at the wrong dots and the catalog lookup below finds nothing, and
+  // it assumes a CREATE VIEW statement made an index which made this dataflow.
+  // So we assume that problems can happen at any level here and will cleanly
+  // bail if anything doesn't exactly match what we want. In that case we will
+  // not show the SQL. This is intended to be good enough for most users for
+  // now.
   const match = dataflow_name.match(/^Dataflow: (.*)\.(.*)\.(.*)$/);
   if (!match) {
     throw 'unknown dataflow name pattern';
