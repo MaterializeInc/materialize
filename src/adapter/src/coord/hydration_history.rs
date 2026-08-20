@@ -389,22 +389,19 @@ impl Sweep {
         };
         match tokio::time::timeout(MUTATION_TIMEOUT, mutation).await {
             Ok(Ok(())) => {}
-            // Exhausted retries mean every attempt lost its timestamp race. The
-            // write timestamp is the subscribe's observed frontier, and the log
-            // half of that frontier advances on the replica's clock, so a replica
-            // whose clock trails `environmentd` by more than its introspection
-            // interval can never get ahead of the oracle and fails every sweep.
-            Ok(Err(error @ AdapterError::ReadThenWriteContention)) => {
-                warn!(
-                    %step, %cluster_id, %replica_id, %error,
-                    "hydration history step exhausted retries, \
-                     the replica's introspection frontier may be trailing the write frontier"
-                )
-            }
             Ok(Err(error)) => {
                 warn!(%step, %cluster_id, %replica_id, %error, "hydration history step failed")
             }
-            Err(_) => warn!(%step, %cluster_id, %replica_id, "hydration history step timed out"),
+            // The oracle names the timestamp to write at and the subscribe's
+            // frontier has to reach it. The log half of that frontier advances on
+            // the replica's clock, so a replica whose clock trails `environmentd`
+            // by more than its introspection interval keeps sitting below the
+            // target and waits here until this fires, every sweep.
+            Err(_) => warn!(
+                %step, %cluster_id, %replica_id,
+                "hydration history step timed out, \
+                 the replica's introspection frontier may be trailing the write frontier"
+            ),
         }
     }
 }
