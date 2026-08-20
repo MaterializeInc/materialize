@@ -28,6 +28,7 @@
 //! | Cluster ownership | `validate_cluster_ownership_impl` | Current role owns all production clusters that will be swapped |
 //! | Table dependencies | `validate_table_dependencies_impl` | Tables depended on by objects being deployed exist |
 //! | Source references | `validate_source_references_impl` | Each `CREATE TABLE FROM SOURCE` names an object its source can read |
+
 //!
 //! ## Batching Strategy
 //!
@@ -43,7 +44,7 @@ use crate::project::ast::Statement;
 use crate::project::ir::graph;
 use crate::project::ir::object_id::ObjectId;
 use crate::verbose;
-use mz_sql_parser::ast::{CreateSinkConnection, UnresolvedItemName};
+use mz_sql_parser::ast::{CreateSinkConnection, Ident, UnresolvedItemName};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
@@ -909,20 +910,48 @@ impl fmt::Display for SourceReference {
     }
 }
 
+/// Split a reference as written into its object name and, when the reference is
+/// qualified, the namespace immediately preceding it.
+///
+/// A leading database qualifier (only SQL Server references carry one) is
+/// dropped: `mz_source_references` records no database, so there is nothing to
+/// match it against.
+fn split_reference(reference: &UnresolvedItemName) -> Option<(&Ident, Option<&Ident>)> {
+    let mut parts = reference.0.iter().rev();
+    let name = parts.next()?;
+    Some((name, parts.next()))
+}
+
+/// Whether the recorded references can settle `reference` at all.
+///
+/// MySQL's system schemas are the blind spot. Both `CREATE SOURCE` and
+/// `ALTER SOURCE ... REFRESH REFERENCES` retrieve MySQL tables with system
+/// schemas excluded, so `mz_source_references` never lists a table in `mysql`,
+/// `sys`, `performance_schema`, or `information_schema`. Creating a table from
+/// such a reference does resolve it, so only the server can judge one, and
+/// reporting it missing here would block a deploy that works.
+///
+/// The namespace alone decides this, without consulting the source's connection
+/// type. A Postgres or SQL Server schema that happens to be named `mysql` or
+/// `sys` is skipped too, which costs nothing beyond leaving those references to
+/// the server.
+fn reference_is_verifiable(reference: &UnresolvedItemName) -> bool {
+    let Some((_, Some(namespace))) = split_reference(reference) else {
+        return true;
+    };
+    !mz_mysql_util::SYSTEM_SCHEMAS.contains(&namespace.as_str())
+}
+
 /// Whether `reference`, as written in a `CREATE TABLE ... FROM SOURCE`
 /// statement, names one of `available`.
 ///
-/// Mirrors the server's resolution (`SourceReferenceResolver`) with one
-/// difference: `mz_source_references` records only a namespace and a name, so a
-/// leading database qualifier (which only SQL Server references carry) has
-/// nothing to match against and is ignored. A bare object name matches in any
-/// namespace, and the ambiguous case is left for the server to report.
+/// Mirrors the server's resolution (`SourceReferenceResolver`), except that a
+/// bare object name matches in any namespace: the ambiguous case is left for
+/// the server to report.
 fn reference_is_available(reference: &UnresolvedItemName, available: &[SourceReference]) -> bool {
-    let mut parts = reference.0.iter().rev();
-    let Some(name) = parts.next() else {
+    let Some((name, namespace)) = split_reference(reference) else {
         return false;
     };
-    let namespace = parts.next();
 
     available.iter().any(|candidate| {
         candidate.name == name.as_str()
@@ -1015,6 +1044,9 @@ pub(crate) async fn validate_source_references_impl(
         let Some(reference) = &stmt.external_reference else {
             continue;
         };
+        if !reference_is_verifiable(reference) {
+            continue;
+        }
         let source_id = ObjectId::from_raw_item_name(
             &stmt.source,
             table_id.expect_database(),
@@ -1095,7 +1127,6 @@ pub(crate) async fn validate_source_references_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mz_sql_parser::ast::Ident;
 
     fn reference(parts: &[&str]) -> UnresolvedItemName {
         UnresolvedItemName(parts.iter().map(|p| Ident::new_unchecked(*p)).collect())
@@ -1136,6 +1167,29 @@ mod tests {
             &reference(&["public", "users"]),
             &[]
         ));
+    }
+
+    #[mz_ore::test]
+    fn test_reference_is_verifiable() {
+        assert!(reference_is_verifiable(&reference(&["public", "users"])));
+        assert!(reference_is_verifiable(&reference(&["users"])));
+
+        // MySQL system schemas are never recorded, so nothing here can be
+        // judged against the recorded set.
+        assert!(!reference_is_verifiable(&reference(&["mysql", "users"])));
+        assert!(!reference_is_verifiable(&reference(&["sys", "users"])));
+        assert!(!reference_is_verifiable(&reference(&[
+            "performance_schema",
+            "users"
+        ])));
+        assert!(!reference_is_verifiable(&reference(&[
+            "information_schema",
+            "tables"
+        ])));
+        // The namespace is the part before the object name, whatever precedes it.
+        assert!(!reference_is_verifiable(&reference(&[
+            "upstream", "mysql", "users"
+        ])));
     }
 
     #[mz_ore::test]
