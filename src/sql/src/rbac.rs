@@ -37,6 +37,8 @@ use crate::session::metadata::SessionMetadata;
 use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
 use crate::session::vars::SystemVars;
 
+pub mod kernel;
+
 /// Common checks that need to be performed before we can start checking a role's privileges.
 fn rbac_check_preamble(
     catalog: &impl SessionCatalog,
@@ -316,6 +318,61 @@ impl Default for RbacRequirements {
             superuser_action: None,
         }
     }
+}
+
+/// An owned description of what a plan requires, for inspection rather than enforcement.
+///
+/// Deliberately a separate type from [`RbacRequirements`] so that the internal representation
+/// stays free to change. Field order and contents are the reviewable statement of the policy, so
+/// treat a change here as a change to a public interface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RbacRequirementsDescription {
+    /// Role memberships the current role must hold.
+    pub role_membership: BTreeSet<RoleId>,
+    /// Objects the current role must own.
+    pub ownership: Vec<ObjectId>,
+    /// Required privileges, as (object, privilege, role that must hold it). The role is not
+    /// always the current role: reads through a view attribute requirements on the view's inputs
+    /// to the view's owner.
+    pub privileges: Vec<(SystemObjectId, AclMode, RoleId)>,
+    /// Item types this plan requires `USAGE` on.
+    pub item_usage: BTreeSet<CatalogItemType>,
+    /// Set when the action is superuser-only, in which case no privilege can satisfy it.
+    pub superuser_action: Option<String>,
+}
+
+impl From<RbacRequirements> for RbacRequirementsDescription {
+    fn from(reqs: RbacRequirements) -> Self {
+        let RbacRequirements {
+            role_membership,
+            ownership,
+            privileges,
+            item_usage,
+            superuser_action,
+        } = reqs;
+        RbacRequirementsDescription {
+            role_membership,
+            ownership,
+            privileges,
+            item_usage: item_usage.clone(),
+            superuser_action,
+        }
+    }
+}
+
+/// Reports what `plan` would require of `role_id`, without checking whether the requirements hold.
+///
+/// This is the policy table as data. It exists so the policy can be dumped, reviewed, and asserted
+/// on. It applies no session filtering, so the result is the full requirement set, not the reduced
+/// one a superuser or an RBAC-disabled session would face. Use [`check_plan`] to make a decision.
+pub fn describe_rbac_requirements(
+    catalog: &impl SessionCatalog,
+    plan: &Plan,
+    target_conn_role: Option<RoleId>,
+    target_cluster_id: Option<ClusterId>,
+    role_id: RoleId,
+) -> RbacRequirementsDescription {
+    generate_rbac_requirements(catalog, plan, target_conn_role, target_cluster_id, role_id).into()
 }
 
 /// When `restrict_to_user_objects` is active, rejects access to system catalog objects.
@@ -1978,5 +2035,219 @@ pub const fn default_builtin_object_privilege(object_type: ObjectType) -> MzAclI
         grantee: RoleId::Public,
         grantor: MZ_SYSTEM_ROLE_ID,
         acl_mode,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::names::{DatabaseId, SchemaId};
+
+    /// The membership, ownership, and privilege obligations of
+    /// [`RbacRequirements::validate`], evaluated against an abstract state instead of a catalog.
+    ///
+    /// Both maps are already closed over role membership, which is what lets this avoid a
+    /// catalog. The `USAGE`-on-`resolved_ids` obligation is not modelled, because it depends on
+    /// the statement's resolved ids rather than on the requirement record.
+    #[derive(Debug, Clone)]
+    struct AbstractState {
+        held_roles: BTreeSet<RoleId>,
+        owners: BTreeMap<ObjectId, RoleId>,
+        privileges: BTreeMap<(SystemObjectId, RoleId), AclMode>,
+    }
+
+    impl AbstractState {
+        fn satisfies(&self, reqs: &RbacRequirementsDescription) -> bool {
+            if reqs.superuser_action.is_some() {
+                // No privilege can satisfy a superuser-only action.
+                return false;
+            }
+            if !reqs.role_membership.is_subset(&self.held_roles) {
+                return false;
+            }
+            for object_id in &reqs.ownership {
+                // An object with no recorded owner is vacuously owned, matching
+                // `check_owner_roles`.
+                if let Some(owner) = self.owners.get(object_id) {
+                    if !self.held_roles.contains(owner) {
+                        return false;
+                    }
+                }
+            }
+            for (object_id, acl_mode, role_id) in &reqs.privileges {
+                if matches!(
+                    object_id,
+                    SystemObjectId::Object(ObjectId::Schema((_, SchemaSpecifier::Temporary)))
+                ) {
+                    continue;
+                }
+                let held = self
+                    .privileges
+                    .get(&(object_id.clone(), *role_id))
+                    .copied()
+                    .unwrap_or_else(AclMode::empty);
+                if !held.contains(*acl_mode) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+
+    fn any_role_id() -> impl Strategy<Value = RoleId> {
+        prop_oneof![
+            Just(RoleId::Public),
+            (0..3u64).prop_map(RoleId::User),
+            (0..3u64).prop_map(RoleId::System),
+        ]
+    }
+
+    fn any_acl_mode() -> impl Strategy<Value = AclMode> {
+        proptest::collection::vec(
+            prop_oneof![
+                Just(AclMode::SELECT),
+                Just(AclMode::INSERT),
+                Just(AclMode::USAGE),
+                Just(AclMode::CREATE),
+                Just(AclMode::CREATE_DB),
+            ],
+            0..4,
+        )
+        .prop_map(|modes| {
+            modes
+                .into_iter()
+                .fold(AclMode::empty(), |accum, mode| accum.union(mode))
+        })
+    }
+
+    /// Object ids spanning the system and user namespaces, which is the distinction
+    /// [`RbacRequirements::filter_to_mandatory_requirements`] branches on. Temporary schemas are
+    /// included because `check_object_privileges` skips them, and a skip is a place where a
+    /// requirement silently stops applying.
+    fn any_object_id() -> impl Strategy<Value = ObjectId> {
+        prop_oneof![
+            (0..3u64).prop_map(|id| ObjectId::Item(CatalogItemId::User(id))),
+            (0..3u64).prop_map(|id| ObjectId::Item(CatalogItemId::System(id))),
+            (0..3u64).prop_map(|id| ObjectId::Database(DatabaseId::User(id))),
+            (0..3u64).prop_map(|id| ObjectId::Database(DatabaseId::System(id))),
+            (0..3u64).prop_map(|id| ObjectId::Schema((
+                ResolvedDatabaseSpecifier::Id(DatabaseId::User(0)),
+                SchemaSpecifier::Id(SchemaId::User(id)),
+            ))),
+            Just(ObjectId::Schema((
+                ResolvedDatabaseSpecifier::Ambient,
+                SchemaSpecifier::Temporary,
+            ))),
+        ]
+    }
+
+    fn any_system_object_id() -> impl Strategy<Value = SystemObjectId> {
+        prop_oneof![
+            Just(SystemObjectId::System),
+            any_object_id().prop_map(SystemObjectId::Object),
+        ]
+    }
+
+    fn any_requirements() -> impl Strategy<Value = RbacRequirementsDescription> {
+        (
+            proptest::collection::btree_set(any_role_id(), 0..3),
+            proptest::collection::vec(any_object_id(), 0..3),
+            proptest::collection::vec(
+                (any_system_object_id(), any_acl_mode(), any_role_id()),
+                0..4,
+            ),
+            prop_oneof![Just(None), Just(Some("do a superuser thing".to_string()))],
+        )
+            .prop_map(
+                |(role_membership, ownership, privileges, superuser_action)| {
+                    RbacRequirementsDescription {
+                        role_membership,
+                        ownership,
+                        privileges,
+                        item_usage: DEFAULT_ITEM_USAGE.clone(),
+                        superuser_action,
+                    }
+                },
+            )
+    }
+
+    fn any_state() -> impl Strategy<Value = AbstractState> {
+        (
+            proptest::collection::btree_set(any_role_id(), 0..4),
+            proptest::collection::btree_map(any_object_id(), any_role_id(), 0..4),
+            proptest::collection::btree_map(
+                (any_system_object_id(), any_role_id()),
+                any_acl_mode(),
+                0..4,
+            ),
+        )
+            .prop_map(|(held_roles, owners, privileges)| AbstractState {
+                held_roles,
+                owners,
+                privileges,
+            })
+    }
+
+    /// Rebuilds an [`RbacRequirements`] so that the real filter can be exercised.
+    fn to_internal(desc: &RbacRequirementsDescription) -> RbacRequirements {
+        RbacRequirements {
+            role_membership: desc.role_membership.clone(),
+            ownership: desc.ownership.clone(),
+            privileges: desc.privileges.clone(),
+            item_usage: &DEFAULT_ITEM_USAGE,
+            superuser_action: desc.superuser_action.clone(),
+        }
+    }
+
+    proptest! {
+        /// P3, relaxation soundness: dropping to mandatory requirements must weaken, never
+        /// strengthen. Every superuser session and every session with RBAC disabled takes this
+        /// path, so an inversion here would be broadly exploitable and invisible on inspection.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn proptest_filter_to_mandatory_requirements_weakens(
+            reqs in any_requirements(),
+            state in any_state(),
+        ) {
+            let filtered: RbacRequirementsDescription =
+                to_internal(&reqs).filter_to_mandatory_requirements().into();
+            if state.satisfies(&reqs) {
+                prop_assert!(
+                    state.satisfies(&filtered),
+                    "state satisfies {reqs:?} but not the filtered {filtered:?}",
+                );
+            }
+        }
+
+        /// The structural witness for the property above, which localizes a failure to the
+        /// specific field that stopped shrinking rather than to the decision as a whole.
+        #[mz_ore::test]
+        #[cfg_attr(miri, ignore)]
+        fn proptest_filter_to_mandatory_requirements_is_structurally_weaker(
+            reqs in any_requirements(),
+        ) {
+            let filtered: RbacRequirementsDescription =
+                to_internal(&reqs).filter_to_mandatory_requirements().into();
+
+            prop_assert!(filtered.role_membership.is_subset(&reqs.role_membership));
+            for object_id in &filtered.ownership {
+                prop_assert!(reqs.ownership.contains(object_id));
+            }
+            prop_assert!(filtered.superuser_action.is_none());
+            prop_assert_eq!(&filtered.item_usage, &reqs.item_usage);
+
+            // Every surviving privilege must be implied by one the caller already had to hold.
+            for (object_id, acl_mode, role_id) in &filtered.privileges {
+                let implied = reqs.privileges.iter().any(|(orig_object, orig_mode, orig_role)| {
+                    orig_object == object_id && orig_role == role_id && orig_mode.contains(*acl_mode)
+                });
+                prop_assert!(
+                    implied,
+                    "filtered privilege {object_id:?} {acl_mode:?} {role_id:?} is not implied",
+                );
+            }
+        }
     }
 }
