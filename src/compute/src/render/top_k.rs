@@ -49,7 +49,7 @@ use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use crate::extensions::arrange::{ArrangementSize, KeyCollection, MzArrange};
 use crate::extensions::reduce::{ClearContainer, MzReduce};
 use crate::render::Pairer;
-use crate::render::columnar::{CollectionEdge, columnar_to_vec, flat_map_datums, vec_to_columnar};
+use crate::render::columnar::{CollectionEdge, flat_map_datums};
 use crate::render::context::{ArrangementFlavor, CollectionBundle, Context};
 use crate::render::errors::DataflowErrorSer;
 use crate::render::errors::MaybeValidatingRow;
@@ -125,11 +125,7 @@ impl<'scope, T: crate::render::RenderTimestamp + crate::render::MaybeBucketByTim
                 .get(&self.config_set)
                 .try_into()
                 .expect("must fit");
-            vec_to_columnar(T::maybe_apply_temporal_bucketing(
-                columnar_to_vec(ok_input).inner,
-                self.as_of_frontier.clone(),
-                summary,
-            ))
+            T::maybe_apply_temporal_bucketing(ok_input.inner, self.as_of_frontier.clone(), summary)
         } else {
             ok_input
         };
