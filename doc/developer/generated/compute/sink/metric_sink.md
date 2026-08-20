@@ -1,6 +1,6 @@
 ---
 source: src/compute/src/sink/metric_sink.rs
-revision: 94054eb165
+revision: a702b8be70
 ---
 
 # mz-compute::sink::metric_sink

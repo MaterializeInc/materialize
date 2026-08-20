@@ -1,6 +1,6 @@
 ---
 source: src/sql/src/plan/statement/ddl.rs
-revision: 39dcae2fba
+revision: a702b8be70
 ---
 
 # mz-sql::plan::statement::ddl
@@ -21,4 +21,4 @@ The `iceberg_sink_builder` function accepts an optional `storage_connection: Opt
 `plan_alter_sink` handles `AlterSinkAction::SetOptions` and `AlterSinkAction::ResetOptions`, currently restricted to the `CommitInterval` option name. A `SET` identical to the current with-options returns `Plan::AlterNoop`. A `RESET` of an option that is not set is rejected.
 `iceberg_sink_builder` enforces a minimum `COMMIT INTERVAL` of 1 second; intervals shorter than 1 second produce the error `"COMMIT INTERVAL must be at least 1 second"`.
 `plan_create_type` validates nested type references using a shared `TypeResolutionBudget`, rejecting types that exceed the nesting depth limit (128) or total resolution node limit (100,000) with graceful planning errors.
-`plan_create_metric_sink` plans `CREATE METRIC SINK` (gated by `ENABLE_METRIC_SINK`), validating that the `FROM` relation exposes the five required columns (`metric_name`, `metric_type`, `labels`, `value`, `help`) with the correct types, and that the required `PREFIX` option is a valid start of a Prometheus metric family name.
+`plan_create_metric_sink` plans `CREATE METRIC SINK` (gated by `ENABLE_METRIC_SINK`), validating that the `FROM` relation exposes the five required columns (`metric_name`, `metric_type`, `labels`, `value`, `help`) with the correct types, and that the required `PREFIX` option starts with `"mz_metric_sink_"` and satisfies the Prometheus metric family name grammar.

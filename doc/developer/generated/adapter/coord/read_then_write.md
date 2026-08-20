@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/read_then_write.rs
-revision: 39dcae2fba
+revision: b0d4c751f6
 ---
 
 # adapter::coord::read_then_write
