@@ -278,6 +278,13 @@ fn classify_write_result(
                 .requested_error()
                 .unwrap_or(AdapterError::Canceled),
         ),
+        WriteResult::TimestampTooFarAhead {
+            target_timestamp,
+            limit,
+        } => WriteOutcome::Failed(AdapterError::ReadThenWriteTimestampTooFarAhead {
+            target_timestamp,
+            limit,
+        }),
         WriteResult::ReadOnly => WriteOutcome::Failed(AdapterError::ReadOnly),
         WriteResult::TargetChanged => {
             // A concurrent DDL gave the table a new generation after we
