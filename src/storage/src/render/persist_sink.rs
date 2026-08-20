@@ -95,6 +95,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use differential_dataflow::consolidation::consolidate;
 use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::{AsCollection, Hashable, VecCollection};
@@ -128,6 +129,7 @@ use tokio::sync::Semaphore;
 use tracing::trace;
 
 use crate::metrics::source::SourcePersistSinkMetrics;
+use crate::statistics::SourceStatistics;
 use crate::storage_state::StorageState;
 
 /// Metrics about batches.
@@ -168,7 +170,13 @@ where
     T: Timestamp + Lattice + Codec64,
 {
     builder: BatchBuilder<K, V, T, D>,
-    data_ts: T,
+    /// Largest update timestamp staged so far, `None` while empty.
+    ///
+    /// `append_batches` needs this to decide, after an `UpperMismatch`, whether a batch lies
+    /// entirely below a raised append lower and so holds nothing this sink still owes. Such a
+    /// batch is deleted rather than appended, which keeps parts that would be truncated away in
+    /// their entirety out of shard state.
+    data_max_ts: Option<T>,
     metrics: BatchMetrics,
 }
 
@@ -179,33 +187,35 @@ where
     T: Timestamp + Lattice + Codec64,
     D: Monoid + Codec64,
 {
-    /// Creates a new batch.
-    ///
-    /// NOTE(benesch): temporary restriction: all updates added to the batch
-    /// must be at the specified timestamp `data_ts`.
-    fn new(builder: BatchBuilder<K, V, T, D>, data_ts: T) -> Self {
+    /// Creates a new batch. Updates at any timestamp at or beyond the builder's lower may be
+    /// added, in any order.
+    fn new(builder: BatchBuilder<K, V, T, D>) -> Self {
         BatchBuilderAndMetadata {
             builder,
-            data_ts,
+            data_max_ts: None,
             metrics: Default::default(),
         }
     }
 
     /// Adds an update to the batch.
-    ///
-    /// NOTE(benesch): temporary restriction: all updates added to the batch
-    /// must be at the timestamp specified during creation.
     async fn add(&mut self, k: &K, v: &V, t: &T, d: &D) {
-        assert_eq!(
-            self.data_ts, *t,
-            "BatchBuilderAndMetadata::add called with a timestamp {t:?} that does not match creation timestamp {:?}",
-            self.data_ts
-        );
+        self.data_max_ts = Some(match self.data_max_ts.take() {
+            Some(max) => max.join(t),
+            None => t.clone(),
+        });
 
         self.builder.add(k, v, t, d).await.expect("invalid usage");
     }
 
+    /// Finishes the batch, registering it under `lower` and `upper`.
+    ///
+    /// Panics if no update was ever added, since an empty batch has no largest timestamp. Callers
+    /// open a builder on the first update rather than up front, so reaching this is a bug.
     async fn finish(self, lower: Antichain<T>, upper: Antichain<T>) -> HollowBatchAndMetadata<T> {
+        let data_max_ts = self.data_max_ts.expect("finishing an empty builder");
+        // `BatchBuilder::finish` rejects an update at or beyond `upper`, so a builder that was
+        // handed updates outside the description it is being finished under fails here rather
+        // than producing a batch whose parts reach past their registered bounds.
         let batch = self
             .builder
             .finish(upper.clone())
@@ -214,7 +224,7 @@ where
         HollowBatchAndMetadata {
             lower,
             upper,
-            data_ts: self.data_ts,
+            data_max_ts,
             batch: batch.into_transmittable_batch(),
             metrics: self.metrics,
         }
@@ -230,7 +240,7 @@ where
 struct HollowBatchAndMetadata<T> {
     lower: Antichain<T>,
     upper: Antichain<T>,
-    data_ts: T,
+    data_max_ts: T,
     batch: ProtoBatch,
     metrics: BatchMetrics,
 }
@@ -245,7 +255,95 @@ struct BatchSet {
 #[derive(Debug)]
 struct FinishedBatch {
     batch: Batch<SourceData, (), mz_repr::Timestamp, StorageDiff>,
-    data_ts: mz_repr::Timestamp,
+    data_max_ts: mz_repr::Timestamp,
+}
+
+/// The batch builder the source sink writes with.
+type SourceBatchBuilder = BatchBuilderAndMetadata<SourceData, (), mz_repr::Timestamp, StorageDiff>;
+
+/// Updates staged at one timestamp, along with their accounted size.
+#[derive(Debug, Default)]
+struct RawStashEntry {
+    updates: Vec<(Result<Row, DataflowError>, Diff)>,
+    bytes: usize,
+    /// `updates.len()` as of the last consolidation.
+    consolidated_len: usize,
+}
+
+impl RawStashEntry {
+    /// Adds an update, charging its size to the entry.
+    fn push(&mut self, row: Result<Row, DataflowError>, diff: Diff) -> usize {
+        let bytes = stashed_bytes(&row);
+        self.updates.push((row, diff));
+        self.bytes += bytes;
+        bytes
+    }
+
+    /// Consolidates the entry, returning the bytes this freed.
+    fn consolidate(&mut self) -> usize {
+        consolidate(&mut self.updates);
+        self.consolidated_len = self.updates.len();
+
+        let bytes = self.updates.iter().map(|(row, _)| stashed_bytes(row)).sum();
+        let freed = self.bytes.saturating_sub(bytes);
+        self.bytes = bytes;
+        freed
+    }
+
+    /// Consolidates the entry only once it has doubled since the last attempt.
+    ///
+    /// Used on the memory-pressure path, where the same entry can be revisited on every arrival.
+    /// The doubling keeps the total work amortized linear instead of re-sorting a growing entry
+    /// each time the stash is over budget.
+    fn maybe_consolidate(&mut self) -> usize {
+        if self.updates.len() < self.consolidated_len.max(1) * 2 {
+            return 0;
+        }
+        self.consolidate()
+    }
+
+    /// Consolidates and returns the entry's updates, for staging into a builder.
+    fn drain(mut self) -> Vec<(Result<Row, DataflowError>, Diff)> {
+        // Every update is about to be visited anyway, so the sort is nearly free here, and
+        // whatever cancels is a row that never reaches blob storage.
+        self.consolidate();
+        self.updates
+    }
+}
+
+/// The size charged against the raw stash budget for one staged update.
+///
+/// This tracks the retained row payload rather than the true allocation, so it is an estimate
+/// used only to decide when to start writing batches out.
+fn stashed_bytes(row: &Result<Row, DataflowError>) -> usize {
+    let payload = match row {
+        Ok(row) => row.byte_len(),
+        Err(_) => size_of::<DataflowError>(),
+    };
+    payload + size_of::<Diff>()
+}
+
+/// Adds one update to `builder`, keeping the batch metrics in step.
+async fn stage_update(
+    builder: &mut SourceBatchBuilder,
+    row: Result<Row, DataflowError>,
+    ts: mz_repr::Timestamp,
+    diff: Diff,
+) {
+    let is_value = row.is_ok();
+
+    builder
+        .add(&SourceData(row), &(), &ts, &diff.into_inner())
+        .await;
+
+    // Note that we assume `diff` is either +1 or -1 here, being anything else is a logic bug we
+    // can't handle at the metric layer. We also assume this addition doesn't overflow.
+    match (is_value, diff.is_positive()) {
+        (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
+        (true, false) => builder.metrics.retractions += diff.unsigned_abs(),
+        (false, true) => builder.metrics.error_inserts += diff.unsigned_abs(),
+        (false, false) => builder.metrics.error_retractions += diff.unsigned_abs(),
+    }
 }
 
 /// Continuously writes the `desired_stream` into persist
@@ -300,6 +398,12 @@ pub(crate) fn render<'scope>(
         Arc::clone(&persist_clients),
     );
 
+    let source_statistics = storage_state
+        .aggregated_statistics
+        .get_source(&collection_id)
+        .expect("statistics initialized")
+        .clone();
+
     let (written_batches, write_token) = write_batches(
         scope,
         collection_id.clone(),
@@ -308,7 +412,9 @@ pub(crate) fn render<'scope>(
         batch_descriptions.clone(),
         passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
-        storage_state,
+        source_statistics,
+        dyncfgs::STORAGE_PERSIST_SINK_MAX_RAW_STASH_BYTES
+            .get(storage_state.storage_configuration.config_set()),
         Arc::clone(&busy_signal),
     );
 
@@ -521,6 +627,11 @@ fn mint_batch_descriptions<'scope>(
 /// This forwards a `HollowBatch` (with additional metadata)
 /// for any batch of updates that was written.
 ///
+/// Emits one batch per description, spanning however many timestamps that description covers.
+/// Updates wait as raw rows until their description arrives, which is what keeps the batch count
+/// independent of how many timestamps a stalled frontier accumulates. Past `max_raw_stash_bytes`
+/// the heaviest timestamps are written out early, one batch each.
+///
 /// This operator assumes that the `desired_collection` comes pre-sharded.
 ///
 /// This also and updates various metrics.
@@ -536,7 +647,8 @@ fn write_batches<'scope>(
     >,
     desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
-    storage_state: &StorageState,
+    source_statistics: SourceStatistics,
+    max_raw_stash_bytes: usize,
     busy_signal: Arc<Semaphore>,
 ) -> (
     StreamVec<'scope, mz_repr::Timestamp, HollowBatchAndMetadata<mz_repr::Timestamp>>,
@@ -547,12 +659,6 @@ fn write_batches<'scope>(
     let persist_location = target.persist_location.clone();
     let shard_id = target.data_shard;
     let target_relation_desc = target.relation_desc.clone();
-
-    let source_statistics = storage_state
-        .aggregated_statistics
-        .get_source(&collection_id)
-        .expect("statistics initialized")
-        .clone();
 
     let mut write_op =
         AsyncOperatorBuilder::new(format!("{} write_batches", operator_name), scope.clone());
@@ -569,8 +675,23 @@ fn write_batches<'scope>(
     // upper_.
 
     let shutdown_button = write_op.build(move |_capabilities| async move {
-        // In-progress batches of data, keyed by timestamp.
-        let mut stashed_batches = BTreeMap::new();
+        // Updates staged as raw rows, keyed by timestamp.
+        //
+        // A batch builder cannot be split, so updates may only enter one once it is known which
+        // description will cover them. A description is only acted on when the desired frontier
+        // has reached its upper, which means every update it covers has already arrived, so the
+        // builder can be created then and take all of them at once. Holding the rows until that
+        // point is what keeps the batch count proportional to descriptions rather than to
+        // timestamps.
+        let mut raw_stash: BTreeMap<mz_repr::Timestamp, RawStashEntry> = BTreeMap::new();
+        let mut raw_stash_bytes: usize = 0;
+
+        // Builders for timestamps evicted from `raw_stash` to stay under the byte budget.
+        //
+        // Each holds exactly one timestamp, which is what makes evicting safe without knowing the
+        // descriptions yet: a description either covers a timestamp entirely or not at all, so a
+        // single-timestamp builder can never straddle one.
+        let mut spilled: BTreeMap<mz_repr::Timestamp, SourceBatchBuilder> = BTreeMap::new();
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -691,35 +812,33 @@ fn write_batches<'scope>(
 
                         for (row, ts, diff) in data {
                             if write.upper().less_equal(&ts) {
-                                let builder = stashed_batches.entry(ts).or_insert_with(|| {
-                                    BatchBuilderAndMetadata::new(
-                                        write.builder(operator_batch_lower.clone()),
-                                        ts,
-                                    )
-                                });
+                                // Every description this operator has emitted was covered by the
+                                // desired frontier at the time, so no update below
+                                // `operator_batch_lower` can still be in flight. An update that
+                                // arrives anyway belongs to a description that is already gone: it
+                                // matches no later description and would sit in the stash unwritten
+                                // and unnoticed. Not a `debug_assert!`, which compiles out of the
+                                // optimized and release profiles and would leave the loss silent
+                                // everywhere it matters.
+                                assert!(
+                                    operator_batch_lower.less_equal(&ts),
+                                    "persist_sink {collection_id}/{shard_id}: update at {ts:?} \
+                                    arrived below the emitted batch lower {operator_batch_lower:?}",
+                                );
 
-                                let is_value = row.is_ok();
-
-                                builder
-                                    .add(&SourceData(row), &(), &ts, &diff.into_inner())
-                                    .await;
-
+                                // Counted on arrival rather than when the update reaches a
+                                // builder, so a stalled frontier does not make the sink look
+                                // like it is receiving nothing.
                                 source_statistics.inc_updates_staged_by(1);
 
-                                // Note that we assume `diff` is either +1 or -1 here, being anything
-                                // else is a logic bug we can't handle at the metric layer. We also
-                                // assume this addition doesn't overflow.
-                                match (is_value, diff.is_positive()) {
-                                    (true, true) => builder.metrics.inserts += diff.unsigned_abs(),
-                                    (true, false) => {
-                                        builder.metrics.retractions += diff.unsigned_abs()
-                                    }
-                                    (false, true) => {
-                                        builder.metrics.error_inserts += diff.unsigned_abs()
-                                    }
-                                    (false, false) => {
-                                        builder.metrics.error_retractions += diff.unsigned_abs()
-                                    }
+                                // A timestamp already evicted from the stash keeps its own
+                                // builder, so later updates at that time join it rather than
+                                // starting the stash growing again.
+                                if let Some(builder) = spilled.get_mut(&ts) {
+                                    stage_update(builder, row, ts, diff).await;
+                                } else {
+                                    raw_stash_bytes +=
+                                        raw_stash.entry(ts).or_default().push(row, diff);
                                 }
                             }
                         }
@@ -727,6 +846,44 @@ fn write_batches<'scope>(
                     Event::Progress(frontier) => {
                         desired_frontier = frontier;
                     }
+                }
+            }
+
+            // Consolidate before writing anything out. Updates that cancel cost nothing to
+            // drop and everything to keep: at a pinned timestamp the snapshot's rows and the
+            // rewind retractions that supersede them are both staged here, and they annihilate
+            // exactly. That is the heaviest entry and so the first eviction candidate.
+            if raw_stash_bytes > max_raw_stash_bytes {
+                for entry in raw_stash.values_mut() {
+                    raw_stash_bytes -= entry.maybe_consolidate();
+                }
+                raw_stash.retain(|_, entry| !entry.updates.is_empty());
+            }
+
+            // Evict the heaviest timestamps until the stash fits its budget. Heaviest first so
+            // that each eviction buys as much headroom as possible, which keeps the number of
+            // single-timestamp batches down.
+            while raw_stash_bytes > max_raw_stash_bytes {
+                let Some(ts) = raw_stash
+                    .iter()
+                    .max_by_key(|(_, entry)| entry.bytes)
+                    .map(|(ts, _)| *ts)
+                else {
+                    break;
+                };
+                let entry = raw_stash.remove(&ts).expect("just looked up");
+                raw_stash_bytes -= entry.bytes;
+                let updates = entry.drain();
+                // The entry can consolidate to nothing, in which case there is no builder to
+                // open. Its bytes are already off the budget, so the loop still makes progress.
+                if updates.is_empty() {
+                    continue;
+                }
+                let builder = spilled.entry(ts).or_insert_with(|| {
+                    BatchBuilderAndMetadata::new(write.builder(operator_batch_lower.clone()))
+                });
+                for (row, diff) in updates {
+                    stage_update(builder, row, ts, diff).await;
                 }
             }
             // We may have the opportunity to commit updates, if either frontier
@@ -789,45 +946,92 @@ fn write_batches<'scope>(
                     }
 
                     let (batch_lower, batch_upper) = batch_description;
-
-                    let finalized_timestamps: Vec<_> = stashed_batches
-                        .keys()
-                        .filter(|time| {
-                            batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                        })
-                        .copied()
-                        .collect();
+                    let covered = |time: &mz_repr::Timestamp| {
+                        batch_lower.less_equal(time) && !batch_upper.less_equal(time)
+                    };
 
                     let mut batch_tokens = vec![];
-                    for ts in finalized_timestamps {
-                        let batch_builder = stashed_batches.remove(&ts).unwrap();
+
+                    // This description is only ready once the desired frontier reached its upper,
+                    // so every update it covers has arrived. Whatever is still stashed for it is
+                    // all of it, and one builder can take the lot.
+                    //
+                    // The builder is opened on the first surviving update rather than up front,
+                    // because every stashed timestamp can consolidate to nothing and a batch with
+                    // no updates has no largest timestamp to register.
+                    //
+                    // Its lower is this description's own lower, not `operator_batch_lower`. Every
+                    // timestamp staged here passed `covered`, so the description's lower is at or
+                    // below all of them. `operator_batch_lower` is only safe for a builder opened
+                    // before the covering description is known: several descriptions can be ready
+                    // in one pass, they are processed in `in_flight_batches` order rather than by
+                    // lower, and each one processed advances `operator_batch_lower` to its own
+                    // upper. A description handled after a later sibling would otherwise build
+                    // with a lower already past the updates it owns.
+                    let stashed_timestamps: Vec<_> =
+                        raw_stash.keys().copied().filter(covered).collect();
+                    let mut coalesced: Option<SourceBatchBuilder> = None;
+                    for ts in stashed_timestamps {
+                        let entry = raw_stash.remove(&ts).expect("just looked up");
+                        raw_stash_bytes -= entry.bytes;
+                        for (row, diff) in entry.drain() {
+                            let builder = coalesced.get_or_insert_with(|| {
+                                BatchBuilderAndMetadata::new(write.builder(batch_lower.clone()))
+                            });
+                            stage_update(builder, row, ts, diff).await;
+                        }
+                    }
+
+                    if let Some(builder) = coalesced {
+                        if collection_id.is_user() {
+                            trace!(
+                                "persist_sink {collection_id}/{shard_id}: \
+                                    wrote coalesced batch from worker {}: ({:?}, {:?}), \
+                                    containing {:?}",
+                                worker_index, batch_lower, batch_upper, builder.metrics
+                            );
+                        }
+
+                        batch_tokens.push(
+                            builder
+                                .finish(batch_lower.clone(), batch_upper.clone())
+                                .await,
+                        );
+                    }
+
+                    // Timestamps evicted under memory pressure already have builders, one apiece.
+                    let spilled_timestamps: Vec<_> =
+                        spilled.keys().copied().filter(covered).collect();
+                    for ts in spilled_timestamps {
+                        let builder = spilled.remove(&ts).expect("just looked up");
 
                         if collection_id.is_user() {
                             trace!(
                                 "persist_sink {collection_id}/{shard_id}: \
-                                    wrote batch from worker {}: ({:?}, {:?}),
+                                    wrote spilled batch from worker {}: ({:?}, {:?}) at {ts}, \
                                     containing {:?}",
-                                worker_index, batch_lower, batch_upper, batch_builder.metrics
+                                worker_index, batch_lower, batch_upper, builder.metrics
                             );
                         }
 
-                        let batch = batch_builder
-                            .finish(batch_lower.clone(), batch_upper.clone())
-                            .await;
-
-                        // The next "safe" lower for batches is the meet (max) of all the emitted
-                        // batches. These uppers all are not beyond the `desired_frontier`, which
-                        // means all updates received by this operator will be beyond this lower.
-                        // Additionally, the `mint_batch_descriptions` operator ensures that
-                        // later-received batch descriptions will start beyond these uppers as
-                        // well.
-                        //
-                        // It is impossible to emit a batch description that is
-                        // beyond a not-yet emitted description in `in_flight_batches`, as
-                        // a that description would also have been chosen as ready above.
-                        operator_batch_lower = operator_batch_lower.join(&batch_upper);
-                        batch_tokens.push(batch);
+                        batch_tokens.push(
+                            builder
+                                .finish(batch_lower.clone(), batch_upper.clone())
+                                .await,
+                        );
                     }
+
+                    // The next "safe" lower for batches is the meet (max) of all the emitted
+                    // batches. These uppers all are not beyond the `desired_frontier`, which
+                    // means all updates received by this operator will be beyond this lower.
+                    // Additionally, the `mint_batch_descriptions` operator ensures that
+                    // later-received batch descriptions will start beyond these uppers as
+                    // well.
+                    //
+                    // It is impossible to emit a batch description that is
+                    // beyond a not-yet emitted description in `in_flight_batches`, as
+                    // a that description would also have been chosen as ready above.
+                    operator_batch_lower = operator_batch_lower.join(&batch_upper);
 
                     output.give_container(&cap, &mut batch_tokens);
 
@@ -1070,7 +1274,7 @@ fn append_batches<'scope>(
 
                                 batches.finished.push(FinishedBatch {
                                     batch: write.batch_from_transmittable_batch(batch.batch),
-                                    data_ts: batch.data_ts,
+                                    data_max_ts: batch.data_max_ts,
                                 });
                                 batches.batch_metrics += &batch.metrics;
                             }
@@ -1370,13 +1574,17 @@ fn append_batches<'scope>(
                             let new_done_batch_metadata =
                                 (new_batch_lower.clone(), batch_upper.clone());
 
-                            // Retain any batches that are still in advance of
-                            // the new lower, and delete any batches that are
-                            // not.
+                            // Re-append every batch that still holds something we owe, under the
+                            // narrowed description. A batch may hold data on both sides of the new
+                            // lower: persist registers it truncated and filters the updates
+                            // outside the registered bounds on read, so the ones the concurrent
+                            // writer already committed do not come back. A batch entirely below
+                            // the new lower owes nothing and is deleted instead, to keep parts
+                            // that would be truncated away in full out of shard state.
                             let mut batch_delete_futures = vec![];
                             let mut new_batch_set = BatchSet::default();
                             for batch in batches {
-                                if new_batch_lower.less_equal(&batch.data_ts) {
+                                if new_batch_lower.less_equal(&batch.data_max_ts) {
                                     new_batch_set.finished.push(batch);
                                 } else {
                                     batch_delete_futures.push(batch.batch.delete());
@@ -1411,4 +1619,682 @@ fn append_batches<'scope>(
     }));
 
     (upper_stream, errors, shutdown_button.press_on_drop())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::str::FromStr;
+
+    use mz_build_info::DUMMY_BUILD_INFO;
+    use mz_dyncfg::{ConfigUpdates, ConfigVal};
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::now::SYSTEM_TIME;
+    use mz_ore::url::SensitiveUrl;
+    use mz_persist_client::PersistLocation;
+    use mz_persist_client::cfg::PersistConfig;
+    use mz_persist_client::rpc::PubSubClientConnection;
+    use mz_persist_types::ShardId;
+    use mz_repr::{Datum, RelationDesc, SqlScalarType};
+    use mz_storage_types::sources::SourceEnvelope;
+    use mz_storage_types::sources::envelope::{KeyEnvelope, NoneEnvelope};
+    use timely::dataflow::operators::Input;
+
+    use crate::statistics::SourceStatisticsMetricDefs;
+
+    use super::*;
+
+    fn ts(t: u64) -> mz_repr::Timestamp {
+        t.into()
+    }
+
+    fn frontier(t: u64) -> Antichain<mz_repr::Timestamp> {
+        Antichain::from_elem(ts(t))
+    }
+
+    /// One step of a `write_batches` script.
+    enum Step {
+        /// Deliver a batch description, as `mint_batch_descriptions` would.
+        Description(u64, u64),
+        /// Deliver `count` updates at time `at`.
+        Updates(u64, usize),
+        /// Deliver `count` updates at time `at` with negated diffs, as the rewind of a snapshot
+        /// does for rows the replication stream redelivers at their true offset.
+        Retractions(u64, usize),
+        /// Advance both input frontiers.
+        AdvanceTo(u64),
+    }
+
+    /// What a batch emitted by `write_batches` carries, flattened for assertions.
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct EmittedBatch {
+        lower: u64,
+        upper: u64,
+        data_max_ts: u64,
+        inserts: u64,
+    }
+
+    /// Drives `write_batches` through `script` and returns the batches it emitted, along with a
+    /// handle to the shard so callers can append them and read the result back.
+    fn run_write_batches(
+        target: CollectionMetadata,
+        persist_clients: Arc<PersistClientCache>,
+        max_raw_stash_bytes: usize,
+        script: Vec<Step>,
+    ) -> Vec<(EmittedBatch, ProtoBatch)> {
+        timely::execute_directly(move |worker| {
+            // `ProtoBatch` is not `Ord`, so the captured stream is summarized on the way out
+            // rather than going through `Capture`.
+            let emitted = Rc::new(RefCell::new(Vec::new()));
+
+            let (mut descs_input, mut data_input, button) = worker
+                .dataflow::<mz_repr::Timestamp, _, _>(|scope| {
+                    let (descs_input, descs) = scope.new_input();
+                    let (data_input, data) = scope.new_input();
+
+                    let source_id = GlobalId::User(0);
+                    let stats_defs =
+                        SourceStatisticsMetricDefs::register_with(&MetricsRegistry::new());
+                    let source_statistics = SourceStatistics::new(
+                        source_id,
+                        0,
+                        &stats_defs,
+                        source_id,
+                        &target.data_shard,
+                        SourceEnvelope::None(NoneEnvelope {
+                            key_envelope: KeyEnvelope::None,
+                            key_arity: 0,
+                        }),
+                        Antichain::from_elem(Timestamp::minimum()),
+                    );
+
+                    let (batches, button) = write_batches(
+                        scope,
+                        source_id,
+                        "test",
+                        &target,
+                        descs,
+                        data.as_collection(),
+                        persist_clients,
+                        source_statistics,
+                        max_raw_stash_bytes,
+                        Arc::new(Semaphore::new(Semaphore::MAX_PERMITS)),
+                    );
+                    let sink = Rc::clone(&emitted);
+                    InspectCore::inspect_container(batches, move |event| {
+                        if let Ok((_, data)) = event {
+                            for b in data {
+                                sink.borrow_mut().push((
+                                    EmittedBatch {
+                                        lower: b.lower.as_option().expect("single lower").into(),
+                                        upper: b.upper.as_option().expect("single upper").into(),
+                                        data_max_ts: b.data_max_ts.into(),
+                                        inserts: b.metrics.inserts,
+                                    },
+                                    b.batch.clone(),
+                                ));
+                            }
+                        }
+                    });
+
+                    (descs_input, data_input, button)
+                });
+
+            // The operator waits on persist off the timely scheduler, so a plain `step` can find
+            // the worker idle while the operator is still starting up. Parking hands the thread
+            // over until its waker fires, which is what lets the operator keep up with the script.
+            fn pump(worker: &mut timely::worker::Worker) {
+                for _ in 0..32 {
+                    worker.step_or_park(Some(Duration::from_millis(1)));
+                }
+            }
+
+            // Twice, so the operator is past opening its persist handles before the script runs.
+            pump(worker);
+            pump(worker);
+
+            for step in script {
+                match step {
+                    Step::Description(lower, upper) => {
+                        descs_input.send((frontier(lower), frontier(upper)));
+                    }
+                    Step::Updates(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), Diff::ONE));
+                        }
+                    }
+                    Step::Retractions(at, count) => {
+                        for i in 0..i64::try_from(count).expect("small count") {
+                            let row = Row::pack_slice(&[Datum::Int64(i)]);
+                            data_input.send((Ok(row), ts(at), -Diff::ONE));
+                        }
+                    }
+                    Step::AdvanceTo(t) => {
+                        descs_input.advance_to(ts(t));
+                        data_input.advance_to(ts(t));
+                    }
+                }
+                pump(worker);
+            }
+
+            descs_input.close();
+            data_input.close();
+            for _ in 0..1_000 {
+                if !worker.step_or_park(Some(Duration::from_millis(1))) {
+                    break;
+                }
+            }
+
+            drop(button);
+            while worker.step() {}
+
+            let mut emitted = emitted.borrow().clone();
+            emitted.sort_by(|a, b| a.0.cmp(&b.0));
+            emitted
+        })
+    }
+
+    fn test_target() -> CollectionMetadata {
+        CollectionMetadata {
+            persist_location: PersistLocation {
+                blob_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+                consensus_uri: SensitiveUrl::from_str("mem://").expect("invalid URL"),
+            },
+            data_shard: ShardId::new(),
+            relation_desc: RelationDesc::builder()
+                .with_column("a", SqlScalarType::Int64.nullable(false))
+                .finish(),
+            txns_shard: None,
+        }
+    }
+
+    /// Persist clients with part bounds validation on. Both settings default off in code but are
+    /// turned on in production, so an append has to run under them to say anything about the
+    /// bounds the sink writes.
+    fn test_persist_clients() -> Arc<PersistClientCache> {
+        let persist_cfg =
+            PersistConfig::new_default_configs(&DUMMY_BUILD_INFO, SYSTEM_TIME.clone());
+        let mut updates = ConfigUpdates::default();
+        updates.add_dynamic(
+            "persist_validate_part_bounds_on_write",
+            ConfigVal::Bool(true),
+        );
+        updates.add_dynamic(
+            "persist_validate_part_bounds_on_read",
+            ConfigVal::Bool(true),
+        );
+        updates.apply(&persist_cfg.configs);
+        Arc::new(PersistClientCache::new(
+            persist_cfg,
+            &MetricsRegistry::new(),
+            |_, _| PubSubClientConnection::noop(),
+        ))
+    }
+
+    /// Appends every emitted batch in one `compare_and_append` over `[lower, upper)`, then reads
+    /// the shard back as of `as_of` and returns the summed diffs.
+    ///
+    /// Each entry in `appends` is one `compare_and_append` over `[lower, upper)`, applied in order.
+    /// Batches written for different descriptions need separate calls, because persist rejects a
+    /// batch whose upper is below the append upper. A `lower` above a batch's own lower registers
+    /// it truncated, which is what the sink relies on when a concurrent writer has already claimed
+    /// part of the range.
+    ///
+    /// This is where a batch whose parts reach outside their registered bounds is caught, so the
+    /// tests append for real rather than stopping at what `write_batches` emitted.
+    /// A single `compare_and_append` over `[lower, upper)` carrying every emitted batch.
+    fn one_append(
+        emitted: Vec<(EmittedBatch, ProtoBatch)>,
+        lower: u64,
+        upper: u64,
+    ) -> Vec<(u64, u64, Vec<ProtoBatch>)> {
+        vec![(lower, upper, emitted.into_iter().map(|(_, p)| p).collect())]
+    }
+
+    /// One `compare_and_append` per description the batches were written for, ascending by lower.
+    fn append_per_description(
+        emitted: Vec<(EmittedBatch, ProtoBatch)>,
+    ) -> Vec<(u64, u64, Vec<ProtoBatch>)> {
+        let mut by_desc: BTreeMap<(u64, u64), Vec<ProtoBatch>> = BTreeMap::new();
+        for (batch, proto) in emitted {
+            by_desc
+                .entry((batch.lower, batch.upper))
+                .or_default()
+                .push(proto);
+        }
+        by_desc
+            .into_iter()
+            .map(|((lower, upper), protos)| (lower, upper, protos))
+            .collect()
+    }
+
+    async fn append_and_read_back(
+        target: &CollectionMetadata,
+        persist_clients: &PersistClientCache,
+        appends: Vec<(u64, u64, Vec<ProtoBatch>)>,
+        as_of: u64,
+    ) -> i64 {
+        let persist_client = persist_clients
+            .open(target.persist_location.clone())
+            .await
+            .expect("could not open persist client");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                target.data_shard,
+                Arc::new(target.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("could not open persist shard");
+
+        assert!(
+            write.validate_part_bounds_on_write(),
+            "part bounds validation is off, so this append proves nothing about batch bounds"
+        );
+
+        for (lower, upper, protos) in appends {
+            let mut batches: Vec<_> = protos
+                .into_iter()
+                .map(|proto| write.batch_from_transmittable_batch(proto))
+                .collect();
+            let mut to_append: Vec<_> = batches.iter_mut().collect();
+            write
+                .compare_and_append_batch(
+                    &mut to_append[..],
+                    frontier(lower),
+                    frontier(upper),
+                    true,
+                )
+                .await
+                .expect("invalid usage")
+                .expect("upper mismatch");
+
+            assert_eq!(write.fetch_recent_upper().await, &frontier(upper));
+        }
+
+        let mut read = persist_client
+            .open_leased_reader::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                target.data_shard,
+                Arc::new(target.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+                true,
+            )
+            .await
+            .expect("invalid usage");
+        let contents = read
+            .snapshot_and_fetch(frontier(as_of))
+            .await
+            .expect("since <= as_of");
+
+        contents.iter().map(|(_, _, d)| *d).sum()
+    }
+
+    /// Several descriptions can become ready in the same pass, and they are processed in
+    /// `in_flight_batches` order rather than by lower. Each one processed advances
+    /// `operator_batch_lower` to its own upper, so a description handled after a later sibling must
+    /// still build from its own lower to take the updates it owns.
+    ///
+    /// NOTE: `in_flight_batches` is a `HashMap`, so this only lands on the bad order some of the
+    /// time. Enough descriptions are used here that an all-ascending pass is unlikely, and the fix
+    /// makes correctness independent of the order either way.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_handles_descriptions_ready_in_one_pass() {
+        const DESCRIPTIONS: u64 = 6;
+        const DONE: u64 = DESCRIPTIONS * 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // One update inside each of the tiling descriptions [0,2), [2,4), ... None of them is ready
+        // until the frontier passes every upper, so they all come due together.
+        let mut script = vec![];
+        for i in 0..DESCRIPTIONS {
+            script.push(Step::Updates(i * 2 + 1, 1));
+        }
+        for i in 0..DESCRIPTIONS {
+            script.push(Step::Description(i * 2, i * 2 + 2));
+        }
+        script.push(Step::AdvanceTo(DONE));
+
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            1 << 20,
+            script,
+        );
+
+        assert_eq!(
+            emitted.len(),
+            usize::cast_from(DESCRIPTIONS),
+            "one batch per description, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        for (batch, _) in &emitted {
+            assert!(
+                batch.lower <= batch.data_max_ts && batch.data_max_ts < batch.upper,
+                "batch {batch:?} holds data outside the description it was written for"
+            );
+        }
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            append_per_description(emitted),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(DESCRIPTIONS).expect("small"),
+            "every update should be readable exactly once"
+        );
+    }
+
+    /// Advances the shard upper to `upper` without writing data, standing in for a concurrent
+    /// writer that reached part of the range first.
+    async fn advance_shard_upper(
+        target: &CollectionMetadata,
+        persist_clients: &PersistClientCache,
+        upper: u64,
+    ) {
+        let persist_client = persist_clients
+            .open(target.persist_location.clone())
+            .await
+            .expect("could not open persist client");
+        let mut write = persist_client
+            .open_writer::<SourceData, (), mz_repr::Timestamp, StorageDiff>(
+                target.data_shard,
+                Arc::new(target.relation_desc.clone()),
+                Arc::new(UnitSchema),
+                Diagnostics::for_tests(),
+            )
+            .await
+            .expect("could not open persist shard");
+
+        let empty: Vec<((SourceData, ()), mz_repr::Timestamp, StorageDiff)> = Vec::new();
+        write
+            .compare_and_append(
+                &empty,
+                Antichain::from_elem(Timestamp::minimum()),
+                frontier(upper),
+            )
+            .await
+            .expect("invalid usage")
+            .expect("upper mismatch");
+
+        // Otherwise the handle's heartbeat task outlives the test and nextest reports a leak.
+        write.expire().await;
+    }
+
+    /// A batch spanning many timestamps stays usable when a concurrent writer has raised the shard
+    /// upper into the middle of it. Persist registers the batch under the narrowed description and
+    /// filters the updates outside those bounds on read, so the sink can hand a straddling batch
+    /// over as is rather than discarding it and rebuilding from the new upper.
+    ///
+    /// This is the property that lets `write_batches` coalesce a stalled frontier into one batch
+    /// without giving up the ability to recover from a concurrent append.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn a_straddling_batch_is_usable_under_a_raised_lower() {
+        const TIMES: u64 = 10;
+        const DONE: u64 = TIMES + 1;
+        // Inside the batch's data range, so the batch holds updates on both sides of it.
+        const RAISED_LOWER: u64 = 5;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // One update at each of times 1..=TIMES, all covered by a single description, so the
+        // stash coalesces them into one batch whose data spans the whole range.
+        let mut script = vec![];
+        for at in 1..=TIMES {
+            script.push(Step::Updates(at, 1));
+        }
+        script.push(Step::Description(0, DONE));
+        script.push(Step::AdvanceTo(DONE));
+
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            1 << 20,
+            script,
+        );
+        assert_eq!(
+            emitted.len(),
+            1,
+            "expected one coalesced batch, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+
+        advance_shard_upper(&target, &persist_clients, RAISED_LOWER).await;
+
+        // Append the straddling batch under the raised lower, as the sink does after an
+        // `UpperMismatch` cuts the description down.
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, RAISED_LOWER, DONE),
+            DONE - 1,
+        )
+        .await;
+
+        assert_eq!(
+            total,
+            i64::try_from(TIMES - RAISED_LOWER + 1).expect("small"),
+            "only the updates at or above the raised lower should be readable, and all of them"
+        );
+    }
+
+    /// The rewind mechanism retracts the snapshot's copy of every row the replication stream
+    /// redelivers at its true offset, and both land at the pinned timestamp. Those pairs cancel,
+    /// so the stash collapses them rather than evicting to make room.
+    ///
+    /// NOTE: this only reclaims pairs that are in the stash at the same time. Once a timestamp
+    /// has been evicted its updates live in a builder, where a later retraction cannot reach
+    /// them, and the cancellation is left to persist compaction.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_consolidates_the_stash_before_evicting() {
+        const ROWS: usize = 512;
+        const DONE: u64 = 4;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // The snapshot's rows, then the rewind retracting all but one of them, all at the pinned
+        // timestamp while the frontier is stalled.
+        let script = vec![
+            Step::Updates(1, ROWS),
+            Step::Retractions(1, ROWS - 1),
+            Step::Description(0, DONE),
+            Step::AdvanceTo(DONE),
+        ];
+
+        // Big enough to hold the snapshot's rows, too small to also hold their retractions.
+        // Cancelling pairs only collapse while both sides are still in the stash, so a budget
+        // that evicted the rows before their retractions arrived would prove nothing.
+        let unit = stashed_bytes(&Ok(Row::pack_slice(&[Datum::Int64(0)])));
+        let budget = unit * (ROWS + ROWS / 2);
+
+        let emitted =
+            run_write_batches(target.clone(), Arc::clone(&persist_clients), budget, script);
+
+        assert_eq!(
+            emitted.len(),
+            1,
+            "cancelling updates should consolidate away rather than evict, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            emitted[0].0.inserts, 1,
+            "only the surviving row should reach the batch"
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(total, 1, "the shard should hold exactly the surviving row");
+    }
+
+    /// A row inserted and deleted at the same timestamp consolidates to nothing, which can leave
+    /// a description with no updates at all to write. That must emit no batch rather than open a
+    /// builder that has no data bounds to register.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_emits_nothing_when_a_description_fully_consolidates() {
+        const DONE: u64 = 4;
+
+        let persist_clients = test_persist_clients();
+
+        // A budget the stash never reaches, so the updates sit unconsolidated until the
+        // description drains them, and one that forces eviction to handle the same entry.
+        for budget in [1 << 20, 0] {
+            // Everything the description covers cancels out.
+            let script = vec![
+                Step::Updates(1, 8),
+                Step::Retractions(1, 8),
+                Step::Description(0, DONE),
+                Step::AdvanceTo(DONE),
+            ];
+
+            let emitted =
+                run_write_batches(test_target(), Arc::clone(&persist_clients), budget, script);
+
+            assert!(
+                emitted.is_empty(),
+                "a fully consolidated description should produce no batch at budget {budget}, \
+                got {:?}",
+                emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+            );
+        }
+    }
+
+    /// A snapshot at time 1 pinning the frontier while replication delivers one update at each of
+    /// times 2..=`stall_times`+1, then the description that covers the whole stall.
+    fn pinned_frontier_script(snapshot_rows: usize, stall_times: u64, done: u64) -> Vec<Step> {
+        let mut script = vec![Step::Updates(1, snapshot_rows)];
+        for t in 2..=stall_times + 1 {
+            script.push(Step::Updates(t, 1));
+        }
+        // The minter holds a capability at the shard upper for the whole stall, so its one
+        // description is emitted there, and the frontier then jumps past everything staged.
+        script.push(Step::Description(0, done));
+        script.push(Step::AdvanceTo(done));
+        script
+    }
+
+    /// A snapshot pins the export's frontier at its as_of while concurrent replication keeps
+    /// delivering updates at later times. No description is minted for the duration, so the
+    /// updates stage as raw rows, and the single description minted once the snapshot finishes
+    /// takes all of them into one batch regardless of how many timestamps they span.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_coalesces_a_pinned_frontier_into_one_batch() {
+        const SNAPSHOT_ROWS: usize = 4;
+        const STALL_TIMES: u64 = 16;
+        const DONE: u64 = STALL_TIMES + 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // A budget far above what this script stages, so nothing is evicted.
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            1 << 20,
+            pinned_frontier_script(SNAPSHOT_ROWS, STALL_TIMES, DONE),
+        );
+
+        assert_eq!(
+            emitted.len(),
+            1,
+            "the stall should coalesce into a single batch, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            emitted[0].0,
+            EmittedBatch {
+                lower: 0,
+                upper: DONE,
+                data_max_ts: STALL_TIMES + 1,
+                inserts: u64::cast_from(SNAPSHOT_ROWS) + STALL_TIMES,
+            }
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(SNAPSHOT_ROWS).expect("small")
+                + i64::try_from(STALL_TIMES).expect("small"),
+            "every staged update should be readable exactly once"
+        );
+    }
+
+    /// Under a budget the stash cannot meet, updates are evicted into per-timestamp batches
+    /// rather than held in memory. Those batches are still appended and read back correctly,
+    /// which is what makes the eviction a graceful degradation rather than a failure.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_spills_single_timestamp_batches_when_over_budget() {
+        const SNAPSHOT_ROWS: usize = 4;
+        const STALL_TIMES: u64 = 16;
+        const DONE: u64 = STALL_TIMES + 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // A zero budget evicts every timestamp as soon as it is staged.
+        let emitted = run_write_batches(
+            target.clone(),
+            Arc::clone(&persist_clients),
+            0,
+            pinned_frontier_script(SNAPSHOT_ROWS, STALL_TIMES, DONE),
+        );
+
+        assert_eq!(
+            emitted.len(),
+            usize::cast_from(STALL_TIMES) + 1,
+            "every timestamp should have been evicted to its own batch, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        for (batch, _) in &emitted {
+            assert_eq!(
+                (batch.lower, batch.upper),
+                (0, DONE),
+                "an evicted batch still carries the description bounds"
+            );
+        }
+        // One batch per staged timestamp. That is what makes evicting safe before the covering
+        // description is known, since a single-timestamp batch cannot span a description boundary.
+        let data_times: Vec<_> = emitted.iter().map(|(b, _)| b.data_max_ts).collect();
+        assert_eq!(data_times, (1..=STALL_TIMES + 1).collect::<Vec<_>>());
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(SNAPSHOT_ROWS).expect("small")
+                + i64::try_from(STALL_TIMES).expect("small"),
+            "eviction must not change what the shard ends up holding"
+        );
+    }
 }

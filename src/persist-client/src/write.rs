@@ -617,7 +617,7 @@ where
             let mut key_storage = None;
             let mut val_storage = None;
             for batch in batches.iter() {
-                let () = validate_truncate_batch(
+                let bounds_truncated = validate_truncate_batch(
                     &batch.batch,
                     &desc,
                     any_batch_rewrite,
@@ -689,7 +689,11 @@ where
                     if start_index != 0 {
                         run_splits.push(start_index);
                     }
-                    run_metas.push(run_meta.clone());
+                    let mut run_meta = run_meta.clone();
+                    if bounds_truncated {
+                        run_meta.set_bounds_truncated();
+                    }
+                    run_metas.push(run_meta);
                 }
                 num_updates += batch.batch.len;
             }

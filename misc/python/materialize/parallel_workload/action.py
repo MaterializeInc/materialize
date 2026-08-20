@@ -2877,6 +2877,10 @@ class FlipFlagsAction(Action):
             "8",
             "16",
         ]
+        self.flags_with_values["storage_persist_sink_max_raw_stash_bytes"] = (
+            # Always evict, evict under light load, never evict in practice.
+            ["0", "1024", "16777216"]
+        )
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3270,6 +3274,12 @@ class FlipFlagsAction(Action):
             "storage_suspend_and_restart_delay",
             "storage_reclock_to_latest",
             "storage_use_continual_feedback_upsert",
+            # The snapshot and replication operators read this independently at
+            # startup. A flip landing between the two reads leaves one in
+            # concurrent mode and the other not, within the same dataflow, which
+            # is a broken state rather than an interesting one. CI covers the
+            # feature by defaulting it on instead.
+            "storage_source_snapshot_concurrent_replication",
             "storage_server_maintenance_interval",
             "storage_sink_progress_search",
             "storage_sink_ensure_topic_config",

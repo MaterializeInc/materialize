@@ -1357,12 +1357,20 @@ impl<T: Timestamp + Codec64> BatchParts<T> {
     }
 }
 
+/// Validates that `batch` may be appended under the desc `truncate`.
+///
+/// Returns whether `truncate` cuts into `batch`'s own desc, i.e. whether the
+/// batch's parts may hold updates outside the desc they are registered under.
+/// Readers filter such updates out against the registered desc, but write-time
+/// part statistics still count them, so callers must record the bit (see
+/// `RunMeta::bounds_truncated`) to keep stats-based accounting from trusting
+/// the statistics.
 pub(crate) fn validate_truncate_batch<T: Timestamp>(
     batch: &HollowBatch<T>,
     truncate: &Description<T>,
     any_batch_rewrite: bool,
     validate_part_bounds_on_write: bool,
-) -> Result<(), InvalidUsage<T>> {
+) -> Result<bool, InvalidUsage<T>> {
     // If rewrite_ts is used, we don't allow truncation, to keep things simpler
     // to reason about.
     if any_batch_rewrite {
@@ -1391,8 +1399,11 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         }
     }
 
+    let bounds_truncated = !PartialOrder::less_equal(truncate.lower(), batch.desc.lower())
+        || !PartialOrder::less_equal(batch.desc.upper(), truncate.upper());
+
     if !validate_part_bounds_on_write {
-        return Ok(());
+        return Ok(bounds_truncated);
     }
 
     let batch = &batch.desc;
@@ -1407,7 +1418,7 @@ pub(crate) fn validate_truncate_batch<T: Timestamp>(
         });
     }
 
-    Ok(())
+    Ok(bounds_truncated)
 }
 
 #[derive(Debug)]
