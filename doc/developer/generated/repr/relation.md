@@ -1,6 +1,6 @@
 ---
 source: src/repr/src/relation.rs
-revision: 37d0a1c9ac
+revision: 95baa04a85
 ---
 
 # mz-repr::relation
@@ -13,6 +13,7 @@ Defines a dual-type system for relation and column metadata:
 `SqlColumnType::backport_nullability` reconciles nullability information from a `ReprColumnType` back into an `SqlColumnType`, including nested record fields.
 
 `RelationDesc` (an ordered sequence of named, typed columns using `SqlColumnType`) remains the primary schema descriptor. `RelationDescBuilder` provides a fluent construction API.
+`RelationDesc::apply_demand` asserts via `debug_assert!` that the desc is "dense" (every `ColumnIndex` equals the column's position and `typ_idx`, i.e. no columns have been dropped). This invariant is required because `apply_demand` filters `metadata` by raw `ColumnIndex` and `typ` by position, which only agree when the desc is dense; a sparse desc would silently attach types, statistics, and filter specs to wrong columns downstream.
 `RelationDescDiff` and `VersionedRelationDesc` support schema evolution by tracking changes between relation versions.
 `ColumnName`, `ColumnIndex`, and `NotNullViolation` provide naming, indexing, and validation support.
 `PropRelationDescDiff` and the `arb_relation_desc_diff`, `arb_relation_desc_projection`, and `arb_row_for_relation` helpers are gated behind `#[cfg(any(test, feature = "proptest"))]` and support property-based testing.

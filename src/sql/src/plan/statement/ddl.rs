@@ -4250,7 +4250,16 @@ const METRIC_SINK_SOURCE_COLUMNS: &[(&str, fn(&SqlScalarType) -> bool)] = &[
 
 generate_extracted_config!(CreateMetricSinkOption, (Prefix, String));
 
-/// Rejects a prefix that could not start a Prometheus metric name.
+/// The reserved namespace every metric sink prefix must start with. It confines the family names a
+/// sink publishes (`prefix + name`) to the `mz_metric_sink_` lane, which nothing else in a
+/// replica's Prometheus registry writes: platform metrics use other `mz_*` names, third-party
+/// collectors namespace away from `mz_*`, and the sink's own health gauges are
+/// `mz_compute_metric_sink_*`. Requiring the marker rather than blocklisting platform names cannot
+/// rot as new platform collectors are added.
+const METRIC_SINK_PREFIX_MARKER: &str = "mz_metric_sink_";
+
+/// Rejects a prefix that could not start a Prometheus metric name, or that escapes the reserved
+/// `mz_metric_sink_` lane (see [`METRIC_SINK_PREFIX_MARKER`]).
 ///
 /// The sink prepends this to every name it publishes, so `prefix + name` must stay a legal
 /// family name (`[a-zA-Z_:][a-zA-Z0-9_:]*`, the same grammar the runtime checks each row's
@@ -4270,6 +4279,13 @@ fn validate_metric_sink_prefix(prefix: &str) -> Result<(), PlanError> {
         return Err(sql_err!(
             "metric sink prefix {:?} is not a valid start of a Prometheus metric name",
             prefix
+        ));
+    }
+    if !prefix.starts_with(METRIC_SINK_PREFIX_MARKER) {
+        return Err(sql_err!(
+            "metric sink prefix {:?} must start with {:?}",
+            prefix,
+            METRIC_SINK_PREFIX_MARKER
         ));
     }
     Ok(())

@@ -1,13 +1,13 @@
 ---
 source: src/sql/src/catalog.rs
-revision: fd1dd6e62b
+revision: 39dcae2fba
 ---
 
 # mz-sql::catalog
 
 Defines the `SessionCatalog` trait — the abstraction layer between the SQL planner and any concrete catalog implementation.
 The trait covers resolution (converting partial names to fully-qualified names), lookup (retrieving metadata about databases, schemas, items, roles, clusters, etc.), and session management (variables, notices, privilege queries, and access-restriction flags such as `restrict_to_user_objects`).
-Supporting types such as `CatalogItem`, `CatalogItemType` (variants: `Table`, `Source`, `Sink`, `View`, `MaterializedView`, `Index`, `Type`, `Func`, `Secret`, `Connection`), `CatalogDatabase`, `CatalogSchema`, `CatalogCluster`, `CatalogRole`, `CatalogType`, and `CatalogError` are all defined here, making this the central interface contract for the entire SQL layer.
+Supporting types such as `CatalogItem`, `CatalogItemType` (variants: `Table`, `Source`, `Sink`, `View`, `MaterializedView`, `Index`, `Type`, `Func`, `Secret`, `Connection`, `MetricSink`), `CatalogDatabase`, `CatalogSchema`, `CatalogCluster`, `CatalogRole`, `CatalogType`, and `CatalogError` are all defined here, making this the central interface contract for the entire SQL layer.
 `CatalogCluster` exposes `auto_scaling_strategy() -> Option<&AutoScalingStrategy>`, returning the user-configured autoscaling policy when the cluster is managed and has one set.
 `ObjectType` covers the full set of catalog object kinds visible in SQL; `CatalogConfig` carries session-level configuration including `connection_context`, optional `helm_chart_version`, and `aws_account_id` (the AWS account ID the environment runs under, folded to a literal by `mz_aws_account_id()` and `None` on non-cloud/local environments).
 Also defines `AutoProvisionSource` (enum tracking whether a role was auto-provisioned by OIDC, Frontegg, or None), `RoleAttributes` and `RoleAttributesRaw` (which include an `auto_provision_source` field), and `PasswordAction`.

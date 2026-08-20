@@ -1,6 +1,6 @@
 ---
 source: src/ore/src/assert.rs
-revision: 1ec49c0396
+revision: f0cdedca04
 ---
 
 # mz-ore::assert

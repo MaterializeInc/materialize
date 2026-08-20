@@ -84,6 +84,34 @@
 //! durable in the first case and there was never anything to write in the
 //! second, so all they do is make the disagreement loud.
 //!
+//! ## The frontier certifies, the oracle chooses
+//!
+//! The target `T` comes from the oracle, and a progress message at `F` only
+//! certifies completeness below `F`, so it gates the write rather than choosing
+//! its timestamp. The design doc's "The OCC loop" says why. Three invariants
+//! hold for every write this path makes:
+//!
+//! * `F >= T` before it submits, so the payload is a complete view of `T - 1`.
+//! * The payload is every diff below `T`, strictly. A diff at `T` is concurrent
+//!   with the write and waits for a later target.
+//! * `T > as_of`, so the snapshot, which arrives at `as_of`, is in the payload.
+//!
+//! NOTE: `F >= T` does not make the two equal, because `F` is a minimum over the
+//! selection's inputs. Where `F` runs above `T`, a selection that reads the
+//! target table makes the compare-and-append refuse, and retrying higher is the
+//! design rather than a failure.
+//!
+//! ## A zero-row answer
+//!
+//! A write linearizes itself, because group commit advances the oracle before it
+//! acknowledges. An answer of "no rows" performs no write, so the loop reports
+//! the timestamp its view is complete through and the caller waits for the
+//! oracle to reach it. A selection empty at `as_of` is complete through `as_of`,
+//! which the caller put behind the oracle before the subscribe started, so that
+//! answer waits for nothing, while reporting the frontier the subscribe observed
+//! would cost a group commit every time. The design doc's "Linearization" argues
+//! why the lower timestamp is not the weaker guarantee.
+//!
 //! ## Rollout note
 //!
 //! The `FRONTEND_READ_THEN_WRITE` dyncfg is read once at process startup and
@@ -104,7 +132,6 @@ use std::time::Duration;
 
 use bytesize::ByteSize;
 use differential_dataflow::consolidation;
-use itertools::Itertools;
 use mz_catalog::memory::error::ErrorKind;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
@@ -121,6 +148,7 @@ use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::vars::IsolationLevel;
 use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
+use mz_timestamp_oracle::TimestampOracle;
 use prometheus::Histogram;
 use timely::progress::Antichain;
 use tokio::sync::mpsc;
@@ -226,19 +254,18 @@ enum OccOutcome {
     },
     /// The selection was empty, so there was nothing to write.
     ///
-    /// `observed_ts` is the timestamp emptiness was concluded at, and is
-    /// `None` only when the selection reads no persisted state. When it is
-    /// `Some`, the caller must linearize against it before responding: the
-    /// subscribe follows Persist, which runs ahead of the oracle, so the
-    /// emptiness can be concluded from state no oracle-timestamped read can
-    /// reach yet.
+    /// `empty_as_of` is the timestamp the emptiness holds at, and the caller must
+    /// bring the oracle's read timestamp up to it before responding. `None` when
+    /// the subscribe ran to completion, where the emptiness holds at every
+    /// timestamp. See the module docs for why the choice of timestamp matters.
     NoRowsMatched {
         response: ExecuteResponse,
-        observed_ts: Option<Timestamp>,
+        empty_as_of: Option<Timestamp>,
     },
-    /// Diffs from a selection that reads no persisted state. The subscribe ran
-    /// to completion, so they are frontier-independent and the caller chooses
-    /// whether to submit them now or buffer them into the transaction.
+    /// Diffs no frontier can change, from a subscribe that ran to completion.
+    /// The close says the selection can never change again, not that it reads
+    /// nothing persisted, and either way the caller chooses whether to submit
+    /// them now or buffer them into the transaction.
     Blind {
         response: ExecuteResponse,
         diffs: Vec<(Row, Diff)>,
@@ -278,6 +305,13 @@ fn classify_write_result(
                 .requested_error()
                 .unwrap_or(AdapterError::Canceled),
         ),
+        WriteResult::TimestampTooFarAhead {
+            target_timestamp,
+            limit,
+        } => WriteOutcome::Failed(AdapterError::ReadThenWriteTimestampTooFarAhead {
+            target_timestamp,
+            limit,
+        }),
         WriteResult::ReadOnly => WriteOutcome::Failed(AdapterError::ReadOnly),
         WriteResult::TargetChanged => {
             // A concurrent DDL gave the table a new generation after we
@@ -396,12 +430,13 @@ fn validate_read_then_write(
 
     let timeline = catalog.validate_timeline_context(depends_on.iter().copied())?;
 
-    // The write commits at the frontier the subscribe observed, and that
-    // frontier is only comparable with the target table's upper on
-    // `EpochMilliseconds`. A selection in another timeline counts something
-    // else, transactions rather than milliseconds for a CDCv2 source, so the
-    // conflict check would refuse every attempt and the statement would burn
-    // until `statement_timeout`. Refuse it up front instead.
+    // The loop waits for the subscribe's frontier to reach a target timestamp
+    // taken from the `EpochMilliseconds` oracle, and it is the target table's
+    // upper the write then competes for. A selection in another timeline
+    // counts something else, transactions rather than milliseconds for a CDCv2
+    // source, so its frontier is not comparable with that target and the
+    // statement would burn until `statement_timeout`. Refuse it up front
+    // instead.
     //
     // Only `INSERT ... SELECT` reaches this. A DELETE or UPDATE selection
     // includes the target table, so a foreign timeline already fails above
@@ -444,7 +479,7 @@ fn validate_read_then_write(
 fn build_success_response(
     kind: &MutationKind,
     returning: &[MirScalarExpr],
-    all_diffs: &[(Row, Timestamp, Diff)],
+    diffs: &[(Row, Diff)],
     max_result_size: u64,
     max_query_result_size: u64,
     row_set_finishing_seconds: &Histogram,
@@ -452,9 +487,9 @@ fn build_success_response(
     if returning.is_empty() {
         // For UPDATE each changed row produces a retraction (-1) and an
         // insertion (+1), so we divide by 2 below.
-        let row_count = all_diffs
+        let row_count = diffs
             .iter()
-            .map(|(_, _, diff)| diff.into_inner().unsigned_abs())
+            .map(|(_, diff)| diff.into_inner().unsigned_abs())
             .sum::<u64>();
         let row_count = usize::try_from(row_count).expect("positive row count must fit in usize");
 
@@ -477,7 +512,7 @@ fn build_success_response(
     let mut projected_byte_size: u64 = 0;
     let early_cap = std::cmp::min(max_result_size, max_query_result_size);
 
-    for (row, _ts, diff) in all_diffs {
+    for (row, diff) in diffs {
         let include = match kind {
             MutationKind::Delete => diff.is_negative(),
             MutationKind::Update | MutationKind::Insert => diff.is_positive(),
@@ -811,22 +846,20 @@ impl PeekClient {
         // Linearize the read BEFORE subscribing or writing: block until
         // the oracle for this query's timeline has advanced to `as_of`.
         //
-        // The up-front ordering is load-bearing. If `as_of` is in the far
-        // future (e.g. reading from a `REFRESH AT` MV with a far-future
-        // since), submitting a write at `chosen_ts >= as_of` would have
-        // the group commit bump the oracle to that far-future value,
-        // stalling every subsequent write on the `EpochMilliseconds`
-        // timeline until then. So a pathological far-future RTW must park
-        // here without ever touching the oracle. This park is unbounded on
-        // its own, the caller bounds it by `statement_timeout`.
-        //
-        // NOTE: A far-future read reaching a write at all is the
-        // counterintuitive step. It does not simply hang on its read the way
-        // the coordinator's peek path would. Refresh-MV uppers legitimately run
-        // ahead of the wall clock, the upper being the next refresh boundary,
-        // so the subscribe can observe frontiers past `as_of` immediately, and
-        // we derive the write timestamp from those observed frontiers.
+        // Ordering is load-bearing: this leaves the oracle at or above `as_of`,
+        // which is what makes the loop's target clear `as_of` and so include the
+        // snapshot. A far-future `as_of` parks here until the clock arrives,
+        // bounded by `statement_timeout`.
         self.ensure_read_linearized(&timeline, as_of).await?;
+
+        // The loop takes its write target from this oracle, and reaching one takes
+        // `&mut self`, which the loop does not have. `None` for a
+        // timestamp-independent selection, which reads at `Timestamp::maximum()`
+        // and so always leaves through the blind path rather than reaching a write.
+        let write_oracle = match governing_timeline(&timeline) {
+            Some(tl) => Some(Arc::clone(self.ensure_oracle(tl).await?)),
+            None => None,
+        };
 
         let subscribe_handle = self
             .create_internal_subscribe(
@@ -859,6 +892,7 @@ impl PeekClient {
                 conn_id.clone(),
                 statement_logging_id,
                 as_of,
+                write_oracle,
                 &attempt_state,
             )
             .await;
@@ -895,39 +929,30 @@ impl PeekClient {
             }
             Ok(OccOutcome::NoRowsMatched {
                 response,
-                observed_ts,
+                empty_as_of,
             }) => {
-                // A write would have linearized this for us, because group
-                // commit advances the oracle before it answers. With nothing
-                // to write we have to do it ourselves, or we report an empty
-                // selection from state a later strict-serializable read cannot
-                // see yet, and that read finds the rows we said were not
-                // there.
-                //
-                // An `observed_ts` for a statement we meant to stage is the
+                // An `empty_as_of` for a statement we meant to stage is the
                 // same predicate disagreement the `Committed` arm guards
                 // against: the syntactic answer said it reads nothing, the
                 // subscribe then read persisted state. Nothing is durable here,
                 // so there is nothing to undo, but the disagreement itself is
                 // the bug and it would otherwise park silently.
                 soft_assert_or_log!(
-                    !(stages_rows && observed_ts.is_some()),
+                    !(stages_rows && empty_as_of.is_some()),
                     "read-then-write observed a read timestamp for a statement \
                      it meant to stage"
                 );
                 end_own_transaction(session, stages_rows);
-                match observed_ts {
-                    Some(observed_ts) => {
-                        // Nothing is left to write and `run_occ_loop` consumed
-                        // the subscribe handle, so its dataflow is already gone
-                        // and the permit guards nothing. `observed_ts` is an
-                        // upper, so this parks until the *next* write applies,
-                        // which on an idle system is the next keepalive, up to
-                        // a full `default_timestamp_interval`. Holding one of
-                        // the few permits for that would throttle unrelated
-                        // writes for no benefit.
+                match empty_as_of {
+                    Some(empty_as_of) => {
+                        // The wait is a no-op where the oracle is already past
+                        // `empty_as_of`, which is the common `WHERE <no match>`,
+                        // and otherwise costs the group commit that
+                        // `ensure_read_linearized` asks for. Either way the
+                        // subscribe handle is gone, so the permit guards nothing
+                        // and holding it would throttle unrelated writes.
                         drop(permit.take());
-                        self.ensure_read_linearized(&timeline, observed_ts)
+                        self.ensure_read_linearized(&timeline, empty_as_of)
                             .await
                             .map(|()| response)
                     }
@@ -1260,22 +1285,23 @@ impl PeekClient {
     /// Run the OCC loop: drain the subscribe at `as_of`, apply the
     /// mutation, and submit the resulting diffs as a write.
     ///
-    /// Semantically this is a SELECT at `as_of` followed by an INSERT.
-    /// Because we hold no write lock, a concurrent writer may bump the
-    /// target table's upper past our chosen write timestamp, in which
-    /// case the coordinator returns `WriteResult::TimestampPassed`. We
-    /// then wait for the subscribe to advance and retry, up to
-    /// `max_occ_retries` times.
+    /// Semantically a SELECT at `target - 1` followed by an INSERT at `target`.
+    /// `write_oracle` chooses `target`, the subscribe's frontier certifies the
+    /// payload is complete below it, and a target the target table has moved
+    /// past comes back as `WriteResult::TimestampPassed`, whose next eligible
+    /// timestamp the loop adopts. At most `max_occ_retries` attempts.
     ///
-    /// A subscribe that ends on its own reads no persisted state, so its diffs
-    /// are frontier-independent. Those are returned as [`OccOutcome::Blind`]
-    /// for the caller to submit or buffer, and this never writes them.
+    /// A subscribe that ends on its own has diffs no frontier can change, and
+    /// those are returned as [`OccOutcome::Blind`] rather than written.
     ///
-    /// Read linearization is the caller's responsibility, on both ends.
-    /// `as_of` must already be linearized (oracle read_ts >= `as_of`) on
-    /// entry, and an [`OccOutcome::NoRowsMatched`] carrying an `observed_ts`
-    /// must be linearized against it before the response goes out. See
-    /// `ensure_read_linearized` at the call site.
+    /// Contract on the caller, both ends of the read: the oracle's read
+    /// timestamp must be at or above `as_of` on entry, and an
+    /// [`OccOutcome::NoRowsMatched`] must be linearized against its
+    /// `empty_as_of` before the response goes out.
+    ///
+    /// `write_oracle` is `None` only for a timestamp-independent selection. Such
+    /// a statement reads at `Timestamp::maximum()`, so it observes no progress
+    /// past its `as_of` and always leaves through the blind path.
     ///
     /// Returns `(retry_count, result)` so the caller can record OCC retry
     /// metrics regardless of whether the operation succeeded or failed.
@@ -1294,235 +1320,301 @@ impl PeekClient {
         conn_id: mz_adapter_types::connection::ConnectionId,
         statement_logging_id: Option<StatementLoggingId>,
         as_of: Timestamp,
+        write_oracle: Option<Arc<dyn TimestampOracle<Timestamp> + Send + Sync>>,
         attempt_state: &FrontendWriteAttemptState,
     ) -> (usize, Result<OccOutcome, AdapterError>) {
         let mut state = OccState::new();
 
-        // Correctness invariant for retries:
+        // The timestamp the next attempt writes at, chosen when we are first
+        // ready to attempt one and replaced only by a conflict. `None` until
+        // then.
+        let mut write_target: Option<Timestamp> = None;
+
+        // The smallest timestamp an attempt may target. `as_of` itself is out,
+        // since the payload has to contain the snapshot the subscribe emits
+        // there.
         //
-        // `all_diffs` accumulates *all* rows ever received from the subscribe,
-        // across retries. The subscribe emits a snapshot (at the as_of
-        // timestamp) followed by incremental updates. We consolidate on every
-        // progress message (flattening timestamps to MIN first), so after
-        // consolidation `all_diffs` always represents "what the query returns
-        // as of the latest progress timestamp". Old snapshot rows that were
-        // retracted by newer updates cancel out, and new rows appear. This is
-        // exactly the set of diffs we want to write.
-        //
-        // Consolidating on every progress also means the NoRowsMatched check
-        // works correctly across retries: if the consolidated result becomes
-        // logically empty (all diffs cancel out), `all_diffs` will be empty
-        // and we early-return without attempting a write.
+        // `as_of` is `Timestamp::MAX` for a selection with no timestamp at all,
+        // which is the selection whose subscribe closes on its own and leaves
+        // through the blind path rather than a write. There is no timestamp
+        // above `MAX`, so saturating keeps this total instead of asserting a
+        // property of a value the write path never uses.
+        let min_target = as_of.try_step_forward().unwrap_or(as_of);
+
+        // Retry invariant: the payload is the selection consolidated at
+        // `target - 1`, and the diffs at or above `target` are concurrent with
+        // the write, so a retry folds them in only once it raises the target.
         let result = loop {
             if let Some(error) = attempt_state.requested_error() {
                 break Err(error);
             }
-            let msg = match subscribe_handle.recv().await {
-                Some(msg) => msg,
-                None => {
-                    // Channel closed cleanly: the SELECT is constant (no
-                    // table dependency), so the diffs do not depend on any
-                    // read frontier. The caller decides where they go, so we
-                    // flatten to `Timestamp::MIN` for `consolidate_updates`.
-                    state.consolidate(Timestamp::MIN);
-                    if state.all_diffs.is_empty() {
-                        break Ok(OccOutcome::NoRowsMatched {
-                            response: build_no_rows_response(&kind),
-                            observed_ts: None,
-                        });
-                    }
-                    let success_response = match build_success_response(
-                        &kind,
-                        &returning,
-                        &state.all_diffs,
-                        max_result_size,
-                        max_query_result_size,
-                        &row_set_finishing_seconds,
-                    ) {
-                        Ok(response) => response,
-                        Err(e) => break Err(e),
-                    };
-                    let diffs = state
-                        .all_diffs
-                        .iter()
-                        .map(|(row, _ts, diff)| (row.clone(), *diff))
-                        .collect_vec();
 
-                    break Ok(OccOutcome::Blind {
-                        response: success_response,
-                        diffs,
-                    });
+            // Before a target is chosen, `min_target` is a lower bound on it, so
+            // folding there consolidates the snapshot without admitting a diff a
+            // write would have to treat as concurrent.
+            let fold_target = write_target.unwrap_or(min_target);
+
+            // Already certified for the target we hold? Write. Otherwise wait for
+            // the next subscribe message. Waiting first would hang after a
+            // conflict, since an input settled until its next refresh sends
+            // nothing further and does not close the channel either.
+            //
+            // Termination: the write arm awaits a round trip and only a conflict
+            // returns to this one, raising `retry_count` towards
+            // `max_occ_retries`, so neither arm spins.
+            let attempt_write = match write_target {
+                Some(target) if state.current_upper.is_some_and(|upper| upper >= target) => true,
+                _ => {
+                    let msg = match subscribe_handle.recv().await {
+                        Some(msg) => msg,
+                        None => {
+                            // The channel closed cleanly, which says the
+                            // selection can never change again, so these diffs
+                            // are frontier-independent. It does not say the
+                            // selection reads nothing persisted, a sealed
+                            // `REFRESH AT` MV closes cleanly too. Either way no
+                            // target separates them, and the caller decides
+                            // where they go.
+                            state.fold_all();
+                            if state.payload.is_empty() {
+                                break Ok(OccOutcome::NoRowsMatched {
+                                    response: build_no_rows_response(&kind),
+                                    empty_as_of: None,
+                                });
+                            }
+                            let success_response = match build_success_response(
+                                &kind,
+                                &returning,
+                                &state.payload,
+                                max_result_size,
+                                max_query_result_size,
+                                &row_set_finishing_seconds,
+                            ) {
+                                Ok(response) => response,
+                                Err(e) => break Err(e),
+                            };
+
+                            break Ok(OccOutcome::Blind {
+                                response: success_response,
+                                diffs: std::mem::take(&mut state.payload),
+                            });
+                        }
+                    };
+
+                    match process_message(
+                        msg,
+                        &mut state,
+                        as_of,
+                        fold_target,
+                        max_result_size,
+                        &table_desc,
+                    ) {
+                        ProcessResult::Continue { ready_to_write } => ready_to_write,
+                        ProcessResult::NoRowsMatched { empty_as_of } => {
+                            break Ok(OccOutcome::NoRowsMatched {
+                                response: build_no_rows_response(&kind),
+                                empty_as_of: Some(empty_as_of),
+                            });
+                        }
+                        ProcessResult::Error(e) => break Err(e),
+                    }
                 }
             };
 
-            match process_message(msg, &mut state, as_of, max_result_size, &table_desc) {
-                ProcessResult::Continue { ready_to_write } => {
-                    if !ready_to_write {
-                        continue;
-                    }
+            if !attempt_write {
+                continue;
+            }
 
-                    // Drain pending messages before attempting write
-                    let drain_err = loop {
-                        match subscribe_handle.try_recv() {
-                            Ok(msg) => {
-                                match process_message(
-                                    msg,
-                                    &mut state,
-                                    as_of,
-                                    max_result_size,
-                                    &table_desc,
-                                ) {
-                                    ProcessResult::Continue { .. } => {}
-                                    ProcessResult::NoRowsMatched { observed_ts } => {
-                                        break Some(Ok(OccOutcome::NoRowsMatched {
-                                            response: build_no_rows_response(&kind),
-                                            observed_ts: Some(observed_ts),
-                                        }));
-                                    }
-                                    ProcessResult::Error(e) => {
-                                        break Some(Err(e));
-                                    }
-                                }
+            // Drain buffered messages before attempting the write.
+            let drain_err = loop {
+                match subscribe_handle.try_recv() {
+                    Ok(msg) => {
+                        match process_message(
+                            msg,
+                            &mut state,
+                            as_of,
+                            fold_target,
+                            max_result_size,
+                            &table_desc,
+                        ) {
+                            ProcessResult::Continue { .. } => {}
+                            ProcessResult::NoRowsMatched { empty_as_of } => {
+                                break Some(Ok(OccOutcome::NoRowsMatched {
+                                    response: build_no_rows_response(&kind),
+                                    empty_as_of: Some(empty_as_of),
+                                }));
                             }
-                            Err(mpsc::error::TryRecvError::Empty) => break None,
-                            // The subscribe can finish (coordinator drops the
-                            // sender after `process_response` returns true)
-                            // between our last recv() and this drain. This is
-                            // benign, all buffered messages have already been
-                            // consumed via the Ok(msg) arm above.
-                            Err(mpsc::error::TryRecvError::Disconnected) => break None,
-                        }
-                    };
-                    if let Some(result) = drain_err {
-                        break result;
-                    }
-
-                    let write_ts = state
-                        .current_upper
-                        .expect("must have seen progress to be ready to write");
-
-                    // Invariant: every diff we are about to write comes from a
-                    // time strictly below `write_ts`. `consolidate` below
-                    // rewrites all diff timestamps to `write_ts`, so a diff from
-                    // at or after `write_ts` would durably record rows that
-                    // reflect state from after the timestamp they were written
-                    // at.
-                    //
-                    // The drain can get ahead of the frontier: a subscribe sends
-                    // a batch's data and the following progress as two separate
-                    // channel messages, so `try_recv` can pick up data from the
-                    // next batch and then see `Empty`, leaving `current_upper`
-                    // at the older progress. When that happens we do not write.
-                    // Waiting for the next progress message re-establishes the
-                    // invariant, and it is bounded by `statement_timeout` like
-                    // every other wait in this loop.
-                    if state
-                        .max_data_ts
-                        .is_some_and(|max_data_ts| max_data_ts >= write_ts)
-                    {
-                        continue;
-                    }
-
-                    // Consolidate any rows received during the drain
-                    // (the bulk was already consolidated on the last progress).
-                    state.consolidate(write_ts);
-
-                    let success_response = match build_success_response(
-                        &kind,
-                        &returning,
-                        &state.all_diffs,
-                        max_result_size,
-                        max_query_result_size,
-                        &row_set_finishing_seconds,
-                    ) {
-                        Ok(response) => response,
-                        Err(e) => break Err(e),
-                    };
-
-                    // Submit write.
-                    //
-                    // TODO(aljoscha): Store `Arc<Row>` in `all_diffs` if this
-                    // shows up in profiles. Every attempt clones every row, and
-                    // we retry up to `max_occ_retries` times.
-                    attempt_state.mark_write_submitted();
-                    let result = self
-                        .call_coordinator(|tx| Command::AttemptWrite {
-                            conn_id: conn_id.clone(),
-                            target_id,
-                            target_global_id,
-                            diffs: state
-                                .all_diffs
-                                .iter()
-                                .map(|(row, _ts, diff)| (row.clone(), *diff))
-                                .collect_vec(),
-                            write_ts: Some(write_ts),
-                            tx,
-                        })
-                        .await;
-
-                    match classify_write_result(result, target_id, attempt_state) {
-                        WriteOutcome::Committed(timestamp) => {
-                            if let Some(id) = statement_logging_id {
-                                self.log_set_timestamp(id, timestamp);
+                            ProcessResult::Error(e) => {
+                                break Some(Err(e));
                             }
-                            // N.B. subscribe_handle is dropped here, which
-                            // fires off the cleanup message.
-                            break Ok(OccOutcome::Committed {
-                                response: success_response,
-                                write_ts: timestamp,
-                            });
-                        }
-                        WriteOutcome::Failed(err) => break Err(err),
-                        WriteOutcome::Conflict {
-                            next_eligible_timestamp,
-                        } => {
-                            // The write definitively did not land, so the
-                            // attempt is resolved. Clearing `write_submitted`
-                            // lets a cancel or statement timeout that fires
-                            // during the upcoming subscribe wait resolve
-                            // promptly instead of awaiting a write result.
-                            attempt_state.mark_write_resolved();
-                            // Do not advance `state.current_upper` (and
-                            // therefore `write_ts`) from `next_eligible_timestamp`.
-                            // The diffs in `all_diffs` are only known to be
-                            // correct as of subscribe progress we have actually
-                            // observed. Retrying at a newer oracle timestamp
-                            // before subscribe progress catches up would risk
-                            // applying stale diffs at the wrong timestamp. So
-                            // on a conflict we wait for the subscribe to
-                            // progress and retry using that observed frontier.
-                            state.retry_count += 1;
-                            // Cancellation wins over the retry budget: if both
-                            // apply, the user asked us to stop and that is the
-                            // more truthful answer.
-                            if let Some(error) = attempt_state.requested_error() {
-                                break Err(error);
-                            }
-                            if state.retry_count > max_occ_retries {
-                                // Contention is a user-visible condition, not
-                                // an internal invariant violation, and every
-                                // attempt was refused before anything was
-                                // appended, so the statement is retryable.
-                                break Err(AdapterError::ReadThenWriteContention);
-                            }
-                            tracing::debug!(
-                                retry_count = state.retry_count,
-                                write_ts = %write_ts,
-                                next_eligible_timestamp = %next_eligible_timestamp,
-                                "OCC write conflict, retrying"
-                            );
-                            continue;
                         }
                     }
+                    Err(mpsc::error::TryRecvError::Empty) => break None,
+                    // The subscribe can finish (coordinator drops the sender
+                    // after `process_response` returns true) between our last
+                    // recv() and this drain. This is benign, all buffered
+                    // messages have already been consumed via the Ok(msg) arm
+                    // above.
+                    Err(mpsc::error::TryRecvError::Disconnected) => break None,
                 }
-                ProcessResult::NoRowsMatched { observed_ts } => {
-                    break Ok(OccOutcome::NoRowsMatched {
-                        response: build_no_rows_response(&kind),
-                        observed_ts: Some(observed_ts),
+            };
+            if let Some(result) = drain_err {
+                break result;
+            }
+
+            let upper = state
+                .current_upper
+                .expect("a write attempt requires an observed frontier");
+
+            let target = match write_target {
+                Some(target) => target,
+                None => {
+                    let Some(oracle) = &write_oracle else {
+                        // Invariant: a statement with no governing timeline
+                        // reads at `as_of == Timestamp::maximum()`, so it
+                        // observes no progress past its `as_of` and leaves
+                        // through the blind arm above rather than reaching a
+                        // write.
+                        soft_panic_or_log!(
+                            "read-then-write reached a write attempt with no governing timeline"
+                        );
+                        break Err(AdapterError::Internal(
+                            "read-then-write has no oracle to take a write timestamp from".into(),
+                        ));
+                    };
+
+                    // One step above the oracle's write timestamp is the smallest
+                    // value `commit_timestamped` accepts.
+                    let peek_write_ts = oracle.peek_write_ts().await;
+                    let Some(chosen) = peek_write_ts.try_step_forward() else {
+                        // A timeline that reached `Timestamp::MAX` is a broken
+                        // environment, not anything this statement did.
+                        soft_panic_or_log!(
+                            "read-then-write cannot target a timestamp above the write \
+                             timeline's timestamp {peek_write_ts}"
+                        );
+                        break Err(AdapterError::Internal(format!(
+                            "write timeline exhausted at timestamp {peek_write_ts}"
+                        )));
+                    };
+
+                    // Unreachable while the oracle's read timestamp is at or
+                    // above `as_of` on entry, and the clamp keeps the payload
+                    // rule rather than only reporting the violation.
+                    if chosen < min_target {
+                        soft_panic_or_log!(
+                            "read-then-write target {chosen} does not clear the as_of {as_of}, \
+                             so the payload would miss the snapshot"
+                        );
+                    }
+                    let chosen = std::cmp::max(chosen, min_target);
+
+                    write_target = Some(chosen);
+                    chosen
+                }
+            };
+
+            // Fold in what the drain picked up, plus anything a target raised
+            // by the last conflict now admits.
+            state.fold_below(target);
+
+            // A write at `target` needs every diff below it, which is what
+            // progress at or above `target` certifies. Waiting for the next
+            // message is bounded by `statement_timeout`, like every wait here.
+            if upper < target {
+                continue;
+            }
+
+            if state.payload.is_empty() {
+                // Everything below `target` cancelled out, so there is nothing to
+                // write and the answer holds as of `target - 1`. Diffs pending at
+                // or above `target` are concurrent with the write this would have
+                // been and do not enter it.
+                break Ok(OccOutcome::NoRowsMatched {
+                    response: build_no_rows_response(&kind),
+                    empty_as_of: Some(empty_as_of(target)),
+                });
+            }
+
+            let success_response = match build_success_response(
+                &kind,
+                &returning,
+                &state.payload,
+                max_result_size,
+                max_query_result_size,
+                &row_set_finishing_seconds,
+            ) {
+                Ok(response) => response,
+                Err(e) => break Err(e),
+            };
+
+            // Submit write.
+            //
+            // TODO(aljoscha): Store `Arc<Row>` in the payload if this shows up
+            // in profiles. Every attempt clones every row, and we retry up to
+            // `max_occ_retries` times.
+            attempt_state.mark_write_submitted();
+            let result = self
+                .call_coordinator(|tx| Command::AttemptWrite {
+                    conn_id: conn_id.clone(),
+                    target_id,
+                    target_global_id,
+                    diffs: state.payload.clone(),
+                    write_ts: Some(target),
+                    tx,
+                })
+                .await;
+
+            match classify_write_result(result, target_id, attempt_state) {
+                WriteOutcome::Committed(timestamp) => {
+                    if let Some(id) = statement_logging_id {
+                        self.log_set_timestamp(id, timestamp);
+                    }
+                    // N.B. subscribe_handle is dropped here, which fires off
+                    // the cleanup message.
+                    break Ok(OccOutcome::Committed {
+                        response: success_response,
+                        write_ts: timestamp,
                     });
                 }
-                ProcessResult::Error(e) => {
-                    break Err(e);
+                WriteOutcome::Failed(err) => break Err(err),
+                WriteOutcome::Conflict {
+                    next_eligible_timestamp,
+                } => {
+                    // The write definitively did not land, so the attempt is
+                    // resolved. Clearing `write_submitted` lets a cancel or
+                    // statement timeout that fires during the upcoming
+                    // subscribe wait resolve promptly instead of awaiting a
+                    // write result.
+                    attempt_state.mark_write_resolved();
+                    // Adopt the timestamp the committer reported as next
+                    // eligible. The accumulated diffs say nothing about it
+                    // yet, and they do not have to: the readiness check above
+                    // holds the next attempt until the subscribe has certified
+                    // everything below the new target, and the fold then moves
+                    // the diffs in between into the payload.
+                    write_target = Some(next_eligible_timestamp);
+                    state.retry_count += 1;
+                    // Cancellation wins over the retry budget: if both apply,
+                    // the user asked us to stop and that is the more truthful
+                    // answer.
+                    if let Some(error) = attempt_state.requested_error() {
+                        break Err(error);
+                    }
+                    if state.retry_count > max_occ_retries {
+                        // Contention is a user-visible condition, not an
+                        // internal invariant violation, and every attempt was
+                        // refused before anything was appended, so the
+                        // statement is retryable.
+                        break Err(AdapterError::ReadThenWriteContention);
+                    }
+                    tracing::debug!(
+                        retry_count = state.retry_count,
+                        write_ts = %target,
+                        next_eligible_timestamp = %next_eligible_timestamp,
+                        "OCC write conflict, retrying"
+                    );
+                    continue;
                 }
             }
         };
@@ -1542,50 +1634,93 @@ struct ValidationResult {
 }
 
 /// Accumulated state for the OCC loop in `run_occ_loop`.
+///
+/// Every diff the subscribe ever sent is kept, split at [`Self::split`]. The
+/// split only rises, so each diff crosses it once.
 struct OccState {
-    all_diffs: Vec<(Row, Timestamp, Diff)>,
+    /// Consolidated net diffs from strictly below [`Self::split`].
+    payload: Vec<(Row, Diff)>,
+    /// Diffs at or above [`Self::split`], consolidated by `(row, timestamp)`.
+    pending: Vec<(Row, Timestamp, Diff)>,
+    /// Where the last fold split the diffs, `None` before the first one.
+    split: Option<Timestamp>,
+    /// Timestamp of the last progress message, which certifies that no diff
+    /// will arrive below it.
     current_upper: Option<Timestamp>,
-    /// The largest timestamp among the data rows accumulated since the last
-    /// [`Self::consolidate`], which is where the diffs' own timestamps are
-    /// erased. `None` means every accumulated diff is already known to be from
-    /// before `current_upper`.
-    max_data_ts: Option<Timestamp>,
     retry_count: usize,
+    /// Row bytes held in `payload` and `pending` together, which is what the
+    /// `max_result_size` check measures. `pending` is consolidated by
+    /// `(row, timestamp)`, so a row touched at several timestamps occupies
+    /// several entries until a rising split folds them together, and the count
+    /// can exceed the size of the payload that eventually goes out.
     byte_size: u64,
 }
 
 impl OccState {
     fn new() -> Self {
         Self {
-            all_diffs: Vec::new(),
+            payload: Vec::new(),
+            pending: Vec::new(),
+            split: None,
             current_upper: None,
-            max_data_ts: None,
             retry_count: 0,
             byte_size: 0,
         }
     }
 
-    /// Forward all diff timestamps to `target_ts` and consolidate.
+    /// Raises the split to `split`, moving the diffs below it into the payload.
     ///
-    /// After consolidation, `all_diffs` represents the net state of the
-    /// query as of `target_ts`. Rows that were retracted by newer updates
-    /// cancel out, and `byte_size` is recomputed to reflect the
-    /// consolidated data.
+    /// Lowering it is a bug: the payload is consolidated and never re-split, so
+    /// the diffs above a lowered split would stay in it. We clamp to the old
+    /// split, which keeps the payload's contract intact.
+    fn fold_below(&mut self, split: Timestamp) {
+        let split = match self.split {
+            Some(previous) if split < previous => {
+                soft_panic_or_log!(
+                    "read-then-write folded at {split}, below its previous split {previous}"
+                );
+                previous
+            }
+            _ => split,
+        };
+        self.split = Some(split);
+        self.fold(Some(split));
+    }
+
+    /// Moves every accumulated diff into the payload, whatever its timestamp.
     ///
-    /// The caller must have established that every diff comes from a time at or
-    /// before `target_ts`, otherwise the consolidated set claims to describe
-    /// `target_ts` while reflecting state from after it.
-    fn consolidate(&mut self, target_ts: Timestamp) {
-        for (_, ts, _) in self.all_diffs.iter_mut() {
-            *ts = target_ts;
+    /// Only valid once the subscribe has run to completion, where the diffs are
+    /// frontier-independent and no split separates them.
+    fn fold_all(&mut self) {
+        self.fold(None);
+    }
+
+    /// Moves the diffs below `split`, or all of them when it is `None`, into the
+    /// payload, consolidates both halves, and recomputes `byte_size`.
+    fn fold(&mut self, split: Option<Timestamp>) {
+        for (row, ts, diff) in std::mem::take(&mut self.pending) {
+            match split {
+                Some(split) if ts >= split => self.pending.push((row, ts, diff)),
+                _ => self.payload.push((row, diff)),
+            }
         }
-        consolidation::consolidate_updates(&mut self.all_diffs);
+        consolidation::consolidate(&mut self.payload);
+        consolidation::consolidate_updates(&mut self.pending);
         self.byte_size = self
-            .all_diffs
+            .payload
             .iter()
-            .map(|(row, _, _)| u64::cast_from(row.byte_len()))
+            .map(|(row, _)| u64::cast_from(row.byte_len()))
+            .chain(
+                self.pending
+                    .iter()
+                    .map(|(row, _, _)| u64::cast_from(row.byte_len())),
+            )
             .sum();
-        self.max_data_ts = None;
+    }
+
+    /// Whether nothing has been accumulated on either side of the split.
+    fn is_empty(&self) -> bool {
+        self.payload.is_empty() && self.pending.is_empty()
     }
 }
 
@@ -1594,22 +1729,28 @@ enum ProcessResult {
     Continue {
         ready_to_write: bool,
     },
-    /// The consolidated selection is empty as of `observed_ts`.
+    /// The consolidated selection is empty, as of the timestamp reported. See
+    /// [`OccOutcome::NoRowsMatched`].
     NoRowsMatched {
-        observed_ts: Timestamp,
+        empty_as_of: Timestamp,
     },
     Error(AdapterError),
 }
 
 /// Process one subscribe message, updating `state` in place.
 ///
-/// Data rows are accumulated into `state.all_diffs` (with per-row constraint
-/// and max-result-size checks). Progress messages trigger consolidation and
-/// can promote the accumulated diffs to "ready to write".
+/// Data rows are accumulated into `state` (with per-row constraint and
+/// max-result-size checks). Progress messages fold everything below
+/// `fold_target` into the payload and can promote the accumulated diffs to
+/// "ready to write".
+///
+/// `fold_target` must not exceed the timestamp the next write attempt uses, or
+/// the payload takes in a diff that is concurrent with that write.
 fn process_message(
     response: PeekResponseUnary,
     state: &mut OccState,
     as_of: Timestamp,
+    fold_target: Timestamp,
     max_result_size: u64,
     table_desc: &RelationDesc,
 ) -> ProcessResult {
@@ -1658,29 +1799,29 @@ fn process_message(
                     state.current_upper = Some(ts);
                     saw_progress = true;
 
-                    // Consolidate incrementally on each progress
-                    // message. This keeps memory bounded by the
-                    // consolidated size and makes the byte_size check
-                    // below accurate (except for rows received between
-                    // two progress messages, which is a small window).
-                    state.consolidate(ts);
+                    // Fold and consolidate incrementally on each progress
+                    // message. This keeps memory bounded by the consolidated
+                    // size and makes the byte_size check below accurate (except
+                    // for rows received between two progress messages, which is
+                    // a small window).
+                    state.fold_below(fold_target);
 
-                    // The very first progress message we receive is
-                    // always at `as_of`, emitted synchronously by
-                    // `ActiveSubscribe::initialize` *before* any data
-                    // batch is processed. At that point `all_diffs` is
-                    // empty by construction, regardless of whether the
-                    // snapshot is actually empty, so we must not
-                    // conclude `NoRowsMatched` from it. Progress
-                    // messages emitted later from `process_response`
-                    // are gated on `batch.upper > as_of`, so any
-                    // progress with `ts > as_of` is past the initial
-                    // one and an empty `all_diffs` then genuinely
-                    // means no rows matched. See
-                    // `src/adapter/src/active_compute_sink.rs` for
-                    // the emission order.
-                    if ts > as_of && state.all_diffs.is_empty() {
-                        return ProcessResult::NoRowsMatched { observed_ts: ts };
+                    // NOTE: The first progress message is always at `as_of`,
+                    // emitted by `ActiveSubscribe::initialize` before any data
+                    // batch, so the accumulation is empty there whatever the
+                    // snapshot holds. Later progress is gated on `batch.upper >
+                    // as_of` (see `crate::active_compute_sink`), so `ts > as_of`
+                    // is what distinguishes a real answer from that first one.
+                    //
+                    // Nothing accumulated at all, so no write is coming and the
+                    // loop would otherwise wait for diffs that will not arrive.
+                    // Our view is complete below `ts` and the payload covers
+                    // below `fold_target`, so the emptiness holds as of one below
+                    // the earlier of the two.
+                    if ts > as_of && state.is_empty() {
+                        return ProcessResult::NoRowsMatched {
+                            empty_as_of: empty_as_of(std::cmp::min(ts, fold_target)),
+                        };
                     }
                 } else {
                     let Some(diff_datum) = datums.next() else {
@@ -1717,21 +1858,13 @@ fn process_message(
                             ByteSize::b(max_result_size)
                         )));
                     }
-                    state.max_data_ts = Some(match state.max_data_ts {
-                        Some(max_ts) => std::cmp::max(max_ts, ts),
-                        None => ts,
-                    });
-                    state.all_diffs.push((data_row, ts, diff));
+                    state.pending.push((data_row, ts, diff));
                 }
             }
 
-            // We're ready to write once we've seen a progress
-            // message and have accumulated any diffs. Data rows can
-            // only arrive *after* the initial progress at `as_of`
-            // (see the note in the progress branch), so a non-empty
-            // `all_diffs` here implies we're past the initial
-            // progress.
-            let ready_to_write = saw_progress && !state.all_diffs.is_empty();
+            // The complement of the zero-row exit above: something accumulated
+            // means a write is coming, nothing at all means there is none.
+            let ready_to_write = saw_progress && !state.is_empty();
             ProcessResult::Continue { ready_to_write }
         }
         PeekResponseUnary::Error(e) => {
@@ -1745,6 +1878,16 @@ fn process_message(
         }
         PeekResponseUnary::Canceled => ProcessResult::Error(AdapterError::Canceled),
     }
+}
+
+/// The timestamp an answer holds as of, given a view complete strictly below
+/// `complete_below`.
+///
+/// Both callers derive `complete_below` from a timestamp strictly above the
+/// subscribe's `as_of`, so it is never `Timestamp::MIN` and the saturating
+/// fallback is unreachable.
+fn empty_as_of(complete_below: Timestamp) -> Timestamp {
+    complete_below.step_back().unwrap_or(complete_below)
 }
 
 /// Build the response returned when no rows matched the selection.
@@ -1833,5 +1976,211 @@ fn apply_mutation_to_mir(
         // INSERT: rows pass through unchanged, the subscribe emits them with
         // diff +1.
         MutationKind::Insert => expr,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::adt::numeric;
+    use mz_repr::{Datum, IntoRowIterator};
+
+    use super::*;
+
+    fn row(value: i64) -> Row {
+        Row::pack_slice(&[Datum::Int64(value)])
+    }
+
+    /// A progress message in the subscribe's `SubscribeOutput::Diffs` shape:
+    /// `mz_timestamp, mz_progressed, mz_diff, data...`.
+    fn progress(ts: u64) -> PeekResponseUnary {
+        let mut row = Row::default();
+        let mut packer = row.packer();
+        packer.push(Datum::from(numeric::Numeric::from(ts)));
+        packer.push(Datum::True);
+        packer.push(Datum::Null);
+        PeekResponseUnary::Rows(Box::new(row.into_row_iter()))
+    }
+
+    /// Accumulates `(row value, timestamp, diff)` triples the way
+    /// `process_message` does, without going through a subscribe.
+    fn accumulate(diffs: impl IntoIterator<Item = (i64, u64, i64)>) -> OccState {
+        let mut state = OccState::new();
+        for (value, ts, diff) in diffs {
+            state
+                .pending
+                .push((row(value), Timestamp::new(ts), Diff::from(diff)));
+        }
+        state
+    }
+
+    /// The target is the boundary the write turns on, so the off-by-one is the
+    /// whole point: a diff at exactly the target is concurrent with the write
+    /// and must not be in its payload.
+    #[mz_ore::test]
+    fn test_fold_below_splits_at_the_target() {
+        let mut state = accumulate([(1, 9, 1), (2, 10, 1), (3, 11, 1)]);
+        state.fold_below(Timestamp::new(10));
+
+        assert_eq!(state.payload, vec![(row(1), Diff::ONE)]);
+        assert_eq!(
+            state.pending,
+            vec![
+                (row(2), Timestamp::new(10), Diff::ONE),
+                (row(3), Timestamp::new(11), Diff::ONE),
+            ]
+        );
+    }
+
+    /// A retry raises the target, which is what admits the diffs that were
+    /// concurrent with the attempt that lost.
+    #[mz_ore::test]
+    fn test_fold_below_moves_each_diff_once() {
+        let mut state = accumulate([(1, 9, 1), (2, 10, 1), (3, 11, 1)]);
+
+        state.fold_below(Timestamp::new(10));
+        assert_eq!(state.payload, vec![(row(1), Diff::ONE)]);
+
+        state.fold_below(Timestamp::new(11));
+        assert_eq!(
+            state.payload,
+            vec![(row(1), Diff::ONE), (row(2), Diff::ONE)]
+        );
+        assert_eq!(state.pending, vec![(row(3), Timestamp::new(11), Diff::ONE)]);
+
+        state.fold_below(Timestamp::new(12));
+        assert_eq!(
+            state.payload,
+            vec![
+                (row(1), Diff::ONE),
+                (row(2), Diff::ONE),
+                (row(3), Diff::ONE),
+            ]
+        );
+        assert!(state.pending.is_empty());
+    }
+
+    /// A row inserted and retracted below the target leaves nothing behind,
+    /// which is what makes the payload the net change rather than a log.
+    #[mz_ore::test]
+    fn test_fold_below_cancels_opposite_diffs() {
+        let mut state = accumulate([(1, 9, 1), (1, 10, -1), (2, 9, 1)]);
+        state.fold_below(Timestamp::new(11));
+
+        assert_eq!(state.payload, vec![(row(2), Diff::ONE)]);
+        assert!(state.pending.is_empty());
+        assert!(!state.is_empty());
+    }
+
+    /// The same rows stay pending or move to the payload depending on the
+    /// target, so a size check that saw only one half would let a statement
+    /// past `max_result_size` by picking the other one.
+    #[mz_ore::test]
+    fn test_byte_size_counts_payload_and_pending() {
+        let row_bytes = u64::cast_from(row(1).byte_len());
+
+        let mut state = accumulate([(1, 9, 1), (2, 10, 1), (3, 11, 1)]);
+        state.fold_below(Timestamp::new(10));
+        assert_eq!(state.payload.len(), 1);
+        assert_eq!(state.pending.len(), 2);
+        assert_eq!(state.byte_size, 3 * row_bytes);
+
+        state.fold_below(Timestamp::new(12));
+        assert!(state.pending.is_empty());
+        assert_eq!(state.byte_size, 3 * row_bytes);
+    }
+
+    /// A subscribe that ran to completion has no target to split on, and
+    /// cancellation still applies.
+    #[mz_ore::test]
+    fn test_fold_all_takes_every_timestamp() {
+        let mut state = accumulate([(1, 9, 1), (1, 10, -1), (2, u64::MAX, 1)]);
+        state.fold_all();
+
+        assert_eq!(state.payload, vec![(row(2), Diff::ONE)]);
+        assert!(state.pending.is_empty());
+    }
+
+    /// A zero-row answer holds as of the timestamp the answer was reached at,
+    /// never an input's frontier. The caller waits for the oracle to reach
+    /// whatever it gets, and an input settled until its next refresh reports a
+    /// frontier days out, so reporting that would spend the statement's timeout
+    /// on an answer of "0 rows".
+    #[mz_ore::test]
+    fn test_zero_rows_report_the_answer_not_the_frontier() {
+        let as_of = Timestamp::new(10);
+        let desc = RelationDesc::empty();
+
+        // First pass, where the fold target is `as_of + 1`. The answer holds at
+        // `as_of`, which the caller linearized before the subscribe started, so
+        // it costs no wait however far out the frontier is.
+        let mut state = OccState::new();
+        match process_message(
+            progress(u64::MAX / 2),
+            &mut state,
+            as_of,
+            as_of.step_forward(),
+            u64::MAX,
+            &desc,
+        ) {
+            ProcessResult::NoRowsMatched { empty_as_of } => assert_eq!(empty_as_of, as_of),
+            _ => panic!("an empty selection past `as_of` must report no rows matched"),
+        }
+
+        // A target raised by a conflict, with the frontier past it. The answer
+        // holds at one below the target, the same timestamp a write there would
+        // have been read at.
+        let fold_target = Timestamp::new(20);
+        let mut state = OccState::new();
+        match process_message(
+            progress(u64::MAX / 2),
+            &mut state,
+            as_of,
+            fold_target,
+            u64::MAX,
+            &desc,
+        ) {
+            ProcessResult::NoRowsMatched { empty_as_of } => {
+                assert_eq!(empty_as_of, Timestamp::new(19))
+            }
+            _ => panic!("an empty selection past `as_of` must report no rows matched"),
+        }
+
+        // A frontier below the target certifies less, so the answer holds one
+        // below the frontier instead.
+        let mut state = OccState::new();
+        match process_message(
+            progress(15),
+            &mut state,
+            as_of,
+            fold_target,
+            u64::MAX,
+            &desc,
+        ) {
+            ProcessResult::NoRowsMatched { empty_as_of } => {
+                assert_eq!(empty_as_of, Timestamp::new(14))
+            }
+            _ => panic!("an empty selection past `as_of` must report no rows matched"),
+        }
+    }
+
+    /// Diffs waiting above the target mean a write is still coming, so the
+    /// answer is not "no rows" yet even with an empty payload.
+    #[mz_ore::test]
+    fn test_pending_diffs_are_not_a_zero_row_answer() {
+        let as_of = Timestamp::new(10);
+        let desc = RelationDesc::empty();
+
+        let mut state = accumulate([(1, 30, 1)]);
+        match process_message(
+            progress(20),
+            &mut state,
+            as_of,
+            as_of.step_forward(),
+            u64::MAX,
+            &desc,
+        ) {
+            ProcessResult::Continue { ready_to_write } => assert!(ready_to_write),
+            _ => panic!("a selection with diffs above the target must not report no rows"),
+        }
     }
 }

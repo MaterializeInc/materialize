@@ -116,6 +116,7 @@ def get_minimal_system_parameters(
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
+        "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -313,6 +314,10 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
+        ),
+        # Low default so small tables exercise partitioning.
+        VariableSystemParameter(
+            "mysql_source_snapshot_partition_min_rows", "2", ["2", "50000"]
         ),
         VariableSystemParameter(
             "persist_batch_delete_enabled", "true", ["true", "false"]
@@ -713,6 +718,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     # The estimated path is covered explicitly in mysql-cdc/statistics.td and
     # by parallel-workload.
     "mysql_source_snapshot_exact_count_max_rows",
+    "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
     "pg_source_validate_timeline",
@@ -776,6 +782,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
     "webhook_validation_memory_budget_bytes",
+    "subscribe_max_buffered_bytes",
     "cluster_controller_tick_interval",
     "default_cluster_reconfiguration_timeout",
     "read_then_write_max_dependencies",

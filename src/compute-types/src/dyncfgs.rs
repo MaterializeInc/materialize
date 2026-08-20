@@ -23,6 +23,25 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
     "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
 );
 
+/// Whether rendering should collapse error multiplicities to one where it arranges errors.
+///
+/// Error semantics depend only on whether an error is present, so its multiplicity carries no
+/// information a consumer reads. Left uncollapsed, a shared collection contributes its errors once
+/// per plan path that reads it, and because those factors apply again at each level of sharing they
+/// compound multiplicatively until the `Diff` overflows.
+///
+/// Governs sharing within a dataflow only. Sharing across objects is bounded unconditionally, by
+/// normalizing at every boundary another dataflow can read, so what this flag decides is never
+/// durable state and two replicas rendering under different values still write the same thing.
+/// Environment-scoped for now because nothing needs finer granularity, not because finer would be
+/// unsafe.
+pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
+    "enable_compute_error_distinct",
+    true,
+    "Whether compute rendering should collapse error multiplicities to one where it arranges \
+     errors.",
+);
+
 /// Use the column-paged merge batcher code path at arrange sites. When
 /// `true`, arrange operators use `Col2ValPagedBatcher` (in
 /// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
@@ -548,6 +567,7 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
         .add(&ENABLE_HALF_JOIN2)
+        .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
         .add(&ENABLE_CORRECTION_V2)

@@ -89,8 +89,9 @@ CREATE INDEX idx_on_my_mat_view ON my_mat_view_name(...) ;
 
 ## Indexes and clusters
 
-Indexes are local to a cluster. Queries in a different cluster cannot use the
-indexes in another cluster.
+{{% include-from-yaml data="index_details" name="index-cluster-local" %}}
+
+As such, queries issued from a different cluster cannot use the index.
 
 For example, to create an index in the current cluster:
 

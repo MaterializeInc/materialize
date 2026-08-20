@@ -214,6 +214,28 @@ SELECT DATE '2015-06-30' + TIME '23:59:60' = TIMESTAMP '2015-07-01 00:00:00'
 ----
 true
 
+# lower() maps empty and unbounded ranges to NULL; its declared
+# monotonicity is sound because those sort below every value-yielding
+# range. Range columns collect no statistics today, so pushdown cannot
+# prune on them, but pin the results so a future stats addition revisits
+# the NULL cases.
+
+statement ok
+CREATE TABLE rt (r int4range)
+
+statement ok
+INSERT INTO rt VALUES ('empty'), ('(,5)'), ('[1,5)'), ('[3,7)')
+
+query I
+SELECT count(*) FROM rt WHERE lower(r) = 1
+----
+1
+
+query I
+SELECT count(*) FROM rt WHERE lower(r) IS NULL
+----
+2
+
 # EXPLAIN FILTER PUSHDOWN FOR MATERIALIZED VIEW is also supported
 
 statement ok

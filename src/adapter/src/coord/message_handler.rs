@@ -210,6 +210,9 @@ impl Coordinator {
             Message::CreateIndexStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
+            Message::CreateMetricSinkStageReady { ctx, span, stage } => {
+                self.sequence_staged(ctx, span, stage).boxed_local().await;
+            }
             Message::CreateViewStageReady { ctx, span, stage } => {
                 self.sequence_staged(ctx, span, stage).boxed_local().await;
             }
@@ -698,10 +701,37 @@ impl Coordinator {
                     self.active_compute_sinks.get_mut(&sink_id)
                 {
                     let finished = active_subscribe.process_response(response);
-                    if finished {
+                    // Read the backlog into a `Copy` local so the mutable borrow
+                    // of `active_subscribe` (and the accounting lock) ends before
+                    // we call `self.retire_compute_sinks`. The producer runs on
+                    // this loop, so it cannot block on a slow client. Instead we
+                    // bound the backlog here and retire the subscribe once it
+                    // exceeds the budget.
+                    //
+                    // The backlog excludes the message the client is currently
+                    // draining, so a client working through a single large batch
+                    // (e.g. the initial snapshot) is never retired for it.
+                    let buffered_bytes = active_subscribe
+                        .backlog_accounting
+                        .lock()
+                        .expect("subscribe backlog accounting poisoned")
+                        .backlog_size();
+                    let max_buffered_bytes = active_subscribe.max_buffered_bytes;
+
+                    let reason = if finished {
+                        Some(ActiveComputeSinkRetireReason::Finished)
+                    } else if buffered_bytes > max_buffered_bytes {
+                        Some(ActiveComputeSinkRetireReason::BufferExceeded {
+                            buffered_bytes,
+                            max_buffered_bytes,
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = reason {
                         let retire_notify = self
                             .retire_compute_sinks(btreemap! {
-                                sink_id => ActiveComputeSinkRetireReason::Finished,
+                                sink_id => reason,
                             })
                             .await;
                         // `retire_compute_sinks` waits before sending the terminal

@@ -49,9 +49,9 @@ a subscribe that continually tracks the current state of the data.
 - Removing the in-process locks immediately. During rollout, the old lock-based
   path and the new OCC path coexist behind a feature flag. The locks can be
   removed once the OCC path is fully rolled out.
-- Mixed read/write transactions. A write that reads persisted state commits at
-  the frontier it observed, which it cannot postpone until COMMIT, so it runs
-  only as a single statement. A write that reads nothing does compose with
+- Mixed read/write transactions. A write that reads persisted state commits at a
+  timestamp the oracle handed out while the statement ran, which it cannot
+  postpone until COMMIT, so it runs only as a single statement. A write that reads nothing does compose with
   transactions: its diffs are frontier-independent, so they are buffered as
   session write ops and land when the transaction commits. That covers, for
   example, `INSERT INTO t SELECT generate_series(1, 20000)`, whose values are
@@ -65,12 +65,13 @@ subscribe-based OCC loop:
 1. Open a subscribe on the read expression (the `selection` from the
    `ReadThenWrite` plan), starting at the timestamp determined by the oracle
 2. Accumulate diffs from the subscribe
-3. When the subscribe frontier advances to T (meaning we have a consistent
-   snapshot), attempt to write the accumulated diffs at timestamp T
-4. If the write succeeds, done
-5. If the write fails because another writer already committed at timestamp T,
-   the subscribe will deliver the new state; go back to step 3 with the updated
-   diffs
+3. Take the write timestamp T from the timeline's oracle, one step above its
+   write timestamp, which is the smallest value the group committer accepts
+4. Once the subscribe frontier has advanced to T, so the accumulated diffs below
+   T are complete, attempt to write those diffs at T
+5. If the write succeeds, done
+6. If the write fails because another writer already took T, adopt the timestamp
+   the committer reports as next eligible and go back to step 4 with it
 
 This approach is correct by construction: the subscribe always reflects the
 committed state of the data, and the timestamped write mechanism ensures that
@@ -144,17 +145,36 @@ Session Task                         Coordinator
   |                                      |
   |   +-- OCC Loop ------------------+   |
   |   | receive diffs from subscribe |   |
-  |   | on frontier advance:         |   |
-  |   |   consolidate diffs          |   |
+  |   | target T from the oracle     |   |
+  |   | once frontier >= T:          |   |
+  |   |   consolidate diffs below T  |   |
   |   |   AttemptTimestampedWrite -> |-->|-- group_commit()
   |   |   <-- Success/Failed --------|<--|
-  |   |   if Failed: continue loop   |   |
+  |   |   if Failed: T = next, loop  |   |
   |   |   if Success: break          |   |
   |   +------------------------------+   |
   |                                      |
   |-- DropInternalSubscribe -----------> |
   |                                      |
 ```
+
+The target `T` comes from the oracle, not from the subscribe's frontier. A
+frontier certifies what the loop has a complete view of, which is a different
+question from which timestamp to write at, and the two coincide only when the
+selection's inputs are caught up with the oracle. An input can legitimately sit
+far in the future, a materialized view with a `REFRESH` schedule for instance, so
+taking `T` from the frontier would move the write timeline to that future and
+keep it there. The frontier gates the write, the oracle chooses it, and three
+invariants hold for every write the loop makes: the frontier is at or above `T`
+before it submits, the payload is every diff strictly below `T`, and `T` is above
+the statement's `as_of`, which is where the snapshot arrives.
+
+Note that the frontier being at or above `T` does not make the two equal. The
+frontier is a minimum over the selection's inputs, so it bounds neither `T` nor
+the target table's upper. Where it runs above `T`, a selection that reads the
+target table sees diffs the payload excludes, the compare-and-append refuses, and
+the loop retries at a higher target. Persist arbitrates the timestamp, not the
+frontier.
 
 ### Timestamped writes
 
@@ -230,16 +250,20 @@ selection.
 
 ### The timestamped write ensures atomicity
 
-The write is submitted at the timestamp corresponding to the subscribe's
-frontier. The group commit machinery checks that this timestamp hasn't been
+The write is submitted at a timestamp taken from the timeline's oracle, once the
+subscribe's frontier has reached it so that the accumulated diffs below it are
+complete. The group commit machinery checks that this timestamp hasn't been
 passed by the oracle:
 
 - If the timestamp is still valid: the write is committed at exactly that
   timestamp, and the oracle is advanced past it. Any concurrent OCC loops that
   were targeting the same timestamp will fail and retry.
 - If the timestamp has already passed (another write committed first): the
-  write also fails. The OCC loop continues, the subscribe delivers the updates
-  from the intervening write, and the loop retries at the new frontier.
+  write also fails, and the reply names the next eligible timestamp. The OCC
+  loop adopts that as its new target, waits for the subscribe's frontier to
+  reach it, which folds the intervening writes' updates into the payload, and
+  retries. The reported timestamp is always strictly above the rejected one, so
+  the retries make progress.
 
 This ensures that the write is always based on the state of the data at exactly
 the write timestamp. There is no window for lost updates: either the write
@@ -255,6 +279,22 @@ subscribe-based OCC loop, we might observe data timestamped beyond the current
 oracle read timestamp. However, actually applying the write bumps the oracle
 read timestamp to at least the write timestamp, so at write time it holds that
 `write_ts <= oracle_read_ts`. The linearization invariant is maintained.
+
+A statement that matches no rows performs no write, so nothing advances the
+oracle for it. It reports the timestamp its view is complete through and waits
+for the oracle read timestamp to reach that. A selection already empty at `as_of`
+is complete through `as_of`, which the statement linearized before its subscribe
+started, so the wait is satisfied at once. A selection that empties later reports
+the later timestamp and waits for a group commit.
+
+Reporting the frontier the subscribe observed would also be correct, but the
+subscribe follows Persist, which runs ahead of the oracle, so that frontier is
+usually a timestamp the oracle has not published and every zero-row answer would
+wait for a commit. The lower timestamp is not weaker: the answer describes the
+selection at the timestamp it reports, later reads land at or above it, and rows
+written after it are later in the serial order, as they would be for a SELECT
+there. Answering from state the oracle has not published is the hazard, and that
+is the direction the wait covers.
 
 ### Single timestamped write per group commit round
 
@@ -324,13 +364,19 @@ that the next reader does not take them for bugs.
   When inputs are caught up the lock path's window is milliseconds wide and also
   needs a materially conflicting write plus a reader inside it, which is
   presumably why it went unnoticed.
-- **A lagging dependency blocks rather than waits.** This is the price of the
-  strengthening above. A selection dependency that persistently lags by more
-  than about one `default_timestamp_interval` makes every attempt conflict,
-  because the observed frontier is bounded by the lagging input while the write
-  timestamp keeps advancing with the oracle. The statement then burns retries
-  until `statement_timeout` instead of committing, where the lock path's peek
-  simply waited for the input to catch up.
+- **A lagging dependency delays rather than being read stale.** This is the
+  price of the strengthening above. The write timestamp comes from the oracle,
+  and the loop waits for the subscribe's frontier to certify it before
+  submitting, so a lagging selection dependency delays the statement by its lag.
+  A dependency that catches up commits normally. One that persistently lags by
+  more than about one `default_timestamp_interval` never lets an attempt land:
+  every wait ends with the oracle already past the target, the committer refuses
+  it and names a newer one, and the next wait is again bounded by the lagging
+  input. Each round costs one of `max_occ_retries`, but the rounds are paced by
+  frontier advances rather than spinning, so what ends the statement is
+  `statement_timeout`, which it runs out while holding an OCC permit and its
+  subscribe. The lock path's peek simply waited for the input to catch up and
+  then committed.
 - **Statement lifecycle events.** The frontend path records an
   `optimization-finished` event for a DML, the coordinator path does not,
   because it hands the read-then-write's inner peek a trivial logging context
@@ -357,11 +403,19 @@ that the next reader does not take them for bugs.
   limit on the coordinator path and succeed on the frontend path. We keep the
   frontend's accounting: it matches what the write actually appends, one entry
   with a large diff.
-- **The write-timeline throttle.** A timestamped write does not go through the
-  throttle that a blind write's group commit applies, because its timestamp
-  comes from an observed subscribe frontier rather than from the clock. See the
-  doc comment on `GroupCommitter::commit_timestamped` for the full list of what
-  that path skips and why.
+- **The write-timeline throttle.** A blind write's group commit sleeps in the
+  committer until the wall clock catches up with the oracle's write timestamp,
+  keeping the timeline from running ahead of the clock. A timestamped write
+  cannot be throttled that way: its timestamp is fixed before it reaches the
+  committer, so sleeping would only delay a write that already has to land at
+  that timestamp. The committer instead refuses a target above
+  `write_ts_upper_bound(now)` outright. That refusal is unreachable in normal
+  operation, since the target is one step above the oracle's write timestamp and
+  the oracle clamps itself to the clock. It fires only for a write timeline that
+  has already run away from the clock, which is an environment-level invariant
+  violation rather than something a statement can provoke. See the doc comment on
+  `GroupCommitter::commit_timestamped` for the full list of what that path skips
+  and why.
 - **Zero-row `INSERT ... RETURNING`.** Both paths report `INSERT 0 0` with no
   result set when no rows match, because the coordinator decides the response
   kind from the evaluated RETURNING rows and there are none. Postgres returns an
@@ -398,10 +452,10 @@ throughput (left) and latency (right). Key observations:
   a subscribe sees only progress from another table's write. They do still
   contend, in three ways: the concurrency semaphore is process-global across
   tables and clusters, the conflict predicate is the global oracle plus the
-  shared txns-shard upper, so two writers that observed the same frontier refuse
-  each other, and each timestamped write is its own committer round rather than
-  merging into a shared group commit. Every write benchmark is single-table, so
-  the cross-table case is unmeasured.
+  shared txns-shard upper, so two writers that took the same target timestamp
+  refuse each other, and each timestamped write is its own committer round rather
+  than merging into a shared group commit. Every write benchmark is single-table,
+  so the cross-table case is unmeasured.
 
 The chart above is from the PoC, which benchmarked `UPDATE t SET x = x + 1` over
 a larger table (the regime where OCC wins). It does not capture the small-write
@@ -417,16 +471,29 @@ three runs) and `Update` 1.4x slower (33-45%), and the scalability
 `ManySmallUpdates` is the worst case for this design, and the reason is worth
 recording. Its statements set every matched row's `f1` to one shared random
 value, which merges a whole residue class, so the class count only shrinks and
-roughly 90% of its 100 updates end up matching no rows. A statement that matches
-nothing still has to linearize its read, and the oracle advances only when a
-group commit applies, so each of those statements needs a commit that has nothing
-to write. We ask for one rather than waiting for the periodic keepalive, which
-costs a commit round trip per statement instead of up to a full
-`default_timestamp_interval`. That is the difference between 3.5x and 157x, but
-it is not free, and a workload dominated by zero-row writes pays it on every
-statement. The residue is the price of the linearization guarantee rather than a
-defect: correctness requires the oracle to advance, and only a commit advances
-it.
+roughly 90% of its 100 updates end up matching no rows. Such a statement has
+nothing to write, and the oracle advances only when a group commit applies, so
+linearizing a timestamp the oracle has not reached costs a commit that carries
+nothing. Asking for one rather than waiting for the periodic keepalive is the
+difference between 3.5x and 157x. A selection already empty at its `as_of` needs
+no commit at all, which is this workload's shape, and what remains is a selection
+that empties later. That residue is the price of the linearization guarantee
+rather than a defect, since only a commit advances the oracle.
+
+Note: the figures above were measured before the write timestamp came from the
+oracle and a zero-row answer reported the timestamp its view is complete through.
+Those two remove the commit itself. Group commits per statement fall from about
+1.09 to between 0.13 and 0.37, roughly 75 fewer commits over the scenario's 100
+statements.
+
+What that removal is worth in wallclock depends on what a commit costs, so it does
+not reproduce everywhere. Comparing the same two images, `ManySmallUpdates` runs
+0.73s against 1.34s on a local Docker setup and 0.761s against 0.755s on the CI
+benchmark agents. The removed commits are the same in both, so the 0.6s locally
+puts a commit at roughly 8ms there, a metadata store round trip on that disk, while
+on the agents the same 75 commits disappear into run-to-run noise. The feature
+benchmark therefore cannot see this improvement, and a future change that put the
+commit back would not show up as a regression there either.
 
 The PoC's large-write win does not survive here. `Update` is itself a large
 mutation, a full-table update over 10^6 rows, and it is 1.4x slower. An `UPDATE`

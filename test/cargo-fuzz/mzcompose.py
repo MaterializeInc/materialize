@@ -55,9 +55,13 @@ FUZZ_CRATES = [
 # The highest-yield targets, the ones that keep surfacing bugs deep into a run,
 # or that guard a bug-prone path / actively-developed subsystem where a find
 # would be catastrophic. `--profile fruitful` restricts the run to these, which
-# is the right focus for the long (24h) release-qualification run that should
-# spend its cores where bugs still hide. Substring-matched against
+# points a short run at the code where bugs still hide. Substring-matched against
 # `crate::target`, like the positional `filters`.
+#
+# NOTE: This is *not* what release qualification runs. That run passes
+# `--profile all`. A target nobody ever runs is a target whose oracle can quietly
+# stop asserting anything, and the 24h budget is the only place the low-yield
+# targets get exercised at all.
 #
 # This set is pruned by productivity. Targets over well-tested, stable code that
 # fuzz clean round after round (the arithmetic/range oracles, internal
@@ -78,10 +82,18 @@ FRUITFUL = [
     "strconv_parse_timestamptz",
     "strconv_parse_date",
     "strconv_parse_time",
+    "strconv_parse_interval",
     "strconv_parse_bytes",
     "strconv_parse_uuid",
+    # The two durable-state decoders (rollup = full snapshot, state diff =
+    # incremental). Both are read from blob/consensus on every state load, and a
+    # decode panic there makes the shard unloadable, so they stay paired here.
     "rollup_proto_roundtrip",
+    "state_diff_proto_roundtrip",
     "copy_decode",
+    # The pgwire frontend decoder and the pre-auth SASL/password grammars behind
+    # it, reachable by any client that can open a socket.
+    "codec_decode",
     "protobuf_decode_fuzzed_schema",
     "json_encode",
     "avro_decode_fuzzed_schema",
@@ -332,9 +344,16 @@ class FuzzRunner:
     fail_fast: bool
     triple: str = ""
     # None => don't pass --sanitizer (use cargo-fuzz's default, i.e. ASan).
-    # The CLI defaults this to "none" (see below): our targets find panics /
-    # round-trip drifts, not memory-corruption bugs, so ASan adds no detection
-    # power here but ~2-3x slowdown. Pass --sanitizer=address to opt back in.
+    # The CLI defaults this to "none" (see below): our targets mostly find
+    # panics / round-trip drifts, and ASan costs a ~2-3x slowdown. Pass
+    # --sanitizer=address to opt back in.
+    #
+    # NOTE: a few targets do reach memory-unsafe code through FFI, e.g.
+    # mz-repr's `ProtoNumeric` decode calling libdecnumber's unchecked
+    # `decPackedToNumber`. ASan would not report those writes even when
+    # enabled: cargo-fuzz instruments via RUSTFLAGS only, while the C is built
+    # by the `cc` crate, so covering it needs CFLAGS=-fsanitize=address too.
+    # Bound such input in the decoder rather than relying on a sanitizer.
     sanitizer: str | None = None
     wall_budget: int = 0
     minimize: bool = True
@@ -432,6 +451,22 @@ class FuzzRunner:
         if job.returncode == 0 and not self._new_artifacts(job):
             self.succeeded.append(job)
             say(f"✓ {job.name}  [{secs}s]  {final_stats(job.log_path)}")
+        elif (
+            job.returncode is not None
+            and job.returncode < 0
+            and not self._new_artifacts(job)
+        ):
+            # Killed by a signal (Ctrl-C, step timeout, an external kill)
+            # without a crash artifact: an interrupted run, not a crash.
+            # libFuzzer-detected crashes always leave an artifact, so this
+            # cannot mask one. A kernel OOM SIGKILL is also reported as
+            # interrupted; the rss limit passed to libFuzzer catches memory
+            # blowups as artifact-producing OOMs well before the kernel does.
+            self.succeeded.append(job)
+            say(
+                f"- {job.name} interrupted by signal {-job.returncode} [{secs}s]  "
+                f"{final_stats(job.log_path)}"
+            )
         else:
             self.failed.append(job)
             say(self._failure_block(job, secs))
@@ -505,13 +540,15 @@ class FuzzRunner:
                 except ProcessLookupError:
                     pass
 
-    def build(self) -> None:
-        # Compile every fuzz crate up front, one at a time, not just the crates
-        # this run will fuzz. A fuzz target that won't compile is a broken
-        # build: building only the crates the active --profile/filters select
-        # would let a compile break in a skipped crate pass as a green run,
-        # since that crate is never compiled. Building all of them makes a
-        # broken fuzzer fail the run immediately, whatever the profile.
+    def build(self, crates: list[str] | None = None) -> None:
+        # By default compile every fuzz crate up front, one at a time, not
+        # just the crates this run will fuzz. A fuzz target that won't compile
+        # is a broken build: building only the crates the active --profile
+        # selects would let a compile break in a skipped crate pass as a green
+        # run, since that crate is never compiled. Building all of them makes
+        # a broken fuzzer fail the run immediately, whatever the profile.
+        # Explicit positional `filters` are the exception: those are targeted
+        # runs, and `crates` narrows the build to the crates they selected.
         # Sequential, one crate at a time, so the concurrent fuzzing phase
         # doesn't have 20+ `cargo fuzz run` invocations fighting over cargo's
         # per-target-dir build lock; crates share the target dir, so common
@@ -525,8 +562,9 @@ class FuzzRunner:
         cmd = ["cargo", "fuzz", "build"]
         if self.sanitizer:
             cmd.append(f"--sanitizer={self.sanitizer}")
-        for i, crate in enumerate(FUZZ_CRATES, 1):
-            say(f"building [{i}/{len(FUZZ_CRATES)}] {crate}")
+        build_crates = FUZZ_CRATES if crates is None else crates
+        for i, crate in enumerate(build_crates, 1):
+            say(f"building [{i}/{len(build_crates)}] {crate}")
             if subprocess.run(cmd, cwd=MZ_ROOT / crate, env=self.env).returncode != 0:
                 raise ui.UIError(f"build FAILED for {crate}")
 
@@ -1026,8 +1064,8 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
         help="`fruitful` restricts the run to the historically high-yield "
         "targets (see FRUITFUL): the SQL-parser round-trip oracles and the rich "
         "hand-written PG parsers/decoders that keep finding bugs, ideal for a "
-        "long local run. `all` (default) runs every target. A `filters` list "
-        "narrows further within the profile.",
+        "short local run. `all` (default, and what release qualification uses) "
+        "runs every target. A `filters` list narrows further within the profile.",
     )
     parser.add_argument(
         "filters",
@@ -1114,7 +1152,10 @@ def workflow_default(c: Composition, parser: WorkflowArgumentParser) -> None:
     for crate in shard_crates:
         prepare_corpus(crate, env)
     if not args.no_build:
-        runner.build()
+        # Explicit filters mean a targeted run: build only the crates whose
+        # targets were selected. Without filters, build everything so a
+        # compile break in any fuzz crate fails the run (see build()).
+        runner.build(crates=shard_crates if args.filters else None)
     failed = runner.run()
     upload_logs(env, log_dir)
     if args.corpus_sync:

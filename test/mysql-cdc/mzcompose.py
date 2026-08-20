@@ -321,7 +321,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
                 CREATE DATABASE public;
                 USE public;
                 DROP TABLE IF EXISTS products;
-                CREATE TABLE products (id int NOT NULL, name varchar(255) DEFAULT NULL, merchant_id int NOT NULL, price int DEFAULT NULL, status int DEFAULT NULL, created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP(), recordSizePayload longtext, PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+                CREATE TABLE products (id char(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL, name varchar(255) DEFAULT NULL, merchant_id int NOT NULL, price int DEFAULT NULL, status int DEFAULT NULL, created_at timestamp NULL DEFAULT CURRENT_TIMESTAMP(), recordSizePayload longtext, PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
                 ALTER TABLE products DISABLE KEYS;
 
                 > DROP SOURCE IF EXISTS s1 CASCADE;
@@ -336,7 +336,7 @@ def workflow_large_scale(c: Composition, parser: WorkflowArgumentParser) -> None
             SET foreign_key_checks = 0;
             USE public;
             SET @i:={start};
-            INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT @i:=@i+1, CONCAT("name", @i), @i % 1000, @i % 1000, @i % 10, '2024-12-12', repeat('x', 1000000) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {batch_num};
+            INSERT INTO products (id, name, merchant_id, price, status, created_at, recordSizePayload) SELECT REVERSE(LPAD(@i:=@i+1, 26, '0')), CONCAT("name", @i), @i % 1000, @i % 1000, @i % 10, '2024-12-12', repeat('x', 1000000) FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {batch_num};
             """),
         )
 

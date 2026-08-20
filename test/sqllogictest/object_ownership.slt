@@ -2159,7 +2159,7 @@ db error: ERROR: cannot alter item mz_introspection.mz_dataflow_operators becaus
 simple conn=mz_system,user=mz_system
 ALTER TABLE mz_views OWNER TO mz_system
 ----
-db error: ERROR: cannot alter item mz_catalog.mz_views because it is required by the database system
+db error: ERROR: mz_views is a materialized view not a table
 
 simple conn=mz_system,user=mz_system
 ALTER VIEW mz_relations OWNER TO mz_system

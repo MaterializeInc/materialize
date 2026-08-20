@@ -41,7 +41,7 @@ use crate::adt::jsonb::{KeyClass, KeyClassifier, NumberParser};
 use crate::adt::numeric::{Numeric, PackedNumeric};
 use crate::adt::timestamp::{CheckedTimestamp, PackedNaiveDateTime};
 use crate::row::ProtoDatum;
-use crate::{Datum, RowArena, SqlScalarType};
+use crate::{Datum, Row, RowArena, SqlScalarType};
 
 fn soft_expect_or_log<A, B: Debug>(result: Result<A, B>) -> Option<A> {
     match result {
@@ -210,26 +210,50 @@ pub fn col_values<'a>(
             let upper = soft_expect_or_log(Date::from_pg_epoch(stats.upper))?;
             Some((Datum::Date(lower), Datum::Date(upper)))
         }
-        (SqlScalarType::Time, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        // NOTE: the `kind` field is checked in each fixed-size arm below
+        // because `from_bytes` validates length only, and PackedNaiveDateTime,
+        // PackedInterval, and Uuid are all 16 bytes: wrong-kind bytes would
+        // otherwise silently decode into garbage bounds. A mismatched kind
+        // falls through to the catch-all arm, which degrades to "no stats".
+        (
+            SqlScalarType::Time,
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedTime,
+                    ..
+                },
+            )),
+        ) => {
             let lower = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.lower))?.into_value();
             let upper = soft_expect_or_log(PackedNaiveTime::from_bytes(&stats.upper))?.into_value();
             Some((Datum::Time(lower), Datum::Time(upper)))
         }
-        (SqlScalarType::Timestamp { .. }, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (
+            SqlScalarType::Timestamp { .. },
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedDateTime,
+                    ..
+                },
+            )),
+        ) => {
             let lower =
                 soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?.into_value();
-            let lower =
-                CheckedTimestamp::from_timestamplike(lower).expect("failed to roundtrip timestamp");
+            let lower = soft_expect_or_log(CheckedTimestamp::from_timestamplike(lower))?;
             let upper =
                 soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.upper))?.into_value();
-            let upper =
-                CheckedTimestamp::from_timestamplike(upper).expect("failed to roundtrip timestamp");
+            let upper = soft_expect_or_log(CheckedTimestamp::from_timestamplike(upper))?;
 
             Some((Datum::Timestamp(lower), Datum::Timestamp(upper)))
         }
         (
             SqlScalarType::TimestampTz { .. },
-            ColumnStatKinds::Bytes(BytesStats::FixedSize(stats)),
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedDateTime,
+                    ..
+                },
+            )),
         ) => {
             let lower = soft_expect_or_log(PackedNaiveDateTime::from_bytes(&stats.lower))?
                 .into_value()
@@ -245,12 +269,28 @@ pub fn col_values<'a>(
         (SqlScalarType::MzTimestamp, ColumnStatKinds::Primitive(U64(stats))) => {
             map_stats(stats, |x| Datum::MzTimestamp(crate::Timestamp::from(x)))
         }
-        (SqlScalarType::Interval, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (
+            SqlScalarType::Interval,
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::PackedInterval,
+                    ..
+                },
+            )),
+        ) => {
             let lower = soft_expect_or_log(PackedInterval::from_bytes(&stats.lower))?.into_value();
             let upper = soft_expect_or_log(PackedInterval::from_bytes(&stats.upper))?.into_value();
             Some((Datum::Interval(lower), Datum::Interval(upper)))
         }
-        (SqlScalarType::Uuid, ColumnStatKinds::Bytes(BytesStats::FixedSize(stats))) => {
+        (
+            SqlScalarType::Uuid,
+            ColumnStatKinds::Bytes(BytesStats::FixedSize(
+                stats @ FixedSizeBytesStats {
+                    kind: FixedSizeBytesStatsKind::Uuid,
+                    ..
+                },
+            )),
+        ) => {
             let lower = soft_expect_or_log(Uuid::from_slice(&stats.lower))?;
             let upper = soft_expect_or_log(Uuid::from_slice(&stats.upper))?;
             Some((Datum::Uuid(lower), Datum::Uuid(upper)))
@@ -279,16 +319,37 @@ pub fn col_values<'a>(
             | SqlScalarType::Uuid,
             ColumnStatKinds::Bytes(BytesStats::Atomic(AtomicBytesStats { lower, upper })),
         ) => {
-            let lower = ProtoDatum::decode(lower.as_slice()).expect("should be a valid ProtoDatum");
-            let lower = arena.make_datum(|p| {
-                p.try_push_proto(&lower)
-                    .expect("ProtoDatum should be valid Datum")
-            });
-            let upper = ProtoDatum::decode(upper.as_slice()).expect("should be a valid ProtoDatum");
-            let upper = arena.make_datum(|p| {
-                p.try_push_proto(&upper)
-                    .expect("ProtoDatum should be valid Datum")
-            });
+            // The V0 encoding carries no type tag, so a decoded bound has to
+            // be validated against the column type before it is used: a
+            // wrong-typed bound would produce a range that excludes every
+            // value of the column's actual type. Malformed or mismatched
+            // legacy bytes degrade to "no stats" instead of panicking.
+            fn decode_v0<'a>(
+                bytes: &[u8],
+                typ: &SqlScalarType,
+                arena: &'a RowArena,
+            ) -> Option<Datum<'a>> {
+                let proto = soft_expect_or_log(ProtoDatum::decode(bytes))?;
+                let mut row = Row::default();
+                soft_expect_or_log(row.packer().try_push_proto(&proto))?;
+                let datum = arena.push_unary_row(row);
+                let type_matches = matches!(
+                    (typ, datum),
+                    (SqlScalarType::Numeric { .. }, Datum::Numeric(_))
+                        | (SqlScalarType::Time, Datum::Time(_))
+                        | (SqlScalarType::Timestamp { .. }, Datum::Timestamp(_))
+                        | (SqlScalarType::TimestampTz { .. }, Datum::TimestampTz(_))
+                        | (SqlScalarType::Interval, Datum::Interval(_))
+                        | (SqlScalarType::Uuid, Datum::Uuid(_))
+                );
+                if !type_matches {
+                    soft_panic_or_log!("V0 stats bound {datum:?} does not match column {typ:?}");
+                    return None;
+                }
+                Some(datum)
+            }
+            let lower = decode_v0(lower.as_slice(), typ, arena)?;
+            let upper = decode_v0(upper.as_slice(), typ, arena)?;
 
             Some((lower, upper))
         }

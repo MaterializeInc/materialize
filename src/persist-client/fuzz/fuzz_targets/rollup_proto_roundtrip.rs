@@ -10,7 +10,11 @@
 //! Fuzz target: exercises `ProtoRollup` decoding and the `Rollup<u64>`
 //! `from_proto` conversion. A rollup is a full state snapshot read from blob on
 //! load, so a decoder panic on a corrupted/crafted blob makes the shard
-//! unrecoverable.
+//! unrecoverable. NOTE: an `Err` is not a *good* outcome on that path either.
+//! `UntypedState::decode` `.expect()`s the conversion, so a rejected rollup
+//! still aborts the process. What this target buys is a decoder that fails
+//! predictably and boundedly (no hang, no OOM, no wild slicing) plus a working
+//! error path for the CLI/inspect callers that do surface it.
 //!
 //! Decoding *random* bytes as a protobuf almost never yields a `ProtoRollup`
 //! that survives `into_rust`: the conversion needs a well-formed shard id
@@ -21,15 +25,20 @@
 //! `ProtoRollup` on the protobuf wire from fuzzer-chosen parameters. The first
 //! byte selects a mode:
 //!
-//! * mode 0: feed the remaining bytes straight to `ProtoRollup::decode`
-//!   (the robustness arm: must never panic, and any value that
-//!   converts must survive a proto re-encode round trip losslessly).
+//! * mode 0: feed the remaining bytes straight to `ProtoRollup::decode` (the
+//!   robustness arm: must never panic, and any value that converts must be
+//!   *stable* under a further round trip). Arbitrary bytes can be non-canonical,
+//!   so this arm can only assert stability, not losslessness. Mode 1 covers that.
 //! * mode 1: synthesize a valid rollup *with* inlined diffs whose bounds
-//!   satisfy the invariants, decode it (the happy path that the invariant
-//!   checks must accept), and round-trip it.
+//!   satisfy the invariants, then require that it converts and that the
+//!   conversion is *lossless*: the hand-built message is canonical, so
+//!   re-encoding the converted value must reproduce it field for field.
 //! * mode 2: synthesize a valid rollup, then *perturb a single invariant
 //!   field* (drop the rollups map, or shift `diffs.lower`/`diffs.upper` off
-//!   the expected seqno). `from_proto` must reject it with `Err`, never panic.
+//!   the expected seqno). `from_proto` must reject it with an `Err` that names
+//!   the perturbed field, never panic. Matching the message matters: a bare
+//!   `is_err()` would keep passing if the rollup started being rejected for
+//!   some unrelated reason, hiding that the mutation stopped being tested.
 
 #![no_main]
 
@@ -219,7 +228,11 @@ fn build_rollup(u: &mut Unstructured, mutate: Option<Mutation>) -> Vec<u8> {
             } else {
                 None
             };
-            put_bytes(&mut buf, 16, &rollups_entry(*seqno, &hollow_rollup(&key, sz)));
+            put_bytes(
+                &mut buf,
+                16,
+                &rollups_entry(*seqno, &hollow_rollup(&key, sz)),
+            );
         }
     }
 
@@ -257,9 +270,11 @@ fn build_rollup(u: &mut Unstructured, mutate: Option<Mutation>) -> Vec<u8> {
             _ => {}
         }
 
-        // Pick in-range diff seqnos only for the un-mutated/drop-rollups cases.
-        // `from_proto` does not bound-check individual diff seqnos, so this is
-        // about producing realistic content rather than satisfying an invariant.
+        // Diff seqnos start at `lower`, which is the shifted one for
+        // `ShiftLower`, so the mutated cases can place them outside the true
+        // range. That is harmless: `from_proto` checks only the `lower`/`upper`
+        // bounds and never the individual diff seqnos, so this is about
+        // producing realistic content rather than satisfying an invariant.
         let mut diffs: Vec<(u64, Vec<u8>)> = Vec::new();
         if state_seqno > latest_rollup_seqno {
             let span = upper.saturating_sub(lower).min(4);
@@ -275,16 +290,29 @@ fn build_rollup(u: &mut Unstructured, mutate: Option<Mutation>) -> Vec<u8> {
     buf
 }
 
-fn roundtrip(proto: ProtoRollup) {
+/// Round trip whatever converts, tolerating inputs that don't.
+///
+/// Only for mode 0, where arbitrary bytes legitimately fail to convert. A mode
+/// that builds a rollup it *knows* is valid must require the conversion instead,
+/// or a newly-rejected shape silently turns the arm into a no-op.
+fn roundtrip_lenient(proto: ProtoRollup) {
     let orig: Rollup<u64> = match proto.into_rust() {
         Ok(v) => v,
         Err(_) => return,
     };
+    roundtrip_from(orig.into_proto());
+}
 
-    let proto2: ProtoRollup = orig.into_proto();
+/// Asserts a canonical proto (already an `into_proto` output) is stable under a
+/// further encode / decode / convert / re-encode.
+///
+/// Both sides of the comparison are post-`into_proto`, so this only proves
+/// `into_proto ∘ from_proto` is idempotent. Losslessness of the *first* pass is
+/// mode 1's job, since only a hand-built canonical input can assert it.
+fn roundtrip_from(proto2: ProtoRollup) {
     let bytes2 = proto2.encode_to_vec();
-    let proto3 = ProtoRollup::decode(bytes2.as_slice())
-        .expect("re-encode of valid Rollup must decode");
+    let proto3 =
+        ProtoRollup::decode(bytes2.as_slice()).expect("re-encode of valid Rollup must decode");
     let round: Rollup<u64> = proto3
         .into_rust()
         .expect("re-encoded Rollup must convert back to Rust");
@@ -306,33 +334,63 @@ fuzz_target!(|data: &[u8]| {
             let Ok(proto) = ProtoRollup::decode(rest) else {
                 return;
             };
-            roundtrip(proto);
+            roundtrip_lenient(proto);
         }
         1 => {
             // Valid-rollup arm: the synthesized message satisfies the diff
-            // invariants and must decode + round-trip.
+            // invariants, so it must convert, and convert losslessly.
             let mut u = Unstructured::new(rest);
             let bytes = build_rollup(&mut u, None);
             let proto =
                 ProtoRollup::decode(bytes.as_slice()).expect("hand-built ProtoRollup must decode");
-            roundtrip(proto);
+            // Every shape `build_rollup` emits is valid, so rejection here is a
+            // find, not a reason to skip the arm.
+            let orig: Rollup<u64> = proto
+                .clone()
+                .into_rust()
+                .expect("synthesized rollup must convert");
+            let proto2: ProtoRollup = orig.into_proto();
+            // The strong oracle: the input is already canonical, so a field the
+            // conversion drops or defaults shows up right here. Comparing two
+            // `into_proto` outputs (as `roundtrip_from` does) cannot see that,
+            // and `Rollup::into_proto` reaches through `self.state.state...`
+            // rather than destructuring, so a field added to `State` and wired
+            // into `from_proto` but forgotten in `into_proto` compiles fine and
+            // is then silently lost from every rollup written.
+            //
+            // The one legitimate normalization: an absent `applier_version`
+            // decodes as "infinitely old" and re-encodes as 0.0.0.
+            let mut expected = proto;
+            if expected.applier_version.is_empty() {
+                expected.applier_version = "0.0.0".into();
+            }
+            assert_eq!(
+                expected, proto2,
+                "field lost across ProtoRollup -> Rollup -> ProtoRollup"
+            );
+            roundtrip_from(proto2);
         }
         _ => {
             // Invariant-violation arm: break exactly one invariant and require
-            // `from_proto` to reject (not panic).
+            // `from_proto` to reject it, naming that invariant (not panic, and
+            // not fail for some unrelated reason).
             let mut u = Unstructured::new(rest);
-            let mutation = match u.u8() % 3 {
-                0 => Mutation::DropRollups,
-                1 => Mutation::ShiftLower,
-                _ => Mutation::ShiftUpper,
+            let (mutation, expected_err) = match u.u8() % 3 {
+                0 => (Mutation::DropRollups, "no rollups"),
+                1 => (Mutation::ShiftLower, "diffs lower"),
+                _ => (Mutation::ShiftUpper, "diffs upper"),
             };
             let bytes = build_rollup(&mut u, Some(mutation));
-            let proto = ProtoRollup::decode(bytes.as_slice())
-                .expect("hand-built ProtoRollup must decode");
+            let proto =
+                ProtoRollup::decode(bytes.as_slice()).expect("hand-built ProtoRollup must decode");
             let result: Result<Rollup<u64>, _> = proto.into_rust();
+            let err = result.err().expect(
+                "Rollup with a broken diff-bounds invariant must be rejected by from_proto",
+            );
+            let msg = err.to_string();
             assert!(
-                result.is_err(),
-                "Rollup with a broken diff-bounds invariant must be rejected by from_proto"
+                msg.contains(expected_err),
+                "expected a rejection mentioning {expected_err:?}, got: {msg}"
             );
         }
     }

@@ -9,14 +9,17 @@
     "lib": ["ES2020", "DOM"],
     "strict": false,
     "moduleResolution": "bundler",
-    // The checked files are plain browser scripts with no imports, so nothing
-    // pulls `@types/*` in. List them explicitly to get `React` and `d3` as
-    // ambient globals.
-    "types": ["react", "react-dom", "d3"]
+    // The browser scripts have no imports, so nothing pulls `@types/*` in.
+    // List them explicitly to get `React` and `d3` as ambient globals, plus
+    // `node` for the `process.env` the Playwright specs read.
+    "types": ["react", "react-dom", "d3", "node"]
   },
   "include": [
     "../../src/environmentd/src/http/static/js/prometheus.js",
     "../../src/environmentd/src/http/static/js/metrics.jsx",
-    "../../src/environmentd/src/http/static/js/fetch.js"
+    "../../src/environmentd/src/http/static/js/fetch.js",
+    "../../src/environmentd/src/http/static/js/cluster-replica.jsx",
+    "tests/**/*.ts",
+    "playwright.config.ts"
   ]
 }

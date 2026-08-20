@@ -1,6 +1,6 @@
 ---
 source: src/sqllogictest/src/bin/sqllogictest.rs
-revision: 38a95cefe2
+revision: 84f88ca968
 ---
 
 # sqllogictest binary

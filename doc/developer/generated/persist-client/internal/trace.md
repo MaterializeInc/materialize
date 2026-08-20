@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/internal/trace.rs
-revision: c450b59e6d
+revision: f0cdedca04
 ---
 
 # persist-client::internal::trace

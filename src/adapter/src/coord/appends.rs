@@ -64,6 +64,7 @@ use tokio::sync::{Notify, OwnedMutexGuard, OwnedSemaphorePermit, Semaphore, mpsc
 use tracing::{Instrument, Span, info, warn};
 
 use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogUpperHandle};
+use crate::coord::timeline::write_ts_upper_bound;
 use crate::coord::{Coordinator, Message, PendingTxn, PlanValidity};
 use crate::metrics::Metrics;
 use crate::session::{EndTransactionAction, GroupCommitWriteLocks, Session, WriteLocks};
@@ -173,6 +174,12 @@ pub enum WriteResult {
     TimestampPassed {
         target_timestamp: Timestamp,
         next_eligible_timestamp: Timestamp,
+    },
+    /// The requested timestamp ran further ahead of the wall clock than the write
+    /// timeline may be advanced, so the write was refused before it was attempted.
+    TimestampTooFarAhead {
+        target_timestamp: Timestamp,
+        limit: Timestamp,
     },
     /// The write was canceled before it entered the committer.
     Canceled,
@@ -438,8 +445,11 @@ impl GroupCommitter {
     ///
     /// What [`Self::commit`] does that this skips, and why that is safe:
     ///
-    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose,
-    ///   and it must not run the write timeline ahead of the clock.
+    /// * The wall-clock throttle. `target_timestamp` is the caller's to choose, and a
+    ///   target above [`write_ts_upper_bound`] is refused rather than slept off.
+    ///   Committing there would advance the oracle with it, and a caller that took its
+    ///   target from the oracle cannot exceed the bound unless the timeline has already
+    ///   run away, which sleeping would not resolve.
     /// * A [`GroupCommitPermit`]. The caller bounds how many of these are in
     ///   flight, and that is the backpressure for this path.
     /// * Merging queued commits. There is nothing to merge into: these diffs
@@ -462,6 +472,18 @@ impl GroupCommitter {
             result.send(WriteResult::TimestampPassed {
                 target_timestamp,
                 next_eligible_timestamp: oracle_write_ts.step_forward(),
+            });
+            return ControlFlow::Continue(());
+        }
+
+        // Committing here would apply the target to the oracle below, which is what makes
+        // it stick. See `write_ts_upper_bound`.
+        let now: Timestamp = (self.now)().into();
+        let limit = write_ts_upper_bound(&now);
+        if target_timestamp > limit {
+            result.send(WriteResult::TimestampTooFarAhead {
+                target_timestamp,
+                limit,
             });
             return ControlFlow::Continue(());
         }

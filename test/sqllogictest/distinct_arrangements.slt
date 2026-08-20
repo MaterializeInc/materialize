@@ -82,10 +82,12 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange errors
 ArrangeBy[[Column(0), Column(1)]]
 ArrangeBy[[Column(0)]]
 Arranged DistinctBy
 Arranged DistinctBy
+Distinct errors
 DistinctBy
 DistinctBy
 DistinctByErrorCheck
@@ -120,6 +122,7 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange errors
 ArrangeBy[[Column(0, "a"), Column(1, "b")]]
 ArrangeBy[[Column(0, "a"), Column(1, "b")]]-errors
 Arranged TopK input
@@ -130,6 +133,7 @@ Arranged TopK input
 Arranged TopK input
 Arranged TopK input
 Arranged TopK input
+Distinct errors
 Reduced TopK input
 Reduced TopK input
 Reduced TopK input
@@ -218,6 +222,11 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
 Arranged TopK input
 Arranged TopK input
 Arranged TopK input
@@ -242,6 +251,11 @@ Arranged TopK input
 Arranged TopK input
 Arranged TopK input
 Arranged TopK input
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
 Reduced TopK input
 Reduced TopK input
 Reduced TopK input
@@ -377,11 +391,18 @@ AccumulableErrorCheck
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
+Arrange bundle err
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
 Arrange recursive err
 ArrangeAccumulable [val: empty]
 ArrangeBy[[Column(0, "user_id")]]
 ArrangeBy[[Column(0, "user_id")]]
 ArrangeBy[[Column(0, "user_id")]]
+ArrangeBy[[Column(0, "user_id")]]-errors
 ArrangeBy[[Column(2, "user_id")]]
 Arranged DistinctBy
 Arranged MinsMaxesHierarchical input
@@ -405,6 +426,13 @@ Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
 Arranged MinsMaxesHierarchical input
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors[[Column(0), Column(1)]]
+Distinct errors[[Column(0, "user_id")]]
 Distinct recursive err
 DistinctBy
 DistinctByErrorCheck
@@ -451,7 +479,11 @@ query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
 AccumulableErrorCheck
+Arrange bundle err
+Arrange errors
 ArrangeAccumulable [val: empty]
+Distinct errors
+Distinct errors[[]]
 ReduceAccumulable
 
 statement ok
@@ -475,7 +507,11 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange errors
+Arrange errors
 Arrange recursive err
+Distinct errors
+Distinct errors
 Distinct recursive err
 
 statement ok
@@ -501,9 +537,11 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange errors
 Arrange export iterative
 Arrange export iterative err
 Arrange recursive err
+Distinct errors
 Distinct recursive err
 
 statement ok
@@ -542,7 +580,11 @@ query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
 AccumulableErrorCheck
+Arrange bundle err
+Arrange errors
 ArrangeAccumulable [val: empty]
+Distinct errors
+Distinct errors[[]]
 ReduceAccumulable
 
 statement ok
@@ -564,7 +606,9 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange errors
 ArrangeBy[[Column(0)]]
+Distinct errors
 Threshold local
 
 statement ok
@@ -630,6 +674,13 @@ SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_intros
 ----
 AccumulableErrorCheck
 AccumulableErrorCheck
+Arrange bundle err
+Arrange bundle err
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeBy[[Column(0, "a"), Column(1, "b")]]
@@ -646,6 +697,13 @@ ArrangeBy[[Column(0, "sum")]]
 ArrangeBy[[Column(0, "sum")]]-errors
 ArrangeBy[[]]
 ArrangeBy[[]]
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors[[]]
+Distinct errors[[]]
 ReduceAccumulable
 ReduceAccumulable
 
@@ -731,6 +789,24 @@ SELECT mz_unsafe.mz_sleep(4)
 query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
 ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
@@ -749,12 +825,34 @@ ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
 ArrangeBy[[Column(0, "num")]]
+ArrangeBy[[Column(0, "num")]]-errors
+ArrangeBy[[Column(0, "num")]]-errors
 ArrangeBy[[]]
 ArrangeBy[[]]
 ArrangeBy[[]]
 ArrangeBy[[]]
 Arranged DistinctBy
 Arranged DistinctBy
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors[[Column(0, "num")]]
+Distinct errors[[Column(0, "num")]]
 DistinctBy
 DistinctBy
 DistinctByErrorCheck
@@ -790,10 +888,18 @@ query T
 SELECT mdo.name FROM mz_introspection.mz_arrangement_sharing mash JOIN mz_introspection.mz_dataflow_operators mdo ON mash.operator_id = mdo.id ORDER BY mdo.name;
 ----
 AccumulableErrorCheck
+Arrange bundle err
+Arrange errors
+Arrange errors
 ArrangeAccumulable [val: empty]
 ArrangeBy[[Column(0, "sum")]]
 ArrangeBy[[Column(0, "sum")]]-errors
 ArrangeBy[[]]
+ArrangeBy[[]]-errors
+Distinct errors
+Distinct errors
+Distinct errors[[]]
+Distinct errors[[]]
 ReduceAccumulable
 
 statement ok
@@ -862,10 +968,18 @@ AccumulableErrorCheck
 AccumulableErrorCheck
 Arrange ReduceMinsMaxes
 Arrange ReduceMinsMaxes
+Arrange bundle err
+Arrange bundle err
+Arrange bundle err
+Arrange errors
+Arrange errors
+Arrange errors
+Arrange errors
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeAccumulable [val: empty]
 ArrangeBy[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ReprColumnType { scalar_type: Int64, nullable: false }))]]
+ArrangeBy[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ReprColumnType { scalar_type: Int64, nullable: false }))]]-errors
 ArrangeBy[[CallUnary(CastInt32ToInt64(CastInt32ToInt64), Column(0, "id"))]]
 ArrangeBy[[Column(0)]]
 ArrangeBy[[Column(0, "data")]]
@@ -899,6 +1013,14 @@ Arranged TopK input
 Arranged TopK input
 Arranged TopK input
 Arranged TopK input
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors
+Distinct errors[[CallBinary(ModInt64(ModInt64), Column(0, "data"), Literal(Ok(Row{[Int64(2)]}), ReprColumnType { scalar_type: Int64, nullable: false }))]]
+Distinct errors[[Column(0)]]
+Distinct errors[[Column(0)]]
+Distinct errors[[]]
 ReduceAccumulable
 ReduceAccumulable
 ReduceAccumulable
@@ -1058,9 +1180,11 @@ ORDER BY mdod.name
 ----
 AccumulableErrorCheck  4
 Arrange␠ReduceMinsMaxes  1
+Arrange␠errors  1
 ArrangeAccumulable␠[val:␠empty]  4
 ArrangeBy[[Column(0,␠"operator_id")]]  2
 ArrangeBy[[Column(1,␠"dataflow_id")]]  2
+Distinct␠errors  1
 ReduceAccumulable  4
 ReduceMinsMaxes  1
 ReduceMinsMaxes␠Error␠Check  1

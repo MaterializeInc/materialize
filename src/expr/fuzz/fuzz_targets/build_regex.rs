@@ -10,8 +10,12 @@
 //! Fuzz target: `func::build_regex` compiles an untrusted regular expression
 //! (and flags) for the `regexp_*` SQL functions, and the result matches
 //! untrusted text. A user controls both, so a panic compiling or matching is a
-//! real availability bug. The `regex` crate is size-limited, so an oversized
-//! pattern returns an error rather than OOMing. Single-match ops
+//! real availability bug. Two independent size limits guard that, and both are
+//! under test here: the `regex` crate's `size_limit` bounds the *compiled* NFA,
+//! and `MAX_REGEX_SIZE_BEFORE_COMPILATION` bounds `pattern.len()` before
+//! compilation, because the memory a compile spends translating the pattern is
+//! not something `size_limit` ever sees. Exceeding either must yield an error
+//! rather than an OOM or a hang. Single-match ops
 //! (`is_match`/`find`/`captures`) run in linear time, but the all-matches ops
 //! (`replace_all`/`split`) re-scan from every match via `find_iter` and are
 //! superlinear in the text length for adversarial patterns, so the match text
@@ -32,6 +36,10 @@
 //!  * occasional near-size-limit patterns built from nested counted quantifiers,
 //!    which push the compiler toward its state-count / size limit (where it must
 //!    return an error rather than hang or OOM) and toward deep AST nesting.
+//!  * rare very long patterns, built by repeating one small unit, which straddle
+//!    `MAX_REGEX_SIZE_BEFORE_COMPILATION`. These are the only way to reach the
+//!    compile-time memory cost, which scales with the *source* length and so is
+//!    invisible to every other arm (see `gen_long_pattern`).
 
 #![no_main]
 
@@ -145,9 +153,12 @@ fn gen_regex(
 }
 
 /// Builds a deeply nested chain of counted quantifiers whose multiplied bounds
-/// approach the regex crate's compiled-size limit, e.g. `(?:(?:a{40}){40}){40}`.
-/// `build_regex` must reject this with an error (PatternTooLarge or the regex
-/// crate's CompiledTooBig) rather than hang or OOM.
+/// approach the regex crate's compiled-size limit, e.g. `(?:(?:a){40}){40}`.
+///
+/// These patterns stay tiny in source form, a few dozen bytes, so
+/// `MAX_REGEX_SIZE_BEFORE_COMPILATION` never fires on them. The regex crate's
+/// own `size_limit` is what must reject them, with `CompiledTooBig`, rather than
+/// hanging or OOMing. `gen_long_pattern` covers the other limit.
 fn gen_near_limit(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
     let layers = u.int_in_range(2usize..=5)?;
     for _ in 0..layers {
@@ -160,20 +171,64 @@ fn gen_near_limit(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<(
     Ok(())
 }
 
+/// Builds a pattern that is long *before* compilation by repeating one small
+/// unit.
+///
+/// The regex crate's `size_limit` bounds only the compiled NFA. Class-heavy
+/// patterns spend their memory earlier, in `regex-syntax`'s HIR translation,
+/// which that limit never sees, so cost scales with the pattern's *source*
+/// length. Measured worst case is ~7.4 KB of peak RSS per pattern byte
+/// (`\p{L}` repeated, under the `i` flag, where case-folding the Unicode class
+/// is the multiplier), against ~0.35 KB per byte for a plain literal. That
+/// makes `MAX_REGEX_SIZE_BEFORE_COMPILATION` the only guard on the vector, so
+/// straddle it: draw a length on both sides of 1 MiB, exercising both the
+/// `PatternTooLarge` rejection and the largest pattern that gets through.
+///
+/// The length is synthesized from a handful of input bytes rather than read out
+/// of the input, since libFuzzer's default `-max_len` of 4096 puts a pattern
+/// this long out of reach of the raw arm.
+fn gen_long_pattern(u: &mut Unstructured, out: &mut String) -> arbitrary::Result<()> {
+    let unit = *u.choose(&[
+        "\\p{L}",
+        "\\p{Greek}",
+        "\\w",
+        "\\d",
+        "\\s",
+        "[a-c]",
+        "a",
+        "(?:a)",
+    ])?;
+    let bytes = u.int_in_range(4096usize..=1_100_000)?;
+    out.reserve(bytes + unit.len());
+    // Round *up*, so a multi-byte unit can still land above the guard.
+    for _ in 0..bytes.div_ceil(unit.len()) {
+        out.push_str(unit);
+    }
+    Ok(())
+}
+
 /// A replacement string mixing several capture-reference forms so the regex
 /// crate's interpolation runs against whatever captures the match produced:
 /// numbered (`$1`), named-braced (`${g0}`), the whole match (`$0`), a literal
-/// `$$`, and an out-of-range index (`$99`, which interpolates to empty).
-const REPLACEMENT: &str = "x$1-${g0}-$0-$$-$99y";
+/// `$$`, and an out-of-range index (`${99}`, which interpolates to empty).
+///
+/// NOTE: the braces on `${99}` are load-bearing. An unbraced `$name` takes the
+/// longest run of `[0-9A-Za-z_]`, so `$99y` would parse as the capture *name*
+/// `99y` and take the name-lookup path instead of the index one, silently
+/// swallowing the trailing literal.
+const REPLACEMENT: &str = "x$1-${g0}-$0-$$-${99}y";
 
 fn drive(pattern: &str, flags: &str, text: &str) {
-    let pattern = cap(pattern, 4096);
     // The all-matches ops below (`replace_all`, `split`) drive `find_iter`,
     // which re-scans from each match and is superlinear in the text length for
     // adversarial patterns. Coverage instrumentation amplifies that by orders of
     // magnitude, so keep the match text very short to stay within libFuzzer's
-    // per-unit timeout. Pattern length compiles fast and is not the amplifier,
-    // so it stays generous.
+    // per-unit timeout.
+    //
+    // The pattern is deliberately *not* capped. Its length is what drives
+    // compile-time memory, so capping it here would hide the very blowup this
+    // target is meant to reach, and `MAX_REGEX_SIZE_BEFORE_COMPILATION` is the
+    // guard under test. See `gen_long_pattern`.
     let text = cap(text, 16);
     let Ok(regex) = func::build_regex(pattern, flags) else {
         return;
@@ -198,13 +253,17 @@ fn run(mut u: Unstructured) -> arbitrary::Result<()> {
         return Ok(());
     }
     let mut pattern = String::new();
-    // Occasionally emit a near-size-limit nested-quantifier pattern (the
-    // compiler must reject it cleanly). Otherwise the structured generator.
-    if u.int_in_range(0u8..=7)? == 0 {
-        gen_near_limit(&mut u, &mut pattern)?;
-    } else {
-        let mut name_id = 0u32;
-        gen_regex(&mut u, 3, &mut name_id, &mut pattern)?;
+    // Occasionally emit an adversarially sized pattern, aimed at one of the two
+    // size limits, which the compiler must reject cleanly. The long-pattern arm
+    // legitimately costs seconds and gigabytes per unit, so it stays rare.
+    // Otherwise the structured generator.
+    match u.int_in_range(0u8..=15)? {
+        0 | 1 => gen_near_limit(&mut u, &mut pattern)?,
+        2 => gen_long_pattern(&mut u, &mut pattern)?,
+        _ => {
+            let mut name_id = 0u32;
+            gen_regex(&mut u, 3, &mut name_id, &mut pattern)?;
+        }
     }
     let mut text = String::new();
     for _ in 0..u.int_in_range(0usize..=24)? {

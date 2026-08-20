@@ -11,101 +11,7 @@
 
 const hpccWasm = window['@hpcc-js/wasm'];
 
-function formatNameForQuery(name) {
-  return `'${name.replace('\'', '\'\'')}'`;
-}
-
 const { useState, useEffect } = React;
-
-function ClusterReplicaView() {
-  const [currentClusterName, setCurrentClusterName] = useState(null);
-  const [currentReplicaName, setCurrentReplicaName] = useState(null);
-  const [sqlResponse, setSqlResponse] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(false);
-
-  const queryClusterReplicas = `
-    SELECT
-      clusters.name AS cluster_name, replicas.name AS replica_name
-    FROM
-      mz_catalog.mz_cluster_replicas replicas
-      LEFT JOIN mz_catalog.mz_clusters clusters ON clusters.id = replicas.cluster_id
-    ORDER BY cluster_name ASC, replica_name ASC
-  `;
-
-  useEffect(() => {
-    const search = new URLSearchParams(location.search);
-    const clusterName = search.get('cluster_name');
-    const replicaName = search.get('replica_name');
-    if (clusterName) {
-      setCurrentClusterName(clusterName);
-    }
-    if (replicaName) {
-      setCurrentReplicaName(replicaName);
-    }
-
-    query(queryClusterReplicas)
-      .then((data) => {
-        const results = data.results[0].rows;
-        setSqlResponse(results);
-        if (!replicaName && results.length > 0) {
-          if(results.some(
-            result => ('default' == result[0]) && ('r1' == result[1]))) {
-            setCurrentClusterName('default');
-            setCurrentReplicaName('r1');
-          } else {
-            setCurrentClusterName(results[0][0]);
-            setCurrentReplicaName(results[0][1]);
-          }
-        }
-        setLoading(false);
-      })
-      .catch((error) => {
-        setError(error);
-        setLoading(false);
-      });
-  }, []);
-
-  useEffect(() => {
-    if (!currentReplicaName) return;
-    const params = new URLSearchParams(location.search);
-    params.set('cluster_name', currentClusterName);
-    params.set('replica_name', currentReplicaName);
-    window.history.replaceState({}, '', `${location.pathname}?${params}`);
-  }, [currentClusterName, currentReplicaName]);
-
-  return (
-    <div>
-      {loading ? (
-        <div>Loading...</div>
-      ) : error ? (
-        <div>error: {String(error)}</div>
-      ) : (
-        <div>
-          <label htmlFor="cluster_replica">Cluster Replica </label>
-          <select
-            id="cluster_replica"
-            name="cluster_replica"
-            onChange={(event) => {
-              const clusterReplicaJson = event.target.value;
-              const clusterReplica = JSON.parse(clusterReplicaJson);
-              setCurrentClusterName(clusterReplica[0]);
-              setCurrentReplicaName(clusterReplica[1]);
-            }}
-            defaultValue={JSON.stringify([currentClusterName, currentReplicaName])}
-          >
-            {sqlResponse.map((v) => (
-              <option key={JSON.stringify(v)} value={JSON.stringify(v)}>
-                {`${v[0]}.${v[1]}`}
-              </option>
-            ))}
-          </select>
-          <Views clusterName={currentClusterName} replicaName={currentReplicaName} />
-        </div>
-      )}
-    </div>
-  );
-}
 
 function Views(props) {
   const [currentDataflow, setCurrentDataflow] = useState(null);
@@ -147,8 +53,8 @@ function Views(props) {
       const {
         results: [_set_cluster, _set_replica, records_table],
       } = await query(`
-        SET cluster = ${formatNameForQuery(props.clusterName)};
-        SET cluster_replica = ${formatNameForQuery(props.replicaName)};
+        SET cluster = ${sqlLiteral(props.clusterName)};
+        SET cluster_replica = ${sqlLiteral(props.replicaName)};
         SELECT
           id, name, batches, records, size, capacity, allocations
         FROM
@@ -256,6 +162,13 @@ function View(props) {
     setGraph(null);
 
     const load = async () => {
+      // The id can arrive from the URL, and is interpolated below as a
+      // number, a position no quoting makes an arbitrary string safe in.
+      const dataflowId = Number(props.dataflowId);
+      if (!Number.isInteger(dataflowId)) {
+        throw `invalid dataflow id ${props.dataflowId}`;
+      }
+
       // Use mz_dataflow_operator_parents for hierarchy - much cleaner than computing from addresses.
       // The query computes:
       // 1. All operators in the dataflow with their parent_id
@@ -265,8 +178,8 @@ function View(props) {
       const {
         results: [_set_cluster, _set_replica, stats_table, operators_table, addresses_table, channels_table],
       } = await query(`
-        SET cluster = ${formatNameForQuery(props.clusterName)};
-        SET cluster_replica = ${formatNameForQuery(props.replicaName)};
+        SET cluster = ${sqlLiteral(props.clusterName)};
+        SET cluster_replica = ${sqlLiteral(props.replicaName)};
 
         -- Dataflow stats
         SELECT
@@ -274,7 +187,7 @@ function View(props) {
         FROM
           mz_introspection.mz_records_per_dataflow
         WHERE
-          id = ${props.dataflowId};
+          id = ${dataflowId};
 
         -- All operators with parent relationships, scope detection, and stats
         WITH dataflow_operators AS (
@@ -286,7 +199,7 @@ function View(props) {
             FROM mz_introspection.mz_dataflow_operators o
             LEFT JOIN mz_introspection.mz_dataflow_operator_parents p ON o.id = p.id
             JOIN mz_introspection.mz_dataflow_addresses a ON o.id = a.id
-            WHERE a.address[1] = ${props.dataflowId}
+            WHERE a.address[1] = ${dataflowId}
         ),
         scope_ids AS (
             SELECT DISTINCT parent_id as id FROM dataflow_operators WHERE parent_id IS NOT NULL
@@ -309,7 +222,7 @@ function View(props) {
         -- All addresses in the dataflow (for channel edge lookups)
         SELECT id, address
         FROM mz_introspection.mz_dataflow_addresses
-        WHERE address[1] = ${props.dataflowId};
+        WHERE address[1] = ${dataflowId};
 
         -- Channel edges with message counts and ports (for tracing through region boundaries)
         SELECT
@@ -325,7 +238,7 @@ function View(props) {
             ON channels.id = counts.channel_id
         WHERE channels.id IN (
             SELECT id FROM mz_introspection.mz_dataflow_addresses
-            WHERE address[1] = ${props.dataflowId}
+            WHERE address[1] = ${dataflowId}
         );
       `);
 
@@ -680,18 +593,21 @@ async function getCreateView(dataflow_name) {
   // which we will use with SHOW CREATE VIEW to show the SQL that created this
   // dataflow.
   //
-  // There are known problems with this method. It doesn't know anything about
-  // SQL parsing or escaping, assumes the dataflow operator's name is of a very
-  // specific shape, and assumes a CREATE VIEW statement made an index which made
-  // this dataflow. So we assume that problems can happen at any level here and
-  // will cleanly bail if anything doesn't exactly match what we want. In that
-  // case we will not show the SQL. This is intended to be good enough for most
-  // users for now.
+  // There are known problems with this method. It assumes the dataflow
+  // operator's name is of a very specific shape, so a name containing a dot
+  // splits at the wrong dots and the catalog lookup below finds nothing, and
+  // it assumes a CREATE VIEW statement made an index which made this dataflow.
+  // So we assume that problems can happen at any level here and will cleanly
+  // bail if anything doesn't exactly match what we want. In that case we will
+  // not show the SQL. This is intended to be good enough for most users for
+  // now.
   const match = dataflow_name.match(/^Dataflow: (.*)\.(.*)\.(.*)$/);
   if (!match) {
     throw 'unknown dataflow name pattern';
   }
-  const view_name_table = await query(`
+  const {
+    results: [view_name_table],
+  } = await query(`
     SELECT
       d.name AS database, s.schema, s.view
     FROM
@@ -716,9 +632,9 @@ async function getCreateView(dataflow_name) {
                         mz_catalog.mz_schemas AS sc,
                         mz_catalog.mz_indexes AS idx
                       WHERE
-                        db.name = '${match[1]}'
-                        AND sc.name = '${match[2]}'
-                        AND idx.name = '${match[3]}'
+                        db.name = ${sqlLiteral(match[1])}
+                        AND sc.name = ${sqlLiteral(match[2])}
+                        AND idx.name = ${sqlLiteral(match[3])}
                     )
               )
                 AS v ON s.id = v.schema_id
@@ -729,7 +645,11 @@ async function getCreateView(dataflow_name) {
     throw 'could not determine view';
   }
   const name = view_name_table.rows[0];
-  const create_table = await query(`SHOW CREATE VIEW "${name[0]}"."${name[1]}"."${name[2]}"`);
+  const {
+    results: [create_table],
+  } = await query(
+    `SHOW CREATE VIEW ${sqlIdent(name[0])}.${sqlIdent(name[1])}.${sqlIdent(name[2])}`
+  );
   return { name: create_table.rows[0][0], create: create_table.rows[0][1] };
 }
 
@@ -758,4 +678,11 @@ function dispNs(ns) {
 }
 
 const content = document.getElementById('content');
-ReactDOM.render(<ClusterReplicaView />, content);
+ReactDOM.render(
+  <ClusterReplicaView>
+    {(clusterName, replicaName) => (
+      <Views clusterName={clusterName} replicaName={replicaName} />
+    )}
+  </ClusterReplicaView>,
+  content
+);

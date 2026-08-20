@@ -1399,6 +1399,19 @@ impl RelationDesc {
 
     /// Creates a new [`RelationDesc`] retaining only the columns specified in `demands`.
     pub fn apply_demand(&self, demands: &BTreeSet<usize>) -> RelationDesc {
+        // This filters `metadata` by raw ColumnIndex but `typ` by position,
+        // which only agree when the desc is dense. Every desc constructible
+        // today is (schema history is add-only), but a dropped column would
+        // desync the two and silently attach types, statistics, and filter
+        // specs to the wrong columns downstream.
+        debug_assert!(
+            self.metadata
+                .iter()
+                .enumerate()
+                .all(|(pos, (idx, meta))| idx.0 == pos && meta.typ_idx == pos),
+            "apply_demand requires a dense RelationDesc (ColumnIndex == typ_idx): {:?}",
+            self.metadata,
+        );
         let mut new_desc = self.clone();
 
         // Update ColumnMetadata.
@@ -2065,6 +2078,23 @@ pub fn arb_relation_desc_diff(
 mod tests {
     use super::*;
     use prost::Message;
+
+    /// `apply_demand`, and the stats and filter-spec plumbing downstream of
+    /// it, require dense descs. A desc with a dropped column must trip the
+    /// assertion rather than silently misattach columns.
+    #[mz_ore::test]
+    #[should_panic(expected = "dense RelationDesc")]
+    fn apply_demand_rejects_non_dense_desc() {
+        let desc = RelationDesc::builder()
+            .with_column("a", SqlScalarType::Int32.nullable(false))
+            .with_column("b", SqlScalarType::Int32.nullable(false))
+            .with_column("c", SqlScalarType::Int32.nullable(false))
+            .finish();
+        let mut versioned = VersionedRelationDesc::new(desc);
+        let version = versioned.drop_column("b");
+        let desc = versioned.at_version(RelationVersionSelector::Specific(version));
+        let _ = desc.apply_demand(&BTreeSet::from([0]));
+    }
 
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `pipe2` on OS `linux`

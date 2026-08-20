@@ -386,3 +386,11 @@ Target cluster: quickstart
 "Dataflow: materialize.public.monotonic_min" ReduceMonotonic
 "Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]"
 "Dataflow: materialize.public.non_dbz_data_indexed_primary_idx" "ArrangeBy[[Column(0, \"a\"), Column(1, \"b\")]]-errors"
+"Dataflow: materialize.public.m1" "Arrange errors"
+"Dataflow: materialize.public.m1" "Distinct errors"
+"Dataflow: materialize.public.monotonic_fused" "Arrange errors"
+"Dataflow: materialize.public.monotonic_fused" "Distinct errors"
+"Dataflow: materialize.public.monotonic_max" "Arrange errors"
+"Dataflow: materialize.public.monotonic_max" "Distinct errors"
+"Dataflow: materialize.public.monotonic_min" "Arrange errors"
+"Dataflow: materialize.public.monotonic_min" "Distinct errors"

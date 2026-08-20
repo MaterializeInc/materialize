@@ -19,10 +19,10 @@ hydration](#objects-and-hydration).
 
 ## Objects and hydration
 
-Hydration is per cluster replica. When a trigger above occurs, the objects on
-the affected replicas hydrate as described below. When a replica restarts, every
-object on it re-hydrates. A resize or an added replica hydrates only the new
-replicas.
+{{% include-from-yaml data="hydration-details" name="per-replica" %}}
+
+The objects on the affected replicas hydrate as described in the following
+table.
 
 {{% yaml-table data="hydration-objects-table" %}}
 

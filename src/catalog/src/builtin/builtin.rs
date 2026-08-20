@@ -25,8 +25,8 @@ use mz_sql::rbac;
 use mz_sql::session::user::MZ_SYSTEM_ROLE_ID;
 
 use crate::builtin::{
-    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinView, Cardinality,
-    LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
+    Builtin, BuiltinLog, BuiltinMaterializedView, BuiltinSource, BuiltinTable, BuiltinView,
+    Cardinality, LinkProperties, Ontology, OntologyLink, PUBLIC_SELECT,
 };
 
 /// Generate builtin views reporting the given builtins.
@@ -47,14 +47,32 @@ pub(super) fn builtins(
         Builtin::MaterializedView(x) => Some(*x),
         _ => None,
     });
+    let table_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::Table(x) => Some(*x),
+        _ => None,
+    });
 
-    let sources = make_builtin_sources(source_iter, log_iter);
-    let materialized_views = make_builtin_materialized_views(mv_iter);
+    let sources: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_sources(source_iter, log_iter)));
+    let materialized_views: &'static BuiltinView =
+        Box::leak(Box::new(make_builtin_materialized_views(mv_iter)));
+    let tables: &'static BuiltinView = Box::leak(Box::new(make_builtin_tables(table_iter)));
 
-    [sources, materialized_views].into_iter().map(|v| {
-        let static_ref = Box::leak(Box::new(v));
-        Builtin::View(static_ref)
-    })
+    // The generated views above, and `mz_builtin_views` itself, are listed in
+    // `mz_builtin_views` with placeholder SQL rather than their real
+    // definitions. See `make_builtin_views`.
+    let view_iter = builtin_items.iter().filter_map(|b| match b {
+        Builtin::View(x) => Some(*x),
+        _ => None,
+    });
+    let views: &'static BuiltinView = Box::leak(Box::new(make_builtin_views(
+        view_iter,
+        [sources, materialized_views, tables],
+    )));
+
+    [sources, materialized_views, tables, views]
+        .into_iter()
+        .map(Builtin::View)
 }
 
 fn make_builtin_sources(
@@ -168,6 +186,145 @@ FROM (VALUES {values}) AS v(oid, schema_name, name, cluster_name, definition, pr
         access: vec![PUBLIC_SELECT],
         ontology: None,
     }
+}
+
+fn make_builtin_tables(iter: impl Iterator<Item = &'static BuiltinTable>) -> BuiltinView {
+    let owner_priv = rbac::owner_privilege(ObjectType::Table, MZ_SYSTEM_ROLE_ID);
+    let values = iter
+        .map(|table| {
+            let schema = escaped_string_literal(table.schema);
+            let name = escaped_string_literal(table.name);
+            let privileges = make_privileges_sql(&table.access, &owner_priv);
+            format!("({}::oid, {}, {}, {})", table.oid, schema, name, privileges)
+        })
+        .join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, privileges
+FROM (VALUES {values}) AS v(oid, schema_name, name, privileges)"
+    );
+
+    BuiltinView {
+        name: "mz_builtin_tables",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_TABLES_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this). Table names happen to
+            // be unique across builtin schemas today, so `name` is a key. If
+            // a table is ever added whose bare name collides with another
+            // schema's, drop the `name` key here.
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .finish(),
+        column_comments: Default::default(),
+        sql: Box::leak(sql.into_boxed_str()),
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    }
+}
+
+/// Generates `mz_internal.mz_builtin_views`, listing every builtin view,
+/// including itself and the `generated` views.
+///
+/// Views from `iter` are listed with their real definition and create SQL.
+/// The generated views are instead listed with a short placeholder query.
+/// Real SQL is impossible for `mz_builtin_views` itself, its definition would
+/// have to contain its own text. It is impractical for the other generated
+/// views, whose SQL embeds metadata about every builtin object.
+/// `mz_builtin_materialized_views` for example carries the SQL of every
+/// builtin materialized view, so re-embedding its definition here would
+/// produce enormous rows that make `SELECT * FROM mz_views` unusable.
+///
+/// The placeholder is a valid SQL statement, because `mz_views` applies
+/// `mz_internal.redact_sql` to the `create_sql` column and that function
+/// errors on unparseable input, which would poison the whole materialized
+/// view. The placeholder also embeds the view's qualified name so that the
+/// `definition` and `create_sql` columns stay unique across rows, which the
+/// declared keys rely on.
+fn make_builtin_views<'a>(
+    iter: impl Iterator<Item = &'a BuiltinView>,
+    generated: [&BuiltinView; 3],
+) -> BuiltinView {
+    let owner_priv = rbac::owner_privilege(ObjectType::View, MZ_SYSTEM_ROLE_ID);
+
+    let make_row = |oid: u32, schema: &str, name: &str, access: &[MzAclItem], create_sql: &str| {
+        let stmt = mz_sql::parse::parse(create_sql)
+            .expect("valid sql")
+            .into_element()
+            .ast;
+        let Statement::CreateView(stmt) = stmt else {
+            panic!("invalid builtin view SQL");
+        };
+
+        let definition = format!("{};", stmt.definition.query.to_ast_string_stable());
+        let definition = escaped_string_literal(&definition);
+        let create_sql = stmt.to_ast_string_stable();
+        let create_sql = escaped_string_literal(&create_sql);
+
+        let schema = escaped_string_literal(schema);
+        let name = escaped_string_literal(name);
+        let privileges = make_privileges_sql(access, &owner_priv);
+
+        format!(
+            "({}::oid, {}, {}, {}, {}, {})",
+            oid, schema, name, definition, privileges, create_sql
+        )
+    };
+
+    let mut view = BuiltinView {
+        name: "mz_builtin_views",
+        schema: MZ_INTERNAL_SCHEMA,
+        oid: oid::VIEW_MZ_BUILTIN_VIEWS_OID,
+        desc: RelationDesc::builder()
+            .with_column("oid", SqlScalarType::Oid.nullable(false))
+            .with_column("schema_name", SqlScalarType::String.nullable(false))
+            .with_column("name", SqlScalarType::String.nullable(false))
+            .with_column("definition", SqlScalarType::String.nullable(false))
+            .with_column(
+                "privileges",
+                SqlScalarType::Array(Box::new(SqlScalarType::MzAclItem)).nullable(false),
+            )
+            .with_column("create_sql", SqlScalarType::String.nullable(false))
+            // NOTE: The declared keys must exactly match the keys the
+            // optimizer derives from the generated VALUES list
+            // (`verify_builtin_descs` enforces this).
+            .with_key(vec![0])
+            .with_key(vec![2])
+            .with_key(vec![3])
+            .with_key(vec![5])
+            .finish(),
+        column_comments: Default::default(),
+        sql: "",
+        access: vec![PUBLIC_SELECT],
+        ontology: None,
+    };
+
+    let full_values = iter.map(|v| make_row(v.oid, v.schema, v.name, &v.access, &v.create_sql()));
+    let placeholder_values = generated.iter().copied().chain([&view]).map(|v| {
+        let create_sql = format!(
+            "CREATE VIEW {}.{} AS SELECT '<generated builtin view {}.{}: definition elided>'",
+            v.schema, v.name, v.schema, v.name
+        );
+        make_row(v.oid, v.schema, v.name, &v.access, &create_sql)
+    });
+    let values = full_values.chain(placeholder_values).join(",");
+    let sql = format!(
+        "
+SELECT oid, schema_name, name, definition, privileges, create_sql
+FROM (VALUES {values}) AS v(oid, schema_name, name, definition, privileges, create_sql)"
+    );
+
+    view.sql = Box::leak(sql.into_boxed_str());
+    view
 }
 
 /// Convert the given list of [`MzAclItem`] to the equivalent SQL syntax.

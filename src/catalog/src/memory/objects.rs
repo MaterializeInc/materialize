@@ -2540,16 +2540,15 @@ impl CatalogItem {
     /// per-replica hydration check would resolve vacuously.
     pub fn is_hydratable(&self) -> bool {
         match self {
-            CatalogItem::Index(_) | CatalogItem::MaterializedView(_) | CatalogItem::Sink(_) => true,
+            CatalogItem::Index(_)
+            | CatalogItem::MaterializedView(_)
+            | CatalogItem::Sink(_)
+            | CatalogItem::MetricSink(_) => true,
             CatalogItem::Source(source) => matches!(
                 source.data_source,
                 DataSourceDesc::Ingestion { .. } | DataSourceDesc::OldSyntaxIngestion { .. }
             ),
-            // TODO(SQL-571): return true once metric sinks run a per-replica dataflow, and
-            // move this arm out then. Reporting `false` until then is safe: a sink with no
-            // real hydration state lets graceful reconfiguration cut over without waiting.
-            CatalogItem::MetricSink(_)
-            | CatalogItem::Table(_)
+            CatalogItem::Table(_)
             | CatalogItem::Log(_)
             | CatalogItem::View(_)
             | CatalogItem::Type(_)

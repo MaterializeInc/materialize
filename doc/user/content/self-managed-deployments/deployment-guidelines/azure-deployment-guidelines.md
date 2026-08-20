@@ -69,11 +69,13 @@ database, we recommend:
 - The **Memory Optimized** tier (E-series), which provides the 1:8
   vCore-to-memory ratio recommended for the metadata database.
 - **Zone-redundant high availability** for production.
+- **Premium SSD v2** storage, which includes 3,000 IOPS and 125 MB/s at any
+  size.
 
-| Deployment size | `sku_name` | vCores / memory | Continuously-active objects (~60% CPU) |
-|---|---|---|---|
-| Entry / small production | `MO_Standard_E4ds_v5` | 4 / 32 GiB | ~4,500 |
-| Recommended default | `MO_Standard_E16ds_v5` | 16 / 128 GiB | ~18,000 |
+| Deployment size | `sku_name` | vCores / memory | Storage | Provisioned IOPS | Continuously-active objects (~60% CPU) |
+|---|---|---|---|---|---|
+| Entry / small production | `MO_Standard_E4ds_v5` | 4 / 32 GiB | 128 GiB | 3,000 (included) | ~4,500 |
+| Recommended default | `MO_Standard_E16ds_v5` | 16 / 128 GiB | 512 GiB | 6,000 | ~18,000 |
 
 ## TLS
 

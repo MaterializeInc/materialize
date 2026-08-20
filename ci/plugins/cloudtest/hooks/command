@@ -14,6 +14,11 @@ set -euo pipefail
 . misc/shlib/shlib.bash
 . test/cloudtest/config.bash
 
+# The kind cluster setup hands repository paths to the host Docker daemon as
+# bind mount sources, which requires container paths to equal host paths. See
+# CI_BUILDER_FIXED_WORKDIR in bin/ci-builder.
+export CI_BUILDER_FIXED_WORKDIR=0
+
 run_args=(
     "--junitxml=junit_cloudtest_$BUILDKITE_JOB_ID.xml"
 )

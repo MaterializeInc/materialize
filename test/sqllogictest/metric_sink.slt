@@ -11,8 +11,9 @@ mode cockroach
 
 reset-server
 
-# `CREATE METRIC SINK` only writes a catalog item. No dataflow is installed, so
-# nothing here actually publishes metrics.
+# These tests exercise `CREATE METRIC SINK` planning and catalog behavior. The
+# sink's dataflow and the metrics it publishes are covered in
+# test/testdrive/metric-sink.td.
 
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_metric_sink = true
@@ -28,7 +29,7 @@ CREATE VIEW shaped AS SELECT * FROM raw
 # All five columns present with the right types, so this plans.
 
 statement ok
-CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'ms_')
+CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'mz_metric_sink_ms_')
 
 statement ok
 DROP METRIC SINK ms
@@ -39,7 +40,7 @@ statement ok
 CREATE VIEW reordered AS SELECT help, value, labels, metric_type, metric_name FROM raw
 
 statement ok
-CREATE METRIC SINK ms_reordered FROM reordered WITH (PREFIX = 'reordered_')
+CREATE METRIC SINK ms_reordered FROM reordered WITH (PREFIX = 'mz_metric_sink_reordered_')
 
 statement ok
 DROP METRIC SINK ms_reordered
@@ -50,7 +51,7 @@ statement ok
 CREATE VIEW extra AS SELECT *, 1 AS unrelated FROM raw
 
 statement ok
-CREATE METRIC SINK ms_extra FROM extra WITH (PREFIX = 'extra_')
+CREATE METRIC SINK ms_extra FROM extra WITH (PREFIX = 'mz_metric_sink_extra_')
 
 statement ok
 DROP METRIC SINK ms_extra
@@ -61,7 +62,7 @@ statement ok
 CREATE VIEW missing_help AS SELECT metric_name, metric_type, labels, value FROM raw
 
 statement error metric sink source must expose column "help"
-CREATE METRIC SINK bad FROM missing_help WITH (PREFIX = 'bad_')
+CREATE METRIC SINK bad FROM missing_help WITH (PREFIX = 'mz_metric_sink_bad_')
 
 # Neither is one of the wrong type.
 
@@ -70,7 +71,7 @@ CREATE VIEW wrong_value_type AS
 SELECT metric_name, metric_type, labels, value::text AS value, help FROM raw
 
 statement error metric sink source column "value" is not of the required type
-CREATE METRIC SINK bad FROM wrong_value_type WITH (PREFIX = 'bad_')
+CREATE METRIC SINK bad FROM wrong_value_type WITH (PREFIX = 'mz_metric_sink_bad_')
 
 # `labels` has to be a text=>text map, not just any map.
 
@@ -79,7 +80,7 @@ CREATE VIEW wrong_labels_type AS
 SELECT metric_name, metric_type, '{a=>1}'::map[text=>int] AS labels, value, help FROM raw
 
 statement error metric sink source column "labels" is not of the required type
-CREATE METRIC SINK bad FROM wrong_labels_type WITH (PREFIX = 'bad_')
+CREATE METRIC SINK bad FROM wrong_labels_type WITH (PREFIX = 'mz_metric_sink_bad_')
 
 # You can't read from something that has no rows to read.
 
@@ -87,7 +88,7 @@ statement ok
 CREATE SECRET s AS 'x'
 
 statement error cannot create metric sink from s because it is a secret
-CREATE METRIC SINK bad FROM s WITH (PREFIX = 'bad_')
+CREATE METRIC SINK bad FROM s WITH (PREFIX = 'mz_metric_sink_bad_')
 
 # An index is in the same boat, and the error should say so instead of being
 # vague about it.
@@ -96,7 +97,7 @@ statement ok
 CREATE INDEX raw_idx ON raw (metric_name)
 
 statement error cannot create metric sink from raw_idx because it is a index
-CREATE METRIC SINK bad FROM raw_idx WITH (PREFIX = 'bad_')
+CREATE METRIC SINK bad FROM raw_idx WITH (PREFIX = 'mz_metric_sink_bad_')
 
 # The prefix is required. The names a sink publishes come from its query's rows
 # and so are unknown at plan time, which makes the prefix the only handle we get
@@ -117,20 +118,27 @@ CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = 'has-a-dash')
 statement error metric sink prefix must not be empty
 CREATE METRIC SINK ms_bad_prefix FROM shaped WITH (PREFIX = '')
 
+# The prefix must live in the reserved `mz_metric_sink_` namespace, the one lane
+# nothing else in a replica's registry writes. A well-formed prefix outside it is
+# rejected, so a sink can never publish onto a platform metric or its own gauges.
+
+statement error metric sink prefix "app_" must start with "mz_metric_sink_"
+CREATE METRIC SINK ms_unmarked FROM shaped WITH (PREFIX = 'app_')
+
 # Prefixes on one cluster have to be prefix-free, not merely distinct: `app_`
 # plus a row named `svc_x` publishes exactly what `app_svc_` plus a row named
 # `x` does, and the Prometheus registry merges same-named families silently.
 
 statement ok
-CREATE METRIC SINK ms_app FROM shaped WITH (PREFIX = 'app_')
+CREATE METRIC SINK ms_app FROM shaped WITH (PREFIX = 'mz_metric_sink_app_')
 
-statement error metric sink prefix "app_svc_" conflicts with prefix "app_" of metric sink ms_app on cluster quickstart
-CREATE METRIC SINK ms_app_svc FROM shaped WITH (PREFIX = 'app_svc_')
+statement error metric sink prefix "mz_metric_sink_app_svc_" conflicts with prefix "mz_metric_sink_app_" of metric sink ms_app on cluster quickstart
+CREATE METRIC SINK ms_app_svc FROM shaped WITH (PREFIX = 'mz_metric_sink_app_svc_')
 
 # Either direction, so an existing prefix cannot be swallowed by a shorter one.
 
-statement error metric sink prefix "ap" conflicts with prefix "app_" of metric sink ms_app on cluster quickstart
-CREATE METRIC SINK ms_ap FROM shaped WITH (PREFIX = 'ap')
+statement error metric sink prefix "mz_metric_sink_ap" conflicts with prefix "mz_metric_sink_app_" of metric sink ms_app on cluster quickstart
+CREATE METRIC SINK ms_ap FROM shaped WITH (PREFIX = 'mz_metric_sink_ap')
 
 # The registry a sink publishes into is process-local and every replica of a
 # cluster runs the same sinks, so uniqueness is only ever a per-cluster
@@ -140,7 +148,7 @@ statement ok
 CREATE CLUSTER other SIZE 'scale=1,workers=1', REPLICATION FACTOR 0
 
 statement ok
-CREATE METRIC SINK ms_other_app IN CLUSTER other FROM shaped WITH (PREFIX = 'app_')
+CREATE METRIC SINK ms_other_app IN CLUSTER other FROM shaped WITH (PREFIX = 'mz_metric_sink_app_')
 
 statement ok
 DROP METRIC SINK ms_other_app
@@ -155,13 +163,13 @@ DROP METRIC SINK ms_app
 # existing sink already has is not a conflict with itself.
 
 statement ok
-CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'ms_')
+CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'mz_metric_sink_ms_')
 
 statement ok
-CREATE METRIC SINK IF NOT EXISTS ms FROM shaped WITH (PREFIX = 'ms_')
+CREATE METRIC SINK IF NOT EXISTS ms FROM shaped WITH (PREFIX = 'mz_metric_sink_ms_')
 
 statement error metric sink "materialize.public.ms" already exists
-CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'ms_')
+CREATE METRIC SINK ms FROM shaped WITH (PREFIX = 'mz_metric_sink_ms_')
 
 # A metric sink can't be indexed.
 
@@ -280,7 +288,7 @@ DROP VIEW shaped CASCADE
 # against `raw`.
 
 statement ok
-CREATE METRIC SINK ms FROM raw WITH (PREFIX = 'ms_')
+CREATE METRIC SINK ms FROM raw WITH (PREFIX = 'mz_metric_sink_ms_')
 
 statement ok
 DROP METRIC SINK ms
@@ -297,7 +305,7 @@ statement ok
 CREATE SCHEMA ms_rename_schema
 
 statement ok
-CREATE METRIC SINK ms_rename_schema.rsink FROM ms_rename_src WITH (PREFIX = 'ren_')
+CREATE METRIC SINK ms_rename_schema.rsink FROM ms_rename_src WITH (PREFIX = 'mz_metric_sink_ren_')
 
 statement ok
 ALTER VIEW ms_rename_src RENAME TO ms_rename_src2
@@ -364,7 +372,7 @@ REVOKE SELECT ON TABLE rbac_src FROM rbac_owner
 COMPLETE 0
 
 simple conn=rbac_owner,user=rbac_owner
-CREATE METRIC SINK rbac_ms FROM rbac_src WITH (PREFIX = 'rbac_')
+CREATE METRIC SINK rbac_ms FROM rbac_src WITH (PREFIX = 'mz_metric_sink_rbac_')
 ----
 db error: ERROR: permission denied for TABLE "materialize.public.rbac_src"
 DETAIL: The 'rbac_owner' role needs SELECT privileges on TABLE "materialize.public.rbac_src"
@@ -377,9 +385,67 @@ GRANT SELECT ON TABLE rbac_src TO rbac_reader
 COMPLETE 0
 
 simple conn=rbac_reader,user=rbac_reader
-CREATE METRIC SINK rbac_ms FROM rbac_src WITH (PREFIX = 'rbac_')
+CREATE METRIC SINK rbac_ms FROM rbac_src WITH (PREFIX = 'mz_metric_sink_rbac_')
 ----
 COMPLETE 0
+
+# TODO(linear#SQL-645): re-enable the block below once the sink operator skips a row whose
+# `labels` map carries a null value. Today `extract_row` unwraps such a value as a string and
+# panics, which aborts clusterd, so the test reproduces the crash instead of asserting the
+# behavior it describes.
+#
+# # A `map[text=>text]` legally holds null *values*, and the shaping coalesces only
+# # a null `labels` map as a whole, so such a row reaches the sink operator, which
+# # has no label set it can represent and must skip it. Panicking instead aborts the
+# # whole clusterd process, and the sink re-renders over the same persisted row on
+# # restart, crash-looping every dataflow on the cluster.
+# #
+# # The same sink covers notice bookkeeping: `LiteralConstraints` attaches an "index
+# # too wide" notice for the `metric_name = 'm'` filter over `nulls_idx`, keyed by
+# # the sink's own id, and `DROP METRIC SINK` has to retract it again.
+#
+# statement ok
+# CREATE TABLE nulls (metric_name text, metric_type text, labels map[text=>text], value double, help text)
+#
+# statement ok
+# INSERT INTO nulls VALUES ('m', 'gauge', '{good=>1, bad=>NULL}'::map[text=>text], 1, 'h')
+#
+# statement ok
+# CREATE INDEX nulls_idx ON nulls (metric_name, metric_type)
+#
+# statement ok
+# CREATE VIEW nulls_v AS SELECT * FROM nulls WHERE metric_name = 'm'
+#
+# statement ok
+# CREATE METRIC SINK ms_nulls FROM nulls_v WITH (PREFIX = 'mz_metric_sink_nulls_')
+#
+# # The replica folded that row and still answers: `count(*)` needs a dataflow on
+# # `quickstart`, the cluster the sink runs on.
+#
+# query I
+# SELECT count(*) FROM nulls
+# ----
+# 1
+#
+# # `mz_optimizer_notices` is readable only by `mz_monitor`, hence `mz_system`.
+#
+# simple conn=mz_system,user=mz_system
+# SELECT count(*) FROM mz_internal.mz_optimizer_notices WHERE message LIKE '%nulls_idx%'
+# ----
+# 1
+# COMPLETE 1
+#
+# statement ok
+# DROP METRIC SINK ms_nulls
+#
+# simple conn=mz_system,user=mz_system
+# SELECT count(*) FROM mz_internal.mz_optimizer_notices WHERE message LIKE '%nulls_idx%'
+# ----
+# 0
+# COMPLETE 1
+#
+# statement ok
+# DROP TABLE nulls CASCADE
 
 # With the flag off the statement is refused, and the error says which flag.
 

@@ -46,7 +46,7 @@ pub mod probe;
 pub use probe::{KeyProber, MAX_KEY_LENGTH};
 
 pub mod partition;
-pub use partition::partition_table;
+pub use partition::{PartitionParams, partition_table};
 
 mod aws_rds;
 

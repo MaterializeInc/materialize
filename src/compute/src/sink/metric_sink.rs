@@ -24,6 +24,7 @@
 //! family-conflict counting stay here because they need the cross-row state of the fold.
 
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
@@ -110,11 +111,31 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
             }),
         );
 
+        // The frontier this worker reports to the controller. Every worker reports, not just the
+        // active one: the controller meets the per-worker frontiers, so a worker that never
+        // advanced would pin the input's since forever.
+        let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
+        let shared_frontier = Rc::clone(&sink_frontier);
+
         op.build(move |_capabilities| {
             // Recycled across activations: unpacking a row into `Datum`s otherwise allocates a
             // fresh `Vec` per row on this hot path.
             let mut datum_vec = DatumVec::new();
             move |frontiers| {
+                // Combined ok+err input frontier. A timestamp is closed once neither input can
+                // still produce data at it, so folding a closed time observes all of its diffs.
+                let mut frontier = Antichain::new();
+                for f in frontiers {
+                    frontier.extend(f.frontier().iter().copied());
+                }
+                // NOTE: the reported frontier is published here, before the active worker folds
+                // through it below (`st.integrate` at the end of this closure). This is only safe
+                // because the active worker must complete that fold in the same activation that
+                // observed the frontier. An early return added on the active-worker path between
+                // here and `st.integrate` would advertise progress the sink has not folded,
+                // downgrading the input's since ahead of the data actually consumed.
+                shared_frontier.borrow_mut().clone_from(&frontier);
+
                 if worker_id != active_worker_id {
                     // Drain so the operator isn't rescheduled forever. There is no state to
                     // fold into on this worker.
@@ -152,13 +173,6 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
                     }
                 });
 
-                // Combined ok+err input frontier. A timestamp is closed once neither input can
-                // still produce data at it, so folding a closed time observes all of its diffs.
-                let mut frontier = Antichain::new();
-                for f in frontiers {
-                    frontier.extend(f.frontier().iter().copied());
-                }
-
                 st.integrate(&frontier);
                 st.frontier_ms = frontier
                     .as_option()
@@ -167,6 +181,12 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
                 st.publish_if_healthy();
             }
         });
+
+        // Report frontier updates to the `ComputeState`. A metric sink writes to the metrics
+        // registry rather than to a collection, so its "write" frontier is the input frontier it
+        // has folded through.
+        let collection = compute_state.expect_collection_mut(sink_id);
+        collection.sink_write_frontier = Some(sink_frontier);
 
         Some(Rc::new(drop_handle))
     }
@@ -605,7 +625,7 @@ fn build_families(published: &BTreeMap<PublishedKey, PublishedValue>) -> Vec<Met
 
 /// A `prometheus::core::Collector` that exposes a metric sink's [`SinkState`].
 ///
-/// The companion gauges (`mz_metric_sink_*`) are declared statically, each carrying a `sink`
+/// The companion gauges (`mz_compute_metric_sink_*`) are declared statically, each carrying a `sink`
 /// const label so that per-sink series get distinct `Desc` ids on registration. The user-defined
 /// series are entirely dynamic: their names come from the sink's source query, so they are built
 /// directly as [`MetricFamily`] protos in `collect` and are not declared via `desc`. Prometheus's
@@ -631,27 +651,27 @@ impl SinkCollector {
         SinkCollector {
             state,
             frontier_gauge: gauge(
-                "mz_metric_sink_frontier_ms",
+                "mz_compute_metric_sink_frontier_ms",
                 "The metric sink's input frontier, in milliseconds since the epoch.",
             ),
             errors_gauge: gauge(
-                "mz_metric_sink_errors",
+                "mz_compute_metric_sink_errors",
                 "The number of live errors on the metric sink's input.",
             ),
             skipped_gauge: gauge(
-                "mz_metric_sink_skipped",
+                "mz_compute_metric_sink_skipped",
                 "The number of input rows skipped for an unsupported metric type or an invalid name.",
             ),
             conflicts_gauge: gauge(
-                "mz_metric_sink_conflicts",
+                "mz_compute_metric_sink_conflicts",
                 "The number of published series whose type or help disagree with their family's chosen type or help.",
             ),
             collisions_gauge: gauge(
-                "mz_metric_sink_collisions",
+                "mz_compute_metric_sink_collisions",
                 "The number of series with more than one distinct live value for the same metric name and labels.",
             ),
             null_values_gauge: gauge(
-                "mz_metric_sink_null_values",
+                "mz_compute_metric_sink_null_values",
                 "The number of series currently suppressed because their value is null.",
             ),
         }

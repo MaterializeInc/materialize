@@ -646,6 +646,22 @@ all database objects in the system.
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).  |
 | `referenced_object_id`  | [`text`]     | The ID of the referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
+## `mz_object_graph_edges`
+
+The `mz_object_graph_edges` view describes the dependency edges between maintained
+objects, as rendered by object dependency graphs.
+
+It unions the dataflow-layer dependencies from
+[`mz_materialization_dependencies`](#mz_materialization_dependencies), restricted to
+indexes, materialized views, sinks, sources, and tables, with the source-to-subsource
+and source-to-table edges that stand in for sources whose subsources carry the data.
+
+<!-- RELATION_SPEC mz_internal.mz_object_graph_edges -->
+| Field           | Type     | Meaning                                                                                |
+| --------------- | -------- | -------------------------------------------------------------------------------------- |
+| `object_id`     | [`text`] | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).     |
+| `dependency_id` | [`text`] | The ID of the object it depends on. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+
 ## `mz_object_fully_qualified_names`
 
 The `mz_object_fully_qualified_names` view enriches the [`mz_catalog.mz_objects`](/reference/system-catalog/mz_catalog/#mz_objects) view with namespace information.
@@ -1500,6 +1516,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->

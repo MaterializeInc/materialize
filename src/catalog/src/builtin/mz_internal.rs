@@ -3898,6 +3898,66 @@ pub static MZ_OBJECTS_ID_NAMESPACE_TYPES: LazyLock<BuiltinView> = LazyLock::new(
     ontology: None,
 });
 
+/// Object dependency edges. Each row `(object_id, dependency_id)` means
+/// `object_id` depends on `dependency_id`.
+///
+/// Unions the dataflow dependencies between maintained objects (index,
+/// materialized view, sink, source, table) with the source-to-subsource and
+/// source-to-table edges that connect a source to the children carrying its
+/// data. Indexed on `mz_catalog_server` so the console surfaces that walk the
+/// dependency graph read one maintained arrangement instead of recomputing the
+/// union per request: the object workflow graph, critical-path freshness
+/// analysis, and impact/dependents views.
+pub static MZ_OBJECT_GRAPH_EDGES: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
+    name: "mz_object_graph_edges",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::VIEW_MZ_OBJECT_GRAPH_EDGES_OID,
+    desc: RelationDesc::builder()
+        .with_column("object_id", SqlScalarType::String.nullable(false))
+        .with_column("dependency_id", SqlScalarType::String.nullable(false))
+        .with_key(vec![0, 1])
+        .finish(),
+    column_comments: BTreeMap::from_iter([
+        (
+            "object_id",
+            "The ID of the dependent object. Corresponds to `mz_objects.id`.",
+        ),
+        (
+            "dependency_id",
+            "The ID of the object it depends on. Corresponds to `mz_objects.id`.",
+        ),
+    ]),
+    sql: "
+SELECT md.object_id, md.dependency_id
+FROM mz_internal.mz_materialization_dependencies md
+JOIN mz_catalog.mz_objects po ON po.id = md.dependency_id
+    AND po.type IN ('index', 'materialized-view', 'sink', 'source', 'table')
+JOIN mz_catalog.mz_objects co ON co.id = md.object_id
+    AND co.type IN ('index', 'materialized-view', 'sink', 'source', 'table')
+UNION
+-- Subsource -> parent-source edges: a subsource depends on the (user) source it
+-- belongs to, an edge mz_materialization_dependencies doesn't carry.
+SELECT od.object_id, od.referenced_object_id
+FROM mz_internal.mz_object_dependencies od
+JOIN mz_catalog.mz_sources ps ON ps.id = od.referenced_object_id
+JOIN mz_catalog.mz_sources cs ON cs.id = od.object_id
+-- Progress collections are deliberately left out: their dependency edge points
+-- source -> progress, and they only exist for old-syntax sources, which the
+-- source-table migration is removing.
+WHERE ps.id LIKE 'u%' AND cs.type = 'subsource'
+UNION
+-- Select the (non-null) source id from the join rather than the nullable
+-- mz_tables.source_id, so dependency_id is non-null across all branches.
+SELECT t.id, ps.id
+FROM mz_catalog.mz_tables t
+JOIN mz_catalog.mz_sources ps ON ps.id = t.source_id",
+    access: vec![PUBLIC_SELECT],
+    // No ontology entity: these edges are already in the ontology via the
+    // DependsOn links of mz_object_dependencies and
+    // mz_materialization_dependencies. An entity here would duplicate them.
+    ontology: None,
+});
+
 pub static MZ_OBJECT_OID_ALIAS: LazyLock<BuiltinView> = LazyLock::new(|| BuiltinView {
     name: "mz_object_oid_alias",
     schema: MZ_INTERNAL_SCHEMA,
@@ -8757,6 +8817,15 @@ pub const MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND: BuiltinIndex = BuiltinIndex {
     oid: oid::INDEX_MZ_OBJECT_TRANSITIVE_DEPENDENCIES_IND_OID,
     sql: "IN CLUSTER mz_catalog_server
 ON mz_internal.mz_object_transitive_dependencies (object_id)",
+    is_retained_metrics_object: false,
+};
+
+pub const MZ_OBJECT_GRAPH_EDGES_IND: BuiltinIndex = BuiltinIndex {
+    name: "mz_object_graph_edges_ind",
+    schema: MZ_INTERNAL_SCHEMA,
+    oid: oid::INDEX_MZ_OBJECT_GRAPH_EDGES_IND_OID,
+    sql: "IN CLUSTER mz_catalog_server
+ON mz_internal.mz_object_graph_edges (object_id)",
     is_retained_metrics_object: false,
 };
 
