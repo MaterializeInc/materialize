@@ -1027,14 +1027,28 @@ impl ComputeController {
             .map_err(|err| TimeDependenceError::InstanceMissing(err.0))?;
         let mut time_dependencies = Vec::new();
 
-        for id in dataflow.imported_index_ids() {
+        // Only the imports the exports read say anything about how this dataflow's frontier relates
+        // to wall clock. Counting one that optimization left unused reports wall-clock dependence
+        // for a dataflow whose exports are constant, and that earns it a dataflow expiration, which
+        // pins its output frontier at the expiration time. A constant export's frontier is the empty
+        // antichain, so the pin holds it days short of the truth and whoever reads that frontier
+        // never learns the collection can no longer change.
+        let used_imports = dataflow.used_import_ids();
+
+        for id in dataflow
+            .imported_index_ids()
+            .filter(|id| used_imports.contains(id))
+        {
             let dependence = instance
                 .get_time_dependence(id)
                 .map_err(|err| TimeDependenceError::CollectionMissing(err.0))?;
             time_dependencies.push(dependence);
         }
 
-        'source: for id in dataflow.imported_source_ids() {
+        'source: for id in dataflow
+            .imported_source_ids()
+            .filter(|id| used_imports.contains(id))
+        {
             // We first check whether the id is backed by a compute object, in which case we use
             // the time dependence we know. This is true for storage sinks.
             for instance in self.instances.values() {
