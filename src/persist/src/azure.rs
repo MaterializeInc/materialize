@@ -9,312 +9,156 @@
 
 //! An Azure Blob Storage implementation of [Blob] storage.
 
-use anyhow::{Context, anyhow};
-use async_trait::async_trait;
-use azure_core::auth::{AccessToken, TokenCredential};
-use azure_core::error::ErrorKind;
-use azure_core::{ExponentialRetryOptions, RetryOptions, StatusCode, TransportOptions};
-use azure_identity::{
-    TokenCredentialOptions, create_default_credential, federated_credentials_flow,
-};
-use azure_storage::{CloudLocation, EMULATOR_ACCOUNT, prelude::*};
-use azure_storage_blobs::blob::operations::GetBlobResponse;
-use azure_storage_blobs::prelude::*;
-use bytes::Bytes;
-use futures_util::future::BoxFuture;
-use futures_util::stream::FuturesOrdered;
-use futures_util::{FutureExt, StreamExt};
-use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use time::OffsetDateTime;
-use tokio::sync::RwLock;
-use tracing::{info, warn};
+
+use anyhow::anyhow;
+use async_trait::async_trait;
+use azure_core::credentials::{AccessToken, TokenCredential, TokenRequestOptions};
+use azure_core::error::ErrorKind;
+use azure_core::http::headers::HeaderName;
+use azure_core::http::{ExponentialRetryOptions, RetryOptions, StatusCode, Transport};
+use azure_identity::{
+    DeveloperToolsCredential, ManagedIdentityCredential, WorkloadIdentityCredential,
+};
+use azure_storage_blob::models::{
+    BlobClientDownloadResult, BlobClientGetPropertiesResultHeaders,
+    BlobContainerClientListBlobsOptions,
+};
+use azure_storage_blob::{BlobContainerClient, BlobContainerClientOptions};
+use bytes::Bytes;
+use futures_util::{StreamExt, TryStreamExt};
+use tracing::info;
 use url::Url;
 use uuid::Uuid;
 
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
-use mz_ore::task::AbortOnDropHandle;
 
 use crate::cfg::BlobKnobs;
 use crate::error::Error;
 use crate::location::{Blob, BlobMetadata, Determinate, ExternalError};
 use crate::metrics::S3BlobMetrics;
 
-/// Environment variables that configure AKS-style workload identity. The
-/// names match the ones `azure_identity`'s credential chain reads.
-const AZURE_TENANT_ID: &str = "AZURE_TENANT_ID";
-const AZURE_CLIENT_ID: &str = "AZURE_CLIENT_ID";
-const AZURE_FEDERATED_TOKEN: &str = "AZURE_FEDERATED_TOKEN";
-const AZURE_FEDERATED_TOKEN_FILE: &str = "AZURE_FEDERATED_TOKEN_FILE";
+mod azurite;
 
-/// Time before an access token's expiry at which its refresh task fetches a
-/// replacement, so requests keep being served from an unexpired token while
-/// the refresh round trip to AAD is in flight.
-const TOKEN_REFRESH_BUFFER: Duration = Duration::from_secs(5 * 60);
-
-/// Minimum time a refresh task waits between fetch attempts once a refresh
-/// is due. This paces retries after failures, e.g. when AAD is transiently
-/// unreachable, and prevents hot-looping if issued tokens are already within
-/// [TOKEN_REFRESH_BUFFER] of expiry.
-const TOKEN_REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(10);
-
-/// Exchanges a client assertion (the projected service account token) for an
-/// AAD access token with the given scopes.
-type ExchangeFn = Arc<
-    dyn Fn(String, Vec<String>) -> BoxFuture<'static, azure_core::Result<AccessToken>>
-        + Send
-        + Sync,
->;
-
-/// A shared slot holding the current access token for one scope set.
-type TokenSlot = Arc<std::sync::RwLock<AccessToken>>;
-
-/// A [TokenCredential] for AKS-style workload identity that re-reads the
-/// projected service account token file on every AAD access token refresh.
+/// A [TokenCredential] that tries each of its sources in order and returns the
+/// first token one of them produces.
 ///
-/// `azure_identity`'s `WorkloadIdentityCredential` reads
-/// `AZURE_FEDERATED_TOKEN_FILE` once at construction and holds the contents
-/// for the life of the process. Kubernetes rotates the projected token, so
-/// once the last cached AAD access token expires, every refresh presents an
-/// expired client assertion and fails, permanently locking a long-running
-/// process out of blob storage. Deferring the file read to refresh time picks
-/// up rotations.
-struct RefreshingWorkloadIdentityCredential {
-    federated_token_file: PathBuf,
-    exchange: ExchangeFn,
-    /// One token slot and refresh task per requested scope set. The task
-    /// keeps the slot fresh, so [TokenCredential::get_token] only blocks on
-    /// the first use of a scope set.
-    cache: RwLock<BTreeMap<Vec<String>, (TokenSlot, AbortOnDropHandle<()>)>>,
-    refresh_buffer: Duration,
-    retry_interval: Duration,
-}
-
-impl Debug for RefreshingWorkloadIdentityCredential {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RefreshingWorkloadIdentityCredential")
-            .field("federated_token_file", &self.federated_token_file)
-            .finish_non_exhaustive()
-    }
-}
-
-impl RefreshingWorkloadIdentityCredential {
-    /// Returns a credential if the workload identity environment variables
-    /// are present, or `None` to indicate that a different credential type
-    /// must be used.
-    fn from_env() -> Option<azure_core::Result<Self>> {
-        // A token provided directly via AZURE_FEDERATED_TOKEN is static, so
-        // there is nothing to re-read. `azure_identity`'s credential chain
-        // prefers it over the token file, defer to it to preserve that
-        // precedence.
-        if std::env::var(AZURE_FEDERATED_TOKEN).is_ok() {
-            return None;
-        }
-        let (Ok(tenant_id), Ok(client_id), Ok(token_file)) = (
-            std::env::var(AZURE_TENANT_ID),
-            std::env::var(AZURE_CLIENT_ID),
-            std::env::var(AZURE_FEDERATED_TOKEN_FILE),
-        ) else {
-            return None;
-        };
-        Some(Self::new(tenant_id, client_id, PathBuf::from(token_file)))
-    }
-
-    fn new(
-        tenant_id: String,
-        client_id: String,
-        federated_token_file: PathBuf,
-    ) -> azure_core::Result<Self> {
-        let options = TokenCredentialOptions::default();
-        let http_client = options.http_client();
-        let authority_host = options.authority_host()?;
-        let exchange: ExchangeFn = Arc::new(move |assertion, scopes| {
-            let http_client = Arc::clone(&http_client);
-            let authority_host = authority_host.clone();
-            let tenant_id = tenant_id.clone();
-            let client_id = client_id.clone();
-            async move {
-                let scopes: Vec<&str> = scopes.iter().map(String::as_str).collect();
-                let res = federated_credentials_flow::perform(
-                    http_client,
-                    &client_id,
-                    &assertion,
-                    &scopes,
-                    &tenant_id,
-                    &authority_host,
-                )
-                .await
-                .map_err(|err| {
-                    azure_core::error::Error::full(
-                        ErrorKind::Credential,
-                        err,
-                        "request token error",
-                    )
-                })?;
-                Ok(AccessToken::new(
-                    res.access_token().clone(),
-                    OffsetDateTime::now_utc() + Duration::from_secs(res.expires_in),
-                ))
-            }
-            .boxed()
-        });
-        Ok(Self::with_exchange(
-            federated_token_file,
-            exchange,
-            TOKEN_REFRESH_BUFFER,
-            TOKEN_REFRESH_RETRY_INTERVAL,
-        ))
-    }
-
-    fn with_exchange(
-        federated_token_file: PathBuf,
-        exchange: ExchangeFn,
-        refresh_buffer: Duration,
-        retry_interval: Duration,
-    ) -> Self {
-        Self {
-            federated_token_file,
-            exchange,
-            cache: RwLock::new(BTreeMap::new()),
-            refresh_buffer,
-            retry_interval,
-        }
-    }
-}
-
-/// Reads the projected service account token file and exchanges its contents
-/// for an AAD access token.
-async fn fetch_token(
-    federated_token_file: &Path,
-    exchange: &ExchangeFn,
-    scopes: Vec<String>,
-) -> azure_core::Result<AccessToken> {
-    let assertion = tokio::fs::read_to_string(federated_token_file)
-        .await
-        .map_err(|err| {
-            azure_core::error::Error::full(
-                ErrorKind::Credential,
-                err,
-                format!(
-                    "failed to read federated token from file {}",
-                    federated_token_file.display()
-                ),
-            )
-        })?;
-    // Kubernetes writes the projected token without surrounding whitespace,
-    // but a hand-provisioned file may have a trailing newline, which would
-    // corrupt the client assertion.
-    (exchange)(assertion.trim().to_string(), scopes).await
-}
-
-/// Keeps `slot` holding an unexpired token by fetching a replacement within
-/// `refresh_buffer` of the current token's expiry. A failed fetch leaves the
-/// current token in place and is retried after `retry_interval`.
-async fn refresh_task(
-    federated_token_file: PathBuf,
-    exchange: ExchangeFn,
-    slot: TokenSlot,
-    scopes: Vec<String>,
-    refresh_buffer: Duration,
-    retry_interval: Duration,
-) {
-    loop {
-        let refresh_at = slot.read().expect("lock poisoned").expires_on - refresh_buffer;
-        let wait = refresh_at - OffsetDateTime::now_utc();
-        let wait = if wait.is_positive() {
-            wait.unsigned_abs()
-        } else {
-            Duration::ZERO
-        };
-        tokio::time::sleep(wait.max(retry_interval)).await;
-        match fetch_token(&federated_token_file, &exchange, scopes.clone()).await {
-            Ok(token) => *slot.write().expect("lock poisoned") = token,
-            Err(err) => {
-                warn!("failed to refresh Azure workload identity token, will retry: {err}")
-            }
-        }
-    }
-}
+/// `azure_identity` 1.x offers no chaining credential, and the sources cannot
+/// be picked once at construction time instead: [ManagedIdentityCredential]
+/// constructs successfully on any host, so an eager choice would shadow the
+/// developer-tools fallback on a laptop. Sources are re-tried on every token
+/// request rather than latching onto the first that worked, so an identity that
+/// becomes available later is picked up.
+#[derive(Debug)]
+struct ChainedTokenCredential(Vec<Arc<dyn TokenCredential>>);
 
 #[async_trait]
-impl TokenCredential for RefreshingWorkloadIdentityCredential {
-    async fn get_token(&self, scopes: &[&str]) -> azure_core::Result<AccessToken> {
-        let scopes_key: Vec<String> = scopes.iter().map(ToString::to_string).collect();
-
-        {
-            let cache = self.cache.read().await;
-            if let Some((slot, _refresh)) = cache.get(&scopes_key) {
-                return Ok(slot.read().expect("lock poisoned").clone());
+impl TokenCredential for ChainedTokenCredential {
+    async fn get_token(
+        &self,
+        scopes: &[&str],
+        options: Option<TokenRequestOptions<'_>>,
+    ) -> azure_core::Result<AccessToken> {
+        let mut errors = Vec::new();
+        for source in &self.0 {
+            match source.get_token(scopes, options.clone()).await {
+                Ok(token) => return Ok(token),
+                Err(err) => errors.push(format!("{source:?}: {err}")),
             }
         }
-
-        let mut cache = self.cache.write().await;
-        if let Some((slot, _refresh)) = cache.get(&scopes_key) {
-            return Ok(slot.read().expect("lock poisoned").clone());
-        }
-
-        // First use of this scope set: fetch the initial token, then hand
-        // the slot to a task that keeps it fresh. A failed initial fetch is
-        // not cached, the next call retries it.
-        let token = fetch_token(
-            &self.federated_token_file,
-            &self.exchange,
-            scopes_key.clone(),
-        )
-        .await?;
-        let slot = Arc::new(std::sync::RwLock::new(token.clone()));
-        let refresh = mz_ore::task::spawn(
-            || "azure-workload-identity-token-refresh",
-            refresh_task(
-                self.federated_token_file.clone(),
-                Arc::clone(&self.exchange),
-                Arc::clone(&slot),
-                scopes_key.clone(),
-                self.refresh_buffer,
-                self.retry_interval,
-            ),
-        )
-        .abort_on_drop();
-        cache.insert(scopes_key, (slot, refresh));
-        Ok(token)
-    }
-
-    async fn clear_cache(&self) -> azure_core::Result<()> {
-        // Dropping the entries aborts their refresh tasks with them.
-        self.cache.write().await.clear();
-        Ok(())
+        Err(azure_core::Error::with_message_fn(
+            ErrorKind::Credential,
+            || {
+                format!(
+                    "no Azure credential produced a token:\n{}",
+                    errors.join("\n")
+                )
+            },
+        ))
     }
 }
 
-/// Returns the token credential to use when the blob URL carries no SAS
-/// token.
+/// Returns the token credential to use when the blob URL carries no SAS token.
 ///
-/// Prefers [RefreshingWorkloadIdentityCredential] when its environment
-/// variables are present, because the workload identity credential in
-/// `azure_identity`'s default chain never re-reads the rotated token file.
-/// Otherwise falls back to the default chain, whose remaining credential
-/// types (e.g. managed identity via IMDS) refresh correctly.
+/// The chain mirrors the credential types the SDK's own default chain covered
+/// before it was removed in 1.x: workload identity (AKS), managed identity
+/// (App Service and VM/IMDS), then the local developer tools (`az login`,
+/// `azd auth login`). Client secrets read from the environment are not
+/// included; 1.x dropped that credential type, and we never provisioned one.
 fn token_credential() -> Arc<dyn TokenCredential> {
-    match RefreshingWorkloadIdentityCredential::from_env() {
-        Some(credential) => {
-            info!("azure: using refreshing workload identity credentials");
-            Arc::new(credential.expect("Azure workload identity credentials"))
-        }
-        None => create_default_credential().expect("Azure default credentials"),
+    let mut sources: Vec<Arc<dyn TokenCredential>> = Vec::new();
+    // Construction fails when the credential's environment is absent, e.g.
+    // workload identity outside of a pod with a projected token. Log and skip:
+    // a later source may still authenticate.
+    match WorkloadIdentityCredential::new(None) {
+        Ok(credential) => sources.push(credential),
+        Err(err) => info!("azure: workload identity credentials unavailable: {err}"),
     }
+    match ManagedIdentityCredential::new(None) {
+        Ok(credential) => sources.push(credential),
+        Err(err) => info!("azure: managed identity credentials unavailable: {err}"),
+    }
+    match DeveloperToolsCredential::new(None) {
+        Ok(credential) => sources.push(credential),
+        Err(err) => info!("azure: developer tools credentials unavailable: {err}"),
+    }
+    Arc::new(ChainedTokenCredential(sources))
+}
+
+/// Builds the HTTP client the Azure SDK transports its requests over.
+///
+/// The SDK's own client hardcodes 20s connect and 60s read timeouts, so we
+/// supply a client that honors [BlobKnobs] instead.
+///
+/// NOTE: automatic decompression must stay off. `BlobClient::download`
+/// reassembles a blob from range requests keyed by byte offset, which a
+/// transparently decompressed body would invalidate. reqwest turns
+/// decompression on by default for every codec whose feature is enabled, and
+/// the SDK enables gzip and deflate, so we have to opt out explicitly.
+fn http_client(knobs: &dyn BlobKnobs) -> reqwest_0_13::Client {
+    reqwest_0_13::ClientBuilder::new()
+        // The SDK defaults to rustls; pin it so an unrelated dependency
+        // enabling native-tls cannot silently move Azure traffic onto it.
+        .tls_backend_rustls()
+        .timeout(knobs.operation_attempt_timeout())
+        .read_timeout(knobs.read_timeout())
+        .connect_timeout(knobs.connect_timeout())
+        // Azure's REST API does not redirect, and following one would leak the
+        // Authorization header to the redirect target.
+        .redirect(reqwest_0_13::redirect::Policy::none())
+        .no_gzip()
+        .no_deflate()
+        .no_brotli()
+        .no_zstd()
+        .build()
+        .expect("valid config for azure HTTP client")
 }
 
 /// Configuration for opening an [AzureBlob].
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AzureBlobConfig {
+    // The metrics struct here is a bit of a misnomer. We only need access
+    // to the LgBytes metrics, which has an Azure-specific field. For now,
+    // it saves considerable plumbing to reuse [S3BlobMetrics].
+    //
+    // TODO: spin up an AzureBlobMetrics and do the plumbing.
     metrics: S3BlobMetrics,
-    client: ContainerClient,
+    // `BlobContainerClient` is neither `Clone` nor `Debug`, so it is shared
+    // behind an `Arc` and `Debug` is implemented by hand.
+    client: Arc<BlobContainerClient>,
     prefix: String,
+}
+
+impl Debug for AzureBlobConfig {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureBlobConfig")
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AzureBlobConfig {
@@ -333,59 +177,52 @@ impl AzureBlobConfig {
         url: Url,
         knobs: Box<dyn BlobKnobs>,
     ) -> Result<Self, Error> {
-        let transport = TransportOptions::new(Arc::new(
-            reqwest::ClientBuilder::new()
-                .timeout(knobs.operation_attempt_timeout())
-                .read_timeout(knobs.read_timeout())
-                .connect_timeout(knobs.connect_timeout())
-                .build()
-                .expect("valid config for azure HTTP client"),
-        ));
-        let retry = RetryOptions::exponential(
-            ExponentialRetryOptions::default().max_total_elapsed(knobs.operation_timeout()),
-        );
+        let mut options = BlobContainerClientOptions::default();
+        options.client_options.transport = Some(Transport::new(Arc::new(http_client(&*knobs))));
+        options.client_options.retry = RetryOptions::exponential(ExponentialRetryOptions {
+            max_total_elapsed: azure_core::time::Duration::try_from(knobs.operation_timeout())
+                .map_err(|e| Error::from(format!("operation timeout out of range: {e}")))?,
+            ..Default::default()
+        });
 
-        let client = if account == EMULATOR_ACCOUNT {
+        let (container_url, credential) = if account == azurite::ACCOUNT {
             info!("Connecting to Azure emulator");
-            ClientBuilder::with_location(
-                CloudLocation::Emulator {
-                    address: url.domain().expect("domain for Azure emulator").to_string(),
-                    port: url.port().expect("port for Azure emulator"),
-                },
-                StorageCredentials::emulator(),
-            )
+            // Azurite rejects Entra ID tokens, so requests are signed with the
+            // Shared Key scheme by a policy instead of by a credential.
+            options
+                .client_options
+                .per_try_policies
+                .push(Arc::new(azurite::SharedKeyPolicy));
+            options.version = azurite::API_VERSION.to_string();
+            (azurite::container_url(&url, &container)?, None)
         } else {
-            let sas_credentials = match url.query() {
-                Some(query) => Some(StorageCredentials::sas_token(query)),
-                None => None,
-            };
-
-            let credentials = match sas_credentials {
-                Some(Ok(credentials)) => credentials,
-                Some(Err(err)) => {
-                    warn!("Failed to parse SAS token: {err}");
-                    // TODO: should we fallback here? Or can we fully rely on query params
-                    // to determine whether a SAS token was provided?
-                    StorageCredentials::token_credential(token_credential())
+            let endpoint = format!("https://{account}.blob.core.windows.net/{container}");
+            match url.query() {
+                // A SAS token is self-authenticating: it travels in the query
+                // string and no credential is attached.
+                //
+                // NOTE: a SAS token provided this way is static and never
+                // refreshed, so callers must provision one that outlives the
+                // process. Token credentials refresh themselves.
+                Some(sas) => {
+                    let url = Url::parse(&format!("{endpoint}?{sas}"))
+                        .map_err(|e| Error::from(format!("bad Azure container URL: {e}")))?;
+                    (url, None)
                 }
-                None => StorageCredentials::token_credential(token_credential()),
-            };
+                None => {
+                    let url = Url::parse(&endpoint)
+                        .map_err(|e| Error::from(format!("bad Azure container URL: {e}")))?;
+                    (url, Some(token_credential()))
+                }
+            }
+        };
 
-            ClientBuilder::new(account, credentials)
-        }
-        .transport(transport)
-        .retry(retry)
-        .blob_service_client()
-        .container_client(container);
-
-        // NOTE: a SAS token provided via the URL query string is static and
-        // never refreshed, so callers must provision one that outlives the
-        // process. Token credentials (workload identity and managed identity)
-        // refresh themselves.
+        let client = BlobContainerClient::new(container_url, credential, Some(options))
+            .map_err(|e| Error::from(format!("azure container client: {e}")))?;
 
         Ok(AzureBlobConfig {
             metrics,
-            client,
+            client: Arc::new(client),
             prefix,
         })
     }
@@ -435,7 +272,7 @@ impl AzureBlobConfig {
         let metrics = S3BlobMetrics::new(&MetricsRegistry::new());
 
         let config = AzureBlobConfig::new(
-            EMULATOR_ACCOUNT.to_string(),
+            azurite::ACCOUNT.to_string(),
             container_name.clone(),
             prefix,
             metrics,
@@ -448,21 +285,28 @@ impl AzureBlobConfig {
 }
 
 /// Implementation of [Blob] backed by Azure Blob Storage.
-#[derive(Debug)]
 pub struct AzureBlob {
     metrics: S3BlobMetrics,
-    client: ContainerClient,
+    client: Arc<BlobContainerClient>,
     prefix: String,
+}
+
+impl Debug for AzureBlob {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureBlob")
+            .field("prefix", &self.prefix)
+            .finish_non_exhaustive()
+    }
 }
 
 impl AzureBlob {
     /// Opens the given location for non-exclusive read-write access.
     pub async fn open(config: AzureBlobConfig) -> Result<Self, ExternalError> {
-        if config.client.service_client().account() == EMULATOR_ACCOUNT {
+        if azurite::is_emulator_url(config.client.url()) {
             // TODO: we could move this logic into the test harness.
             // it's currently here because it's surprisingly annoying to
             // create the container out-of-band
-            if let Err(error) = config.client.create().await {
+            if let Err(error) = config.client.create(None).await {
                 info!(
                     ?error,
                     "failed to create emulator container; this is expected on repeat runs"
@@ -484,70 +328,54 @@ impl AzureBlob {
     }
 }
 
+/// The blob's total size according to a download's initial response, or `None`
+/// if the response did not report one.
+///
+/// `download` fetches a blob as a sequence of range requests, so its
+/// `content_length` covers only the first range. `Content-Range` carries the
+/// total after the slash (`bytes 0-1023/4096`). A blob served in a single
+/// unranged response has no `Content-Range`, and its `content_length` is then
+/// the whole blob.
+fn total_len(response: &BlobClientDownloadResult) -> Option<u64> {
+    const CONTENT_RANGE: HeaderName = HeaderName::from_static("content-range");
+    match response.headers.get_optional_str(&CONTENT_RANGE) {
+        Some(content_range) => content_range
+            .rsplit_once('/')
+            .and_then(|(_, total)| total.parse().ok()),
+        None => response.properties.content_length,
+    }
+}
+
 #[async_trait]
 impl Blob for AzureBlob {
     async fn get(&self, key: &str) -> Result<Option<SegmentedBytes>, ExternalError> {
         let path = self.get_path(key);
-        let blob = self.client.blob_client(path);
+        let blob = self.client.blob_client(&path);
 
-        /// Fetch the body of a single [`GetBlobResponse`].
-        async fn fetch_chunk(
-            response: GetBlobResponse,
-            metrics: S3BlobMetrics,
-        ) -> Result<Vec<Bytes>, ExternalError> {
-            let content_length = response.blob.properties.content_length;
-
-            let mut parts: Vec<Bytes> = Vec::new();
-            let mut total_len: u64 = 0;
-            let mut body = response.data;
-            while let Some(value) = body.next().await {
-                let value = value
-                    .map_err(|e| ExternalError::from(e.context("azure blob get body error")))?;
-                total_len += u64::cast_from(value.len());
-                parts.push(value);
-            }
-
-            // Report if the content-length header didn't match the number of
-            // bytes we read from the network.
-            if content_length != total_len {
-                metrics.get_invalid_resp.inc();
-            }
-
-            Ok(parts)
-        }
-
-        let mut requests = FuturesOrdered::new();
-        // TODO: the default chunk size is 1MB. We have not tried tuning it,
-        // but making this configurable / running some benchmarks could be
-        // valuable.
-        let mut stream = blob.get().into_stream();
-
-        while let Some(value) = stream.next().await {
-            // Return early if any of the individual fetch requests return an error.
-            let response = match value {
-                Ok(v) => v,
-                Err(e) => {
-                    if let Some(e) = e.as_http_error() {
-                        if e.status() == StatusCode::NotFound {
-                            return Ok(None);
-                        }
-                    }
-
-                    return Err(ExternalError::from(e.context("azure blob get error")));
+        let response = match blob.download(None).await {
+            Ok(response) => response,
+            Err(e) => {
+                if e.http_status() == Some(StatusCode::NotFound) {
+                    return Ok(None);
                 }
-            };
+                return Err(ExternalError::from(e.with_context("azure blob get error")));
+            }
+        };
 
-            // Drive all of the fetch requests concurrently.
-            let metrics = self.metrics.clone();
-            requests.push_back(fetch_chunk(response, metrics));
+        let expected_len = total_len(&response);
+        let mut body = response.body;
+
+        let mut segments = SegmentedBytes::new();
+        while let Some(value) = body.next().await {
+            let value = value
+                .map_err(|e| ExternalError::from(e.with_context("azure blob get body error")))?;
+            segments.push(value);
         }
 
-        // Await on all of our chunks.
-        let mut segments = SegmentedBytes::with_capacity(requests.len());
-        while let Some(body) = requests.next().await {
-            for part in body.context("azure blob get body err")? {
-                segments.push(part);
-            }
+        // Report if the length the service told us to expect didn't match the
+        // number of bytes we read from the network.
+        if expected_len.is_some_and(|len| len != u64::cast_from(segments.len())) {
+            self.metrics.get_invalid_resp.inc();
         }
 
         Ok(Some(segments))
@@ -561,27 +389,29 @@ impl Blob for AzureBlob {
         let blob_key_prefix = self.get_path(key_prefix);
         let strippable_root_prefix = format!("{}/", self.prefix);
 
-        let mut stream = self
+        let mut pager = self
             .client
-            .list_blobs()
-            .prefix(blob_key_prefix.clone())
-            .into_stream();
+            .list_blobs(Some(BlobContainerClientListBlobsOptions {
+                prefix: Some(blob_key_prefix),
+                ..Default::default()
+            }))
+            .map_err(|e| ExternalError::from(e.with_context("azure blob list error")))?;
 
-        while let Some(response) = stream.next().await {
-            let response =
-                response.map_err(|e| ExternalError::from(e.context("azure blob list error")))?;
-
-            for blob in response.blobs.items {
-                let azure_storage_blobs::container::operations::list_blobs::BlobItem::Blob(blob) =
-                    blob
-                else {
-                    continue;
-                };
-
-                if let Some(key) = blob.name.strip_prefix(&strippable_root_prefix) {
-                    let size_in_bytes = blob.properties.content_length;
-                    f(BlobMetadata { key, size_in_bytes });
-                }
+        while let Some(blob) = pager
+            .try_next()
+            .await
+            .map_err(|e| ExternalError::from(e.with_context("azure blob list error")))?
+        {
+            let Some(name) = blob.name.as_deref() else {
+                continue;
+            };
+            if let Some(key) = name.strip_prefix(&strippable_root_prefix) {
+                let size_in_bytes = blob
+                    .properties
+                    .as_ref()
+                    .and_then(|properties| properties.content_length)
+                    .unwrap_or(0);
+                f(BlobMetadata { key, size_in_bytes });
             }
         }
 
@@ -590,56 +420,57 @@ impl Blob for AzureBlob {
 
     async fn set(&self, key: &str, value: Bytes) -> Result<(), ExternalError> {
         let path = self.get_path(key);
-        let blob = self.client.blob_client(path);
+        let blob = self.client.blob_client(&path);
 
-        blob.put_block_blob(value)
+        // `.into()` selects `From<Bytes>`; the inherent `from(Vec<u8>)` would
+        // shadow it and copy.
+        blob.upload(value.into(), None)
             .await
-            .map_err(|e| ExternalError::from(e.context("azure blob put error")))?;
+            .map_err(|e| ExternalError::from(e.with_context("azure blob put error")))?;
 
         Ok(())
     }
 
     async fn delete(&self, key: &str) -> Result<Option<usize>, ExternalError> {
         let path = self.get_path(key);
-        let blob = self.client.blob_client(path);
+        let blob = self.client.blob_client(&path);
 
-        match blob.get_properties().await {
-            Ok(props) => {
-                let size = usize::cast_from(props.blob.properties.content_length);
-                blob.delete()
-                    .await
-                    .map_err(|e| ExternalError::from(e.context("azure blob delete error")))?;
-                Ok(Some(size))
-            }
+        let properties = match blob.get_properties(None).await {
+            Ok(properties) => properties,
             Err(e) => {
-                if let Some(e) = e.as_http_error() {
-                    if e.status() == StatusCode::NotFound {
-                        return Ok(None);
-                    }
+                if e.http_status() == Some(StatusCode::NotFound) {
+                    return Ok(None);
                 }
-
-                Err(ExternalError::from(e.context("azure blob error")))
+                return Err(ExternalError::from(e.with_context("azure blob error")));
             }
-        }
+        };
+
+        let size = usize::cast_from(
+            properties
+                .content_length()
+                .map_err(|e| ExternalError::from(e.with_context("azure blob error")))?
+                .unwrap_or(0),
+        );
+        blob.delete(None)
+            .await
+            .map_err(|e| ExternalError::from(e.with_context("azure blob delete error")))?;
+        Ok(Some(size))
     }
 
     async fn restore(&self, key: &str) -> Result<(), ExternalError> {
         let path = self.get_path(key);
         let blob = self.client.blob_client(&path);
 
-        match blob.get_properties().await {
+        match blob.get_properties(None).await {
             Ok(_) => Ok(()),
             Err(e) => {
-                if let Some(e) = e.as_http_error() {
-                    if e.status() == StatusCode::NotFound {
-                        return Err(Determinate::new(anyhow!(
-                            "azure blob error: unable to restore non-existent key {key}"
-                        ))
-                        .into());
-                    }
+                if e.http_status() == Some(StatusCode::NotFound) {
+                    return Err(Determinate::new(anyhow!(
+                        "azure blob error: unable to restore non-existent key {key}"
+                    ))
+                    .into());
                 }
-
-                Err(ExternalError::from(e.context("azure blob error")))
+                Err(ExternalError::from(e.with_context("azure blob error")))
             }
         }
     }
@@ -647,144 +478,9 @@ impl Blob for AzureBlob {
 
 #[cfg(test)]
 mod tests {
-    use azure_core::auth::Secret;
-    use std::sync::Mutex;
-    use tracing::info;
-
     use crate::location::tests::blob_impl_test;
 
     use super::*;
-
-    /// A [MockExchange] wrapped for sharing with the credential's exchange
-    /// closure.
-    struct MockExchange {
-        /// Client assertions passed to each exchange call.
-        assertions: Vec<String>,
-        /// Whether the next exchange calls fail.
-        fail: bool,
-    }
-
-    fn mock_exchange(state: &Arc<Mutex<MockExchange>>) -> ExchangeFn {
-        let state = Arc::clone(state);
-        Arc::new(move |assertion, _scopes| {
-            let state = Arc::clone(&state);
-            async move {
-                let mut state = state.lock().unwrap();
-                state.assertions.push(assertion);
-                if state.fail {
-                    return Err(azure_core::error::Error::message(
-                        ErrorKind::Credential,
-                        "mock exchange failure",
-                    ));
-                }
-                Ok(AccessToken::new(
-                    Secret::new(format!("aad-{}", state.assertions.len())),
-                    OffsetDateTime::now_utc() + Duration::from_secs(3600),
-                ))
-            }
-            .boxed()
-        })
-    }
-
-    /// Tests that the token file is re-read (and trimmed) on every fetch,
-    /// that fetched tokens are served from the slot without further
-    /// exchanges, and that a failed initial fetch is not cached.
-    #[mz_ore::test(tokio::test)]
-    async fn refreshing_workload_identity_credential() {
-        let token_file = tempfile::NamedTempFile::new().expect("create temp token file");
-        std::fs::write(token_file.path(), "token-a\n").expect("write token file");
-
-        let state = Arc::new(Mutex::new(MockExchange {
-            assertions: Vec::new(),
-            fail: false,
-        }));
-        let credential = RefreshingWorkloadIdentityCredential::with_exchange(
-            token_file.path().to_path_buf(),
-            mock_exchange(&state),
-            TOKEN_REFRESH_BUFFER,
-            TOKEN_REFRESH_RETRY_INTERVAL,
-        );
-        let scopes = &["https://storage.azure.com/"];
-
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-1");
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-1");
-        assert_eq!(state.lock().unwrap().assertions, vec!["token-a"]);
-
-        // A failed initial fetch surfaces the error without caching it, and
-        // the rotated token file is re-read on the next fetch.
-        std::fs::write(token_file.path(), "token-b").expect("write token file");
-        credential.clear_cache().await.expect("clear cache");
-        state.lock().unwrap().fail = true;
-        assert!(credential.get_token(scopes).await.is_err());
-        state.lock().unwrap().fail = false;
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-3");
-        assert_eq!(
-            state.lock().unwrap().assertions,
-            vec!["token-a", "token-b", "token-b"]
-        );
-    }
-
-    /// Tests that the background task refreshes the slot with fresh token
-    /// file contents and keeps the last good token through failed refreshes.
-    #[mz_ore::test(tokio::test)]
-    async fn workload_identity_credential_background_refresh() {
-        let token_file = tempfile::NamedTempFile::new().expect("create temp token file");
-        std::fs::write(token_file.path(), "token-a").expect("write token file");
-
-        let state = Arc::new(Mutex::new(MockExchange {
-            assertions: Vec::new(),
-            fail: false,
-        }));
-        // A refresh buffer longer than the issued validity makes every token
-        // immediately due, so refreshes run continuously at the (shortened)
-        // retry interval.
-        let credential = RefreshingWorkloadIdentityCredential::with_exchange(
-            token_file.path().to_path_buf(),
-            mock_exchange(&state),
-            Duration::from_secs(7200),
-            Duration::from_millis(10),
-        );
-        let scopes = &["https://storage.azure.com/"];
-
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), "aad-1");
-
-        // The background task picks up the rotated token file without any
-        // caller blocking on the refresh.
-        std::fs::write(token_file.path(), "token-b").expect("write token file");
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let token = credential.get_token(scopes).await.expect("token");
-                if token.token.secret() != "aad-1" {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("token refreshed within timeout");
-        assert_eq!(
-            state.lock().unwrap().assertions.last().map(String::as_str),
-            Some("token-b")
-        );
-
-        // Failed refreshes keep the last good token in the slot and retry.
-        state.lock().unwrap().fail = true;
-        let held = credential.get_token(scopes).await.expect("token");
-        let calls_when_failing = state.lock().unwrap().assertions.len();
-        tokio::time::timeout(Duration::from_secs(30), async {
-            while state.lock().unwrap().assertions.len() <= calls_when_failing + 2 {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("retries within timeout");
-        let token = credential.get_token(scopes).await.expect("token");
-        assert_eq!(token.token.secret(), held.token.secret());
-    }
 
     #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `TLS_method` on OS `linux`
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
@@ -805,7 +501,7 @@ mod tests {
             async move {
                 let config = AzureBlobConfig {
                     metrics: config.metrics.clone(),
-                    client: config.client.clone(),
+                    client: Arc::clone(&config.client),
                     prefix: config.prefix.clone(),
                 };
                 AzureBlob::open(config).await
