@@ -9,14 +9,14 @@
 
 #![recursion_limit = "256"]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use insta::assert_debug_snapshot;
 use itertools::Itertools;
 use mz_audit_log::{EventDetails, EventType, EventV1, IdNameV1, VersionedEvent};
 use mz_catalog::durable::objects::serialization::proto;
-use mz_catalog::durable::objects::{DurableType, IdAlloc};
+use mz_catalog::durable::objects::{Comment, DurableType, IdAlloc};
 use mz_catalog::durable::{
     CatalogError, Database, DurableCatalogError, FenceError, Item, Metrics,
     TestCatalogStateBuilder, USER_ITEM_ALLOC_KEY, test_bootstrap_args,
@@ -25,12 +25,13 @@ use mz_ore::assert_ok;
 use mz_ore::collections::HashSet;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::SYSTEM_TIME;
-use mz_persist_client::PersistClient;
+use mz_persist_client::{PersistClient, ShardId};
 use mz_proto::RustType;
 use mz_repr::role_id::RoleId;
-use mz_repr::{CatalogItemId, GlobalId};
+use mz_repr::{CatalogItemId, GlobalId, RelationVersion};
 use mz_sql::catalog::{RoleAttributesRaw, RoleMembership, RoleVars};
-use mz_sql::names::{DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_sql::names::{CommentObjectId, DatabaseId, ResolvedDatabaseSpecifier, SchemaId};
+use mz_storage_client::controller::StorageTxn;
 use uuid::Uuid;
 
 #[mz_ore::test(tokio::test)]
@@ -580,6 +581,49 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
     insert(&mut txn, 200, temp_schema, "tt", Some(session_a)).unwrap();
     insert(&mut txn, 300, temp_schema, "tt", Some(session_b)).unwrap();
 
+    // A temporary item with an ALTER history: two global ids, one shard.
+    txn.insert_item(
+        CatalogItemId::User(500),
+        20_500,
+        GlobalId::User(500),
+        temp_schema,
+        "versioned",
+        "CREATE TABLE versioned (a int)".to_string(),
+        RoleId::User(1),
+        vec![],
+        BTreeMap::from([(RelationVersion::root().bump(), GlobalId::User(501))]),
+        Some(session_a),
+    )
+    .unwrap();
+
+    // Storage mappings like the ones `prepare_state` writes at CREATE, for
+    // the normal item, one plain temporary item, and both versions of the
+    // versioned one.
+    let keep_shard = ShardId::new();
+    let temp_shard = ShardId::new();
+    let versioned_shard = ShardId::new();
+    txn.insert_collection_metadata(BTreeMap::from([
+        (GlobalId::User(100), keep_shard),
+        (GlobalId::User(200), temp_shard),
+        (GlobalId::User(500), versioned_shard),
+        (GlobalId::User(501), versioned_shard),
+    ]))
+    .unwrap();
+
+    // Comments on a temporary and a non-temporary item.
+    txn.update_comment(
+        CommentObjectId::View(CatalogItemId::User(100)),
+        None,
+        Some("keep comment".into()),
+    )
+    .unwrap();
+    txn.update_comment(
+        CommentObjectId::View(CatalogItemId::User(200)),
+        None,
+        Some("temp comment".into()),
+    )
+    .unwrap();
+
     // One session may not hold the same name twice, though.
     let err = insert(&mut txn, 400, temp_schema, "tt", Some(session_a)).unwrap_err();
     assert!(
@@ -626,6 +670,41 @@ async fn test_ephemeral_items(state_builder: TestCatalogStateBuilder) {
             .any(|item| item.id == CatalogItemId::User(100) && item.name == "keep"),
         "non-ephemeral item was removed: {snapshot_items:?}"
     );
+
+    // Only the non-ephemeral item's comment survives.
+    let snapshot_comments: Vec<Comment> = state
+        .snapshot()
+        .await
+        .unwrap()
+        .comments
+        .into_iter()
+        .map(RustType::from_proto)
+        .map_ok(|(k, v)| Comment::from_key_value(k, v))
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        snapshot_comments
+            .iter()
+            .map(|c| c.object_id.clone())
+            .collect::<Vec<_>>(),
+        vec![CommentObjectId::View(CatalogItemId::User(100))],
+        "comments on ephemeral items survived: {snapshot_comments:?}"
+    );
+
+    // The ephemeral items' storage mappings moved to the finalization WAL,
+    // deduped to one shard per item. The non-ephemeral mapping is untouched.
+    let txn = state.transaction().await.unwrap();
+    assert_eq!(
+        txn.get_collection_metadata(),
+        BTreeMap::from([(GlobalId::User(100), keep_shard)]),
+        "ephemeral collection metadata survived"
+    );
+    assert_eq!(
+        txn.get_unfinalized_shards(),
+        BTreeSet::from([temp_shard, versioned_shard]),
+        "ephemeral shards were not enqueued for finalization"
+    );
+    drop(txn);
 
     Box::new(state).expire().await;
 }
