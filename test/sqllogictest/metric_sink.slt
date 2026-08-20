@@ -389,6 +389,64 @@ CREATE METRIC SINK rbac_ms FROM rbac_src WITH (PREFIX = 'mz_metric_sink_rbac_')
 ----
 COMPLETE 0
 
+# TODO(linear#SQL-645): re-enable the block below once the sink operator skips a row whose
+# `labels` map carries a null value. Today `extract_row` unwraps such a value as a string and
+# panics, which aborts clusterd, so the test reproduces the crash instead of asserting the
+# behavior it describes.
+#
+# # A `map[text=>text]` legally holds null *values*, and the shaping coalesces only
+# # a null `labels` map as a whole, so such a row reaches the sink operator, which
+# # has no label set it can represent and must skip it. Panicking instead aborts the
+# # whole clusterd process, and the sink re-renders over the same persisted row on
+# # restart, crash-looping every dataflow on the cluster.
+# #
+# # The same sink covers notice bookkeeping: `LiteralConstraints` attaches an "index
+# # too wide" notice for the `metric_name = 'm'` filter over `nulls_idx`, keyed by
+# # the sink's own id, and `DROP METRIC SINK` has to retract it again.
+#
+# statement ok
+# CREATE TABLE nulls (metric_name text, metric_type text, labels map[text=>text], value double, help text)
+#
+# statement ok
+# INSERT INTO nulls VALUES ('m', 'gauge', '{good=>1, bad=>NULL}'::map[text=>text], 1, 'h')
+#
+# statement ok
+# CREATE INDEX nulls_idx ON nulls (metric_name, metric_type)
+#
+# statement ok
+# CREATE VIEW nulls_v AS SELECT * FROM nulls WHERE metric_name = 'm'
+#
+# statement ok
+# CREATE METRIC SINK ms_nulls FROM nulls_v WITH (PREFIX = 'mz_metric_sink_nulls_')
+#
+# # The replica folded that row and still answers: `count(*)` needs a dataflow on
+# # `quickstart`, the cluster the sink runs on.
+#
+# query I
+# SELECT count(*) FROM nulls
+# ----
+# 1
+#
+# # `mz_optimizer_notices` is readable only by `mz_monitor`, hence `mz_system`.
+#
+# simple conn=mz_system,user=mz_system
+# SELECT count(*) FROM mz_internal.mz_optimizer_notices WHERE message LIKE '%nulls_idx%'
+# ----
+# 1
+# COMPLETE 1
+#
+# statement ok
+# DROP METRIC SINK ms_nulls
+#
+# simple conn=mz_system,user=mz_system
+# SELECT count(*) FROM mz_internal.mz_optimizer_notices WHERE message LIKE '%nulls_idx%'
+# ----
+# 0
+# COMPLETE 1
+#
+# statement ok
+# DROP TABLE nulls CASCADE
+
 # With the flag off the statement is refused, and the error says which flag.
 
 simple conn=mz_system,user=mz_system

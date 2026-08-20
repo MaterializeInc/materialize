@@ -104,7 +104,7 @@ tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
-tokio-stream = { workspace = true, features = ["net"] }
+tokio-stream = { workspace = true, features = ["net"], optional = true }
 tokio-metrics.workspace = true
 tower.workspace = true
 tower-http.workspace = true
@@ -172,6 +172,7 @@ test = [
     "semver",
     "sentry-tracing",
     "tempfile",
+    "tokio-stream",
     "tracing-subscriber",
     "mz-postgres-util",
     "mz-tracing",

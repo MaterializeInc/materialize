@@ -295,6 +295,13 @@ ignore = [
     "RUSTSEC-2026-0247",
     # `aws-sdk-s3` and `launchdarkly-server-sdk` both require `lru ^0.16.3` in their latest releases
     "RUSTSEC-2026-0253",
+    # `h2` unbounded empty DATA frames, only patched in `h2 >=0.4.16`. Our
+    # `h2 0.4` is patched, but `h2 0.3` is also in the tree via `hyper 0.14`,
+    # which `mz-aws-util` keeps to override the DNS resolver of the AWS SDK
+    # (`aws-smithy-runtime/connector-hyper-0-14-x`). The `h2 0.3` line has no
+    # patched release, so this cannot be resolved by a version bump. That
+    # client only talks to AWS endpoints, and the advisory is low severity.
+    "RUSTSEC-2026-0258",
 ]
 
 # Must be manually kept in sync with about.toml.
