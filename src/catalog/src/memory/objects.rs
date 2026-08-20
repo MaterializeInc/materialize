@@ -1852,6 +1852,16 @@ impl CatalogItem {
         }
     }
 
+    /// Returns a mutable reference to the dataflow metainfo, if this item has one.
+    pub fn dataflow_metainfo_mut(&mut self) -> Option<&mut DataflowMetainfo<Arc<OptimizerNotice>>> {
+        match self {
+            CatalogItem::Index(idx) => idx.dataflow_metainfo.as_mut(),
+            CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.as_mut(),
+            CatalogItem::MetricSink(ms) => ms.dataflow_metainfo.as_mut(),
+            _ => None,
+        }
+    }
+
     /// Returns mutable references to the plan fields (`optimized_plan`,
     /// `physical_plan`, `dataflow_metainfo`) on plan-bearing items
     /// (`Index`, `MaterializedView`), or `None` for
