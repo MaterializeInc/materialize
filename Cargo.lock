@@ -1116,8 +1116,8 @@ dependencies = [
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "bytes",
- "h2 0.3.26",
- "h2 0.4.12",
+ "h2 0.3.27",
+ "h2 0.4.17",
  "http 0.2.12",
  "http 1.4.2",
  "http-body 0.4.6",
@@ -4176,9 +4176,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.3.26"
+version = "0.3.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "81fe527a889e1532da5c525686d96d4c2e74cdd345badf8dfef9f6b39dd5f5e8"
+checksum = "0beca50380b1fc32983fc1cb4587bfa4bb9e78fc259aad4a0032d2080309222d"
 dependencies = [
  "bytes",
  "fnv",
@@ -4195,9 +4195,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.12"
+version = "0.4.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3c0b69cfcb4e1b9f1bf2f53f95f766e4661169728ec61cd3fe5a0166f2d1386"
+checksum = "9f877e75f39e9827ec50a572dd592684ac28c029578726c85f1b2aa6ab807449"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -4552,7 +4552,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.3.26",
+ "h2 0.3.27",
  "http 0.2.12",
  "http-body 0.4.6",
  "httparse",
@@ -4576,7 +4576,7 @@ dependencies = [
  "bytes",
  "futures-channel",
  "futures-core",
- "h2 0.4.12",
+ "h2 0.4.17",
  "http 1.4.2",
  "http-body 1.0.1",
  "httparse",
@@ -7146,7 +7146,6 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-postgres",
- "tokio-stream",
  "tower 0.5.3",
  "tower-http",
  "tower-sessions",
@@ -8014,7 +8013,6 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-openssl",
- "tokio-stream",
  "tokio-util",
  "tracing",
  "uuid",
@@ -11371,7 +11369,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
- "h2 0.4.12",
+ "h2 0.4.17",
  "http 1.4.2",
  "http-body 1.0.1",
  "http-body-util",
@@ -13364,7 +13362,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "flate2",
- "h2 0.4.12",
+ "h2 0.4.17",
  "http 1.4.2",
  "http-body 1.0.1",
  "http-body-util",

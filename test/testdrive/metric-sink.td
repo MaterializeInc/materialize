@@ -22,6 +22,14 @@
 # the default timeout is too tight here.
 $ set-sql-timeout duration=60s
 
+# `mz_cluster_prometheus_metrics` is a per-replica log source, so every read of it
+# below has to name a replica. The sink runs on each replica of its cluster and
+# each replica owns its own registry, so targeting one replica is also what keeps
+# the series counts below independent of how many replicas `quickstart` has. `r1`
+# is the default replica name, and the multi-replica testdrive configurations keep
+# a replica of that name on `quickstart`.
+> SET cluster_replica = r1
+
 > CREATE TABLE t (k text NOT NULL, val double)
 
 > INSERT INTO t VALUES ('a', 1), ('b', 2)

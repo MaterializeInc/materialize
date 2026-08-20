@@ -104,7 +104,6 @@ tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
-tokio-stream = { workspace = true, features = ["net"] }
 tokio-metrics.workspace = true
 tower.workspace = true
 tower-http.workspace = true
