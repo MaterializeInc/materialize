@@ -95,6 +95,20 @@ def workflow_gcp_connection_validation(c: Composition) -> None:
     )
 
 
+def workflow_oauth2_server_url(c: Composition) -> None:
+    """OAUTH2 SERVER URL redirects a REST catalog connection's token exchange
+    away from the endpoint the Iceberg specification derives from the catalog
+    URL. Catalogs behind an auth gateway that will not serve an unauthenticated
+    exchange, such as Databricks Unity Catalog, need it. This exercises
+    connection planning only and needs no Iceberg backend."""
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    c.run_testdrive_files(
+        "oauth2-server-url.td",
+    )
+
+
 def workflow_mode_append(c: Composition) -> None:
     key = _setup(c)
 
