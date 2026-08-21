@@ -6173,6 +6173,7 @@ dependencies = [
  "qcell",
  "rand 0.9.4",
  "rand_chacha 0.9.0",
+ "regex",
  "semver",
  "serde",
  "serde_json",
