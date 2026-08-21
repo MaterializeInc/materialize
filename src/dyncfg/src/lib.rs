@@ -19,8 +19,9 @@
 //!   set the value of `Config`.
 //!
 //! ```
-//! # use mz_dyncfg::{Config, ConfigSet};
-//! const FOO: Config<bool> = Config::new("foo", false, "description of foo");
+//! # use mz_dyncfg::{Config, ConfigSet, ParameterScope};
+//! const FOO: Config<bool> =
+//!     Config::new("foo", false, "description of foo", ParameterScope::Environment);
 //! fn bar(cfg: &ConfigSet) {
 //!     assert_eq!(FOO.get(&cfg), false);
 //! }
@@ -71,10 +72,44 @@ use tracing::error;
 /// The declaration is the single source of truth for which contexts the
 /// LaunchDarkly sync loop evaluates and where the resolved value may be
 /// overridden. See `doc/developer/design/20260609_scoped_feature_flags.md`.
+///
+/// The scope of a [`Config`] follows from where its value is *realized*, not
+/// from what it is named after:
+///
+/// - A config realized inside a `clusterd` process is [`Replica`]. That covers
+///   the compute and storage worker config sets, the persist client config set,
+///   and `mz_metrics`, all of which the per-replica dyncfg push reaches.
+///   `environmentd` may read such a config too, for its own process. That read
+///   legitimately sees the environment-wide value.
+/// - A config that `environmentd` resolves for *one specific replica*, whether
+///   it ships the value there or acts on it itself, is also [`Replica`]. The
+///   read site has to resolve that replica's override, either with
+///   [`Config::get_with_overrides`] or from a per-replica config set. Without
+///   that, the override never takes effect and the declaration is a silent
+///   no-op.
+/// - A config realized in `environmentd` with no single replica in scope is
+///   [`Environment`]. So is every `balancerd` config. `balancerd` syncs
+///   LaunchDarkly itself, against a `balancer` context keyed by cloud provider,
+///   region and build version, and has no environment, cluster or replica
+///   beneath it to target.
+/// - A config consumed at plan time, once per cluster, is [`Cluster`].
+///
+/// NOTE: a config whose value must agree across the replicas of one cluster
+/// (because they render the same dataflow and their outputs are compared) is
+/// [`Environment`] even when it is read on `clusterd`. Per-replica divergence in
+/// *how* a dataflow is rendered is fine, in *what* it produces is not.
+///
+/// [`Cluster`]: ParameterScope::Cluster
+/// [`Environment`]: ParameterScope::Environment
+/// [`Replica`]: ParameterScope::Replica
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ParameterScope {
     /// Environment-wide only; no cluster/replica overrides. The default, so all
     /// existing synced parameters are unchanged.
+    ///
+    /// NOTE: this names the coarsest targeting granularity, not the
+    /// `environmentd` process. A config a process other than `environmentd`
+    /// resolves for itself, with nothing finer beneath it, is `Environment`.
     Environment,
     /// Cluster-coherent: env-wide base plus per-cluster overrides. Evaluated
     /// with the `cluster` context (replica-free) and resolved at plan time via
@@ -132,6 +167,11 @@ impl<D: ConfigDefault> Config<D> {
     /// It is best practice, but not strictly required, for the name to be
     /// globally unique within a process.
     ///
+    /// `scope` declares where the config's value may be overridden. It is a
+    /// required parameter rather than a builder step so that every new config
+    /// makes the choice deliberately. [`ParameterScope`] documents how to pick
+    /// one from the config's read sites.
+    ///
     /// TODO(cfg): Add some sort of categorization of config purpose here: e.g.
     /// limited-lifetime rollout flag, CYA, magic number that we never expect to
     /// tune, magic number that we DO expect to tune, etc. This could be used to
@@ -141,24 +181,18 @@ impl<D: ConfigDefault> Config<D> {
     /// TODO(cfg): See if we can make this more Rust-y and take these params as
     /// a struct (the obvious thing hits some issues with const combined with
     /// Drop).
-    pub const fn new(name: &'static str, default: D, desc: &'static str) -> Self {
+    pub const fn new(
+        name: &'static str,
+        default: D,
+        desc: &'static str,
+        scope: ParameterScope,
+    ) -> Self {
         Config {
             name,
             default,
             desc,
-            scope: ParameterScope::DEFAULT,
+            scope,
         }
-    }
-
-    /// Declares the [`ParameterScope`] of this config, overriding the
-    /// [default](ParameterScope::DEFAULT).
-    ///
-    /// Use this to mark a config as cluster-coherent or replica-local so the
-    /// LaunchDarkly sync loop evaluates the appropriate scoped contexts and
-    /// resolution applies the override at the right boundary.
-    pub const fn scoped(mut self, scope: ParameterScope) -> Self {
-        self.scope = scope;
-        self
     }
 
     /// The name of this config.
@@ -192,6 +226,38 @@ impl<D: ConfigDefault> Config<D> {
     /// on this ordering.
     pub fn get(&self, set: &ConfigSet) -> D::ConfigType {
         D::ConfigType::from_val(self.shared(set).load())
+    }
+
+    /// Returns the value of this config within the given set, with `overrides`
+    /// layered on top.
+    ///
+    /// This is how `environmentd` must read a [`ParameterScope::Replica`] config
+    /// whose value it ships to one specific replica: the set holds the
+    /// environment-wide value and `overrides` holds that replica's scoped
+    /// overrides, which win. Reading such a config with [`Self::get`] instead
+    /// makes its scope declaration a silent no-op.
+    ///
+    /// Panics if this config was not previously registered to the set. An
+    /// override whose type does not match the config's is logged and ignored,
+    /// rather than panicking a read site that is often on a critical path.
+    pub fn get_with_overrides(
+        &self,
+        set: &ConfigSet,
+        overrides: Option<&ConfigUpdates>,
+    ) -> D::ConfigType {
+        let val = self.shared(set).load();
+        let val = match overrides.and_then(|o| o.updates.get(self.name)) {
+            None => val,
+            Some(o) if std::mem::discriminant(o) == std::mem::discriminant(&val) => o.clone(),
+            Some(o) => {
+                error!(
+                    "override {:?} for config {} does not match its type {:?}",
+                    o, self.name, val
+                );
+                val
+            }
+        };
+        D::ConfigType::from_val(val)
     }
 
     /// Returns a handle to the value of this config in the given set.
@@ -830,16 +896,27 @@ mod tests {
 
     use mz_ore::assert_err;
 
-    const BOOL: Config<bool> = Config::new("bool", true, "");
-    const U32: Config<u32> = Config::new("u32", 4, "");
-    const USIZE: Config<usize> = Config::new("usize", 1, "");
-    const OPT_USIZE: Config<Option<usize>> = Config::new("opt_usize", Some(2), "");
-    const F64: Config<f64> = Config::new("f64", 5.0, "");
-    const STRING: Config<&str> = Config::new("string", "a", "");
-    const OPT_STRING: Config<Option<&str>> = Config::new("opt_string", Some("a"), "");
-    const DURATION: Config<Duration> = Config::new("duration", Duration::from_nanos(3), "");
-    const JSON: Config<fn() -> serde_json::Value> =
-        Config::new("json", || serde_json::json!({}), "");
+    const BOOL: Config<bool> = Config::new("bool", true, "", ParameterScope::Environment);
+    const U32: Config<u32> = Config::new("u32", 4, "", ParameterScope::Environment);
+    const USIZE: Config<usize> = Config::new("usize", 1, "", ParameterScope::Environment);
+    const OPT_USIZE: Config<Option<usize>> =
+        Config::new("opt_usize", Some(2), "", ParameterScope::Environment);
+    const F64: Config<f64> = Config::new("f64", 5.0, "", ParameterScope::Environment);
+    const STRING: Config<&str> = Config::new("string", "a", "", ParameterScope::Environment);
+    const OPT_STRING: Config<Option<&str>> =
+        Config::new("opt_string", Some("a"), "", ParameterScope::Environment);
+    const DURATION: Config<Duration> = Config::new(
+        "duration",
+        Duration::from_nanos(3),
+        "",
+        ParameterScope::Environment,
+    );
+    const JSON: Config<fn() -> serde_json::Value> = Config::new(
+        "json",
+        || serde_json::json!({}),
+        "",
+        ParameterScope::Environment,
+    );
 
     #[mz_ore::test]
     fn all_types() {
@@ -888,12 +965,17 @@ mod tests {
 
     #[mz_ore::test]
     fn fn_default() {
-        const BOOL_FN_DEFAULT: Config<fn() -> bool> = Config::new("bool", || !true, "");
+        const BOOL_FN_DEFAULT: Config<fn() -> bool> =
+            Config::new("bool", || !true, "", ParameterScope::Environment);
         const STRING_FN_DEFAULT: Config<fn() -> String> =
-            Config::new("string", || "x".repeat(3), "");
+            Config::new("string", || "x".repeat(3), "", ParameterScope::Environment);
 
-        const OPT_STRING_FN_DEFAULT: Config<fn() -> Option<String>> =
-            Config::new("opt_string", || Some("x".repeat(3)), "");
+        const OPT_STRING_FN_DEFAULT: Config<fn() -> Option<String>> = Config::new(
+            "opt_string",
+            || Some("x".repeat(3)),
+            "",
+            ParameterScope::Environment,
+        );
 
         let configs = ConfigSet::default()
             .add(&BOOL_FN_DEFAULT)
@@ -931,6 +1013,28 @@ mod tests {
         assert_eq!(USIZE.get(&c1), 3);
         updates.apply(&c1);
         assert_eq!(USIZE.get(&c1), 2);
+    }
+
+    #[mz_ore::test]
+    fn get_with_overrides() {
+        let configs = ConfigSet::default().add(&USIZE).add(&STRING);
+
+        // No overrides at all, and an override map that doesn't mention the
+        // config, both resolve to the set's value.
+        assert_eq!(USIZE.get_with_overrides(&configs, None), 1);
+        let mut overrides = ConfigUpdates::default();
+        overrides.add(&STRING, "b");
+        assert_eq!(USIZE.get_with_overrides(&configs, Some(&overrides)), 1);
+
+        // An override wins over the set's value, without disturbing it.
+        overrides.add(&USIZE, 2);
+        assert_eq!(USIZE.get_with_overrides(&configs, Some(&overrides)), 2);
+        assert_eq!(USIZE.get(&configs), 1);
+
+        // An override of the wrong type is ignored rather than panicking.
+        let mut mistyped = ConfigUpdates::default();
+        mistyped.add_dynamic(USIZE.name(), ConfigVal::Bool(true));
+        assert_eq!(USIZE.get_with_overrides(&configs, Some(&mistyped)), 1);
     }
 
     #[mz_ore::test]

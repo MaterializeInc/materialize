@@ -21,6 +21,7 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
     "enable_compute_half_join2",
     true,
     "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
+    ParameterScope::Replica,
 );
 
 /// Whether rendering should collapse error multiplicities to one where it arranges errors.
@@ -40,6 +41,7 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
     true,
     "Whether compute rendering should collapse error multiplicities to one where it arranges \
      errors.",
+    ParameterScope::Environment,
 );
 
 /// Use the column-paged merge batcher code path at arrange sites. When
@@ -59,8 +61,8 @@ pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
     false,
     "Use the columnar-native paged merge batcher at arrange sites. When `false` (default), \
      arranges fall back to the legacy columnation `Col2ValBatcher` / `RowRowBuilder` path.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Allow the column-paged batcher's pager to evict chunks under memory
 /// pressure. Only meaningful when [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
@@ -81,8 +83,8 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
     false,
     "Allow the column-paged batcher's pager to evict chunks under memory pressure. Only \
      meaningful when `enable_column_paged_batcher = true`.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Resident-bytes budget fraction for chunk spilling. Two consumers read
 /// it: the column pager's tiered policy multiplies it against the
@@ -104,8 +106,8 @@ pub const COLUMN_PAGED_BATCHER_BUDGET_FRACTION: Config<f64> = Config::new(
     "Budget fraction for chunk spilling: the buffer pool multiplies it against physical \
      RAM and the column pager's tiered policy against the announced memory limit. \
      Total pool budget = max(ram * fraction, 128 MiB).",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Number of buffer-pool spill threads performing eviction I/O (lz4
 /// compression plus the synchronous-reclaim `MADV_PAGEOUT`) off the threads
@@ -118,8 +120,8 @@ pub const COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT: Config<usize> = Config::new(
     "column_paged_batcher_spill_worker_count",
     2,
     "Buffer-pool spill threads for off-worker eviction I/O; 0 evicts inline on the caller.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Compress chunks the column-paged batcher spills, using lz4. Only
 /// meaningful when [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`] is `true`; the codec
@@ -133,8 +135,8 @@ pub const COLUMN_PAGED_BATCHER_LZ4: Config<bool> = Config::new(
     false,
     "Compress column-paged batcher chunks with lz4 on the spill path. Only meaningful when \
      `enable_column_paged_batcher_spill = true`.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Proactively evict the column-paged batcher's lz4-compressed spill chunks
 /// from RSS via `MADV_PAGEOUT` when spilling to the swap backend. Only
@@ -156,8 +158,8 @@ pub const COLUMN_PAGED_BATCHER_SWAP_PAGEOUT: Config<bool> = Config::new(
     "Eagerly evict the column-paged batcher's lz4-compressed swap-backend spill chunks from RSS \
      via `MADV_PAGEOUT` (they otherwise receive no madvise and are reclaimed only lazily). Only \
      meaningful when `column_paged_batcher_lz4 = true` and the swap backend is active.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Eagerly compress unbacked buffer-pool chunks to `BackedResident` on idle
 /// spill threads (write-behind). The chunk stays readable in its slot while
@@ -170,8 +172,8 @@ pub const COLUMN_PAGED_BATCHER_EAGER_BACKING: Config<bool> = Config::new(
     false,
     "Eagerly compress buffer-pool chunks to compressed-but-resident on idle spill threads, so \
      budget-driven eviction is a pure page release. Only meaningful with spill workers.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Ceiling on the buffer pool's total RSS, as a fraction of *physical RAM*
 /// (never the announced limit, which includes swap on swap-provisioned
@@ -192,8 +194,8 @@ pub const COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION: Config<f64> = Config::n
     0.25,
     "Ceiling on the buffer pool's total RSS as a fraction of physical RAM; the headroom above \
      the slot budget holds compressed-but-resident extents. Zero pages extents out immediately.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Whether rendering should use `mz_join_core` rather than DD's `JoinCore::join_core`.
 pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
@@ -201,6 +203,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     true,
     "Whether compute should use `mz_join_core` rather than DD's `JoinCore::join_core` to render \
      linear joins.",
+    ParameterScope::Replica,
 );
 
 /// Use sync Timely operators with Tokio tasks for the MV sink.
@@ -208,6 +211,7 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     "enable_compute_sync_mv_sink",
     false,
     "Use sync Timely operators with Tokio tasks for the MV sink.",
+    ParameterScope::Replica,
 );
 
 /// Whether rendering should use the new MV sink correction buffer implementation.
@@ -215,6 +219,7 @@ pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
     true,
     "Whether compute should use the new MV sink correction buffer implementation.",
+    ParameterScope::Replica,
 );
 
 /// The size factor of subsequent chains in the correction V2 buffer.
@@ -222,6 +227,7 @@ pub const CORRECTION_V2_CHAIN_PROPORTIONALITY: Config<f64> = Config::new(
     "compute_correction_v2_chain_proportionality",
     3.0,
     "The size factor of subsequent chains in the correction V2 buffer.",
+    ParameterScope::Replica,
 );
 
 /// The byte size of chunks in the correction V2 buffer.
@@ -229,6 +235,7 @@ pub const CORRECTION_V2_CHUNK_SIZE: Config<usize> = Config::new(
     "compute_correction_v2_chunk_size",
     8 * 1024,
     "The byte size of chunks in the correction V2 buffer.",
+    ParameterScope::Replica,
 );
 
 /// Whether to enable temporal bucketing in compute.
@@ -236,6 +243,7 @@ pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
     false,
     "Whether to enable temporal bucketing in compute.",
+    ParameterScope::Replica,
 );
 
 /// The summary to apply to the frontier in temporal bucketing in compute.
@@ -243,6 +251,7 @@ pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "compute_temporal_bucketing_summary",
     Duration::from_secs(2),
     "The summary to apply to frontiers in temporal bucketing in compute.",
+    ParameterScope::Replica,
 );
 
 /// The yielding behavior with which linear joins should be rendered.
@@ -253,17 +262,23 @@ pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
      'work:<amount>' or 'time:<milliseconds>' or 'work:<amount>,time:<milliseconds>'. Note \
      that omitting one of 'work' or 'time' will entirely disable join yielding by time or \
      work, respectively, rather than falling back to some default.",
+    ParameterScope::Replica,
 );
 
 /// Enable lgalloc.
-pub const ENABLE_LGALLOC: Config<bool> =
-    Config::new("enable_lgalloc", true, "Enable lgalloc.").scoped(ParameterScope::Replica);
+pub const ENABLE_LGALLOC: Config<bool> = Config::new(
+    "enable_lgalloc",
+    true,
+    "Enable lgalloc.",
+    ParameterScope::Replica,
+);
 
 /// Enable lgalloc's eager memory return/reclamation feature.
 pub const ENABLE_LGALLOC_EAGER_RECLAMATION: Config<bool> = Config::new(
     "enable_lgalloc_eager_reclamation",
     true,
     "Enable lgalloc's eager return behavior.",
+    ParameterScope::Replica,
 );
 
 /// The interval at which the background thread wakes.
@@ -271,6 +286,7 @@ pub const LGALLOC_BACKGROUND_INTERVAL: Config<Duration> = Config::new(
     "lgalloc_background_interval",
     Duration::from_secs(1),
     "Scheduling interval for lgalloc's background worker.",
+    ParameterScope::Replica,
 );
 
 /// Enable lgalloc's eager memory return/reclamation feature.
@@ -278,6 +294,7 @@ pub const LGALLOC_FILE_GROWTH_DAMPENER: Config<usize> = Config::new(
     "lgalloc_file_growth_dampener",
     2,
     "Lgalloc's file growth dampener parameter.",
+    ParameterScope::Replica,
 );
 
 /// Enable lgalloc's eager memory return/reclamation feature.
@@ -285,6 +302,7 @@ pub const LGALLOC_LOCAL_BUFFER_BYTES: Config<usize> = Config::new(
     "lgalloc_local_buffer_bytes",
     64 << 20,
     "Lgalloc's local buffer bytes parameter.",
+    ParameterScope::Replica,
 );
 
 /// The bytes to reclaim (slow path) per size class, for each background thread activation.
@@ -292,6 +310,7 @@ pub const LGALLOC_SLOW_CLEAR_BYTES: Config<usize> = Config::new(
     "lgalloc_slow_clear_bytes",
     128 << 20,
     "Clear byte size per size class for every invocation",
+    ParameterScope::Replica,
 );
 
 /// Interval to run the memory limiter. A zero duration disables the limiter.
@@ -299,6 +318,7 @@ pub const MEMORY_LIMITER_INTERVAL: Config<Duration> = Config::new(
     "memory_limiter_interval",
     Duration::from_secs(10),
     "Interval to run the memory limiter. A zero duration disables the limiter.",
+    ParameterScope::Replica,
 );
 
 /// Bias to the memory limiter usage factor.
@@ -306,6 +326,7 @@ pub const MEMORY_LIMITER_USAGE_BIAS: Config<f64> = Config::new(
     "memory_limiter_usage_bias",
     1.,
     "Multiplicative bias to the memory limiter's limit.",
+    ParameterScope::Replica,
 );
 
 /// Burst factor to memory limit.
@@ -313,6 +334,7 @@ pub const MEMORY_LIMITER_BURST_FACTOR: Config<f64> = Config::new(
     "memory_limiter_burst_factor",
     0.,
     "Multiplicative burst factor to the memory limiter's limit.",
+    ParameterScope::Replica,
 );
 
 /// Enable lgalloc for columnation.
@@ -320,6 +342,7 @@ pub const ENABLE_COLUMNATION_LGALLOC: Config<bool> = Config::new(
     "enable_columnation_lgalloc",
     true,
     "Enable allocating regions from lgalloc.",
+    ParameterScope::Replica,
 );
 
 /// The interval at which the compute server performs maintenance tasks.
@@ -327,6 +350,7 @@ pub const COMPUTE_SERVER_MAINTENANCE_INTERVAL: Config<Duration> = Config::new(
     "compute_server_maintenance_interval",
     Duration::from_millis(10),
     "The interval at which the compute server performs maintenance tasks. Zero enables maintenance on every iteration.",
+    ParameterScope::Replica,
 );
 
 /// Maximum number of in-flight bytes emitted by persist_sources feeding dataflows.
@@ -335,6 +359,7 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES: Config<Option<usize>> = Config::new(
     None,
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
      compute dataflows in non-cc clusters.",
+    ParameterScope::Replica,
 );
 
 /// The "physical backpressure" of `compute_dataflow_max_inflight_bytes_cc` has
@@ -346,6 +371,7 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
     None,
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
      compute dataflows in cc clusters.",
+    ParameterScope::Replica,
 );
 
 /// The term `n` in the growth rate `1 + 1/(n + 1)` for `ConsolidatingVec`.
@@ -354,13 +380,21 @@ pub const CONSOLIDATING_VEC_GROWTH_DAMPENER: Config<usize> = Config::new(
     "consolidating_vec_growth_dampener",
     1,
     "Dampener in growth rate for consolidating vector size",
+    ParameterScope::Replica,
 );
 
 /// The number of dataflows that may hydrate concurrently.
+///
+/// Enforced in `environmentd`, by the controller's per-replica hydration
+/// interceptor withholding `Schedule` commands, rather than by the replica. The
+/// interceptor resolves it from the configuration commands it observes, which
+/// are already specialized for its replica, so the limit still follows the
+/// replica's scoped override.
 pub const HYDRATION_CONCURRENCY: Config<usize> = Config::new(
     "compute_hydration_concurrency",
     4,
     "Controls how many compute dataflows may hydrate concurrently.",
+    ParameterScope::Replica,
 );
 
 /// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.
@@ -369,6 +403,7 @@ pub const COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO: Config<usize> = Config::new(
     20,
     "The ratio (defined as a percentage) of row-group size to max-file-size. \
         Must be <= 100.",
+    ParameterScope::Replica,
 );
 
 /// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.
@@ -377,6 +412,7 @@ pub const COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO: Config<usize> = Config::new(
     150,
     "The ratio (defined as a percentage) of arrow-builder size to row-group size. \
         Must be >= 100.",
+    ParameterScope::Replica,
 );
 
 /// The size of each part in the multi-part upload to use when uploading files to S3.
@@ -384,15 +420,21 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
     "copy_to_s3_multipart_part_size_bytes",
     1024 * 1024 * 8,
     "The size of each part in a multipart upload to S3.",
+    ParameterScope::Replica,
 );
 
 /// Main switch to enable or disable replica expiration.
 ///
 /// Changes affect existing replicas only after restart.
+///
+/// The env-wide kill switch for the feature, read in `environmentd` when
+/// specializing `CreateInstance` for a replica. [`COMPUTE_REPLICA_EXPIRATION_OFFSET`]
+/// is the replica-scoped half of the pair.
 pub const ENABLE_COMPUTE_REPLICA_EXPIRATION: Config<bool> = Config::new(
     "enable_compute_replica_expiration",
     true,
     "Main switch to disable replica expiration.",
+    ParameterScope::Environment,
 );
 
 /// The maximum lifetime of a replica configured as an offset to the replica start time.
@@ -404,6 +446,7 @@ pub const COMPUTE_REPLICA_EXPIRATION_OFFSET: Config<Duration> = Config::new(
     "compute_replica_expiration_offset",
     Duration::ZERO,
     "The expiration time offset for replicas. Zero disables expiration.",
+    ParameterScope::Replica,
 );
 
 /// When enabled, applies the column demands from a MapFilterProject onto the RelationDesc used to
@@ -413,6 +456,7 @@ pub const COMPUTE_APPLY_COLUMN_DEMANDS: Config<bool> = Config::new(
     "compute_apply_column_demands",
     true,
     "When enabled, passes applys column demands to the RelationDesc used to read out of Persist.",
+    ParameterScope::Replica,
 );
 
 /// The amount of output the flat-map operator produces before yielding. Set to a high value to
@@ -421,6 +465,7 @@ pub const COMPUTE_FLAT_MAP_FUEL: Config<usize> = Config::new(
     "compute_flat_map_fuel",
     1_000_000,
     "The amount of output the flat-map operator produces before yielding.",
+    ParameterScope::Replica,
 );
 
 /// Whether to render `as_specific_collection` using a fueled flat-map operator.
@@ -428,6 +473,7 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
     "enable_compute_render_fueled_as_specific_collection",
     true,
     "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
+    ParameterScope::Replica,
 );
 
 /// Whether to apply logical backpressure in compute dataflows.
@@ -435,6 +481,7 @@ pub const ENABLE_COMPUTE_LOGICAL_BACKPRESSURE: Config<bool> = Config::new(
     "enable_compute_logical_backpressure",
     false,
     "When enabled, compute dataflows will apply logical backpressure.",
+    ParameterScope::Replica,
 );
 
 /// Maximal number of capabilities retained by the logical backpressure operator.
@@ -450,6 +497,7 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES: Config<Option<
         "compute_logical_backpressure_max_retained_capabilities",
         Some(30 * 24 * 60),
         "The maximum number of capabilities retained by the logical backpressure operator.",
+        ParameterScope::Replica,
     );
 
 /// The slack to round observed timestamps up to.
@@ -460,6 +508,7 @@ pub const COMPUTE_LOGICAL_BACKPRESSURE_INFLIGHT_SLACK: Config<Duration> = Config
     "compute_logical_backpressure_inflight_slack",
     Duration::from_secs(1),
     "Round observed timestamps to slack.",
+    ParameterScope::Replica,
 );
 
 /// Enable per-column dictionary compression for row containers in arrangements.
@@ -474,6 +523,7 @@ pub const ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA: Config<bool> = Config
     "enable_arrangement_dictionary_compression_alpha",
     true,
     "Enable arrangement dictionary compression (alpha; not yet production-ready).",
+    ParameterScope::Replica,
 );
 
 /// Whether to enable the peek response stash, for sending back large peek
@@ -483,6 +533,7 @@ pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "enable_compute_peek_response_stash",
     true,
     "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
+    ParameterScope::Replica,
 );
 
 /// The threshold for peek response size above which we should use the peek
@@ -492,6 +543,7 @@ pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
     "compute_peek_response_stash_threshold_bytes",
     1024 * 10, /* 10KB */
     "The threshold above which to use the peek response stash, for sending back large peek responses.",
+    ParameterScope::Replica,
 );
 
 /// The target number of maximum runs in the batches written to the stash.
@@ -506,6 +558,7 @@ pub const PEEK_RESPONSE_STASH_BATCH_MAX_RUNS: Config<usize> = Config::new(
     // `clusterd` side.
     2,
     "The target number of maximum runs in the batches written to the stash.",
+    ParameterScope::Replica,
 );
 
 /// The target size for batches of rows we read out of the peek stash.
@@ -513,6 +566,7 @@ pub const PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES: Config<usize> = Config::new
     "compute_peek_response_stash_read_batch_size_bytes",
     1024 * 1024 * 100, /* 100mb */
     "The target size for batches of rows we read out of the peek stash.",
+    ParameterScope::Environment,
 );
 
 /// The memory budget for consolidating stashed peek responses in
@@ -521,6 +575,7 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
     "compute_peek_response_stash_read_memory_budget_bytes",
     1024 * 1024 * 64, /* 64mb */
     "The memory budget for consolidating stashed peek responses in environmentd.",
+    ParameterScope::Environment,
 );
 
 /// The number of batches to pump from the peek result iterator when stashing peek responses.
@@ -528,6 +583,7 @@ pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
     "compute_peek_stash_num_batches",
     100,
     "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
+    ParameterScope::Replica,
 );
 
 /// The size of each batch, as number of rows, pumped from the peek result
@@ -536,6 +592,7 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "compute_peek_stash_batch_size",
     100000,
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
+    ParameterScope::Replica,
 );
 
 /// The collection interval for the Prometheus metrics introspection source.
@@ -545,13 +602,25 @@ pub const COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL: Config<Duration> = C
     "compute_prometheus_introspection_scrape_interval",
     Duration::from_secs(10),
     "The collection interval for the Prometheus metrics introspection source. Set to zero to disable.",
+    ParameterScope::Replica,
 );
 
 /// If set, skip fetching or processing the snapshot data for subscribes when possible.
+///
+/// Read twice. At plan time in `environmentd` it gates whether snapshot elision runs at all, and
+/// at render time on the replica it gates whether an elided snapshot is honored. The replica-side
+/// read only ever puts a snapshot back, never takes one away, so the two reads disagreeing costs
+/// work rather than correctness.
+///
+/// Environment-scoped because the plan-time read has no replica in scope. Making it
+/// cluster-coherent instead would need plan-time resolution of cluster overrides for
+/// `OptimizerConfig` fields that are not `OptimizerFeatures`, which is the only place cluster
+/// overrides are resolved today.
 pub const SUBSCRIBE_SNAPSHOT_OPTIMIZATION: Config<bool> = Config::new(
     "compute_subscribe_snapshot_optimization",
     true,
     "If set, skip fetching or processing the snapshot data for subscribes when possible.",
+    ParameterScope::Environment,
 );
 
 /// Temporary flag to de-risk the rollout of a release-blocker fix.
@@ -561,6 +630,7 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     "compute_mv_sink_advance_persist_frontiers",
     true,
     "Whether the MV sink's write operator advances its internal persist frontiers to the as_of.",
+    ParameterScope::Replica,
 );
 
 /// Adds the full set of all compute `Config`s.
