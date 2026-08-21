@@ -11,41 +11,52 @@ import { Box, Card, Text, useTheme, VStack } from "@chakra-ui/react";
 import React from "react";
 
 import Alert from "~/components/Alert";
+import { useObjectStorageSize } from "~/hooks/useObjectStorageSize";
 import { DetailItem } from "~/platform/connectors/AsideBox";
 import { snapshotEstimateNote } from "~/platform/connectors/utils";
 import { MaterializeTheme } from "~/theme";
+import { formatBytesShort } from "~/utils/format";
 
 import {
+  MaintainedObjectCluster,
+  MaintainedObjectLag,
   MaintainedObjectSourceStatus,
   useObjectSourceStatistics,
 } from "./queries";
+import { SourceIngestionHealth } from "./SourceIngestionHealth";
 
 export interface SourceDiagnosticsProps {
   sourceId: string;
   sourceType: string | null;
   /** Null until the source status subscribe delivers a row. */
   sourceStatus: MaintainedObjectSourceStatus | null;
+  /** Null until the lag subscribe delivers a row. */
+  lag: MaintainedObjectLag | null;
+  cluster: MaintainedObjectCluster | null;
 }
 
 /**
- * Renders only while the source has something diagnostic to say: a status
- * error, or an in-progress snapshot. Steady-state lifecycle facts live on the
- * source details page instead.
+ * Diagnosis-first source card: ingestion health verdict, storage footprint,
+ * and, while relevant, status errors and snapshot progress. Steady-state
+ * lifecycle facts live on the source details page instead.
  */
 export const SourceDiagnostics = ({
   sourceId,
   sourceType,
   sourceStatus,
+  lag,
+  cluster,
 }: SourceDiagnosticsProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { data: stats } = useObjectSourceStatistics(sourceId);
+  const { data: storageBytes } = useObjectStorageSize(sourceId);
 
   const error = sourceStatus?.error;
+  if (!stats && !error) return null;
+
   // `snapshot_committed` is authoritative. Judging by the staged/known ratio
   // would report a live source as stuck at 99% forever.
   const snapshotting = sourceStatus?.snapshotCommitted === false;
-  if (!error && !snapshotting) return null;
-
   const snapshotKnown = stats?.snapshotRecordsKnown ?? 0;
   const snapshotStaged = stats?.snapshotRecordsStaged ?? 0;
   const snapshotPercent =
@@ -65,6 +76,22 @@ export const SourceDiagnostics = ({
         <Text textStyle="heading-sm">Source diagnostics</Text>
 
         {error && <Alert variant="error" width="100%" message={error} />}
+
+        <SourceIngestionHealth
+          sourceId={sourceId}
+          sourceType={sourceType}
+          sourceStatus={sourceStatus}
+          lag={lag}
+          cluster={cluster}
+        />
+
+        {storageBytes != null && storageBytes > 0 && (
+          <VStack align="stretch" spacing={2} width="100%">
+            <DetailItem label="Storage size">
+              {formatBytesShort(BigInt(Math.round(storageBytes)))}
+            </DetailItem>
+          </VStack>
+        )}
 
         {snapshotting && (
           <VStack align="stretch" spacing={2} width="100%">
