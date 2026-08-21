@@ -141,24 +141,27 @@ impl HedgeBudget {
     fn try_acquire(&self, max_concurrent: usize) -> Result<HedgeGuard<'_>, HedgeRefused> {
         let got_slot = self
             .concurrent
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |c| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |c| {
                 (c < max_concurrent).then_some(c + 1)
             })
             .is_ok();
         if !got_slot {
             return Err(HedgeRefused::Concurrency);
         }
+        // Constructed before the token take so its drop releases the slot
+        // on the budget-refusal path.
+        let guard = HedgeGuard(self);
         let took_token = self
             .micro_tokens
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |t| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
                 t.checked_sub(HEDGE_COST_MICRO_TOKENS)
             })
             .is_ok();
-        if !took_token {
-            self.concurrent.fetch_sub(1, Ordering::SeqCst);
-            return Err(HedgeRefused::Budget);
+        if took_token {
+            Ok(guard)
+        } else {
+            Err(HedgeRefused::Budget)
         }
-        Ok(HedgeGuard(self))
     }
 
     /// Adds `ratio` tokens, called once per completed get (hedged or not),
@@ -170,7 +173,7 @@ impl HedgeBudget {
         }
         let _ = self
             .micro_tokens
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |t| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |t| {
                 Some((t + add).min(BUDGET_BURST_MICRO_TOKENS))
             });
     }
@@ -180,7 +183,7 @@ struct HedgeGuard<'a>(&'a HedgeBudget);
 
 impl Drop for HedgeGuard<'_> {
     fn drop(&mut self) {
-        self.0.concurrent.fetch_sub(1, Ordering::SeqCst);
+        self.0.concurrent.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
@@ -335,14 +338,10 @@ impl HedgedBlob {
         let start = Instant::now();
         let delay = BLOB_HEDGED_GET_DELAY.get(&self.cfg);
         let mut primary = std::pin::pin!(self.primary.get(key));
-        // NOTE: both races below rely on `select` polling its first argument
-        // first: a primary that is ready exactly at the delay boundary wins
-        // without firing a hedge, and a primary that is ready simultaneously
-        // with the hedge is never miscredited as a hedge win. tokio::select!
-        // does NOT have this property unless marked `biased`.
-        if let Either::Left((res, _sleep)) =
-            select(primary.as_mut(), std::pin::pin!(tokio::time::sleep(delay))).await
-        {
+        // NOTE: `Timeout` polls the wrapped future before checking the
+        // deadline, so a primary that is ready exactly at the delay
+        // boundary wins here without firing a hedge.
+        if let Ok(res) = tokio::time::timeout(delay, primary.as_mut()).await {
             // The fast path: the primary's result verbatim, success or
             // error. A fast error stays on the ordinary retry-ladder path,
             // since hedging targets hangs, not failures.
@@ -358,6 +357,10 @@ impl HedgedBlob {
         // the backend). An error on one leg does not end the race: the slow
         // leg is expected to be a hung request, and a fast-failing hedge
         // must not convert a get that was about to succeed into an error.
+        // NOTE: `select` polls its first argument first, so a primary that
+        // is ready simultaneously with the hedge is never miscredited as a
+        // hedge win. tokio::select! does NOT have this property unless
+        // marked `biased`.
         match select(primary.as_mut(), hedge.as_mut()).await {
             Either::Left((Ok(res), _hedge)) => Ok(res),
             Either::Right((Ok(res), _primary)) => {

@@ -222,10 +222,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "persist_blob_hedged_get_delay", "10ms", ["0s", "10ms", "2s"]
         ),
-        # Full refill so the delay=0s variant keeps hedging instead of
-        # draining the budget after the first few gets.
+        # The production ratio: with the 10ms delay above, a full refill
+        # would hedge nearly every get and double CI blob traffic. The 1.0
+        # variant lets randomized runs pair a full budget with delay=0s.
         VariableSystemParameter(
-            "persist_blob_hedged_get_budget_ratio", "1.0", ["1.0", "0.01"]
+            "persist_blob_hedged_get_budget_ratio", "0.01", ["1.0", "0.01"]
         ),
         # -----
         # Others (ordered by name),
