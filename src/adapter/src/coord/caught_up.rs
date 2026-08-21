@@ -614,10 +614,32 @@ impl Coordinator {
             let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {
-                    // The collection didn't previously exist, so consider
-                    // ourselves hydrated as long as our write_ts is > 0.
-                    tracing::info!(?write_frontier, "collection {id} not in live frontiers");
-                    if write_frontier.less_equal(&Timestamp::minimum()) {
+                    // No live frontier to compare against, either because the collection didn't
+                    // exist on the leader or because the leader hosts it as something
+                    // `mz_cluster_replica_frontiers` doesn't track. A table→MV conversion is the
+                    // latter: it keeps the table's `GlobalId`, still a table on the leader, so the
+                    // new MV lands here instead of the strong path below.
+                    //
+                    // Require hydration, not just a write frontier past the minimum. A fresh MV's
+                    // sink reaches frontier 1 after one batch, which would otherwise look caught
+                    // up mid-hydration and bring back the cut-over spike this gate prevents.
+                    let collection_hydrated = match collection_type {
+                        CollectionType::Compute => {
+                            self.controller
+                                .compute
+                                .collection_hydrated(cluster.id, id)
+                                .await?
+                        }
+                        CollectionType::Storage => {
+                            self.controller.storage.collection_hydrated(id)?
+                        }
+                    };
+                    tracing::info!(
+                        ?write_frontier,
+                        %collection_hydrated,
+                        "collection {id} not in live frontiers"
+                    );
+                    if write_frontier.less_equal(&Timestamp::minimum()) || !collection_hydrated {
                         all_caught_up = false;
                     }
                     continue;

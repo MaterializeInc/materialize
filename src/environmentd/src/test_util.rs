@@ -137,6 +137,7 @@ pub struct TestHarness {
     internal_console_redirect_url: Option<String>,
     metrics_registry: Option<MetricsRegistry>,
     code_version: semver::Version,
+    force_builtin_schema_migration: Option<String>,
     capture: Option<SharedStorage>,
     pub environment_id: EnvironmentId,
 }
@@ -242,6 +243,7 @@ impl Default for TestHarness {
                 ..Default::default()
             },
             code_version: crate::BUILD_INFO.semver_version(),
+            force_builtin_schema_migration: None,
             environment_id: EnvironmentId::for_tests(),
             capture: None,
         }
@@ -692,6 +694,13 @@ impl TestHarness {
         self
     }
 
+    /// Forces every builtin storage collection through the given migration mechanism,
+    /// `"evolution"` or `"replacement"`.
+    pub fn with_force_builtin_schema_migration(mut self, mechanism: &str) -> Self {
+        self.force_builtin_schema_migration = Some(mechanism.into());
+        self
+    }
+
     pub fn with_capture(mut self, storage: SharedStorage) -> Self {
         self.capture = Some(storage);
         self
@@ -944,7 +953,7 @@ impl Listeners {
                 helm_chart_version: None,
                 license_key: ValidatedLicenseKey::for_tests(),
                 external_login_password_mz_system: config.external_login_password_mz_system,
-                force_builtin_schema_migration: None,
+                force_builtin_schema_migration: config.force_builtin_schema_migration,
             })
             .await?;
 

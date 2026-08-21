@@ -58,7 +58,8 @@ Doing so requires no writes to durable state, and therefore doesn't interfere wi
 
 In the subsequent read-only bootstrap phase, the process creates persist read and write handles using the new schema.
 Read handles perform transparent migration of any data updates that flow through them, so dataflow hydration can proceed using the new schema.
-Write handles only require a matching registered shard schema when writing batches, which is something a read-only process doesn't do.
+Write handles only require a matching registered shard schema when writing batches, which a read-only process performing schema evolution doesn't do: the shard is the leader's live one, so it stays read-only until promotion.
+(Shard replacement is different: there the read-only process does write batches, but to a shard it created for itself. See below.)
 
 Once the read-only process gets promoted to a leader, and runs the builtin schema migration mechanism again, it this time registers the new schema with the persist shard.
 Doing so fences out any processes that planned to evolve the schema to an earlier version.
@@ -75,6 +76,10 @@ A read-only process performing shard replacement reads the migration shard to co
 Notably, it ignores any entries at different versions or deploy generations, to avoid any interference with concurrent in-progress upgrades.
 Depending on the existing migration shard entries, the process either decides to use the existing replacement shard, or to create the replacement shard and write its ID into the migration shard, at the current version.
 It sets the new shard ID as the migrated collection's shard in its in-memory catalog and commences bootstrapping using the replacement shard.
+
+Because this environment exclusively owns the replacement shard, the read-only process force-writes it during bootstrap rather than leaving it read-only until promotion.
+This lets a migrated builtin materialized view and its dependents hydrate before cut-over instead of all at once at cut-over.
+It is safe only for the self-owned replacement shard, never a shard the leader is still serving, which is why it applies to shard replacement and not schema evolution.
 
 A leader process performing shard replacement performs the same steps as in read-only mode.
 Additionally, it cleans up durable state written by earlier versions and/or deploy generations by:
