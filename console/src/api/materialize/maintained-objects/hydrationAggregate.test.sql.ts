@@ -18,15 +18,19 @@ import { buildHydrationAggregateQuery } from "./hydrationAggregate";
 
 const TEST_SCHEMA = "test_hydration_aggregate";
 
-/** Shadows the three relations the query reads. Empty value lists are elided. */
+/** Shadows the four relations the query reads. Empty value lists are elided.
+ *  `replicas` defaults to the ids the fixtures use, so statistics rows count
+ *  as coming from live replicas unless a test overrides it. */
 const seed = ({
   hydration = "",
   statuses = "",
   statistics = "",
+  replicas = "('r1'), ('r2'), ('r3')",
 }: {
   hydration?: string;
   statuses?: string;
   statistics?: string;
+  replicas?: string;
 }) => `
   > DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE;
   > CREATE SCHEMA ${TEST_SCHEMA};
@@ -38,16 +42,21 @@ const seed = ({
   > CREATE TABLE ${TEST_SCHEMA}.mz_source_statuses (
       id TEXT NOT NULL,
       status TEXT NOT NULL,
-      error TEXT
+      error TEXT,
+      type TEXT NOT NULL
     );
   > CREATE TABLE ${TEST_SCHEMA}.mz_source_statistics (
       id TEXT NOT NULL,
       replica_id TEXT,
       snapshot_committed BOOLEAN
     );
+  > CREATE TABLE ${TEST_SCHEMA}.mz_cluster_replicas (
+      id TEXT NOT NULL
+    );
   ${hydration ? `> INSERT INTO ${TEST_SCHEMA}.mz_hydration_statuses VALUES ${hydration};` : ""}
   ${statuses ? `> INSERT INTO ${TEST_SCHEMA}.mz_source_statuses VALUES ${statuses};` : ""}
   ${statistics ? `> INSERT INTO ${TEST_SCHEMA}.mz_source_statistics VALUES ${statistics};` : ""}
+  ${replicas ? `> INSERT INTO ${TEST_SCHEMA}.mz_cluster_replicas VALUES ${replicas};` : ""}
 `;
 
 const run = async () => {
@@ -126,8 +135,8 @@ describe("buildHydrationAggregateQuery", () => {
       seed({
         hydration: `('u1', 'r1', true), ('u2', 'r1', false)`,
         statuses: `
-          ('u1', 'running', NULL),
-          ('u2', 'stalled', 'broker unreachable')`,
+          ('u1', 'running', NULL, 'kafka'),
+          ('u2', 'stalled', 'broker unreachable', 'kafka')`,
         statistics: `('u1', 'r1', true), ('u2', 'r1', false)`,
       }),
     );
@@ -154,7 +163,7 @@ describe("buildHydrationAggregateQuery", () => {
     await testdrive(
       seed({
         hydration: `('u1', 'r1', true)`,
-        statuses: `('u1', 'running', NULL)`,
+        statuses: `('u1', 'running', NULL, 'kafka')`,
         statistics: `('u1', 'r1', true), ('u1', 'r2', false)`,
       }),
     );
@@ -173,7 +182,7 @@ describe("buildHydrationAggregateQuery", () => {
     await testdrive(
       seed({
         hydration: `('u1', 'r1', true)`,
-        statuses: `('u1', 'running', NULL), ('u7', 'running', NULL)`,
+        statuses: `('u1', 'running', NULL, 'kafka'), ('u7', 'running', NULL, 'webhook')`,
       }),
     );
 
@@ -186,5 +195,59 @@ describe("buildHydrationAggregateQuery", () => {
     });
     expect(rows[1].hydratedReplicas).toBeNull();
     expect(rows[1].totalReplicas).toBeNull();
+  });
+
+  it("excludes subsources and progress collections from the feed", async () => {
+    // The UI hides them, and each source carries one progress collection and
+    // often several subsources, so keeping them out shrinks the subscribe.
+    await testdrive(
+      seed({
+        statuses: `
+          ('u1', 'running', NULL, 'postgres'),
+          ('u2', 'running', NULL, 'subsource'),
+          ('u3', 'running', NULL, 'progress')`,
+      }),
+    );
+
+    const rows = await run();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ object_id: "u1", sourceStatus: "running" });
+  });
+
+  it("ignores statistics rows from dropped replicas", async () => {
+    // Statistics rows can outlive their replica; a dropped replica's stale
+    // false must not pin a committed source back to snapshotting.
+    await testdrive(
+      seed({
+        statuses: `('u1', 'running', NULL, 'kafka')`,
+        statistics: `('u1', 'r1', true), ('u1', 'r_dropped', false)`,
+        replicas: `('r1')`,
+      }),
+    );
+
+    const rows = await run();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      object_id: "u1",
+      snapshotCommitted: true,
+    });
+  });
+
+  it("keeps statistics rows that report no replica", async () => {
+    // Webhook sources report statistics with a null replica_id.
+    await testdrive(
+      seed({
+        statuses: `('u1', 'running', NULL, 'webhook')`,
+        statistics: `('u1', NULL, true)`,
+        replicas: `('r1')`,
+      }),
+    );
+
+    const rows = await run();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      object_id: "u1",
+      snapshotCommitted: true,
+    });
   });
 });
