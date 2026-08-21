@@ -216,6 +216,10 @@ rows:
     Privileges: |
       {{% include-headless "/headless/sql-command-privileges/explain-plan" %}}
 
+  - Command: "[`EXPLAIN REPLAN`](/sql/explain-replan)"
+    Privileges: |
+      {{% include-headless "/headless/sql-command-privileges/explain-replan" %}}
+
   - Command: "[`EXPLAIN SCHEMA`](/sql/explain-schema)"
     Privileges: |
       {{% include-headless "/headless/sql-command-privileges/explain-schema" %}}

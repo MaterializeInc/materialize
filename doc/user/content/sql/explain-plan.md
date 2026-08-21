@@ -135,6 +135,7 @@ Explained object | Description
 **VIEW name** | Display the `RAW` or `LOCALLY OPTIMIZED` plan for an existing view.
 **INDEX name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing index.
 **MATERIALIZED VIEW name** | Display the `OPTIMIZED` or `PHYSICAL` plan for an existing materialized view.
+**REPLAN VIEW name**, **REPLAN INDEX name**, **REPLAN MATERIALIZED VIEW name** | Re-run the optimizer on an existing view, index, or materialized view and display the resulting plan. See [`EXPLAIN REPLAN`](../explain-replan).
 
 ### Output format
 

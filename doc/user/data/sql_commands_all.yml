@@ -267,6 +267,9 @@ rows:
   - command: "[`EXPLAIN PLAN`](/sql/explain-plan)"
     labels:
       - "explain"
+  - command: "[`EXPLAIN REPLAN`](/sql/explain-replan)"
+    labels:
+      - "explain"
   - command: "[`EXPLAIN SCHEMA`](/sql/explain-schema)"
     labels:
       - "explain"

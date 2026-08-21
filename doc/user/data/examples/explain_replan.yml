@@ -1,0 +1,43 @@
+- name: "syntax"
+  code: |
+    EXPLAIN [ [ RAW | DECORRELATED | [LOCALLY] OPTIMIZED | PHYSICAL ] PLAN
+        [ WITH (<option> [, <option> ...]) ]
+        [ AS (TEXT | JSON) ]
+    FOR ]  -- The FOR keyword is required if the PLAN keyword is specified
+      REPLAN <VIEW | MATERIALIZED VIEW | INDEX> <name>
+    ;
+  syntax_elements:
+    - name: "(`RAW` | `DECORRELATED` | [`LOCALLY`] `OPTIMIZED` | `PHYSICAL`) **PLAN**"
+      description: |
+        The [optimization stage](/sql/explain-plan/#explained-stage) at which to
+        take the plan snapshot. Not every stage applies to every object type,
+        see [Supported stages](#supported-stages). Omitting the whole
+        `PLAN ... FOR` prefix is equivalent to `PHYSICAL PLAN AS TEXT FOR`,
+        which is valid for a materialized view or an index but not for a view.
+    - name: "**WITH** (`<option>` [, ...])"
+      description: |
+        Optional. Either an [output
+        modifier](/sql/explain-plan/#output-modifiers) that changes what the
+        explanation renders, or an optimizer feature override of the form
+        `ENABLE <feature> = <boolean>` that changes how the object is
+        replanned. See [Optimizer feature
+        overrides](#optimizer-feature-overrides).
+    - name: "**AS** (`TEXT` | `JSON`)"
+      description: |
+        Optional. Specifies the output format of the explanation:
+
+        | Format | Description |
+        |--------|-------------|
+        | `TEXT` | Format the explanation output as UTF-8 text (default). |
+        | `JSON` | Format the explanation output as a JSON object. |
+    - name: "**REPLAN VIEW** `<name>`"
+      description: |
+        Re-run the optimizer on an existing [view](/sql/create-view/). Requires
+        an explicit `RAW`, `DECORRELATED`, or `LOCALLY OPTIMIZED` stage.
+    - name: "**REPLAN MATERIALIZED VIEW** `<name>`"
+      description: |
+        Re-run the optimizer on an existing [materialized
+        view](/sql/create-materialized-view/).
+    - name: "**REPLAN INDEX** `<name>`"
+      description: |
+        Re-run the optimizer on an existing [index](/sql/create-index/).
