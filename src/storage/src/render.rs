@@ -372,6 +372,14 @@ pub fn build_ingestion_dataflow(
                     export_id,
                     primary_source_id
                 );
+                // Mirrors the operator selection in `render::sources`: only
+                // `Upsert` exports run through the feedback upsert operator,
+                // which is what the persist sink's concurrent-modification
+                // leniency relies on.
+                let is_upsert_pipeline = matches!(
+                    export.data_config.envelope,
+                    mz_storage_types::sources::envelope::SourceEnvelope::Upsert(_)
+                );
                 let (upper_stream, errors, sink_tokens) = crate::render::persist_sink::render(
                     mz_scope,
                     export_id,
@@ -380,6 +388,7 @@ pub fn build_ingestion_dataflow(
                     storage_state,
                     metrics,
                     Arc::clone(&busy_signal),
+                    is_upsert_pipeline,
                 );
                 upper_streams.push(upper_stream);
                 tokens.extend(sink_tokens);
