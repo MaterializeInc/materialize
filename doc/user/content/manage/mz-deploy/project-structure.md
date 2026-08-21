@@ -128,6 +128,23 @@ database-level statements:
 - `GRANT`
 - `ALTER DEFAULT PRIVILEGES`
 
+## How modifiers are applied
+
+Writing a modifier file claims the scope it names. On every `apply`, the
+comments, grants, and default privileges it declares are compared against the
+database and only the differences are applied. Anything the file stops declaring
+is removed, including a grant or comment someone added by hand, so the file is
+the source of truth for its scope. A schema or database with no modifier file
+declares nothing and is left untouched.
+
+One consequence is worth knowing: `ALTER DEFAULT PRIVILEGES` only governs
+objects at the moment they are created. Once a table has picked up a privilege
+from a rule, that privilege lives on the table. It is protected from removal
+while the rule still grants it, so changing or dropping the rule leaves the
+privilege undeclared and the next `apply` revokes it from the objects that
+inherited it. Grant the privilege explicitly in the object's own file if you
+want it to outlive the rule.
+
 ## project.toml
 
 The `project.toml` file in your project root controls project-wide settings:
