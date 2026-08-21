@@ -6718,15 +6718,6 @@ pub fn plan_alter_cluster(
                         );
                     }
 
-                    match alter_strategy {
-                        AlterClusterPlanStrategy::None => {}
-                        _ => {
-                            scx.require_feature_flag(
-                                &crate::session::vars::ENABLE_ZERO_DOWNTIME_CLUSTER_RECONFIGURATION,
-                            )?;
-                        }
-                    }
-
                     if replica_defs.is_some() {
                         sql_bail!("REPLICAS not supported for managed clusters");
                     }
