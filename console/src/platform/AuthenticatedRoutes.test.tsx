@@ -20,8 +20,8 @@ import {
 
 import { AuthenticatedRoutes } from "./AuthenticatedRoutes";
 
-// This test only exercises route gating, so stub out the layout and the
-// query-history page itself rather than mocking every endpoint they need.
+// The app shell and the page itself each fetch data this test doesn't cover,
+// so stub them rather than mocking every endpoint they need.
 vi.mock("~/components/AppInitializer", () => ({
   AppInitializer: () => null,
 }));
