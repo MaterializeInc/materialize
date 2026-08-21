@@ -35,7 +35,7 @@ import { Link as RouterLink, useLocation, useNavigate } from "react-router-dom";
 
 import { createNamespace } from "~/api/materialize";
 import { OUTDATED_THRESHOLD_SECONDS } from "~/api/materialize/cluster/materializationLag";
-import StatusPill from "~/components/StatusPill";
+import StatusPill, { ConnectorStatusPill } from "~/components/StatusPill";
 import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
 import { TablePagination } from "~/components/Table/TablePagination";
 import { TableSearch } from "~/components/Table/TableSearch";
@@ -68,8 +68,8 @@ import { FilterChips } from "./FilterChips";
 import {
   ClusterFilterPanel,
   FreshnessFilterPanel,
-  HydrationFilterPanel,
   ObjectTypeFilterPanel,
+  StatusFilterPanel,
 } from "./filterPanels";
 import {
   bucketForHydration,
@@ -77,10 +77,10 @@ import {
   FILTER_URL_SPECS,
   freshnessFilterFn,
   HYDRATION_LABELS,
-  hydrationFilterFn,
   initialColumnFiltersFromUrl,
   objectTypeFilterFn,
   STATUS_COLOR_SCHEMES,
+  statusFilterFn,
 } from "./filters";
 import { MaintainedObjectListItem } from "./queries";
 
@@ -259,16 +259,47 @@ const FreshnessCell = ({
   );
 };
 
-const StatusCell = ({
+const pendingPill = <Skeleton height="5" width="20" borderRadius="full" />;
+
+/**
+ * Sources report their own ingestion status, so they don't go through replica
+ * hydration. For a source, `hydrated` only tracks whether `rehydration_latency`
+ * is set, which stays false for the whole initial snapshot and would render a
+ * healthy source as `Not Hydrated`.
+ */
+const SourceStatusCell = ({
   row,
   ready,
 }: {
   row: MaintainedObjectListItem;
   ready: boolean;
 }) => {
+  // Status rides on the hydration-aggregate feed, so it can trail the row.
+  if (!row.sourceStatus) return ready ? "-" : pendingPill;
+  return (
+    <ConnectorStatusPill
+      connector={{
+        status: row.sourceStatus.status,
+        type: row.sourceType ?? "",
+        snapshotCommitted: row.sourceStatus.snapshotCommitted,
+      }}
+    />
+  );
+};
+
+const StatusCell = ({
+  row,
+  hydrationReady,
+}: {
+  row: MaintainedObjectListItem;
+  hydrationReady: boolean;
+}) => {
+  if (row.objectType === "source") {
+    return <SourceStatusCell row={row} ready={hydrationReady} />;
+  }
   const { hydratedReplicas, totalReplicas } = row;
   if (totalReplicas === 0) {
-    return ready ? "-" : <Skeleton height="5" width="20" borderRadius="full" />;
+    return hydrationReady ? "-" : pendingPill;
   }
   const bucket = bucketForHydration(hydratedReplicas, totalReplicas);
   if (!bucket) return "-";
@@ -327,17 +358,20 @@ const columns = [
       id: "status",
       header: "Status",
       sortingFn: sortingFunctions.nullsLast,
-      filterFn: hydrationFilterFn,
+      filterFn: statusFilterFn,
       cell: (info) => {
         const meta = info.table.options.meta as MaintainedObjectsTableMeta;
         return (
-          <StatusCell row={info.row.original} ready={meta.hydrationReady} />
+          <StatusCell
+            row={info.row.original}
+            hydrationReady={meta.hydrationReady}
+          />
         );
       },
       meta: {
         tooltip:
-          "Object status derived from replica hydration across all clusters.",
-        renderFilter: (column) => <HydrationFilterPanel column={column} />,
+          "Ingestion status for sources, replica hydration across all clusters for everything else.",
+        renderFilter: (column) => <StatusFilterPanel column={column} />,
       },
     },
   ),
