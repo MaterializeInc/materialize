@@ -798,6 +798,25 @@ impl DecimalLike for Numeric {
     }
 }
 
+/// Byte offsets of the fields [`PackedNumeric`] holds.
+///
+/// The coefficient units occupy everything between [`PACKED_LSU_AT`] and [`PACKED_BITS_AT`], and
+/// the five bytes after the flags are unused padding to [`PackedNumeric::SIZE`].
+const PACKED_DIGITS_AT: usize = 0;
+const PACKED_EXPONENT_AT: usize = 4;
+const PACKED_LSU_AT: usize = 8;
+const PACKED_BITS_AT: usize = 34;
+
+/// The number of coefficient units [`PackedNumeric`] has room for.
+const PACKED_LSU_LEN: usize = (PACKED_BITS_AT - PACKED_LSU_AT) / size_of::<u16>();
+
+// `PackedNumeric` is a durable encoding, so its layout cannot follow `NUMERIC_DATUM_WIDTH`. A
+// wider datum would write its coefficient over the flags byte, which still fits inside `SIZE` and
+// so would corrupt persisted values with neither a compile error nor a panic. Failing here instead
+// makes the coupling explicit: changing the datum width needs a new packed encoding and a
+// migration, not a recompile.
+static_assertions::const_assert_eq!(NUMERIC_DATUM_WIDTH_USIZE, PACKED_LSU_LEN);
+
 /// An encoded packed variant of [`Numeric`].
 ///
 /// Unlike other "Packed" types we _DO NOT_ uphold the invariant that
@@ -826,35 +845,44 @@ impl FixedSizeCodec<Numeric> for PackedNumeric {
     fn from_value(val: Numeric) -> PackedNumeric {
         let (digits, exponent, bits, lsu) = val.to_raw_parts();
 
-        let mut buf = [0u8; 40];
+        let mut buf = [0u8; Self::SIZE];
 
-        buf[0..4].copy_from_slice(&digits.to_le_bytes());
-        buf[4..8].copy_from_slice(&exponent.to_le_bytes());
+        buf[PACKED_DIGITS_AT..PACKED_DIGITS_AT + 4].copy_from_slice(&digits.to_le_bytes());
+        buf[PACKED_EXPONENT_AT..PACKED_EXPONENT_AT + 4].copy_from_slice(&exponent.to_le_bytes());
 
-        for i in 0..13 {
-            buf[(i * 2) + 8..(i * 2) + 10].copy_from_slice(&lsu[i].to_le_bytes());
+        for (i, unit) in lsu.iter().enumerate() {
+            let at = PACKED_LSU_AT + i * size_of::<u16>();
+            buf[at..at + size_of::<u16>()].copy_from_slice(&unit.to_le_bytes());
         }
 
-        buf[34..35].copy_from_slice(&bits.to_le_bytes());
+        buf[PACKED_BITS_AT..PACKED_BITS_AT + 1].copy_from_slice(&bits.to_le_bytes());
 
         PackedNumeric(buf)
     }
 
     fn into_value(self) -> Numeric {
-        let digits: [u8; 4] = self.0[0..4].try_into().unwrap();
+        let digits: [u8; 4] = self.0[PACKED_DIGITS_AT..PACKED_DIGITS_AT + 4]
+            .try_into()
+            .expect("4 bytes");
         let digits = u32::from_le_bytes(digits);
 
-        let exponent: [u8; 4] = self.0[4..8].try_into().unwrap();
+        let exponent: [u8; 4] = self.0[PACKED_EXPONENT_AT..PACKED_EXPONENT_AT + 4]
+            .try_into()
+            .expect("4 bytes");
         let exponent = i32::from_le_bytes(exponent);
 
-        let mut lsu = [0u16; 13];
-        for i in 0..13 {
-            let x: [u8; 2] = self.0[(i * 2) + 8..(i * 2) + 10].try_into().unwrap();
-            let x = u16::from_le_bytes(x);
-            lsu[i] = x;
+        let mut lsu = [0u16; PACKED_LSU_LEN];
+        for (i, unit) in lsu.iter_mut().enumerate() {
+            let at = PACKED_LSU_AT + i * size_of::<u16>();
+            let raw: [u8; 2] = self.0[at..at + size_of::<u16>()]
+                .try_into()
+                .expect("2 bytes");
+            *unit = u16::from_le_bytes(raw);
         }
 
-        let bits: [u8; 1] = self.0[34..35].try_into().unwrap();
+        let bits: [u8; 1] = self.0[PACKED_BITS_AT..PACKED_BITS_AT + 1]
+            .try_into()
+            .expect("1 byte");
         let bits = u8::from_le_bytes(bits);
 
         Numeric::from_raw_parts(digits, exponent, bits, lsu)
@@ -886,6 +914,26 @@ mod tests {
             let actual = protobuf_roundtrip::<_, ProtoOptionalNumericMaxScale>(&expect);
             assert_ok!(actual);
             assert_eq!(actual.unwrap(), expect);
+        }
+    }
+
+    /// A value using every coefficient unit must not disturb the flags byte that follows them.
+    ///
+    /// The flags carry the sign, so an encoder that overran the coefficient would round-trip a
+    /// negative maximum-precision value as a positive one.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `decNumberFromString` on OS `linux`
+    fn packed_numeric_max_precision_keeps_flags() {
+        let digits = usize::from(NUMERIC_DATUM_MAX_PRECISION);
+        for text in ["9".repeat(digits), format!("-{}", "9".repeat(digits))] {
+            let og: Numeric = crate::strconv::parse_numeric(&text)
+                .expect("valid numeric")
+                .into_inner();
+            assert_eq!(usize::try_from(og.digits()).expect("fits"), digits);
+
+            let rnd = PackedNumeric::from_value(og).into_value();
+            assert_eq!(og, rnd, "{text}");
+            assert_eq!(og.is_negative(), rnd.is_negative(), "{text}");
         }
     }
 
