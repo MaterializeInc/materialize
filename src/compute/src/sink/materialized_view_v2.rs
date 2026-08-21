@@ -68,7 +68,6 @@ use timely::dataflow::operators::vec::Broadcast;
 use timely::dataflow::operators::{Capability, CapabilitySet};
 use timely::progress::Antichain;
 use timely::progress::frontier::AntichainRef;
-use tokio::runtime::Handle;
 use tokio::sync::{mpsc, watch};
 use tracing::trace;
 
@@ -686,11 +685,11 @@ mod write {
             mz_ore::task::spawn(
                 || operator_name(sink_id, "write::batch_writer"),
                 async move {
-                    let mut writer = persist_api.open_writer().await;
+                    let writer = persist_api.open_writer().await;
 
                     while let Some(cmd) = cmd_rx.recv().await {
                         corrections =
-                            apply_command(sink_id, corrections, &mut writer, cmd, &resp_tx).await;
+                            apply_command(sink_id, corrections, &writer, cmd, &resp_tx).await;
                         // Activate the operator to drain logging events and process batch responses.
                         // ArcActivator suppresses redundant activations, so this is cheap.
                         activator.activate();
@@ -836,6 +835,13 @@ mod write {
         batches_output_stream
     }
 
+    /// How many updates the batch read-back hands over per chunk.
+    const READ_BACK_CHUNK: usize = 1024;
+    /// How many chunks may sit between the blocking read-back and the async task feeding the
+    /// batch builder. Together with [`READ_BACK_CHUNK`] this bounds the handoff to a few thousand
+    /// buffered updates.
+    const READ_BACK_CHUNKS_IN_FLIGHT: usize = 4;
+
     /// Apply a single command to the task state, returning the correction buffers.
     ///
     /// `desired` updates enter `corrections` as positive contributions and `persist` updates as
@@ -851,54 +857,80 @@ mod write {
     async fn apply_command(
         sink_id: GlobalId,
         mut corrections: Corrections,
-        writer: &mut WriteHandle<SourceData, (), Timestamp, StorageDiff>,
+        writer: &WriteHandle<SourceData, (), Timestamp, StorageDiff>,
         cmd: WriteCommand,
         resp_tx: &mpsc::UnboundedSender<WriteResponse>,
     ) -> Corrections {
         match cmd {
             WriteCommand::Batch(batch) => apply_batch(sink_id, corrections, batch).await,
             WriteCommand::WriteBatch(desc) => {
+                // Reading the updates back clones a row per update and, with the pager enabled,
+                // pages chunks back in, so it stalls the same way the consolidation does and runs
+                // on the same blocking thread: the closure keeps the buffers, consolidates, and
+                // streams the consolidated updates back in chunks that this task feeds to the
+                // persist batch builder.
+                //
+                // Not `block_in_place`: that parks a worker's core on a blocking-pool thread for
+                // the whole write, while the batch's part uploads are spawned tasks that need a
+                // live core. With one write per sink and worker, enough concurrent sinks exhaust
+                // the pool's thread cap and the runtime deadlocks. `spawn_blocking` queues
+                // instead of stranding a core, and this task stays cancellable at every chunk
+                // boundary.
                 let upper = desc.upper.clone();
-                corrections = mz_ore::task::spawn_blocking(
-                    || operator_name(sink_id, "write::consolidate"),
-                    move || {
-                        corrections.ok.consolidate_before(&upper);
-                        corrections.err.consolidate_before(&upper);
-                        corrections
-                    },
-                )
-                .await;
+                let (updates_tx, mut updates_rx) = mpsc::channel(READ_BACK_CHUNKS_IN_FLIGHT);
+                let read_back =
+                    mz_ore::task::spawn_blocking(
+                        || operator_name(sink_id, "write::consolidate"),
+                        move || {
+                            corrections.ok.consolidate_before(&upper);
+                            corrections.err.consolidate_before(&upper);
 
-                // Chain ok and err correction iterators directly, avoiding an intermediate Vec
-                // allocation.
-                let oks = corrections
-                    .ok
-                    .consolidated_updates_before(&desc.upper)
-                    .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
-                let errs = corrections
-                    .err
-                    .consolidated_updates_before(&desc.upper)
-                    .map(|(d, t, r)| ((SourceData(Err(d.deserialize())), ()), t, r.into_inner()));
-                let mut updates = oks.chain(errs).peekable();
+                            let oks = corrections
+                                .ok
+                                .consolidated_updates_before(&upper)
+                                .map(|(d, t, r)| ((SourceData(Ok(d)), ()), t, r.into_inner()));
+                            let errs = corrections.err.consolidated_updates_before(&upper).map(
+                                |(d, t, r)| {
+                                    ((SourceData(Err(d.deserialize())), ()), t, r.into_inner())
+                                },
+                            );
 
-                if updates.peek().is_none() {
+                            let mut updates = oks.chain(errs).peekable();
+                            while updates.peek().is_some() {
+                                let mut chunk = Vec::with_capacity(READ_BACK_CHUNK);
+                                chunk.extend(updates.by_ref().take(READ_BACK_CHUNK));
+                                // A closed channel means the write task is gone, so the batch it
+                                // asked for is moot and there is no point in pulling the rest of
+                                // the buffer.
+                                if updates_tx.blocking_send(chunk).is_err() {
+                                    break;
+                                }
+                            }
+
+                            // The iterators borrow the correction buffers, so they must end before
+                            // the buffers move back out.
+                            drop(updates);
+                            corrections
+                        },
+                    );
+
+                // Create the builder lazily: an idle sink's descriptions find no corrections.
+                let mut builder = None;
+                while let Some(chunk) = updates_rx.recv().await {
+                    let builder = builder.get_or_insert_with(|| writer.builder(desc.lower.clone()));
+                    for ((k, v), t, d) in &chunk {
+                        builder.add(k, v, t, d).await.expect("valid usage");
+                    }
+                }
+                let corrections = read_back.await;
+
+                let Some(builder) = builder else {
                     // No corrections to write.
                     let _ = resp_tx.send(WriteResponse { batch: None });
-                    drop(updates);
                     return corrections;
-                }
+                };
 
-                // Feeding the builder pulls the updates out of the correction buffers on the
-                // calling thread: every pull clones a row and can page a chunk back in, while the
-                // builder only awaits once a part fills, i.e. after `blob_target_size` times
-                // `batch_builder_max_outstanding_parts` worth of updates. That is the same stall
-                // the consolidation above avoids, so it gets the same treatment.
-                // `block_in_place` rather than `spawn_blocking`, because the updates borrow the
-                // buffers and the builder needs an async context.
-                let batch = tokio::task::block_in_place(|| {
-                    Handle::current().block_on(writer.batch(updates, desc.lower, desc.upper))
-                })
-                .expect("valid usage");
+                let batch = builder.finish(desc.upper).await.expect("valid usage");
                 let proto_batch = batch.into_transmittable_batch();
                 if let Err(err) = resp_tx.send(WriteResponse {
                     batch: Some(proto_batch),
