@@ -14,10 +14,11 @@
 //! Provides batch existence checks for schemas, clusters, and objects, as well
 //! as dependency lookups used during deployment planning and sink repointing.
 
-use crate::cli::commands::default_privileges::DefaultPrivilege;
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
-use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectComment, ObjectGrant};
+use crate::client::models::{
+    Cluster, ClusterConfig, ClusterReplica, DefaultPrivilege, ObjectComment, ObjectGrant,
+};
 use crate::client::sql_placeholders;
 use crate::client::staging_suffix_like_pattern;
 use crate::client::{parse_create_cluster, quote_identifier};
@@ -304,6 +305,32 @@ pub(super) async fn get_current_user(client: &Client) -> Result<String, Connecti
     let row = client.query_one("SELECT current_user()", &[]).await?;
 
     Ok(row.get(0))
+}
+
+/// Check which databases from a set of names exist.
+///
+/// Returns a BTreeSet of database names that exist.
+pub(super) async fn check_databases_exist(
+    client: &Client,
+    databases: &[String],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    if databases.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let query = format!(
+        "SELECT name FROM mz_catalog.mz_databases WHERE name IN ({})",
+        sql_placeholders(databases.len())
+    );
+
+    let mut params: Vec<&(dyn ToSql + Sync)> = Vec::new();
+    for database in databases {
+        params.push(database);
+    }
+
+    let rows = client.query(&query, &params).await?;
+
+    Ok(rows.iter().map(|row| row.get("name")).collect())
 }
 
 /// Check which schemas from a set of (database, schema) pairs exist.
@@ -871,15 +898,22 @@ async fn get_named_object_grants(
             WHERE name = $1
         )
         SELECT
-            grantee.name AS grantee,
+            -- `p` is the PUBLIC pseudo-role. It has no `mz_roles` row, so it is
+            -- resolved here rather than by the join, which would drop it.
+            CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
             p.privilege_type
         FROM privilege AS p
         -- Resolve grantee role IDs to human-readable names.
-        JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        LEFT JOIN mz_roles AS grantee ON p.grantee = grantee.id
         -- Exclude system roles that are not user-manageable.
-        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        WHERE (
+            p.grantee = 'p'
+            OR grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
           -- Owners implicitly have all privileges; don't surface those as explicit grants.
           AND p.grantee != p.owner_id
+        -- Ordered so the revocations a plan emits are deterministic.
+        ORDER BY grantee, p.privilege_type
         "#,
         catalog_table
     );
@@ -934,12 +968,17 @@ pub(super) async fn get_database_object_grants(
             WHERE d.name = $1 AND s.name = $2 AND t.name = $3
         )
         SELECT
-            grantee.name AS grantee,
+            -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
+            CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
             p.privilege_type
         FROM privilege AS p
-        JOIN mz_roles AS grantee ON p.grantee = grantee.id
-        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        LEFT JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        WHERE (
+            p.grantee = 'p'
+            OR grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
           AND p.grantee != p.owner_id
+        ORDER BY grantee, p.privilege_type
         "#,
         catalog_table
     );
@@ -969,12 +1008,17 @@ pub(super) async fn get_schema_grants(
             WHERE d.name = $1 AND s.name = $2
         )
         SELECT
-            grantee.name AS grantee,
+            -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
+            CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
             p.privilege_type
         FROM privilege AS p
-        JOIN mz_roles AS grantee ON p.grantee = grantee.id
-        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        LEFT JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        WHERE (
+            p.grantee = 'p'
+            OR grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
           AND p.grantee != p.owner_id
+        ORDER BY grantee, p.privilege_type
         "#;
 
     let rows = client.query(query, &[&database, &schema]).await?;
@@ -1000,7 +1044,8 @@ pub(super) async fn get_default_privilege_grants_for_schema(
 ) -> Result<Vec<ObjectGrant>, ConnectionError> {
     let query = r#"
         SELECT
-            grantee_role.name AS grantee,
+            -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
             dp_priv.privilege_type
         FROM mz_default_privileges dp
         CROSS JOIN LATERAL unnest(
@@ -1008,7 +1053,7 @@ pub(super) async fn get_default_privilege_grants_for_schema(
         ) AS dp_priv(privilege_type)
         JOIN mz_schemas s ON s.name = $2
         JOIN mz_databases d ON s.database_id = d.id
-        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
         WHERE d.name = $1
           AND dp.object_type = 'schema'
           -- Match rules targeting the schema's owner, or PUBLIC ('p') rules.
@@ -1018,7 +1063,10 @@ pub(super) async fn get_default_privilege_grants_for_schema(
           AND (dp.database_id IS NULL OR dp.database_id = d.id)
           -- Schemas are not themselves schema-scoped.
           AND dp.schema_id IS NULL
-          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND (
+              dp.grantee = 'p'
+              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          )
         "#;
 
     let rows = client.query(query, &[&database, &schema]).await?;
@@ -1048,7 +1096,8 @@ async fn get_default_privilege_grants_for_named_object(
         -- Query default privileges from ALTER DEFAULT PRIVILEGES rules.
         -- These are auto-applied grants that should be protected from revocation.
         SELECT
-            grantee_role.name AS grantee,
+            -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
             dp_priv.privilege_type
         FROM mz_default_privileges dp
         -- Expand the privilege bitmap into individual privilege type strings.
@@ -1056,7 +1105,7 @@ async fn get_default_privilege_grants_for_named_object(
             mz_internal.mz_format_privileges(dp.privileges)
         ) AS dp_priv(privilege_type)
         JOIN {} obj ON obj.name = $1
-        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
         WHERE dp.object_type = $2
           -- Match rules targeting the object's owner, or PUBLIC ('p') rules
           -- that apply to all owners.
@@ -1065,7 +1114,10 @@ async fn get_default_privilege_grants_for_named_object(
           -- so only global default privileges (both NULL) apply.
           AND dp.database_id IS NULL
           AND dp.schema_id IS NULL
-          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND (
+              dp.grantee = 'p'
+              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          )
         "#,
         catalog_table
     );
@@ -1115,7 +1167,8 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
         -- Query default privileges from ALTER DEFAULT PRIVILEGES rules
         -- for a schema-qualified database object.
         SELECT
-            grantee_role.name AS grantee,
+            -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
             dp_priv.privilege_type
         FROM mz_default_privileges dp
         -- Expand the privilege bitmap into individual privilege type strings.
@@ -1126,7 +1179,7 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
         JOIN {} obj ON obj.name = $3
         JOIN mz_schemas s ON obj.schema_id = s.id
         JOIN mz_databases d ON s.database_id = d.id
-        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
         WHERE d.name = $1 AND s.name = $2
           AND dp.object_type = $4
           -- Match rules targeting the object's owner, or PUBLIC ('p') rules.
@@ -1136,7 +1189,10 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
           AND (dp.database_id IS NULL OR dp.database_id = d.id)
           -- Same for schema: global or scoped to this specific schema.
           AND (dp.schema_id IS NULL OR dp.schema_id = s.id)
-          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND (
+              dp.grantee = 'p'
+              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          )
         "#,
         catalog_table
     );
@@ -1162,6 +1218,9 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
 /// target role and the grantee can be the `p` pseudo-role, which stands for
 /// `PUBLIC` and has no `mz_roles` row, so both are resolved with an outer join
 /// and a `CASE` rather than an inner join that would drop those rules.
+///
+/// Role names come back exactly as the catalog stores them: they are identifiers
+/// and identifiers are case-sensitive, so the caller compares them verbatim.
 async fn get_default_privileges(
     client: &Client,
     scope_predicate: &str,
@@ -1170,9 +1229,9 @@ async fn get_default_privileges(
     let query = format!(
         r#"
         SELECT
-            CASE WHEN dp.role_id = 'p' THEN 'public' ELSE lower(target.name) END AS target_role,
+            CASE WHEN dp.role_id = 'p' THEN 'public' ELSE target.name END AS target_role,
             dp.object_type,
-            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE lower(grantee.name) END AS grantee,
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
             upper(dp_priv.privilege_type) AS privilege
         FROM mz_default_privileges dp
         -- Expand the privilege bitmap into individual privilege type strings.
@@ -1659,6 +1718,14 @@ impl IntrospectionClient<'_> {
         schema: &str,
     ) -> Result<Vec<ObjectGrant>, ConnectionError> {
         get_default_privilege_grants_for_schema(self.client, database, schema).await
+    }
+
+    /// Check which databases from a set of names exist.
+    pub async fn check_databases_exist(
+        &self,
+        databases: &[String],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        check_databases_exist(self.client, databases).await
     }
 
     /// Get the default-privilege rules scoped to a database.

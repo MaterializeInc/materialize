@@ -10,41 +10,36 @@
 //! Reconcile the `ALTER DEFAULT PRIVILEGES` rules a database or schema mod file
 //! declares.
 //!
-//! Unlike object grants, which are reconciled one privilege at a time, a rule is
-//! replayed exactly as authored whenever the catalog does not already satisfy
-//! it. A rule maps onto `mz_default_privileges` rows keyed by
-//! (target role, grantee, object type), so the statement is already the unit the
-//! server stores, and replaying the authored SQL beats reconstructing it from
-//! catalog rows. When a rule's privileges cannot be enumerated, it is replayed
-//! rather than assumed satisfied.
+//! A rule maps onto `mz_default_privileges` rows keyed by
+//! (target role, object type, grantee, privilege). The declared rules are folded
+//! into the row set the project wants — an abbreviated `GRANT` adds rows, an
+//! abbreviated `REVOKE` takes them away — and that set is diffed against the
+//! catalog. So a privilege the project stops declaring is revoked rather than
+//! left behind, the same way object grants and comments are reconciled.
+//!
+//! Only rows the scope itself owns take part. The identity queries match on the
+//! scope's own database or schema id, so a global rule, or one belonging to a
+//! different scope, is never revoked from here.
 
 use crate::cli::CliError;
+use crate::cli::commands::grants::parse_privilege;
 use crate::cli::executor::DeploymentExecutor;
-use crate::client::Client;
+use crate::client::{Client, DefaultPrivilege};
+use crate::verbose;
 use mz_sql_parser::ast::{
-    AbbreviatedGrantOrRevokeStatement, AlterDefaultPrivilegesStatement, ObjectType,
-    PrivilegeSpecification, Raw, TargetRoleSpecification,
+    AbbreviatedGrantOrRevokeStatement, AbbreviatedGrantStatement, AbbreviatedRevokeStatement,
+    AlterDefaultPrivilegesStatement, GrantTargetAllSpecification, Ident, ObjectType, Privilege,
+    PrivilegeSpecification, Raw, TargetRoleSpecification, UnresolvedDatabaseName,
+    UnresolvedSchemaName,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-/// The name the catalog uses for `PUBLIC`, which it stores as the `p`
+/// The name the catalog reports for `PUBLIC`, which it stores as the `p`
 /// pseudo-role in both the target-role and grantee positions.
+///
+/// `PUBLIC` folds to this when parsed as a role name, so the same spelling round
+/// trips through both the catalog and the AST.
 const PUBLIC: &str = "public";
-
-/// One `mz_default_privileges` row, keyed by everything that identifies it
-/// within a single database or schema scope.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct DefaultPrivilege {
-    /// The role whose newly created objects receive the privilege.
-    pub target_role: String,
-    /// The object type, spelled as `mz_default_privileges` spells it: the
-    /// object-type keyword lowercased, for example `table` or `network policy`.
-    pub object_type: String,
-    /// The role receiving the privilege.
-    pub grantee: String,
-    /// The privilege, uppercased.
-    pub privilege: String,
-}
 
 /// The scope a mod file's default-privilege rules are attached to.
 pub enum DefaultPrivilegeScope<'a> {
@@ -53,7 +48,7 @@ pub enum DefaultPrivilegeScope<'a> {
 }
 
 impl DefaultPrivilegeScope<'_> {
-    /// The default-privilege rules the catalog currently records for this scope.
+    /// The rules the catalog currently records against this scope.
     async fn current_privileges(
         &self,
         client: &Client,
@@ -73,88 +68,211 @@ impl DefaultPrivilegeScope<'_> {
         };
         Ok(rows.map_err(CliError::Connection)?.into_iter().collect())
     }
+
+    /// The `IN DATABASE` or `IN SCHEMA` clause a synthesized rule carries.
+    fn target_objects(&self) -> GrantTargetAllSpecification<Raw> {
+        match self {
+            Self::Database(database) => GrantTargetAllSpecification::AllDatabases {
+                databases: vec![UnresolvedDatabaseName(Ident::new_unchecked(*database))],
+            },
+            Self::Schema { database, schema } => GrantTargetAllSpecification::AllSchemas {
+                schemas: vec![UnresolvedSchemaName(vec![
+                    Ident::new_unchecked(*database),
+                    Ident::new_unchecked(*schema),
+                ])],
+            },
+        }
+    }
 }
 
-/// Reconcile the default-privilege rules for one scope, replaying only the rules
-/// the catalog does not already satisfy.
+/// Reconcile the default-privilege rules for one scope.
 pub async fn reconcile(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
     scope: &DefaultPrivilegeScope<'_>,
     statements: &[AlterDefaultPrivilegesStatement<Raw>],
 ) -> Result<(), CliError> {
-    if statements.is_empty() {
-        return Ok(());
-    }
     let current = scope.current_privileges(client).await?;
-    for stmt in statements {
-        if !is_satisfied(stmt, &current) {
+    let Some(desired) = declared_privileges(statements) else {
+        // The declared state cannot be enumerated, so revoking anything risks
+        // removing a rule the project still wants. Replay instead.
+        verbose!("replaying default privileges verbatim: declared state is not enumerable");
+        for stmt in statements {
             executor.execute_sql(stmt).await?;
         }
+        return Ok(());
+    };
+    for stmt in privilege_changes(&desired, &current, scope) {
+        executor.execute_sql(&stmt).await?;
     }
     Ok(())
 }
 
-/// Whether the catalog already reflects a rule.
+/// Fold the declared rules into the row set the project wants.
 ///
-/// A `GRANT` rule is satisfied when every row it implies is present, a `REVOKE`
-/// rule when none of them is. A rule whose privileges cannot be enumerated is
-/// reported unsatisfied so it gets replayed.
-pub fn is_satisfied(
-    stmt: &AlterDefaultPrivilegesStatement<Raw>,
-    current: &BTreeSet<DefaultPrivilege>,
-) -> bool {
-    let (privileges, object_type, grantees, is_grant) = match &stmt.grant_or_revoke {
-        AbbreviatedGrantOrRevokeStatement::Grant(grant) => {
-            (&grant.privileges, grant.object_type, &grant.grantees, true)
-        }
-        AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => (
-            &revoke.privileges,
-            revoke.object_type,
-            &revoke.revokees,
-            false,
-        ),
-    };
+/// Rules apply in file order: an abbreviated `GRANT` adds its rows and an
+/// abbreviated `REVOKE` takes them away, so a project can grant broadly and then
+/// carve out an exception, matching the order the server would have applied the
+/// statements in.
+///
+/// Returns `None` when a rule names privileges that cannot be enumerated, which
+/// leaves the declared state unknowable.
+pub fn declared_privileges(
+    statements: &[AlterDefaultPrivilegesStatement<Raw>],
+) -> Option<BTreeSet<DefaultPrivilege>> {
+    let mut declared = BTreeSet::new();
+    for stmt in statements {
+        let (privileges, object_type, grantees, is_grant) = match &stmt.grant_or_revoke {
+            AbbreviatedGrantOrRevokeStatement::Grant(grant) => {
+                (&grant.privileges, grant.object_type, &grant.grantees, true)
+            }
+            AbbreviatedGrantOrRevokeStatement::Revoke(revoke) => (
+                &revoke.privileges,
+                revoke.object_type,
+                &revoke.revokees,
+                false,
+            ),
+        };
+        let privilege_names = privilege_names(privileges, object_type)?;
+        let object_type = object_type.to_string().to_lowercase();
 
-    let Some(privilege_names) = privilege_names(privileges, object_type) else {
-        return false;
-    };
-
-    let target_roles: Vec<String> = match &stmt.target_roles {
-        TargetRoleSpecification::Roles(roles) => {
-            roles.iter().map(|r| r.as_str().to_lowercase()).collect()
-        }
-        TargetRoleSpecification::AllRoles => vec![PUBLIC.to_string()],
-    };
-    let object_type = object_type.to_string().to_lowercase();
-
-    let mut all_present = true;
-    let mut any_present = false;
-    for target_role in &target_roles {
-        for grantee in grantees {
-            for privilege in &privilege_names {
-                let row = DefaultPrivilege {
-                    target_role: target_role.clone(),
-                    object_type: object_type.clone(),
-                    grantee: grantee.as_str().to_lowercase(),
-                    privilege: privilege.clone(),
-                };
-                if current.contains(&row) {
-                    any_present = true;
-                } else {
-                    all_present = false;
+        for target_role in target_role_names(&stmt.target_roles) {
+            for grantee in grantees {
+                for privilege in &privilege_names {
+                    let row = DefaultPrivilege {
+                        target_role: target_role.clone(),
+                        object_type: object_type.clone(),
+                        grantee: grantee.as_str().to_string(),
+                        privilege: privilege.clone(),
+                    };
+                    if is_grant {
+                        declared.insert(row);
+                    } else {
+                        declared.remove(&row);
+                    }
                 }
             }
         }
     }
+    Some(declared)
+}
 
-    if is_grant { all_present } else { !any_present }
+/// Compute the rules that close the gap between `desired` and `current`.
+///
+/// Rows are grouped by (target role, object type, grantee) so one statement
+/// carries every privilege that triple gains or loses. Grants come before
+/// revocations.
+pub fn privilege_changes(
+    desired: &BTreeSet<DefaultPrivilege>,
+    current: &BTreeSet<DefaultPrivilege>,
+    scope: &DefaultPrivilegeScope<'_>,
+) -> Vec<AlterDefaultPrivilegesStatement<Raw>> {
+    let mut changes = rules_for(desired.difference(current), scope, true);
+    changes.extend(rules_for(current.difference(desired), scope, false));
+    changes
+}
+
+/// Build one rule per (target role, object type, grantee) triple in `rows`.
+fn rules_for<'a>(
+    rows: impl Iterator<Item = &'a DefaultPrivilege>,
+    scope: &DefaultPrivilegeScope<'_>,
+    grant: bool,
+) -> Vec<AlterDefaultPrivilegesStatement<Raw>> {
+    let mut grouped: BTreeMap<(&str, &str, &str), Vec<Privilege>> = BTreeMap::new();
+    for row in rows {
+        let Some(privilege) = parse_privilege(&row.privilege) else {
+            verbose!(
+                "skipping unknown default privilege '{}' for grantee '{}' on {}",
+                row.privilege,
+                row.grantee,
+                row.object_type,
+            );
+            continue;
+        };
+        grouped
+            .entry((
+                row.target_role.as_str(),
+                row.object_type.as_str(),
+                row.grantee.as_str(),
+            ))
+            .or_default()
+            .push(privilege);
+    }
+
+    grouped
+        .into_iter()
+        .filter_map(|((target_role, object_type, grantee), privileges)| {
+            let Some(object_type) = parse_object_type(object_type) else {
+                verbose!(
+                    "skipping default privileges on unknown object type '{}'",
+                    object_type
+                );
+                return None;
+            };
+            let privileges = PrivilegeSpecification::Privileges(privileges);
+            let grantees = vec![Ident::new_unchecked(grantee)];
+            let grant_or_revoke = if grant {
+                AbbreviatedGrantOrRevokeStatement::Grant(AbbreviatedGrantStatement {
+                    privileges,
+                    object_type,
+                    grantees,
+                })
+            } else {
+                AbbreviatedGrantOrRevokeStatement::Revoke(AbbreviatedRevokeStatement {
+                    privileges,
+                    object_type,
+                    revokees: grantees,
+                })
+            };
+            Some(AlterDefaultPrivilegesStatement {
+                target_roles: target_role_spec(target_role),
+                target_objects: scope.target_objects(),
+                grant_or_revoke,
+            })
+        })
+        .collect()
+}
+
+/// The target roles a rule names, as the catalog spells them.
+fn target_role_names(target_roles: &TargetRoleSpecification<Raw>) -> Vec<String> {
+    match target_roles {
+        TargetRoleSpecification::Roles(roles) => {
+            roles.iter().map(|r| r.as_str().to_string()).collect()
+        }
+        TargetRoleSpecification::AllRoles => vec![PUBLIC.to_string()],
+    }
+}
+
+/// The inverse of [`target_role_names`] for a single role.
+fn target_role_spec(target_role: &str) -> TargetRoleSpecification<Raw> {
+    if target_role == PUBLIC {
+        TargetRoleSpecification::AllRoles
+    } else {
+        TargetRoleSpecification::Roles(vec![Ident::new_unchecked(target_role)])
+    }
+}
+
+/// Parse the object type back out of the spelling `mz_default_privileges` uses.
+///
+/// Covers the object types the `ALTER DEFAULT PRIVILEGES` grammar accepts, which
+/// are the only ones that can produce a row.
+fn parse_object_type(object_type: &str) -> Option<ObjectType> {
+    match object_type {
+        "table" => Some(ObjectType::Table),
+        "type" => Some(ObjectType::Type),
+        "secret" => Some(ObjectType::Secret),
+        "connection" => Some(ObjectType::Connection),
+        "database" => Some(ObjectType::Database),
+        "schema" => Some(ObjectType::Schema),
+        "cluster" => Some(ObjectType::Cluster),
+        _ => None,
+    }
 }
 
 /// The privileges a rule names, expanding `ALL` for the object type.
 ///
 /// Returns `None` for an object type whose `ALL` expansion is unknown, which the
-/// caller treats as "cannot prove satisfied".
+/// caller treats as an unknowable declared state.
 fn privilege_names(
     privileges: &PrivilegeSpecification,
     object_type: ObjectType,
@@ -193,12 +311,22 @@ mod tests {
     use mz_sql_parser::ast::Statement;
     use mz_sql_parser::parser::parse_statements;
 
+    const SCOPE: DefaultPrivilegeScope<'static> = DefaultPrivilegeScope::Schema {
+        database: "db",
+        schema: "app",
+    };
+
     fn parse_adp(sql: &str) -> AlterDefaultPrivilegesStatement<Raw> {
         let stmts = parse_statements(sql).unwrap();
         match stmts.into_iter().next().unwrap().ast {
             Statement::AlterDefaultPrivileges(a) => a,
             other => panic!("expected ALTER DEFAULT PRIVILEGES, got: {}", other),
         }
+    }
+
+    fn declared(sql: &[&str]) -> BTreeSet<DefaultPrivilege> {
+        let stmts: Vec<_> = sql.iter().map(|s| parse_adp(s)).collect();
+        declared_privileges(&stmts).expect("declared state is enumerable")
     }
 
     fn row(
@@ -219,113 +347,205 @@ mod tests {
         rows.into_iter().collect()
     }
 
-    #[mz_ore::test]
-    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
-    fn test_grant_rule_satisfied_when_row_present() {
-        let stmt = parse_adp(
-            "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
-             GRANT SELECT ON TABLES TO analyst",
-        );
-        let rows = current(vec![row("owner", "table", "analyst", "SELECT")]);
-        assert!(is_satisfied(&stmt, &rows));
-        assert!(!is_satisfied(&stmt, &BTreeSet::new()));
+    fn changes(desired: &[&str], current_rows: Vec<DefaultPrivilege>) -> Vec<String> {
+        privilege_changes(&declared(desired), &current(current_rows), &SCOPE)
+            .iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 
-    /// Every row a rule implies has to be present, not just one of them.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
-    fn test_grant_rule_needs_every_row() {
-        let stmt = parse_adp(
-            "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
-             GRANT SELECT ON TABLES TO analyst, auditor",
+    fn test_declared_grant_produces_a_row() {
+        let rows = declared(
+            &["ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+             GRANT SELECT ON TABLES TO analyst"],
         );
-        let partial = current(vec![row("owner", "table", "analyst", "SELECT")]);
-        assert!(!is_satisfied(&stmt, &partial));
+        assert_eq!(
+            rows,
+            current(vec![row("owner", "table", "analyst", "SELECT")])
+        );
+    }
 
-        let complete = current(vec![
-            row("owner", "table", "analyst", "SELECT"),
-            row("owner", "table", "auditor", "SELECT"),
+    /// A later `REVOKE` carves a row back out, the way the server would have
+    /// applied the statements in order.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
+    fn test_declared_revoke_carves_out_a_grant() {
+        let rows = declared(&[
+            "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+             GRANT SELECT, INSERT ON TABLES TO analyst",
+            "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+             REVOKE INSERT ON TABLES FROM analyst",
         ]);
-        assert!(is_satisfied(&stmt, &complete));
+        assert_eq!(
+            rows,
+            current(vec![row("owner", "table", "analyst", "SELECT")])
+        );
     }
 
-    /// `ALL ON TABLES` expands to the four table privileges, matching the
-    /// server's own mapping.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
-    fn test_grant_all_expands_for_tables() {
-        let stmt = parse_adp(
-            "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
-             GRANT ALL ON TABLES TO analyst",
+    fn test_declared_all_expands_per_object_type() {
+        let tables = declared(
+            &["ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+             GRANT ALL ON TABLES TO analyst"],
         );
-        let partial = current(vec![row("owner", "table", "analyst", "SELECT")]);
-        assert!(!is_satisfied(&stmt, &partial));
+        assert_eq!(
+            tables,
+            current(
+                ["SELECT", "INSERT", "UPDATE", "DELETE"]
+                    .into_iter()
+                    .map(|p| row("owner", "table", "analyst", p))
+                    .collect()
+            )
+        );
 
-        let complete = current(
-            ["SELECT", "INSERT", "UPDATE", "DELETE"]
-                .into_iter()
-                .map(|p| row("owner", "table", "analyst", p))
-                .collect(),
+        let clusters =
+            declared(&["ALTER DEFAULT PRIVILEGES FOR ROLE owner GRANT ALL ON CLUSTERS TO analyst"]);
+        assert_eq!(
+            clusters,
+            current(vec![
+                row("owner", "cluster", "analyst", "USAGE"),
+                row("owner", "cluster", "analyst", "CREATE"),
+            ])
         );
-        assert!(is_satisfied(&stmt, &complete));
     }
 
-    /// `FOR ALL ROLES` and a `PUBLIC` grantee are both the `p` pseudo-role,
-    /// which the catalog query reports as `public`.
+    /// `FOR ALL ROLES` and a `PUBLIC` grantee are both the `p` pseudo-role, which
+    /// the catalog reports as `public`.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
-    fn test_all_roles_and_public_grantee() {
-        let stmt = parse_adp(
-            "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA db.app \
-             GRANT USAGE ON SECRETS TO PUBLIC",
+    fn test_declared_all_roles_and_public_grantee() {
+        let rows = declared(&["ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA db.app \
+             GRANT USAGE ON SECRETS TO PUBLIC"]);
+        assert_eq!(
+            rows,
+            current(vec![row("public", "secret", "public", "USAGE")])
         );
-        let rows = current(vec![row("public", "secret", "public", "USAGE")]);
-        assert!(is_satisfied(&stmt, &rows));
     }
 
-    /// A revoke rule is satisfied only while none of its rows exists.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
-    fn test_revoke_rule_inverts_the_test() {
-        let stmt = parse_adp(
-            "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
-             REVOKE SELECT ON TABLES FROM analyst",
-        );
-        assert!(is_satisfied(&stmt, &BTreeSet::new()));
-
-        let rows = current(vec![row("owner", "table", "analyst", "SELECT")]);
-        assert!(!is_satisfied(&stmt, &rows));
+    fn test_converged_scope_emits_nothing() {
+        let declared_sql = ["ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+             GRANT SELECT ON TABLES TO analyst"];
+        let rows = vec![row("owner", "table", "analyst", "SELECT")];
+        assert!(changes(&declared_sql, rows).is_empty());
     }
 
-    /// `ALL ON CLUSTERS` is `USAGE` plus `CREATE`, and the object type is keyed
-    /// the way `mz_default_privileges` spells it.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
-    fn test_grant_all_expands_for_clusters() {
-        let stmt = parse_adp(
-            "ALTER DEFAULT PRIVILEGES FOR ROLE owner \
-             GRANT ALL ON CLUSTERS TO analyst",
+    fn test_missing_row_is_granted() {
+        assert_eq!(
+            changes(
+                &["ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                   GRANT SELECT ON TABLES TO analyst"],
+                vec![],
+            ),
+            vec![
+                "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                 GRANT SELECT ON TABLES TO analyst"
+            ]
         );
-        let partial = current(vec![row("owner", "cluster", "analyst", "USAGE")]);
-        assert!(!is_satisfied(&stmt, &partial));
-
-        let complete = current(vec![
-            row("owner", "cluster", "analyst", "USAGE"),
-            row("owner", "cluster", "analyst", "CREATE"),
-        ]);
-        assert!(is_satisfied(&stmt, &complete));
     }
 
-    /// Role names are compared case-insensitively, matching how the catalog
-    /// query lowercases them.
+    /// Dropping the last rule revokes the rows it used to declare, rather than
+    /// leaving them behind.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
-    fn test_role_names_case_insensitive() {
-        let stmt = parse_adp(
-            "ALTER DEFAULT PRIVILEGES FOR ROLE \"Owner\" IN SCHEMA db.app \
-             GRANT SELECT ON TABLES TO \"Analyst\"",
+    fn test_dropping_every_rule_revokes_what_is_left() {
+        assert_eq!(
+            changes(&[], vec![row("owner", "table", "analyst", "SELECT")]),
+            vec![
+                "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                 REVOKE SELECT ON TABLES FROM analyst"
+            ]
         );
-        let rows = current(vec![row("owner", "table", "analyst", "SELECT")]);
-        assert!(is_satisfied(&stmt, &rows));
+    }
+
+    /// Changing the privilege grants the new one and revokes the old one.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
+    fn test_changed_privilege_grants_and_revokes() {
+        assert_eq!(
+            changes(
+                &["ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                   GRANT INSERT ON TABLES TO analyst"],
+                vec![row("owner", "table", "analyst", "SELECT")],
+            ),
+            vec![
+                "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                 GRANT INSERT ON TABLES TO analyst",
+                "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                 REVOKE SELECT ON TABLES FROM analyst",
+            ]
+        );
+    }
+
+    /// Privileges for one triple collapse into a single statement.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
+    fn test_privileges_group_per_triple() {
+        assert_eq!(
+            changes(
+                &["ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                   GRANT SELECT, INSERT ON TABLES TO analyst"],
+                vec![],
+            ),
+            vec![
+                "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN SCHEMA db.app \
+                 GRANT INSERT, SELECT ON TABLES TO analyst"
+            ]
+        );
+    }
+
+    /// A synthesized rule for the `p` pseudo-role renders as `FOR ALL ROLES` and
+    /// `TO public`, which is how it round trips.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
+    fn test_public_round_trips_through_a_synthesized_rule() {
+        assert_eq!(
+            changes(&[], vec![row("public", "secret", "public", "USAGE")]),
+            vec![
+                "ALTER DEFAULT PRIVILEGES FOR ALL ROLES IN SCHEMA db.app \
+                 REVOKE USAGE ON SECRETS FROM public"
+            ]
+        );
+    }
+
+    /// Role names are identifiers, so their exact casing survives into the
+    /// emitted SQL rather than being folded.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
+    fn test_exact_role_casing_is_preserved() {
+        assert_eq!(
+            changes(&[], vec![row("Owner", "table", "Analyst", "SELECT")]),
+            vec![
+                "ALTER DEFAULT PRIVILEGES FOR ROLE \"Owner\" IN SCHEMA db.app \
+                 REVOKE SELECT ON TABLES FROM \"Analyst\""
+            ]
+        );
+    }
+
+    /// A database scope renders `IN DATABASE`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function 'rust_psm_stack_pointer'
+    fn test_database_scope_renders_in_database() {
+        let rendered: Vec<String> = privilege_changes(
+            &BTreeSet::new(),
+            &current(vec![row("owner", "schema", "analyst", "USAGE")]),
+            &DefaultPrivilegeScope::Database("db"),
+        )
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "ALTER DEFAULT PRIVILEGES FOR ROLE owner IN DATABASE db \
+                 REVOKE USAGE ON SCHEMAS FROM analyst"
+            ]
+        );
     }
 }

@@ -135,6 +135,21 @@ pub struct ObjectComment {
     pub comment: String,
 }
 
+/// One `mz_default_privileges` row, keyed by everything that identifies it
+/// within a single database or schema scope.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct DefaultPrivilege {
+    /// The role whose newly created objects receive the privilege.
+    pub target_role: String,
+    /// The object type, spelled as `mz_default_privileges` spells it: the
+    /// object-type keyword lowercased, for example `table` or `network policy`.
+    pub object_type: String,
+    /// The role receiving the privilege.
+    pub grantee: String,
+    /// The privilege, uppercased.
+    pub privilege: String,
+}
+
 /// Configuration for creating a cluster (managed or unmanaged).
 ///
 /// This captures all the information needed to clone a cluster's configuration
