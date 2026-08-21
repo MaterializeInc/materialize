@@ -80,6 +80,7 @@ import {
   initialColumnFiltersFromUrl,
   objectTypeFilterFn,
   STATUS_COLOR_SCHEMES,
+  statusBucketForRow,
   statusFilterFn,
 } from "./filters";
 import { MaintainedObjectListItem } from "./queries";
@@ -351,30 +352,26 @@ const columns = [
       renderFilter: (column) => <FreshnessFilterPanel column={column} />,
     },
   }),
-  columnHelper.accessor(
-    (row) =>
-      row.totalReplicas === 0 ? null : row.hydratedReplicas / row.totalReplicas,
-    {
-      id: "status",
-      header: "Status",
-      sortingFn: sortingFunctions.nullsLast,
-      filterFn: statusFilterFn,
-      cell: (info) => {
-        const meta = info.table.options.meta as MaintainedObjectsTableMeta;
-        return (
-          <StatusCell
-            row={info.row.original}
-            hydrationReady={meta.hydrationReady}
-          />
-        );
-      },
-      meta: {
-        tooltip:
-          "Ingestion status for sources, replica hydration across all clusters for everything else.",
-        renderFilter: (column) => <StatusFilterPanel column={column} />,
-      },
+  columnHelper.accessor((row) => statusBucketForRow(row) ?? null, {
+    id: "status",
+    header: "Status",
+    sortingFn: sortingFunctions.nullsLast,
+    filterFn: statusFilterFn,
+    cell: (info) => {
+      const meta = info.table.options.meta as MaintainedObjectsTableMeta;
+      return (
+        <StatusCell
+          row={info.row.original}
+          hydrationReady={meta.hydrationReady}
+        />
+      );
     },
-  ),
+    meta: {
+      tooltip:
+        "Ingestion status for sources, replica hydration across all clusters for everything else.",
+      renderFilter: (column) => <StatusFilterPanel column={column} />,
+    },
+  }),
   columnHelper.accessor((row) => row.cluster?.name ?? null, {
     id: "clusterName",
     header: "Cluster",

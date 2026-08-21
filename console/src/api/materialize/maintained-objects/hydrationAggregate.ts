@@ -43,16 +43,25 @@ export interface HydrationAggregateRow {
  * they multiply the feed's cardinality several times over.
  */
 export function buildHydrationAggregateQuery() {
+  // Subsources have hydration rows of their own (they run on their parent's
+  // cluster), so both sides of the FULL JOIN need the exclusion.
   const hydration = queryBuilder
-    .selectFrom("mz_hydration_statuses")
+    .selectFrom("mz_hydration_statuses as hs")
+    .leftJoin("mz_sources as s", "s.id", "hs.object_id")
+    .where((eb) =>
+      eb.or([
+        eb("s.type", "is", null),
+        eb("s.type", "not in", ["subsource", "progress"]),
+      ]),
+    )
     .select((eb) => [
-      "object_id",
-      sql<bigint>`count(*) FILTER (WHERE ${eb.ref("hydrated")})`.as(
+      "hs.object_id",
+      sql<bigint>`count(*) FILTER (WHERE ${eb.ref("hs.hydrated")})`.as(
         "hydratedReplicas",
       ),
       sql<bigint>`count(*)`.as("totalReplicas"),
     ])
-    .groupBy("object_id");
+    .groupBy("hs.object_id");
 
   const statuses = queryBuilder
     .selectFrom("mz_source_statuses")

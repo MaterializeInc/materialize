@@ -26,11 +26,13 @@ const seed = ({
   statuses = "",
   statistics = "",
   replicas = "('r1'), ('r2'), ('r3')",
+  sources = "",
 }: {
   hydration?: string;
   statuses?: string;
   statistics?: string;
   replicas?: string;
+  sources?: string;
 }) => `
   > DROP SCHEMA IF EXISTS ${TEST_SCHEMA} CASCADE;
   > CREATE SCHEMA ${TEST_SCHEMA};
@@ -38,6 +40,10 @@ const seed = ({
       object_id TEXT NOT NULL,
       replica_id TEXT,
       hydrated BOOLEAN
+    );
+  > CREATE TABLE ${TEST_SCHEMA}.mz_sources (
+      id TEXT NOT NULL,
+      type TEXT NOT NULL
     );
   > CREATE TABLE ${TEST_SCHEMA}.mz_source_statuses (
       id TEXT NOT NULL,
@@ -57,6 +63,7 @@ const seed = ({
   ${statuses ? `> INSERT INTO ${TEST_SCHEMA}.mz_source_statuses VALUES ${statuses};` : ""}
   ${statistics ? `> INSERT INTO ${TEST_SCHEMA}.mz_source_statistics VALUES ${statistics};` : ""}
   ${replicas ? `> INSERT INTO ${TEST_SCHEMA}.mz_cluster_replicas VALUES ${replicas};` : ""}
+  ${sources ? `> INSERT INTO ${TEST_SCHEMA}.mz_sources VALUES ${sources};` : ""}
 `;
 
 const run = async () => {
@@ -200,12 +207,16 @@ describe("buildHydrationAggregateQuery", () => {
   it("excludes subsources and progress collections from the feed", async () => {
     // The UI hides them, and each source carries one progress collection and
     // often several subsources, so keeping them out shrinks the subscribe.
+    // Subsources also have hydration rows of their own (they run on the
+    // parent's cluster), so the exclusion must hold on both join sides.
     await testdrive(
       seed({
+        hydration: `('u1', 'r1', true), ('u2', 'r1', true)`,
         statuses: `
           ('u1', 'running', NULL, 'postgres'),
           ('u2', 'running', NULL, 'subsource'),
           ('u3', 'running', NULL, 'progress')`,
+        sources: `('u1', 'postgres'), ('u2', 'subsource'), ('u3', 'progress')`,
       }),
     );
 

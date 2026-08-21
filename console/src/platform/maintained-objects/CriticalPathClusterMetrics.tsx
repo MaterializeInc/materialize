@@ -351,11 +351,16 @@ export const ClusterReplicaMetrics = ({
   const atAnchor = buckets.flatMap((bs) =>
     bs.filter((b) => b.bucketStart.getTime() === targetBucketStartMs),
   );
-  // Right after a replica swap the anchor bucket can predate the new
+  // Right after a replica swap the current bucket can predate the new
   // replica's first metrics; fall back to each replica's latest bucket so a
-  // live cluster is not reported as inactive.
+  // live cluster is not reported as inactive. Only for a now-ish anchor: for
+  // a historical anchor an empty bucket means the cluster really had no
+  // replicas then, and present-time metrics must not impersonate it.
+  const anchorIsRecent = Date.now() - targetBucketStartMs < 2 * bucketSizeMs;
   const replicas =
-    atAnchor.length > 0 ? atAnchor : buckets.flatMap((bs) => bs.slice(-1));
+    atAnchor.length > 0 || !anchorIsRecent
+      ? atAnchor
+      : buckets.flatMap((bs) => bs.slice(-1));
   const replicasInWindow: ReplicaInWindow[] = buckets
     .flatMap((bs) => bs.slice(-1))
     .map(({ replicaId, name, size, bucketEnd }) => ({
