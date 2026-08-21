@@ -1,0 +1,52 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file at the root of this repository.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Reads at `Timestamp::MAX`, the one single-time shape whose `until` is empty.
+#
+# `optimize::peek` bounds a one-shot read with `until = as_of + 1`, but at `MAX` there is no such
+# time and it leaves `until` unset. An empty `until` therefore means end-of-time here, not
+# unbounded, and the interactive runtime accepts such a read: `render`'s snapshot bound drops the
+# `MAX` element for the same reason, giving the empty frontier and the semantics of reading the
+# final state.
+#
+# A read at `MAX` is answerable only against a collection that has sealed, because the peek gate
+# requires `upper` to have passed the read timestamp and no finite `upper` passes `MAX`. Constant
+# collections seal: their dataflow has no inputs, so it emits once and drops its capability. The
+# reads below therefore double as the assertion that the indexes sealed, since a peek that found a
+# live frontier would never return.
+
+mode cockroach
+
+statement ok
+CREATE VIEW v1 AS SELECT 1 AS a, 'x' AS b
+
+statement ok
+CREATE DEFAULT INDEX ON v1
+
+statement ok
+CREATE VIEW v2 AS SELECT 1 AS a, 'y' AS c
+
+statement ok
+CREATE DEFAULT INDEX ON v2
+
+# Served as a fast-path index peek, which on the interactive runtime reads the arrangement the
+# maintenance runtime published rather than a trace of its own.
+query IT
+SELECT a, b FROM v1 AS OF 18446744073709551615
+----
+1
+x
+
+# A join cannot take the fast path, so this builds a peek dataflow. Both of its inputs are imported
+# from the sharing registry, each bounded by the empty snapshot frontier that `MAX` produces.
+query TT
+SELECT v1.b, v2.c FROM v1 JOIN v2 ON v1.a = v2.a AS OF 18446744073709551615
+----
+x
+y

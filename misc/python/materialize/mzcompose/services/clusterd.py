@@ -39,6 +39,7 @@ class Clusterd(Service):
         workers: int = 1,
         process_names: list[str] = [],
         mz_service: str = "materialized",
+        interactive_compute: bool = False,
     ) -> None:
         environment = [
             "CLUSTERD_LOG_FILTER",
@@ -78,6 +79,21 @@ class Clusterd(Service):
             f"CLUSTERD_STORAGE_TIMELY_CONFIG={storage_timely_config}",
         ]
 
+        # When set, clusterd runs a second, interactive compute runtime alongside the
+        # maintenance one (see `--interactive-compute-timely-config` in
+        # `src/clusterd/src/lib.rs`). It must span the same number of Timely peers as
+        # the maintenance compute config, so it reuses `process_names`/`workers`; its
+        # addresses use a distinct port (2104) so the two runtimes don't collide.
+        ports = [2100, 2101, 6878]
+        if interactive_compute:
+            interactive_compute_timely_config = timely_config(
+                process_names, 2104, workers, DEFAULT_COMPUTE_EXERT_PROPORTIONALITY
+            )
+            environment += [
+                f"CLUSTERD_INTERACTIVE_COMPUTE_TIMELY_CONFIG={interactive_compute_timely_config}"
+            ]
+            ports += [2104]
+
         options = ["clusterd", f"--scratch-directory={scratch_directory}", *options]
 
         config: ServiceConfig = {}
@@ -106,7 +122,7 @@ class Clusterd(Service):
         config.update(
             {
                 "command": options,
-                "ports": [2100, 2101, 6878],
+                "ports": ports,
                 "environment": environment,
                 "volumes": volumes or DEFAULT_MZ_VOLUMES,
                 "restart": restart,
