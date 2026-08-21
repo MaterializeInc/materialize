@@ -18,7 +18,6 @@ peaks, failed episodes, and storage objects need signals that do not exist yet.
 - Stay idempotent across concurrent environmentd processes.
 - Leave the values of existing hydration relations untouched.
 - Bound storage with configurable retention.
-- Default off in production, on in CI.
 
 ## Non-Goals
 
@@ -38,25 +37,23 @@ because it is unwanted:
 
 ## Design
 
-Compute stamps three replica-side timestamps per export and worker: `installed_at`
-when the dataflow is installed, `started_at` when it is unsuspended, and
-`hydrated_at` when the output frontier passes the as-of. They are added to the
-existing `mz_introspection.mz_compute_hydration_times_per_worker` log, which keeps
-its name, OID, and object kind, so its generated per-replica index and every
-relation built on it are unaffected. A consumer doing `SELECT *` sees three new
-columns.
+Compute already stamps three replica-side timestamps per export and worker in
+`mz_introspection.mz_compute_hydration_times_per_worker`: `installed_at` when the
+dataflow is installed, `started_at` when it is unsuspended, and `hydrated_at` when
+the output frontier passes the as-of. See
+`doc/developer/design/20260817_compute_hydration_timestamps.md`. This design adds
+the history table and the sweep that writes those timestamps down.
 
-Renaming the log was considered and not done, which is why the columns are appended
-rather than reorganized. A rename would move OID 16977 to a differently shaped
-relation and turn the old name into a view over the new one, and naming that
-relation is the compute team's call on their own change.
+A coordinator task visits one user replica per interval, in a rotation, skipping
+replicas with introspection disabled, whose logs are installed but never populated.
+It installs an internal subscribe on that replica which aggregates every worker's
+completed rows, anti-joins them against the history table, and writes the missing
+ones through the timestamped OCC read-then-write path.
 
-A coordinator task visits one user replica per interval, in a rotation. The only
-replicas it skips are those with introspection disabled, whose logs are installed
-but never populated. It installs an internal subscribe on that
-replica which aggregates every worker's completed rows, anti-joins them against the
-history table, and writes the missing ones through the timestamped OCC
-read-then-write path.
+Two dyncfgs control it. `hydration_history_collection_interval` sets the sweep
+cadence and disables collection at zero, which is the production default.
+`hydration_history_retention_period` bounds how long rows live, defaulting to 30
+days.
 
 An *episode* throughout this document is one such row: one dataflow's hydration on
 one replica, from installation to hydrated, recorded once.
@@ -65,7 +62,7 @@ one replica, from installation to hydrated, recorded once.
 
 ```text
 mz_internal.mz_object_hydration_history
-  export_id     text         not null
+  object_id     text         not null
   cluster_id    text         not null
   replica_id    text         not null
   installed_at  timestamptz  not null
@@ -74,49 +71,29 @@ mz_internal.mz_object_hydration_history
   status        text         not null
 ```
 
-An episode is identified by `(export_id, replica_id, installed_at)`. The
-installation time is replica-stamped and stable across an environmentd restart,
-where `started_at` cannot serve that role because it is null while an object waits
-to run.
+An episode is identified by `(object_id, replica_id, installed_at)`. The
+installation time is replica-stamped and stable across an environmentd restart. The
+nullability of each column matches the compute log the values come from, so
+`installed_at` is not null there and here, while the two later stamps are nullable.
 
-The id is the dataflow export's, not the catalog item's, because that is the grain of the
-data we read: the log holds one row per export, and one item can own several
-exports at once. Resolving to an item id would force us to merge those into one
-row and invent its timestamps. The cost is that a superseded generation stops
-resolving through `mz_object_global_ids` once its mapping row is retracted, and
-consumers reach a catalog object through that view rather than joining `mz_objects`
-directly.
-
-That identity is deliberately not declared as a key on the relation. A key is a
-promise to the optimizer, which may then elide a `DISTINCT` or assume a join
-cardinality, so a single duplicate from a best-effort sampler becomes a silently
-wrong answer rather than a duplicate row. The collector's anti-join is what keeps
-the identity unique, and none of the comparable history tables declare a key
-either. Adding one later is also expensive: it changes the relation's descriptor,
-which needs a migration, which for this table means giving up the exemptions that
-protect its contents.
+`object_id` is named the way the other hydration relations name it, because to a
+user these are objects that exist somewhere rather than exports of a dataflow. The
+value is the id compute reports for the object's dataflow, and one catalog item can
+own several dataflows at once, so consumers reach a catalog object through
+`mz_internal.mz_object_global_ids` rather than joining `mz_objects` directly.
 
 Only terminal `hydrated` rows are written today, so every row has a finish time.
-The nullable columns and the `status` column reserve a compatible shape for
-episodes that are canceled or unfinished, once those become observable. Retention
-keys off `hydrated_at`, so an unfinished episode needs a second age basis before it
-can be recorded at all.
+The nullable columns and `status` reserve a compatible shape for canceled or
+unfinished episodes once those become observable. Retention keys off `hydrated_at`,
+so an unfinished episode needs a second age basis before it can be recorded at all.
 
-The table is in `mz_internal`, not `mz_catalog`, because its contents are best
-effort and `status` will gain values. `mz_internal` carries no stability
-commitment. Its closest sibling, `mz_internal.mz_object_arrangement_size_history`,
-sits there for the same reason.
+The table lives in `mz_internal` to mark it unstable while it settles.
 
-No index. An arrangement on the catalog server would hold the whole table, which
-grows with objects times replicas times re-hydrations, and nothing queries this
-table by key yet. A user query instead scans a table bounded by retention. Note
-that an index would not help the collector anyway, since its anti-join runs on the
-targeted user replica, where a catalog-server arrangement does not exist.
-
-For the same reason the table is not a retained-metrics object. That flag pins a
-30 day logical compaction window, which keeps 30 days of update history rather
-than current state. Our history is in the rows, which retention retracts on its
-own schedule, and nothing reads this table at an old timestamp.
+No index initially, and not a retained-metrics object either, both because of size:
+an index arranges the whole table on the catalog server, and the retained-metrics
+flag pins a 30 day compaction window on top of it. The table grows with objects
+times replicas times re-hydrations, and nothing queries it by key yet. Adding an
+index later is a migration we can do when a query needs one.
 
 ## Why concurrent writers converge
 
@@ -132,78 +109,48 @@ nothing left to write.
 
 The losing writer never retries stale diffs at the next eligible timestamp. It
 only retries with state it has observed to be valid at the frontier it is writing
-at. That same property is what makes a trailing replica record nothing, in the limitation section below.
+at. That same property is what makes a trailing replica record nothing, which the
+last section covers.
 
-## Reading every worker
+## Aggregating a replica's workers
 
-Collection aggregates a replica's workers for an export and records nothing until
-all of them have hydrated. The reason is narrower than it looks, and it is worth
-writing down because the obvious argument for reading one worker is almost right.
+Collection aggregates every worker's row for an export and records nothing until all
+of them have hydrated, taking `max(hydrated_at)` and `min` of the two start stamps.
 
-For an index it *is* right. A worker stamps `hydrated_at` when its reported output
-frontier passes the as_of, an index's output frontier is the arrangement upper, and
-that moves only as timely's dataflow-wide progress tracking allows. No worker sees
-it advance while another still holds capabilities below it, so any one worker's
-stamp already accounts for the slowest.
+One worker would be enough for an index, whose output frontier is the arrangement
+upper and therefore moves only as timely's dataflow-wide progress allows. It is not
+enough for a materialized view. Its output frontier also depends on the sink write
+frontier, and only the sink's single active worker, `hash(sink_id) % workers`,
+tracks the shard upper. Every other worker stamps at compute completion, before the
+snapshot is durable, and the sink buffers that snapshot until computation finishes,
+so the gap is the whole write. Reading one worker would mean `hydrated_at` said
+"durable" for some objects and "computed" for others, decided by a hash. The
+aggregate gives one meaning for every object, and it is what
+`mz_compute_hydration_times` already does, so the durable history and the live
+signal agree.
 
-A materialized view breaks it. Its output frontier is the meet of the compute
-frontier and the *sink write* frontier, and the sink write frontier is not a timely
-progress quantity. The persist sink picks one active worker, `hash(sink_id) %
-workers`. Only that worker's frontier tracks the shard upper. Every other worker
-clears its own, so its output frontier is the compute frontier alone and it stamps
-at compute completion, before the snapshot is durable. The sink buffers the snapshot
-until the desired frontier passes, so that write follows the computation rather than
-overlapping it, which makes the gap the whole write rather than a flush.
-
-Reading one worker would therefore give a finish that means "durable" for the
-`1/workers` of objects whose hash picks worker 0 and "computed" for the rest, with
-nothing in the data to say which. `max` over a complete set of workers gives one
-meaning for every object, and matches `mz_compute_hydration_times`, so the durable
-history and the live hydration signal agree.
-
-Completeness needs no worker count. The log carries a row per
+Completeness needs no worker count: the log carries a row per
 `(export_id, worker_id)` from installation with a null `hydrated_at`, so
-`count(*) = count(hydrated_at)` says every worker that has the dataflow has
-finished. An object still hydrating is skipped rather than recorded with a finish
-that precedes its write, and a later sweep picks it up. The cutoff and the anti-join
-have to apply to the aggregate's output rather than its input, since as `WHERE`
-clauses either one drops the not-yet-hydrated rows and makes the check trivially
-true.
+`count(*) = count(hydrated_at)` means every worker has finished. An object still
+hydrating is skipped and picked up by a later sweep. The cutoff and the anti-join
+apply to the aggregate's output, since as `WHERE` clauses either one would drop the
+unfinished rows and make that check trivially true.
 
-The cost is that an interval can span two process clocks. Each process anchors its
-logging clock at its own `SystemTime`, so a duration carries whatever skew there is
-between the ends. That inflates it. Nothing rejects a row for looking inconsistent,
-which is deliberate: a guard comparing cross-worker stamps rejects complete episodes
-permanently, because the log values never change. Skew is normally milliseconds
-against durations of seconds, so inflation is the right failure to accept and
-rejection is not.
-
-`started_at` is the earliest across workers. Note that the compute log does not
-leave it unset when no start was observed, it reports the installation time instead,
-which keeps `installed_at <= started_at <= hydrated_at` total. So a queueing interval
-of exactly zero means "no start was observed" rather than "the dataflow started
-immediately", and the two are not distinguishable here. An import-free dataflow is
-never suspended, so it is the common case for the former.
-
-The aggregate is per export, not per catalog item. A materialized view being
-replaced has two global ids live at once, and a replica running both dataflows logs
-a row for each. We record both, as two rows with different `export_id`s, which is
-what actually happened. Keying by item id instead would have collapsed them into one
-row per item and forced us to pick timestamps across two separate hydrations.
+Two consequences. An interval can span workers in different processes, each
+anchoring its logging clock at its own `SystemTime`, so skew inflates a duration.
+Nothing rejects a row for looking inconsistent, deliberately, because a guard on
+cross-worker stamps rejects complete episodes permanently once the log values
+settle. And `started_at` equal to `installed_at` means no start was observed rather
+than an immediate start, since the log substitutes the installation time. An
+import-free dataflow is never suspended, so that is the common case.
 
 ## What is and is not recorded
 
-Collection samples current state. It is not an event log, and the log it reads
-retracts an object's row when the export goes away. An episode is recorded only if
-its row is still live when its replica's turn comes around, so an object dropped
-before then, or a replica process that restarts before then, leaves no trace.
-
-A short-lived dataflow makes this concrete. A constant materialized view hydrates
-immediately, its log row briefly carries a complete episode, and then the
-controller drops the collection and the row is retracted for good. Whether a sweep
-lands inside that window is a race, so such an object is recorded on some runs and
-not others. Nothing wrong is recorded either way, and no test can pin the outcome,
-which is why `test/testdrive/hydration-status.td` asserts nothing about it.
+Collection samples current state rather than consuming events, so it writes down
+whatever the replica collection holds when that replica's turn comes around. The
+log retracts an export's row when the dataflow goes away, so a short-lived object,
+or one dropped before its turn, leaves no trace. Nothing wrong is recorded, it is
+simply absent.
 
 Making these durable requires compute to emit hydration transitions into an
 append-only collection that survives until an observer acknowledges them. Until
@@ -211,10 +158,10 @@ then, best effort is the honest description of a sampler.
 
 ## Retention
 
-`hydration_history_retention_period` defaults to 30 days. Retention is another OCC
-mutation: it subscribes to rows older than the cutoff and writes their retractions
-at the observed frontier. Collection applies the same cutoff, so a still-live log
-row cannot resurrect an episode retention just retracted.
+Retention is another OCC mutation: it subscribes to rows older than the cutoff and
+writes their retractions at the observed frontier. Collection applies the same
+cutoff, so a still-live log row cannot resurrect an episode retention just
+retracted.
 
 Retention deletes a bounded batch per sweep and converges over as many sweeps as it
 takes. The bound is not a nicety. The OCC path refuses a selection larger than
@@ -237,63 +184,48 @@ off.
 
 ## Durability is best effort
 
-Builtin tables are reset at bootstrap and re-shard on a forced schema migration.
-The history table is exempt from both, because a sampled history cannot be rebuilt
-from anything else once it is gone. Those two exemptions are the whole promise.
+Builtin tables are reset at bootstrap and re-sharded on a forced schema migration.
+This table is exempt from both, because a sampled history cannot be rebuilt from
+anything else. Those two exemptions are the whole promise.
 
-We do not commit to carrying the contents across every future version. A schema
-change to a builtin table allocates a fresh shard, so changing these columns clears
-the history. That is an acceptable trade: the value here is the distribution the
-table accumulates, and starting it over costs one retention period, while freezing
-the schema to protect it costs every later improvement.
+We do not promise to carry the contents across every future version. A shard
+replacement clears the table, and that is an acceptable trade: what has value here
+is the distribution the table accumulates, and starting over costs one retention
+period, while freezing the schema to protect it costs every later improvement.
+Schema *evolution* keeps the rows, so an additive column costs nothing.
 
-So we try not to break it and we do not promise not to. The exemption exists to
-stop an incidental migration from wiping the table as a side effect of unrelated
-work, not to make it untouchable. Giving it up is deliberate: an assert in
-`plan_migration` fires if a migration step ever names this table, and the comment
-there says to remove the assert and the exemption together and to note in the
-release notes that the history restarts. The user-facing documentation states the
-same limit, that a schema change in a future release may clear the contents.
+Giving the exemption up is meant to be deliberate. An assert fires if a replacement
+step ever names this table, and the comment there says to remove the assert and the
+exemption together and to note in the release notes that the history restarts.
 
 ## Scheduling and isolation
 
-`hydration_history_collection_interval` sets the cadence and disables collection at
-zero. One sweep visits one replica, and sweeps never overlap, which bounds compute
-load and keeps the collector from contending with itself in the serialized
-timestamped-write path.
-
-Fires align to interval boundaries, and each sleep is capped, so that lowering a
-long interval at runtime takes effect within the cap rather than after the old
-interval elapses. Tests depend on that. The cap is much coarser while collection is
-disabled, because a disabled collector has nothing to do but notice that it has been
-enabled, and disabled is what every environment runs by default.
-
-Two isolation decisions are worth stating outright:
+Sweeps never overlap and each visits one replica, which bounds compute load and
+keeps the collector from contending with itself in the serialized timestamped-write
+path. Fires align to interval boundaries and each sleep is capped, so lowering a
+long interval takes effect within the cap rather than after the old interval
+elapses.
 
 **Background mutations take no OCC write permit.** The permits are one semaphore
-shared by every read-then-write in the process, not one per table. A session's wait for a permit is
-bounded by its statement timeout. A sweep has no statement timeout, and its
-subscribe must first hydrate a dataflow on a user replica, so holding a permit
-would let a background sampler stall user DML for as long as that takes. The sweep
-is single-flight, so skipping the permit adds at most one concurrent
-read-then-write.
+shared by every read-then-write in the process, not one per table. A session's wait
+is bounded by its statement timeout, a sweep's is not, and a sweep's subscribe has
+to hydrate a dataflow on a user replica first, so holding a permit would let
+background sampling stall user DML on any table for as long as that takes. Being
+single-flight, skipping the permit adds at most one concurrent read-then-write.
 
-**The sweep is aborted when the coordinator is dropped.** Unlike a session it holds
-no `Client`, so nothing otherwise stops it from outliving the coordinator, and the
-runtime teardown that follows drops the timestamp oracle's worker task. A sweep
-still running then reads a timestamp from a dead oracle and panics. The coordinator
-owns the task handle so that dropping it cancels the sweep first.
+**The sweep is aborted when the coordinator is dropped.** It holds no `Client`, so
+nothing else stops it outliving the coordinator, and the teardown that follows drops
+the timestamp oracle's worker task. A sweep still running would then read a
+timestamp from a dead oracle and panic, so the coordinator owns the task handle.
 
-Each mutation has its own deliberately generous timeout. Even a mutation with
-nothing to write waits for its read to linearize, which can take a full
-`default_timestamp_interval`, a parameter with no upper bound, so a tighter bound
-would let a large timestamp interval starve retention permanently.
+**Each mutation's timeout is deliberately generous.** Even a mutation with nothing
+to write waits for its read to linearize, which can take a full
+`default_timestamp_interval`, a parameter with no upper bound. A tighter bound would
+let a large timestamp interval starve retention permanently.
 
 Replica drop, cluster drop, dependency replacement, replica failure, and timeout all
 skip the attempt, and a later sweep recomputes from current state. Read-only
-generations do nothing, which is discussed under upgrades below. Replicas with introspection disabled are skipped, since
-their log arrangements exist but are never populated, so a subscribe would read a
-sealed, empty collection on every sweep forever.
+generations do nothing, which the next section covers.
 
 ## Upgrades record late, not never
 
@@ -331,24 +263,18 @@ tolerance is a whole introspection interval, and the failure mode is waiting rat
 than wrong data. Because the symptom is otherwise hard to attribute, a step that
 times out logs that the replica's introspection frontier may be trailing.
 
-## Notes on the catalog plumbing
-
-The `test/sqllogictest/autogenerated/*.slt` goldens are generated from the
-user-facing docs markdown, but the sqllogictest run compares them against the live
-catalog. Editing a column comment in the markdown without editing it in the Rust
-builtin definition produces a golden that passes the docs lint locally and fails in
-CI.
-
 ## Rollout
 
-The interval is zero, and so disabled, in production, and runtime configuration can
-enable it without restarting environmentd. The mzcompose configuration enables it at
-60 seconds so hydration, restart, retention, and catalog tests exercise the path.
+Collection is disabled by default, and the interval is runtime configurable, so
+enabling it needs no restart. The plan is to enable it in CI when this merges, then
+in staging, then in production, a week apart, so each step has a week of real
+traffic behind it before the next.
 
-It stays off in the sqllogictest runner defaults, against the usual preference for
-enabling new paths in tests. The collector installs subscribes and writes a builtin
-table, while those runs assert on catalog contents and plans, so enabling it risks
-churn and timing flakiness in files that have nothing to do with hydration.
+CI enables it at a 60 second interval through the mzcompose configuration, which is
+what exercises the hydration, restart, retention, and catalog tests. It stays off in
+the sqllogictest runner defaults, against the usual preference for enabling new
+paths in tests: the collector installs subscribes and writes a builtin table, while
+those runs assert on catalog contents and plans.
 
 ## Future Work
 
