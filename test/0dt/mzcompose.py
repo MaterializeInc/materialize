@@ -1819,6 +1819,11 @@ def workflow_builtin_schema_migrations_replacement(c: Composition) -> None:
         # caught-up gate they would hydrate at cut-over instead, spiking catalog-server CPU. Reading
         # them here from the read-only generation asserts the write-enable-while-read-only path
         # actually filled those shards.
+        #
+        # NOTE: this covers hydration, not the caught-up gate's lag comparison.
+        # `force_migrations="replacement"` replaces `mz_cluster_replica_frontiers` too, and the gate
+        # reads the leader's "live" frontiers out of that collection, so here it compares this
+        # generation against itself.
         for relation in ["mz_databases", "mz_clusters"]:
             count = c.sql_query(
                 f"SELECT count(*) FROM mz_catalog.{relation}",

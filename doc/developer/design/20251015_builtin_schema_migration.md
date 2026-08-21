@@ -81,6 +81,11 @@ Because this environment exclusively owns the replacement shard, the read-only p
 This lets a migrated builtin materialized view and its dependents hydrate before cut-over instead of all at once at cut-over.
 It is safe only for the self-owned replacement shard, never a shard the leader is still serving, which is why it applies to shard replacement and not schema evolution.
 
+The force-write is conditional on two things.
+First, the leader must be at v26.17 or later, because every builtin materialized view reads the catalog shard and only leaders from that version on keep its frontier advancing with the current time; against an older leader the dataflow would sit at a stale frontier.
+Second, the `enable_0dt_hydrate_migrated_builtin_mvs` feature flag must be on; it exists as a break-glass revert.
+When either condition does not hold, the migrated materialized views and their dependents are instead excluded from the 0dt caught-up check, which is the older behaviour: promotion proceeds without them and they hydrate at cut-over.
+
 A leader process performing shard replacement performs the same steps as in read-only mode.
 Additionally, it cleans up durable state written by earlier versions and/or deploy generations by:
   - arranging for the previous shards used by the migrated storage collections to be finalized

@@ -11,6 +11,7 @@
 
 #![recursion_limit = "256"]
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::Write as _;
@@ -2542,32 +2543,72 @@ async fn test_leader_promotion_mixed_code_version() {
     client_this.simple_query("SELECT 1").await.unwrap();
 }
 
-/// Regression test for builtin MVs migrated by shard replacement: they must be hydrated by the
-/// time the read-only deployment reports `ReadyToPromote`.
+/// The migrated builtin MVs that the 0dt hydration tests read.
 ///
-/// A replacement migration hands the new deployment a fresh shard that no other environment
-/// writes. Leave the MV's dataflow read-only and that shard stays empty, so the MV and everything
-/// downstream of it drop out of the 0dt caught-up gate and then all hydrate at once at cut-over.
+/// `mz_clusters` is the interesting one: it joins the `mz_cluster_replica_size_internal` builtin
+/// table, whose replacement shard is written once at bootstrap and thereafter only kept moving by
+/// `read_only_mode_table_worker`.
+const FORCED_BUILTIN_MIGRATION_MVS: &[&str] =
+    &["mz_catalog.mz_databases", "mz_catalog.mz_clusters"];
+
+/// How long a single read of a migrated builtin MV may take before it counts as unreadable.
+const MIGRATED_BUILTIN_MV_READ_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Reads every MV in [`FORCED_BUILTIN_MIGRATION_MVS`], reporting whether all of them returned rows.
 ///
-/// Reaching `ReadyToPromote` at all is the other half of the assertion. Write-enabling puts these
-/// MVs back *into* the gate, so anything they cannot catch up to now blocks promotion instead of
-/// being waved through. `mz_clusters` is the interesting case: it joins the
-/// `mz_cluster_replica_size_internal` builtin table, whose replacement shard is written once at
-/// bootstrap and thereafter only kept moving by `read_only_mode_table_worker`.
-#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
-#[cfg_attr(miri, ignore)] // too slow
+/// Each read gets its own connection, dropped on timeout so the session ends and takes the peek
+/// with it. `statement_timeout` bounds INSERT/UPDATE/DELETE, not a `SELECT` waiting on a frontier,
+/// so it would leave the poll loop hanging on an unwritten replacement shard.
 #[allow(clippy::disallowed_methods)]
-async fn test_0dt_migrated_builtin_mv_hydrates_before_promotion() {
+async fn migrated_builtin_mvs_readable(server: &test_util::TestServer) -> bool {
+    for relation in FORCED_BUILTIN_MIGRATION_MVS {
+        let client = server.connect().await.unwrap();
+        let query = format!("SELECT count(*) FROM {relation}");
+        let read = tokio::time::timeout(
+            MIGRATED_BUILTIN_MV_READ_TIMEOUT,
+            client.query_one(&query, &[]),
+        );
+        match read.await {
+            Ok(Ok(row)) => {
+                let count: i64 = row.get(0);
+                if count == 0 {
+                    tracing::info!("`{query}` returned 0 rows");
+                    return false;
+                }
+            }
+            Ok(Err(err)) => {
+                tracing::info!("`{query}` errored: {err}");
+                return false;
+            }
+            Err(_) => {
+                tracing::info!(
+                    "`{query}` did not return within {MIGRATED_BUILTIN_MV_READ_TIMEOUT:?}"
+                );
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// Boots a leader deployment plus a read-only deployment whose builtins were force-migrated by
+/// shard replacement, and reports whether the migrated builtin MVs had become readable by the time
+/// the read-only deployment first said `ReadyToPromote`.
+///
+/// Status and readability are polled in the same loop on purpose. Reading the MVs only *after*
+/// observing `ReadyToPromote` proves nothing about ordering: a peek against an unwritten
+/// replacement shard blocks, but so does a peek against an MV that is merely late.
+#[allow(clippy::disallowed_methods)]
+async fn migrated_builtin_mvs_readable_at_ready_to_promote(hydrate_migrated_mvs: bool) -> bool {
     let tmpdir = TempDir::new().unwrap();
     let harness = test_util::TestHarness::default()
         .unsafe_mode()
         .data_directory(tmpdir.path())
         .with_deploy_generation(1)
-        // Tick often, and tolerate far less lag and require a far shorter healthy streak than
-        // production, so the test both finishes quickly and actually exercises the gate: a
-        // collection frozen at `boot_ts + 1` drifts outside a 5s tolerance long before a 10s
-        // streak can complete, where the 60s production tolerance would hide it for a whole
-        // minute.
+        // Tick often, and tolerate far less lag than production, so the test finishes quickly and
+        // actually exercises the gate. The allowed lag has to stay *below* the stability period: a
+        // frozen collection looks caught up for as long as the tolerance lasts, so it must fall
+        // out of tolerance before an uninterrupted streak can complete.
         .with_system_parameter_default(
             "0dt_deployment_hydration_check_interval".to_string(),
             "1s".to_string(),
@@ -2579,14 +2620,18 @@ async fn test_0dt_migrated_builtin_mv_hydrates_before_promotion() {
         .with_system_parameter_default(
             "with_0dt_caught_up_check_stability_period".to_string(),
             "10s".to_string(),
+        )
+        .with_system_parameter_default(
+            "enable_0dt_hydrate_migrated_builtin_mvs".to_string(),
+            hydrate_migrated_mvs.to_string(),
         );
 
-    // The leader generation.
+    // The leader deployment.
     let server_leader = harness.clone().start().await;
     let client_leader = server_leader.connect().await.unwrap();
     client_leader.simple_query("SELECT 1").await.unwrap();
 
-    // The new generation, booting read-only. Forcing the `replacement` mechanism gives every
+    // The new deployment, booting read-only. Forcing the `replacement` mechanism gives every
     // builtin storage collection a fresh shard, which is what a release carrying a
     // `MigrationStep::replacement` does for the collections it names.
     let server_new = harness
@@ -2601,42 +2646,81 @@ async fn test_0dt_migrated_builtin_mv_hydrates_before_promotion() {
         server_new.internal_http_local_addr()
     ))
     .unwrap();
+
+    // Readability is monotonic, so latching the first `true` can only understate how early the MVs
+    // hydrated, never overstate it, and a readable-mid-tick race can't fail the test spuriously.
+    // The budget stays inside nextest's 240s kill for this package, so a gate that never opens
+    // fails the assertion rather than timing the test out.
+    let mvs_readable = Cell::new(false);
     Retry::default()
-        .max_duration(Duration::from_secs(300))
-        .retry_async(|_state| async {
-            let res = reqwest::Client::new()
-                .get(status_url.clone())
-                .send()
-                .await
-                .unwrap();
-            assert_eq!(res.status(), StatusCode::OK);
-            let response = res.text().await.unwrap();
-            tracing::info!("leader status of the new generation: {response}");
-            assert_ne!(response, r#"{"status":"IsLeader"}"#);
-            if response == r#"{"status":"ReadyToPromote"}"# {
-                Ok(())
-            } else {
-                Err(())
+        .max_duration(Duration::from_secs(120))
+        .retry_async(|_state| {
+            let status_url = status_url.clone();
+            let server_new = &server_new;
+            let mvs_readable = &mvs_readable;
+            async move {
+                if !mvs_readable.get() {
+                    mvs_readable.set(migrated_builtin_mvs_readable(server_new).await);
+                }
+
+                let res = reqwest::Client::new().get(status_url).send().await.unwrap();
+                assert_eq!(res.status(), StatusCode::OK);
+                let response = res.text().await.unwrap();
+                tracing::info!(
+                    mvs_readable = mvs_readable.get(),
+                    "leader status of the new deployment: {response}"
+                );
+                assert_ne!(response, r#"{"status":"IsLeader"}"#);
+                if response == r#"{"status":"ReadyToPromote"}"# {
+                    Ok(())
+                } else {
+                    Err(())
+                }
             }
         })
         .await
-        .unwrap();
+        .expect("new deployment never reported ReadyToPromote");
 
-    // The new generation says it is ready to take over, so a migrated builtin MV has to be
-    // readable from it while it is still read-only. With no writer on the replacement shard this
-    // peek never returns, so bound it rather than hang the test.
-    //
     // NOTE: we never promote. Cut-over `halt!`s the process, taking the test with it.
-    let client_new = server_new.connect().await.unwrap();
-    for relation in ["mz_databases", "mz_clusters"] {
-        let query = format!("SELECT count(*) FROM mz_catalog.{relation}");
-        let rows = tokio::time::timeout(Duration::from_secs(60), client_new.query(&query, &[]))
-            .await
-            .unwrap_or_else(|_| panic!("`{query}` never returned on the read-only generation"))
-            .unwrap();
-        let count: i64 = rows[0].get(0);
-        assert!(count > 0, "`{query}` returned {count}");
-    }
+    mvs_readable.get()
+}
+
+/// Regression test for builtin MVs migrated by shard replacement: they must be hydrated by the
+/// time the read-only deployment reports `ReadyToPromote`.
+///
+/// A replacement migration hands the new deployment a fresh shard that no other environment
+/// writes. Leave the MV's dataflow read-only and that shard stays empty, so the MV and everything
+/// downstream of it drop out of the 0dt caught-up gate and then all hydrate at once at cut-over.
+///
+/// Reaching `ReadyToPromote` at all is the other half of the assertion. Write-enabling puts these
+/// MVs back *into* the gate, so anything they cannot catch up to now blocks promotion instead of
+/// being waved through.
+///
+/// NOTE: this covers the ordering, not the gate's lag comparison. Forcing `replacement` replaces
+/// `mz_cluster_replica_frontiers` too, and the gate reads its "live" frontiers out of that
+/// collection, so here it compares this deployment against itself.
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_0dt_migrated_builtin_mv_hydrates_before_promotion() {
+    assert!(
+        migrated_builtin_mvs_readable_at_ready_to_promote(true).await,
+        "migrated builtin MVs were not readable when the new deployment reported ReadyToPromote"
+    );
+}
+
+/// The break-glass half of [`test_0dt_migrated_builtin_mv_hydrates_before_promotion`]: with
+/// `enable_0dt_hydrate_migrated_builtin_mvs` off, the migrated MVs are excluded from the caught-up
+/// gate again, so the deployment reports `ReadyToPromote` with them still unhydrated.
+///
+/// The two tests differ only in the flag, so a change that reaches `ReadyToPromote` without
+/// hydrating cannot pass both.
+#[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+#[cfg_attr(miri, ignore)] // too slow
+async fn test_0dt_migrated_builtin_mv_flag_off_promotes_unhydrated() {
+    assert!(
+        !migrated_builtin_mvs_readable_at_ready_to_promote(false).await,
+        "migrated builtin MVs hydrated even with enable_0dt_hydrate_migrated_builtin_mvs off"
+    );
 }
 
 // Test that websockets observe cancellation.

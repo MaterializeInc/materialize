@@ -95,9 +95,11 @@ pub const ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS: Config<bool> = Config::new(
     true,
     "Write-enable replacement-migrated builtin materialized views while read-only during a 0dt \
      deployment, so they hydrate before cut-over and keep gating promotion. Emergency break-glass \
-     flag: disabling reverts to excluding migrated MVs (and their dependents) from the caught-up \
-     check, which lets promotion proceed with them unhydrated and hydrate at cut-over instead. \
-     Only takes effect when the leader is new enough for the write to make progress.",
+     flag: disabling excludes migrated MVs (and their dependents) from the caught-up check again, \
+     so promotion proceeds with them unhydrated. Not an exact revert: a collection with no live \
+     leader frontier must be hydrated either way. Only takes effect when the leader is new enough \
+     for the write to make progress, and is read once at startup, so changing it means setting it \
+     on the leader and restarting the new deployment.",
 );
 
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
