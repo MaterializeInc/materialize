@@ -32,6 +32,8 @@ pub enum AuthenticatorKind {
     Sasl,
     /// Authenticate users using OIDC (JWT tokens).
     Oidc,
+    /// Authenticate users using Ory Talos app passwords (derived-JWT exchange).
+    Talos,
     /// Do not authenticate users. Trust they are who they say they are without verification.
     #[default]
     None,
@@ -215,10 +217,16 @@ impl ListenerConfig for HttpListenerConfig {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.authenticator_kind == AuthenticatorKind::Sasl {
-            Err("SASL authentication is not supported for HTTP listeners".to_string())
-        } else {
-            Ok(())
+        match self.authenticator_kind {
+            AuthenticatorKind::Sasl => {
+                Err("SASL authentication is not supported for HTTP listeners".to_string())
+            }
+            // Talos derive-based auth is wired for pgwire only so far; the HTTP
+            // path is not yet supported.
+            AuthenticatorKind::Talos => {
+                Err("Talos authentication is not yet supported for HTTP listeners".to_string())
+            }
+            _ => Ok(()),
         }
     }
 }

@@ -110,7 +110,9 @@ pub async fn get_k8s_auth_mode(
                 ))
             }
         }
-        AuthenticatorKind::Frontegg => Err(anyhow::anyhow!(
+        // Talos uses derived-JWT app passwords rather than a username/password
+        // mz-debug can present, so it is unsupported here (like Frontegg).
+        AuthenticatorKind::Frontegg | AuthenticatorKind::Talos => Err(anyhow::anyhow!(
             "Unsupported authenticator kind: {:?}",
             authenticator_kind
         )),
