@@ -9,7 +9,7 @@ menu:
 Use `ALTER CLUSTER` to:
 
 - Change configuration of a cluster, such as the `SIZE` or
-`REPLICATON FACTOR`.
+`REPLICATION FACTOR`.
 - Rename a cluster.
 - Change owner of a cluster.
 
@@ -150,17 +150,30 @@ The values in the `mz_cluster_replica_sizes` table may change at any
 time. You should not rely on them for any kind of capacity planning.
 {{< /warning >}}
 
-#### Downtime considerations for v26.35 or after
-Starting in v26.35, ALTER CLUSTER <name> SET (SIZE = ...) by default resizes
-the cluster gracefully and without downtime. For example:
+#### Resizing is graceful by default
+
+`ALTER CLUSTER <name> SET (SIZE = ...)` resizes the cluster gracefully and
+without downtime. This is the default: you do **not** need to specify `WAIT
+UNTIL READY`, or any other `WITH` option, to get a zero-downtime resize.
+
+Graceful resizing became the default in **v26.35** on Materialize Cloud and in
+**v26.34.1** on Materialize Self-Managed.
 
 ```mzsql
 ALTER CLUSTER c1 SET (SIZE = '100cc');
 ```
 
+The statement returns immediately and the resize proceeds in the background,
+with a default deadline of 24 hours. If the new replicas have not hydrated by
+the deadline, Materialize rolls the resize back and the cluster keeps its
+current size.
+
+The `WAIT UNTIL READY` and `WAIT FOR` options do not enable graceful resizing,
+and they are not required for it. Their only effect is to customize the
+deadline and what happens if the deadline passes. See [Customizing the
+timeout](#customizing-the-timeout).
+
 ##### Resizing process
-The resize proceeds in the background, allowing the command to return
-immediately.
 
 During a graceful resize, Materialize:
 1. Provisions new replicas at the target size, alongside the current replicas.
@@ -172,10 +185,16 @@ Throughout, the cluster keeps serving queries, first from the old replicas,
 then from both sets as the new replicas come up, so the resize incurs no
 downtime.
 
-If the new replicas do not hydrate within the reconfiguration timeout (24 hours
-by default), Materialize rolls back the resize and the cluster keeps its current
-size. To customize the timeout behavior, use the `WAIT UNTIL READY` or `WAIT FOR` options.
-The resize still proceeds in the background.
+Because the resize runs in the background, it is unaffected by the session that
+started it. Closing the connection does not cancel it. To stop a resize, see
+[Cancel a resize](#cancel-a-resize).
+
+##### Customizing the timeout
+
+By default, a resize has a deadline of 24 hours, and Materialize rolls the
+resize back if the new replicas have not hydrated by then. Use the `WAIT UNTIL
+READY` or `WAIT FOR` options to change the deadline, or to change what happens
+when it passes.
 
 {{< private-preview >}}
 Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
@@ -195,8 +214,20 @@ Customizing the resize timeout with `WAIT UNTIL READY` or `WAIT FOR`
   regardless of hydration status, which can cause downtime. Prefer
   `WAIT UNTIL READY`.
 
-See [Monitoring a resize](#monitoring-a-resize) to track progress and
-[cancel](#monitoring-a-resize) an in-flight resize.
+On current versions, both options still return immediately and let the resize
+proceed in the background. They do not hold the session open. In v26.33 and
+earlier, `WAIT UNTIL READY` blocked the session instead. See [Resizing in
+v26.33 and earlier](#resizing-in-v2633-and-earlier). For system clusters, an
+explicit `WAIT UNTIL READY` also blocked the session through v26.37. See
+[System clusters](#system-clusters).
+
+On a self-managed deployment, these options are additionally gated behind the
+`enable_zero_downtime_cluster_reconfiguration` session feature flag, which is
+off by default. Until it is enabled, a statement using them returns an error
+rather than resizing the cluster.
+
+See [Monitoring a resize](#monitoring-a-resize) to track progress and [Cancel a
+resize](#cancel-a-resize) to stop an in-flight resize.
 
 ##### Monitoring a resize
 You can monitor a resize through the following:
@@ -224,8 +255,37 @@ To **cancel** an in-flight resize, reissue `ALTER CLUSTER` with the cluster's
 current size. Materialize drops the pending replicas and keeps the current
 configuration.
 
-#### Downtime considerations for v26.34 or before
-{{< private-preview />}}
+#### System clusters
+
+`ALTER CLUSTER ... SET (SIZE = ...)` applies to system clusters (such as
+`mz_catalog_server`, `mz_system`, `mz_probe`, `mz_support`, and `mz_analytics`)
+as well as to clusters you create yourself. As with any cluster, altering one
+requires [ownership of it](#required-privileges), which for most system clusters
+means connecting as `mz_system`.
+
+{{< warning >}}
+System clusters resize gracefully starting in **v26.38**. In v26.37 and
+earlier, resizing a system cluster **without** an explicit `WAIT UNTIL READY`
+option replaces the cluster's replicas immediately instead of waiting for the
+new ones to hydrate, so the cluster is unavailable until they do. Resizing
+`mz_catalog_server` this way makes the Materialize Console and `SHOW` commands
+unresponsive in the meantime.
+
+On v26.37 and earlier, specify the option explicitly when resizing a system
+cluster:
+
+```mzsql
+ALTER CLUSTER mz_catalog_server
+SET (SIZE = '50cc') WITH (WAIT UNTIL READY (TIMEOUT = '30m'));
+```
+
+On those versions, the explicit option was the only way to resize a system
+cluster gracefully, and it also held the session open until the new replicas
+hydrated or the timeout passed. That is unlike a user cluster, which returns
+immediately.
+{{< /warning >}}
+
+#### Resizing in v26.33 and earlier {#resizing-in-v2633-and-earlier}
 
 You can use the `WAIT UNTIL READY` option to perform a zero-downtime resizing,
 which incurs **no downtime**. Instead of restarting the cluster, this approach
@@ -235,7 +295,7 @@ replica.
 
 ```sql
 ALTER CLUSTER c1
-SET (SIZE '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
+SET (SIZE = '100cc') WITH (WAIT UNTIL READY (TIMEOUT = '10m', ON TIMEOUT = 'COMMIT'));
 ```
 
 The `ALTER` statement is blocking and will return only when the new replica
