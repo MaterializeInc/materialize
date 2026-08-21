@@ -387,6 +387,20 @@ impl<P, S> DataflowDescription<P, S> {
         self.export_ids().all(|id| id.is_transient())
     }
 
+    /// Whether this dataflow exists only to produce the answer to one peek: it installs transient
+    /// collections, reads a single time, and drives no sink that outlives the read.
+    ///
+    /// Transience alone is not the property, because it says nothing about when the dataflow stops.
+    /// A `REFRESH AT` materialized view is durable and still gets a finite `until`, and an
+    /// introspection subscribe is transient and never stops. Callers that place a dataflow on the
+    /// strength of "it finishes on its own" want this, not `is_transient`.
+    pub fn is_peek_dataflow(&self) -> bool {
+        self.is_transient()
+            && self.is_single_time()
+            && self.subscribe_ids().next().is_none()
+            && self.copy_to_ids().next().is_none()
+    }
+
     /// Returns the description of the object to build with the specified
     /// identifier.
     ///
