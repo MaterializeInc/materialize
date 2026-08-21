@@ -53,6 +53,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::soft_assert_or_log;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
@@ -1147,6 +1148,47 @@ impl ComputeController {
             return Ok(());
         }
 
+        self.allow_writes_inner(instance_id, collection_id)
+    }
+
+    /// Like [`Self::allow_writes`], but takes effect even in read-only mode.
+    ///
+    /// The caller must guarantee that no other environment writes the collection's output shard.
+    /// In a 0dt deployment that means a shard this environment created for itself, the replacement
+    /// shard of a `Replacement`-migrated builtin collection, never one the leader is still serving
+    /// from. `Evolution` migrates in place and reuses the leader's shard, so it must not reach this
+    /// path. Violating the guarantee races two writers on one shard.
+    ///
+    /// This is the compute-side counterpart to the storage controller's `force_writable` handling
+    /// of migrated storage collections. Migrated builtin tables are storage collections that
+    /// storage force-writes read-only; migrated builtin MVs are compute collections that only this
+    /// path can force-write. Both rest on the same guarantee (this environment exclusively owns the
+    /// replacement shard) but run on separate write paths, so each needs its own bypass.
+    pub fn allow_writes_in_read_only(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
+        // Every builtin eligible for the read-only bypass has a system id. A non-system id means
+        // the caller's `Replacement`-only invariant broke, so degrade to the read-only no-op (cold
+        // collection at cut-over) rather than risk writing a shard the leader still serves. Mirrors
+        // the storage-side tripwire in `StorageController::register_introspection_collection`.
+        if self.read_only && !collection_id.is_system() {
+            soft_panic_or_log!(
+                "allow_writes_in_read_only called for non-system collection {collection_id}; \
+                 falling back to read-only no-op"
+            );
+            return Ok(());
+        }
+
+        self.allow_writes_inner(instance_id, collection_id)
+    }
+
+    fn allow_writes_inner(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
         let instance = self.instance_mut(instance_id)?;
 
         // Validation

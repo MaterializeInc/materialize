@@ -93,7 +93,8 @@ use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
 use mz_adapter_types::dyncfgs::FRONTEND_READ_THEN_WRITE;
 use mz_adapter_types::dyncfgs::{
-    USER_ID_POOL_BATCH_SIZE, WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
+    ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS, USER_ID_POOL_BATCH_SIZE,
+    WITH_0DT_DEPLOYMENT_CAUGHT_UP_CHECK_INTERVAL,
 };
 use mz_auth::password::Password;
 use mz_build_info::BuildInfo;
@@ -171,6 +172,7 @@ use mz_storage_types::sources::{IngestionDescription, SourceExport, Timeline};
 use mz_timestamp_oracle::{TimestampOracleConfig, WriteTimestamp};
 use mz_transform::dataflow::DataflowMetainfo;
 use opentelemetry::trace::TraceContextExt;
+use semver::Version;
 use serde::Serialize;
 use thiserror::Error;
 use timely::progress::{Antichain, Timestamp as _};
@@ -242,6 +244,17 @@ mod message_handler;
 mod privatelink_status;
 mod sql;
 mod validity;
+
+/// The oldest leader version against which a replacement-migrated builtin materialized view may
+/// write its new persist shard while this environment is still read-only.
+///
+/// Every builtin materialized view reads `mz_internal.mz_catalog_raw`, so its dataflow only makes
+/// progress up to the catalog shard's frontier. Holding that frontier at the current time is the
+/// leader's job, and leaders only started doing it in v26.17. Write-enable such an MV against an
+/// older leader and it sits at a stale frontier and never reports caught up, which blocks
+/// promotion outright instead of merely leaving the collection cold at cut-over. We still support
+/// upgrading from before v26.17, so that leader is a real case, not a hypothetical.
+const MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES: Version = Version::new(26, 17, 0);
 
 /// A pool of pre-allocated user IDs to avoid per-DDL persist writes.
 ///
@@ -2445,6 +2458,7 @@ impl Coordinator {
         &mut self,
         boot_ts: Timestamp,
         migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
+        hydrate_migrated_mvs: bool,
         mut builtin_table_updates: Vec<BuiltinTableUpdate>,
         cached_global_exprs: BTreeMap<GlobalId, GlobalExpressions>,
         uncached_local_exprs: BTreeMap<GlobalId, LocalExpressions>,
@@ -2773,7 +2787,22 @@ impl Coordinator {
                     // If this is a replacement MV, it must remain read-only until the replacement
                     // gets applied.
                     if mview.replacement_target.is_none() {
-                        self.allow_writes(mview.cluster_id, mview.global_id_writes());
+                        let gid = mview.global_id_writes();
+                        if hydrate_migrated_mvs
+                            && migrated_storage_collections_0dt.contains(&entry.id())
+                        {
+                            // `migrated_storage_collections_0dt` is `Replacement`-migrated items
+                            // only, so this is a fresh shard we own: nothing else writes it, and
+                            // writing it while read-only hydrates the MV and its dependents before
+                            // cut-over. An `Evolution`-migrated MV reuses the leader's live shard
+                            // and must never reach here.
+                            self.controller
+                                .compute
+                                .allow_writes_in_read_only(mview.cluster_id, gid)
+                                .unwrap_or_terminate("allow_writes cannot fail");
+                        } else {
+                            self.allow_writes(mview.cluster_id, gid);
+                        }
                     }
                 }
                 CatalogItem::MetricSink(metric_sink) => {
@@ -5021,6 +5050,7 @@ pub fn serve(
         ;
         let OpenCatalogResult {
             mut catalog,
+            last_seen_version,
             migrated_storage_collections_0dt,
             new_builtin_collections,
             builtin_table_updates,
@@ -5076,6 +5106,22 @@ pub fn serve(
             catalog_open_start.elapsed()
         );
 
+        // Whether replacement-migrated builtin MVs may write their new shards before cut-over.
+        // Both `bootstrap` and the readiness gate below read this, and they have to agree.
+        // `MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES` explains why the leader's version settles it.
+        //
+        // While we are read-only, `last_seen_version` is that leader's version: our catalog
+        // transaction is a savepoint, so our own bump of the setting never lands. `None` means a
+        // freshly initialized catalog, with nothing migrated and no leader to be compatible with.
+        //
+        // `ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS` is the break-glass revert: off falls back to
+        // excluding migrated MVs from the caught-up gate, no redeploy needed.
+        let hydrate_migrated_mvs = ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS
+            .get(catalog.system_config().dyncfgs())
+            && last_seen_version
+                .as_ref()
+                .is_none_or(|version| *version >= MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES);
+
         let coord_thread_start = Instant::now();
         info!("startup: coordinator init: coordinator thread start beginning");
 
@@ -5126,18 +5172,16 @@ pub fn serve(
 
                 // A collection that can't advance its write frontier in read-only mode
                 // stalls its transitive dependents too, so exclude those from the caught-up
-                // check as well. That's migrated MVs (their dataflows don't write in
-                // read-only mode) and new builtin MVs (their fresh shard has no writer until
-                // this deployment promotes). An excluded dependent may still be hydrating
-                // right after promotion, a brief blip we accept because these MVs are small
-                // and get a writer at cut-over.
+                // check as well. That's new builtin MVs, whose fresh shard has no writer until
+                // this deployment promotes, plus migrated MVs whenever the leader is too old for
+                // them to write. An excluded dependent may still be hydrating right after
+                // promotion, a brief blip we accept because these MVs are small and get a writer
+                // at cut-over.
                 //
-                // TODO: Consider sending `allow_writes` for the dataflows of migrated MVs, which
-                //       would allow them to make progress even in read-only mode. This doesn't
-                //       work for MVs based on `mz_catalog_raw`, if the leader's version is less
-                //       than v26.17, since before that version the catalog shard's frontier wasn't
-                //       kept up-to-date with the current time. So this workaround has to remain in
-                //       place upgrades from a version less than v26.17 are no longer supported.
+                // A migrated builtin *table* needs no such treatment even though a builtin MV can
+                // read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
+                // `read_only_mode_table_worker` keeps advancing the uppers of migrated tables, so
+                // an MV over one still catches up.
                 let new_builtin_mvs = new_builtin_collections
                     .iter()
                     .map(|global_id| {
@@ -5148,12 +5192,12 @@ pub fn serve(
                     })
                     .filter(|entry| entry.is_materialized_view())
                     .map(|entry| entry.id());
-                let mut todo: Vec<_> = migrated_storage_collections_0dt
+                let frozen_migrated_mvs = migrated_storage_collections_0dt
                     .iter()
                     .copied()
-                    .filter(|id| catalog.state().get_entry(id).is_materialized_view())
-                    .chain(new_builtin_mvs)
-                    .collect();
+                    .filter(|_| !hydrate_migrated_mvs)
+                    .filter(|id| catalog.state().get_entry(id).is_materialized_view());
+                let mut todo: Vec<_> = new_builtin_mvs.chain(frozen_migrated_mvs).collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
                     exclude_collections.extend(entry.global_ids());
@@ -5326,6 +5370,7 @@ pub fn serve(
                         .bootstrap(
                             boot_ts,
                             migrated_storage_collections_0dt,
+                            hydrate_migrated_mvs,
                             builtin_table_updates,
                             cached_global_exprs,
                             uncached_local_exprs,

@@ -80,6 +80,16 @@ pub const WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD: Config<Duration> = Config::
     "How long a cluster must continuously be caught-up and have all replicas healthy before it is considered ready to cut over during a 0dt deployment.",
 );
 
+pub const ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS: Config<bool> = Config::new(
+    "enable_0dt_hydrate_migrated_builtin_mvs",
+    true,
+    "Write-enable replacement-migrated builtin materialized views while read-only during a 0dt \
+     deployment, so they hydrate before cut-over and keep gating promotion. Emergency break-glass \
+     flag: disabling reverts to excluding migrated MVs (and their dependents) from the caught-up \
+     check, which lets promotion proceed with them unhydrated and hydrate at cut-over instead. \
+     Only takes effect when the leader is new enough for the write to make progress.",
+);
+
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
 pub const ENABLE_STATEMENT_LIFECYCLE_LOGGING: Config<bool> = Config::new(
     "enable_statement_lifecycle_logging",
@@ -458,6 +468,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_0DT_CAUGHT_UP_REPLICA_STATUS_CHECK)
         .add(&ENABLE_0DT_CAUGHT_UP_STABILITY_CHECK)
         .add(&WITH_0DT_CAUGHT_UP_CHECK_STABILITY_PERIOD)
+        .add(&ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS)
         .add(&ENABLE_STATEMENT_LIFECYCLE_LOGGING)
         .add(&ENABLE_INTROSPECTION_SUBSCRIBES)
         .add(&ENABLE_FRONTEND_SUBSCRIBES)
