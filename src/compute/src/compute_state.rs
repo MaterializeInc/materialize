@@ -430,6 +430,13 @@ impl ComputeState {
             }
         }
 
+        // Serialized column bodies are minted from operator code with no
+        // handle on the config set, so the gate is a process-global flag the
+        // config apply writes. Flips take effect for bodies minted afterwards.
+        mz_timely_util::columnar::align_buffer::metrics::set_tracking_enabled(
+            ENABLE_COLUMN_ALIGN_BUFFER_TRACKING.get(config),
+        );
+
         // Remember the maintenance interval locally to avoid reading it from the config set on
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
