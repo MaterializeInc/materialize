@@ -168,6 +168,7 @@ use crate::logging::compute::{
 use crate::render::columnar::CollectionEdge;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
+use crate::shared_trace::PublishArrangement;
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
@@ -743,6 +744,37 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
+                // Publish into the per-process sharing registry when this role publishes (see
+                // `ComputeRuntimeRole::publishes`). Borrows the arrangements, so it must precede
+                // moving their traces into the `TraceBundle` below.
+                if compute_state.role().publishes() {
+                    // Adopt the registry's placeholder for `idx_id` rather than publishing fresh and
+                    // inserting: whichever side touches `idx_id` first creates the slot, so filling
+                    // it in place cannot overwrite a placeholder a reader has already imported.
+                    //
+                    // Both halves signal on seal. A read whose result is an error (a runtime
+                    // division-by-zero, or a `WITH MUTUALLY RECURSIVE ... ERROR AT RECURSION LIMIT`
+                    // that trips its limit) carries its data on the errs stream, whose frontier is
+                    // held back until the error is emitted, so an oks-only signal leaves it stuck,
+                    // and vice versa for a normal result.
+                    let worker_index = self.scope.index();
+                    let slot = compute_state.sharing_registry.get_or_create_placeholder(
+                        idx_id,
+                        worker_index,
+                        self.scope.peers(),
+                    );
+                    let oks_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&oks, &slot.oks, move || {
+                        oks_registry.note_frontier(idx_id, worker_index)
+                    });
+                    let errs_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&errs, &slot.errs, move || {
+                        errs_registry.note_frontier(idx_id, worker_index)
+                    });
+                    // `get_or_create_placeholder` does not notify on create.
+                    compute_state.sharing_registry.notify(idx_id, worker_index);
+                }
+
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -753,6 +785,20 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
+
+                // Mirror the trace aliasing in the sharing registry: re-register the arrangement
+                // already published under `gid` on this worker under `idx_id` as well. This arm
+                // builds no streams of its own, so it installs no seal signal of its own.
+                // `reexport` records `idx_id` as an alias of `gid` so `gid`'s publisher wakes reads
+                // waiting on `idx_id`'s seal. Without that, such a read hangs.
+                if compute_state.role().publishes() {
+                    compute_state.sharing_registry.reexport(
+                        &gid,
+                        idx_id,
+                        self.scope.index(),
+                        self.scope.peers(),
+                    );
+                }
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -845,6 +891,29 @@ where
                     errs.stream = errs.stream.log_dataflow_errors(logger, idx_id);
                 }
 
+                // Publish into the per-process sharing registry when this role publishes, as in the
+                // unbucketed export path above, which carries the reasoning. The arrangements were
+                // re-arranged onto `outer` (the worker scope carrying `mz_repr::Timestamp`), so the
+                // worker ordinal comes from there.
+                if compute_state.role().publishes() {
+                    let worker_index = outer.index();
+                    let slot = compute_state.sharing_registry.get_or_create_placeholder(
+                        idx_id,
+                        worker_index,
+                        outer.peers(),
+                    );
+                    let oks_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&oks, &slot.oks, move || {
+                        oks_registry.note_frontier(idx_id, worker_index)
+                    });
+                    let errs_registry = compute_state.sharing_registry.clone();
+                    PublishArrangement::adopt(&errs, &slot.errs, move || {
+                        errs_registry.note_frontier(idx_id, worker_index)
+                    });
+                    // `get_or_create_placeholder` does not notify on create.
+                    compute_state.sharing_registry.notify(idx_id, worker_index);
+                }
+
                 compute_state.traces.set(
                     idx_id,
                     TraceBundle::new(oks.trace, errs.trace).with_drop(needed_tokens),
@@ -855,6 +924,17 @@ where
                 // just create another handle to that arrangement.
                 let trace = compute_state.traces.get(&gid).unwrap().clone();
                 compute_state.traces.set(idx_id, trace);
+
+                // Mirror the trace aliasing in the sharing registry: re-register the arrangement
+                // already published under `gid` on this worker under `idx_id` as well.
+                if compute_state.role().publishes() {
+                    compute_state.sharing_registry.reexport(
+                        &gid,
+                        idx_id,
+                        outer.index(),
+                        outer.peers(),
+                    );
+                }
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());

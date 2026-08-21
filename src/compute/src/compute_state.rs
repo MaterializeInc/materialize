@@ -74,7 +74,8 @@ use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
-use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
+use crate::sharing::ArrangementSharingRegistry;
 
 mod peek_result_iterator;
 mod peek_stash;
@@ -114,6 +115,11 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
+    /// A per-process registry of published index arrangements.
+    ///
+    /// Intentionally shared between all workers of the process, each of which publishes into its own
+    /// worker-ordinal slot. `Clone` shares the same underlying map.
+    pub sharing_registry: ArrangementSharingRegistry,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -172,12 +178,20 @@ pub struct ComputeState {
 
     /// The storage worker forwards its introspection logs to the compute worker.
     pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+
+    /// Which of the process's compute runtimes this state belongs to.
+    ///
+    /// Only the maintenance runtime runs the non-idempotent process-global initializers. The
+    /// interactive runtime shares the same process and inherits those globals.
+    role: ComputeRuntimeRole,
 }
 
 impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
+        role: ComputeRuntimeRole,
         persist_clients: Arc<PersistClientCache>,
+        sharing_registry: ArrangementSharingRegistry,
         txns_ctx: TxnsContext,
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
@@ -198,6 +212,7 @@ impl ComputeState {
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
+            sharing_registry,
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -213,7 +228,13 @@ impl ComputeState {
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             storage_log_reader,
+            role,
         }
+    }
+
+    /// Which of the process's compute runtimes this state serves.
+    pub(crate) fn role(&self) -> ComputeRuntimeRole {
+        self.role
     }
 
     /// Return a mutable reference to the identified collection.
@@ -866,6 +887,8 @@ impl<'a> ActiveComputeState<'a> {
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
             storage_log_reader,
+            self.compute_state.role(),
+            self.compute_state.sharing_registry.clone(),
         );
 
         let dataflow_index = Rc::new(dataflow_index);
