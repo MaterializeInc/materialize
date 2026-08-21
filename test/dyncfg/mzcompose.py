@@ -300,16 +300,31 @@ def workflow_default(c: Composition) -> None:
             # replica's first configuration carries them. This exercises that path,
             # which the cluster above never reaches.
             #
-            # The periodic reconcile has to be held still for the assertion to be
-            # about the create path at all. It runs every 100ms by default here and
-            # would populate the same rows on its own, so the assertion would pass
-            # with the create-time fold deleted -- while a render-frozen parameter
-            # would already have been missed. The interval is a startup argument, so
-            # it is set long and materialized restarted: the loop's first tick fires
+            # Two things have to be held still for this to be an assertion about
+            # the create path at all.
+            #
+            # The periodic reconcile runs every 100ms by default here and would
+            # populate the same rows on its own, so the assertion would pass with
+            # the create-time fold deleted -- while a render-frozen parameter would
+            # already have been missed. The interval is a startup argument, so it is
+            # set long and materialized restarted: the loop's first tick fires
             # immediately, which is what installs the shared frontend the fold needs
             # and what reconciles the objects that already exist, and the next tick
             # is an hour away. Every row asserted for `dyncfg_scoped_2` below can
             # therefore only have come from its own create transaction.
+            #
+            # And testdrive's reset, which is why this block also declares
+            # `no_reset`. `c.testdrive()` runs `ALTER SYSTEM RESET ALL` before each
+            # script otherwise, returning every parameter to its
+            # `--system-parameter-default`. Those defaults come from
+            # `get_default_system_parameters`, which sets both scoped parameters to
+            # the *opposite* of `ENV_WIDE_PARAMS` -- so a reset baseline is exactly
+            # the two rule values, `classify_scoped_value` calls both
+            # `MatchesEnvironment`, and the fold then correctly records nothing at
+            # all. Elsewhere in this file the 100ms loop repairs the reset inside
+            # testdrive's retry window, which is the only reason those
+            # `SHOW max_connections` assertions pass; parked at an hour, nothing
+            # repairs it.
             #
             # The two segments are widened with `startsWith` rather than a longer
             # exact list, which is the case an exact list cannot express: the
@@ -339,7 +354,8 @@ def workflow_default(c: Composition) -> None:
                 Materialized(
                     config_sync_file_path=str(config_file),
                     config_sync_loop_interval="1h",
-                )
+                ),
+                Testdrive(no_reset=True),
             ):
                 c.kill("materialized")
                 c.up("materialized")
@@ -348,9 +364,19 @@ def workflow_default(c: Composition) -> None:
                 # has not, the fold is skipped and the rows below are simply
                 # absent, which fails loudly rather than flakily.
                 c.sleep(10)
+                # The premise of everything below, and with `no_reset` it now holds
+                # for the whole block rather than only until the next script starts.
                 assert_environment_wide_baseline(c)
                 c.testdrive(
                     input=dedent(f"""
+                        # The premise again, asserted ahead of the create rather than
+                        # inferred from its result. `max_connections` is one of the
+                        # same flat keys and is user-visible, so a baseline that was
+                        # reset after all fails on this line instead of surfacing
+                        # below as an unexplained missing row.
+                        > SHOW max_connections
+                        67
+
                         $ postgres-execute connection=mz_system
                         CREATE CLUSTER dyncfg_scoped_2 SIZE 'scale=1,workers=1'
 
@@ -374,8 +400,9 @@ def workflow_default(c: Composition) -> None:
                 )
 
             # Dropping the segments and rules removes the overrides, returning every
-            # object to the environment-wide value. Back on the short interval, since
-            # this one is the periodic reconcile's job.
+            # object to the environment-wide value. Back on the short interval and on
+            # the resetting testdrive, since this one is the periodic reconcile's job
+            # -- it repairs the reset as it always did.
             write_config(config_file, system_params_2)
             c.kill("materialized")
             c.up("materialized")
