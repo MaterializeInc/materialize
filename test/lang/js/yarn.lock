@@ -1424,10 +1424,10 @@
   dependencies:
     undici-types "~7.16.0"
 
-"@types/pg@^8.21.0":
-  version "8.21.0"
-  resolved "https://registry.yarnpkg.com/@types/pg/-/pg-8.21.0.tgz#338b10ccdce0cc0ca811bc7d7936268a61ac1ec8"
-  integrity sha512-AYdtudzabjLZgVgRZmAnU8bAnVUXzuJX2IYHeSIiIHm68olD+LgQYCGWdtcNYnP0uq9c4S4NibVG3Ni7VbKW7Q==
+"@types/pg@^8.23.1":
+  version "8.23.1"
+  resolved "https://registry.yarnpkg.com/@types/pg/-/pg-8.23.1.tgz#7e712ce02cf44ad100862127f10f52e9c6b9d227"
+  integrity sha512-fKVHpikPdg4GKks3JuLEhvwSyvwzF23hnabPy6DD8ljVbC7+6J5dQzdv4arV6jqq57djnMgs1HKBxX4P8aBI3A==
   dependencies:
     "@types/node" "*"
     pg-protocol "*"
