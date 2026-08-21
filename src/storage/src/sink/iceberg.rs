@@ -134,6 +134,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_repr::{Diff, GlobalId, Row, Timestamp};
+use mz_row_spine::ArcBatch;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::configuration::StorageConfiguration;
 use mz_storage_types::controller::CollectionMetadata;
@@ -1588,7 +1589,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                 // Rows can arrive before their batch description due to dataflow parallelism.
                 // Stash them until we know which batch they belong to.
                 // Keyed by the lower bound (per arrangement batch) of the rows.
-                let mut stashed_rows: VecDeque<Rc<OrdValBatch<_>>> = VecDeque::new();
+                let mut stashed_rows: VecDeque<ArcBatch<OrdValBatch<_>>> = VecDeque::new();
 
                 // Track batches currently being written. When a row arrives, we check if it belongs
                 // to an in-flight batch. When frontiers advance to a batch's upper, we close the
@@ -1682,7 +1683,7 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                                     last_input_bounds =
                                         Some((rows.lower().clone(), rows.upper().clone()));
 
-                                    stashed_rows.push_back(Rc::clone(rows));
+                                    stashed_rows.push_back(rows.clone());
                                 }
                             }
                             Event::Progress(frontier) => {
@@ -1829,7 +1830,7 @@ type BatchDescription = (Antichain<Timestamp>, Antichain<Timestamp>);
 /// are in order and non-overlapping.
 async fn with_ready_batches<L: Layout, W, Write, Close>(
     input_frontier: Antichain<Timestamp>,
-    input_batches: &mut VecDeque<Rc<OrdValBatch<L>>>,
+    input_batches: &mut VecDeque<ArcBatch<OrdValBatch<L>>>,
     output_frontier: Antichain<Timestamp>,
     output_batches: &mut VecDeque<(BatchDescription, W)>,
     mut write_rows: Write,
@@ -2148,9 +2149,9 @@ mod tests {
 
         /// An input batch with the given bounds. The pairing logic under test
         /// only looks at bounds, so the batch holds no data.
-        fn input(lower: u64, upper: Option<u64>) -> Rc<TestBatch> {
+        fn input(lower: u64, upper: Option<u64>) -> ArcBatch<TestBatch> {
             let (lower, upper) = span(lower, upper);
-            Rc::new(TestBatch::empty(lower, upper))
+            ArcBatch(Arc::new(TestBatch::empty(lower, upper)))
         }
 
         #[derive(Debug, PartialEq)]
@@ -2164,7 +2165,7 @@ mod tests {
         /// sequence of calls it made.
         async fn run(
             input_frontier: Antichain<Timestamp>,
-            input_batches: &mut VecDeque<Rc<TestBatch>>,
+            input_batches: &mut VecDeque<ArcBatch<TestBatch>>,
             output_frontier: Antichain<Timestamp>,
             output_batches: &mut VecDeque<(BatchDescription, ())>,
         ) -> Vec<Call> {
