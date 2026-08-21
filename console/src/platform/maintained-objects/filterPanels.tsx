@@ -30,11 +30,7 @@ import {
 import { MaterializeTheme } from "~/theme";
 import { DurationUnit, fromSeconds, toSeconds } from "~/utils/format";
 
-import {
-  HYDRATION_BUCKETS,
-  HYDRATION_LABELS,
-  HydrationBucket,
-} from "./filters";
+import { STATUS_FILTER_BUCKETS, STATUS_FILTER_LABELS } from "./filters";
 import { MaintainedObjectListItem } from "./queries";
 
 type AnyColumn = Column<MaintainedObjectListItem, unknown>;
@@ -176,11 +172,11 @@ export const ObjectTypeFilterPanel = ({ column }: { column: AnyColumn }) => (
   />
 );
 
-export const HydrationFilterPanel = ({ column }: { column: AnyColumn }) => (
-  <MultiSelectFilterPanel<HydrationBucket>
+export const StatusFilterPanel = ({ column }: { column: AnyColumn }) => (
+  <MultiSelectFilterPanel<string>
     column={column}
-    items={HYDRATION_BUCKETS}
-    getLabel={(b) => HYDRATION_LABELS[b]}
+    items={STATUS_FILTER_BUCKETS}
+    getLabel={(b) => STATUS_FILTER_LABELS[b]}
   />
 );
 

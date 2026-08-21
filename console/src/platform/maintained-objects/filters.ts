@@ -13,8 +13,12 @@ import {
   MAINTAINED_OBJECT_TYPES,
   MaintainedObjectType,
 } from "~/api/materialize/maintained-objects/constants";
+import { snapshotting } from "~/platform/connectors/utils";
 
-import { MaintainedObjectListItem } from "./queries";
+import {
+  MaintainedObjectListItem,
+  MaintainedObjectSourceStatus,
+} from "./queries";
 
 /**
  * Row-threshold options for the freshness filter, keyed by seconds. Selecting
@@ -38,7 +42,7 @@ export const HYDRATION_BUCKETS = [
 export type HydrationBucket = (typeof HYDRATION_BUCKETS)[number];
 
 export const HYDRATION_LABELS: Record<HydrationBucket, string> = {
-  hydrated: "Running",
+  hydrated: "Hydrated",
   hydrating: "Hydrating",
   not_hydrated: "Not Hydrated",
 };
@@ -79,9 +83,73 @@ export const objectTypeFilterFn = arrayMatchFilter<MaintainedObjectType>(
   (r) => r.objectType,
 );
 
-export const hydrationFilterFn = arrayMatchFilter<HydrationBucket>((r) =>
-  bucketForHydration(r.hydratedReplicas, r.totalReplicas),
-);
+/**
+ * Status values offered for sources. `snapshotting` is derived rather than
+ * reported: `mz_source_statuses` says `running` throughout the initial
+ * snapshot, so both the pill and this filter fold in `snapshot_committed`.
+ */
+export const SOURCE_STATUS_BUCKETS = [
+  "snapshotting",
+  "running",
+  "starting",
+  "created",
+  "paused",
+  "stalled",
+  "failed",
+] as const;
+export type SourceStatusBucket = (typeof SOURCE_STATUS_BUCKETS)[number];
+
+export const SOURCE_STATUS_LABELS: Record<SourceStatusBucket, string> = {
+  snapshotting: "Snapshotting",
+  running: "Running",
+  starting: "Starting",
+  created: "Created",
+  paused: "Paused",
+  stalled: "Stalled",
+  failed: "Failed",
+};
+
+/** Derives a source's displayed status, matching `ConnectorStatusPill`. */
+export const bucketForSourceStatus = (
+  sourceStatus: MaintainedObjectSourceStatus,
+  sourceType: string | null,
+): string =>
+  snapshotting({
+    status: sourceStatus.status,
+    type: sourceType ?? "",
+    snapshotCommitted: sourceStatus.snapshotCommitted,
+  })
+    ? "snapshotting"
+    : sourceStatus.status;
+
+/** Options the Status filter offers, sources first. */
+export const STATUS_FILTER_BUCKETS = [
+  ...SOURCE_STATUS_BUCKETS,
+  ...HYDRATION_BUCKETS,
+] as const;
+
+export const STATUS_FILTER_LABELS: Record<string, string> = {
+  ...SOURCE_STATUS_LABELS,
+  ...HYDRATION_LABELS,
+};
+
+/**
+ * The bucket the Status cell displays: ingestion status for sources, replica
+ * hydration for everything else. The filter matches on this so it can never
+ * select a value the cell doesn't show.
+ */
+export const statusBucketForRow = (
+  row: MaintainedObjectListItem,
+): string | undefined => {
+  if (row.objectType === "source") {
+    return row.sourceStatus
+      ? bucketForSourceStatus(row.sourceStatus, row.sourceType)
+      : undefined;
+  }
+  return bucketForHydration(row.hydratedReplicas, row.totalReplicas);
+};
+
+export const statusFilterFn = arrayMatchFilter<string>(statusBucketForRow);
 
 export const freshnessFilterFn = (
   row: Row<MaintainedObjectListItem>,
@@ -144,18 +212,20 @@ export const FILTER_URL_SPECS: readonly FilterUrlSpec[] = [
       typeof v === "number" ? { key: "freshness", value: v } : undefined,
   },
   {
-    columnId: "hydration",
+    // Matches the Status column's id. The filter, its URL param and its chip
+    // all have to agree on this key or the filter silently stops round-tripping.
+    columnId: "status",
     fromUrl: (p) =>
       nonEmpty(
         p
-          .getAll("hydration[]")
-          .filter((h): h is HydrationBucket =>
-            (HYDRATION_BUCKETS as readonly string[]).includes(h),
+          .getAll("status[]")
+          .filter((s) =>
+            (STATUS_FILTER_BUCKETS as readonly string[]).includes(s),
           ),
       ),
     toUrl: (v) => {
-      const arr = v as HydrationBucket[];
-      return arr?.length ? { key: "hydration[]", value: arr } : undefined;
+      const arr = v as string[];
+      return arr?.length ? { key: "status[]", value: arr } : undefined;
     },
   },
 ];
