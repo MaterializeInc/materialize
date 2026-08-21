@@ -1548,16 +1548,33 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                     .context("Failed to merge Materialize metadata into Iceberg schema")?,
                 );
 
-                // WORKAROUND: S3 Tables catalog incorrectly sets location to the metadata file path
-                // instead of the warehouse root. Strip off the /metadata/*.metadata.json suffix.
-                // No clear way to detect this properly right now, so we use heuristics.
-                let location = table_metadata.location();
-                let corrected_location = match location.rsplit_once("/metadata/") {
-                    Some((a, b)) if b.ends_with(".metadata.json") => a,
-                    _ => location,
-                };
-
-                let data_location = format!("{}/data", corrected_location);
+                // A catalog that manages where data files live advertises it through
+                // `write.data.path`. Honor it: catalogs backing an Iceberg table with
+                // their own storage layout reject a commit whose data files sit outside
+                // that path. Unity Catalog, for one, has to register the files in the
+                // Delta log that actually backs the table, and answers a commit
+                // referencing files under `<location>/data` with a 500.
+                //
+                // `DefaultLocationGenerator::new` reads these same properties, but its
+                // fallback misses the S3 Tables correction below, so choose explicitly.
+                let data_location = table_metadata
+                    .properties()
+                    .get("write.data.path")
+                    .or_else(|| table_metadata.properties().get("write.folder-storage.path"))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        // WORKAROUND: S3 Tables catalog incorrectly sets location to the
+                        // metadata file path instead of the warehouse root. Strip off the
+                        // /metadata/*.metadata.json suffix. No clear way to detect this
+                        // properly right now, so we use heuristics.
+                        let location = table_metadata.location();
+                        let corrected_location = match location.rsplit_once("/metadata/") {
+                            Some((a, b)) if b.ends_with(".metadata.json") => a,
+                            _ => location,
+                        };
+                        format!("{}/data", corrected_location)
+                    });
+                debug!(%data_location, "iceberg sink data file location");
                 let location_generator =
                     DefaultLocationGenerator::with_data_location(data_location);
 
