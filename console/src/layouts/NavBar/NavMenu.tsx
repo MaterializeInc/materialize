@@ -54,7 +54,6 @@ const getNavItems = ({
   regionSlug,
   flags,
   canViewUsage,
-  canViewQueryHistory,
   canViewAppPasswords,
   canViewLicenseKeys,
   canViewRoles,
@@ -64,7 +63,6 @@ const getNavItems = ({
   regionSlug: string;
   flags: ReturnType<typeof useFlags>;
   canViewUsage: boolean;
-  canViewQueryHistory: boolean;
   canViewAppPasswords: boolean;
   canViewLicenseKeys: boolean;
   canViewRoles: boolean;
@@ -107,14 +105,10 @@ const getNavItems = ({
               },
             ]
           : []),
-        ...(canViewQueryHistory
-          ? [
-              {
-                label: "Query History",
-                href: `/regions/${regionSlug}/query-history`,
-              },
-            ]
-          : []),
+        {
+          label: "Query History",
+          href: `/regions/${regionSlug}/query-history`,
+        },
         ...(flags["maintained-objects-ui-50"]
           ? [
               {
@@ -219,7 +213,6 @@ const useCloudNavMenuItems = ({
     flags,
     canViewUsage,
     location,
-    canViewQueryHistory: true,
     canViewAppPasswords: true,
     canViewLicenseKeys,
     canViewRoles: Boolean(isSuperUser),
@@ -240,9 +233,6 @@ const useSelfManagedNavMenuItems = () => {
     flags,
     canViewUsage: false,
     location,
-    // TODO (SangJunBak): Remove guard once we want to re-enable Query History
-    //  for self managed, see <https://github.com/MaterializeInc/cloud/issues/10755>
-    canViewQueryHistory: false,
     canViewAppPasswords: false,
     canViewLicenseKeys,
     canViewRoles: Boolean(isSuperUser),
