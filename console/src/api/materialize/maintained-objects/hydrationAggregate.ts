@@ -34,7 +34,13 @@ export interface HydrationAggregateRow {
  * `snapshot_committed` is aggregated with `bool_and`, so a source only reads as
  * committed once every replica reporting statistics agrees. A replica that has
  * not reported yet contributes no row, so a scale-up cannot flip a committed
- * source back to snapshotting.
+ * source back to snapshotting. Statistics rows can outlive their replica, so
+ * the aggregate is restricted to live replicas (keeping rows with no
+ * `replica_id`, which is how webhook sources report); a dropped replica's
+ * stale row must not pin the flag.
+ *
+ * Subsources and progress collections are excluded: the UI hides them, and
+ * they multiply the feed's cardinality several times over.
  */
 export function buildHydrationAggregateQuery() {
   const hydration = queryBuilder
@@ -48,19 +54,28 @@ export function buildHydrationAggregateQuery() {
     ])
     .groupBy("object_id");
 
+  const statuses = queryBuilder
+    .selectFrom("mz_source_statuses")
+    .where("type", "not in", ["subsource", "progress"])
+    .select(["id", "status", "error"]);
+
   const snapshotCommittedBySource = queryBuilder
-    .selectFrom("mz_source_statistics")
+    .selectFrom("mz_source_statistics as st")
+    .leftJoin("mz_cluster_replicas as r", "r.id", "st.replica_id")
+    .where((eb) =>
+      eb.or([eb("r.id", "is not", null), eb("st.replica_id", "is", null)]),
+    )
     .select((eb) => [
-      "id",
-      sql<boolean | null>`bool_and(${eb.ref("snapshot_committed")})`.as(
+      "st.id",
+      sql<boolean | null>`bool_and(${eb.ref("st.snapshot_committed")})`.as(
         "snapshotCommitted",
       ),
     ])
-    .groupBy("id");
+    .groupBy("st.id");
 
   return queryBuilder
     .selectFrom(hydration.as("h"))
-    .fullJoin("mz_source_statuses as ss", "ss.id", "h.object_id")
+    .fullJoin(statuses.as("ss"), "ss.id", "h.object_id")
     .leftJoin(snapshotCommittedBySource.as("stats"), "stats.id", "ss.id")
     .select([
       sql<string>`coalesce(h.object_id, ss.id)`.as("object_id"),
