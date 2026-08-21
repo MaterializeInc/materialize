@@ -19,6 +19,13 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.38.1
+*Released to Materialize Cloud: 2026-08-19* <br>
+*Released to Materialize Self-Managed: 2026-08-20* <br>
+
+### Bug Fixes {#v26.38.1-bug-fixes}
+- Fixed an environment on AKS losing access to Azure Blob Storage after running for a while, because the projected workload identity token was read only once at startup and Kubernetes had since rotated it; the token file is now re-read on every credential refresh.
+
 ## v26.37.0
 *Released to Materialize Cloud: 2026-08-12* <br>
 *Released to Materialize Self-Managed: 2026-08-13* <br>
