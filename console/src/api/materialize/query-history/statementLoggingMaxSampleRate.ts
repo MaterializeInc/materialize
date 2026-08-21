@@ -23,7 +23,7 @@ export const buildStatementLoggingMaxSampleRateQuery = () => {
  * `min(session statement_logging_sample_rate, this)`, so a value of `0` means statement
  * logging is off for everyone and query history can never have rows.
  *
- * Returns `null` if the variable could not be read.
+ * Returns `null` if the variable could not be read as a number.
  */
 export default async function fetchStatementLoggingMaxSampleRate({
   queryKey,
@@ -41,7 +41,7 @@ export default async function fetchStatementLoggingMaxSampleRate({
     requestOptions,
   });
 
-  const row = response.rows?.[0];
+  const rate = parseFloat(response.rows[0]?.statement_logging_max_sample_rate);
 
-  return row ? parseFloat(row.statement_logging_max_sample_rate) : null;
+  return Number.isFinite(rate) ? rate : null;
 }

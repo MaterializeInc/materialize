@@ -139,7 +139,9 @@ export function useFetchQueryHistoryUsers() {
   });
 }
 
-export function useFetchStatementLoggingMaxSampleRate() {
+export function useFetchStatementLoggingMaxSampleRate(options?: {
+  enabled?: boolean;
+}) {
   return useQuery({
     queryKey: queryHistoryQueryKeys.statementLoggingMaxSampleRate(),
     queryFn: ({ queryKey, signal }) => {
@@ -148,6 +150,7 @@ export function useFetchStatementLoggingMaxSampleRate() {
         requestOptions: { signal },
       });
     },
+    enabled: options?.enabled,
   });
 }
 

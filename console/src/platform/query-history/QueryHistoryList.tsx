@@ -107,7 +107,7 @@ const EmptyState = () => {
   );
 };
 
-export const SamplingDisabledState = () => {
+const SamplingDisabledState = () => {
   const { colors } = useTheme<MaterializeTheme>();
 
   return (
@@ -121,12 +121,12 @@ export const SamplingDisabledState = () => {
           helpText={
             <>
               The statement logging sample rate is set to zero, so no queries
-              are recorded. To start recording queries, raise the sample rate in
-              your Materialize operator&rsquo;s Helm chart values, or run{" "}
+              are recorded. Ask an administrator to raise it with{" "}
               <Text as="span" textStyle="monospace">
-                ALTER SYSTEM SET statement_logging_max_sample_rate = 0.99
+                ALTER SYSTEM SET statement_logging_max_sample_rate
               </Text>
-              .
+              . In self-managed deployments it can also be set through the
+              Materialize operator&apos;s Helm chart values.
             </>
           }
         />
@@ -205,9 +205,6 @@ export const QueryHistoryList = ({
 
   const isV0_132_0 = useEnvironmentGate("0.132.0") ?? true;
 
-  const { data: maxSampleRate, isLoading: isMaxSampleRateLoading } =
-    useFetchStatementLoggingMaxSampleRate();
-
   const {
     isError: isQueryHistoryListError,
     data: queryHistoryListData,
@@ -223,16 +220,22 @@ export const QueryHistoryList = ({
     },
   );
 
+  const isEmpty = queryHistoryListData?.rows.length === 0;
+
+  // Only needed to disambiguate an empty result set, so keep it off the path
+  // that renders rows.
+  const { data: maxSampleRate, isLoading: isMaxSampleRateLoading } =
+    useFetchStatementLoggingMaxSampleRate({ enabled: isEmpty });
+
   useSyncObjectToSearchParams(urlParamObject);
 
   const isError = isPrivilegesError || isQueryHistoryListError;
 
   const isLoading =
     isPrivilegesLoading || isQueryHistoryListLoading || isMaxSampleRateLoading;
-  const isEmpty = queryHistoryListData?.rows.length === 0;
   const isSamplingDisabled = isEmpty && maxSampleRate === 0;
-  // Nudging the user at the filter controls only makes sense when narrowing
-  // them is what could produce rows.
+  // Sampling being off, not an over-narrow filter, is what the user has to fix,
+  // so don't draw attention to the filter controls.
   const isFilterEmpty = isEmpty && !isSamplingDisabled;
 
   const isUnauthorized = isPrivilegesSuccess && !isAuthorized;
