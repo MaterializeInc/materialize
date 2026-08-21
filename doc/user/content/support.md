@@ -11,15 +11,7 @@ aliases:
 
 Whether you're building, scaling, or debugging, we're here to help.
 
-{{< note >}}
-We're retiring access to Slack and Microsoft Teams workspaces. We've introduced the messenger app to streamline and scale how users engage with support — starting with AI-first assistance and seamless escalation paths when needed.
-{{< /note >}}
-
 ## Materialize Support
-
-We offer multiple support pathways depending on your platform and plan:
-
-### Messenger App
 
 You can reach us directly from:
 - **materialize.com**
@@ -49,7 +41,7 @@ Connect with other users, share ideas, and get informal help from the [Materiali
 
 If you are an SLA Supported Customer who is experiencing an **urgent** issue,
 
-- Use the [messenger's](#messenger-app) **Report Production Outage** option for
+- Use the [messenger's](#materialize-support) **Report Production Outage** option for
   fastest response.
 
 - Alternatively, you can email `support@materialize.com`. To ensure priority
