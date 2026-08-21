@@ -250,10 +250,10 @@ mod validity;
 ///
 /// Every builtin materialized view reads `mz_internal.mz_catalog_raw`, so its dataflow only makes
 /// progress up to the catalog shard's frontier. Holding that frontier at the current time is the
-/// leader's job, and leaders only started doing it in v26.17. Write-enable such an MV against an
-/// older leader and it sits at a stale frontier and never reports caught up, which blocks
-/// promotion outright instead of merely leaving the collection cold at cut-over. We still support
-/// upgrading from before v26.17, so that leader is a real case, not a hypothetical.
+/// leader's job, and leaders only started doing it in v26.17 (PR #35402). Write-enable such an MV
+/// against an older leader and it sits at a stale frontier and never reports caught up, which
+/// blocks promotion outright instead of merely leaving the collection cold at cut-over. We still
+/// support upgrading from before v26.17, so that leader is a real case, not a hypothetical.
 const MIN_LEADER_VERSION_FOR_MIGRATED_MV_WRITES: Version = Version::new(26, 17, 0);
 
 /// A pool of pre-allocated user IDs to avoid per-DDL persist writes.
@@ -2784,8 +2784,9 @@ impl Coordinator {
                     self.ship_dataflow(df_desc, mview.cluster_id, mview.target_replica)
                         .await;
 
-                    // If this is a replacement MV, it must remain read-only until the replacement
-                    // gets applied.
+                    // A pending `REPLACEMENT FOR` MV must stay read-only until
+                    // `ALTER ... APPLY REPLACEMENT` swaps it in. Unrelated to the
+                    // builtin-migration `Replacement` mechanism below.
                     if mview.replacement_target.is_none() {
                         let gid = mview.global_id_writes();
                         if hydrate_migrated_mvs
@@ -2796,6 +2797,10 @@ impl Coordinator {
                             // writing it while read-only hydrates the MV and its dependents before
                             // cut-over. An `Evolution`-migrated MV reuses the leader's live shard
                             // and must never reach here.
+                            //
+                            // A *new* builtin MV gets no such treatment: its shard allocation
+                            // lives only in this read-only savepoint, so the promoted leader
+                            // allocates a different shard and discards whatever we wrote.
                             self.controller
                                 .compute
                                 .allow_writes_in_read_only(mview.cluster_id, gid)
@@ -5172,32 +5177,31 @@ pub fn serve(
 
                 // A collection that can't advance its write frontier in read-only mode
                 // stalls its transitive dependents too, so exclude those from the caught-up
-                // check as well. That's new builtin MVs, whose fresh shard has no writer until
-                // this deployment promotes, plus migrated MVs whenever the leader is too old for
-                // them to write. An excluded dependent may still be hydrating right after
-                // promotion, a brief blip we accept because these MVs are small and get a writer
-                // at cut-over.
+                // check as well. That's every *new* builtin collection, whose fresh shard has no
+                // writer until this deployment promotes, plus migrated MVs whenever the leader is
+                // too old for them to write. An excluded dependent may still be hydrating right
+                // after promotion, a brief blip we accept because these collections are small and
+                // get a writer at cut-over.
                 //
-                // A migrated builtin *table* needs no such treatment even though a builtin MV can
-                // read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
-                // `read_only_mode_table_worker` keeps advancing the uppers of migrated tables, so
-                // an MV over one still catches up.
-                let new_builtin_mvs = new_builtin_collections
-                    .iter()
-                    .map(|global_id| {
-                        catalog
-                            .state()
-                            .try_get_entry_by_global_id(global_id)
-                            .expect("new builtin collections have catalog entries")
-                    })
-                    .filter(|entry| entry.is_materialized_view())
-                    .map(|entry| entry.id());
+                // Seeded from all of `new_builtin_collections`, not just the MVs: a new builtin
+                // table or source has no read-only writer either (`register_table_collections`
+                // retains only *migrated* tables), so an MV reading one never advances past its
+                // empty frontier. A *migrated* table is the opposite case, even though a builtin
+                // MV can read one (`mz_clusters` joins `mz_cluster_replica_size_internal`):
+                // `read_only_mode_table_worker` keeps advancing migrated tables' uppers.
+                let new_builtin_items = new_builtin_collections.iter().map(|global_id| {
+                    catalog
+                        .state()
+                        .try_get_entry_by_global_id(global_id)
+                        .expect("new builtin collections have catalog entries")
+                        .id()
+                });
                 let frozen_migrated_mvs = migrated_storage_collections_0dt
                     .iter()
                     .copied()
                     .filter(|_| !hydrate_migrated_mvs)
                     .filter(|id| catalog.state().get_entry(id).is_materialized_view());
-                let mut todo: Vec<_> = new_builtin_mvs.chain(frozen_migrated_mvs).collect();
+                let mut todo: Vec<_> = new_builtin_items.chain(frozen_migrated_mvs).collect();
                 while let Some(item_id) = todo.pop() {
                     let entry = catalog.state().get_entry(&item_id);
                     exclude_collections.extend(entry.global_ids());

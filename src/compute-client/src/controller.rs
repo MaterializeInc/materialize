@@ -1153,26 +1153,40 @@ impl ComputeController {
 
     /// Like [`Self::allow_writes`], but takes effect even in read-only mode.
     ///
-    /// The caller must guarantee that no other environment writes the collection's output shard.
+    /// The caller must guarantee that no leader environment writes the collection's output shard.
     /// In a 0dt deployment that means a shard this environment created for itself, the replacement
     /// shard of a `Replacement`-migrated builtin collection, never one the leader is still serving
     /// from. `Evolution` migrates in place and reuses the leader's shard, so it must not reach this
     /// path. Violating the guarantee races two writers on one shard.
+    ///
+    /// NOTE: ownership is exclusive per (build version, deploy generation), not per process: the
+    /// migration shard entry naming the shard is keyed by that pair and a read-only catalog open is
+    /// a savepoint, so two read-only processes of one generation both write it. Same shape as a
+    /// multi-replica materialized view, which the self-correcting persist sink tolerates (see the
+    /// `mz_compute::sink::materialized_view` module docs).
     ///
     /// This is the compute-side counterpart to the storage controller's `force_writable` handling
     /// of migrated storage collections. Migrated builtin tables are storage collections that
     /// storage force-writes read-only; migrated builtin MVs are compute collections that only this
     /// path can force-write. Both rest on the same guarantee (this environment exclusively owns the
     /// replacement shard) but run on separate write paths, so each needs its own bypass.
+    ///
+    /// NOTE: the replica-side handler enables persist compaction process-wide on the clusterd
+    /// (`ComputeState::handle_allow_writes`), which this path is the first to trigger inside a
+    /// read-only deployment.
     pub fn allow_writes_in_read_only(
         &mut self,
         instance_id: ComputeInstanceId,
         collection_id: GlobalId,
     ) -> Result<(), CollectionUpdateError> {
-        // Every builtin eligible for the read-only bypass has a system id. A non-system id means
-        // the caller's `Replacement`-only invariant broke, so degrade to the read-only no-op (cold
-        // collection at cut-over) rather than risk writing a shard the leader still serves. Mirrors
-        // the storage-side tripwire in `StorageController::register_introspection_collection`.
+        // Every builtin eligible for this bypass has a system id, so a non-system id means the
+        // caller's `Replacement`-only invariant broke. No-op rather than risk writing a shard the
+        // leader still serves. The collection then sits in the caught-up gate on an unwritten
+        // shard and blocks promotion, which is the loud, safe direction to fail.
+        //
+        // Storage asserts the same invariant hard, in
+        // `StorageController::register_introspection_collection`. The asymmetry is deliberate: a
+        // soft panic keeps a caller bug visible in CI and Sentry without downing production.
         if self.read_only && !collection_id.is_system() {
             soft_panic_or_log!(
                 "allow_writes_in_read_only called for non-system collection {collection_id}; \
