@@ -40,10 +40,10 @@ operator:
     # -- (float) Caps the fraction of statements recorded in query history, via
     # environmentd's `statement_logging_max_sample_rate`. Statement logging
     # costs CPU on environmentd and storage for the retained history, which is
-    # noticeable on small clusters, so the default samples a fraction of
-    # statements rather than nearly all of them. Raise it for more complete
-    # query history, set it to `0` to disable statement logging entirely, or
-    # leave it empty to use environmentd's own default.
+    # noticeable on small clusters, so this samples a fraction of statements
+    # instead of environmentd's own default of 0.99. Raise it for more complete
+    # query history, set it to `0` to disable statement logging entirely, or set
+    # it to `null` to inherit environmentd's default.
     statementLoggingMaxSampleRate: 0.1
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
