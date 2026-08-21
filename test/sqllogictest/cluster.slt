@@ -218,6 +218,12 @@ bar  mz_compute_hydration_times_per_worker  mz_compute_hydration_times_per_worke
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  1  export_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  2  import_id  NULL  false
 bar  mz_compute_import_frontiers_per_worker  mz_compute_import_frontiers_per_worker_u7_primary_idx  3  worker_id  NULL  false
+bar  mz_compute_lifecycle_events_per_worker  mz_compute_lifecycle_events_per_worker_u7_primary_idx  1  export_id  NULL  false
+bar  mz_compute_lifecycle_events_per_worker  mz_compute_lifecycle_events_per_worker_u7_primary_idx  2  worker_id  NULL  false
+bar  mz_compute_lifecycle_events_per_worker  mz_compute_lifecycle_events_per_worker_u7_primary_idx  3  event  NULL  false
+bar  mz_compute_lifecycle_events_per_worker  mz_compute_lifecycle_events_per_worker_u7_primary_idx  4  occurred_at  NULL  false
+bar  mz_compute_lifecycle_events_per_worker  mz_compute_lifecycle_events_per_worker_u7_primary_idx  5  reason  NULL  true
+bar  mz_compute_lifecycle_events_per_worker  mz_compute_lifecycle_events_per_worker_u7_primary_idx  6  details  NULL  true
 bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  1  global_id  NULL  false
 bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  2  lir_id  NULL  false
 bar  mz_compute_lir_mapping_per_worker  mz_compute_lir_mapping_per_worker_u7_primary_idx  3  worker_id  NULL  false
@@ -423,7 +429,7 @@ CREATE CLUSTER test REPLICAS (foo (SIZE 'scale=1,workers=1'));
 query I
 SELECT COUNT(name) FROM mz_indexes;
 ----
-313
+320
 
 statement ok
 DROP CLUSTER test CASCADE
@@ -431,7 +437,7 @@ DROP CLUSTER test CASCADE
 query T
 SELECT COUNT(name) FROM mz_indexes;
 ----
-280
+286
 
 simple conn=mz_system,user=mz_system
 ALTER CLUSTER quickstart OWNER TO materialize

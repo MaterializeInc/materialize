@@ -357,6 +357,41 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         }),
     });
 
+pub static MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER: LazyLock<BuiltinLog> =
+    LazyLock::new(|| BuiltinLog {
+        name: "mz_compute_lifecycle_events_per_worker",
+        schema: MZ_INTROSPECTION_SCHEMA,
+        oid: oid::LOG_MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER_OID,
+        variant: LogVariant::Compute(ComputeLog::LifecycleEvent),
+        access: vec![PUBLIC_SELECT],
+        ontology: Some(Ontology {
+            entity_name: "compute_lifecycle_event_per_worker",
+            description: "Lifecycle events of each compute export, as observed by the worker \
+                          that logged them. Every event carries the wallclock instant it \
+                          occurred at, so durations between stages are differences of \
+                          `occurred_at`. The `installed`, `started` and `hydrated` events are \
+                          logged by every worker, since each worker hydrates its own fragment \
+                          of the dataflow. The write events are logged only by the worker that \
+                          maintains the sink frontier, so they appear once per export rather \
+                          than once per worker.",
+            links: &const {
+                [OntologyLink {
+                    name: "lifecycle_event_of",
+                    target: "compute_export_per_worker",
+                    properties: LinkProperties::MapsTo {
+                        source_column: "export_id",
+                        target_column: "export_id",
+                        via: None,
+                        from_type: Some(SemanticType::GlobalId),
+                        to_type: Some(SemanticType::GlobalId),
+                        note: None,
+                    },
+                }]
+            },
+            column_semantic_types: &[("export_id", SemanticType::GlobalId)],
+        }),
+    });
+
 pub static MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER: LazyLock<BuiltinLog> =
     LazyLock::new(|| BuiltinLog {
         name: "mz_compute_operator_hydration_statuses_per_worker",
