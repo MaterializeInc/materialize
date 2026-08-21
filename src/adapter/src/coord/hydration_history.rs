@@ -69,16 +69,6 @@ const DISABLED_RECHECK_INTERVAL: Duration = Duration::from_secs(60);
 /// sweep recomputes from current state.
 const MUTATION_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// How far apart per-worker installation stamps may be within one episode.
-///
-/// A dataflow is installed on every process of a replica by one broadcast, so
-/// the spread across workers is cross-process clock skew plus handling delay,
-/// not elapsed work. The bound only has to exceed plausible skew while staying
-/// under a re-install, which also restarts the processes. Erring generous is
-/// deliberate: too tight silently records nothing, while too loose records an
-/// episode whose duration looks like an outlier.
-const INSTALL_SPREAD_TOLERANCE_SECS: u64 = 60;
-
 /// Rows retracted per retention step.
 ///
 /// Retention has to be bounded: the OCC path refuses a selection larger than
@@ -155,23 +145,15 @@ impl Coordinator {
             return;
         }
 
-        // Only managed replicas expose a worker count, and without it the
-        // collector cannot tell a complete cross-worker aggregate from a partial
-        // one. A replica with introspection disabled is skipped too: its log
-        // arrangements are installed but never populated, so a subscribe would
-        // read a sealed, empty collection and find nothing, every sweep.
+        // A replica with introspection disabled is skipped: its log arrangements
+        // are installed but never populated, so a subscribe would read a sealed,
+        // empty collection and find nothing, every sweep.
         let replicas = self
             .catalog()
             .user_cluster_replicas()
             .filter(|replica| replica.config.compute.logging.enabled())
-            .filter_map(|replica| {
-                replica
-                    .config
-                    .location
-                    .workers()
-                    .map(|workers| (replica.cluster_id, replica.replica_id, workers))
-            })
-            .sorted_by_key(|(_, replica_id, _)| *replica_id)
+            .map(|replica| (replica.cluster_id, replica.replica_id))
+            .sorted_by_key(|(_, replica_id)| *replica_id)
             .collect_vec();
 
         let catalog = self.owned_catalog();
@@ -185,15 +167,15 @@ impl Coordinator {
             .map(|replica| (catalog_server.id, replica.replica_id));
 
         let replica = next_replica(&replicas, self.hydration_history_replica_cursor);
-        if let Some((_, replica_id, _)) = replica {
+        if let Some((_, replica_id)) = replica {
             self.hydration_history_replica_cursor = Some(replica_id);
         }
         let mut sweep = self.new_sweep(catalog, retention);
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         let handle = task::spawn(|| "hydration_history_sweep", async move {
-            if let Some((cluster_id, replica_id, workers)) = replica {
-                sweep.collect(cluster_id, replica_id, workers).await;
+            if let Some((cluster_id, replica_id)) = replica {
+                sweep.collect(cluster_id, replica_id).await;
             }
 
             // Retention runs even when collection failed above. A replica that
@@ -251,92 +233,66 @@ impl Coordinator {
 /// returns a replica but degenerates the rotation, revisiting some replicas and
 /// starving others.
 fn next_replica(
-    replicas: &[(ClusterId, ReplicaId, usize)],
+    replicas: &[(ClusterId, ReplicaId)],
     cursor: Option<ReplicaId>,
-) -> Option<(ClusterId, ReplicaId, usize)> {
+) -> Option<(ClusterId, ReplicaId)> {
     replicas
         .iter()
-        .find(|(_, replica_id, _)| cursor.is_none_or(|cursor| *replica_id > cursor))
+        .find(|(_, replica_id)| cursor.is_none_or(|cursor| *replica_id > cursor))
         .or_else(|| replicas.first())
         .copied()
 }
 
 /// The rows this replica has completed that the history table is missing.
 ///
-/// `workers` is the replica's total worker count, and an object is only
-/// considered once every worker has reported it hydrated.
+/// Reads worker 0 only, which loses nothing. A worker stamps `hydrated_at` when the
+/// reported output frontier passes the as_of, and that frontier moves only as
+/// timely's dataflow-wide progress tracking allows, so no worker sees it advance
+/// while another still holds capabilities below it. Worker 0's stamp therefore
+/// already accounts for the slowest worker, and there is no need to know the worker
+/// count or to wait for a complete set of rows.
 ///
-/// Unlike retention this needs no batch bound. The result is at most the
-/// replica's not-yet-recorded dataflows, which is bounded by the objects
-/// installed on one replica.
-fn collect_sql(
-    cluster_id: ClusterId,
-    replica_id: ReplicaId,
-    workers: usize,
-    cutoff: &str,
-) -> String {
+/// Reading one worker also keeps the two stamps on one clock. Each process anchors
+/// its logging clock at its own `SystemTime`, so comparing `installed_at` from one
+/// worker with `hydrated_at` from another measures skew as much as elapsed time.
+///
+/// Needs no batch bound. The result is at most the replica's not-yet-recorded
+/// dataflows.
+fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> String {
     // Interpolating into SQL is safe here: the ids are catalog-internal and the
     // cutoff is an RFC 3339 timestamp we formatted ourselves. Nothing in this
     // query comes from a user.
-    // NOTE: We group by `export_id`, the runtime dataflow, not by catalog item.
-    // A materialized view can own several `GlobalId`s at once, because a
-    // replacement adds the new dataflow's id while the old one still serves
-    // reads. Grouping by item would mix both dataflows' worker rows, present
-    // twice the expected per-worker count, and record nothing for either.
     //
-    // NOTE: The installation-spread bound rejects worker rows that cannot belong
-    // to one install, without requiring the processes' clocks to agree with each
-    // other. Each process anchors its logging clock at its own `SystemTime`, so
-    // comparing one worker's `installed_at` against another's `hydrated_at`
-    // measures clock skew as much as elapsed time: on a `scale>1` replica, skew
-    // larger than the hydration itself would reject a complete episode, and
-    // would keep rejecting it, since the log values never change. Comparing
-    // installations to each other instead separates "one broadcast install,
-    // clocks slightly off" from "rows from either side of a re-install".
-    //
-    // `started_at` is only reported when every worker observed a start. An
-    // import-free dataflow is never suspended, so no start is observed, and a
-    // partially observed start would otherwise be presented as the episode's,
-    // which is a value nobody measured.
-    //
-    // The outer aggregation collapses to the table's key. Per-dataflow grouping
-    // can otherwise emit two rows for one item, and two dataflows installed in
-    // the same instant would collide on `(object_id, replica_id, installed_at)`.
+    // NOTE: The grouping is not cross-worker. We key rows by item id, while the
+    // log keys them by global id, and one item can own several global ids at once,
+    // as a materialized view being replaced does. Each has its own dataflow and so
+    // its own log row, and a replica that installs both in the same instant would
+    // otherwise write this table's identity twice in one batch.
     format!(
         "SELECT
-            c.object_id,
+            ids.id AS object_id,
             '{cluster_id}'::text AS cluster_id,
             '{replica_id}'::text AS replica_id,
-            c.installed_at,
-            min(c.started_at) AS started_at,
-            max(c.finished_at) AS finished_at,
+            t.installed_at,
+            min(t.started_at) AS started_at,
+            min(t.hydrated_at) AS finished_at,
             'hydrated'::text AS status
-        FROM (
-            SELECT
-                ids.id AS object_id,
-                min(t.installed_at) AS installed_at,
-                CASE WHEN count(t.started_at) = {workers} THEN min(t.started_at) END AS started_at,
-                max(t.hydrated_at) AS finished_at
-            FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
-            JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
-            JOIN mz_catalog.mz_objects AS o ON o.id = ids.id
-            WHERE ids.id LIKE 'u%'
-              AND o.type IN ('index', 'materialized-view')
-            GROUP BY t.export_id, ids.id
-            HAVING count(*) = {workers}
-               AND count(*) = count(t.hydrated_at)
-               AND max(t.installed_at) - min(t.installed_at)
-                   <= INTERVAL '{INSTALL_SPREAD_TOLERANCE_SECS} seconds'
-        ) AS c
-        WHERE c.finished_at >= TIMESTAMPTZ '{cutoff}'
+        FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
+        JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
+        JOIN mz_catalog.mz_objects AS o ON o.id = ids.id
+        WHERE t.worker_id = 0
+          AND t.hydrated_at IS NOT NULL
+          AND t.hydrated_at >= TIMESTAMPTZ '{cutoff}'
+          AND ids.id LIKE 'u%'
+          AND o.type IN ('index', 'materialized-view')
           AND NOT EXISTS (
               SELECT 1
               FROM mz_internal.mz_object_hydration_history AS h
-              WHERE h.object_id = c.object_id
+              WHERE h.object_id = ids.id
                 AND h.replica_id = '{replica_id}'::text
-                AND h.installed_at = c.installed_at
+                AND h.installed_at = t.installed_at
           )
-        GROUP BY c.object_id, c.installed_at"
+        GROUP BY ids.id, t.installed_at"
     )
 }
 
@@ -376,8 +332,8 @@ struct Sweep {
 
 impl Sweep {
     /// Appends this replica's completed episodes that the table is missing.
-    async fn collect(&mut self, cluster_id: ClusterId, replica_id: ReplicaId, workers: usize) {
-        let sql = collect_sql(cluster_id, replica_id, workers, &self.cutoff);
+    async fn collect(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
+        let sql = collect_sql(cluster_id, replica_id, &self.cutoff);
         self.run(
             "collect",
             cluster_id,
@@ -523,10 +479,7 @@ mod tests {
     #[mz_ore::test]
     fn replica_sweep_advances_and_wraps() {
         let cluster = ClusterId::user(1).expect("valid cluster ID");
-        let replicas = [
-            (cluster, ReplicaId::User(1), 1),
-            (cluster, ReplicaId::User(3), 4),
-        ];
+        let replicas = [(cluster, ReplicaId::User(1)), (cluster, ReplicaId::User(3))];
 
         assert_eq!(next_replica(&replicas, None), Some(replicas[0]));
         assert_eq!(
@@ -540,29 +493,18 @@ mod tests {
         assert_eq!(next_replica(&[], None), None);
     }
 
-    /// The replica's worker count has to reach both places that gate on it, the
-    /// completeness check and the start aggregation. Interpolating it into one
-    /// but not the other silently records partial episodes.
+    /// Cross-worker stamps are not comparable, since each process anchors its
+    /// logging clock at its own `SystemTime`. The query must therefore stay on one
+    /// worker, and must not grow a cross-worker aggregate again.
     #[mz_ore::test]
-    fn collect_uses_worker_count_everywhere() {
+    fn collect_reads_one_worker() {
         let sql = collect_sql(
             ClusterId::user(1).expect("valid cluster ID"),
             ReplicaId::User(2),
-            4,
             "1970-01-01T00:00:00+00:00",
         );
-        assert!(sql.contains("count(*) = 4"), "{sql}");
-        assert!(
-            sql.contains("CASE WHEN count(t.started_at) = 4 THEN min(t.started_at) END"),
-            "{sql}"
-        );
-        // The spread bound compares installations to each other. Comparing an
-        // installation against a completion would measure cross-process clock
-        // skew and reject complete episodes on multi-process replicas.
-        assert!(
-            sql.contains("max(t.installed_at) - min(t.installed_at)"),
-            "{sql}"
-        );
-        assert!(!sql.contains("min(t.hydrated_at)"), "{sql}");
+        assert!(sql.contains("t.worker_id = 0"), "{sql}");
+        assert!(!sql.contains("count("), "{sql}");
+        assert!(!sql.contains("max("), "{sql}");
     }
 }
