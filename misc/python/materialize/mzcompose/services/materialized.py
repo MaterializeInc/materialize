@@ -123,6 +123,7 @@ class Materialized(Service):
         builtin_probe_cluster_replication_factor: int | None = None,
         listeners_config_path: str | None = None,
         config_sync_file_path: str | None = None,
+        config_sync_loop_interval: str = "100ms",
         support_external_clusterd: bool = False,
         networks: (
             dict[str, dict[str, list[str]]] | dict[str, dict[str, str]] | None
@@ -391,7 +392,13 @@ class Materialized(Service):
             # assert os.path.exists(str(config_sync_file_path))
             volumes.append(f"{config_sync_file_path}:/config_sync.json")
             environment.append("MZ_CONFIG_SYNC_FILE_PATH=/config_sync.json")
-            environment.append("MZ_CONFIG_SYNC_LOOP_INTERVAL=100ms")
+            # The interval is a startup argument, so a test that needs the
+            # periodic reconcile held still across an assertion sets it long and
+            # restarts. Only the loop's first tick then runs, immediately on
+            # startup.
+            environment.append(
+                f"MZ_CONFIG_SYNC_LOOP_INTERVAL={config_sync_loop_interval}"
+            )
 
         if image_version is None or image_version >= "v0.140.0-dev":
             if "MZ_CI_LICENSE_KEY" in os.environ:

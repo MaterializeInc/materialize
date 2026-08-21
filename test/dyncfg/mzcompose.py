@@ -298,13 +298,18 @@ def workflow_default(c: Composition) -> None:
             # Create-time resolution: a cluster created while a segment already
             # matches it folds the overrides into its create transaction, so its
             # replica's first configuration carries them. This exercises that path,
-            # which the cluster above never reaches. Asserted without a sleep, but
-            # the sync loop also reconciles every 100ms here, so what this pins down
-            # is that the create path resolves and commits the overrides rather than
-            # their exact ordering against the replica's first configuration.
+            # which the cluster above never reaches.
             #
-            # The fold resolves from the file as of the last sync tick, hence the
-            # sleep after the write.
+            # The periodic reconcile has to be held still for the assertion to be
+            # about the create path at all. It runs every 100ms by default here and
+            # would populate the same rows on its own, so the assertion would pass
+            # with the create-time fold deleted -- while a render-frozen parameter
+            # would already have been missed. The interval is a startup argument, so
+            # it is set long and materialized restarted: the loop's first tick fires
+            # immediately, which is what installs the shared frontend the fold needs
+            # and what reconciles the objects that already exist, and the next tick
+            # is an hour away. Every row asserted for `dyncfg_scoped_2` below can
+            # therefore only have come from its own create transaction.
             #
             # The two segments are widened with `startsWith` rather than a longer
             # exact list, which is the case an exact list cannot express: the
@@ -330,35 +335,51 @@ def workflow_default(c: Composition) -> None:
             }
 
             write_config(config_file, system_params_4)
-            c.sleep(2)
-            c.testdrive(
-                input=dedent(f"""
-                    $ postgres-execute connection=mz_system
-                    CREATE CLUSTER dyncfg_scoped_2 SIZE 'scale=1,workers=1'
+            with c.override(
+                Materialized(
+                    config_sync_file_path=str(config_file),
+                    config_sync_loop_interval="1h",
+                )
+            ):
+                c.kill("materialized")
+                c.up("materialized")
+                # Long enough for the restarted loop's immediate first tick to
+                # read `system_params_4`, push it, and install the frontend. If it
+                # has not, the fold is skipped and the rows below are simply
+                # absent, which fails loudly rather than flakily.
+                c.sleep(10)
+                assert_environment_wide_baseline(c)
+                c.testdrive(
+                    input=dedent(f"""
+                        $ postgres-execute connection=mz_system
+                        CREATE CLUSTER dyncfg_scoped_2 SIZE 'scale=1,workers=1'
 
-                    > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
-                    dyncfg_scoped {CLUSTER_PARAM} true
-                    dyncfg_scoped_2 {CLUSTER_PARAM} true
+                        > SELECT c.name, p.name, p.value FROM mz_internal.mz_cluster_system_parameters p JOIN mz_clusters c ON c.id = p.cluster_id ORDER BY c.name, p.name
+                        dyncfg_scoped {CLUSTER_PARAM} true
+                        dyncfg_scoped_2 {CLUSTER_PARAM} true
 
-                    > SELECT r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'dyncfg_scoped_2'
-                    r1 {REPLICA_PARAM} false
+                        > SELECT r.name, p.name, p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas r ON r.id = p.replica_id JOIN mz_clusters c ON c.id = r.cluster_id WHERE c.name = 'dyncfg_scoped_2'
+                        r1 {REPLICA_PARAM} false
 
-                    # `scoped-replicas` now matches every replica of both
-                    # clusters, but `scoped-r1` still precedes it, so `r1` of
-                    # `dyncfg_scoped` is still decided at the environment-wide
-                    # value. Widening a later rule must not take a parameter away
-                    # from the narrower rule ahead of it.
-                    > SELECT c.name, r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name LIKE 'dyncfg_scoped%' ORDER BY c.name, r.name
-                    dyncfg_scoped r1 env-wide
-                    dyncfg_scoped r2 false
-                    dyncfg_scoped_2 r1 false
-                """),
-            )
+                        # `scoped-replicas` now matches every replica of both
+                        # clusters, but `scoped-r1` still precedes it, so `r1` of
+                        # `dyncfg_scoped` is still decided at the environment-wide
+                        # value. Widening a later rule must not take a parameter away
+                        # from the narrower rule ahead of it.
+                        > SELECT c.name, r.name, coalesce(p.value, 'env-wide') FROM mz_cluster_replicas r JOIN mz_clusters c ON c.id = r.cluster_id LEFT JOIN mz_internal.mz_replica_system_parameters p ON p.replica_id = r.id AND p.name = '{REPLICA_PARAM}' WHERE c.name LIKE 'dyncfg_scoped%' ORDER BY c.name, r.name
+                        dyncfg_scoped r1 env-wide
+                        dyncfg_scoped r2 false
+                        dyncfg_scoped_2 r1 false
+                    """),
+                )
 
             # Dropping the segments and rules removes the overrides, returning every
-            # object to the environment-wide value.
+            # object to the environment-wide value. Back on the short interval, since
+            # this one is the periodic reconcile's job.
             write_config(config_file, system_params_2)
-            c.sleep(2)
+            c.kill("materialized")
+            c.up("materialized")
+            c.sleep(5)
             c.testdrive(
                 input=dedent("""
                     > SELECT count(*) FROM mz_internal.mz_cluster_system_parameters
