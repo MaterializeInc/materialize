@@ -22,6 +22,7 @@ mod logging;
 mod metrics;
 mod render;
 pub mod shared_trace;
+pub mod sharing;
 /// MV sink machinery, exposed for benchmarks.
 #[cfg(feature = "bench")]
 pub mod sink;
