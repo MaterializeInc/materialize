@@ -137,6 +137,83 @@ fn handles_available_after_insert_gone_after_remove() {
     assert!(registry.handles(&id, 0).is_none());
 }
 
+#[mz_ore::test]
+fn alias_shares_the_target_slot() {
+    let target = GlobalId::User(1);
+    let alias = GlobalId::User(2);
+    let registry = publish_index(target, test_rows());
+    registry.register_waker(0, thread::current());
+    let _ = registry.take_dirty(0);
+
+    assert!(registry.publish_alias(alias, target, 0, 1));
+    // Registering wakes readers waiting under the alias, and both names read the same rows.
+    assert_eq!(registry.take_dirty(0), BTreeSet::from([alias]));
+    let (oks, _) = registry.handles(&alias, 0).expect("alias published");
+    assert_eq!(
+        read_rows(&oks, Timestamp::from(1_u64)),
+        expected_rows(&test_rows())
+    );
+
+    // A seal on the target reaches readers waiting under either name.
+    registry.notify(target, 0);
+    assert_eq!(registry.take_dirty(0), BTreeSet::from([target, alias]));
+
+    // The alias outlives the target; removing the alias removes only the alias.
+    registry.remove(&target);
+    assert!(registry.handles(&target, 0).is_none());
+    assert!(registry.handles(&alias, 0).is_some());
+    registry.remove(&alias);
+    assert!(registry.handles(&alias, 0).is_none());
+}
+
+#[mz_ore::test]
+fn alias_refused_once_a_reader_holds_its_own_point() {
+    let target = GlobalId::User(1);
+    let alias = GlobalId::User(2);
+    let registry = publish_index(target, test_rows());
+
+    // A reader that bound the alias id first holds an unbacked point that only a publisher into
+    // it can back, so aliasing has to fall back to publishing.
+    let _reader_slot = registry.get_or_create(alias, 0, 1);
+    assert!(!registry.publish_alias(alias, target, 0, 1));
+    // Nor can an alias be registered for a target that has no slot on this worker.
+    assert!(!registry.publish_alias(GlobalId::User(3), GlobalId::User(9), 0, 1));
+}
+
+#[mz_ore::test]
+fn alias_frontiers_follow_the_target_then_the_aliases_meet() {
+    let target = GlobalId::User(1);
+    let alias_a = GlobalId::User(2);
+    let alias_b = GlobalId::User(3);
+    let registry = publish_index(target, test_rows());
+    assert!(registry.publish_alias(alias_a, target, 0, 1));
+    assert!(registry.publish_alias(alias_b, target, 0, 1));
+    let writer_logical = |id: &GlobalId| {
+        registry
+            .published_diagnostics(id, 0)
+            .expect("published")
+            .writer_logical
+    };
+    let at = |t: u64| Antichain::from_elem(Timestamp::from(t));
+
+    // While the target lives, only its notes reach the shared point.
+    registry.note_allow_compaction(alias_a, 0, &at(10));
+    assert_eq!(writer_logical(&alias_a), None);
+    registry.note_allow_compaction(target, 0, &at(5));
+    assert_eq!(writer_logical(&alias_a), Some(at(5)));
+    registry.note_allow_compaction(alias_b, 0, &at(20));
+    assert_eq!(writer_logical(&target), Some(at(5)));
+
+    // Once the target drops, the meet of the aliases' notes governs the point.
+    registry.remove(&target);
+    assert_eq!(writer_logical(&alias_a), Some(at(10)));
+    registry.note_allow_compaction(alias_a, 0, &at(30));
+    assert_eq!(writer_logical(&alias_b), Some(at(20)));
+    registry.remove(&alias_b);
+    registry.note_allow_compaction(alias_a, 0, &at(40));
+    assert_eq!(writer_logical(&alias_a), Some(at(40)));
+}
+
 /// Walks a snapshot of `handle` at `at` into a sorted `Vec` of owned (key, value) rows,
 /// keeping only entries whose accumulated diff at `at` is nonzero.
 ///
