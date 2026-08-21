@@ -19,6 +19,26 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.39.0
+*Released to Materialize Cloud: 2026-08-27* <br>
+*Released to Materialize Self-Managed: 2026-08-28* <br>
+
+### Improvements {#v26.39-improvements}
+- **Object dependency graph in the system catalog**: A new `mz_internal.mz_object_graph_edges` view lists the dependency edges between maintained objects, including the edges linking a source to its subsources and tables.
+- **MCP-first connect experience in the Console**: The Console's connect modal is now a drawer with guided setup for MCP clients, external tools such as DBeaver and dbt, and the `psql` terminal command, including inline app password creation.
+
+### Agent Skills {#v26.39-agent-skills}
+- **materialize-debug-freshness**: A new skill that diagnoses why an object is behind wall-clock time, sweeping source and sink status, attributing lag hop by hop, and ranking the dataflows and operators responsible.
+
+### Bug Fixes {#v26.39-bug-fixes}
+- Fixed crashes and coordinator stalls when planning queries with long `JOIN` chains or long chains of CTEs.
+- Fixed a `column "table_func_0" does not exist` error when a table function in the `SELECT` list is combined with `GROUP BY`, aggregates, or `HAVING`.
+- Fixed out-of-memory crashes caused by large `SELECT` results over the HTTP and WebSocket APIs and by slow-reading `SUBSCRIBE` clients, with results now streaming incrementally over the WebSocket API, the result size limit now enforced on the HTTP API, and an error returned when a `SUBSCRIBE` client falls too far behind.
+- Fixed hangs where a `SUBSCRIBE` over a query the optimizer folds to a constant would never end, and stopped dataflows from retaining source collections none of their outputs read.
+- Fixed filter pushdown skipping data that matched a query, which could return too few rows, and fixed replica crashes when reading data with legacy or malformed statistics.
+- Fixed SQL Server sources reporting inflated ingestion lag during the initial snapshot.
+- `CREATE CONNECTION`, `ALTER CONNECTION`, and `VALIDATE CONNECTION` for AWS PrivateLink now reject a `SERVICE NAME` that is not an AWS VPC endpoint service name, such as a DNS hostname, instead of failing later with a misleading missing-availability-zones error.
+
 ## v26.37.0
 *Released to Materialize Cloud: 2026-08-12* <br>
 *Released to Materialize Self-Managed: 2026-08-13* <br>
