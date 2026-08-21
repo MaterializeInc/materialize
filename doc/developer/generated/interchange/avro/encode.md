@@ -1,6 +1,6 @@
 ---
 source: src/interchange/src/avro/encode.rs
-revision: 57cbba8867
+revision: f0cdedca04
 ---
 
 # interchange::avro::encode

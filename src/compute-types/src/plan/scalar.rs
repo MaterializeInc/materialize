@@ -24,7 +24,7 @@ use mz_expr::{
 use mz_ore::str::separated;
 use mz_ore::treat_as_equal::TreatAsEqual;
 use mz_repr::explain::ScalarOps;
-use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena};
+use mz_repr::{Datum, ReprColumnType, ReprScalarType, Row, RowArena, StableRow};
 use serde::{Deserialize, Serialize};
 
 /// Scalar expressions, as appear in MFPs.
@@ -35,7 +35,10 @@ pub enum LirScalarExpr {
     Column(usize, TreatAsEqual<Option<Arc<str>>>),
     /// A literal value.
     /// (Stored as a row, because we can't own a Datum)
-    Literal(Result<Row, EvalError>, ReprColumnType),
+    Literal(
+        #[serde(with = "literal_value_serde")] Result<StableRow, EvalError>,
+        ReprColumnType,
+    ),
     /// A function call that takes one expression as an argument.
     CallUnary {
         /// Function. This instantiation stores no MirScalarExpr.
@@ -75,6 +78,58 @@ pub enum LirScalarExpr {
     },
 }
 
+pub use literal_value_serde::LiteralValue;
+
+/// Serializes `LirScalarExpr::Literal`'s value through the named
+/// [`LiteralValue`] mirror enum instead of std `Result`.
+///
+/// The stable LIR schema registry maps each container name to a single
+/// format, and `Result` would clash with the differently instantiated
+/// `Result` in `LirRelationNode::Constant`. The mirror has the same variant
+/// order as `Result`, so the encoded bytes are unchanged.
+mod literal_value_serde {
+    use mz_expr::{EvalError, StableEvalError, StableEvalErrorRef};
+    use mz_repr::StableRow;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    /// The serialized form of `LirScalarExpr::Literal`'s value.
+    #[derive(Debug, Serialize, Deserialize)]
+    pub enum LiteralValue {
+        /// See `Result::Ok`.
+        Ok(StableRow),
+        /// See `Result::Err`.
+        Err(StableEvalError),
+    }
+
+    /// Borrowing mirror of [`LiteralValue`], to serialize without cloning.
+    #[derive(Serialize)]
+    #[serde(rename = "LiteralValue")]
+    enum LiteralValueRef<'a> {
+        Ok(&'a StableRow),
+        Err(StableEvalErrorRef<'a>),
+    }
+
+    pub fn serialize<S: Serializer>(
+        value: &Result<StableRow, EvalError>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let mirror = match value {
+            Ok(row) => LiteralValueRef::Ok(row),
+            Err(err) => LiteralValueRef::Err(StableEvalErrorRef(err)),
+        };
+        mirror.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Result<StableRow, EvalError>, D::Error> {
+        Ok(match LiteralValue::deserialize(deserializer)? {
+            LiteralValue::Ok(row) => Ok(row),
+            LiteralValue::Err(err) => Err(err.0),
+        })
+    }
+}
+
 impl LirScalarExpr {
     /// Generates an LSE representing the given column reference.
     pub fn column(c: usize) -> Self {
@@ -87,7 +142,7 @@ impl LirScalarExpr {
             scalar_type: typ,
             nullable: matches!(res, Ok(Datum::Null)),
         };
-        let row = res.map(|datum| Row::pack_slice(&[datum]));
+        let row = res.map(|datum| StableRow(Row::pack_slice(&[datum])));
         LirScalarExpr::Literal(row, typ)
     }
 
@@ -608,7 +663,7 @@ impl From<&LirScalarExpr> for MirScalarExpr {
         match value {
             Column(c, treat_as_equal) => MirScalarExpr::Column(c.clone(), treat_as_equal.clone()),
             Literal(row, repr_column_type) => {
-                MirScalarExpr::Literal(row.clone(), repr_column_type.clone())
+                MirScalarExpr::Literal(row.clone().map(|row| row.0), repr_column_type.clone())
             }
             CallUnary { func, expr } => MirScalarExpr::CallUnary {
                 func: func.map_expr(),
@@ -641,7 +696,7 @@ impl TryFrom<&MirScalarExpr> for LirScalarExpr {
         match value {
             Column(c, treat_as_equal) => Ok(LirScalarExpr::Column(*c, treat_as_equal.clone())),
             Literal(row, repr_column_type) => Ok(LirScalarExpr::Literal(
-                row.clone(),
+                row.clone().map(StableRow),
                 repr_column_type.clone(),
             )),
             CallUnary { func, expr } => Ok(LirScalarExpr::CallUnary {

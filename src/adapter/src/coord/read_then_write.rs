@@ -99,6 +99,16 @@ impl Coordinator {
             conn_id: conn_id.clone(),
             session_uuid,
             channel: tx,
+            backlog_accounting: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::active_compute_sink::SubscribeBacklogAccounting::default(),
+            )),
+            // This internal subscribe is drained by the coordinator for OCC
+            // read-then-write, not by a slow external client, so the slow-client
+            // backlog budget must not apply. A large read-then-write read set
+            // (e.g. an UPDATE that rewrites every row of a big table)
+            // legitimately exceeds the budget, so bounding it here would
+            // spuriously retire the statement with `SubscribeFellBehind`.
+            max_buffered_bytes: usize::MAX,
             emit_progress: true, // We need progress updates for OCC
             as_of,
             arity,
@@ -282,7 +292,7 @@ pub(crate) fn validate_read_then_write_dependencies(
                     }
                     Source | Secret | Connection => false,
                     // Cannot select from sinks or indexes.
-                    Sink | Index => unreachable!(),
+                    Sink | MetricSink | Index => unreachable!(),
                     Table => {
                         if !id.is_user() {
                             // We can't read from non-user tables

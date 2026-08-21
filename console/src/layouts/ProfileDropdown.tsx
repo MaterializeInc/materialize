@@ -40,6 +40,7 @@ import {
   type User,
 } from "~/external-library-wrappers/frontegg";
 import { type AuthContextProps } from "~/external-library-wrappers/oidc";
+import { SUPPORT_CHAT_URL } from "~/externalUrls";
 import { AUTH_ROUTES } from "~/fronteggRoutes";
 import { useSelfManagedProfile } from "~/hooks/useSelfManagedProfile";
 import { NAV_HORIZONTAL_SPACING, NAV_HOVER_STYLES } from "~/layouts/constants";
@@ -492,7 +493,7 @@ const CommunityMenuItems = () => {
       </MenuItem>
       <MenuItem
         as={RouterLink}
-        to="https://materialize.com/s/chat"
+        to={SUPPORT_CHAT_URL}
         fontWeight="medium"
         target="_blank"
       >

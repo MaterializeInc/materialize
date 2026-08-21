@@ -35,7 +35,6 @@ mz-sql = { path = "../sql" }
 openssl.workspace = true
 postgres.workspace = true
 tokio.workspace = true
-tokio-stream.workspace = true
 tokio-openssl.workspace = true
 tokio-util = { workspace = true, features = ["codec"] }
 tokio-metrics.workspace = true

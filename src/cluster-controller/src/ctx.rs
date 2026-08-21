@@ -219,9 +219,10 @@ pub struct RefreshWindowInputs {
 /// This is the input every strategy reads. Unmanaged clusters are not
 /// controller-owned and are not represented here.
 ///
-/// The `size`, `replication_factor`, `availability_zones`, and `logging` fields
-/// together are the realized config the cluster is currently serving. The
-/// implicit baseline desires `replication_factor` replicas at that shape.
+/// The `size`, `replication_factor`, `availability_zones`, `logging`, and
+/// `arrangement_compression` fields together are the realized config the
+/// cluster is currently serving. The implicit baseline desires
+/// `replication_factor` replicas at that shape.
 #[derive(Clone, Debug)]
 pub struct ClusterState {
     pub cluster_id: ClusterId,

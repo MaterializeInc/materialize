@@ -48,7 +48,7 @@ use mz_storage_client::client::TableData;
 use mz_storage_types::sources::Timeline;
 use qcell::{QCell, QCellOwner};
 use timely::progress::Timestamp as _;
-use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{self, UnboundedSender};
 use tokio::sync::watch;
 use uuid::Uuid;
 
@@ -1069,8 +1069,14 @@ impl InProgressRows {
     }
 }
 
-/// A channel of batched rows.
-pub type RowBatchStream = UnboundedReceiver<PeekResponseUnary>;
+/// A stream of batched rows delivered to a client writer.
+///
+/// This is a boxed stream, not a bare channel receiver, so the coordinator can
+/// insert an adapter between itself and the client writer. The SUBSCRIBE path
+/// wraps the receiver in a byte-accounting `map` whose closure type cannot be
+/// named, so it has to be boxed. Consumers box the receiver into a
+/// `RecordFirstRowStream` regardless, so this adds no allocation.
+pub type RowBatchStream = Box<dyn futures::Stream<Item = PeekResponseUnary> + Unpin + Send + Sync>;
 
 /// Part of statement lifecycle. These are timestamps that come from the Adapter frontend
 /// (`mz-pgwire`) part of the lifecycle.
@@ -1207,6 +1213,29 @@ impl TransactionStatus {
             | TransactionStatus::Started(_)
             | TransactionStatus::Failed(_) => false,
         }
+    }
+
+    /// Whether a statement other than the current one can belong to this
+    /// transaction, so committing here would commit more than this statement.
+    ///
+    /// This is [`Self::is_in_multi_statement_transaction`] widened to cover the
+    /// `Started` trap. An extended-protocol pipeline stays `Started` from its
+    /// first statement until `Sync`, so a `Started` transaction already holding
+    /// ops has a pipeline accumulating in it, and a statement running now runs
+    /// alongside those ops.
+    ///
+    /// Callers must evaluate this before the current statement stages ops of
+    /// its own. Afterwards `contains_ops` reports the statement's own ops and
+    /// every statement looks like it shares a transaction.
+    ///
+    /// Reports true for a `Failed` transaction that holds ops, since
+    /// `contains_ops` reads through to the inner transaction in that state.
+    /// Callers that treat a failed transaction as one a statement may run in
+    /// need their own check, because pgwire admits only `COMMIT` and `ROLLBACK`
+    /// once a transaction has failed and so nothing else can observe the
+    /// difference.
+    pub fn may_share_transaction_with_other_statements(&self) -> bool {
+        self.is_in_multi_statement_transaction() || self.contains_ops()
     }
 
     /// Whether we are in a multi-statement transaction, AND the query is immediate.

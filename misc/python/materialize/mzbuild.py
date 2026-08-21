@@ -258,9 +258,9 @@ class RepositoryDetails:
 
 
 @cache
-def docker_images() -> frozenset[str]:
+def docker_images() -> set[str]:
     """List the Docker images available on the local machine."""
-    return frozenset(
+    return set(
         spawn.capture(["docker", "images", "--format", "{{.Repository}}:{{.Tag}}"])
         .strip()
         .split("\n")
@@ -1077,6 +1077,8 @@ class ResolvedImage:
                 self._build_locked(prep, push)
             finally:
                 fcntl.flock(lock_file, fcntl.LOCK_UN)
+        self.acquired = True
+        docker_images().add(self.spec())
 
     def _build_locked(
         self, prep: dict[type[PreImage], Any], push: bool = False
@@ -1201,6 +1203,7 @@ class ResolvedImage:
                         stdout=sys.stderr.buffer,
                     )
                     self.acquired = True
+                    docker_images().add(self.spec())
                     break
                 except subprocess.CalledProcessError:
                     if retry < max_retries:

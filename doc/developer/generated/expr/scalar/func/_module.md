@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-revision: f4650d00b
+revision: 32c1e1d399
 ---
 
 # mz-expr::scalar::func

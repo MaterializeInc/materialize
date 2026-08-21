@@ -254,9 +254,10 @@ where
         // seqno hold). The real invariant we want to protect here is that the
         // hold is >= the seqno_since, so validate that instead of anything more
         // specific.
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             reader_state.seqno >= seqno_since,
-            "{} vs {}",
+            "leased reader {} registered with seqno hold {} below the shard's seqno_since {}",
+            reader_id,
             reader_state.seqno,
             seqno_since,
         );
@@ -514,7 +515,7 @@ where
                     info!(
                         "compare_and_append received an indeterminate error, retrying in {:?}: {}",
                         retry.next_sleep(),
-                        err
+                        err.display_with_causes()
                     );
                     if indeterminate.is_none() {
                         indeterminate = Some(err);

@@ -787,6 +787,9 @@ steps:
           queue: linux-x86_64
         env:
           CI: "true"
+          # The kind cluster setup hands repository paths to the host Docker
+          # daemon. See CI_BUILDER_FIXED_WORKDIR in bin/ci-builder.
+          CI_BUILDER_FIXED_WORKDIR: "0"
         coverage: skip
         sanitizer: skip
         ci_glue_exempt: true

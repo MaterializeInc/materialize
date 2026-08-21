@@ -421,7 +421,7 @@ CREATE INDEX database.schema.view_a_idx IN CLUSTER cluster_a ON view_a (col_a);
 
 As new data arrives, indexes keep view results **incrementally updated** in
 memory within a [cluster](/concepts/clusters/). Indexes help optimize query
-performance and make queries against views fast and computationally free.
+performance and make queries against views fast since the results are already calculated.
 
 #### Materialized views
 

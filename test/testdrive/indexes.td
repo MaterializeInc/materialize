@@ -345,6 +345,7 @@ mz_object_arrangement_size_history_object_ind               mz_object_arrangemen
 mz_object_arrangement_size_history_ts_ind                   mz_object_arrangement_size_history           mz_catalog_server    {collection_timestamp}                      ""
 mz_object_arrangement_sizes_ind                             mz_object_arrangement_sizes                  mz_catalog_server    {replica_id}                                ""
 mz_object_dependencies_ind                                  mz_object_dependencies                       mz_catalog_server    {object_id}                                 ""
+mz_object_graph_edges_ind                                   mz_object_graph_edges                        mz_catalog_server    {object_id}                                 ""
 mz_object_history_ind                                       mz_object_history                            mz_catalog_server    {id}                                        ""
 mz_object_lifetimes_ind                                     mz_object_lifetimes                          mz_catalog_server    {id}                                        ""
 mz_object_transitive_dependencies_ind                       mz_object_transitive_dependencies            mz_catalog_server    {object_id}                                 ""

@@ -372,6 +372,50 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_iceberg_sinks",
         ),
+        // The mz_cluster_reconfigurations MV definition changed (the `changes`
+        // diff now includes the `arrangement_compression` dimension).
+        MigrationStep::replacement(
+            "26.38.0-rc.2",
+            CatalogItemType::MaterializedView,
+            MZ_INTERNAL_SCHEMA,
+            "mz_cluster_reconfigurations",
+        ),
+        // The mz_audit_events MV gained a `metric-sink` arm in its object_type
+        // CASE, changing its SQL fingerprint, so it needs an explicit
+        // replacement step. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_audit_events",
+        ),
+        // Required because we added the `mz_object_graph_edges_ind` builtin index.
+        // make_mz_indexes inlines the builtin-index set as VALUES, so any add or
+        // remove changes its SQL fingerprint and requires an explicit replacement.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // Converting mz_tables and mz_views from builtin tables to
+        // materialized views over mz_catalog_raw changes their catalog
+        // fingerprints, so each needs an explicit replacement step. See the
+        // NOTE above: this version must stay at the workspace's current dev
+        // version until the change ships.
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_tables",
+        ),
+        MigrationStep::replacement(
+            "26.39.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_views",
+        ),
     ]
 });
 

@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord/sequencer/inner/create_index.rs
-revision: a60edac7f1
+revision: a702b8be70
 ---
 
 # adapter::coord::sequencer::inner::create_index

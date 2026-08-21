@@ -33,7 +33,7 @@
 
 use libfuzzer_sys::arbitrary::{self, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use mz_repr::adt::numeric::{cx_datum, Numeric};
+use mz_repr::adt::numeric::{Numeric, cx_datum};
 use mz_repr::strconv::parse_numeric;
 
 /// Generate one operand from the fuzzer's byte stream.

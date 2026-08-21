@@ -253,6 +253,14 @@ case "$cmd" in
         npm_dir=$HOME/.npm-builder
         mkdir -p "$(pwd)/target-xcompile" ~/.kube "$claude_dir" "$codex_dir" "$npm_dir"
 
+        container_workdir=$workdir
+        if is_truthy "${CI_BUILDER_FIXED_WORKDIR:-${CI:-0}}"; then
+            if [[ "$workdir" != "$(pwd)" ]]; then
+                die "the fixed workdir requires invoking ci-builder from the repository root (set CI_BUILDER_FIXED_WORKDIR=0 to opt out)"
+            fi
+            container_workdir=/workspace
+        fi
+
         args=(
             --cidfile "$cid_file"
             --rm --interactive
@@ -262,8 +270,8 @@ case "$cmd" in
             --volume "$HOME/.claude.json:/tmp/.claude.json"
             --volume "$codex_dir:/tmp/.codex"
             --volume "$npm_dir:/tmp/.npm"
-            --volume "$workdir:$workdir"
-            --workdir "$workdir"
+            --volume "$workdir:$container_workdir"
+            --workdir "$container_workdir"
             --env XDG_CACHE_HOME=/mnt/build/cache
             --env MZ_SOFT_ASSERTIONS
             --env NO_COLOR

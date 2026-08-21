@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/catalog/timeline.rs
-revision: 9d0a7c3c6f
+revision: 39dcae2fba
 ---
 
 # adapter::catalog::timeline

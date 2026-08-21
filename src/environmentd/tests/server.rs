@@ -1297,6 +1297,299 @@ fn test_ws_notifies_for_bad_options() {
     };
 }
 
+/// A `SELECT` over `/api/ws` emits a `Rows` descriptor, then one `Row` message
+/// per row, then `CommandComplete`. This pins the wire shape, which is the same
+/// shape a buffered implementation would produce. What proves the rows are
+/// emitted incrementally is `test_ws_select_streams_rows_then_size_error`.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+fn test_ws_select_row_message_shape() {
+    let server = test_util::TestHarness::default().start_blocking();
+    let ws_url = server.ws_addr();
+    let (mut ws, _resp) = tungstenite::connect(ws_url).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+
+    let query = "SELECT * FROM generate_series(1, 1000)";
+    let json = serde_json::json!({ "query": query });
+    ws.send(Message::Text(json.to_string().into())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+
+    match read_msg() {
+        WebSocketResponse::CommandStarting(_) => {}
+        other => panic!("expected CommandStarting, got {other:?}"),
+    }
+    match read_msg() {
+        WebSocketResponse::Rows(desc) => assert_eq!(desc.columns.len(), 1),
+        other => panic!("expected Rows description, got {other:?}"),
+    }
+
+    // Every row arrives as its own `Row` message before `CommandComplete`.
+    let mut rows_seen = 0;
+    loop {
+        match read_msg() {
+            WebSocketResponse::Row(_) => rows_seen += 1,
+            WebSocketResponse::Notice(_) => continue,
+            WebSocketResponse::CommandComplete(tag) => {
+                assert_eq!(tag, "SELECT 1000");
+                break;
+            }
+            other => panic!("unexpected message before CommandComplete: {other:?}"),
+        }
+    }
+    assert_eq!(rows_seen, 1000);
+}
+
+/// Regression test for SQL-428: a `SELECT` over `/api/ws` emits rows as it
+/// streams them, so a result that outgrows `max_result_size` mid-flight arrives
+/// as some `Row` messages followed by an `Error`. An implementation that
+/// buffered the result would size it before emitting anything and send the
+/// `Error` alone, so this is the assertion that pins streaming.
+///
+/// NOTE: clients must therefore tolerate rows that precede an error, which is
+/// the contract pgwire has always had.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_ws_select_streams_rows_then_size_error() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    // `max_result_size` is a system parameter, so lower it over the internal
+    // (system) port. A normal session cannot.
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    system
+        .batch_execute("ALTER SYSTEM SET max_result_size = '1MB'")
+        .unwrap();
+
+    let (mut ws, _resp) = tungstenite::connect(server.ws_addr()).unwrap();
+    test_util::auth_with_ws(&mut ws, BTreeMap::default()).unwrap();
+
+    // Each row is ~10 KB, so the cap trips around row 100 of 500.
+    const ROWS: usize = 500;
+    let query = format!("SELECT repeat('x', 10000) FROM generate_series(1, {ROWS})");
+    let json = serde_json::json!({ "query": query });
+    ws.send(Message::Text(json.to_string().into())).unwrap();
+
+    let mut read_msg = || -> WebSocketResponse {
+        let msg = ws.read().unwrap();
+        let msg = msg.into_text().expect("response should be text");
+        serde_json::from_str(&msg).unwrap()
+    };
+
+    match read_msg() {
+        WebSocketResponse::CommandStarting(_) => {}
+        other => panic!("expected CommandStarting, got {other:?}"),
+    }
+    match read_msg() {
+        WebSocketResponse::Rows(desc) => assert_eq!(desc.columns.len(), 1),
+        other => panic!("expected Rows description, got {other:?}"),
+    }
+
+    let mut rows_seen = 0;
+    let error = loop {
+        match read_msg() {
+            WebSocketResponse::Row(_) => rows_seen += 1,
+            WebSocketResponse::Notice(_) => continue,
+            WebSocketResponse::Error(err) => break err,
+            other => panic!("unexpected message before the size error: {other:?}"),
+        }
+    };
+
+    assert!(
+        error.message.contains("result exceeds max size"),
+        "expected a result-size error, got: {error:?}"
+    );
+    assert!(
+        rows_seen > 0 && rows_seen < ROWS,
+        "expected a truncated stream of rows before the error, got {rows_seen}"
+    );
+}
+
+/// Regression test for SQL-428: the JSON `/api/sql` endpoint enforces
+/// `max_result_size` on `Row::byte_len`, the same quantity the WebSocket
+/// transport and pgwire use. A result that exceeds the cap fails cleanly with a
+/// result-size error rather than being buffered whole, while a result under the
+/// cap succeeds.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_http_sql_result_size_limit() {
+    let server = test_util::TestHarness::default().start_blocking();
+
+    // Lower the cap to its minimum. `max_result_size` is a system parameter, so
+    // set it via the internal (system) port. A normal session cannot.
+    let mut system = server.connect_internal(postgres::NoTls).unwrap();
+    system
+        .batch_execute("ALTER SYSTEM SET max_result_size = '1MB'")
+        .unwrap();
+
+    let http_url = Url::parse(&format!("http://{}/api/sql", server.http_local_addr())).unwrap();
+    let post = |query: &str| -> serde_json::Value {
+        let json = serde_json::json!({ "query": query });
+        let res = Client::new()
+            .post(http_url.clone())
+            .json(&json)
+            .send()
+            .unwrap();
+        res.json().unwrap()
+    };
+
+    // A result whose rows exceed the cap fails cleanly.
+    let body = post("SELECT * FROM generate_series(1, 500000)");
+    let results = body.get("results").unwrap().as_array().unwrap();
+    let err = results[0]
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str());
+    assert!(
+        err.map_or(false, |m| m.contains("result exceeds max size")),
+        "expected a result-size error, got: {body}"
+    );
+
+    // A result that fits under the cap succeeds.
+    let body = post("SELECT * FROM generate_series(1, 3)");
+    let results = body.get("results").unwrap().as_array().unwrap();
+    assert!(
+        results[0].get("error").is_none(),
+        "expected success, got: {body}"
+    );
+    let rows = results[0].get("rows").unwrap().as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+}
+
+/// Regression test for SQL-423: a SUBSCRIBE whose client stops reading is
+/// retired once its coordinator-side buffer exceeds
+/// `subscribe_max_buffered_bytes`, rather than growing environmentd's memory
+/// without bound. The client sees a clean "fell behind" error.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_buffer_bound() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "subscribe_max_buffered_bytes".to_string(),
+            "1024".to_string(),
+        )
+        .start_blocking();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    writer.batch_execute("CREATE TABLE t (a bigint)").unwrap();
+
+    // Open a SUBSCRIBE over COPY but never read from it, so the coordinator-side
+    // buffer fills once the socket backs up.
+    let mut reader_client = server.connect(postgres::NoTls).unwrap();
+    let mut copy = reader_client
+        .copy_out("COPY (SUBSCRIBE t) TO STDOUT")
+        .unwrap();
+
+    // Drive far more than the 1 KiB budget through the subscribe while the
+    // reader is not draining.
+    for _ in 0..200 {
+        writer
+            .batch_execute("INSERT INTO t SELECT generate_series(1, 1000)")
+            .unwrap();
+    }
+
+    // Draining now surfaces the terminal "fell behind" error rather than an
+    // unbounded backlog. The COPY read fails with the underlying DB error, whose
+    // message lives in the error's source chain (the top-level display is just
+    // "db error").
+    let mut buf = Vec::new();
+    let io_err = std::io::Read::read_to_end(&mut copy, &mut buf).unwrap_err();
+    let mut chain = io_err.to_string();
+    let mut source = std::error::Error::source(&io_err);
+    while let Some(err) = source {
+        chain.push_str(" | ");
+        chain.push_str(&err.to_string());
+        source = err.source();
+    }
+    assert!(
+        chain.contains("fell behind"),
+        "expected a fell-behind error, got: {chain}"
+    );
+}
+
+/// Regression test for SQL-423: a client that drains each batch as it arrives is
+/// never retired, however many batches flow past the budget in total. A false
+/// `SubscribeFellBehind` on a well-behaved client is the failure mode this
+/// budget must not introduce.
+///
+/// The budget here is 64 KiB and each batch costs at least the 1 KiB per-message
+/// overhead, so a client that stopped draining would be retired within ~64 of
+/// the 200 batches.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_keeping_up_client_not_retired() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "subscribe_max_buffered_bytes".to_string(),
+            "65536".to_string(),
+        )
+        .start_blocking();
+
+    let mut writer = server.connect(postgres::NoTls).unwrap();
+    writer.batch_execute("CREATE TABLE t (a bigint)").unwrap();
+
+    let mut reader = server.connect(postgres::NoTls).unwrap();
+    reader
+        .batch_execute("BEGIN; DECLARE c CURSOR FOR SUBSCRIBE t")
+        .unwrap();
+
+    // `FETCH` defaults to `WaitOnce`, so each round trip blocks until the batch
+    // for the insert it follows has arrived. That makes the drain deterministic
+    // rather than timing-dependent.
+    const BATCHES: usize = 200;
+    let mut rows_seen = 0;
+    for i in 0..BATCHES {
+        writer
+            .execute("INSERT INTO t VALUES ($1)", &[&i64::try_from(i).unwrap()])
+            .unwrap();
+        rows_seen += reader
+            .query("FETCH ALL c", &[])
+            .expect("a client that keeps up must not be retired")
+            .len();
+    }
+    assert_eq!(rows_seen, BATCHES);
+}
+
+/// Regression test for SQL-423: a SUBSCRIBE whose snapshot is a single batch
+/// larger than `subscribe_max_buffered_bytes` completes when the client reads it
+/// promptly. The budget bounds accumulated backlog, not the size of any single
+/// batch, and it is independent of `max_result_size`, which is what bounds an
+/// individual batch.
+#[mz_ore::test]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+fn test_subscribe_single_large_batch_not_retired() {
+    let server = test_util::TestHarness::default()
+        .with_system_parameter_default(
+            "subscribe_max_buffered_bytes".to_string(),
+            "1024".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    // Subscribe to a finite collection whose snapshot is a single batch far
+    // larger than the 1 KiB budget. The subscribe finishes once the snapshot is
+    // delivered, and a client reading it promptly (via `query`) keeps the
+    // backlog at that single batch, so it must stream to completion rather than
+    // be retired with a "fell behind" error.
+    let rows: usize = 10_000;
+    let returned = client
+        .query(
+            &format!("SUBSCRIBE TO (SELECT * FROM generate_series(1, {rows}))"),
+            &[],
+        )
+        .expect("single large snapshot batch should stream, not be retired");
+    assert_eq!(returned.len(), rows);
+}
+
 #[derive(Debug, Deserialize)]
 struct HttpResponse<R> {
     results: Vec<R>,
@@ -1835,27 +2128,41 @@ async fn test_termination_races() {
         .unwrap();
 
     let adapter_client = server.inner.adapter_client();
-    let conn_id = adapter_client.new_conn_id().unwrap();
-    let session = adapter_client.new_session(
-        SessionConfig {
-            conn_id,
-            uuid: Uuid::new_v4(),
-            user: "materialize".to_string(),
-            client_ip: None,
-            external_metadata_rx: None,
-            helm_chart_version: None,
-            authenticator_kind: AuthenticatorKind::None,
-            groups: None,
-        },
-        Authenticated,
-    );
 
-    // Box the future so that dropping it below drops the future itself, not
-    // just a reference to it.
-    let mut fut = Box::pin(adapter_client.startup(session));
-    // The first poll sends the Startup command to the Coordinator and installs
-    // the cleanup guard around the response channel.
-    assert!(futures::poll!(&mut fut).is_pending());
+    // The cleanup guard only runs on a response the startup future never observed, so
+    // the future has to be left pending on its first poll. That poll both sends the
+    // Startup command and polls the response channel, and the Coordinator runs on its
+    // own thread, so it can answer in between and resolve the future right away. Retry
+    // until the poll lands while the response is still in flight. A lost attempt
+    // leaves nothing behind, a failed startup registers no state in the Coordinator.
+    let mut fut = None;
+    for _ in 0..100 {
+        let conn_id = adapter_client.new_conn_id().unwrap();
+        let session = adapter_client.new_session(
+            SessionConfig {
+                conn_id,
+                uuid: Uuid::new_v4(),
+                user: "materialize".to_string(),
+                client_ip: None,
+                external_metadata_rx: None,
+                helm_chart_version: None,
+                authenticator_kind: AuthenticatorKind::None,
+                groups: None,
+            },
+            Authenticated,
+        );
+        // Box the future so that dropping it below drops the future itself, not
+        // just a reference to it.
+        let mut candidate = Box::pin(adapter_client.startup(session));
+        // The first poll sends the Startup command to the Coordinator and installs
+        // the cleanup guard around the response channel.
+        if futures::poll!(&mut candidate).is_pending() {
+            fut = Some(candidate);
+            break;
+        }
+    }
+    let fut = fut.expect("startup always answered before its first poll finished");
+
     // Wait for the Coordinator to process the Startup command and place the
     // startup error in the response channel. Commands on the client channel
     // are processed in order, so a completed round trip implies the Startup
@@ -6776,4 +7083,95 @@ fn test_shutdown_with_inflight_writes() {
         }
         tracing::info!("round {round} survived");
     }
+}
+
+/// Changing a startup-only parameter is allowed and warns that it only takes
+/// effect after a restart. The running process keeps its sampled value, so the
+/// routing decision cannot change underneath open sessions. A change that is
+/// rejected, or a `RESET ALL` that leaves the parameter where it was, must not
+/// warn.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_startup_only_system_var_warns() {
+    let server = test_util::TestHarness::default()
+        .unsafe_mode()
+        .start_blocking();
+
+    let (tx, mut rx) = futures::channel::mpsc::unbounded();
+    let mut client = server
+        .pg_config_internal()
+        .notice_callback(move |notice| tx.unbounded_send(notice).expect("send notice"))
+        .connect(postgres::NoTls)
+        .unwrap();
+
+    const WARNING: &str = "only take effect when environmentd restarts";
+    let drain = |rx: &mut futures::channel::mpsc::UnboundedReceiver<_>| -> Vec<String> {
+        std::iter::from_fn(|| rx.try_recv().ok())
+            .map(|notice: postgres::error::DbError| notice.message().to_string())
+            .collect()
+    };
+
+    for stmt in [
+        "ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true",
+        "ALTER SYSTEM RESET enable_adapter_frontend_occ_read_then_write",
+    ] {
+        client.batch_execute(stmt).unwrap();
+        let notices = drain(&mut rx);
+        assert!(
+            notices.iter().any(|message| message.contains(WARNING)),
+            "{stmt} did not warn, notices: {notices:?}"
+        );
+    }
+
+    // A rejected change must not warn: the catalog value does not move, so a
+    // restart would not pick anything new up.
+    let err = client
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 'not-a-number'")
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("requires a \"unsigned integer\" value"),
+        "unexpected error: {err:?}"
+    );
+    let notices = drain(&mut rx);
+    assert!(
+        !notices.iter().any(|message| message.contains(WARNING)),
+        "rejected change warned, notices: {notices:?}"
+    );
+
+    // Zero permits would block every read-then-write until its statement
+    // timeout, so the parameter is constrained to at least 1.
+    let err = client
+        .batch_execute("ALTER SYSTEM SET max_concurrent_occ_writes = 0")
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("only supports values in range 1.."),
+        "unexpected error: {err:?}"
+    );
+
+    // `RESET ALL` also goes through, and warns for the parameter it changes.
+    client
+        .batch_execute("ALTER SYSTEM SET enable_adapter_frontend_occ_read_then_write = true")
+        .unwrap();
+    let _ = drain(&mut rx);
+    client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
+    let notices = drain(&mut rx);
+    assert!(
+        notices.iter().any(|message| message.contains(WARNING)),
+        "RESET ALL did not warn, notices: {notices:?}"
+    );
+
+    // Everything is at its effective default now, so a second `RESET ALL`
+    // changes no startup-only parameter and must stay quiet about them.
+    client.batch_execute("ALTER SYSTEM RESET ALL").unwrap();
+    let notices = drain(&mut rx);
+    assert!(
+        !notices.iter().any(|message| message.contains(WARNING)),
+        "RESET ALL warned without changing anything, notices: {notices:?}"
+    );
 }

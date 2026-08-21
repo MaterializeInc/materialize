@@ -2111,6 +2111,9 @@ class CopyFromStdinEnvdStrongScalingScenario(ClusterScalingScenario):
 
 
 class SourceIngestionScenario(ClusterScalingScenario):
+    # 1.1.0: MySQL RDS instance type changed
+    VERSION: str = "1.1.0"
+
     def name(self) -> str:
         return "source_ingestion"
 
@@ -2518,7 +2521,9 @@ class Scenario(ABC):
       3. `teardown(runner)` once.
     """
 
-    VERSION: str = "1.0.0"
+    def version(self) -> str:
+        """Version recorded as ``scenario_version`` in result rows."""
+        return "1.0.0"
 
     @abstractmethod
     def name(self) -> str: ...
@@ -3162,6 +3167,9 @@ class StrongScalingSweep(_ClusterSizeSweepBase):
         self._name = name
         self._workload = workload
 
+    def version(self) -> str:
+        return self._workload.VERSION
+
     def name(self) -> str:
         return self._name
 
@@ -3199,6 +3207,9 @@ class WeakScalingSweep(_ClusterSizeSweepBase):
         self._name = name
         self._workload = workload
         self._initial_scale = workload.scale
+
+    def version(self) -> str:
+        return self._workload.VERSION
 
     def name(self) -> str:
         return self._name
@@ -3252,6 +3263,9 @@ class EnvdCpuSweep(Scenario):
         self._name = name
         self._workload = workload
         self._fixed_replica_size: str | None = None
+
+    def version(self) -> str:
+        return self._workload.VERSION
 
     def name(self) -> str:
         return self._name
@@ -3327,6 +3341,9 @@ class EnvdObjectsSweep(Scenario):
         self._name = name
         self._workload = workload
         self._sizes = sizes
+
+    def version(self) -> str:
+        return self._workload.VERSION
 
     def name(self) -> str:
         return self._name
@@ -4137,7 +4154,7 @@ def run_scenario(
     """
     runner = ScenarioRunner(
         scenario.name(),
-        scenario.VERSION,
+        scenario.version(),
         0,
         scenario.mode(),
         connection,

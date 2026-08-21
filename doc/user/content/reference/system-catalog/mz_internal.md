@@ -181,7 +181,7 @@ shape is in [`mz_clusters`](../mz_catalog/#mz_clusters).
 | `status`       | [`text`]         | The lifecycle status of the reconfiguration: `in-progress` while the controller converges on the target, then a terminal `finalized`, `timed-out`, `cancelled`, or `resource-exhausted`. The record is retained after it settles, so the latest outcome stays inspectable until a later reconfiguration overwrites it. |
 | `deadline`     | [`mz_timestamp`] | The deadline by which the reconfiguration must complete. After it passes, the `on_timeout` action applies. |
 | `on_timeout`   | [`text`]         | The action applied if `deadline` passes before the target hydrates: `commit` (cut over to the not-yet-hydrated target) or `rollback` (revert to the pre-reconfiguration shape). |
-| `target`       | [`jsonb`]        | The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, and `logging`. The realized (current) shape is in `mz_clusters`. |
+| `target`       | [`jsonb`]        | The config shape the cluster is reconfiguring to, as JSON: `size`, `replication_factor`, `availability_zones`, `logging`, and `arrangement_compression`. The realized (current) shape is in `mz_clusters`. |
 | `changes`      | [`jsonb`]        | The dimensions in which `target` differs from the cluster's realized configuration, as a JSON object holding the target value per changed dimension. Empty (`{}`) once a record settles with its target applied. A rolled-back record keeps the abandoned diff. |
 
 ## `mz_cluster_auto_scaling_strategies`
@@ -645,6 +645,22 @@ all database objects in the system.
 | ----------------------- | ------------ | --------                                                                                      |
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).  |
 | `referenced_object_id`  | [`text`]     | The ID of the referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
+
+## `mz_object_graph_edges`
+
+The `mz_object_graph_edges` view describes the dependency edges between maintained
+objects, as rendered by object dependency graphs.
+
+It unions the dataflow-layer dependencies from
+[`mz_materialization_dependencies`](#mz_materialization_dependencies), restricted to
+indexes, materialized views, sinks, sources, and tables, with the source-to-subsource
+and source-to-table edges that stand in for sources whose subsources carry the data.
+
+<!-- RELATION_SPEC mz_internal.mz_object_graph_edges -->
+| Field           | Type     | Meaning                                                                                |
+| --------------- | -------- | -------------------------------------------------------------------------------------- |
+| `object_id`     | [`text`] | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).     |
+| `dependency_id` | [`text`] | The ID of the object it depends on. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
 ## `mz_object_fully_qualified_names`
 
@@ -1500,6 +1516,8 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_activity_log_thinned -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_materialized_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_sources -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_tables -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_builtin_views -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_catalog_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_replica_size_internal -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_cluster_workload_classes -->

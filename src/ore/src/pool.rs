@@ -1427,7 +1427,7 @@ impl PoolInner {
         let class_bytes = u64::cast_from(class_size);
         self.counters
             .warm_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
                 (cur + class_bytes <= cap).then_some(cur + class_bytes)
             })
             .is_ok()
@@ -1531,7 +1531,7 @@ impl PoolInner {
         let reserved = self
             .counters
             .resident_bytes
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
                 // Loaded inside the closure so a CAS retry sees oversize
                 // frees that landed since the last attempt.
                 let oversize = self.counters.oversize_bytes.load(Ordering::Relaxed);
@@ -1647,7 +1647,7 @@ impl PoolInner {
                 let settled = self
                     .counters
                     .resident_bytes
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |cur| {
                         let next = cur.checked_add(admitted_len)?.saturating_sub(victim_len);
                         let oversize = self.counters.oversize_bytes.load(Ordering::Relaxed);
                         (next <= cur
@@ -2172,7 +2172,7 @@ impl Drop for ChunkHandle {
             }
             Residency::Evicted => {
                 // Eviction already released the slot.
-                debug_assert!(state.slot.is_none(), "evicted chunk holds no slot");
+                crate::soft_assert_no_log!(state.slot.is_none(), "evicted chunk holds no slot");
                 if let Some(extent) = &state.extent {
                     pool.note_extent_released(extent);
                 }

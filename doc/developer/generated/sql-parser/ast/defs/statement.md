@@ -1,12 +1,14 @@
 ---
 source: src/sql-parser/src/ast/defs/statement.rs
-revision: 447da2b53e
+revision: 39dcae2fba
 ---
 
 # mz-sql-parser::ast::defs::statement
 
-Defines `Statement<T>`, the top-level enum of all SQL statement types supported by Materialize, including DML (SELECT, INSERT, UPDATE, DELETE, COPY), DDL (CREATE/ALTER/DROP for connections, databases, schemas, sources, sinks, tables, views, materialized views, indexes, secrets, clusters, roles, types, functions, network policies; ALTER MATERIALIZED VIEW APPLY REPLACEMENT; DISCARD), and control statements (SUBSCRIBE, EXPLAIN PLAN, EXPLAIN PUSHDOWN, EXPLAIN TIMESTAMP, EXPLAIN SINK SCHEMA, EXPLAIN ANALYZE OBJECT, EXPLAIN ANALYZE CLUSTER, SHOW, SET, RESET, BEGIN, COMMIT, ROLLBACK, PREPARE, EXECUTE, EXECUTE UNIT TEST, DEALLOCATE, DECLARE, FETCH, CLOSE, RAISE, GRANT/REVOKE ROLE, GRANT/REVOKE PRIVILEGES, ALTER DEFAULT PRIVILEGES, REASSIGN OWNED, VALIDATE CONNECTION, COMMENT).
+Defines `Statement<T>`, the top-level enum of all SQL statement types supported by Materialize, including DML (SELECT, INSERT, UPDATE, DELETE, COPY), DDL (CREATE/ALTER/DROP for connections, databases, schemas, sources, sinks, metric sinks, tables, views, materialized views, indexes, secrets, clusters, roles, types, functions, network policies; ALTER MATERIALIZED VIEW APPLY REPLACEMENT; DISCARD), and control statements (SUBSCRIBE, EXPLAIN PLAN, EXPLAIN PUSHDOWN, EXPLAIN TIMESTAMP, EXPLAIN SINK SCHEMA, EXPLAIN ANALYZE OBJECT, EXPLAIN ANALYZE CLUSTER, SHOW, SET, RESET, BEGIN, COMMIT, ROLLBACK, PREPARE, EXECUTE, EXECUTE UNIT TEST, DEALLOCATE, DECLARE, FETCH, CLOSE, RAISE, GRANT/REVOKE ROLE, GRANT/REVOKE PRIVILEGES, ALTER DEFAULT PRIVILEGES, REASSIGN OWNED, VALIDATE CONNECTION, COMMENT).
 Each statement variant has a corresponding struct with its specific fields.
+
+`CreateMetricSinkStatement<T>` represents a `CREATE METRIC SINK [IF NOT EXISTS] <name> [IN CLUSTER <cluster>] FROM <source> [WITH (PREFIX = '...')]` statement. Fields: `name: UnresolvedItemName`, `in_cluster: Option<T::ClusterName>`, `if_not_exists: bool`, `from: T::ItemName`, `with_options: Vec<CreateMetricSinkOption<T>>`. `CreateMetricSinkOptionName` has a single variant `Prefix`; its `redact_value()` returns `false`. The `AstDisplay` impl persists the `WITH (PREFIX = ...)` clause in `create_sql` so the prefix survives a restart.
 
 `ExecuteUnitTestStatement<T>` represents an `EXECUTE UNIT TEST <name> FOR <target> [AT TIME <expr>] [MOCK <view_def>, ...] EXPECTED <result_def>` statement. Fields: `name: Ident`, `target: T::ItemName`, `at_time: Option<Expr<T>>`, `mocks: Vec<MockViewDef<T>>`, `expected: ExpectedResultDef<T>`.
 

@@ -1,7 +1,7 @@
 [package]
 name = "mz-environmentd"
 description = "Manages a single Materialize environment."
-version = "26.39.0-dev.0"
+version = "26.40.0-dev.0"
 authors = ["Materialize, Inc."]
 license = "proprietary"
 edition.workspace = true
@@ -104,7 +104,7 @@ tempfile = { workspace = true, optional = true }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
-tokio-stream = { workspace = true, features = ["net"] }
+tokio-stream = { workspace = true, features = ["net"], optional = true }
 tokio-metrics.workspace = true
 tower.workspace = true
 tower-http.workspace = true
@@ -172,6 +172,7 @@ test = [
     "semver",
     "sentry-tracing",
     "tempfile",
+    "tokio-stream",
     "tracing-subscriber",
     "mz-postgres-util",
     "mz-tracing",

@@ -920,8 +920,8 @@ impl<T: Timestamp + Lattice> SpineBatch<T> {
     }
 
     fn id(&self) -> SpineId {
-        debug_assert_eq!(self.parts.first().map(|x| x.id.0), Some(self.id.0));
-        debug_assert_eq!(self.parts.last().map(|x| x.id.1), Some(self.id.1));
+        mz_ore::soft_assert_eq_no_log!(self.parts.first().map(|x| x.id.0), Some(self.id.0));
+        mz_ore::soft_assert_eq_no_log!(self.parts.last().map(|x| x.id.1), Some(self.id.1));
         self.id
     }
 
@@ -1631,7 +1631,7 @@ impl<T: Timestamp + Lattice> FuelingMerge<T> {
             merged_parts.extend(b.parts)
         }
         // Sanity check the pre-size code.
-        debug_assert_eq!(merged_parts.len(), merged_parts_len);
+        mz_ore::soft_assert_eq_no_log!(merged_parts.len(), merged_parts_len);
 
         if let SpineLog::Enabled { merge_reqs } = log {
             merge_reqs.push(FueledMergeReq {

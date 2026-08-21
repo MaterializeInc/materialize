@@ -59,6 +59,7 @@ regex.workspace = true
 regex-syntax.workspace = true
 seahash.workspace = true
 serde.workspace = true
+serde_bytes.workspace = true
 serde_json.workspace = true
 aws-lc-rs.workspace = true
 tracing.workspace = true
@@ -70,6 +71,7 @@ proptest-derive = { workspace = true, optional = true }
 smallvec.workspace = true
 
 [dev-dependencies]
+bincode.workspace = true
 criterion.workspace = true
 datadriven.workspace = true
 insta.workspace = true

@@ -117,7 +117,8 @@ pub const PLAN_INSIGHTS_NOTICE_FAST_PATH_CLUSTERS_OPTIMIZE_DURATION: Config<Dura
 pub const ENABLE_EXPRESSION_CACHE: Config<bool> = Config::new(
     "enable_expression_cache",
     true,
-    "Use a cache to store optimized expressions to help speed up start times.",
+    "Use a cache to store optimized expressions to help speed up start times. \
+     Read at startup, so changing it takes effect on the next restart.",
 );
 
 /// Whether to enable password authentication.
@@ -296,6 +297,25 @@ pub const WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES: Config<usize> = Config::new(
     "The maximum bytes of temporary storage a webhook CHECK expression may allocate while validating one request.",
 );
 
+/// Budget for the backlog a `SUBSCRIBE` (or `COPY (SUBSCRIBE ...) TO STDOUT`)
+/// may accumulate in environmentd while waiting for a slow client to read.
+///
+/// The subscribe producer runs on the non-blockable coordinator loop, so it
+/// cannot apply backpressure to a slow client. Instead the coordinator retires
+/// the subscribe once its buffered backlog exceeds this budget, bounding the
+/// memory a slow client can make the shared process hold.
+///
+/// The backlog excludes the message the client is currently draining, so this
+/// bounds the accumulation of messages, not the size of any single one.
+/// `max_result_size` is what bounds an individual message. A client that keeps
+/// up holds at most one message at a time, so it stays at a zero backlog and a
+/// large snapshot batch is delivered rather than retired.
+pub const SUBSCRIBE_MAX_BUFFERED_BYTES: Config<usize> = Config::new(
+    "subscribe_max_buffered_bytes",
+    128 * 1024 * 1024,
+    "Maximum bytes a SUBSCRIBE may buffer in environmentd for a slow client before it is retired with an error.",
+);
+
 /// Number of user IDs to pre-allocate in a batch. Pre-allocating IDs avoids
 /// a persist write + oracle call per DDL statement.
 pub const USER_ID_POOL_BATCH_SIZE: Config<u32> = Config::new(
@@ -416,7 +436,8 @@ pub const FRONTEND_READ_THEN_WRITE: Config<bool> = Config::new(
     "enable_adapter_frontend_occ_read_then_write",
     false,
     "Use frontend sequencing (with optimistic concurrency control) for \
-     DELETE, UPDATE, and INSERT operations.",
+     DELETE, UPDATE, and INSERT operations. Read at startup, so changing it \
+     takes effect on the next restart.",
 );
 
 /// Adds the full set of all adapter `Config`s.
@@ -462,6 +483,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&MCP_REQUEST_TIMEOUT)
         .add(&WEBHOOK_MAX_REQUEST_SIZE_BYTES)
         .add(&WEBHOOK_VALIDATION_MEMORY_BUDGET_BYTES)
+        .add(&SUBSCRIBE_MAX_BUFFERED_BYTES)
         .add(&USER_ID_POOL_BATCH_SIZE)
         .add(&GROUP_COMMIT_MAX_ATTEMPTS)
         .add(&CONSOLE_OIDC_CLIENT_ID)

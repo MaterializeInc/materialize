@@ -2016,7 +2016,10 @@ class MySqlInitialLoad(MySqlCdc):
     # load, so allow a bit more headroom than the base default before flagging a
     # regression.
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
+        # Primary key splitting supports only string primary keys, so this
+        # BIGINT-keyed snapshot reads serially where older versions split it across
+        # workers. The increased wallclock tolerance covers that lost parallelism.
+        MeasurementType.WALLCLOCK: 0.25,
         MeasurementType.MEMORY_MZ: 0.30,
         MeasurementType.MEMORY_CLUSTERD: 0.50,
     }
@@ -2097,7 +2100,7 @@ class MySqlInitialLoadMultiWorkerSampled(MySqlCdc):
         for i in range(self.TABLES):
             table = f"pk_table{i + 1}"
             table_blocks.append(
-                f"CREATE TABLE {table} (pk CHAR(26) PRIMARY KEY, f2 BIGINT);\n"
+                f"CREATE TABLE {table} (pk CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, f2 BIGINT);\n"
                 f"SET @i := 0;\n"
                 f"INSERT INTO {table} SELECT {row_values} "
                 f"FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {row_counts[i]};"
@@ -2168,7 +2171,11 @@ class MySqlInitialLoadMultiWorkerSingleTable(MySqlCdc):
     single-table companion to MySqlInitialLoadMultiWorkerSampled."""
 
     RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
+        # In MySQL, probing primary keys (for approximately even partitions) is
+        # slower on small datasets than using OFFSET (for exactly even
+        # partitions). Measured locally at 2-14% slower by wallclock at
+        # SCALE=6 (1M rows).
+        MeasurementType.WALLCLOCK: 0.25,
         MeasurementType.MEMORY_MZ: 0.60,
         MeasurementType.MEMORY_CLUSTERD: 0.60,
     }
@@ -2188,7 +2195,7 @@ DROP DATABASE IF EXISTS public;
 CREATE DATABASE public;
 USE public;
 
-CREATE TABLE pk_table (pk CHAR(26) PRIMARY KEY, f2 BIGINT);
+CREATE TABLE pk_table (pk CHAR(26) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY, f2 BIGINT);
 SET @i := 0;
 INSERT INTO pk_table SELECT LPAD(CONV(@i := @i + 1, 10, 36), 26, '0'), @i FROM mysql.time_zone t1, mysql.time_zone t2 LIMIT {self.n()};
 """)

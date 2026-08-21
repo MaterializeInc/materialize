@@ -329,7 +329,7 @@ impl Coordinator {
             return Err(AdapterError::AlterClusterScheduleWhileReconfiguring);
         }
 
-        // Replication factor is one of the four dimensions the cut-over sets
+        // Replication factor is one of the dimensions the cut-over sets
         // atomically from the record's target (`fold_reconfiguration_target`),
         // so a change applied independently while a reconfiguration is in
         // flight would be silently clobbered at cut-over. Refused even when the
@@ -797,10 +797,10 @@ impl Coordinator {
         };
 
         // Build the durable write from `new_config`, which carries every field the
-        // `ALTER` changed, then reset the config *shape* (size, replication factor,
-        // availability zones, logging) back to the realized values: that transition
-        // is deferred to the `reconfiguration` record and applied at cut-over. This
-        // applies non-shape changes (`workload_class`, `schedule`,
+        // `ALTER` changed, then reset the config *shape* (every
+        // `ReconfigurationTarget` dimension) back to the realized values: that
+        // transition is deferred to the `reconfiguration` record and applied at
+        // cut-over. This applies non-shape changes (`workload_class`, `schedule`,
         // `auto_scaling_strategy`, ...) immediately, matching the legacy path,
         // rather than silently dropping them. Any existing record is folded over by
         // the `record` we just built.
@@ -811,10 +811,7 @@ impl Coordinator {
                 "reshape_alter_cluster_managed requires a managed realized config".into(),
             ));
         };
-        let realized_size = realized_now.size.clone();
-        let realized_replication_factor = realized_now.replication_factor;
-        let realized_availability_zones = realized_now.availability_zones.clone();
-        let realized_logging = realized_now.logging.clone();
+        let realized_target = realized_now.realized_reconfiguration_target();
         // The status and the audit intent are two views of the same decision,
         // made together here: an ALTER back to the realized shape is a cancel,
         // anything else starts (or re-targets) a reconfiguration.
@@ -842,10 +839,7 @@ impl Coordinator {
                 "reshape_alter_cluster_managed requires a managed target config".into(),
             ));
         };
-        realized_managed.size = realized_size;
-        realized_managed.replication_factor = realized_replication_factor;
-        realized_managed.availability_zones = realized_availability_zones;
-        realized_managed.logging = realized_logging;
+        realized_managed.apply_reconfiguration_target(realized_target);
         realized_managed.reconfiguration = Some(record);
 
         self.catalog_transact(
@@ -2737,8 +2731,9 @@ fn cancel_carried_reconfiguration(config: &mut ClusterConfig) -> Option<Reconfig
 }
 
 /// Whether an `ALTER` statement sets a replica config shape dimension (`SIZE`,
-/// `AVAILABILITY ZONES`, or either `INTROSPECTION` option), the changes that
-/// need a durable `reconfiguration` record and a hydrate-overlap.
+/// `AVAILABILITY ZONES`, either `INTROSPECTION` option, or `EXPERIMENTAL
+/// ARRANGEMENT COMPRESSION`), the changes that need a durable
+/// `reconfiguration` record and a hydrate-overlap.
 ///
 /// A statement-level check, used while a reconfiguration is in flight: an
 /// `ALTER` back to the realized shape sets a shape option without changing its

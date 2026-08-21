@@ -1234,6 +1234,208 @@ def workflow_arrangement_sizes_stale_snapshot_after_restart(c: Composition) -> N
             )
 
 
+def workflow_temporary_item_cleanup(c: Composition) -> None:
+    """Temporary tables and views are durable catalog items tagged with the
+    UUID of the session that created them (SQL-150), so they need explicit
+    cleanup on both paths out of a session.
+
+    Graceful close is handled by the session-close hook, which drops the
+    session's items in one catalog transaction. A crash never runs that hook,
+    so the items are instead reclaimed the next time the catalog is opened with
+    write intent, which fences out every previous owner and therefore every
+    session that could still own one.
+    """
+
+    def forget_cached_conns() -> None:
+        """Drop the connections `sql_query` caches.
+
+        A SIGKILL severs them, and reusing a dead socket surfaces as a spurious
+        "server closed the connection unexpectedly" rather than as a retry.
+        """
+        for conn in c.conns.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        c.conns.clear()
+
+    def query(sql: str) -> list[tuple]:
+        try:
+            return c.sql_query(sql)
+        except OperationalError:
+            forget_cached_conns()
+            raise
+
+    def wait_for(sql: str, expected: list[tuple], what: str) -> None:
+        """Poll until `sql` returns `expected`."""
+        deadline = time.time() + 120
+        actual = None
+        while time.time() < deadline:
+            try:
+                actual = query(sql)
+                if actual == expected:
+                    return
+            except OperationalError:
+                # environmentd is still coming back up.
+                pass
+            time.sleep(0.5)
+        raise UIError(
+            f"timed out waiting for {what}: wanted {expected}, last saw {actual}"
+        )
+
+    # Temporary items report the temporary schema sentinel '0'.
+    temp_item_counts = """
+        SELECT
+          (SELECT count(*) FROM mz_tables WHERE name = 'tt' AND schema_id = '0'),
+          (SELECT count(*) FROM mz_views WHERE name = 'tv' AND schema_id = '0')
+    """
+
+    c.down(destroy_volumes=True)
+    c.up("materialized")
+
+    # Two sessions create temporary items of the same name. Name uniqueness is
+    # scoped by the owning session, so both must coexist, and mz_tables and
+    # mz_views report every item regardless of owner.
+    conn_a = c.sql_connection()
+    conn_b = c.sql_connection()
+    conn_ids = {}
+    for label, conn in (("a", conn_a), ("b", conn_b)):
+        cur = conn.cursor()
+        cur.execute("SELECT pg_backend_pid()")
+        conn_ids[label] = cur.fetchall()[0][0]
+        cur.execute("CREATE TEMP TABLE tt (a int)")
+        cur.execute("CREATE TEMP VIEW tv AS SELECT * FROM tt")
+
+    wait_for(temp_item_counts, [(2, 2)], "both sessions' temporary items to appear")
+
+    sessions = query(f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""")
+    assert sessions == [(2,)], f"both sessions should be in mz_sessions, saw {sessions}"
+
+    # --- Graceful close: only the closing session's items go ------------------
+
+    conn_a.close()
+
+    wait_for(
+        temp_item_counts,
+        [(1, 1)],
+        "session a's temporary items to be dropped and session b's to survive",
+    )
+    wait_for(
+        f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id = {conn_ids["a"]}""",
+        [(0,)],
+        "session a's mz_sessions row to be retracted",
+    )
+
+    # Session b still owns and resolves its own items.
+    cur_b = conn_b.cursor()
+    cur_b.execute("INSERT INTO tt VALUES (1)")
+    cur_b.execute("SELECT count(*) FROM tv")
+    assert cur_b.fetchall() == [(1,)], "session b lost its own temporary items"
+
+    # A comment on a temporary item is a durable catalog row too, and item ids
+    # are reused, so reclamation must drop it or it can re-attach to an
+    # unrelated later object.
+    cur_b.execute("COMMENT ON TABLE tt IS 'crash victim'")
+    temp_comment_count = """
+        SELECT count(*) FROM mz_internal.mz_catalog_raw
+        WHERE data->>'kind' = 'Comment'
+          AND data->'value'->>'comment' = 'crash victim'
+    """
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [(1,)], f"the temp table's comment was not written: {comments}"
+
+    # Capture the shard backing session b's temp table: the metadata row of
+    # the one remaining ephemeral item that has storage (the temp view has
+    # none). It is what boot-time reclamation must clean up after the kill.
+    shards = c.sql_query(
+        """SELECT m.data->'value'->>'shard'
+           FROM mz_internal.mz_catalog_raw m
+           WHERE m.data->>'kind' = 'StorageCollectionMetadata'
+             AND m.data->'key'->'id' IN (
+               SELECT i.data->'value'->'global_id'
+               FROM mz_internal.mz_catalog_raw i
+               WHERE i.data->>'kind' = 'Item'
+                 AND i.data->'value'->>'ephemeral_owner_session' IS NOT NULL)""",
+        port=6877,
+        user="mz_system",
+    )
+    assert len(shards) == 1, f"expected one ephemeral storage mapping: {shards}"
+    temp_shard = shards[0][0]
+
+    # --- kill -9, with session b's items still live ---------------------------
+
+    c.kill("materialized")
+    c.up("materialized")
+    forget_cached_conns()
+
+    wait_for(
+        temp_item_counts,
+        [(0, 0)],
+        "the crashed session's temporary items to be reclaimed at boot",
+    )
+    wait_for(
+        f"""SELECT count(*) FROM mz_internal.mz_sessions
+            WHERE connection_id IN ({conn_ids["a"]}, {conn_ids["b"]})""",
+        [(0,)],
+        "stale mz_sessions rows to be retracted at boot",
+    )
+
+    # mz_tables and mz_views are projections. Only mz_catalog_raw shows whether
+    # the durable rows themselves are gone, so a reclamation that merely stopped
+    # rendering the items would still be caught here. It is system-only.
+    ephemeral = c.sql_query(
+        """SELECT count(*) FROM mz_internal.mz_catalog_raw
+           WHERE data->>'kind' = 'Item'
+             AND data->'value'->>'ephemeral_owner_session' IS NOT NULL""",
+        port=6877,
+        user="mz_system",
+    )
+    assert ephemeral == [
+        (0,)
+    ], f"ephemeral catalog items survived the restart: {ephemeral}"
+
+    # The temp table's storage mapping must have moved to the finalization
+    # WAL in the same reclamation, else the metadata row and its persist
+    # shard would leak forever. Both rows are stable to assert on here: the
+    # metadata deletion is permanent, and the WAL row survives until the
+    # next committed catalog transaction, which cannot have happened because
+    # nothing has run DDL since the restart.
+    metadata = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'StorageCollectionMetadata'
+              AND data->'value'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert metadata == [
+        (0,)
+    ], f"temp table's storage metadata survived the restart: {temp_shard}"
+    unfinalized = c.sql_query(
+        f"""SELECT count(*) FROM mz_internal.mz_catalog_raw
+            WHERE data->>'kind' = 'UnfinalizedShard'
+              AND data->'key'->>'shard' = '{temp_shard}'""",
+        port=6877,
+        user="mz_system",
+    )
+    assert unfinalized == [
+        (1,)
+    ], f"temp table's shard was not enqueued for finalization: {temp_shard}"
+
+    # The comment row dies with its item.
+    comments = c.sql_query(temp_comment_count, port=6877, user="mz_system")
+    assert comments == [
+        (0,)
+    ], f"the temp table's comment survived the restart: {comments}"
+
+    # conn_b's socket died with the process; closing is bookkeeping only.
+    try:
+        conn_b.close()
+    except Exception:
+        pass
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":

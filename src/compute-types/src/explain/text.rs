@@ -621,7 +621,7 @@ impl LirRelationExpr {
                         ctx.indented(|ctx| {
                             fmt_text_constant_rows(
                                 f,
-                                rows.iter().map(|(data, _, diff)| (data, diff)),
+                                rows.iter().map(|(data, _, diff)| (&data.0, diff)),
                                 &mut ctx.indent,
                                 ctx.config.redacted,
                             )

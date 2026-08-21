@@ -87,7 +87,6 @@ def get_minimal_system_parameters(
         "enable_case_literal_transform": "true",
         "enable_cast_elimination": "true",
         "enable_coalesce_case_transform": "true",
-        "enable_columnar_lgalloc": "false",
         "enable_columnation_lgalloc": "false",
         "enable_compute_correction_v2": "true",
         "enable_compute_logical_backpressure": "true",
@@ -98,12 +97,11 @@ def get_minimal_system_parameters(
         "enable_expressions_in_limit_syntax": "true",
         "enable_fixed_correlated_cte_lowering": "true",
         "enable_introspection_subscribes": "true",
-        "enable_kafka_sink_partition_by": "true",
         "enable_lgalloc": "false",
         "enable_load_generator_counter": "true",
         "enable_logical_compaction_window": "true",
+        "enable_metric_sink": "true",
         "enable_multi_worker_storage_persist_sink": "true",
-        "enable_multi_replica_sources": "true",
         "enable_rbac_checks": "true",
         "enable_reduce_mfp_fusion": "true",
         "enable_refresh_every_mvs": "true",
@@ -118,6 +116,7 @@ def get_minimal_system_parameters(
         "enable_s3_tables_region_check": "false",
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
+        "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -133,6 +132,11 @@ def get_minimal_system_parameters(
 
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
+
+    if version < MzVersion.parse_mz("v26.24.0-dev"):
+        config["enable_columnar_lgalloc"] = "false"
+    if version < MzVersion.parse_mz("v26.25.0-dev"):
+        config["enable_multi_replica_sources"] = "true"
 
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
@@ -179,7 +183,7 @@ def get_variable_system_parameters(
         ["true", "false"] if read_committed_safe else ["false"],
     )
 
-    return [
+    params = [
         # -----
         # To reduce CRDB load as we are struggling with it in CI (values based on load test environment):
         VariableSystemParameter(
@@ -199,12 +203,6 @@ def get_variable_system_parameters(
         ),
         # -----
         # Persist internals changes, advance coverage
-        VariableSystemParameter(
-            "persist_enable_arrow_lgalloc_noncc_sizes", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
-        ),
         VariableSystemParameter(
             "persist_source_fetch_concurrency", "1", ["1", "2", "8", "16"]
         ),
@@ -317,19 +315,12 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "mysql_source_snapshot_parallelism", "true", ["true", "false"]
         ),
+        # Low default so small tables exercise partitioning.
         VariableSystemParameter(
-            "persist_batch_columnar_format",
-            "structured" if version > MzVersion.parse_mz("v0.135.0-dev") else "both_v2",
-            ["row", "both_v2", "both", "structured"],
+            "mysql_source_snapshot_partition_min_rows", "2", ["2", "50000"]
         ),
         VariableSystemParameter(
             "persist_batch_delete_enabled", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_batch_structured_order", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_batch_builder_structured", "true", ["true", "false"]
         ),
         VariableSystemParameter(
             "persist_batch_structured_key_lower_len",
@@ -404,18 +395,6 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "persist_pubsub_push_diff_enabled", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_record_compactions", "true", ["true", "false"]
-        ),
-        VariableSystemParameter(
-            "persist_record_schema_id",
-            ("true" if version > MzVersion.parse_mz("v0.127.0-dev") else "false"),
-            (
-                ["true", "false"]
-                if version > MzVersion.parse_mz("v0.127.0-dev")
-                else ["false"]
-            ),
         ),
         VariableSystemParameter(
             "persist_rollup_use_active_rollup",
@@ -509,7 +488,6 @@ def get_variable_system_parameters(
             "",
             ["", "0", "1", "1000", "2071", "1000000"],
         ),
-        VariableSystemParameter("storage_reclock_to_latest", "true", ["true", "false"]),
         VariableSystemParameter(
             "storage_source_decode_fuel",
             "100000",
@@ -528,6 +506,26 @@ def get_variable_system_parameters(
         ),
         # End of list (ordered by name)
     ]
+
+    if version < MzVersion.parse_mz("v26.14.0-dev"):
+        params.append(
+            VariableSystemParameter(
+                "storage_reclock_to_latest", "true", ["true", "false"]
+            )
+        )
+    if version < MzVersion.parse_mz("v26.23.0-dev"):
+        params.append(
+            VariableSystemParameter(
+                "persist_enable_arrow_lgalloc_noncc_sizes", "true", ["true", "false"]
+            )
+        )
+        params.append(
+            VariableSystemParameter(
+                "persist_enable_s3_lgalloc_noncc_sizes", "true", ["true", "false"]
+            )
+        )
+
+    return params
 
 
 def get_default_system_parameters(
@@ -720,6 +718,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     # The estimated path is covered explicitly in mysql-cdc/statistics.td and
     # by parallel-workload.
     "mysql_source_snapshot_exact_count_max_rows",
+    "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
     "postgres_fetch_slot_resume_lsn_interval",
     "pg_schema_validation_interval",
     "pg_source_validate_timeline",
@@ -783,6 +782,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "user_id_pool_batch_size",
     "webhook_max_request_size_bytes",
     "webhook_validation_memory_budget_bytes",
+    "subscribe_max_buffered_bytes",
     "cluster_controller_tick_interval",
     "default_cluster_reconfiguration_timeout",
     "read_then_write_max_dependencies",

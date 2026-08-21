@@ -54,7 +54,7 @@ import { hasTenantApiTokenPermissions } from "~/api/auth";
 import { ApiToken } from "~/api/frontegg/types";
 import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
-import ConnectModal from "~/components/ConnectModal";
+import ConnectDrawer from "~/components/connect/ConnectDrawer";
 import { SecretCopyableBox } from "~/components/copyableComponents";
 import TaggedMultiSelect from "~/components/Dropdown/TaggedComboBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
@@ -451,7 +451,7 @@ const ApiTokensTableProps = ({
                 borderBottomColor={colors.border.primary}
               >
                 <HStack>
-                  <ConnectAppPasswordModal user={user} userStr={userStr} />
+                  <ConnectAppPasswordButton userStr={userStr} />
                   <DeleteAppPasswordModal token={token} />
                 </HStack>
               </Td>
@@ -545,13 +545,7 @@ const SecretBox = ({
   );
 };
 
-const ConnectAppPasswordModal = ({
-  user,
-  userStr,
-}: {
-  user: User;
-  userStr: string;
-}) => {
+const ConnectAppPasswordButton = ({ userStr }: { userStr: string }) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
 
   return (
@@ -566,10 +560,9 @@ const ConnectAppPasswordModal = ({
       >
         Connect
       </Button>
-      <ConnectModal
+      <ConnectDrawer
         onClose={onClose}
         isOpen={isOpen}
-        user={user}
         forAppPassword={{ user: userStr }}
       />
     </>

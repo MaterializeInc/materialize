@@ -73,14 +73,13 @@ CREATE INDEX idx_on_my_view IN CLUSTER active_cluster ON my_view (...);
 
 **As new data arrives**, the index **incrementally updates** view results in
 memory within that [cluster](/concepts/clusters/). Within the cluster, the
-**in-memory up-to-date** results are immediately available and computationally
-free to query.
+**in-memory up-to-date** results are immediately available to query.
 
 See also:
 
 - [Indexes](/concepts/indexes)
 - [Optimization](/transform-data/optimization)
-- [`CREATE INDEX`](/sql/create-index/)  for complete syntax information
+- [`CREATE INDEX`](/sql/create-index/) for complete syntax information
 
 ## Materialized views
 
@@ -131,11 +130,13 @@ storage, indexes on materialized views can serve up-to-date results without
 having to perform additional computation.
 
 {{< note >}}
-Querying a materialized view, whether indexed or not, from any cluster is
-computationally free. However, querying an indexed materialized view within the
-cluster associated with the index is faster since the results are served from
-memory rather than from storage.
-{{</ note >}}
+
+Querying a materialized view, whether indexed or not, from any cluster is fast
+since the results are already computed. However, querying an indexed
+materialized view within the cluster associated with the index is faster since
+the results are served from memory rather than from storage.
+
+{{< /note >}}
 
 
 See also:

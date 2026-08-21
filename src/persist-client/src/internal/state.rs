@@ -1018,15 +1018,15 @@ impl<T> HollowBatch<T> {
             run_splits.is_strictly_sorted(),
             "run indices should be strictly increasing"
         );
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             run_splits.first().map_or(true, |i| *i > 0),
             "run indices should be positive"
         );
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             run_splits.last().map_or(true, |i| *i < parts.len()),
             "run indices should be valid indices into parts"
         );
-        debug_assert!(
+        mz_ore::soft_assert_no_log!(
             parts.is_empty() || run_meta.len() == run_splits.len() + 1,
             "all metadata should correspond to a run"
         );
@@ -1467,11 +1467,12 @@ where
         let mut removed = vec![];
         for (seqno, key) in remove_rollups {
             let removed_key = self.rollups.remove(seqno);
-            debug_assert!(
+            mz_ore::soft_assert_no_log!(
                 removed_key.as_ref().map_or(true, |x| &x.key == key),
-                "{} vs {:?}",
-                key,
-                removed_key
+                "rollup at {} to be removed has key {:?} in state, but GC asked to remove {}",
+                seqno,
+                removed_key,
+                key
             );
 
             if removed_key.is_some() {
@@ -1847,7 +1848,7 @@ where
             )
         }
 
-        debug_assert_eq!(self.trace.upper(), batch.desc.upper());
+        mz_ore::soft_assert_eq_no_log!(self.trace.upper(), batch.desc.upper());
         writer_state.most_recent_write_token = idempotency_token.clone();
         // The writer's most recent upper should only go forward.
         assert!(
@@ -2181,7 +2182,7 @@ where
         self.leased_readers.clear();
         self.critical_readers.clear();
 
-        debug_assert!(self.is_tombstone());
+        mz_ore::soft_assert_no_log!(self.is_tombstone());
 
         // Now that we're in a "tombstone" state -- ie. nobody can read the data from a shard or write to
         // it -- the actual contents of our batches no longer matter.
@@ -2739,8 +2740,19 @@ fn serialize_part_stats<S: Serializer>(
     val: &Option<LazyPartStats>,
     s: S,
 ) -> Result<S::Ok, S::Error> {
-    let val = val.as_ref().map(|x| x.decode().key);
-    val.serialize(s)
+    // These bytes come from blob and are never validated on the way in, so a
+    // malformed or newer-version encoding reaches here intact. Report it as
+    // absent rather than panicking, and keep the field's shape stable for
+    // consumers of the inspect-state output by logging the failure instead of
+    // serializing a differently typed value in its place.
+    let stats = val.as_ref().and_then(|x| match x.try_decode() {
+        Ok(stats) => Some(stats.key),
+        Err(err) => {
+            tracing::warn!("undecodable part stats, reporting as absent: {err}");
+            None
+        }
+    });
+    stats.serialize(s)
 }
 
 fn serialize_diffs_sum<S: Serializer>(val: &Option<[u8; 8]>, s: S) -> Result<S::Ok, S::Error> {

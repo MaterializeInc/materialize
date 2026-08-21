@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/connections.rs
-revision: fd1dd6e62b
+revision: 8933b16354
 ---
 
 # storage-types::connections
@@ -14,6 +14,7 @@ Key types include `Connection` (an enum over Kafka, CSR, Postgres, SSH, AWS, AWS
 `IcebergCatalogAuth` is an enum with variants `OAuth { credential, scope }` (standard Iceberg REST OAuth2 flow) and `Gcp(GcpConnectionReference)` (GCP service-account-based auth for BigLake/Lakehouse catalogs). `RestIcebergCatalog` holds an `auth: IcebergCatalogAuth` field and an optional `warehouse`.
 The submodules `aws`, `gcp`, `inline`, and `string_or_secret` provide supporting abstractions for AWS credential loading, GCP credential loading, reference/inlined connection polymorphism, and secret-backed string values respectively.
 Connection types implement `AlterCompatible` to constrain which fields may change across an `ALTER CONNECTION`.
+`InvalidAwsPrivatelinkServiceName` is a structured error produced when a `SERVICE NAME` does not start with the `com.amazonaws.` prefix required of all AWS VPC endpoint service names; its `hint()` directs the user to the AWS console under VPC > Endpoint services. `ConnectionValidationError::AwsPrivatelinkServiceName` wraps it and surfaces its hint at connection-validation time.
 
 `Tunnel<C>` is an enum with variants `Direct`, `Ssh(SshTunnel<C>)`, `AwsPrivatelink(AwsPrivatelink)`, and `AwsPrivatelinks(AwsPrivatelinks)`. The `AwsPrivatelinks` variant routes broker connections through an ordered list of pattern-based PrivateLink rules.
 

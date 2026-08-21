@@ -408,6 +408,7 @@ fn init_persist(sim: &mut turmoil::Sim) -> PersistLocation {
 /// needs a catalog already on disk to reproduce, so the default CI suite never
 /// sees it and only the upgrade nightly does. Much cheaper to catch here.
 #[mz_ore::test]
+#[cfg_attr(miri, ignore)] // can't call foreign function `rust_psm_stack_pointer` on OS `linux`
 fn test_migration_steps_resolve_to_builtins() {
     for step in MIGRATIONS.iter() {
         assert!(

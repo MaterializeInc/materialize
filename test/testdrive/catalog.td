@@ -289,7 +289,7 @@ public.bool
 > DROP DATABASE foo
 
 ! DROP OBJECT v1
-contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
+contains:Expected one of TABLE or VIEW or MATERIALIZED or SOURCE or SINK or METRIC or INDEX or TYPE or ROLE or USER or CLUSTER or SECRET or CONNECTION or DATABASE or SCHEMA or FUNCTION or NETWORK, found identifier
 
 > SHOW OBJECTS
 name        type        comment
@@ -522,9 +522,7 @@ mz_map_types                   ""
 mz_operators                   ""
 mz_pseudo_types                ""
 mz_role_auth                   ""
-mz_tables                      ""
 mz_types                       ""
-mz_views                       ""
 
 > SHOW VIEWS FROM mz_catalog
 name                       comment
@@ -561,6 +559,8 @@ mz_sources            mz_catalog_server   ""
 mz_ssh_tunnel_connections mz_catalog_server ""
 mz_system_privileges  mz_catalog_server   ""
 mz_materialized_views mz_catalog_server   ""
+mz_tables             mz_catalog_server   ""
+mz_views              mz_catalog_server   ""
 
 # Check default sources, tables, and views in mz_catalog_unstable.
 
@@ -625,6 +625,8 @@ name                                     comment
 mz_activity_log_thinned                  ""
 mz_builtin_materialized_views            ""
 mz_builtin_sources                       ""
+mz_builtin_tables                        ""
+mz_builtin_views                         ""
 mz_cluster_deployment_lineage            ""
 mz_cluster_replica_history               ""
 mz_cluster_replica_metrics               ""
@@ -646,6 +648,7 @@ mz_mcp_data_products                     ""
 mz_notices                               ""
 mz_notices_redacted                      ""
 mz_object_fully_qualified_names          ""
+mz_object_graph_edges                    ""
 mz_object_history                        ""
 mz_object_lifetimes                      ""
 mz_object_oid_alias                      ""
@@ -830,11 +833,11 @@ test_table ""
 
 # `SHOW TABLES` and `mz_tables` should agree.
 > SELECT COUNT(*) FROM mz_tables WHERE id LIKE 's%'
-31
+29
 
 # There is one entry in mz_indexes for each field_number/expression of the index.
 > SELECT COUNT(id) FROM mz_indexes WHERE id LIKE 's%'
-272
+273
 
 # Create a second schema with the same table name as above
 > CREATE SCHEMA tester2

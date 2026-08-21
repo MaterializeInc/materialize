@@ -261,6 +261,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_load_generator_counter
     enable_load_generator_datums
     enable_managed_cluster_availability_zones
+    enable_metric_sink
     enable_notices_for_equals_null
     enable_notices_for_index_already_exists
     enable_notices_for_index_empty_key
@@ -525,6 +526,7 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "compute_subscribe_snapshot_optimization",
     "enable_cast_elimination",
     "enable_compute_correction_v2",
+    "enable_compute_error_distinct",
     "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
     "enable_upsert_v2",

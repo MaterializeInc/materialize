@@ -94,6 +94,7 @@ static_assertions.workspace = true
 timely.workspace = true
 tokio.workspace = true
 tokio-postgres.workspace = true
+tokio-stream.workspace = true
 tracing.workspace = true
 tracing-core.workspace = true
 tracing-opentelemetry.workspace = true

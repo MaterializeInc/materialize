@@ -1,6 +1,6 @@
 ---
 source: src/catalog/src/durable/objects.rs
-revision: f3b4f3f
+revision: 39dcae2fba
 ---
 
 # catalog::durable::objects

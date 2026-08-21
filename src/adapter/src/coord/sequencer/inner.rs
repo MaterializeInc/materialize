@@ -18,13 +18,20 @@ use anyhow::anyhow;
 use futures::future::{BoxFuture, FutureExt};
 use futures::{Future, StreamExt, future};
 use itertools::Itertools;
+use maplit::btreemap;
 use mz_adapter_types::compaction::CompactionWindow;
 use mz_adapter_types::connection::ConnectionId;
-use mz_adapter_types::dyncfgs::{ENABLE_PASSWORD_AUTH, READ_THEN_WRITE_MAX_DEPENDENCIES};
+use mz_adapter_types::dyncfgs::{
+    ENABLE_EXPRESSION_CACHE, ENABLE_PASSWORD_AUTH, FRONTEND_READ_THEN_WRITE,
+    READ_THEN_WRITE_MAX_DEPENDENCIES,
+};
 use mz_catalog::memory::error::ErrorKind;
 use mz_catalog::memory::objects::{
     CatalogItem, Connection, DataSourceDesc, Sink, Source, Table, TableDataSource, Type,
 };
+use mz_compute_types::ComputeInstanceId;
+use mz_compute_types::dataflows::DataflowDescription;
+use mz_compute_types::plan::LirRelationExpr;
 use mz_expr::{
     CollectionPlan, Eval, MapFilterProject, OptimizedMirRelationExpr, ResultSpec, RowSetFinishing,
 };
@@ -36,12 +43,12 @@ use mz_ore::tracing::OpenTelemetryContext;
 use mz_ore::{assert_none, instrument};
 use mz_repr::adt::jsonb::Jsonb;
 use mz_repr::adt::mz_acl_item::{MzAclItem, PrivilegeMap};
-use mz_repr::explain::ExprHumanizer;
 use mz_repr::explain::json::json_string;
+use mz_repr::explain::{ExprHumanizer, ExprHumanizerExt, TransientItem};
 use mz_repr::role_id::RoleId;
 use mz_repr::{
-    CatalogItemId, Datum, Diff, GlobalId, RelationVersion, RelationVersionSelector, Row, RowArena,
-    RowIterator, Timestamp,
+    CatalogItemId, Datum, Diff, GlobalId, RelationDesc, RelationVersion, RelationVersionSelector,
+    Row, RowArena, RowIterator, Timestamp,
 };
 use mz_secrets::SecretsReader;
 use mz_sql::ast::{
@@ -60,7 +67,7 @@ use mz_sql::names::{
     SchemaSpecifier, SystemObjectId,
 };
 use mz_sql::plan::{
-    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule,
+    AlterMaterializedViewApplyReplacementPlan, ConnectionDetails, NetworkPolicyRule, PlanError,
     StatementContext,
 };
 use mz_sql::pure::{PurifiedSourceExport, generate_subsource_statements};
@@ -75,7 +82,7 @@ use mz_sql::plan::{
 use mz_sql::session::metadata::SessionMetadata;
 use mz_sql::session::user::UserKind;
 use mz_sql::session::vars::{
-    self, IsolationLevel, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
+    self, IsolationLevel, MAX_CONCURRENT_OCC_WRITES, NETWORK_POLICY, OwnedVarInput, SCHEMA_ALIAS,
     TRANSACTION_ISOLATION_VAR_NAME, Var, VarError, VarInput,
 };
 use mz_sql::{plan, rbac};
@@ -88,6 +95,7 @@ use mz_sql_parser::ast::{
 use mz_ssh_util::keys::SshKeyPairSet;
 use mz_storage_client::controller::ExportDescription;
 use mz_storage_types::AlterCompatible;
+use mz_storage_types::connections::AwsPrivatelinkConnection;
 use mz_storage_types::connections::inline::IntoInlineConnection;
 use mz_storage_types::controller::StorageError;
 use mz_storage_types::sources::SourceConnection;
@@ -98,7 +106,9 @@ use timely::progress::Antichain;
 use tokio::sync::{oneshot, watch};
 use tracing::{Instrument, Span, info, warn};
 
-use crate::catalog::{self, Catalog, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant};
+use crate::catalog::{
+    self, Catalog, CatalogState, ConnCatalog, DropObjectInfo, UpdatePrivilegeVariant,
+};
 use crate::command::{ExecuteResponse, Response};
 use crate::coord::appends::{
     BuiltinTableAppendNotify, DeferredOp, DeferredPlan, PendingWriteTxn, UserWriteResponder,
@@ -121,7 +131,7 @@ use crate::session::{
     WriteLocks, WriteOp,
 };
 use crate::util::{ClientTransmitter, ResultExt, viewable_variables};
-use crate::{PeekResponseUnary, ReadHolds};
+use crate::{CollectionIdBundle, PeekResponseUnary, ReadHolds};
 
 /// A future that resolves to a real-time recency timestamp.
 type RtrTimestampFuture = BoxFuture<'static, Result<Timestamp, StorageError>>;
@@ -130,6 +140,7 @@ mod cluster;
 mod copy_from;
 mod create_index;
 mod create_materialized_view;
+mod create_metric_sink;
 mod create_view;
 mod explain_timestamp;
 mod peek;
@@ -170,6 +181,18 @@ where
             ))
         }
         None => StageResult::Immediate(Box::new(build_stage(None))),
+    }
+}
+
+/// Rejects connection options whose values cannot work, independent of any
+/// external system.
+fn check_connection_details(details: &ConnectionDetails) -> Result<(), PlanError> {
+    match details {
+        ConnectionDetails::AwsPrivatelink(privatelink) => {
+            AwsPrivatelinkConnection::check_service_name(&privatelink.service_name)
+                .map_err(PlanError::InvalidPrivatelinkServiceName)
+        }
+        _ => Ok(()),
     }
 }
 
@@ -710,6 +733,10 @@ impl Coordinator {
         plan: plan::CreateConnectionPlan,
         resolved_ids: ResolvedIds,
     ) {
+        if let Err(err) = check_connection_details(&plan.connection.details) {
+            return ctx.retire(Err(AdapterError::PlanError(err)));
+        }
+
         let (connection_id, connection_gid) = match self.allocate_user_id().await {
             Ok(item_id) => item_id,
             Err(err) => return ctx.retire(Err(err)),
@@ -3767,6 +3794,12 @@ impl Coordinator {
             }
         };
 
+        // `conn` is the whole re-planned connection, so this also rejects a
+        // stored value the statement did not touch.
+        if let Err(err) = check_connection_details(&conn.details) {
+            return ctx.retire(Err(AdapterError::InvalidAlter("CONNECTION", err)));
+        }
+
         // Inspect guarded secrets whether or not validation was requested,
         // before the altered connection is installed in the catalog.
         if let Err(err) = self
@@ -4234,6 +4267,7 @@ impl Coordinator {
         };
         self.catalog_transact(Some(session), vec![op]).await?;
 
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4250,6 +4284,7 @@ impl Coordinator {
         self.is_user_allowed_to_alter_system(session, Some(&name))?;
         let op = catalog::Op::ResetSystemConfiguration { name: name.clone() };
         self.catalog_transact(Some(session), vec![op]).await?;
+        Self::notice_if_startup_only(session, &name);
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: Some(name),
@@ -4264,13 +4299,80 @@ impl Coordinator {
         _: plan::AlterSystemResetAllPlan,
     ) -> Result<ExecuteResponse, AdapterError> {
         self.is_user_allowed_to_alter_system(session, None)?;
+        // Which parameters `RESET ALL` changes has to be read before the
+        // transaction applies it, afterwards they all read as their default.
+        let startup_only_changed = self.startup_only_vars_changed_by_reset_all();
         let op = catalog::Op::ResetAllSystemConfiguration;
         self.catalog_transact(Some(session), vec![op]).await?;
+        for name in startup_only_changed {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
         session.add_notice(AdapterNotice::VarDefaultUpdated {
             role: None,
             var_name: None,
         });
         Ok(ExecuteResponse::AlteredSystemConfiguration)
+    }
+
+    /// System parameters whose value `environmentd` samples once at startup.
+    ///
+    /// `enable_adapter_frontend_occ_read_then_write` selects between the
+    /// lock-based and the OCC read-then-write path. Both are never live in one
+    /// process, so the choice is fixed at boot and every session inherits it.
+    /// `max_concurrent_occ_writes` sizes the OCC semaphore at boot.
+    /// `enable_expression_cache` decides whether catalog open builds the cache,
+    /// which has already happened by the time a session can ask.
+    ///
+    /// `ALTER SYSTEM` on one of these is allowed to go through. The catalog
+    /// value is what the next process start reads, and the running process
+    /// cannot observe it, so there is no window where two code paths are live at
+    /// once.
+    fn startup_only_vars() -> [&'static str; 3] {
+        [
+            FRONTEND_READ_THEN_WRITE.name(),
+            MAX_CONCURRENT_OCC_WRITES.name(),
+            ENABLE_EXPRESSION_CACHE.name(),
+        ]
+    }
+
+    /// Warns that `name` is only read at startup, so the running process keeps
+    /// the value it sampled at boot.
+    fn notice_if_startup_only(session: &Session, name: &str) {
+        if Self::startup_only_vars()
+            .iter()
+            .any(|n| n.eq_ignore_ascii_case(name))
+        {
+            session.add_notice(AdapterNotice::StartupOnlyVarUpdated {
+                var_name: name.to_string(),
+            });
+        }
+    }
+
+    /// The startup-only parameters whose value `ALTER SYSTEM RESET ALL` would
+    /// change. Parameters already at their effective default are untouched, so
+    /// they are not reported.
+    fn startup_only_vars_changed_by_reset_all(&self) -> Vec<&'static str> {
+        // Value-based, unlike `notice_if_startup_only`, which warns whenever an
+        // operator names one of these parameters. `RESET ALL` names every
+        // parameter, so only a value that actually moves is worth a warning.
+        let config = self.catalog().system_config();
+        let defaults = config.defaults();
+        Self::startup_only_vars()
+            .into_iter()
+            .filter(|name| {
+                // These names are all registered system vars, a lookup failure
+                // would mean the definitions and this list have drifted apart.
+                let current = config
+                    .get(name)
+                    .expect("startup-only parameter is a registered system var")
+                    .value();
+                defaults
+                    .get(*name)
+                    .is_some_and(|default| default != &current)
+            })
+            .collect()
     }
 
     // TODO(jkosh44) Move this into rbac.rs once RBAC is always on.
@@ -4980,6 +5082,73 @@ impl Coordinator {
         notices: &[RawOptimizerNotice],
     ) {
         emit_optimizer_notices(&*self.catalog, ctx.session(), notices);
+    }
+
+    /// Renders `raw_df_meta`'s optimizer notices against a humanizer that resolves the
+    /// about-to-be-created item's own `global_id` to `name`, rather than to the bare transient id
+    /// a system-session humanizer would produce. `source_desc` supplies the column names the
+    /// notices humanize against, and is the desc of the relation the new item reads.
+    ///
+    /// Callers render before the catalog transaction that creates the item, so the persisted
+    /// notice text can already refer to the item by its intended name. The raw notices stay with
+    /// the caller: they go to the user session only once the transaction succeeds, so a failed
+    /// transaction does not tell the user about an item that was never created.
+    fn render_create_item_notices(
+        &self,
+        name: &QualifiedItemName,
+        global_id: GlobalId,
+        source_desc: &RelationDesc,
+        raw_df_meta: &DataflowMetainfo,
+    ) -> DataflowMetainfo<Arc<OptimizerNotice>> {
+        let notice_ids = std::iter::repeat_with(|| self.allocate_transient_id())
+            .map(|(_item_id, notice_id)| notice_id)
+            .take(raw_df_meta.optimizer_notices.len())
+            .collect::<Vec<_>>();
+
+        let system_catalog = self.catalog().for_system_session();
+        let full_name = self.catalog().resolve_full_name(name, None);
+        let transient_items = btreemap! {
+            global_id => TransientItem::new(
+                Some(full_name.into_parts()),
+                Some(source_desc.iter_names().map(|c| c.to_string()).collect()),
+            )
+        };
+        let humanizer = ExprHumanizerExt::new(transient_items, &system_catalog);
+        CatalogState::render_notices_core(
+            &humanizer,
+            (self.catalog().config().now)(),
+            raw_df_meta,
+            notice_ids,
+            Some(global_id),
+        )
+    }
+
+    /// Sets `df_desc`'s as-of from a read hold on `id_bundle`, ships the dataflow, and drops the
+    /// hold once compute has taken its own (compute puts in its own read holds during
+    /// `create_dataflow`, so it is safe to release this one right after shipping).
+    ///
+    /// The read hold across shipping keeps the since of `id_bundle` from advancing underneath the
+    /// as-of just picked.
+    async fn ship_new_dataflow(
+        &mut self,
+        id_bundle: &CollectionIdBundle,
+        mut df_desc: DataflowDescription<LirRelationExpr>,
+        instance: ComputeInstanceId,
+        notice_builtin_updates_fut: Option<BuiltinTableAppendNotify>,
+    ) {
+        let read_holds = self.acquire_read_holds(id_bundle);
+        let since = read_holds.least_valid_read();
+        df_desc.set_as_of(since);
+
+        self.ship_dataflow_and_notice_builtin_table_updates(
+            df_desc,
+            instance,
+            notice_builtin_updates_fut,
+            None,
+        )
+        .await;
+
+        drop(read_holds);
     }
 
     /// Persist already-rendered optimizer notices for a newly created

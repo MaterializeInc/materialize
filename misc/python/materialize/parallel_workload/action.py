@@ -294,7 +294,7 @@ class Action:
             "division by zero",
             "out of range",
             "is only defined for finite arguments",
-            "Window function performance issue",  # TODO: Remove when https://github.com/MaterializeInc/database-issues/issues/9644 is fixed
+            "Window function performance issue",  # TODO: Remove when SQL-640 is fixed
             "unknown cluster 'dont_exist'",  # Set intentionally to find panics
             # A persistent object (sink, non-temp view) referencing a temporary
             # one is correctly rejected. We still let the workload attempt it,
@@ -389,12 +389,19 @@ class Action:
             # created after the backup vanish while still being tracked.
             # "invalid database" is the CREATE SCHEMA wording for a database
             # that vanished the same way (CreateSchemaAction does not lock it).
+            # For ZeroDowntimeDeploy the not-yet-promoted environmentd opens
+            # the catalog in savepoint mode, a snapshot frozen at its boot
+            # time, so a worker that lands on it does not see anything the
+            # leader created since. Name resolution runs before the read-only
+            # check, so such a statement reports the missing object rather than
+            # "cannot write in read-only mode".
             result.extend(
                 [
                     "unknown catalog item",
                     "unknown schema",
                     "unknown database",
                     "invalid database",
+                    "unknown network policy",
                 ]
             )
         if exe.db.scenario == Scenario.Rename:
@@ -2979,6 +2986,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_compute_temporal_bucketing"] = (
             BOOLEAN_FLAG_VALUES
         )
+        self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_bounded_staleness_isolation"] = (
             BOOLEAN_FLAG_VALUES
@@ -3081,6 +3089,18 @@ class FlipFlagsAction(Action):
         self.flags_with_values["mysql_source_snapshot_parallelism"] = (
             BOOLEAN_FLAG_VALUES
         )
+        # 2 exercises PK-prefix splitting on parallel-workload sized tables.
+        self.flags_with_values["mysql_source_snapshot_partition_min_rows"] = [
+            "2",
+            "50000",
+        ]
+        # 0 will end up as 64 probes internally because that's the floor.
+        self.flags_with_values[
+            "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows"
+        ] = [
+            "0",
+            "1000",
+        ]
 
         # If you are adding a new config flag in Materialize, consider using it
         # here instead of just marking it as uninteresting to silence the
@@ -3113,6 +3133,7 @@ class FlipFlagsAction(Action):
             "compute_server_maintenance_interval",
             "compute_dataflow_max_inflight_bytes",
             "compute_dataflow_max_inflight_bytes_cc",
+            "subscribe_max_buffered_bytes",
             "compute_flat_map_fuel",
             "consolidating_vec_growth_dampener",
             "compute_hydration_concurrency",
@@ -5965,11 +5986,6 @@ class DropNetworkPolicyAction(Action):
             # The policy is installed as a default somewhere (should not happen,
             # we never install ours, but be safe).
             "cannot be dropped",
-            # Another worker dropped the same policy first. The error carries
-            # the raw name ('netpol-N', not the quoted form), so DROP resolves
-            # the name correctly. This is a concurrency race, not the ALTER
-            # NETWORK POLICY quoted-name bug.
-            "unknown network policy",
         ] + super().errors_to_ignore(exe)
 
     def run(self, exe: Executor) -> bool:
@@ -6422,12 +6438,7 @@ ddl_action_list = ActionList(
         (CreateTypeAction, 2),
         (DropTypeAction, 2),
         (CreateNetworkPolicyAction, 1),
-        # TODO: Reenable once ALTER NETWORK POLICY resolves quoted (e.g.
-        # hyphenated) names. It looks the policy up by its quoted display form,
-        # so it fails with "unknown network policy" for any name that requires
-        # quoting, even though CREATE and DROP work.
-        # See https://linear.app/materializeinc/issue/CLO-143
-        # (AlterNetworkPolicyAction, 1),
+        (AlterNetworkPolicyAction, 1),
         (DropNetworkPolicyAction, 1),
         (RenameSchemaAction, 10),
         (RenameTableAction, 10),

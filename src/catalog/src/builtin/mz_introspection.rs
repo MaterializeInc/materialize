@@ -324,7 +324,8 @@ pub static MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER: LazyLock<BuiltinLog> =
         access: vec![PUBLIC_SELECT],
         ontology: Some(Ontology {
             entity_name: "hydration_time_per_worker",
-            description: "Time in nanoseconds for each compute export to hydrate per worker.",
+            description: "Hydration duration and lifecycle timestamps for each compute export \
+                          per worker.",
             links: &const {
                 [OntologyLink {
                     name: "hydration_time_of",

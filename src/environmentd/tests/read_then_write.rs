@@ -12,11 +12,11 @@
 //! path.
 //!
 //! Most tests here enable `enable_adapter_frontend_occ_read_then_write` and so
-//! cover the frontend OCC path. `test_counts_query_total` runs with the flag
-//! both off and on, because the property it checks must hold whichever path
-//! sequenced the statement. `test_cancel_read_then_write` covers the
-//! coordinator path only, and is the other half of the cancellation behavior
-//! its OCC counterpart pins.
+//! cover the frontend OCC path. `test_counts_query_total` and
+//! `test_constant_insert_reading_catalog_in_transaction` run with the flag both
+//! off and on, because what they check is how the two paths compare.
+//! `test_cancel_read_then_write` covers the coordinator path only, and is the
+//! other half of the cancellation behavior its OCC counterpart pins.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier, Mutex};
@@ -1719,5 +1719,530 @@ fn test_zero_row_write_does_not_wait_for_keepalive() {
         per_statement < Duration::from_millis(500),
         "zero-row writes averaged {per_statement:?} each, which is the keepalive \
          interval rather than a nudged group commit (total {elapsed:?})"
+    );
+}
+
+/// An INSERT whose values are constant to the parser can still plan to a
+/// selection that reads persisted state, because SQL-implemented builtins expand
+/// to queries over system relations. The AST gate cannot see that, so the
+/// decision falls to the planned selection.
+///
+/// Such a statement is invalid whatever the transaction state, since a
+/// read-then-write may not read a system table. What this pins is that both
+/// paths say so, rather than reporting the transaction state, which would
+/// suggest the statement works outside a transaction when it never does.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_constant_insert_reading_catalog_in_transaction() {
+    // `pg_get_viewdef` expands to `(SELECT definition FROM mz_catalog.mz_views
+    // WHERE name = $1)`, so the planned selection carries a dependency while the
+    // AST holds only a function call. `ConstantVisitor` rejects `Show` and
+    // `Table` references, nothing else, so the entry gate admits both of these.
+    const READS_CATALOG: &str = "INSERT INTO t VALUES (pg_get_viewdef('v'))";
+    const READS_CATALOG_AND_MZ_NOW: &str =
+        "INSERT INTO t VALUES (pg_get_viewdef('v') || mz_now()::text)";
+
+    let error_code = |client: &mut postgres::Client, sql: &str| {
+        let err = client.execute(sql, &[]).unwrap_err();
+        err.as_db_error()
+            .unwrap_or_else(|| panic!("{sql} did not fail on the server: {err}"))
+            .code()
+            .clone()
+    };
+
+    for frontend in [false, true] {
+        let server = test_util::TestHarness::default()
+            .with_system_parameter_default(
+                "enable_adapter_frontend_occ_read_then_write".to_string(),
+                frontend.to_string(),
+            )
+            .start_blocking();
+        let mut client = server.connect(postgres::NoTls).unwrap();
+        client.batch_execute("CREATE TABLE t (a text)").unwrap();
+        client.batch_execute("CREATE VIEW v AS SELECT 1").unwrap();
+
+        // Reading a system table is what makes these invalid, and both paths
+        // agree on that when no transaction is in the way.
+        assert_eq!(
+            error_code(&mut client, READS_CATALOG),
+            SqlState::INVALID_TRANSACTION_STATE,
+            "frontend={frontend}: a read-then-write may not read a system table"
+        );
+
+        // `mz_now` outranks the transaction state on both paths. Answering the
+        // transaction question first would report 25001 and hide the reason the
+        // statement can never work.
+        client.batch_execute("BEGIN").unwrap();
+        assert_eq!(
+            error_code(&mut client, READS_CATALOG_AND_MZ_NOW),
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "frontend={frontend}: mz_now must outrank the transaction refusal"
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+
+        // A transaction does not change the answer. Both paths still report the
+        // selection, which is the reason that holds either way.
+        client.batch_execute("BEGIN").unwrap();
+        assert_eq!(
+            error_code(&mut client, READS_CATALOG),
+            SqlState::INVALID_TRANSACTION_STATE,
+            "frontend={frontend}: the invalid selection must outrank the transaction"
+        );
+        client.batch_execute("ROLLBACK").unwrap();
+    }
+}
+
+/// An INSERT whose values read no persisted state may run in a transaction,
+/// even when the values are too large to fold into a literal. The rows are
+/// buffered as session write ops, so they commit with the transaction and
+/// disappear if it does not commit.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_nonconstant_insert_in_transaction() {
+    // Above `FOLD_CONSTANTS_LIMIT`, so the planned values stay a dataflow
+    // instead of folding into a constant.
+    const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
+
+    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+
+    let count = |client: &mut postgres::Client| {
+        client
+            .query_one("SELECT count(*)::int4 FROM t", &[])
+            .unwrap()
+            .get::<_, i32>(0)
+    };
+
+    client
+        .batch_execute(&format!("BEGIN; {BIG_INSERT}; COMMIT;"))
+        .unwrap();
+    assert_eq!(count(&mut client), 20000);
+
+    client
+        .batch_execute(&format!("BEGIN; {BIG_INSERT}; ROLLBACK;"))
+        .unwrap();
+    assert_eq!(count(&mut client), 20000, "rolled back write must not land");
+
+    // A later error in the same implicit batch aborts the transaction, so the
+    // write must not be visible.
+    let err = client
+        .batch_execute(&format!("{BIG_INSERT}; SELECT 1/0;"))
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("division by zero"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+    assert_eq!(count(&mut client), 20000, "aborted write must not land");
+
+    // Outside a transaction the same statement commits on its own.
+    client.batch_execute(BIG_INSERT).unwrap();
+    assert_eq!(count(&mut client), 40000);
+
+    // The command tag counts diffs, not distinct rows: 20000 copies of the
+    // same row consolidate into one row with diff 20000.
+    client.batch_execute("BEGIN").unwrap();
+    let inserted = client
+        .execute("INSERT INTO t SELECT 1 FROM generate_series(1, 20000)", &[])
+        .unwrap();
+    assert_eq!(inserted, 20000);
+    client.batch_execute("COMMIT").unwrap();
+    assert_eq!(count(&mut client), 60000);
+
+    // Deferred and constant writes mix freely in one transaction and all land
+    // at COMMIT.
+    client.batch_execute("BEGIN").unwrap();
+    assert_eq!(client.execute(BIG_INSERT, &[]).unwrap(), 20000);
+    assert_eq!(client.execute(BIG_INSERT, &[]).unwrap(), 20000);
+    assert_eq!(client.execute("INSERT INTO t VALUES (1)", &[]).unwrap(), 1);
+    client.batch_execute("COMMIT").unwrap();
+    assert_eq!(count(&mut client), 100001);
+
+    // Constraint violations are caught while the diffs are being collected, so
+    // the statement fails and the transaction buffers nothing.
+    client
+        .batch_execute("CREATE TABLE nn (a int NOT NULL)")
+        .unwrap();
+    client.batch_execute("BEGIN").unwrap();
+    let err = client
+        .execute(
+            "INSERT INTO nn SELECT CASE WHEN g = 5 THEN NULL ELSE g END \
+             FROM generate_series(1, 20000) g",
+            &[],
+        )
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err.message().contains("violates not-null constraint"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+    let nn_count = client
+        .query_one("SELECT count(*)::int4 FROM nn", &[])
+        .unwrap()
+        .get::<_, i32>(0);
+    assert_eq!(nn_count, 0, "failed write must not land");
+
+    // RETURNING needs the rows to be visible now, so it cannot wait for
+    // COMMIT. The transaction gate rejects it whether or not the values fold.
+    client.batch_execute("BEGIN").unwrap();
+    let err = client
+        .query(&format!("{BIG_INSERT} RETURNING a"), &[])
+        .unwrap_err();
+    let db_err = err.as_db_error().expect("expected db error");
+    assert!(
+        db_err
+            .message()
+            .contains("cannot be run inside a transaction block"),
+        "unexpected error: {err:?}"
+    );
+    let _ = client.batch_execute("ROLLBACK");
+}
+
+/// A transaction that has committed itself to DDL or to a subscribe cannot
+/// take a write. The reported error must be the one the coordinator reports,
+/// not whatever the write-op merge in the session state machine happens to
+/// produce.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_rejected_in_non_writable_transaction() {
+    const BIG_INSERT: &str = "INSERT INTO t SELECT generate_series(1, 20000)";
+
+    let server = frontend_occ_harness().unsafe_mode().start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE t (a int)").unwrap();
+    client.batch_execute("CREATE TABLE z (a int)").unwrap();
+    client.batch_execute("CREATE TABLE u (a int)").unwrap();
+    client.batch_execute("INSERT INTO u VALUES (1)").unwrap();
+
+    let assert_read_only = |client: &mut postgres::Client, setup: &[&str]| {
+        client.batch_execute("BEGIN").unwrap();
+        for stmt in setup {
+            client.batch_execute(stmt).unwrap();
+        }
+        let err = client.execute(BIG_INSERT, &[]).unwrap_err();
+        let db_err = err.as_db_error().expect("expected db error");
+        assert!(
+            db_err.message().contains("transaction in read-only mode"),
+            "after {setup:?}, unexpected error: {err:?}"
+        );
+        // The failed statement aborts the transaction, so the rollback is what
+        // hands the session back in a usable state for the next case.
+        let _ = client.batch_execute("ROLLBACK");
+    };
+
+    // Each case rolls back, so the catalog changes never apply and the next
+    // case starts from the same state.
+    assert_read_only(&mut client, &["ALTER TABLE z RENAME TO z2"]);
+    assert_read_only(&mut client, &["CREATE TABLE zz (i int)"]);
+    // The FETCH is what pins the transaction to the subscribe, the DECLARE
+    // alone leaves it undecided.
+    assert_read_only(
+        &mut client,
+        &["DECLARE c CURSOR FOR SUBSCRIBE u", "FETCH 1 c"],
+    );
+
+    let count = client
+        .query_one("SELECT count(*)::int4 FROM t", &[])
+        .unwrap()
+        .get::<_, i32>(0);
+    assert_eq!(count, 0, "no rejected write may have landed");
+}
+
+/// A read-then-write must not mistake a frontier that replica expiration held
+/// back for the frontier of its selection.
+///
+/// Replica expiration lets a replica drop diffs beyond the time it expects to be
+/// restarted, and holds a dataflow's output frontier at that time so that nothing
+/// downstream believes data at or after it. A selection that can never change
+/// again has the empty antichain for a frontier, and holding that back reports it
+/// as merely frozen until the expiration, days out. The OCC path reads the
+/// frontier both as "this selection is final" and as the timestamp it writes at,
+/// so a statement over such a selection either parks until the oracle reaches the
+/// expiration or commits its write there and drags the oracle along with it.
+///
+/// What earns a dataflow an expiration in the first place is wall-clock
+/// dependence, which the compute controller derives from the imports its exports
+/// read. Each statement here keeps an import that no export reads: the optimizer
+/// folds the selection to a constant, but only in the global pipeline, which runs
+/// after the dataflow's imports were collected, so the table stays an import.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_replica_expiration_spares_folded_selections() {
+    // The two branches are the same collection under the filter. The global
+    // pipeline sees that, local optimization does not.
+    const FOLDED: &str = "WITH x AS (SELECT c0 FROM a WHERE TRUE = c0) \
+                          ((SELECT true AS c0 FROM x) EXCEPT ALL (SELECT c0 FROM x))";
+
+    let server = frontend_occ_harness()
+        // Sampled once per replica, when it is created, which for the default
+        // cluster is during bootstrap. So this has to be a default rather than an
+        // `ALTER SYSTEM SET`.
+        .with_system_parameter_default(
+            "compute_replica_expiration_offset".to_string(),
+            "3d".to_string(),
+        )
+        .start_blocking();
+
+    let mut client = server.connect(postgres::NoTls).unwrap();
+    client.batch_execute("CREATE TABLE a (c0 bool)").unwrap();
+    client
+        .batch_execute("INSERT INTO a VALUES (true), (false), (NULL)")
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (c0 bool)").unwrap();
+
+    let selection = format!("{FOLDED} UNION ALL (VALUES (true))");
+
+    // Pin the premise. Were the fold to move to local optimization, the dataflow
+    // would have no unread import left and none of this would cover the bug.
+    let local: String = client
+        .query_one(
+            &format!("EXPLAIN LOCALLY OPTIMIZED PLAN AS TEXT FOR {selection}"),
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_contains!(local, "materialize.public.a");
+    let global: String = client
+        .query_one(
+            &format!("EXPLAIN OPTIMIZED PLAN AS TEXT FOR {selection}"),
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert_contains!(global.as_str(), "Constant");
+    assert!(
+        !global.contains("materialize.public.a"),
+        "the selection no longer folds to a constant, so its frontier is not the \
+         empty antichain and there is nothing here to hold back: {global}"
+    );
+
+    // Bounds a regression: a held frontier parks the statement until the oracle
+    // reaches it, which is three days out.
+    client
+        .batch_execute("SET statement_timeout = '30s'")
+        .unwrap();
+
+    // This one has diffs, so it is the case that turns a held frontier into a
+    // durable write timestamp, and the oracle is the witness. Checked before
+    // reading `dst` back, because a read parks once the oracle is that far ahead.
+    let inserted = client.execute(&format!("INSERT INTO dst {selection}"), &[]);
+    let inserted = inserted.expect("INSERT ... SELECT over a folded selection");
+    assert_eq!(inserted, 1, "the INSERT reported {inserted} rows");
+    let skew: i64 = client
+        .query_one(
+            "SELECT mz_now()::text::bigint - (extract(epoch FROM now()) * 1000)::bigint",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert!(
+        skew.abs() < 60_000,
+        "the oracle is {skew}ms from wall clock, so a write landed at a timestamp \
+         derived from a held frontier"
+    );
+    let rows = client
+        .query_one("SELECT count(*) FROM dst", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 1, "the INSERT did not land exactly one row");
+
+    // This one has no diffs, so it concludes zero rows from the frontier it
+    // observed and then linearizes against it.
+    let updated = client.execute("UPDATE a SET c0 = TRUE WHERE TRUE = a.c0", &[]);
+    let updated = updated.expect("UPDATE over a folded selection");
+    assert_eq!(updated, 0, "the UPDATE reported {updated} rows");
+    let rows = client
+        .query_one("SELECT count(*), count(*) FILTER (WHERE c0) FROM a", &[])
+        .unwrap();
+    assert_eq!(
+        (rows.get::<_, i64>(0), rows.get::<_, i64>(1)),
+        (3, 1),
+        "the UPDATE changed the table"
+    );
+
+    // Ask the process rather than the flag which path those two took: they only
+    // reach the histogram if the frontend sequenced them, and the coordinator's
+    // lock path does not read subscribe frontiers at all.
+    let metrics = server.metrics_registry().gather();
+    let observations = metrics
+        .iter()
+        .find(|m| m.name() == "mz_occ_read_then_write_retry_count")
+        .expect("mz_occ_read_then_write_retry_count metric should be registered")
+        .get_metric()
+        .first()
+        .expect("a single histogram series")
+        .get_histogram()
+        .get_sample_count();
+    assert!(
+        observations >= 2,
+        "the OCC path sequenced {observations} statements, so the INSERT and the \
+         UPDATE did not both go through it"
+    );
+
+    // The same fault reaches a plain subscribe, with no write anywhere: one over a
+    // collection that is already complete has to end. A subscribe is exempt from
+    // `statement_timeout`, so the deadline is ours to impose.
+    let mut worker = server.connect(postgres::NoTls).unwrap();
+    let cancel = worker.cancel_token();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let subscribe = format!("COPY (SUBSCRIBE ({FOLDED})) TO STDOUT");
+    let handle = thread::spawn(move || {
+        let streamed = (|| -> Result<String, String> {
+            let mut reader = worker
+                .copy_out(&subscribe)
+                .map_err(|e| e.to_string_with_causes())?;
+            let mut out = String::new();
+            std::io::Read::read_to_string(&mut reader, &mut out).map_err(|e| e.to_string())?;
+            Ok(out)
+        })();
+        let _ = tx.send(streamed);
+    });
+
+    let streamed = rx.recv_timeout(Duration::from_secs(60));
+    if streamed.is_err() {
+        // Free the subscribe so the server can shut down cleanly.
+        let _ = cancel.cancel_query(postgres::NoTls);
+    }
+    let _ = handle.join();
+    let streamed = streamed
+        .expect(
+            "a subscribe over a collection that can never change again did not end \
+             within 60s, so its frontier was held at the replica expiration",
+        )
+        .expect("subscribe failed");
+    assert_eq!(streamed, "", "the subscribe streamed {streamed:?}");
+}
+
+/// A read-then-write over an input whose frontier runs far ahead of the wall clock
+/// commits near the clock, not at that frontier.
+///
+/// The write timestamp comes from the timeline's oracle, and the subscribe's frontier
+/// only certifies which diffs the write has a complete view of. That split is what
+/// makes this statement ordinary: a selection over a materialized view with a `REFRESH`
+/// option settles until the next refresh, so its frontier is legitimately hours or days
+/// ahead of the clock. Committing there would advance the timeline's oracle with it, and
+/// the oracle is monotone and durable, so every later write and strict-serializable read
+/// on the timeline blocks until the clock catches up, restarts included.
+///
+/// The MV here refreshes once a few seconds out and once far away. Past the near
+/// refresh it is readable, and its upper is then the far one, which puts the frontier
+/// far in the future deterministically rather than by racing a refresh interval.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_refresh_mv_write_commits_near_wall_clock() {
+    let server = frontend_occ_harness()
+        .unsafe_mode()
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client
+        .batch_execute("INSERT INTO src VALUES (1), (2), (3)")
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv \
+             WITH (REFRESH AT mz_now()::text::int8 + 3000, REFRESH AT '3000-01-01') \
+             AS SELECT a FROM src",
+        )
+        .unwrap();
+
+    // Reaching the write at all means waiting for the near refresh: until then the MV
+    // holds no readable content and the read parks instead.
+    client
+        .batch_execute("SET statement_timeout = '60s'")
+        .unwrap();
+
+    let rows = client
+        .execute("INSERT INTO dst SELECT a FROM mv", &[])
+        .expect("a write over a far-future frontier commits near the clock");
+    assert_eq!(rows, 3, "the whole MV must have been written");
+
+    // Checked before anything reads `dst`, because a read cannot be served once the
+    // oracle is out there.
+    let skew: i64 = client
+        .query_one(
+            "SELECT mz_now()::text::bigint - (extract(epoch FROM now()) * 1000)::bigint",
+            &[],
+        )
+        .unwrap()
+        .get(0);
+    assert!(
+        skew.abs() < 60_000,
+        "the oracle is {skew}ms from wall clock, so the write timestamp came from the frontier"
+    );
+
+    let rows = client
+        .query_one("SELECT count(*) FROM dst", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 3, "the committed write must be readable");
+
+    // The timeline is still usable, both for writes and for reads of the target.
+    client.batch_execute("INSERT INTO dst VALUES (4)").unwrap();
+    let rows = client
+        .query_one("SELECT count(*) FROM dst", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(rows, 4, "the timeline still takes writes");
+}
+
+/// A `serializable` session reads back a read-then-write it committed over a far-future
+/// frontier.
+///
+/// A `serializable` read picks a timestamp near the wall clock and never consults the
+/// oracle, so a write committed hours or days ahead of the clock is not merely slow to
+/// see, it is invisible for that long. Strict serializability hides that: those reads
+/// linearize against the oracle, so they would block instead. This pins read-your-writes
+/// for the isolation level that cannot block its way to correctness.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_serializable_read_sees_own_refresh_mv_write() {
+    let server = frontend_occ_harness()
+        .unsafe_mode()
+        .with_system_parameter_default("enable_refresh_every_mvs".to_string(), "true".to_string())
+        .start_blocking();
+    let mut client = server.connect(postgres::NoTls).unwrap();
+
+    client.batch_execute("CREATE TABLE src (a INT)").unwrap();
+    client
+        .batch_execute("INSERT INTO src VALUES (1), (2), (3)")
+        .unwrap();
+    client.batch_execute("CREATE TABLE dst (a INT)").unwrap();
+    client
+        .batch_execute(
+            "CREATE MATERIALIZED VIEW mv \
+             WITH (REFRESH AT mz_now()::text::int8 + 3000, REFRESH AT '3000-01-01') \
+             AS SELECT a FROM src",
+        )
+        .unwrap();
+
+    // The read side still parks until the near refresh, whatever the isolation level.
+    client
+        .batch_execute("SET statement_timeout = '60s'")
+        .unwrap();
+    client
+        .batch_execute("SET transaction_isolation = 'serializable'")
+        .unwrap();
+
+    let rows = client
+        .execute("INSERT INTO dst SELECT a FROM mv", &[])
+        .expect("a write over a far-future frontier commits near the clock");
+    assert_eq!(rows, 3, "the whole MV must have been written");
+
+    let rows = client
+        .query_one("SELECT count(*) FROM dst", &[])
+        .unwrap()
+        .get::<_, i64>(0);
+    assert_eq!(
+        rows, 3,
+        "a serializable read must see the session's own write"
     );
 }

@@ -16,7 +16,7 @@ aliases:
 
 You can ingest data into Materialize from various external systems:
 
-{{% include-headless "/headless/multilink-box-native-connectors" %}}
+{{% include-headless "/headless/ingest-connectors-table" %}}
 
 ## Sources and clusters
 
@@ -105,11 +105,12 @@ See [Monitoring hydration/data freshness status](/ingest-data/monitoring-data-in
 
 ## Hydration
 
+{{< include-from-yaml data="hydration-details" name="definition" >}}
+
 When a cluster is restarted (such as after resizing), certain objects on that
-cluster  (such as sources, indexes, materialized views, and sinks) undergo
-hydration. Hydration refers to the reconstruction of in-memory state by reading
-data from Materialize's storage layer; hydration **does not** require reading
-data from the upstream system.
+cluster  (such as Kafka upsert sources, indexes, materialized views, and sinks)
+undergo hydration. For the full list of events that trigger hydration and the
+affected objects, see [Hydration](/concepts/hydration/).
 
 {{% tip %}}
 

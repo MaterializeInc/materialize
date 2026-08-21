@@ -2228,6 +2228,14 @@ feature_flags!(
         enable_for_item_parsing: true,
     },
     {
+        name: enable_metric_sink,
+        desc: "CREATE METRIC SINK",
+        default: false,
+        // Boot re-parses every item's `create_sql`, so turning this off would leave any
+        // already-created metric sink unparseable and take the whole catalog down with it.
+        enable_for_item_parsing: true,
+    },
+    {
         name: enable_unlimited_retain_history,
         desc: "Disable limits on RETAIN HISTORY (below 1s default, and 0 disables compaction).",
         default: false,
@@ -2419,6 +2427,12 @@ mod tests {
         // We do this in a roundabout way, by first constructing all-false `OptimizerFeatures` and
         // then assigning them to their respective system vars, to ensure we don't forget to update
         // this test when new optimizer features are added.
+        //
+        // NOTE: if the new feature ships enabled, also turn it on in
+        // `mz_transform_fuzz::fuzz_features`, which the cargo-fuzz optimizer targets plan with.
+        // That helper falls back to `Default` (all-`false`) for anything it does not name, so a
+        // flag missing from it silently fuzzes the disabled path. This exhaustive destructuring is
+        // the tripwire for both.
         let false_features = OptimizerFeatures::default();
         let OptimizerFeatures {
             enable_eq_classes_withholding_errors,
