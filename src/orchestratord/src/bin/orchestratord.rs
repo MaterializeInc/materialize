@@ -213,8 +213,11 @@ pub struct Args {
     enable_security_context: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
-    #[clap(long, default_value = "false")]
-    disable_statement_logging: bool,
+    /// Overrides environmentd's default `statement_logging_max_sample_rate`. A
+    /// rate of 0 disables statement logging entirely. Leave unset to keep
+    /// environmentd's own default.
+    #[clap(long)]
+    statement_logging_max_sample_rate: Option<f64>,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
@@ -628,7 +631,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             scheduler_name: args.scheduler_name.clone(),
             enable_security_context: args.enable_security_context,
             enable_internal_statement_logging: args.enable_internal_statement_logging,
-            disable_statement_logging: args.disable_statement_logging,
+            statement_logging_max_sample_rate: args.statement_logging_max_sample_rate,
             orchestratord_pod_selector_labels: args.orchestratord_pod_selector_labels,
             environmentd_node_selector: args.environmentd_node_selector,
             environmentd_affinity: args.environmentd_affinity,
