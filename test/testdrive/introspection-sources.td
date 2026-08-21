@@ -265,7 +265,9 @@ true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, size < 16 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+# Publishing an index into the arrangement-sharing registry doubles the reported size and
+# allocations of a one-record index, so the bound is 32 KiB rather than 16 KiB.
+> SELECT records, size < 32 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 1 true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)

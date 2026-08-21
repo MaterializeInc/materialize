@@ -194,6 +194,9 @@ pub enum ExplainTarget {
         exports: Vec<ExportSpec>,
         /// The dataflow's `as_of`.
         as_of: u64,
+        /// The dataflow's `until`, if bounded. `as_of + 1` makes the dataflow single-time.
+        #[serde(default)]
+        until: Option<u64>,
         /// Run the MIR optimizer before lowering. Off by default.
         #[serde(default)]
         optimize: bool,
@@ -451,6 +454,11 @@ pub enum Command {
         /// The shard's exclusive write upper (see `PersistSource::upper`).
         upper: u64,
     },
+    /// Submit a dataflow a prior `create-dataflow name=<name> defer` registered.
+    SubmitDataflow {
+        /// The `create-dataflow` name to submit.
+        name: String,
+    },
     /// Schedule a previously-submitted collection so it makes progress.
     Schedule {
         /// The collection's global id.
@@ -524,10 +532,17 @@ pub enum Command {
         exports: Vec<ExportSpec>,
         /// The dataflow's `as_of`.
         as_of: u64,
+        /// The dataflow's `until`, if bounded. `as_of + 1` makes the dataflow single-time.
+        #[serde(default)]
+        until: Option<u64>,
         /// Run the MIR optimizer before lowering (needed for e.g. joins). Off by
         /// default, so the caller's MIR is lowered faithfully.
         #[serde(default)]
         optimize: bool,
+        /// Register the dataflow's exports without submitting it, so a later dataflow
+        /// can import them before `submit-dataflow` renders this one.
+        #[serde(default)]
+        defer: bool,
     },
     /// Render a dataflow's lowered LIR plan as text, the output assertion being the
     /// plan shape itself. It submits nothing and records no index, subscribe, or
@@ -631,6 +646,7 @@ struct DataflowSpec {
     builds: Vec<BuildSpec>,
     exports: Vec<ExportSpec>,
     as_of: u64,
+    until: Option<u64>,
     optimize: bool,
 }
 
@@ -801,6 +817,7 @@ impl ScriptState {
         builds: Vec<BuildSpec>,
         exports: Vec<ExportSpec>,
         as_of: u64,
+        until: Option<u64>,
         optimize: bool,
     ) -> anyhow::Result<(DataflowBuilder, PendingRegistrations)> {
         let mut builder =
@@ -937,7 +954,33 @@ impl ScriptState {
             }
         }
         builder.as_of(Timestamp::from(as_of));
+        if let Some(until) = until {
+            builder.until(Timestamp::from(until));
+        }
         Ok((builder, registrations))
+    }
+
+    /// Finishes and submits `builder`, then applies `registrations`.
+    ///
+    /// Registers only after a successful submit, so a rejected dataflow leaves no dangling
+    /// index entry or subscribe buffer.
+    fn submit(
+        &mut self,
+        builder: DataflowBuilder,
+        registrations: PendingRegistrations,
+    ) -> anyhow::Result<()> {
+        let df = builder.finish()?;
+        self.driver.submit_dataflow(df)?;
+        for (index_id, entry) in registrations.indexes {
+            self.indexes.insert(index_id, entry);
+        }
+        for sink_id in registrations.subscribes {
+            self.driver.register_subscribe(sink_id);
+        }
+        for (sink_id, metadata) in registrations.mv_outputs {
+            self.mv_outputs.insert(sink_id, metadata);
+        }
+        Ok(())
     }
 
     /// Execute a single command, returning its golden output text.
@@ -1085,10 +1128,13 @@ impl ScriptState {
                 builds,
                 exports,
                 as_of,
+                until,
                 optimize,
+                defer,
             } => {
                 // Record the spec under its name so `explain ref=<name>` can render
-                // this dataflow's plan later without repeating the body.
+                // this dataflow's plan later without repeating the body, and so
+                // `submit-dataflow` can submit a deferred one.
                 if let Some(name) = &name {
                     self.dataflows.insert(
                         name.clone(),
@@ -1097,39 +1143,63 @@ impl ScriptState {
                             builds: builds.clone(),
                             exports: exports.clone(),
                             as_of,
+                            until,
                             optimize,
                         },
                     );
                 }
-                let (builder, registrations) =
-                    self.configure_dataflow(name, imports, builds, exports, as_of, optimize)?;
-                let df = builder.finish()?;
-                self.driver.submit_dataflow(df)?;
-                // Register only after a successful submit, so a rejected dataflow
-                // leaves no dangling index entry or subscribe buffer.
-                for (index_id, entry) in registrations.indexes {
-                    self.indexes.insert(index_id, entry);
+                if defer {
+                    anyhow::ensure!(
+                        name.is_some(),
+                        "`defer` needs a name for the later `submit-dataflow`"
+                    );
+                    // Only the index registrations, which is what a later import
+                    // resolves against. Everything else registers at submit.
+                    let (_builder, registrations) = self.configure_dataflow(
+                        name, imports, builds, exports, as_of, until, optimize,
+                    )?;
+                    for (index_id, entry) in registrations.indexes {
+                        self.indexes.insert(index_id, entry);
+                    }
+                    return Ok("deferred".to_string());
                 }
-                for sink_id in registrations.subscribes {
-                    self.driver.register_subscribe(sink_id);
-                }
-                for (sink_id, metadata) in registrations.mv_outputs {
-                    self.mv_outputs.insert(sink_id, metadata);
-                }
+                let (builder, registrations) = self
+                    .configure_dataflow(name, imports, builds, exports, as_of, until, optimize)?;
+                self.submit(builder, registrations)?;
+                Ok("ok".to_string())
+            }
+            Command::SubmitDataflow { name } => {
+                let spec = self.dataflows.get(&name).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "unknown dataflow {name:?}; declare it with \
+                         create-dataflow name={name} defer first"
+                    )
+                })?;
+                let (builder, registrations) = self.configure_dataflow(
+                    Some(name.clone()),
+                    spec.imports.clone(),
+                    spec.builds.clone(),
+                    spec.exports.clone(),
+                    spec.as_of,
+                    spec.until,
+                    spec.optimize,
+                )?;
+                self.submit(builder, registrations)?;
                 Ok("ok".to_string())
             }
             Command::Explain { target } => {
                 // Resolve the target to a dataflow body: either given inline, or the
                 // spec a prior `create-dataflow name=<name>` recorded.
-                let (name, imports, builds, exports, as_of, optimize) = match target {
+                let (name, imports, builds, exports, as_of, until, optimize) = match target {
                     ExplainTarget::Inline {
                         name,
                         imports,
                         builds,
                         exports,
                         as_of,
+                        until,
                         optimize,
-                    } => (name, imports, builds, exports, as_of, optimize),
+                    } => (name, imports, builds, exports, as_of, until, optimize),
                     ExplainTarget::Reference { name } => {
                         let spec = self.dataflows.get(&name).ok_or_else(|| {
                             anyhow::anyhow!(
@@ -1143,6 +1213,7 @@ impl ScriptState {
                             spec.builds.clone(),
                             spec.exports.clone(),
                             spec.as_of,
+                            spec.until,
                             spec.optimize,
                         )
                     }
@@ -1151,8 +1222,8 @@ impl ScriptState {
                 // LIR plan instead of submitting it. The registrations are discarded:
                 // explain has no side effects, so it neither installs a dataflow nor
                 // records an index / subscribe / materialized-view output.
-                let (builder, _registrations) =
-                    self.configure_dataflow(name, imports, builds, exports, as_of, optimize)?;
+                let (builder, _registrations) = self
+                    .configure_dataflow(name, imports, builds, exports, as_of, until, optimize)?;
                 // The LIR render separates objects with blank lines; the `----` block
                 // preserves them via the doubled-separator form (see `crate::text`).
                 // Trim the trailing newline so the golden matches like every other
