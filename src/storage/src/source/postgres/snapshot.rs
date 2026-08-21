@@ -681,6 +681,23 @@ pub(crate) fn render<'scope>(
             let mut outstanding_bytes = 0;
             for (&oid, outputs) in tables_to_snapshot.iter() {
                 for (&output_index, info) in outputs.iter() {
+                    // Test-only pause point. Configuring the failpoint as
+                    // `pg_snapshot_pause=return(<table name>)` holds the snapshot of that table
+                    // here, before any of its data is emitted, until the failpoint is
+                    // deactivated. Tables are snapshotted in OID order, so tables ordered before
+                    // the paused one complete their snapshots.
+                    loop {
+                        let paused = fail::eval("pg_snapshot_pause", |payload| {
+                            payload.is_some_and(|table| table == info.desc.name)
+                        });
+                        match paused {
+                            Some(true) => {
+                                tokio::time::sleep(std::time::Duration::from_millis(100)).await
+                            }
+                            _ => break,
+                        }
+                    }
+
                     if let Err(err) = verify_schema(oid, info, &upstream_info) {
                         let update = (Err(err.into()), MzOffset::minimum(), Diff::ONE);
                         let size = update.fuel_size();

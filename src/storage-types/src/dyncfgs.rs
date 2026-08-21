@@ -430,6 +430,26 @@ pub const STORAGE_PERSIST_SINK_MAX_RAW_STASH_BYTES: Config<usize> = Config::new(
     single-timestamp batches to keep memory bounded.",
 );
 
+/// How far past the collection's frontier the source `persist_sink` may commit batch descriptions,
+/// so that it can group updates while the frontier is stalled.
+///
+/// A batch's bounds come from a batch description, and while a collection's frontier is stalled the
+/// minter has nothing to derive one from, so updates pile up in the stash with no safe grouping.
+/// Past this window the minter commits a description ahead of the frontier and honors it, which
+/// gives the write operator bounds to group into. Committing does not make a description
+/// appendable, that still waits for the frontier to reach its upper.
+///
+/// The window bounds three things: how much of a stall can be grouped into one batch, how far the
+/// shard upper trails the frontier while the last committed description is caught up with, and how
+/// many appends the catch-up costs, which is the stall length over the window. Zero disables
+/// committing ahead, leaving descriptions derived from the frontier alone.
+pub const STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW: Config<Duration> = Config::new(
+    "storage_persist_sink_description_window",
+    Duration::ZERO,
+    "How far past the collection frontier the source persist sink may commit batch descriptions, \
+    so updates can be grouped while the frontier is stalled (zero disables).",
+);
+
 /// Configure mz-ore overflowing type behavior.
 pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
@@ -482,6 +502,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&STORAGE_ROCKSDB_CLEANUP_TRIES)
         .add(&STORAGE_ROCKSDB_USE_MERGE_OPERATOR)
         .add(&STORAGE_PERSIST_SINK_MAX_RAW_STASH_BYTES)
+        .add(&STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW)
         .add(&STORAGE_SERVER_MAINTENANCE_INTERVAL)
         .add(&STORAGE_SOURCE_SNAPSHOT_CONCURRENT_REPLICATION)
         .add(&STORAGE_SUSPEND_AND_RESTART_DELAY)

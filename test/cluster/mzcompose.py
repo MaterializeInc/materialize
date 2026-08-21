@@ -1412,6 +1412,33 @@ def workflow_pg_snapshot_resumption(c: Composition) -> None:
             c.run_testdrive_files("pg-snapshot-resumption/05-verify-data.td")
 
 
+def workflow_pg_snapshot_freshness(c: Composition) -> None:
+    """Test that already hydrated tables of a PostgreSQL source keep ingesting
+    CDC while a newly added table's snapshot runs, and that a table added
+    alongside completes its own snapshot without waiting. The new table's
+    snapshot is held with the pg_snapshot_pause failpoint."""
+
+    with c.override(
+        Testdrive(no_reset=True),
+        Clusterd(
+            name="clusterd1",
+            environment_extra=["FAILPOINTS=pg_snapshot_pause=return(t_paused)"],
+            workers=4,
+        ),
+    ):
+        c.up("materialized", "postgres", "clusterd1")
+
+        c.run_testdrive_files("pg-snapshot-freshness/01-setup.td")
+        c.run_testdrive_files("pg-snapshot-freshness/02-add-tables.td")
+
+        with c.override(
+            # turn off the failpoint
+            Clusterd(name="clusterd1", workers=4)
+        ):
+            c.up("clusterd1")
+            c.run_testdrive_files("pg-snapshot-freshness/03-verify.td")
+
+
 def workflow_sink_failure(c: Composition) -> None:
     """Test specific sink failure scenarios"""
 

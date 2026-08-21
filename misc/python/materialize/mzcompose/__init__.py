@@ -124,6 +124,10 @@ def get_minimal_system_parameters(
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
+        # Short so the sink commits descriptions ahead of a stalled frontier in
+        # tests. Production wants minutes, since this also bounds how far the
+        # shard upper trails the frontier once the stall clears.
+        "storage_persist_sink_description_window": "5s",
         # Tiny so the sink's stash eviction path runs in tests. The production
         # default is large enough that most stalls never reach it.
         "storage_persist_sink_max_raw_stash_bytes": "4096",

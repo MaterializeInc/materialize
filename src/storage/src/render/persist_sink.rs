@@ -107,6 +107,7 @@ use mz_persist_client::Diagnostics;
 use mz_persist_client::batch::{Batch, BatchBuilder, ProtoBatch};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_client::error::UpperMismatch;
+use mz_persist_client::write::WriteHandle;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{Codec, Codec64};
 use mz_repr::{Diff, GlobalId, Row};
@@ -389,6 +390,15 @@ pub(crate) fn render<'scope>(
 
     let operator_name = format!("persist_sink({})", collection_id);
 
+    let config_set = storage_state.storage_configuration.config_set();
+    let description_window = {
+        let window = dyncfgs::STORAGE_PERSIST_SINK_DESCRIPTION_WINDOW.get(config_set);
+        // Saturating rather than panicking on a window nobody would configure. The minter's
+        // `checked_add` then declines to commit anything, which is the disabled behavior.
+        let millis = u64::try_from(window.as_millis()).unwrap_or(u64::MAX);
+        (!window.is_zero()).then(|| mz_repr::Timestamp::new(millis))
+    };
+
     let (batch_descriptions, passthrough_desired_stream, mint_token) = mint_batch_descriptions(
         scope,
         collection_id,
@@ -396,6 +406,7 @@ pub(crate) fn render<'scope>(
         &target,
         desired_collection,
         Arc::clone(&persist_clients),
+        description_window,
     );
 
     let source_statistics = storage_state
@@ -413,8 +424,7 @@ pub(crate) fn render<'scope>(
         passthrough_desired_stream.as_collection(),
         Arc::clone(&persist_clients),
         source_statistics,
-        dyncfgs::STORAGE_PERSIST_SINK_MAX_RAW_STASH_BYTES
-            .get(storage_state.storage_configuration.config_set()),
+        dyncfgs::STORAGE_PERSIST_SINK_MAX_RAW_STASH_BYTES.get(config_set),
         Arc::clone(&busy_signal),
     );
 
@@ -442,6 +452,11 @@ pub(crate) fn render<'scope>(
 /// and upper) that writers should use for writing the next set of batches to
 /// persist.
 ///
+/// With a `description_window`, a description is also minted when data runs a window past the last
+/// one while the frontier stays put, which is a stalled collection. Such a description is a
+/// commitment: no later description will end inside it, so the write operator can group updates
+/// into bounds the frontier has not certified yet. See [`next_description_upper`].
+///
 /// Only one of the workers does this, meaning there will only be one
 /// description in the stream, even in case of multiple timely workers. Use
 /// `broadcast()` to, ahem, broadcast, the one description to all downstream
@@ -453,6 +468,7 @@ fn mint_batch_descriptions<'scope>(
     target: &CollectionMetadata,
     desired_collection: VecCollection<'scope, mz_repr::Timestamp, Result<Row, DataflowError>, Diff>,
     persist_clients: Arc<PersistClientCache>,
+    description_window: Option<mz_repr::Timestamp>,
 ) -> (
     StreamVec<
         'scope,
@@ -551,30 +567,40 @@ fn mint_batch_descriptions<'scope>(
             upper
         };
 
-        // The current input frontiers.
-        let mut desired_frontier;
+        // The current input frontier.
+        let mut desired_frontier = Antichain::from_elem(mz_repr::Timestamp::minimum());
+
+        // The largest timestamp seen in the data. Data running past `current_upper` while the
+        // frontier stays put is how this operator notices a stalled collection, which is the one
+        // situation where it commits a description ahead of the frontier.
+        let mut max_seen_ts: Option<mz_repr::Timestamp> = None;
 
         loop {
-            if let Some(event) = desired_input.next().await {
-                match event {
-                    Event::Data([_output_cap, data_output_cap], mut data) => {
-                        // Just passthrough the data.
-                        data_output.give_container(&data_output_cap, &mut data);
-                        continue;
+            match desired_input.next().await {
+                Some(Event::Data([_output_cap, data_output_cap], mut data)) => {
+                    for (_, ts, _) in data.iter() {
+                        max_seen_ts = Some(match max_seen_ts {
+                            Some(max) => std::cmp::max(max, *ts),
+                            None => *ts,
+                        });
                     }
-                    Event::Progress(frontier) => {
-                        desired_frontier = frontier;
-                    }
+                    // Just passthrough the data.
+                    data_output.give_container(&data_output_cap, &mut data);
                 }
-            } else {
+                Some(Event::Progress(frontier)) => {
+                    desired_frontier = frontier;
+                }
                 // Input is exhausted, so we can shut down.
-                return;
-            };
+                None => return,
+            }
 
-            // If the new frontier for the data input has progressed, produce a batch description.
-            if PartialOrder::less_than(&current_upper, &desired_frontier) {
-                // The maximal description range we can produce.
-                let batch_description = (current_upper.to_owned(), desired_frontier.to_owned());
+            while let Some(upper) = next_description_upper(
+                &current_upper,
+                &desired_frontier,
+                max_seen_ts,
+                description_window,
+            ) {
+                let batch_description = (current_upper.to_owned(), upper.to_owned());
 
                 let lower = batch_description.0.as_option().copied().unwrap();
 
@@ -604,13 +630,15 @@ fn mint_batch_descriptions<'scope>(
                 trace!(
                     "persist_sink {collection_id}/{shard_id}: \
                         downgrading to {:?}",
-                    desired_frontier
+                    upper
                 );
-                cap_set.downgrade(desired_frontier.iter());
+                cap_set.downgrade(upper.iter());
 
                 // After successfully emitting a new description, we can update the upper for the
-                // operator.
-                current_upper.clone_from(&desired_frontier);
+                // operator. A committed description leaves this beyond `desired_frontier`, which
+                // is the state that makes the commitment binding: a frontier arriving inside it
+                // produces no description of its own.
+                current_upper = upper;
             }
         }
     });
@@ -622,15 +650,104 @@ fn mint_batch_descriptions<'scope>(
     )
 }
 
+/// The lower of the in-flight description covering `ts`, if one covers it.
+///
+/// Descriptions are contiguous and disjoint, so the only candidate is the greatest lower at or
+/// below `ts`.
+fn covering_window(
+    window_uppers: &BTreeMap<mz_repr::Timestamp, Antichain<mz_repr::Timestamp>>,
+    ts: mz_repr::Timestamp,
+) -> Option<mz_repr::Timestamp> {
+    let (lower, upper) = window_uppers.range(..=ts).next_back()?;
+    (!upper.less_equal(&ts)).then_some(*lower)
+}
+
+/// The open builder for the in-flight description at `lower`, opening one if there is none.
+///
+/// Finishes the builders of any earlier description first, moving their batches to
+/// `window_batches`. Those builders can no longer receive data, since descriptions are disjoint and
+/// updates arrive in an order the frontier bounds, and a description accepts any number of batches.
+/// Closing them is what keeps the number of open builders independent of how many descriptions a
+/// stalled frontier accumulates.
+async fn window_builder<'a>(
+    write: &WriteHandle<SourceData, (), mz_repr::Timestamp, StorageDiff>,
+    window_uppers: &BTreeMap<mz_repr::Timestamp, Antichain<mz_repr::Timestamp>>,
+    window_builders: &'a mut BTreeMap<mz_repr::Timestamp, SourceBatchBuilder>,
+    window_batches: &mut BTreeMap<
+        mz_repr::Timestamp,
+        Vec<HollowBatchAndMetadata<mz_repr::Timestamp>>,
+    >,
+    lower: mz_repr::Timestamp,
+) -> &'a mut SourceBatchBuilder {
+    while let Some(stale_lower) = window_builders
+        .keys()
+        .next()
+        .copied()
+        .filter(|stale_lower| *stale_lower < lower)
+    {
+        let builder = window_builders
+            .remove(&stale_lower)
+            .expect("just looked up");
+        let upper = window_uppers
+            .get(&stale_lower)
+            .expect("a window builder only exists while its description is in flight")
+            .clone();
+        let batch = builder
+            .finish(Antichain::from_elem(stale_lower), upper)
+            .await;
+        window_batches.entry(stale_lower).or_default().push(batch);
+    }
+
+    window_builders
+        .entry(lower)
+        .or_insert_with(|| BatchBuilderAndMetadata::new(write.builder(Antichain::from_elem(lower))))
+}
+
+/// The upper of the next batch description to emit, or `None` if there is none.
+///
+/// A description is either derived from the frontier, which certifies that everything below it has
+/// arrived, or committed a `window` past `current_upper` while data runs past that window and the
+/// frontier does not move. The committed form exists because a stalled collection mints no
+/// descriptions at all, which leaves the write operator no bounds to group updates into. It does
+/// not make the description appendable, that still waits for the frontier to reach its upper.
+///
+/// Committing is bounded by the data, the window has to lie entirely behind `max_seen_ts`, so this
+/// never describes times nothing has been seen for. It also declines a range starting at the
+/// minimum, which is a fresh shard's upper: that range spans the whole epoch and holds no data, so
+/// cutting it up would mint millions of descriptions to no purpose.
+fn next_description_upper(
+    current_upper: &Antichain<mz_repr::Timestamp>,
+    desired_frontier: &Antichain<mz_repr::Timestamp>,
+    max_seen_ts: Option<mz_repr::Timestamp>,
+    window: Option<mz_repr::Timestamp>,
+) -> Option<Antichain<mz_repr::Timestamp>> {
+    if PartialOrder::less_than(current_upper, desired_frontier) {
+        return Some(desired_frontier.clone());
+    }
+
+    let lower = *current_upper.as_option()?;
+    if lower == mz_repr::Timestamp::minimum() {
+        return None;
+    }
+
+    let upper = lower.checked_add(window?)?;
+    if upper == lower {
+        return None;
+    }
+
+    (max_seen_ts? >= upper).then(|| Antichain::from_elem(upper))
+}
+
 /// Writes `desired_collection` to persist, but only for updates
 /// that fall into batch a description that we get via `batch_descriptions`.
 /// This forwards a `HollowBatch` (with additional metadata)
 /// for any batch of updates that was written.
 ///
-/// Emits one batch per description, spanning however many timestamps that description covers.
-/// Updates wait as raw rows until their description arrives, which is what keeps the batch count
-/// independent of how many timestamps a stalled frontier accumulates. Past `max_raw_stash_bytes`
-/// the heaviest timestamps are written out early, one batch each.
+/// Batches are keyed by description, spanning however many timestamps that description covers. An
+/// update goes straight into its description's builder once that description has arrived, and waits
+/// as a raw row until then, which keeps the batch count independent of how many timestamps a
+/// stalled frontier accumulates. Only updates running ahead of the descriptions are held raw, and
+/// past `max_raw_stash_bytes` the heaviest of those are written into a builder of their own.
 ///
 /// This operator assumes that the `desired_collection` comes pre-sharded.
 ///
@@ -677,12 +794,10 @@ fn write_batches<'scope>(
     let shutdown_button = write_op.build(move |_capabilities| async move {
         // Updates staged as raw rows, keyed by timestamp.
         //
-        // A batch builder cannot be split, so updates may only enter one once it is known which
-        // description will cover them. A description is only acted on when the desired frontier
-        // has reached its upper, which means every update it covers has already arrived, so the
-        // builder can be created then and take all of them at once. Holding the rows until that
-        // point is what keeps the batch count proportional to descriptions rather than to
-        // timestamps.
+        // A batch builder cannot be split, so an update may only enter one once the description
+        // that will cover it is known. Everything held here is therefore ahead of the descriptions
+        // this operator has received, which bounds the stash by how far data runs past the
+        // committed grid rather than by how long the frontier stalls.
         let mut raw_stash: BTreeMap<mz_repr::Timestamp, RawStashEntry> = BTreeMap::new();
         let mut raw_stash_bytes: usize = 0;
 
@@ -690,8 +805,31 @@ fn write_batches<'scope>(
         //
         // Each holds exactly one timestamp, which is what makes evicting safe without knowing the
         // descriptions yet: a description either covers a timestamp entirely or not at all, so a
-        // single-timestamp builder can never straddle one.
+        // single-timestamp builder can never straddle one. Such a builder stays below
+        // `persist_blob_target_size` and so holds its rows in memory, so it is finished as soon as
+        // a description covers it rather than held until that description is ready.
         let mut spilled: BTreeMap<mz_repr::Timestamp, SourceBatchBuilder> = BTreeMap::new();
+
+        // Uppers of the in-flight descriptions, keyed by lower, so that an arriving timestamp can
+        // be matched to the description covering it.
+        let mut window_uppers: BTreeMap<mz_repr::Timestamp, Antichain<mz_repr::Timestamp>> =
+            BTreeMap::new();
+
+        // The open builder for each in-flight description, keyed by the description's lower.
+        //
+        // It takes every timestamp in the description's range, so it reaches
+        // `persist_blob_target_size` and spills its parts to blob. `window_builder` closes the
+        // builders of earlier descriptions as data moves past them, so the number of open builders
+        // does not grow with the stall.
+        let mut window_builders: BTreeMap<mz_repr::Timestamp, SourceBatchBuilder> = BTreeMap::new();
+
+        // Batches finished before their description became ready, keyed by the description's
+        // lower. A description can take any number of batches, so a builder is closed once the
+        // data moves past it rather than held open.
+        let mut window_batches: BTreeMap<
+            mz_repr::Timestamp,
+            Vec<HollowBatchAndMetadata<mz_repr::Timestamp>>,
+        > = BTreeMap::new();
 
         // Contains descriptions of batches for which we know that we can
         // write data. We got these from the "centralized" operator that
@@ -745,8 +883,18 @@ fn write_batches<'scope>(
                 _ = desired_input.ready() => {},
             }
 
-            // Collect ready work from both inputs
-            while let Some(event) = descriptions_input.next_sync() {
+            // Collect ready work from both inputs. Descriptions are processed before the data of
+            // the same round so that an update whose description arrived alongside it can go
+            // straight into that description's builder instead of through the stash.
+            let ready_descriptions =
+                std::iter::from_fn(|| descriptions_input.next_sync()).collect_vec();
+            let ready_events = std::iter::from_fn(|| desired_input.next_sync()).collect_vec();
+
+            // We know start the async work for the input we received. Until we finish the dataflow
+            // should be marked as busy.
+            let permit = busy_signal.acquire().await;
+
+            for event in ready_descriptions {
                 match event {
                     Event::Data(cap, data) => {
                         // Ingest new batch descriptions.
@@ -761,6 +909,54 @@ fn write_batches<'scope>(
                                     description, desired_frontier, batch_descriptions_frontier,
                                 );
                             }
+
+                            let (lower, upper) = (&description.0, &description.1);
+                            let lower_ts = *lower
+                                .as_option()
+                                .expect("minted descriptions have a single-element lower");
+                            let covered = |ts: &mz_repr::Timestamp| {
+                                lower.less_equal(ts) && !upper.less_equal(ts)
+                            };
+                            window_uppers.insert(lower_ts, upper.clone());
+
+                            // Anything spilled under memory pressure now has bounds, so it is
+                            // finished here rather than at readiness. During a stall readiness is
+                            // precisely what is not happening, and a single-timestamp builder left
+                            // open holds its rows in memory until it does.
+                            let spilled_timestamps: Vec<_> =
+                                spilled.keys().copied().filter(covered).collect();
+                            for ts in spilled_timestamps {
+                                let builder = spilled.remove(&ts).expect("just looked up");
+                                let batch = builder.finish(lower.clone(), upper.clone()).await;
+                                window_batches.entry(lower_ts).or_default().push(batch);
+                            }
+
+                            // Same for the stash: these updates have their bounds now, so holding
+                            // them raw only grows the stash for as long as the frontier is stuck.
+                            let stashed_timestamps: Vec<_> =
+                                raw_stash.keys().copied().filter(covered).collect();
+                            for ts in stashed_timestamps {
+                                let entry = raw_stash.remove(&ts).expect("just looked up");
+                                raw_stash_bytes -= entry.bytes;
+                                let updates = entry.drain();
+                                // The entry can consolidate to nothing, and a builder that is
+                                // never handed an update has no largest timestamp to register.
+                                if updates.is_empty() {
+                                    continue;
+                                }
+                                let builder = window_builder(
+                                    &write,
+                                    &window_uppers,
+                                    &mut window_builders,
+                                    &mut window_batches,
+                                    lower_ts,
+                                )
+                                .await;
+                                for (row, diff) in updates {
+                                    stage_update(builder, row, ts, diff).await;
+                                }
+                            }
+
                             match in_flight_batches.entry(description) {
                                 std::collections::hash_map::Entry::Vacant(v) => {
                                     // This _should_ be `.retain`, but rust
@@ -785,12 +981,6 @@ fn write_batches<'scope>(
                     }
                 }
             }
-
-            let ready_events = std::iter::from_fn(|| desired_input.next_sync()).collect_vec();
-
-            // We know start the async work for the input we received. Until we finish the dataflow
-            // should be marked as busy.
-            let permit = busy_signal.acquire().await;
 
             for event in ready_events {
                 match event {
@@ -831,14 +1021,31 @@ fn write_batches<'scope>(
                                 // like it is receiving nothing.
                                 source_statistics.inc_updates_staged_by(1);
 
-                                // A timestamp already evicted from the stash keeps its own
-                                // builder, so later updates at that time join it rather than
+                                // Once a description covers this timestamp its bounds are known,
+                                // so the update goes straight into that description's builder.
+                                // Otherwise a timestamp already evicted from the stash keeps its
+                                // own builder, so later updates at that time join it rather than
                                 // starting the stash growing again.
-                                if let Some(builder) = spilled.get_mut(&ts) {
-                                    stage_update(builder, row, ts, diff).await;
-                                } else {
-                                    raw_stash_bytes +=
-                                        raw_stash.entry(ts).or_default().push(row, diff);
+                                let staged = match covering_window(&window_uppers, ts) {
+                                    Some(lower) => Some(
+                                        window_builder(
+                                            &write,
+                                            &window_uppers,
+                                            &mut window_builders,
+                                            &mut window_batches,
+                                            lower,
+                                        )
+                                        .await,
+                                    ),
+                                    None => spilled.get_mut(&ts),
+                                };
+
+                                match staged {
+                                    Some(builder) => stage_update(builder, row, ts, diff).await,
+                                    None => {
+                                        raw_stash_bytes +=
+                                            raw_stash.entry(ts).or_default().push(row, diff)
+                                    }
                                 }
                             }
                         }
@@ -879,6 +1086,17 @@ fn write_batches<'scope>(
                 if updates.is_empty() {
                     continue;
                 }
+                // Only timestamps ahead of the descriptions reach the stash, so there are no
+                // bounds to open this builder under other than the operator's own lower. That is
+                // what registers the batch as truncated once it is appended under the narrower
+                // bounds of the description that ends up covering it. `validate_truncate_batch`
+                // requires a batch's declared bounds to contain its append bounds, so the lower
+                // cannot be narrowed to this timestamp instead.
+                debug_assert!(
+                    covering_window(&window_uppers, ts).is_none(),
+                    "persist_sink {collection_id}/{shard_id}: covered timestamp {ts:?} left in \
+                    the stash rather than staged into its description's builder",
+                );
                 let builder = spilled.entry(ts).or_insert_with(|| {
                     BatchBuilderAndMetadata::new(write.builder(operator_batch_lower.clone()))
                 });
@@ -946,70 +1164,31 @@ fn write_batches<'scope>(
                     }
 
                     let (batch_lower, batch_upper) = batch_description;
-                    let covered = |time: &mz_repr::Timestamp| {
-                        batch_lower.less_equal(time) && !batch_upper.less_equal(time)
-                    };
+                    let lower = *batch_lower
+                        .as_option()
+                        .expect("minted descriptions have a single-element lower");
 
-                    let mut batch_tokens = vec![];
+                    // Every update this description covers was routed into its builder when it
+                    // arrived, or spilled and finished under these bounds, so nothing it owns is
+                    // still raw.
+                    debug_assert!(
+                        !raw_stash
+                            .keys()
+                            .chain(spilled.keys())
+                            .any(|ts| batch_lower.less_equal(ts) && !batch_upper.less_equal(ts)),
+                        "persist_sink {collection_id}/{shard_id}: description {:?} is ready with \
+                        updates it covers still unwritten",
+                        (&batch_lower, &batch_upper),
+                    );
 
-                    // This description is only ready once the desired frontier reached its upper,
-                    // so every update it covers has arrived. Whatever is still stashed for it is
-                    // all of it, and one builder can take the lot.
-                    //
-                    // The builder is opened on the first surviving update rather than up front,
-                    // because every stashed timestamp can consolidate to nothing and a batch with
-                    // no updates has no largest timestamp to register.
-                    //
-                    // Its lower is this description's own lower, not `operator_batch_lower`. Every
-                    // timestamp staged here passed `covered`, so the description's lower is at or
-                    // below all of them. `operator_batch_lower` is only safe for a builder opened
-                    // before the covering description is known: several descriptions can be ready
-                    // in one pass, they are processed in `in_flight_batches` order rather than by
-                    // lower, and each one processed advances `operator_batch_lower` to its own
-                    // upper. A description handled after a later sibling would otherwise build
-                    // with a lower already past the updates it owns.
-                    let stashed_timestamps: Vec<_> =
-                        raw_stash.keys().copied().filter(covered).collect();
-                    let mut coalesced: Option<SourceBatchBuilder> = None;
-                    for ts in stashed_timestamps {
-                        let entry = raw_stash.remove(&ts).expect("just looked up");
-                        raw_stash_bytes -= entry.bytes;
-                        for (row, diff) in entry.drain() {
-                            let builder = coalesced.get_or_insert_with(|| {
-                                BatchBuilderAndMetadata::new(write.builder(batch_lower.clone()))
-                            });
-                            stage_update(builder, row, ts, diff).await;
-                        }
-                    }
+                    let mut batch_tokens = window_batches.remove(&lower).unwrap_or_default();
 
-                    if let Some(builder) = coalesced {
+                    window_uppers.remove(&lower);
+                    if let Some(builder) = window_builders.remove(&lower) {
                         if collection_id.is_user() {
                             trace!(
                                 "persist_sink {collection_id}/{shard_id}: \
-                                    wrote coalesced batch from worker {}: ({:?}, {:?}), \
-                                    containing {:?}",
-                                worker_index, batch_lower, batch_upper, builder.metrics
-                            );
-                        }
-
-                        batch_tokens.push(
-                            builder
-                                .finish(batch_lower.clone(), batch_upper.clone())
-                                .await,
-                        );
-                    }
-
-                    // Timestamps evicted under memory pressure already have builders, one apiece.
-                    let spilled_timestamps: Vec<_> =
-                        spilled.keys().copied().filter(covered).collect();
-                    for ts in spilled_timestamps {
-                        let builder = spilled.remove(&ts).expect("just looked up");
-
-                        if collection_id.is_user() {
-                            trace!(
-                                "persist_sink {collection_id}/{shard_id}: \
-                                    wrote spilled batch from worker {}: ({:?}, {:?}) at {ts}, \
-                                    containing {:?}",
+                                    wrote batch from worker {}: ({:?}, {:?}), containing {:?}",
                                 worker_index, batch_lower, batch_upper, builder.metrics
                             );
                         }
@@ -1932,14 +2111,12 @@ mod tests {
         contents.iter().map(|(_, _, d)| *d).sum()
     }
 
-    /// Several descriptions can become ready in the same pass, and they are processed in
-    /// `in_flight_batches` order rather than by lower. Each one processed advances
-    /// `operator_batch_lower` to its own upper, so a description handled after a later sibling must
-    /// still build from its own lower to take the updates it owns.
+    /// Several descriptions can become ready in the same pass. Each is written under its own
+    /// bounds, so every batch holds exactly the updates its description covers however that ready
+    /// set happens to be ordered.
     ///
-    /// NOTE: `in_flight_batches` is a `HashMap`, so this only lands on the bad order some of the
-    /// time. Enough descriptions are used here that an all-ascending pass is unlikely, and the fix
-    /// makes correctness independent of the order either way.
+    /// NOTE: `in_flight_batches` is a `HashMap`, so the ready set comes out in no particular order.
+    /// Enough descriptions are used here that an all-ascending pass is unlikely.
     #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
     #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
     async fn write_batches_handles_descriptions_ready_in_one_pass() {
@@ -2241,6 +2418,238 @@ mod tests {
             i64::try_from(SNAPSHOT_ROWS).expect("small")
                 + i64::try_from(STALL_TIMES).expect("small"),
             "every staged update should be readable exactly once"
+        );
+    }
+
+    #[mz_ore::test]
+    fn next_description_upper_derives_from_the_frontier_or_commits_a_window() {
+        let window = Some(ts(10));
+
+        // Everything below the frontier has arrived, so that is the description, window or not.
+        assert_eq!(
+            next_description_upper(&frontier(5), &frontier(7), Some(ts(100)), window),
+            Some(frontier(7))
+        );
+        assert_eq!(
+            next_description_upper(&frontier(5), &frontier(7), None, None),
+            Some(frontier(7))
+        );
+
+        // Data has not run a full window past the upper, so there is nothing to commit to yet.
+        assert_eq!(
+            next_description_upper(&frontier(5), &frontier(5), Some(ts(14)), window),
+            None
+        );
+        // It has, so the window is committed even though the frontier has not moved.
+        assert_eq!(
+            next_description_upper(&frontier(5), &frontier(5), Some(ts(15)), window),
+            Some(frontier(15))
+        );
+        // And again from the committed upper, as far as the data reaches.
+        assert_eq!(
+            next_description_upper(&frontier(15), &frontier(5), Some(ts(25)), window),
+            Some(frontier(25))
+        );
+        assert_eq!(
+            next_description_upper(&frontier(25), &frontier(5), Some(ts(25)), window),
+            None
+        );
+
+        // Without a window, a stalled frontier mints nothing.
+        assert_eq!(
+            next_description_upper(&frontier(5), &frontier(5), Some(ts(100)), None),
+            None
+        );
+        // A fresh shard's upper spans the whole epoch and holds no data, so it is never cut up.
+        assert_eq!(
+            next_description_upper(&frontier(0), &frontier(0), Some(ts(100)), window),
+            None
+        );
+        // A collection that is done has no next description.
+        assert_eq!(
+            next_description_upper(&Antichain::new(), &frontier(7), Some(ts(100)), window),
+            None
+        );
+    }
+
+    /// A description committed ahead of the frontier gives arriving updates their bounds, so they
+    /// go into its builder rather than the stash. A stall then writes one batch for the window
+    /// however tight the budget is, and the rows sit in a builder that fills to the blob target
+    /// instead of a single-timestamp builder that stays under it and holds them in memory.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_routes_updates_into_the_description_covering_them() {
+        const SNAPSHOT_ROWS: usize = 4;
+        const STALL_TIMES: u64 = 16;
+        const DONE: u64 = STALL_TIMES + 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // The description arrives before the data, which is what the minter does once data runs a
+        // window past a frontier that is not moving.
+        // The frontier advance is what delivers the description, so it comes before the data, and
+        // it stops short of the description's upper to leave it in flight while the data arrives.
+        let mut script = vec![
+            Step::Description(0, DONE),
+            Step::AdvanceTo(1),
+            Step::Updates(1, SNAPSHOT_ROWS),
+        ];
+        for t in 2..=STALL_TIMES + 1 {
+            script.push(Step::Updates(t, 1));
+        }
+        script.push(Step::AdvanceTo(DONE));
+
+        // A zero budget, which nothing here reaches: an update covered by a description in hand
+        // never passes through the stash.
+        let emitted = run_write_batches(target.clone(), Arc::clone(&persist_clients), 0, script);
+
+        assert_eq!(
+            emitted.len(),
+            1,
+            "the whole window should share the committed description's builder, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            emitted[0].0,
+            EmittedBatch {
+                lower: 0,
+                upper: DONE,
+                data_max_ts: STALL_TIMES + 1,
+                inserts: u64::cast_from(SNAPSHOT_ROWS) + STALL_TIMES,
+            }
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(SNAPSHOT_ROWS).expect("small")
+                + i64::try_from(STALL_TIMES).expect("small"),
+            "grouping must not change what the shard ends up holding"
+        );
+    }
+
+    /// A spilled builder is finished as soon as a description covers it, rather than kept open for
+    /// later updates at its timestamp. It holds its rows in memory until it is finished, and
+    /// during a stall the readiness that used to finish it is exactly what is not happening.
+    /// Updates arriving at that timestamp afterwards go to the description's own builder, which
+    /// spills its parts to blob.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_finishes_a_spilled_batch_when_its_description_arrives() {
+        const PINNED: u64 = 2;
+        const BEFORE: usize = 4;
+        const AFTER: usize = 6;
+        const DONE: u64 = 8;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        // The advances are what flush each input, so they order the description against the data
+        // around it. Both stop short of `PINNED` + 1, which keeps the pinned timestamp writable.
+        let script = vec![
+            Step::Updates(PINNED, BEFORE),
+            Step::AdvanceTo(1),
+            Step::Description(0, DONE),
+            Step::AdvanceTo(PINNED),
+            Step::Updates(PINNED, AFTER),
+            Step::AdvanceTo(DONE),
+        ];
+
+        // A zero budget spills the first updates before their description arrives.
+        let emitted = run_write_batches(target.clone(), Arc::clone(&persist_clients), 0, script);
+
+        assert_eq!(
+            emitted.iter().map(|(b, _)| b.clone()).collect::<Vec<_>>(),
+            vec![
+                EmittedBatch {
+                    lower: 0,
+                    upper: DONE,
+                    data_max_ts: PINNED,
+                    inserts: u64::cast_from(BEFORE),
+                },
+                EmittedBatch {
+                    lower: 0,
+                    upper: DONE,
+                    data_max_ts: PINNED,
+                    inserts: u64::cast_from(AFTER),
+                },
+            ],
+            "the spilled batch should be closed at the description, leaving the later updates to \
+            the description's builder"
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            one_append(emitted, 0, DONE),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(BEFORE + AFTER).expect("small"),
+            "closing early must not change what the shard ends up holding"
+        );
+    }
+
+    /// Data crossing from one committed description into the next closes the first one's builder,
+    /// so each description gets its own batch under its own bounds rather than a builder spanning
+    /// the boundary between them.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread"))]
+    #[cfg_attr(miri, ignore)] // unsupported operation: returning ready events from epoll_wait
+    async fn write_batches_closes_a_window_when_data_moves_past_it() {
+        const SPLIT: u64 = 9;
+        const STALL_TIMES: u64 = 16;
+        const DONE: u64 = STALL_TIMES + 2;
+
+        let persist_clients = test_persist_clients();
+        let target = test_target();
+
+        let mut script = vec![
+            Step::Description(0, SPLIT),
+            Step::Description(SPLIT, DONE),
+            Step::AdvanceTo(1),
+        ];
+        for t in 1..=STALL_TIMES {
+            script.push(Step::Updates(t, 1));
+        }
+        script.push(Step::AdvanceTo(DONE));
+
+        let emitted = run_write_batches(target.clone(), Arc::clone(&persist_clients), 0, script);
+
+        let bounds: Vec<_> = emitted.iter().map(|(b, _)| (b.lower, b.upper)).collect();
+        assert_eq!(
+            bounds,
+            vec![(0, SPLIT), (SPLIT, DONE)],
+            "one batch per description, got {:?}",
+            emitted.iter().map(|(b, _)| b).collect::<Vec<_>>()
+        );
+        assert_eq!(emitted[0].0.data_max_ts, SPLIT - 1);
+        assert_eq!(emitted[1].0.data_max_ts, STALL_TIMES);
+        assert_eq!(
+            emitted[0].0.inserts + emitted[1].0.inserts,
+            STALL_TIMES,
+            "every update lands in exactly one of the two batches"
+        );
+
+        let total = append_and_read_back(
+            &target,
+            &persist_clients,
+            append_per_description(emitted),
+            DONE - 1,
+        )
+        .await;
+        assert_eq!(
+            total,
+            i64::try_from(STALL_TIMES).expect("small"),
+            "splitting across descriptions must not change what the shard holds"
         );
     }
 

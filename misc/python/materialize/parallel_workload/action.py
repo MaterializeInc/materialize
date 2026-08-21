@@ -2874,6 +2874,13 @@ class FlipFlagsAction(Action):
             # Always evict, evict under light load, never evict in practice.
             ["0", "1024", "16777216"]
         )
+        self.flags_with_values["storage_persist_sink_description_window"] = [
+            # Never commit a description ahead of the frontier, commit one for
+            # nearly every timestamp, and a production-like window.
+            "'0s'",
+            "'1s'",
+            "'5m'",
+        ]
         self.flags_with_values["enable_variadic_left_join_lowering"] = (
             BOOLEAN_FLAG_VALUES
         )
