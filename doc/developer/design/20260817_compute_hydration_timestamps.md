@@ -60,9 +60,11 @@ work itself, with no way to separate them.
    an environmentd restart and reconnection.
 6. Every row satisfies `installed_at <= started_at <= hydrated_at` where the
    values are non-NULL, and no row presents a later stage without an earlier one.
-7. No existing relation changes shape, semantics, or values.
-   `mz_compute_hydration_times`, `mz_compute_hydration_statuses`, and the
-   per-worker relation all keep returning exactly what they return today.
+7. No existing relation changes semantics or values.
+   `mz_compute_hydration_times` and `mz_compute_hydration_statuses` keep
+   returning exactly what they return today. The per-worker log keeps its
+   existing columns and their values, and gains three, so a consumer doing
+   `SELECT *` against it sees a wider row.
 
 ## Out of Scope
 
@@ -165,7 +167,8 @@ acknowledged rather than designed around.
 
 There is no event for hydration start today. Add
 `ComputeEvent::HydrationStart { export_id }`, logged from the three places a
-dataflow's computation becomes unblocked.
+dataflow's computation becomes unblocked. A fourth site fills the column in for
+dataflows whose start was never separately observable.
 
 **From `handle_schedule`**, which drops the suspension token. Guard it in the
 demux on `started_at` already being set, mirroring the existing guard on
@@ -203,12 +206,27 @@ objects. Emitting the event where they are created is simpler than filtering the
 and keeps the state machine total. Nobody should read hydration timings for log
 collections, and the relation's documentation should say so.
 
-Between them, the second and third cases cover every path by which a dataflow can
-begin computing without a `Schedule`, so `handle_hydration` should not need to
-repair anything. If it nonetheless observes a hydration event with `started_at`
-still NULL, that is an unanticipated path: stamp `started_at` from `installed_at`
-so the invariant holds, and soft-log, so the surprise is visible rather than
-silently absorbed.
+**And in `handle_hydration`, when the event arrives with `started_at` unset.**
+It is tempting to treat this as a repair for something unexpected, on the
+reasoning that `StartSignal` gates only imports, so a dataflow with no imports is
+the only one that can run before its `Schedule`. That reasoning is wrong. Having
+no imports is sufficient to start immediately, but it is not necessary in order to
+hydrate early: a dataflow that *does* import can still see its output frontier
+pass the as-of while suspended, when the arrangement it imports is already
+hydrated. A handful of `mz_catalog_server` indexes do exactly that on every
+bootstrap.
+
+So this is a third normal path, not an exotic one, and it needs no diagnostic.
+Stamp `started_at` from `installed_at`, which keeps the invariant total and reports
+the queueing interval as zero. Stamping from `hydrated_at` would invert it,
+charging the whole life of the dataflow to queueing and reporting zero hydration
+time for a dataflow that only ever hydrated.
+
+One consequence for consumers. A `started_at` stamped here is exactly equal to
+`installed_at`, where one stamped at creation is a separate event a few
+microseconds later. That difference is an artifact of how the two are stamped, not
+a contract, so nothing should read a zero queueing interval as distinguishing
+"never queued" from "queued immeasurably briefly".
 
 ### Log relation shape
 
@@ -238,19 +256,24 @@ variant means no new id and no second log collection producing overlapping data.
 
 ### Preserving the existing relations
 
-The builtin log currently named `mz_compute_hydration_times_per_worker`, in
-`src/catalog/src/builtin/mz_introspection.rs`, is renamed to
-`mz_compute_hydration_timestamps_per_worker` and exposes all six columns. A new
-builtin view takes the old name and projects the old three columns:
+The three columns are appended to the existing builtin log
+`mz_compute_hydration_times_per_worker`, in
+`src/catalog/src/builtin/mz_introspection.rs`, which keeps its name, its OID, and
+its object kind. A consumer doing `SELECT *` sees three new columns.
 
-```sql
-SELECT export_id, worker_id, time_ns
-FROM mz_introspection.mz_compute_hydration_timestamps_per_worker
-```
+Renaming it and leaving a projecting view behind the old name was considered and
+rejected. It buys only the `SELECT *` width on an unstable `mz_introspection`
+relation, and costs a new OID, a view, and the golden churn that comes with both.
+Every consumer of this relation selects columns by name: the introspection
+subscribe, `mz-debug`, and the goldens, which churn either way. Nothing reads it
+positionally. The consumer that *is* positional,
+`arrangement_sizes_snapshot`, decodes the aggregate
+`mz_internal.mz_compute_hydration_times` from a persist snapshot, and neither this
+change nor the rename would have touched that relation.
 
-**This is why `time_ns` is kept rather than replaced.** Because it is retained
-rather than derived from the timestamps, that projection is exact: no value
-changes, no precision is lost, and no cross-worker arithmetic is introduced.
+**`time_ns` is kept rather than replaced.** It is the reason the existing columns
+keep their exact values: retained rather than derived, so nothing is recomputed,
+no precision is lost, and no cross-worker arithmetic is introduced.
 Deriving `time_ns` as `hydrated_at - installed_at` would have moved it to
 microsecond precision, since `timestamptz` caps there, where today it is true
 nanoseconds. Deriving it after aggregation would additionally have absorbed
@@ -261,16 +284,15 @@ requires absolute times a duration cannot provide. Two columns with two document
 jobs rather than two sources of truth.
 
 Everything downstream is therefore untouched. The introspection subscribe in
-`src/adapter/src/coord/introspection.rs` keeps reading the old name and keeps its
-current SQL. `mz_internal.mz_compute_hydration_times` and
+`src/adapter/src/coord/introspection.rs` keeps its current SQL, since it names the
+columns it reads. `mz_internal.mz_compute_hydration_times` and
 `mz_internal.mz_compute_hydration_statuses` are not modified at all, so they keep
 their shapes, semantics, values, retained-metrics properties, indexes and shards.
-`arrangement_sizes_snapshot`, which decodes that collection positionally from a
-persist snapshot in `src/adapter/src/coord/message_handler.rs`, needs no change.
-Neither does the console query that joins it by name.
+`arrangement_sizes_snapshot` in `src/adapter/src/coord/message_handler.rs` needs
+no change, and neither does the console query that joins by name.
 
-This is what makes the design purely additive: it adds columns and a relation, and
-changes nothing that anything currently reads.
+So the change adds columns and changes no value that anything currently reads. The
+one thing it is not is invisible: the per-worker log is wider than it was.
 
 ### Sequence of events
 
@@ -415,7 +437,7 @@ for upgrades.
 
 - `src/compute/src/logging/compute.rs`: `ComputeEvent::HydrationStart`, the three
   `ExportState` fields, the packer, `handle_export`, `handle_export_dropped`,
-  `handle_hydration` including the soft-logged repair, and a new
+  `handle_hydration` including the `started_at` backfill, and a new
   `handle_hydration_start`. Also a `CollectionLogging` method alongside
   `set_hydrated`.
 - `src/compute/src/compute_state.rs`: log the start event from `handle_schedule`,
@@ -424,10 +446,8 @@ for upgrades.
 - `src/compute-client/src/logging.rs`: the widened `RelationDesc`.
   `LogVariant::desc` is the only exhaustive match a shape change touches, since
   the variant itself is unchanged.
-- `src/catalog/src/builtin/mz_introspection.rs`: rename the builtin log and add
-  the compat view.
-- `src/catalog/src/builtin.rs`: `BUILTINS_STATIC` registration for the new view.
-- `src/pgrepr-consts/src/oid.rs`: an OID for the new view.
+- `src/catalog/src/builtin/mz_introspection.rs`: the appended columns on the
+  existing builtin log. No rename, so no new OID and no `BUILTINS_STATIC` entry.
 - Goldens that hardcode this relation's identity, columns, OIDs or indexes:
   `test/sqllogictest/oid.slt`, `information_schema_tables.slt`,
   `mz_catalog_server_index_accounting.slt`, `cluster.slt`,
@@ -517,7 +537,7 @@ reached persist, or any signal that a replica crashed.
 
 The prototype is the compute and catalog change itself, exercised through
 testdrive against a targeted replica. The validating query selects from
-`mz_compute_hydration_timestamps_per_worker` on a cluster with a hydration
+`mz_compute_hydration_times_per_worker` on a cluster with a hydration
 concurrency limit and a handful of indexes, showing objects moving from waiting,
 to hydrating, to hydrated, with the queueing interval visible separately from the
 hydration interval. A second run after an environmentd restart shows identical
@@ -536,11 +556,12 @@ and not the compute controller".
 **Replace `time_ns` with the timestamps rather than keeping both.** Rejected for
 the reasons in "Preserving the existing relations".
 
-**Backfill `started_at` at the hydration event** instead of stamping it at
-creation for ungated dataflows. Rejected because the row would be wrong in the
-interim, reporting an object as queued while it hydrates, and because it defers a
-fact the replica already knows at creation time. Retained only as a soft-logged
-repair for paths this design does not anticipate.
+**Backfill `started_at` at the hydration event only,** instead of also stamping
+it at creation for dataflows with no imports. Rejected because the row would be
+wrong in the interim, reporting an object as queued while it hydrates, and because
+it defers a fact the replica already knows at creation. The backfill is kept as
+well, since it covers a case creation-time stamping cannot: see "A new hydration
+start event".
 
 **Narrow `mz_compute_hydration_statuses.hydration_time` to the interval its name
 claims.** Rejected. Monitoring and analytics depend on the current values, and the
@@ -578,8 +599,11 @@ named.
 - **Stamping location.** The replica, not the compute controller. See "Why the
   replica and not the compute controller".
 - **`time_ns` is kept.** See "Preserving the existing relations".
-- **`started_at` for ungated dataflows is stamped at creation,** not backfilled at
-  hydration. See "A new hydration start event".
+- **`started_at` for dataflows with no imports is stamped at creation,** with the
+  backfill at hydration kept for the cases creation-time stamping cannot see. See
+  "A new hydration start event".
+- **The per-worker log is widened in place,** keeping its name and OID, rather than
+  renamed behind a projecting view. See "Preserving the existing relations".
 - **`hydration_time` is left exactly as it is,** and no `queue_time` column is
   added. Future consumers read the timestamps. See "Alternatives".
 - **Clock skew.** Accepted and documented rather than designed around.
