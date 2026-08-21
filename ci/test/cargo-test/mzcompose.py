@@ -473,6 +473,7 @@ def run_cargo_nextest(
 
 def _handle_incremental_build_failure() -> None:
     print("--- Detected incremental build failure, clearing cargo target directories")
+    buildkite.annotate_cache_wipe("incremental build failure")
     for dir in ["target", "target-xcompile"]:
         if os.path.exists(dir):
             shutil.rmtree(dir, ignore_errors=True)
