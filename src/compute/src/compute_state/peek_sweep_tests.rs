@@ -29,6 +29,7 @@ use super::index_peek_tests::{
     TARGET_ID, cancelling_errors, index_peek_with_uuid, rows_answer, trace_bundle, wide_ok_rows,
 };
 use super::*;
+use crate::arrangement::manager::TraceBundle;
 
 /// The per-peek budget the budget-arming tests configure. Distinct from both the unbounded
 /// grant and the parameter's default, so that an assertion on it says the configured value was
@@ -157,7 +158,8 @@ impl Harness {
 
     /// Queues `peek` over `bundle`, as a peek whose frontiers were not yet ready is queued.
     fn add_pending(&mut self, peek: Peek, bundle: TraceBundle) {
-        let PendingPeek::Index(pending) = PendingPeek::index(peek, bundle) else {
+        let PendingPeek::Index(pending) = PendingPeek::index(peek, IndexTraces::Local(bundle))
+        else {
             unreachable!("built as an index peek")
         };
         let uuid = pending.peek.uuid;
