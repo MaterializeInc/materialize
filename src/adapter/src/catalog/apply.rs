@@ -1598,12 +1598,7 @@ impl CatalogState {
         // Extract notices directly from the owned dropped entries.
         for mut entry in dropped_entries {
             drop_ids.extend(entry.global_ids());
-            let metainfo = match entry.item_mut() {
-                CatalogItem::Index(idx) => idx.dataflow_metainfo.take(),
-                CatalogItem::MaterializedView(mv) => mv.dataflow_metainfo.take(),
-                _ => None,
-            };
-            if let Some(mut metainfo) = metainfo {
+            if let Some(metainfo) = entry.item_mut().dataflow_metainfo_mut() {
                 soft_assert_or_log!(
                     metainfo.optimizer_notices.iter().all_unique(),
                     "should have been pushed there by \
@@ -1639,19 +1634,8 @@ impl CatalogState {
                         if let Some(entry) = self.try_get_entry_by_global_id(item_id) {
                             let catalog_item_id = entry.id();
                             let entry = self.get_entry_mut(&catalog_item_id);
-                            let item = entry.item_mut();
-                            match item {
-                                CatalogItem::Index(idx) => {
-                                    if let Some(ref mut m) = idx.dataflow_metainfo {
-                                        m.optimizer_notices.retain(|x| &n != x);
-                                    }
-                                }
-                                CatalogItem::MaterializedView(mv) => {
-                                    if let Some(ref mut m) = mv.dataflow_metainfo {
-                                        m.optimizer_notices.retain(|x| &n != x);
-                                    }
-                                }
-                                _ => {}
+                            if let Some(m) = entry.item_mut().dataflow_metainfo_mut() {
+                                m.optimizer_notices.retain(|x| &n != x);
                             }
                         }
                     }
