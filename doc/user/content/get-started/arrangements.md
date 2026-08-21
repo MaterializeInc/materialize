@@ -1,6 +1,11 @@
 ---
 title: "Arrangements"
 description: "Understand how Materialize arrangements work."
+menu:
+  main:
+    parent: concepts
+    weight: 22
+    identifier: 'concepts-arrangements'
 aliases:
   - /overview/arrangements/
 ---
