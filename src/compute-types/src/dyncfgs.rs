@@ -84,6 +84,26 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 )
 .scoped(ParameterScope::Replica);
 
+/// The youngest chunk generation whose spilled bodies are compressed.
+///
+/// A chunk at generational depth `d` is rewritten with frequency
+/// proportional to `2^-d` under geometric merging, so compressing shallow
+/// generations buys pool bytes back for only a short stay at a guaranteed
+/// near-term codec round-trip. Generations below the floor spill under the
+/// identity codec: fully budgeted and swap-backed, with encode and decode
+/// reduced to copies. The default exempts only fresh (depth 0) chunks. A
+/// chunk that outlives a merge untouched ages a generation regardless, and
+/// its body is re-spilled compressed when it crosses the floor, so
+/// key-disjoint input cannot hold its backlog uncompressed indefinitely.
+/// `0` compresses every spilled body.
+pub const COLUMN_CHUNK_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
+    "column_chunk_compress_min_depth",
+    1,
+    "The youngest chunk generation whose spilled bodies are lz4-compressed in the buffer \
+     pool; younger generations store uncompressed. 0 compresses every spilled body.",
+)
+.scoped(ParameterScope::Replica);
+
 /// Resident-bytes budget fraction for chunk spilling. Two consumers read
 /// it: the column pager's tiered policy multiplies it against the
 /// announced memory limit, and the buffer pool (`mz_ore::pool`)
@@ -621,4 +641,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COLUMN_PAGED_BATCHER_SPILL_WORKER_COUNT)
         .add(&COLUMN_PAGED_BATCHER_EAGER_BACKING)
         .add(&COLUMN_PAGED_BATCHER_POOL_RSS_TARGET_FRACTION)
+        .add(&COLUMN_CHUNK_COMPRESS_MIN_DEPTH)
 }
