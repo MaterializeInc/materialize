@@ -13,6 +13,12 @@
 //! default privileges for the scope it names. Each category is reconciled
 //! against the catalog by the module that owns it, so a scope that already
 //! matches the project emits no SQL.
+//!
+//! Declaring a mod file claims the scope: every category is reconciled, so a
+//! grant or comment the file stops declaring is removed even if the file never
+//! mentioned that category. A scope with no mod file declares nothing and is
+//! left alone entirely, which is why the caller only reconciles scopes that
+//! produced at least one mod statement.
 
 use crate::cli::CliError;
 use crate::cli::commands::comments::{self, CommentObject};

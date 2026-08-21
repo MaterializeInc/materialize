@@ -531,28 +531,55 @@ impl<'a> DeploymentExecutor<'a> {
             return Ok(());
         }
 
-        // Step 1: Create databases
+        // Step 1: Create the databases that do not exist yet.
+        //
+        // `CREATE ... IF NOT EXISTS` would be harmless, but emitting it
+        // unconditionally would put a statement in every plan even when nothing
+        // has changed. Scope reconciliation below runs on every apply, so the
+        // existence check is what keeps a converged plan empty.
         let databases: BTreeSet<&str> = schema_set.iter().map(|sq| sq.database.as_str()).collect();
+        let database_names: Vec<String> = databases.iter().map(|db| db.to_string()).collect();
+        let existing_databases = self
+            .client
+            .introspection()
+            .check_databases_exist(&database_names)
+            .await
+            .map_err(CliError::Connection)?;
         for db in &databases {
+            if existing_databases.contains(*db) {
+                continue;
+            }
             let sql = format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(db));
             self.execute_sql(&sql).await?;
         }
 
-        // Step 2: Create schemas (with optional staging suffix)
-        for sq in schema_set {
-            let schema_name = match staging_suffix {
-                Some(suffix) => format!("{}{}", sq.schema, suffix),
-                None => sq.schema.clone(),
-            };
-            verbose!(
-                "Creating schema {}.{} if not exists",
-                sq.database,
-                schema_name
-            );
+        // Step 2: Create the schemas that do not exist yet (with optional
+        // staging suffix).
+        let target_schemas: Vec<(String, String)> = schema_set
+            .iter()
+            .map(|sq| {
+                let schema_name = match staging_suffix {
+                    Some(suffix) => format!("{}{}", sq.schema, suffix),
+                    None => sq.schema.clone(),
+                };
+                (sq.database.clone(), schema_name)
+            })
+            .collect();
+        let existing_schemas = self
+            .client
+            .introspection()
+            .check_schemas_exist(&target_schemas)
+            .await
+            .map_err(CliError::Connection)?;
+        for (database, schema_name) in &target_schemas {
+            if existing_schemas.contains(&(database.clone(), schema_name.clone())) {
+                continue;
+            }
+            verbose!("Creating schema {}.{} if not exists", database, schema_name);
             let sql = format!(
                 "CREATE SCHEMA IF NOT EXISTS {}.{}",
-                quote_identifier(&sq.database),
-                quote_identifier(&schema_name)
+                quote_identifier(database),
+                quote_identifier(schema_name)
             );
             self.execute_sql(&sql).await?;
         }

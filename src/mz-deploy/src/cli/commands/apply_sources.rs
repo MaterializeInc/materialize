@@ -58,9 +58,12 @@ pub async fn plan(
         .await
         .map_err(CliError::Connection)?;
 
+    // Every schema this phase manages, not just the ones hosting a missing
+    // object. `prepare_schemas` creates only what is absent, and reconciles the
+    // database and schema configuration declared in mod files on every apply, so
+    // drift there is closed even when no object needs creating.
     let schemas: BTreeSet<_> = target_objects
         .iter()
-        .filter(|(obj_id, _)| !existing.contains(obj_id))
         .map(|(obj_id, _)| {
             project::SchemaQualifier::new(
                 obj_id.expect_database().to_string(),
