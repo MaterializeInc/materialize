@@ -41,7 +41,7 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::command_channel;
-use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::compute_state::{ActiveComputeState, ComputeState, PendingPeek, ReportedFrontier};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 use crate::sharing::ArrangementSharingRegistry;
 
@@ -284,6 +284,17 @@ impl ResponseSender {
         self.nonce = Some(nonce);
     }
 
+    /// Builds a `ResponseSender` with the nonce pre-initialized, for tests that drive an
+    /// `ActiveComputeState` outside the full `serve` protocol.
+    #[cfg(test)]
+    pub(crate) fn for_test(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>) -> Self {
+        Self {
+            inner,
+            worker_id: 0,
+            nonce: Some(Uuid::nil()),
+        }
+    }
+
     /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let nonce = self.nonce.expect("nonce must be initialized");
@@ -504,7 +515,31 @@ impl<'w> Worker<'w> {
 
             self.handle_pending_commands()?;
 
+            let role = self.role;
+            let worker_index = self.timely_worker.index();
             if let Some(mut compute_state) = self.activate_compute() {
+                if role == ComputeRuntimeRole::Interactive {
+                    // Notification-driven shared-index resolution: re-examine only the pending work
+                    // whose dependency was marked dirty (publication or seal) since the last drain.
+                    // An empty dirty set means the worker woke for a command or its maintenance
+                    // tick, and no pending shared-index work is touched. This replaces the
+                    // every-step scan for index peeks, which the interactive runtime serves from
+                    // the sharing registry via `pending_work`, not `pending_peeks`.
+                    let dirty = compute_state
+                        .compute_state
+                        .sharing_registry
+                        .take_dirty(worker_index);
+                    if !dirty.is_empty() {
+                        compute_state.resolve_dirty(dirty);
+                    }
+                }
+                // Retire ready peeks from `pending_peeks`. Fast-path persist peeks
+                // (`PendingPeek::Persist`) land here on every runtime, including the interactive
+                // one, and their persist-read task wakes the worker through its activator. That
+                // wake has no dirty signal in the sharing registry, so the interactive runtime must
+                // still scan `pending_peeks` here or the peek is enqueued once and never retired.
+                // The scan is cheap: on the interactive runtime `pending_peeks` holds only
+                // in-flight persist peeks, since index peeks route through `resolve_dirty` above.
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
@@ -533,6 +568,17 @@ impl<'w> Worker<'w> {
                 self.workers_per_process,
                 self.storage_log_reader.take(),
             ));
+
+            // The interactive runtime resolves deferred peeks on notification from the sharing
+            // registry. Register this worker's cross-thread waker so a publication or seal in the
+            // registry can push it back to re-examine pending work. The empty operator address
+            // targets the worker's scheduler, matching the persist-peek wake path. Only the
+            // interactive runtime defers work this way; the maintenance runtime keeps its poll.
+            if self.role == ComputeRuntimeRole::Interactive {
+                let activator = self.timely_worker.sync_activator_for([].into());
+                self.sharing_registry
+                    .register_waker(self.timely_worker.index(), activator);
+            }
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
     }
@@ -609,6 +655,12 @@ impl<'w> Worker<'w> {
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
             compute_state.command_history.discard_peeks();
             compute_state.command_history.reduce();
+
+            // NOTE: the standing holds in the sharing registry are deliberately NOT cleared here.
+            // One is per collection and carries no dataflow identity, so it cannot go stale across a
+            // reconnection, and it only ever rises. Clearing it would drop the hold back to the
+            // minimum time until the replayed compactions raised it again. See
+            // `doc/developer/design/20260720_two_runtime_compute/design.md`.
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
             // suitable replacements for the requested dataflows. A dataflow is "certainly installed"
@@ -779,6 +831,16 @@ impl<'w> Worker<'w> {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
                     logger.log(&peek.as_log_event(false));
+                }
+            }
+
+            // Remove all interactive deferred work, which belongs to the reconciled-away client
+            // connection. Its peeks live here, not in `pending_peeks`.
+            compute_state.dep_index.clear();
+            for (_, peek) in std::mem::take(&mut compute_state.pending_work) {
+                // Log dropping the peek request, reusing `PendingPeek`'s log event.
+                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                    logger.log(&PendingPeek::IndexShared(peek).as_log_event(false));
                 }
             }
 
