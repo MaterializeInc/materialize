@@ -168,7 +168,9 @@ use crate::logging::compute::{
 use crate::render::columnar::CollectionEdge;
 use crate::render::context::{ArrangementFlavor, Context};
 use crate::render::errors::DataflowErrorSer;
-use crate::shared_trace::PublishArrangement;
+use crate::server::ComputeRuntimeRole;
+use crate::shared_trace::{PublishArrangement, SharedErrsFrontier, SharedOksFrontier};
+use crate::sharing::{ArrangementSharingRegistry, SharedIndexArrangement};
 use crate::typedefs::{ErrBatcher, ErrBuilder, ErrSpine, KeyBatcher, MzTimestamp};
 use mz_row_spine::{DatumSeq, RowRowBatcher, RowRowBuilder};
 
@@ -558,6 +560,151 @@ pub fn build_compute_dataflow(
     });
 }
 
+/// Imports the maintenance-published `oks`/`errs` arrangements for `idx_id` from `registry` into
+/// `outer` as a static snapshot at `as_of`, bounded by `until`, via
+/// `SharedTraceHandle::import_snapshot_at`.
+///
+/// Binds through [`ArrangementSharingRegistry::get_or_create_placeholder`], which always returns a
+/// slot: an existing published arrangement, or a freshly created placeholder if the dependency is not
+/// yet published on `worker_index`. An import over an unadopted placeholder produces no data and holds
+/// its output frontier at the minimum until a maintenance publisher adopts the same slot. This is what
+/// lets `handle_create_dataflow` build every interactive dataflow immediately in command arrival order
+/// rather than deferring a build whose dependency is not yet published.
+///
+/// Returns the slot `Arc<SharedIndexArrangement>` alongside the arrangements. The caller MUST retain
+/// it for as long as the import is alive. A `SharedTraceHandle` holds only the inner
+/// `Arc<SharedTrace>` one level down, so the slot's strong count is the registry's only measure of
+/// whether a reader still depends on it.
+///
+/// The read hold is the returned `Arranged`'s own `trace`, registered at `as_of`, exactly as
+/// differential's `TraceAgent::import_frontier_core` makes its `TraceAgent` clone the hold. Retaining
+/// the `Arranged` (a `CollectionBundle` does) pins the shared trace, and consumers downgrade it as
+/// their frontiers advance, so a long-lived import lets the publisher compact behind it. A separate
+/// hold token would defeat that: the publisher forwards the *meet* of the registered holds, so one
+/// hold nobody downgrades is a floor under every hold that is downgraded.
+///
+/// Cleanup of the imported maintenance index is not this runtime's responsibility, and is not
+/// coordinated across runtimes. It rests on the controller's read-hold discipline: the controller
+/// holds a read hold on the imported id for every reader (a peek, or a dataflow importing it) and
+/// releases that hold only once the reader retires, at which point it may issue the index's
+/// `AllowCompaction` (see `mz_compute_client::controller::instance::Instance::finish_peek`). The
+/// interactive runtime releases these handle holds and reports its empty frontier when its own
+/// dataflow is dropped, which reaches the controller before it frees the index. So the imported
+/// index is never compacted or dropped while this import still reads it, without any cross-runtime
+/// signal. A controller that violated this discipline would be an incorrect protocol instantiation,
+/// which the runtime panics on rather than defends against.
+///
+/// Panics if the slot's `since` is already beyond `as_of` at import time: the controller offered
+/// an `as_of` the shared trace can no longer read accurately, a protocol error.
+///
+/// The import replays the published chain and tracks the shared trace's frontier, presenting the
+/// accumulation at `as_of` bounded by `until`. Its output capability drops once the trace seals past
+/// `until`, so a single-time interactive read completes. The returned `stream` and `trace` stay
+/// consistent (the trace never runs ahead of the stream), which a differential join over the import
+/// requires. See [`crate::shared_trace::SharedTraceHandle::import_snapshot_at`].
+/// Reports a publication point refusing to serve `as_of`, and aborts.
+///
+/// A refusal is a protocol-ordering failure rather than an unservable read, so it must stay loud. The
+/// diagnostics say which side moved: a controller frontier beyond `as_of` means the controller
+/// released and maintenance applied it ahead of this render, while `None` means the published `since`
+/// came from the publisher's own floor instead. `part` names which of an index's two arrangements
+/// refused, since they are independent publication points with independent holds.
+///
+/// The standing hold is the value that says whether anything here could have prevented it. Equal to
+/// the refusing `since` means this runtime had already applied the compaction before it built this
+/// dataflow, so the create was ordered behind it on this runtime's own stream and the arrangement was
+/// legitimately compacted. Below it means the publisher escaped its bound.
+fn report_compacted_past<T: std::fmt::Debug>(
+    idx_id: GlobalId,
+    part: &str,
+    as_of: &Antichain<mz_repr::Timestamp>,
+    since: &Antichain<mz_repr::Timestamp>,
+    diagnostics: (
+        Option<Antichain<T>>,
+        Antichain<T>,
+        Antichain<T>,
+        Antichain<T>,
+    ),
+) -> ! {
+    let (writer_logical, standing_hold, published_since, published_upper) = diagnostics;
+    panic!(
+        "Index {idx_id} ({part}) has been allowed to compact beyond the dataflow as_of: \
+         since {:?}, as_of {:?}, controller allow_compaction {:?}, standing hold {:?}, \
+         published since {:?}, published upper {:?}",
+        since.elements(),
+        as_of.elements(),
+        writer_logical.as_ref().map(|f| f.elements()),
+        standing_hold.elements(),
+        published_since.elements(),
+        published_upper.elements(),
+    )
+}
+
+fn import_shared_index<'outer>(
+    outer: Scope<'outer, mz_repr::Timestamp>,
+    registry: &ArrangementSharingRegistry,
+    idx_id: GlobalId,
+    name: &str,
+    as_of: &Antichain<mz_repr::Timestamp>,
+    until: &Antichain<mz_repr::Timestamp>,
+) -> (
+    Arranged<'outer, SharedOksFrontier>,
+    Arranged<'outer, SharedErrsFrontier>,
+    Arc<SharedIndexArrangement>,
+) {
+    // Pairwise import reads publisher worker `i` from importer worker `i`, so worker indices must
+    // line up. The primitive's import additionally asserts equal total peer counts.
+    let worker_index = outer.index();
+    let peers = outer.peers();
+    // Bind through get-or-create so a not-yet-published dependency yields a placeholder rather than
+    // failing. The returned slot Arc is handed back to the caller, which retains it (see the doc
+    // comment): eviction counts live readers by this Arc's strong count, and the handles minted below
+    // wrap only the inner `Arc<SharedTrace>`, which does not contribute to that count.
+    let slot = registry.get_or_create_placeholder(idx_id, worker_index, peers);
+
+    // Mint at `as_of`. `handle_at` checks the published `since` and registers the hold under one
+    // acquisition of the trace's state lock, so the handle is one the trace can still honour.
+    // Observing `since`, deciding it permits `as_of`, and then advancing a hold would be three
+    // acquisitions with the publisher free to advance `since` between any two. A fresh placeholder's
+    // `since` is `minimum`, so this succeeds for an unadopted slot.
+    //
+    // A failure is a protocol-ordering failure, not a serving failure, so it must stay loud. See the
+    // protocol invariants in the design doc: the controller's read hold is realized on the replica
+    // only when this runtime renders, and maintenance may have applied an `AllowCompaction` for
+    // `idx_id` before that. `writer_logical` says which side moved: `Some(f)` with `f` beyond `as_of`
+    // means the controller released and maintenance applied it ahead of this render, `None` means the
+    // published `since` came from the publisher's own hold instead.
+    let oks_handle = match slot.oks.handle_at(as_of) {
+        Ok(handle) => handle,
+        Err(since) => report_compacted_past(idx_id, "oks", as_of, &since, slot.oks.diagnostics()),
+    };
+    let errs_handle = match slot.errs.handle_at(as_of) {
+        Ok(handle) => handle,
+        Err(since) => report_compacted_past(idx_id, "errs", as_of, &since, slot.errs.diagnostics()),
+    };
+
+    // These handles' own registrations end with this function. The hold that outlives it is the one
+    // `import_snapshot_at` clones into each returned `Arranged`, which is what a consumer downgrades.
+    //
+    // Import a static snapshot at `as_of`, bounded by `until`. Interactive work is single-time, so a
+    // snapshot is exactly what is needed, and it avoids the live import's forward-batch replay
+    // (whose capability handling and lack of `as_of` coalescing are unsound for a read at `as_of`).
+    let oks_arranged = oks_handle.import_snapshot_at(
+        outer.clone(),
+        &format!("Shared{name}"),
+        as_of.clone(),
+        until.clone(),
+    );
+    let errs_arranged = errs_handle.import_snapshot_at(
+        outer,
+        &format!("SharedErr{name}"),
+        as_of.clone(),
+        until.clone(),
+    );
+
+    (oks_arranged, errs_arranged, slot)
+}
+
 // This implementation block allows child timestamps to vary from parent timestamps,
 // but requires the parent timestamp to be `repr::Timestamp`.
 impl<'g, T> Context<'g, T>
@@ -602,6 +749,23 @@ where
         snapshot_mode: SnapshotMode,
         start_signal: StartSignal,
     ) {
+        // The interactive runtime maintains no traces of its own: the maintenance runtime publishes
+        // them into the per-process sharing registry. Source the import from there via change-stream
+        // replay. The maintenance runtime keeps using the local `TraceManager` below, unchanged.
+        if compute_state.role() == ComputeRuntimeRole::Interactive {
+            self.import_index_shared(
+                outer,
+                compute_state,
+                tokens,
+                input_probe,
+                idx_id,
+                idx,
+                typ,
+                start_signal,
+            );
+            return;
+        }
+
         if let Some(traces) = compute_state.traces.get_mut(&idx_id) {
             assert!(
                 PartialOrder::less_equal(&traces.compaction_frontier(), &self.as_of_frontier),
@@ -682,6 +846,79 @@ where
             );
         }
     }
+
+    /// The interactive-runtime counterpart to the maintenance [`Self::import_index`] path.
+    ///
+    /// Imports the published index *as an arrangement* via [`ArrangementFlavor::SharedTrace`], keyed
+    /// and permuted as the LIR plan expects, so a downstream `Get` of `idx.on_id` and the joins and
+    /// reduces below it consume an arrangement rather than re-deriving one from a collection. Sources
+    /// it from the per-process sharing registry rather than the local `TraceManager`, which holds
+    /// nothing on the interactive runtime; see [`import_shared_index`] for the read-hold semantics.
+    ///
+    /// The import is a static snapshot at `as_of`, coalesced to `as_of` and bounded by `until`.
+    /// Interactive work is single-time, so a snapshot is what a one-shot peek or its query dataflow
+    /// needs. Multi-time SUBSCRIBE would need the live change stream instead, and must not reuse this
+    /// path.
+    fn import_index_shared<'outer>(
+        &mut self,
+        outer: Scope<'outer, mz_repr::Timestamp>,
+        compute_state: &ComputeState,
+        tokens: &mut BTreeMap<GlobalId, Rc<dyn Any>>,
+        input_probe: probe::Handle<mz_repr::Timestamp>,
+        idx_id: GlobalId,
+        idx: &IndexDesc<LirScalarExpr>,
+        _typ: &ReprRelationType,
+        start_signal: StartSignal,
+    ) {
+        let name = format!("Index({}, {:?})", idx.on_id, idx.key);
+        // Bound the snapshot to the single read time `as_of`. Interactive work is single-time, so the
+        // import's capability must drop once the shared trace seals past `as_of`, letting the one-shot
+        // result complete. `self.until` may be empty (unbounded) for a long-lived dependency, which a
+        // live `upper` never reaches, so it cannot serve as the snapshot bound.
+        //
+        // `try_step_forward` yields the frontier strictly greater than `as_of`. For an `as_of` at
+        // `Timestamp::MAX` there is no such finite time, so the element drops out and the bound is the
+        // empty (end-of-time) frontier, matching the semantics of "read the final state".
+        let snapshot_until = Antichain::from_iter(
+            self.as_of_frontier
+                .iter()
+                .filter_map(|t| t.try_step_forward()),
+        );
+        let (mut oks_arranged, errs_arranged, slot) = import_shared_index(
+            outer,
+            &compute_state.sharing_registry,
+            idx_id,
+            &name,
+            &self.as_of_frontier,
+            &snapshot_until,
+        );
+
+        // Attach the input probe to the replayed batch stream so hydration tracking observes it,
+        // mirroring the maintenance import.
+        oks_arranged.stream = oks_arranged.stream.probe_with(&input_probe);
+
+        // Enter the dataflow scope and gate on the start signal, mirroring the maintenance Trace
+        // import's `.enter(self.scope).with_start_signal(..)`. The shared handle shares the
+        // maintenance arrangement's batch/cursor types, so the entered `Arranged` is a real
+        // arrangement `ArrangementFlavor::SharedTrace` can carry and downstream operators consume.
+        let ok_arranged = oks_arranged
+            .enter(self.scope)
+            .with_start_signal(start_signal.clone());
+        let err_arranged = errs_arranged
+            .enter(self.scope)
+            .with_start_signal(start_signal);
+
+        let bundle = CollectionBundle::from_expressions(
+            idx.key.clone(),
+            ArrangementFlavor::SharedTrace(idx_id, ok_arranged, err_arranged),
+        );
+        self.update_id(Id::Global(idx.on_id), bundle);
+
+        // The slot Arc's strong count marks a live reader, so it must outlive the dataflow. The read
+        // hold is not in here: it lives in the `Arranged`s the bundle above retains, so that a
+        // consumer can downgrade it. See `import_shared_index`.
+        tokens.insert(idx_id, Rc::new(slot));
+    }
 }
 
 // This implementation block requires the scopes have the same timestamp as the trace manager.
@@ -749,14 +986,15 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                 // moving their traces into the `TraceBundle` below.
                 if compute_state.role().publishes() {
                     // Adopt the registry's placeholder for `idx_id` rather than publishing fresh and
-                    // inserting: whichever side touches `idx_id` first creates the slot, so filling
-                    // it in place cannot overwrite a placeholder a reader has already imported.
+                    // inserting: whichever side, this maintenance render or an interactive import
+                    // ahead of it, touches `idx_id` first creates the slot, so filling it in place
+                    // cannot overwrite a placeholder a reader has already imported.
                     //
-                    // Both halves signal on seal. A read whose result is an error (a runtime
-                    // division-by-zero, or a `WITH MUTUALLY RECURSIVE ... ERROR AT RECURSION LIMIT`
-                    // that trips its limit) carries its data on the errs stream, whose frontier is
-                    // held back until the error is emitted, so an oks-only signal leaves it stuck,
-                    // and vice versa for a normal result.
+                    // Both halves signal on seal. A fast-path peek whose result is an error (a
+                    // runtime division-by-zero, or a `WITH MUTUALLY RECURSIVE ... ERROR AT RECURSION
+                    // LIMIT` that trips its limit) carries its data on the errs stream, whose
+                    // frontier is held back until the error is emitted, so an oks-only signal leaves
+                    // it stuck, and vice versa for a normal result.
                     let worker_index = self.scope.index();
                     let slot = compute_state.sharing_registry.get_or_create_placeholder(
                         idx_id,
@@ -788,9 +1026,9 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
 
                 // Mirror the trace aliasing in the sharing registry: re-register the arrangement
                 // already published under `gid` on this worker under `idx_id` as well. This arm
-                // builds no streams of its own, so it installs no seal signal of its own.
-                // `reexport` records `idx_id` as an alias of `gid` so `gid`'s publisher wakes reads
-                // waiting on `idx_id`'s seal. Without that, such a read hangs.
+                // builds no streams of its own, so it installs no seal-signal tap like the `Local`
+                // arm above. `reexport` records `idx_id` as an alias of `gid` so `gid`'s tap wakes
+                // interactive peeks waiting on `idx_id`'s seal. Without that, such a peek hangs.
                 if compute_state.role().publishes() {
                     compute_state.sharing_registry.reexport(
                         &gid,
@@ -799,6 +1037,16 @@ impl<'g> Context<'g, mz_repr::Timestamp> {
                         self.scope.peers(),
                     );
                 }
+            }
+            Some(ArrangementFlavor::SharedTrace(..)) => {
+                // Only the interactive runtime produces `SharedTrace`, and only for imports it reads
+                // from the sharing registry. Its exports are transient query outputs, which are
+                // freshly rendered `Local` arrangements (a join/reduce output), never a direct
+                // re-export of an imported shared arrangement. The maintenance runtime's imports are
+                // `Local`/`Trace`. So an export can never observe a `SharedTrace` input.
+                unreachable!(
+                    "interactive runtime does not re-export an imported shared arrangement"
+                );
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -935,6 +1183,14 @@ where
                         outer.peers(),
                     );
                 }
+            }
+            Some(ArrangementFlavor::SharedTrace(..)) => {
+                // See `export_index`: only the interactive runtime produces `SharedTrace`, and its
+                // exports are freshly rendered `Local` query outputs, never a re-export of an
+                // imported shared arrangement, so an export can never observe this variant.
+                unreachable!(
+                    "interactive runtime does not re-export an imported shared arrangement"
+                );
             }
             None => {
                 println!("collection available: {:?}", bundle.collection.is_none());
@@ -1561,6 +1817,9 @@ impl<'scope, T: RenderTimestamp + MaybeBucketByTime> Context<'scope, T> {
                     Trace(_, a, _) => {
                         a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
                     }
+                    SharedTrace(_, a, _) => {
+                        a.stream = self.log_operator_hydration_inner(a.stream.clone(), lir_id);
+                    }
                 }
             }
             None => {
@@ -2129,3 +2388,6 @@ impl Pairer {
         (first, second)
     }
 }
+
+#[cfg(test)]
+mod tests;
