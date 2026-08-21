@@ -190,14 +190,9 @@ impl CatalogState {
             CatalogItem::Func(func) => {
                 self.pack_func_update(id, schema_id, name, owner_id, func, diff)
             }
-            // A metric sink packs no builtin-table row, so it holds a catalog name that no
-            // catalog relation reports. SQL-572 adds the `mz_metric_sinks` view. Until then,
-            // listing or dropping a metric sink requires knowing its name out of band.
-            //
-            // NOTE: creating a metric sink takes SELECT on the FROM relation, not ownership
-            // of it, so once metric sinks are user-creatable this gap would let a reader
-            // egress another role's rows with no catalog relation the owner could see it in.
-            // SQL-572 has to land before user-facing metric sink DDL does.
+            // Tables, views, and metric sinks are exposed through materialized
+            // views derived from `mz_catalog_raw`, and logs and secrets never
+            // had builtin-table rows, so none pack a row here.
             CatalogItem::Table(_)
             | CatalogItem::View(_)
             | CatalogItem::Log(_)
