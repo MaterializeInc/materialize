@@ -131,9 +131,10 @@ def get_minimal_system_parameters(
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
         "ore_overflowing_behavior": "panic",
-        # Tiny so the sink's stash eviction path runs in tests. The production
-        # default is large enough that most stalls never reach it.
-        "storage_persist_sink_max_raw_stash_bytes": "4096",
+        # Narrow enough that a snapshot in these tests commits several
+        # descriptions and pays little at its end. parallel-workload rolls the
+        # widths production is meant to run at.
+        "storage_persist_sink_description_window": "1s",
         "storage_source_snapshot_concurrent_replication": "true",
         "unsafe_enable_table_keys": "true",
         # Keep the 0dt stability soak out of the critical path for tests. The
@@ -248,6 +249,11 @@ def get_variable_system_parameters(
         # variant lets randomized runs pair a full budget with delay=0s.
         VariableSystemParameter(
             "persist_blob_hedged_get_budget_ratio", "0.01", ["1.0", "0.01"]
+        ),
+        # A ceiling near the 1s window keeps the doubling short so a snapshot
+        # in CI commits many descriptions; the larger ones let it widen.
+        VariableSystemParameter(
+            "storage_persist_sink_description_window_max", "5min", ["2s", "30s", "5min"]
         ),
         # -----
         # Others (ordered by name),
