@@ -83,6 +83,23 @@ pub const ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether to launch compute replicas with a second, interactive compute timely runtime.
+///
+/// With the flag on, a replica advertises an `interactive` port and gets an
+/// `--interactive-compute-timely-config` argument, its runtimes take the `Maintenance` and
+/// `Interactive` roles, maintenance publishes its index arrangements for the interactive runtime to
+/// read, and peeks and peek dataflows route to the interactive runtime.
+///
+/// Read when a replica is provisioned, so it is not a live toggle: a running replica keeps the
+/// layout it was launched with until it is next created. Replica-scoped, but resolved in
+/// `environmentd`, because the controller decides `ServiceConfig::ports` before the replica exists.
+pub const ENABLE_COMPUTE_INTERACTIVE_RUNTIME: Config<bool> = Config::new(
+    "enable_compute_interactive_runtime",
+    false,
+    "Whether to launch compute replicas with a second, interactive compute timely runtime.",
+    ParameterScope::Replica,
+);
+
 /// Adds the full set of all controller `Config`s.
 pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
     configs
@@ -95,4 +112,5 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&TIMELY_ZERO_COPY_LIMIT)
         .add(&ARRANGEMENT_EXERT_PROPORTIONALITY)
         .add(&ENABLE_PAUSED_CLUSTER_READHOLD_DOWNGRADE)
+        .add(&ENABLE_COMPUTE_INTERACTIVE_RUNTIME)
 }
