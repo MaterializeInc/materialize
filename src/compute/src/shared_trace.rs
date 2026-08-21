@@ -23,13 +23,6 @@
 //!   like any trace handle, from any thread. [`SharedReader::import_frontier_core`] replays the
 //!   shared arrangement into another scope.
 
-// TODO(CPU-215): drop both once `crate::sharing` calls this module. Nothing in the crate does yet,
-// so every item here reads as dead and the re-exports below as unused. The alternative, exporting
-// the module publicly to keep the analysis quiet, would ship a crate-internal primitive on the
-// public surface. Comments throughout name `crate::sharing` for the same reason: it is the caller
-// this module is built for.
-#![allow(dead_code, unused_imports)]
-
 mod publish;
 
 use differential_dataflow::trace::TraceReader;
