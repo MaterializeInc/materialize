@@ -373,6 +373,16 @@ where
         state.logical_holds.values().cloned().collect()
     }
 
+    /// The physical holds currently registered against this publication point.
+    ///
+    /// Test-only. A handle reports a weaker physical frontier than it holds, so the hold cannot be
+    /// read back through `TraceReader::get_physical_compaction`.
+    #[cfg(test)]
+    pub(crate) fn physical_holds(&self) -> Vec<Antichain<Tr::Time>> {
+        let state = self.shared.state.lock().expect("shared trace poisoned");
+        state.physical_holds.values().cloned().collect()
+    }
+
     /// The number of batches in the published chain.
     ///
     /// Test-only. Counting through a handle would register a physical hold and perturb the merge
@@ -453,9 +463,21 @@ pub struct SharedTraceHandle<Tr: TraceReader> {
     /// This handle's own logical frontier, mirrored into `logical_holds[id]`. Kept locally so
     /// `get_logical_compaction` can return a borrow.
     logical: Antichain<Tr::Time>,
-    /// This handle's own physical frontier, mirrored into `physical_holds[id]`. Kept locally so
+    /// The physical frontier this handle *reports*, seeded at the published `since`. Kept locally so
     /// `get_physical_compaction` can return a borrow.
     physical: Antichain<Tr::Time>,
+    /// The physical frontier this handle *holds*, seeded at the chain coverage and mirrored into
+    /// `physical_holds[id]`.
+    ///
+    /// Distinct from `physical`, which is the weaker of the two on registration and must stay so:
+    /// a reported frontier may never lead the chain coverage (see `Self::register_at`), while the
+    /// hold has to start AT that coverage or a merge can eat the boundary this reader was seeded
+    /// with. Overwriting the hold with the reported value silently lowers it, which stops the spine
+    /// merging for the life of the handle.
+    ///
+    /// The logical axis needs no such split: both registrations install the same frontier a handle
+    /// reports.
+    physical_hold: Antichain<Tr::Time>,
 }
 
 impl<Tr: TraceReader> SharedTraceHandle<Tr>
@@ -464,7 +486,7 @@ where
 {
     /// Registers a fresh hold at the current published `since` and returns a handle for it.
     fn register(shared: SharedTraceRef<Tr>) -> Self {
-        let (id, since) = {
+        let (id, since, coverage) = {
             let mut state = shared.state.lock().expect("shared trace poisoned");
             let id = state.next_id;
             state.next_id += 1;
@@ -473,13 +495,14 @@ where
             // The cut floor starts at the chain coverage, NOT at `since`. See `register_at`.
             let coverage = seed_frontier::<Tr>(&state.chain, &state.upper);
             state.set_physical_hold(id, &coverage);
-            (id, since)
+            (id, since, coverage)
         };
         Self {
             shared,
             id,
             logical: since.clone(),
             physical: since,
+            physical_hold: coverage,
         }
     }
 
@@ -489,7 +512,7 @@ where
         shared: SharedTraceRef<Tr>,
         as_of: &Antichain<Tr::Time>,
     ) -> Result<Self, Antichain<Tr::Time>> {
-        let (id, since) = {
+        let (id, since, coverage) = {
             let mut state = shared.state.lock().expect("shared trace poisoned");
             if !timely::PartialOrder::less_equal(&state.since, as_of) {
                 return Err(state.since.clone());
@@ -516,7 +539,7 @@ where
             // will get, and permit a merge across the very first frontier that reader cuts at.
             let coverage = seed_frontier::<Tr>(&state.chain, &state.upper);
             state.set_physical_hold(id, &coverage);
-            (id, since)
+            (id, since, coverage)
         };
         Ok(Self {
             shared,
@@ -535,6 +558,7 @@ where
             // publisher forwards the published `since` as its physical target, so this reports the
             // grant.
             physical: since,
+            physical_hold: coverage,
         })
     }
 
@@ -601,10 +625,10 @@ where
         state.set_logical_hold(self.id, &self.logical);
     }
 
-    /// Mirrors this handle's physical frontier into the publication point.
+    /// Mirrors this handle's physical hold into the publication point.
     fn update_physical_hold(&self) {
         let mut state = self.shared.state.lock().expect("shared trace poisoned");
-        state.set_physical_hold(self.id, &self.physical);
+        state.set_physical_hold(self.id, &self.physical_hold);
     }
 }
 
@@ -622,7 +646,11 @@ where
             let id = state.next_id;
             state.next_id += 1;
             state.set_logical_hold(id, &self.logical);
-            state.set_physical_hold(id, &self.physical);
+            // The clone inherits this handle's HOLD, not the frontier it reports. Registering the
+            // reported frontier would install a hold below the coverage the source was seeded with,
+            // and since the accumulation is a meet, one such clone stops the spine merging for as
+            // long as it lives.
+            state.set_physical_hold(id, &self.physical_hold);
             id
         };
         Self {
@@ -630,6 +658,7 @@ where
             id,
             logical: self.logical.clone(),
             physical: self.physical.clone(),
+            physical_hold: self.physical_hold.clone(),
         }
     }
 }
@@ -705,7 +734,12 @@ where
     }
 
     fn set_physical_compaction(&mut self, frontier: AntichainRef<'_, Tr::Time>) {
-        self.physical = self.physical.join(&frontier.to_owned());
+        let frontier = frontier.to_owned();
+        self.physical = self.physical.join(&frontier);
+        // Join, never assign: the hold starts at the chain coverage, which leads what this handle
+        // reports, and a request below that coverage must not pull the hold down to it. `join` with
+        // the empty antichain is absorbing, which is what still lets an empty request release.
+        self.physical_hold = self.physical_hold.join(&frontier);
         self.update_physical_hold();
     }
 
@@ -1165,6 +1199,12 @@ where
                                 // slower of the two wins.
                                 if let Some(hold) = hold.as_mut() {
                                     hold.set_logical_compaction(acknowledged.borrow());
+                                    // Both axes. `acknowledged` is exactly the frontier below which
+                                    // this import will never cut again, which is what the physical
+                                    // hold expresses. Without this the hold pins the spine at the
+                                    // coverage it registered at and the chain grows one batch per
+                                    // seal for the life of the import.
+                                    hold.set_physical_compaction(acknowledged.borrow());
                                 }
                                 // Bound the read at `until`: once the trace's frontier reaches it, drop
                                 // the capability so a single-time read completes. Otherwise track the
