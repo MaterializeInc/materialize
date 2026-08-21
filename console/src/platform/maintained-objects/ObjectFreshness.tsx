@@ -20,10 +20,12 @@ import React from "react";
 
 import { calculateBucketSizeFromLookback } from "~/api/materialize/freshness/lagHistory";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
+import { SourceStatistics } from "~/platform/sources/SourceOverview/SourceStatistics";
 import { MaterializeTheme } from "~/theme";
 import { formatDate } from "~/utils/dateFormat";
 
 import { LOOKBACK_OPTIONS } from "./constants";
+import { ClusterReplicaMetrics } from "./CriticalPathClusterMetrics";
 import { CriticalPathGraph } from "./CriticalPathGraph";
 import { computeFreshnessBreakdown } from "./freshnessBreakdown";
 import { FreshnessBreakdownStrip } from "./FreshnessBreakdownStrip";
@@ -85,8 +87,9 @@ export const ObjectFreshness = ({
   const breakdown = computeFreshnessBreakdown(criticalPath?.directInputs ?? []);
 
   // Sources ingest from external systems and have no Materialize-internal
-  // upstream chain to walk — hide the critical path section for them.
-  const hasUpstreamChain = item.objectType !== "source";
+  // upstream chain to walk. Their "critical path" is the cluster they ingest
+  // on, so they get its replica metrics instead.
+  const isSource = item.objectType === "source";
 
   return (
     <VStack align="start" spacing={6} width="100%">
@@ -122,7 +125,49 @@ export const ObjectFreshness = ({
             isLocked={isLocked}
           />
 
-          {hasUpstreamChain && (
+          {isSource && (
+            <>
+              <Divider />
+
+              <VStack align="start" spacing={1} width="100%">
+                <Text textStyle="heading-sm">Ingestion history</Text>
+                <Text
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                >
+                  Throughput, committed updates, and backlog for this source
+                  over the selected window.
+                </Text>
+              </VStack>
+
+              <SourceStatistics
+                source={{ id: item.id, type: item.sourceType ?? "" }}
+                timePeriodMinutes={timePeriodMinutes}
+              />
+
+              <Divider />
+
+              <VStack align="start" spacing={1} width="100%">
+                <Text textStyle="heading-sm">Source cluster metrics</Text>
+                <Text
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                >
+                  Resources of the cluster this source ingests on, at the point
+                  selected on the freshness graph above.
+                </Text>
+              </VStack>
+
+              <ClusterReplicaMetrics
+                cluster={item.cluster}
+                timestamp={anchorTimestamp}
+                bucketSizeMs={bucketSizeMs}
+                lookbackMs={timePeriodMinutes * 60 * 1000}
+              />
+            </>
+          )}
+
+          {!isSource && (
             <>
               <Divider />
 

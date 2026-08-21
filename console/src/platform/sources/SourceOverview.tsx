@@ -14,6 +14,7 @@ import { Source } from "~/api/materialize/source/sourceList";
 import Alert from "~/components/Alert";
 import { ClusterMetrics } from "~/components/ClusterMetrics";
 import { CopyButton } from "~/components/copyableComponents";
+import { useObjectStorageSize } from "~/hooks/useObjectStorageSize";
 import { useTimePeriodMinutes } from "~/hooks/useTimePeriodSelect";
 import { InfoIcon } from "~/icons";
 import { MainContentContainer } from "~/layouts/BaseLayout";
@@ -21,7 +22,11 @@ import { AsideBox, DetailItem } from "~/platform/connectors/AsideBox";
 import { usePageHeadingRef } from "~/store/stickyHeader";
 import { prettyConnectorType } from "~/util";
 import { formatDate, FRIENDLY_DATE_FORMAT } from "~/utils/dateFormat";
-import { formatInterval, formatIntervalShort } from "~/utils/format";
+import {
+  formatBytesShort,
+  formatInterval,
+  formatIntervalShort,
+} from "~/utils/format";
 
 import OverviewHeader from "../connectors/OverviewHeader";
 import { SourceListResponse, useCurrentSourceStatistics } from "./queries";
@@ -41,6 +46,7 @@ export const SourceOverview = ({ source }: { source: Source }) => {
     data: { rows },
   } = useCurrentSourceStatistics({ sourceId: source.id });
   const stats = rows.at(0);
+  const { data: storageBytes } = useObjectStorageSize(source.id);
 
   return (
     <MainContentContainer>
@@ -138,6 +144,37 @@ export const SourceOverview = ({ source }: { source: Source }) => {
                   <Tooltip label={formatInterval(stats.rehydrationLatency)}>
                     {formatIntervalShort(stats.rehydrationLatency)}
                   </Tooltip>
+                </DetailItem>
+              )}
+              {stats && Number(stats.recordsIndexed ?? 0) > 0 && (
+                <DetailItem
+                  label={
+                    <>
+                      Upsert state{" "}
+                      <Tooltip label="The latest value Materialize remembers for every key in this source. Ingestion slows sharply when this no longer fits in the cluster replica's memory.">
+                        <InfoIcon />
+                      </Tooltip>
+                    </>
+                  }
+                >
+                  {formatBytesShort(
+                    BigInt(Math.round(Number(stats.bytesIndexed ?? 0))),
+                  )}{" "}
+                  ({Number(stats.recordsIndexed).toLocaleString()} keys)
+                </DetailItem>
+              )}
+              {storageBytes != null && storageBytes > 0 && (
+                <DetailItem
+                  label={
+                    <>
+                      Storage size{" "}
+                      <Tooltip label="Bytes this source's data occupies in Materialize's durable storage, including recent history that has not yet been compacted.">
+                        <InfoIcon />
+                      </Tooltip>
+                    </>
+                  }
+                >
+                  {formatBytesShort(BigInt(Math.round(storageBytes)))}
                 </DetailItem>
               )}
             </AsideBox>
