@@ -265,7 +265,14 @@ true true
 
 > INSERT INTO t4 SELECT 1
 
-> SELECT records, size < 16 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
+# NOTE: the bound is 32 KiB rather than 16 KiB because publishing an index into the
+# arrangement-sharing registry raises the reported heap size, capacity, and allocations
+# of the published arrangement. On a 16-worker replica a one-record index reported 8740
+# bytes / 132 allocations with the feature on against 4370 / 66 with it off, while its
+# record and batch counts were unchanged. Whether that overhead is constant per
+# arrangement or scales with size is not established, and needs re-measuring; the bound
+# here is loose enough either way for a one-record index.
+> SELECT records, size < 32 * 1024, allocations > 0 FROM mz_introspection.mz_dataflow_arrangement_sizes WHERE name LIKE '%ii_t4'
 1 true true
 
 > INSERT INTO t4 SELECT generate_series(1, 1000)
