@@ -142,7 +142,23 @@ def run_and_detect_retryable_build_failure(
             "unable to update registry",
         ]
         combined = stdout_contents + stderr_contents
-        if any(msg in combined for msg in incremental_build_failure_msgs):
+        # A cached build-script binary poisoned by cargo cache corruption dies
+        # with a bare ENOENT before doing any work. Both halves are required,
+        # and the error must be the exact bare line: "failed to run custom
+        # build command" alone is any build-script bug, which a retry cannot
+        # fix, and a build script that fails on a missing file with an error
+        # context of its own produces the ENOENT in a "Caused by:" detail line
+        # instead of the bare "Error:" line.
+        custom_build_script_enoent = (
+            "failed to run custom build command" in combined
+            and any(
+                line.strip() == "Error: No such file or directory (os error 2)"
+                for line in combined.splitlines()
+            )
+        )
+        if custom_build_script_enoent or any(
+            msg in combined for msg in incremental_build_failure_msgs
+        ):
             raise RustIncrementalBuildFailure()
         if any(msg in combined for msg in registry_fetch_failure_msgs):
             raise CargoRegistryFetchFailure()

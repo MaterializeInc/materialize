@@ -27,8 +27,41 @@ incremental_build_failure_pattern+="|signal: 11, SIGSEGV"
 
 registry_fetch_failure_pattern="unable to update registry"
 
+# A cached build-script binary poisoned by cargo cache corruption dies with a
+# bare ENOENT before doing any work. Both halves are required, and the error
+# must be the exact bare line: "failed to run custom build command" alone is
+# any build-script bug, which a retry cannot fix, and a build script that
+# fails on a missing file with an error context of its own produces the ENOENT
+# in a "Caused by:" detail line instead of the bare "Error:" line.
+custom_build_script_enoent() {
+  grep -q "failed to run custom build command" "$1" \
+    && grep -qE '^[[:space:]]*Error: No such file or directory \(os error 2\)[[:space:]]*$' "$1"
+}
+
+# Record the wipe as a build annotation. The wipe and retry make the build
+# green, so without a durable trace the only symptom of recurring corruption
+# is builds going cold repeatedly. Never fail the script over bookkeeping.
+annotate_cache_wipe() {
+  if [ -n "${BUILDKITE_JOB_ID:-}" ] && command -v buildkite-agent >/dev/null 2>&1; then
+    buildkite-agent annotate \
+      --style warning \
+      --context "${BUILDKITE_JOB_ID}-cache-wipe" \
+      "Corrupted cargo cache cleared; the build was retried
+
+Detected signature: $1. Frequent occurrences of this annotation mean builds keep running cold; investigate the corruption source rather than relying on the retry." || true
+  fi
+}
+
 if grep -qE "$incremental_build_failure_pattern" "$1"; then
   echo "--- Detected incremental build failure, clearing cargo target directories"
+  annotate_cache_wipe "incremental build failure"
+  rm -rf target target-xcompile || true
+  exit 199
+fi
+
+if custom_build_script_enoent "$1"; then
+  echo "--- Detected corrupted cached build script, clearing cargo target directories"
+  annotate_cache_wipe "corrupted cached build script (bare ENOENT)"
   rm -rf target target-xcompile || true
   exit 199
 fi

@@ -15,7 +15,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from materialize import mzbuild, spawn, ui
+from materialize import buildkite, mzbuild, spawn, ui
 from materialize.ci_util.upload_debug_symbols_to_s3 import (
     DEBUGINFO_BINS,
     upload_debuginfo_to_s3,
@@ -72,6 +72,7 @@ def main() -> None:
         print(
             "--- Detected incremental build failure, clearing cargo target directories"
         )
+        buildkite.annotate_cache_wipe("incremental build failure")
         for dir in ["target", "target-xcompile"]:
             if os.path.exists(dir):
                 shutil.rmtree(dir, ignore_errors=True)

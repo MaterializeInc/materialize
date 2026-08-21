@@ -316,6 +316,28 @@ def add_annotation(style: str, title: str, content: str) -> None:
     add_annotation_raw(style, markdown)
 
 
+def annotate_cache_wipe(signature: str) -> None:
+    """Record a self-healing cargo cache wipe as a build annotation.
+
+    The wipe and retry make the build green, so without a durable trace the
+    only symptom of recurring corruption is builds going cold repeatedly. The
+    annotation keeps each wipe visible and countable. Never fails the caller:
+    the wipe matters more than its bookkeeping.
+    """
+    if not os.getenv("BUILDKITE_JOB_ID"):
+        return
+    try:
+        add_annotation(
+            "warning",
+            "Corrupted cargo cache cleared; the build was retried",
+            f"Detected signature: {signature}. Frequent occurrences of this "
+            "annotation mean builds keep running cold; investigate the "
+            "corruption source rather than relying on the retry.",
+        )
+    except Exception as e:
+        print(f"failed to annotate cache wipe: {e}")
+
+
 def get_job_url_from_build_url(build_url: str, build_job_id: str) -> str:
     return f"{build_url}#{build_job_id}"
 
