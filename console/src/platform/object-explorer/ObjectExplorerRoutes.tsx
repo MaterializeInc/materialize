@@ -11,11 +11,16 @@ import React from "react";
 import { Route } from "react-router-dom";
 
 import { SentryRoutes } from "~/sentry";
+import { useSubscribeToAllObjectsCollection } from "~/store/allObjectsCollection";
 
-import { useSubscribeToAllNamespaces } from "./allNamespaces";
+import { useSubscribeToAllNamespacesCollection } from "./allNamespacesCollection";
 import { ObjectExplorer } from "./ObjectExplorer";
+
 export const ObjectExplorerRoutes = () => {
-  useSubscribeToAllNamespaces();
+  // Feed the objects and namespaces collections the tree reads from. Scoped to
+  // this route so the SUBSCRIBEs only run while the object explorer is mounted.
+  useSubscribeToAllObjectsCollection();
+  useSubscribeToAllNamespacesCollection();
   return (
     <SentryRoutes>
       <Route
