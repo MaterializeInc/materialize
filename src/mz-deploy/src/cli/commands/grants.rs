@@ -218,7 +218,7 @@ pub async fn reconcile_scope(
     };
     let protected: BTreeSet<_> = default_privs
         .iter()
-        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .map(|g| (g.grantee.clone(), g.privilege_type.to_uppercase()))
         .collect();
     let desired = desired_grants(grants, scope.all_privileges());
     let target = scope.grant_target();
@@ -269,7 +269,7 @@ pub async fn reconcile_named_object(
     };
     let protected: BTreeSet<_> = default_privs
         .iter()
-        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .map(|g| (g.grantee.clone(), g.privilege_type.to_uppercase()))
         .collect();
     let desired = desired_grants(grants, kind.all_privileges());
     let target = kind.grant_target(name);
@@ -318,7 +318,7 @@ pub async fn reconcile(
         .map_err(CliError::Connection)?;
     let protected: BTreeSet<_> = default_privs
         .iter()
-        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .map(|g| (g.grantee.clone(), g.privilege_type.to_uppercase()))
         .collect();
     let desired = desired_grants(grants, kind.all_privileges());
     let target = kind.grant_target(obj_id);
@@ -335,6 +335,14 @@ pub async fn reconcile(
 ///
 /// Expands `ALL` privileges based on `all_privileges` (the set of privileges
 /// that `ALL` maps to for the object type).
+///
+/// Grantee names are kept exactly as authored. Role names are identifiers and
+/// identifiers are case-sensitive in Materialize: a role created as `"Reader"`
+/// cannot be reached as `reader`. The parser has already folded unquoted names
+/// to the casing the catalog stores, so the authored name and the catalog name
+/// agree without normalization, and folding here would instead conflate two
+/// roles that differ only by case. Privilege types are uppercased because they
+/// are keywords, not identifiers.
 pub fn desired_grants(
     grants: &[GrantPrivilegesStatement<Raw>],
     all_privileges: &[&str],
@@ -342,13 +350,15 @@ pub fn desired_grants(
     let mut result = BTreeSet::new();
     for grant in grants {
         let privs: Vec<String> = match &grant.privileges {
-            PrivilegeSpecification::All => all_privileges.iter().map(|p| p.to_string()).collect(),
+            PrivilegeSpecification::All => {
+                all_privileges.iter().map(|p| p.to_uppercase()).collect()
+            }
             PrivilegeSpecification::Privileges(privs) => {
-                privs.iter().map(|p| p.to_string()).collect()
+                privs.iter().map(|p| p.to_string().to_uppercase()).collect()
             }
         };
         for role in &grant.roles {
-            let role_name = role.as_str().to_lowercase();
+            let role_name = role.as_str().to_string();
             for priv_name in &privs {
                 result.insert((role_name.clone(), priv_name.clone()));
             }
@@ -363,7 +373,7 @@ pub fn desired_grants(
 /// happen if a future Materialize release introduces a new privilege type.
 /// Callers should skip unknown privileges rather than fail outright so the
 /// CLI keeps working against newer servers.
-fn parse_privilege(s: &str) -> Option<Privilege> {
+pub(crate) fn parse_privilege(s: &str) -> Option<Privilege> {
     let p = if s.eq_ignore_ascii_case("SELECT") {
         Privilege::SELECT
     } else if s.eq_ignore_ascii_case("INSERT") {
@@ -404,7 +414,7 @@ pub fn missing_grant_statements(
 ) -> Vec<GrantPrivilegesStatement<Raw>> {
     let present: BTreeSet<_> = current
         .iter()
-        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
+        .map(|g| (g.grantee.clone(), g.privilege_type.to_uppercase()))
         .collect();
 
     let mut by_grantee: BTreeMap<&str, Vec<Privilege>> = BTreeMap::new();
@@ -440,8 +450,8 @@ pub fn missing_grant_statements(
 /// Compute REVOKE statements for grants that exist in `current` but not in
 /// `desired` and not in `protected` (3-way set difference).
 ///
-/// Grantee names are lowercased and privilege types uppercased before comparison
-/// so that catalog casing differences don't cause spurious revocations.
+/// Grantee names are compared exactly and privilege types uppercased, matching
+/// [`desired_grants`].
 ///
 /// `protected` contains grants that should never be revoked (e.g., grants
 /// originating from `ALTER DEFAULT PRIVILEGES`).
@@ -453,10 +463,7 @@ pub fn stale_grant_revocations(
 ) -> Vec<RevokePrivilegesStatement<Raw>> {
     let mut revocations = Vec::new();
     for grant in current {
-        let key = (
-            grant.grantee.to_lowercase(),
-            grant.privilege_type.to_uppercase(),
-        );
+        let key = (grant.grantee.clone(), grant.privilege_type.to_uppercase());
         if desired.contains(&key) || protected.contains(&key) {
             continue;
         }
@@ -636,9 +643,21 @@ mod tests {
         assert!(result.is_empty());
     }
 
+    /// A quoted role name keeps its casing: `"MyRole"` and `myrole` are
+    /// different roles.
     #[mz_ore::test]
-    fn test_desired_grants_role_name_lowercased() {
+    fn test_desired_grants_keeps_quoted_role_casing() {
         let grant = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO \"MyRole\"");
+        let result = desired_grants(&[grant], &["USAGE"]);
+        assert!(result.contains(&("MyRole".to_string(), "USAGE".to_string())));
+        assert!(!result.contains(&("myrole".to_string(), "USAGE".to_string())));
+    }
+
+    /// An unquoted role name is folded by the parser, so what reaches the diff
+    /// already matches what the catalog stores.
+    #[mz_ore::test]
+    fn test_desired_grants_parser_folds_unquoted_role() {
+        let grant = parse_grant("GRANT USAGE ON CLUSTER my_cluster TO MyRole");
         let result = desired_grants(&[grant], &["USAGE"]);
         assert!(result.contains(&("myrole".to_string(), "USAGE".to_string())));
     }
@@ -714,16 +733,32 @@ mod tests {
         assert!(revocations.is_empty());
     }
 
+    /// Privilege types are keywords, so casing in the catalog does not matter.
     #[mz_ore::test]
-    fn test_stale_grant_revocations_case_insensitive_match() {
-        // Current has mixed case, desired has lowercase — should still match
-        let current = vec![make_object_grant("Reader", "usage")];
+    fn test_stale_grant_revocations_privilege_case_insensitive() {
+        let current = vec![make_object_grant("reader", "usage")];
         let mut desired = BTreeSet::new();
         desired.insert(("reader".to_string(), "USAGE".to_string()));
 
         let target = cluster_target("my_cluster");
         let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
         assert!(revocations.is_empty());
+    }
+
+    /// Grantees are identifiers, so a grant held by `Reader` does not satisfy one
+    /// declared for `reader`; the stale one is revoked.
+    #[mz_ore::test]
+    fn test_stale_grant_revocations_distinguish_roles_by_case() {
+        let current = vec![make_object_grant("Reader", "usage")];
+        let mut desired = BTreeSet::new();
+        desired.insert(("reader".to_string(), "USAGE".to_string()));
+
+        let target = cluster_target("my_cluster");
+        let revocations = stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target);
+        assert_eq!(
+            to_strings(&revocations),
+            vec!["REVOKE USAGE ON CLUSTER my_cluster FROM \"Reader\""]
+        );
     }
 
     #[mz_ore::test]
@@ -981,12 +1016,13 @@ mod tests {
         );
     }
 
-    /// Catalog casing differences must not resurface a grant that is already held.
+    /// Privilege casing in the catalog must not resurface a grant that is
+    /// already held.
     #[mz_ore::test]
-    fn test_missing_grants_case_insensitive_match() {
-        let grant = parse_grant("GRANT USAGE ON CLUSTER c TO Reader");
+    fn test_missing_grants_privilege_case_insensitive() {
+        let grant = parse_grant("GRANT USAGE ON CLUSTER c TO reader");
         let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
-        let current = vec![make_object_grant("READER", "usage")];
+        let current = vec![make_object_grant("reader", "usage")];
         let strings = missing_to_strings(&desired, &current, &cluster_target("c"));
         assert!(strings.is_empty(), "unexpected grants: {:?}", strings);
     }
@@ -1006,5 +1042,75 @@ mod tests {
             .collect();
         let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
         assert!(revocations.is_empty());
+    }
+
+    /// Role names are identifiers, so a grant authored for `"Reader"` must not be
+    /// emitted for `reader`: they are different roles, and the second may not
+    /// exist at all.
+    #[mz_ore::test]
+    fn test_missing_grants_preserve_exact_role_casing() {
+        let grant = parse_grant("GRANT USAGE ON CLUSTER c TO \"Reader\"");
+        let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
+        let strings = missing_to_strings(&desired, &[], &cluster_target("c"));
+        assert_eq!(strings, vec!["GRANT USAGE ON CLUSTER c TO \"Reader\""]);
+    }
+
+    /// Two roles differing only by case are distinct, so a grant held by one does
+    /// not satisfy a grant declared for the other.
+    #[mz_ore::test]
+    fn test_missing_grants_do_not_conflate_roles_by_case() {
+        let grant = parse_grant("GRANT USAGE ON CLUSTER c TO \"Reader\"");
+        let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
+        let current = vec![make_object_grant("reader", "USAGE")];
+        let target = cluster_target("c");
+
+        assert_eq!(
+            missing_to_strings(&desired, &current, &target),
+            vec!["GRANT USAGE ON CLUSTER c TO \"Reader\""]
+        );
+        assert_eq!(
+            to_strings(&stale_grant_revocations(
+                &current,
+                &desired,
+                &BTreeSet::new(),
+                &target
+            )),
+            vec!["REVOKE USAGE ON CLUSTER c FROM reader"]
+        );
+    }
+
+    /// `PUBLIC` reaches the diff as the `public` pseudo-role name, so a grant the
+    /// catalog already holds for it is not re-emitted.
+    #[mz_ore::test]
+    fn test_public_grantee_round_trips() {
+        let grant = parse_grant("GRANT USAGE ON CLUSTER c TO PUBLIC");
+        let desired = desired_grants(&[grant], &["USAGE", "CREATE"]);
+        let target = cluster_target("c");
+
+        assert_eq!(
+            missing_to_strings(&desired, &[], &target),
+            vec!["GRANT USAGE ON CLUSTER c TO public"]
+        );
+
+        let current = vec![make_object_grant("public", "USAGE")];
+        assert!(missing_to_strings(&desired, &current, &target).is_empty());
+        assert!(stale_grant_revocations(&current, &desired, &BTreeSet::new(), &target).is_empty());
+    }
+
+    /// A stale grant to `PUBLIC` is revocable, which it is not when the grantee
+    /// is dropped by an inner join to `mz_roles`.
+    #[mz_ore::test]
+    fn test_stale_public_grant_is_revoked() {
+        let current = vec![make_object_grant("public", "USAGE")];
+        let revocations = stale_grant_revocations(
+            &current,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &cluster_target("c"),
+        );
+        assert_eq!(
+            to_strings(&revocations),
+            vec!["REVOKE USAGE ON CLUSTER c FROM public"]
+        );
     }
 }

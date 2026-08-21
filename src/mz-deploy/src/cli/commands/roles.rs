@@ -173,19 +173,21 @@ async fn reconcile_members(
     def: &RoleDefinition,
 ) -> Result<(), CliError> {
     let role_name = &def.name;
+    // Member names are identifiers, so they are compared and emitted exactly.
+    // The parser has already folded unquoted names to the casing the catalog
+    // stores, and a role created as `"Reader"` cannot be reached as `reader`.
     let current: BTreeSet<String> = client
         .introspection()
         .get_role_members(role_name)
         .await
         .map_err(CliError::Connection)?
         .into_iter()
-        .map(|m| m.to_lowercase())
         .collect();
 
     let desired: BTreeSet<String> = def
         .grants
         .iter()
-        .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_lowercase()))
+        .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_string()))
         .collect();
 
     let role = Ident::new_unchecked(role_name);
