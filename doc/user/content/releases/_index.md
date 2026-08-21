@@ -23,11 +23,69 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 *Released to Materialize Cloud: 2026-08-19* <br>
 *Released to Materialize Self-Managed: 2026-08-20* <br>
 
+### Dictionary compression {#v26.38-dictionary-compression}
+
+{{< public-preview />}}
+
+Dictionary compression reduces the memory that
+[arrangements](/get-started/arrangements/#arrangements) use when a column holds the same values repeatedly. Instead of storing a repeated column value each time it appears, Materialize stores that value once and has each row reference it. This can reduce steady state memory requirements after [hydration](/concepts/hydration/) has completed.
+
+Dictionary compression is off by default. You opt in per cluster with the
+`EXPERIMENTAL ARRANGEMENT COMPRESSION` option:
+
+```mzsql
+-- Turn compression on for a new cluster
+CREATE CLUSTER my_cluster (
+    SIZE = '100cc',
+    EXPERIMENTAL ARRANGEMENT COMPRESSION = true
+);
+
+-- Or turn it on for an existing cluster
+ALTER CLUSTER my_cluster SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true);
+```
+
+For more information, see:
+- [Guide: Dictionary compression](/transform-data/dictionary-compression/), including [when it helps and when it does not](/transform-data/dictionary-compression/#the-tradeoff)
+- [`CREATE CLUSTER`: Dictionary compression](/sql/create-cluster/#dictionary-compression)
+- [`ALTER CLUSTER`: Dictionary compression](/sql/alter-cluster/#dictionary-compression)
+
+### Integrate with your observability stack {#v26.38-self-managed-observability}
+
+<red>*Materialize Self-Managed only*</red>
+
+Materialize Self-Managed now integrates with the observability tools you already
+run. You can export metrics, and optionally logs, from Materialize to Datadog,
+Honeycomb, Google Cloud Monitoring, Prometheus remote write, or any monitoring
+backend with an Open Telemetry (OTLP) endpoint. Template dashboards and alerts are provided to
+help you get started.
+
+Follow the instructions for your destination:
+- [Datadog](/manage/monitor/self-managed/datadog/)
+- [Honeycomb](/manage/monitor/self-managed/honeycomb/)
+- [Google Cloud Monitoring](/manage/monitor/self-managed/google-cloud-monitoring/)
+- [Prometheus remote write](/manage/monitor/self-managed/prometheus-remote-write/), for Mimir, Amazon Managed Prometheus, or Grafana Cloud
+- [OpenTelemetry](/manage/monitor/self-managed/opentelemetry/), for any other OTLP endpoint, including your own collector
+
+If you don't have an observability stack set up, the [Materialize Terraform
+modules](/self-managed-deployments/installation/#install-using-terraform-modules)
+can deploy one alongside Materialize. It collects metrics from Materialize and
+from your Kubernetes cluster, collects Materialize's container logs and
+Kubernetes events, stores both in your own object storage, and ships [Grafana](/manage/monitor/self-managed/grafana/)
+dashboards and Alertmanager alert rules to query them. The stack is controlled by
+the `enable_observability` variable, which defaults to `true` starting with
+v11.0.0 of the modules.
+
+For more information, see:
+- [Monitoring Self-Managed Materialize](/manage/monitor/self-managed/)
+- [How logs and metrics are stored and delivered](/manage/monitor/self-managed/storage/)
+- [Alerting](/manage/monitor/self-managed/alerting/)
+
 ### Improvements {#v26.38-improvements}
 - **Notice for single-replica sources on multi-replica clusters**: Materialize now warns when a command leaves a cluster holding more than one replica alongside PostgreSQL, MySQL, or SQL Server sources, which always run on a single replica, since the extra replicas make those sources neither more fault tolerant nor faster to ingest.
 - **Self-Managed: Graceful resizing of system clusters**: `ALTER CLUSTER ... SET (SIZE ...)` on a system cluster such as `mz_catalog_server` or `mz_system` now runs as a background graceful reconfiguration, with a 24-hour default deadline and a rollback on timeout, instead of recreating the whole replica set at once, so `SHOW CLUSTERS` settles on the new configuration rather than flipping to it.
 
 ### Agent Skills {#v26.38-agent-skills}
+- **materialize-debug-freshness**: New agent skill for diagnosing why an object is behind wall-clock time, whether that surfaces as a stale materialized view, index, or sink, or as a freshness alert. Running on the read-only tools of the Materialize developer MCP server, it ranks what is lagging, attributes the lag to a single hop, then rules out in-progress hydration, a replica dominated by one dataflow, and per-worker skew before naming the culprit operator and the SQL responsible for the expensive work.
 - **mz-deploy**: New agent skill covering the `mz-deploy` CLI — project layout, the compile/test/apply/stage/promote workflow, deploy IDs and staging suffixes, schema-granularity conflict detection, stable API schemas, profile resolution, and the `EXECUTE UNIT TEST` grammar.
 - **mz-sql-lsp**: New Claude Code plugin, installable from the `agent-skills` repository's new `materialize` plugin marketplace, that registers the `mz-deploy` language server for `.sql` files so agents can use go-to-definition, hover, and workspace symbols in an mz-deploy project instead of text search.
 
