@@ -4304,8 +4304,8 @@ mz_internal.pg_type_all_databases:
         →Arrange (#0{id}) (#2{schema_id})
           →Union
             →Map/Filter/Project
-              Project: #0..=#11
-              Map: null, null, null
+              Project: #0..=#12
+              Map: null, null, null, null
                 →Consolidating Union
                   →Negate Diffs
                     →Differential Join %1[#0] » %0:l0[#0{id}]
@@ -4319,7 +4319,7 @@ mz_internal.pg_type_all_databases:
                       Project: #1, #2, #0, #3..=#8
                       →Arranged mz_catalog.mz_types
             →Fused with Child Map/Filter/Project
-              Project: #0..=#8, #0, #9, #10
+              Project: #0..=#8, #0, #9..=#11
                 →Read l1
         →Arrange (#0{id})
           →Fused with Parent Map/Filter/Project
@@ -4339,10 +4339,10 @@ mz_internal.pg_type_all_databases:
             →Read mz_catalog.mz_map_types
             →Read mz_catalog.mz_pseudo_types
     cte l3 =
-      →Differential Join %1:mz_databases[#0] » %0:l2[#13{database_id}]
-        →Arrange (#13{database_id})
+      →Differential Join %1:mz_databases[#0] » %0:l2[#14{database_id}]
+        →Arrange (#14{database_id})
           →Fused with Child Map/Filter/Project
-            Filter: (#13{database_id}) IS NOT NULL
+            Filter: (#14{database_id}) IS NOT NULL
               →Read l2
         →Arrange (#0)
           →Fused with Parent Map/Filter/Project
@@ -4353,18 +4353,18 @@ mz_internal.pg_type_all_databases:
         →Arrange (#5{owner_id})
           →Union
             →Map/Filter/Project
-              Project: #0..=#24
+              Project: #0..=#25
               Map: null, null, null, null, null
                 →Consolidating Union
                   →Negate Diffs
                     →Fused with Child Map/Filter/Project
-                      Project: #0..=#11, #2, #12..=#16, #0, #17
+                      Project: #0..=#12, #2, #13..=#17, #0, #18
                         →Read l3
                   →Fused with Child Map/Filter/Project
-                    Project: #0..=#11, #2, #12..=#16, #0, #17
+                    Project: #0..=#12, #2, #13..=#17, #0, #18
                       →Read l2
             →Fused with Child Map/Filter/Project
-              Project: #0..=#11, #2, #12..=#16, #0, #17, #13, #18..=#21
+              Project: #0..=#12, #2, #13..=#17, #0, #18, #14, #19..=#22
                 →Read l3
         →Arranged mz_catalog.mz_roles
     cte l5 =
@@ -4375,7 +4375,7 @@ mz_internal.pg_type_all_databases:
         →Fused with Child Map/Filter/Project
           Project: #0
             →Arranged l5
-              Key: (#0..=#29)
+              Key: (#0..=#30)
     cte l7 =
       →Arranged l6
     cte l8 =
@@ -4442,73 +4442,73 @@ mz_internal.pg_type_all_databases:
                   Project: #0
                     →Read l15
   →Return
-    →Delta Join [%0:l4[#0..=#29] » %1:l5[#0..=#29] » %2[#0] » %3[#0] » %4[#0]] [%1:l5[#0] » %0:l4[#0..=#29] » %2[#0] » %3[#0] » %4[#0]] [%2[#0] » %1:l5[#0] » %0:l4[#0..=#29] » %3[#0] » %4[#0]] [%3[#0] » %1:l5[#0] » %0:l4[#0..=#29] » %2[#0] » %4[#0]] [%4[#0] » %1:l5[#0] » %0:l4[#0..=#29] » %2[#0] » %3[#0]]
+    →Delta Join [%0:l4[#0..=#30] » %1:l5[#0..=#30] » %2[#0] » %3[#0] » %4[#0]] [%1:l5[#0] » %0:l4[#0..=#30] » %2[#0] » %3[#0] » %4[#0]] [%2[#0] » %1:l5[#0] » %0:l4[#0..=#30] » %3[#0] » %4[#0]] [%3[#0] » %1:l5[#0] » %0:l4[#0..=#30] » %2[#0] » %4[#0]] [%4[#0] » %1:l5[#0] » %0:l4[#0..=#30] » %2[#0] » %3[#0]]
       path %0:
         after %3:
-          Project: #0..=#5, #7..=#10, #12
-          Map: coalesce(#6, #11, 0)
+          Project: #0..=#5, #7..=#11, #13
+          Map: coalesce(#6, #12, 0)
         after %4:
-          Project: #1..=#10, #12
-          Map: coalesce(#11, 0)
+          Project: #1..=#11, #13
+          Map: coalesce(#12, 0)
         Final closure:
-          Project: #0..=#2, #4, #11, #5, #6, #12, #13, #9, #10, #7, #8, #14, #13, #15, #13, #16, #3
+          Project: #0..=#2, #4, #12, #5, #6, #13, #14, #10, #11, #7, #8, #15, #14, #16, #14, #17, #3, #9
           Map: null, 44, 0, false, -1, null
       path %1:
         after %0:
-          Project: #1, #3, #13, #22, #25, #0, #30..=#33
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Project: #1, #3, #14, #23, #26, #0, #31..=#35
+          Map: text_to_"char"(case when (#20{mztype} = "a") then "b" else #20{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0), oidtoregproc(coalesce(#12{typsend}, 0))
         after %3:
-          Project: #1..=#5, #0, #7..=#10, #12
-          Map: coalesce(#6, #11, 0)
+          Project: #1..=#5, #0, #7..=#11, #13
+          Map: coalesce(#6, #12, 0)
         after %4:
-          Project: #1..=#10, #12
-          Map: coalesce(#11, 0)
+          Project: #1..=#11, #13
+          Map: coalesce(#12, 0)
         Final closure:
-          Project: #0..=#2, #4, #11, #5, #6, #12, #13, #9, #10, #7, #8, #14, #13, #15, #13, #16, #3
+          Project: #0..=#2, #4, #12, #5, #6, #13, #14, #10, #11, #7, #8, #15, #14, #16, #14, #17, #3, #9
           Map: null, 44, 0, false, -1, null
       path %2:
         after %0:
-          Project: #1, #3, #13, #22, #25, #0, #30..=#34
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Project: #1, #3, #14, #23, #26, #0, #31..=#36
+          Map: text_to_"char"(case when (#20{mztype} = "a") then "b" else #20{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0), oidtoregproc(coalesce(#12{typsend}, 0))
         after %3:
-          Project: #1..=#5, #0, #7..=#10, #12
-          Map: coalesce(#6, #11, 0)
+          Project: #1..=#5, #0, #7..=#11, #13
+          Map: coalesce(#6, #12, 0)
         after %4:
-          Project: #1..=#10, #12
-          Map: coalesce(#11, 0)
+          Project: #1..=#11, #13
+          Map: coalesce(#12, 0)
         Final closure:
-          Project: #0..=#2, #4, #11, #5, #6, #12, #13, #9, #10, #7, #8, #14, #13, #15, #13, #16, #3
+          Project: #0..=#2, #4, #12, #5, #6, #13, #14, #10, #11, #7, #8, #15, #14, #16, #14, #17, #3, #9
           Map: null, 44, 0, false, -1, null
       path %3:
         after %0:
-          Project: #1, #3, #13, #22, #25, #0, #30..=#34
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Project: #1, #3, #14, #23, #26, #0, #31..=#36
+          Map: text_to_"char"(case when (#20{mztype} = "a") then "b" else #20{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0), oidtoregproc(coalesce(#12{typsend}, 0))
         after %2:
-          Project: #1..=#5, #0, #7..=#10, #12
-          Map: coalesce(#11, #6, 0)
+          Project: #1..=#5, #0, #7..=#11, #13
+          Map: coalesce(#12, #6, 0)
         after %4:
-          Project: #1..=#10, #12
-          Map: coalesce(#11, 0)
+          Project: #1..=#11, #13
+          Map: coalesce(#12, 0)
         Final closure:
-          Project: #0..=#2, #4, #11, #5, #6, #12, #13, #9, #10, #7, #8, #14, #13, #15, #13, #16, #3
+          Project: #0..=#2, #4, #12, #5, #6, #13, #14, #10, #11, #7, #8, #15, #14, #16, #14, #17, #3, #9
           Map: null, 44, 0, false, -1, null
       path %4:
         after %0:
-          Project: #1, #3, #13, #22, #25, #0, #30..=#34
-          Map: text_to_"char"(case when (#19{mztype} = "a") then "b" else #19{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0)
+          Project: #1, #3, #14, #23, #26, #0, #31..=#36
+          Map: text_to_"char"(case when (#20{mztype} = "a") then "b" else #20{mztype} end), text_to_"char"(case when (#4{category} = "array") then "A" else case when (#4{category} = "bit-string") then "V" else case when (#4{category} = "boolean") then "B" else case when (#4{category} = "composite") then "C" else case when (#4{category} = "date-time") then "D" else case when (#4{category} = "enum") then "E" else case when (#4{category} = "geometric") then "G" else case when (#4{category} = "list") then "U" else case when (#4{category} = "network-address") then "I" else case when (#4{category} = "numeric") then "N" else case when (#4{category} = "pseudo") then "P" else case when (#4{category} = "string") then "S" else case when (#4{category} = "timespan") then "T" else case when (#4{category} = "user-defined") then "U" else case when (#4{category} = "unknown") then "X" else null end end end end end end end end end end end end end end end), oidtoregproc(#10{typinput}), coalesce(#11{typreceive}, 0), oidtoregproc(coalesce(#12{typsend}, 0))
         after %3:
-          Project: #1..=#5, #7..=#11, #13
-          Map: coalesce(#6, #12, 0)
+          Project: #1..=#5, #7..=#12, #14
+          Map: coalesce(#6, #13, 0)
         Final closure:
-          Project: #0..=#2, #4, #11, #6, #7, #12, #13, #10, #5, #8, #9, #14, #13, #15, #13, #16, #3
+          Project: #0..=#2, #4, #12, #6, #7, #13, #14, #11, #5, #8, #9, #15, #14, #16, #14, #17, #3, #10
           Map: null, 44, 0, false, -1, null
-      →Arrange (#0..=#29)
+      →Arrange (#0..=#30)
         →Stream l4
-      →Arrange (#0) (#0..=#29)
+      →Arrange (#0) (#0..=#30)
         →Fused with Child Map/Filter/Project
           Filter: (#5 = #5)
             →Arranged l5
-              Key: (#0..=#29)
+              Key: (#0..=#30)
       →Arrange (#0)
         →Union
           →Stream l11
@@ -19653,8 +19653,9 @@ EXPLAIN SELECT * FROM "pg_catalog"."pg_type";
 ----
 Explained Query (fast path):
   →Map/Filter/Project
-    Project: #0..=#17
+    Project: #0..=#11, #20, #13..=#17, #19
     Filter: ((#18{database_name}) IS NULL OR (#18{database_name} = "materialize"))
+    Map: oidtoregproc(#12{typreceive})
       →Indexed mz_internal.pg_type_all_databases (using mz_internal.pg_type_all_databases_ind)
 
 Used Indexes:

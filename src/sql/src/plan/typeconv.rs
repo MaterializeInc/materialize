@@ -203,9 +203,16 @@ static STRING_TO_REGTYPE: LazyLock<String> = LazyLock::new(|| {
         .to_string()
 });
 
+// OID 0 renders as `-` to match PostgreSQL's `regprocout`, `regclassout` and
+// `regtypeout`, which all spell the absent reference that way. A nonzero OID
+// that names nothing still renders as its digits, also as PostgreSQL does.
 const REG_STRING_CAST_TEMPLATE: &str = "(
 SELECT
-    COALESCE(mz_internal.mz_global_id_to_name(o.id), CAST($1 AS pg_catalog.oid)::pg_catalog.text)
+    CASE
+      WHEN CAST($1 AS pg_catalog.oid) = 0::pg_catalog.oid THEN '-'
+      ELSE
+        COALESCE(mz_internal.mz_global_id_to_name(o.id), CAST($1 AS pg_catalog.oid)::pg_catalog.text)
+    END
     AS text
 FROM
   (

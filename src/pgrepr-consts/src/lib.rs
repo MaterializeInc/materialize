@@ -10,3 +10,4 @@
 //! Constants used in the representation of and serialization for PostgreSQL datums.
 
 pub mod oid;
+pub mod regproc;

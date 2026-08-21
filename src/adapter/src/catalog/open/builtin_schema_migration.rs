@@ -322,6 +322,15 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_INTERNAL_SCHEMA,
             "mz_kafka_source_tables",
         ),
+        // `mz_type_pg_metadata` gained a trailing `typsend` column. See the NOTE
+        // above: this version must stay at the workspace's current dev version
+        // until the change ships.
+        MigrationStep::replacement(
+            "26.37.0-dev.0",
+            CatalogItemType::Table,
+            MZ_INTERNAL_SCHEMA,
+            "mz_type_pg_metadata",
+        ),
         // Converting the connection-detail builtin tables to materialized views
         // changes their catalog fingerprint, so each needs an explicit
         // replacement step.

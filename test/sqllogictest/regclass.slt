@@ -274,6 +274,18 @@ SELECT NULL::regclass::text
 ----
 NULL
 
+# OID 0 is the absent reference, rendered as `-` like PostgreSQL's `regclassout`.
+# A nonzero OID that names no relation keeps its digits.
+query T
+SELECT 0::regclass::text
+----
+-
+
+query T
+SELECT 99999::regclass::text
+----
+99999
+
 # ensure that all existing types can be cast to their respective names
 statement OK
 select oid, oid::regclass::text from (select oid from pg_catalog.pg_class)

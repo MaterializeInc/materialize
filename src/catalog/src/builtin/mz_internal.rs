@@ -705,6 +705,10 @@ pub static MZ_TYPE_PG_METADATA: LazyLock<BuiltinTable> = LazyLock::new(|| Builti
         .with_column("id", SqlScalarType::String.nullable(false))
         .with_column("typinput", SqlScalarType::Oid.nullable(false))
         .with_column("typreceive", SqlScalarType::Oid.nullable(false))
+        // NOTE: `pg_type_all_databases` still needs `COALESCE` on this column,
+        // because its `LEFT JOIN` against this table yields NULLs for types with
+        // no PostgreSQL metadata.
+        .with_column("typsend", SqlScalarType::Oid.nullable(false))
         .finish(),
     column_comments: BTreeMap::new(),
     is_retained_metrics_object: false,
@@ -4636,6 +4640,7 @@ pub static PG_TYPE_ALL_DATABASES: LazyLock<BuiltinView> = LazyLock::new(|| {
             .with_column("typcollation", SqlScalarType::Oid.nullable(false))
             .with_column("typdefault", SqlScalarType::String.nullable(true))
             .with_column("database_name", SqlScalarType::String.nullable(true))
+            .with_column("typsend", SqlScalarType::RegProc.nullable(false))
             .finish(),
         column_comments: BTreeMap::new(),
         sql: "
@@ -4704,7 +4709,8 @@ SELECT
     -- MZ doesn't support COLLATE so typcollation is filled with 0
     0::pg_catalog.oid AS typcollation,
     NULL::pg_catalog.text AS typdefault,
-    d.name as database_name
+    d.name as database_name,
+    COALESCE(mz_internal.mz_type_pg_metadata.typsend, 0)::pg_catalog.regproc AS typsend
 FROM
     mz_catalog.mz_types
     LEFT JOIN mz_internal.mz_type_pg_metadata ON mz_catalog.mz_types.id = mz_internal.mz_type_pg_metadata.id
