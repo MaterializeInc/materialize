@@ -295,6 +295,17 @@ impl ResponseSender {
         self.nonce = Some(nonce);
     }
 
+    /// Builds a `ResponseSender` with the nonce pre-initialized, for tests that drive an
+    /// `ActiveComputeState` outside the full `serve` protocol.
+    #[cfg(test)]
+    pub(crate) fn for_test(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>) -> Self {
+        Self {
+            inner,
+            worker_id: 0,
+            nonce: Some(Uuid::nil()),
+        }
+    }
+
     /// Send a compute response.
     pub fn send(&self, response: ComputeResponse) -> Result<(), SendError<ComputeResponse>> {
         let nonce = self.nonce.expect("nonce must be initialized");
@@ -526,7 +537,28 @@ impl<'w> Worker<'w> {
 
             self.handle_pending_commands()?;
 
+            let role = self.role;
+            let worker_index = self.timely_worker.index();
             if let Some(mut compute_state) = self.activate_compute() {
+                if role == ComputeRuntimeRole::Interactive {
+                    // Give a turn to the shared-index peeks whose dependency was marked dirty by a
+                    // publication or a seal since the last drain. An empty dirty set means the
+                    // worker woke for a command or its maintenance tick, and no peek waiting on an
+                    // event is touched, so this costs what changed rather than what is pending.
+                    let dirty = compute_state
+                        .compute_state
+                        .sharing_registry
+                        .take_dirty(worker_index);
+                    if !dirty.is_empty() {
+                        compute_state.resolve_dirty(dirty);
+                    }
+                }
+                // The sweep is what serves a peek awaiting a turn and what retires one a driver
+                // has taken over. Neither of those waits on a dirty mark, on either runtime: a
+                // persist read and an offloaded walk both wake the worker through a channel of
+                // their own. A shared peek reaches the sweep only once it has passed the gates
+                // that admit the read, so a peek waiting on a publication or a seal costs it
+                // nothing.
                 compute_state.process_peeks();
                 compute_state.process_subscribes();
                 compute_state.process_copy_tos();
@@ -556,6 +588,16 @@ impl<'w> Worker<'w> {
                 Arc::clone(&self.peek_permits),
                 self.storage_log_reader.take(),
             ));
+
+            // The interactive runtime resolves deferred peeks on notification from the sharing
+            // registry. Register this worker's thread so a publication or seal in the registry can
+            // unpark it to re-examine pending work. Registered from the worker's own thread, which
+            // is what makes `current()` the right handle. Only the interactive runtime defers work
+            // this way; the maintenance runtime keeps its poll.
+            if self.role == ComputeRuntimeRole::Interactive {
+                self.sharing_registry
+                    .register_waker(self.timely_worker.index(), std::thread::current());
+            }
         }
         self.activate_compute().unwrap().handle_compute_command(cmd);
     }
@@ -632,6 +674,12 @@ impl<'w> Worker<'w> {
             // Importantly, act as if all peeks may have been retired (as we cannot know otherwise).
             compute_state.command_history.discard_peeks();
             compute_state.command_history.reduce();
+
+            // NOTE: the standing holds in the sharing registry are deliberately NOT cleared here.
+            // One is per collection and carries no dataflow identity, so it cannot go stale across a
+            // reconnection, and it only ever rises. Clearing it would drop the hold back to the
+            // minimum time until the replayed compactions raised it again. See
+            // `doc/developer/design/20260720_two_runtime_compute/design.md`.
 
             // At this point, we need to sort out which of the *certainly installed* dataflows are
             // suitable replacements for the requested dataflows. A dataflow is "certainly installed"
@@ -804,6 +852,19 @@ impl<'w> Worker<'w> {
                 // Log dropping the peek request.
                 if let Some(logger) = compute_state.compute_logger.as_mut() {
                     logger.log(&peek.as_log_event(false));
+                }
+            }
+
+            // And the shared peeks waiting on a publication or a seal, which belong to the
+            // reconciled-away client connection just as much. They wait outside both queues above,
+            // so the sweep never sees them.
+            for peek in std::mem::take(&mut compute_state.pending_work)
+                .into_values()
+                .flatten()
+            {
+                // Log dropping the peek request, reusing `PendingPeek`'s log event.
+                if let Some(logger) = compute_state.compute_logger.as_mut() {
+                    logger.log(&PendingPeek::Index(peek).as_log_event(false));
                 }
             }
 

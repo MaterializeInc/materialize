@@ -19,10 +19,6 @@
 //! is shared. Worker `i` publishes into slot `i`; a reader on worker `i` of another runtime looks up
 //! slot `i`, which is sound only because both sides shard keys by the same `key.hashed() % peers`.
 
-// TODO(CPU-215): drop once `crate::render` and `crate::compute_state` call this registry. Only the
-// registry's constructor is reachable yet, so the rest reads as dead.
-#![allow(dead_code)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use std::thread::Thread;

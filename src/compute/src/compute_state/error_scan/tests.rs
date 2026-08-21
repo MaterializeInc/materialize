@@ -51,7 +51,10 @@ pub(crate) fn error_batch(
 
 /// Builds a walk over a single-batch error trace holding `updates`, bounded by
 /// `row_iteration_limit`.
-pub(crate) fn error_scan(updates: ErrorUpdates, row_iteration_limit: Option<usize>) -> ErrorScan {
+pub(crate) fn error_scan(
+    updates: ErrorUpdates,
+    row_iteration_limit: Option<usize>,
+) -> ErrorScan<ErrsHandle> {
     let storage = vec![error_batch(updates)];
     let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
     let mut scan = ErrorScan::from_cursor(cursor, storage);
@@ -79,7 +82,10 @@ pub(crate) fn holding(error: &DataflowErrorSer) -> ErrorUpdates {
 
 /// Runs `scan` to an answer in slices of `fuel_per_step` units, and returns that answer, the
 /// fuel the walk spent, and the number of calls it took.
-fn run_sliced(scan: &mut ErrorScan, fuel_per_step: usize) -> (ErrorScanStep, usize, usize) {
+fn run_sliced(
+    scan: &mut ErrorScan<ErrsHandle>,
+    fuel_per_step: usize,
+) -> (ErrorScanStep, usize, usize) {
     let mut consumed = 0;
     // Bounded so that a walk which restarts from the first key on each resumption fails the
     // test instead of hanging it.
