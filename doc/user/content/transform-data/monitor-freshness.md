@@ -128,15 +128,31 @@ busier instance under real load might show non-zero fractions at those higher
 thresholds.
 
 By default this query aggregates across every object. To scope the CCDF to a
-single object, add a join to `mz_catalog.mz_objects` and a name filter to the
-`lags` CTE (replace `<your_mv_name>` with the name of your object):
+single object, join `mz_catalog.mz_objects` in the `lags` CTE and filter on the
+object name (replace `<your_mv_name>` with the name of your object):
 
 ```mzsql
+WITH lags AS (
+    -- Convert each lag to seconds, dropping unhydrated (NULL) observations and
+    -- any non-positive lag.
+    SELECT extract(epoch FROM wl.lag) AS lag_seconds
     FROM mz_internal.mz_wallclock_global_lag_recent_history wl
     JOIN mz_catalog.mz_objects o ON wl.object_id = o.id
     WHERE o.name = '<your_mv_name>'
       AND wl.lag IS NOT NULL
       AND wl.lag > INTERVAL '0'
+),
+thresholds AS (
+    -- Fixed decade thresholds, so the CCDF always reports 1s, 10s, and 100s.
+    SELECT unnest(ARRAY[1, 10, 100]) AS lag_threshold_seconds
+)
+SELECT
+    t.lag_threshold_seconds,
+    count(*) FILTER (WHERE l.lag_seconds >= t.lag_threshold_seconds)::float8
+        / count(*) AS fraction_of_time_at_or_above
+FROM thresholds t, lags l
+GROUP BY t.lag_threshold_seconds
+ORDER BY t.lag_threshold_seconds;
 ```
 
 To compare against an SLO, pick your target freshness (say 10 seconds) and read
