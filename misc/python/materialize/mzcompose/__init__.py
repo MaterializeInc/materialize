@@ -298,6 +298,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_compute_interactive_runtime",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_upsert_v2",
             "false",
             ["true", "false"],
@@ -584,9 +589,6 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
-    # Registered here rather than varied, because the interactive runtime cannot serve
-    # index peeks yet. Moves to get_variable_system_parameters once it can.
-    "enable_compute_interactive_runtime",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
