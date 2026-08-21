@@ -27,7 +27,8 @@ use crate::compute_state::index_peek_tests::{
     cancelling_errors, index_peek, ok_row, rows_answer, trace_bundle, trivial_finishing,
     wide_ok_rows,
 };
-use crate::compute_state::peek_scan::{PeekScan, StashBounds};
+use crate::compute_state::index_traces::{PeekErrs, PeekOks};
+use crate::compute_state::peek_scan::{IndexPeekScan, PeekScan, StashBounds};
 use crate::compute_state::peek_stash::tests::{CountedBlob, stashed_rows};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 use crate::server::ComputeRuntimeRole;
@@ -121,8 +122,8 @@ fn open(
     let (oks, errs) = bundle.oks_errs_mut();
     PeekScan::new(
         peek,
-        errs,
-        oks,
+        &mut PeekErrs::Local(errs.clone()),
+        &mut PeekOks::Local(oks.clone()),
         u64::MAX,
         StashBounds {
             eligible: stash_threshold_bytes.is_some(),
