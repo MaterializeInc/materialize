@@ -57,6 +57,12 @@ pub struct Export {
     pub export_id: GlobalId,
     /// Timely worker index of the exporting dataflow.
     pub dataflow_index: usize,
+    /// The as-of of the exporting dataflow, unless it is the empty antichain.
+    ///
+    /// Every lifecycle stage is defined relative to the as-of, so the demux keeps it around to
+    /// report alongside the stages. Durations between stages are not comparable without it: the
+    /// same duration is a different amount of work for a recent as-of than for a far behind one.
+    pub as_of: Option<Timestamp>,
 }
 
 /// The export for a global id was dropped.
@@ -172,6 +178,54 @@ pub struct Hydration {
     pub export_id: GlobalId,
 }
 
+/// An export reached a stage of its lifecycle.
+#[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
+pub struct Lifecycle {
+    /// Identifier of the export.
+    pub export_id: GlobalId,
+    /// The stage that was reached.
+    pub stage: LifecycleStage,
+}
+
+/// A stage of an export's lifecycle.
+///
+/// NOTE: Only the stages from [`LifecycleStage::Hydrated`] on are carried by a [`Lifecycle`]
+/// event. `Installed` and `Started` are logged from the [`Export`] and [`HydrationStart`] events,
+/// which already mark those moments for the hydration time relation. They are variants here so
+/// that the stage vocabulary has a single definition.
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Columnar)]
+pub enum LifecycleStage {
+    /// The export's dataflow was installed, still suspended.
+    Installed,
+    /// The export's dataflow was unsuspended, so hydration work may begin.
+    Started,
+    /// The dataflow's own progress frontier passed its as-of.
+    Hydrated,
+    /// The export's sink may not write, because the dataflow is in read-only mode.
+    WriteBlockedReadOnly,
+    /// The export's sink may write.
+    WriteUnblocked,
+    /// The export's sink advanced the output shard's upper past the as-of.
+    Written,
+}
+
+impl LifecycleStage {
+    /// The `event` and `reason` this stage is reported as.
+    ///
+    /// The reason is a closed vocabulary, so that "which exports are in this state, and why" stays
+    /// a filter over typed columns rather than a search through `details`.
+    fn columns(self) -> (&'static str, Option<&'static str>) {
+        match self {
+            Self::Installed => ("installed", None),
+            Self::Started => ("started", None),
+            Self::Hydrated => ("hydrated", None),
+            Self::WriteBlockedReadOnly => ("write_blocked", Some("read_only")),
+            Self::WriteUnblocked => ("write_unblocked", None),
+            Self::Written => ("written", None),
+        }
+    }
+}
+
 /// An operator's hydration status changed.
 #[derive(Debug, Clone, PartialOrd, PartialEq, Columnar)]
 pub struct OperatorHydration {
@@ -238,6 +292,8 @@ pub enum ComputeEvent {
     HydrationStart(HydrationStart),
     /// A dataflow export was hydrated.
     Hydration(Hydration),
+    /// A dataflow export reached a stage of its lifecycle.
+    Lifecycle(Lifecycle),
     /// A dataflow operator's hydration status changed.
     OperatorHydration(OperatorHydration),
     /// An LIR operator was mapped to some particular dataflow operator.
@@ -360,6 +416,8 @@ pub(super) fn construct<'scope>(
         let mut error_count_out = OutputBuilder::from(error_count_out);
         let (hydration_time_out, hydration_time) = demux.new_output();
         let mut hydration_time_out = OutputBuilder::from(hydration_time_out);
+        let (lifecycle_out, lifecycle) = demux.new_output();
+        let mut lifecycle_out = OutputBuilder::from(lifecycle_out);
         let (operator_hydration_status_out, operator_hydration_status) = demux.new_output();
         let mut operator_hydration_status_out = OutputBuilder::from(operator_hydration_status_out);
         let (lir_mapping_out, lir_mapping) = demux.new_output();
@@ -380,6 +438,7 @@ pub(super) fn construct<'scope>(
                 let mut arrangement_heap_allocations = arrangement_heap_allocations_out.activate();
                 let mut error_count = error_count_out.activate();
                 let mut hydration_time = hydration_time_out.activate();
+                let mut lifecycle = lifecycle_out.activate();
                 let mut operator_hydration_status = operator_hydration_status_out.activate();
                 let mut lir_mapping = lir_mapping_out.activate();
                 let mut dataflow_global_ids = dataflow_global_ids_out.activate();
@@ -398,6 +457,7 @@ pub(super) fn construct<'scope>(
                         arrangement_heap_size: arrangement_heap_size.session_with_builder(&cap),
                         error_count: error_count.session_with_builder(&cap),
                         hydration_time: hydration_time.session_with_builder(&cap),
+                        lifecycle: lifecycle.session_with_builder(&cap),
                         operator_hydration_status: operator_hydration_status
                             .session_with_builder(&cap),
                         lir_mapping: lir_mapping.session_with_builder(&cap),
@@ -430,6 +490,7 @@ pub(super) fn construct<'scope>(
             (FrontierCurrent, frontier),
             (HydrationTime, hydration_time),
             (ImportFrontierCurrent, import_frontier),
+            (LifecycleEvent, lifecycle),
             (LirMapping, lir_mapping),
             (OperatorHydrationStatus, operator_hydration_status),
             (PeekCurrent, peek),
@@ -494,6 +555,23 @@ fn epoch_offset_datum(offset: Duration) -> Datum<'static> {
     Datum::TimestampTz(timestamp)
 }
 
+/// Pack the `details` payload reported alongside every lifecycle stage of an export.
+///
+/// The as-of is rendered as a JSON string rather than a number. It is an `mz_timestamp`, which has
+/// no faithful JSON number counterpart, and a string round-trips it exactly.
+fn lifecycle_details(as_of: Option<Timestamp>) -> Row {
+    let mut row = Row::default();
+    let mut packer = row.packer();
+    match as_of {
+        Some(ts) => {
+            let ts = ts.to_string();
+            packer.push_dict([("as_of", Datum::String(&ts))]);
+        }
+        None => packer.push_dict([("as_of", Datum::JsonNull)]),
+    }
+    row
+}
+
 /// State maintained by the demux operator.
 struct DemuxState {
     /// The timely activations handle.
@@ -540,6 +618,8 @@ struct DemuxState {
     peek_packer: PermutedRowPacker,
     /// A row packer for the hydration time output.
     hydration_time_packer: PermutedRowPacker,
+    /// A row packer for the lifecycle output.
+    lifecycle_packer: PermutedRowPacker,
 }
 
 impl DemuxState {
@@ -567,6 +647,7 @@ impl DemuxState {
             frontier_packer: PermutedRowPacker::new(ComputeLog::FrontierCurrent),
             hydration_time_packer: PermutedRowPacker::new(ComputeLog::HydrationTime),
             import_frontier_packer: PermutedRowPacker::new(ComputeLog::ImportFrontierCurrent),
+            lifecycle_packer: PermutedRowPacker::new(ComputeLog::LifecycleEvent),
             lir_mapping_packer: PermutedRowPacker::new(ComputeLog::LirMapping),
             operator_hydration_status_packer: PermutedRowPacker::new(
                 ComputeLog::OperatorHydrationStatus,
@@ -660,6 +741,25 @@ impl DemuxState {
             timestamps
                 .hydrated_at
                 .map_or(Datum::Null, epoch_offset_datum),
+        ])
+    }
+
+    /// Pack a lifecycle update key-value for the given export ID and stage.
+    fn pack_lifecycle_update(
+        &mut self,
+        export_id: GlobalId,
+        stage: LifecycleStage,
+        occurred_at: Duration,
+        details: Datum<'_>,
+    ) -> (&RowRef, &RowRef) {
+        let (event, reason) = stage.columns();
+        self.lifecycle_packer.pack_slice(&[
+            make_string_datum(export_id, &mut self.scratch_string_a),
+            Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::String(event),
+            epoch_offset_datum(occurred_at),
+            reason.map_or(Datum::Null, Datum::String),
+            details,
         ])
     }
 
@@ -799,10 +899,18 @@ struct ExportState {
     hydration_timestamps: HydrationTimestamps,
     /// Hydration status of operators feeding this export.
     operator_hydration: BTreeMap<LirId, bool>,
+    /// The as-of of the dataflow maintaining this export.
+    as_of: Option<Timestamp>,
+    /// The lifecycle rows logged for this export so far.
+    ///
+    /// The lifecycle relation is append-only for the life of an export, so the rows are kept to
+    /// retract them when it is dropped. Re-deriving them at drop time would risk drifting from
+    /// what was inserted.
+    lifecycle_rows: Vec<(Row, Row)>,
 }
 
 impl ExportState {
-    fn new(dataflow_index: usize, installed_at: Duration) -> Self {
+    fn new(dataflow_index: usize, installed_at: Duration, as_of: Option<Timestamp>) -> Self {
         Self {
             dataflow_index,
             error_count: Diff::ZERO,
@@ -814,6 +922,8 @@ impl ExportState {
                 hydrated_at: None,
             },
             operator_hydration: BTreeMap::new(),
+            as_of,
+            lifecycle_rows: Vec::new(),
         }
     }
 }
@@ -837,6 +947,7 @@ struct DemuxOutput<'a, 'b> {
     arrangement_heap_capacity: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     arrangement_heap_size: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     hydration_time: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
+    lifecycle: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     operator_hydration_status: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     error_count: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
     lir_mapping: OutputSessionColumnar<'a, 'b, Update<(Row, Row)>>,
@@ -888,6 +999,7 @@ impl DemuxHandler<'_, '_, '_> {
             ErrorCount(error_count) => self.handle_error_count(error_count),
             HydrationStart(hydration) => self.handle_hydration_start(hydration),
             Hydration(hydration) => self.handle_hydration(hydration),
+            Lifecycle(lifecycle) => self.handle_lifecycle(lifecycle),
             OperatorHydration(hydration) => self.handle_operator_hydration(hydration),
             LirMapping(mapping) => self.handle_lir_mapping(mapping),
             DataflowGlobal(global) => self.handle_dataflow_global(global),
@@ -899,6 +1011,7 @@ impl DemuxHandler<'_, '_, '_> {
         ExportReference {
             export_id,
             dataflow_index,
+            as_of,
         }: Ref<'_, Export>,
     ) {
         let export_id = Columnar::into_owned(export_id);
@@ -910,10 +1023,11 @@ impl DemuxHandler<'_, '_, '_> {
         // then only delays when an update becomes visible, rather than skewing recorded instants.
         let installed_at = self.time;
 
-        let existing = self
-            .state
-            .exports
-            .insert(export_id, ExportState::new(dataflow_index, installed_at));
+        let as_of = Option::<Timestamp>::into_owned(as_of);
+        let existing = self.state.exports.insert(
+            export_id,
+            ExportState::new(dataflow_index, installed_at, as_of),
+        );
         if existing.is_some() {
             error!(%export_id, "export already registered");
         }
@@ -928,6 +1042,8 @@ impl DemuxHandler<'_, '_, '_> {
             .state
             .pack_hydration_time_update(export_id, None, &timestamps);
         self.output.hydration_time.give((datum, ts, Diff::ONE));
+
+        self.log_lifecycle(export_id, LifecycleStage::Installed);
     }
 
     fn handle_export_dropped(
@@ -963,6 +1079,13 @@ impl DemuxHandler<'_, '_, '_> {
         self.output
             .hydration_time
             .give((datum, ts, Diff::MINUS_ONE));
+
+        // Remove lifecycle logging for this export.
+        for (key, value) in &export.lifecycle_rows {
+            self.output
+                .lifecycle
+                .give(((&**key, &**value), ts, Diff::MINUS_ONE));
+        }
 
         // Remove operator hydration logging for this export.
         for (lir_id, hydrated) in export.operator_hydration {
@@ -1078,6 +1201,8 @@ impl DemuxHandler<'_, '_, '_> {
             .state
             .pack_hydration_time_update(export_id, time_ns, &new_timestamps);
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
+
+        self.log_lifecycle(export_id, LifecycleStage::Started);
     }
 
     fn handle_hydration(&mut self, HydrationReference { export_id }: Ref<'_, Hydration>) {
@@ -1111,7 +1236,8 @@ impl DemuxHandler<'_, '_, '_> {
         // hydrated_at` total and reports the queueing interval as zero. Stamping `hydrated_at`
         // instead would invert it, charging the whole life to queueing and reporting zero
         // hydration time for a dataflow that only ever hydrated.
-        if export.hydration_timestamps.started_at.is_none() {
+        let backfilled_start = export.hydration_timestamps.started_at.is_none();
+        if backfilled_start {
             export.hydration_timestamps.started_at = Some(export.hydration_timestamps.installed_at);
         }
         let new_timestamps = export.hydration_timestamps;
@@ -1126,6 +1252,72 @@ impl DemuxHandler<'_, '_, '_> {
             self.state
                 .pack_hydration_time_update(export_id, Some(nanos), &new_timestamps);
         self.output.hydration_time.give((insertion, ts, Diff::ONE));
+
+        // The lifecycle log needs the same back-fill. A `Schedule` that arrives after hydration is
+        // absorbed by the guard in `handle_hydration_start`, so this is the only chance to report
+        // the stage, and without it the export would report `hydrated` with no `started`.
+        //
+        // Stamp it from `installed_at`, not from the current event time, for the same reason the
+        // timestamps above do. A dataflow that hydrated before it was ever scheduled did not
+        // queue, so reporting `started` at the hydration instant would charge its whole life to
+        // queueing and report roughly zero hydration, and the two relations would disagree about
+        // the same export.
+        if backfilled_start {
+            self.log_lifecycle_at(
+                export_id,
+                LifecycleStage::Started,
+                new_timestamps.installed_at,
+            );
+        }
+    }
+
+    /// Log an export having reached a lifecycle stage, and remember the row so that it can be
+    /// retracted when the export is dropped.
+    fn log_lifecycle(&mut self, export_id: GlobalId, stage: LifecycleStage) {
+        // Stamp the event time rather than `ts`, as in `handle_export`.
+        let occurred_at = self.time;
+        self.log_lifecycle_at(export_id, stage, occurred_at);
+    }
+
+    /// As [`Self::log_lifecycle`], for a stage whose instant is not the current event time.
+    fn log_lifecycle_at(
+        &mut self,
+        export_id: GlobalId,
+        stage: LifecycleStage,
+        occurred_at: Duration,
+    ) {
+        let ts = self.ts();
+
+        let Some(as_of) = self.state.exports.get(&export_id).map(|e| e.as_of) else {
+            error!(%export_id, ?stage, "lifecycle event for unknown export");
+            return;
+        };
+
+        let details = lifecycle_details(as_of);
+        let update = {
+            let (key, value) = self.state.pack_lifecycle_update(
+                export_id,
+                stage,
+                occurred_at,
+                details.unpack_first(),
+            );
+            (key.to_owned(), value.to_owned())
+        };
+        self.output
+            .lifecycle
+            .give(((&*update.0, &*update.1), ts, Diff::ONE));
+
+        let export = self
+            .state
+            .exports
+            .get_mut(&export_id)
+            .expect("checked above");
+        export.lifecycle_rows.push(update);
+    }
+
+    fn handle_lifecycle(&mut self, LifecycleReference { export_id, stage }: Ref<'_, Lifecycle>) {
+        let export_id = Columnar::into_owned(export_id);
+        self.log_lifecycle(export_id, stage);
     }
 
     fn handle_operator_hydration(
@@ -1454,11 +1646,13 @@ impl CollectionLogging {
         export_id: GlobalId,
         logger: Logger,
         dataflow_index: usize,
+        as_of: Option<Timestamp>,
         import_ids: impl Iterator<Item = GlobalId>,
     ) -> Self {
         logger.log(&ComputeEvent::Export(Export {
             export_id,
             dataflow_index,
+            as_of,
         }));
 
         let mut self_ = Self {
@@ -1542,6 +1736,17 @@ impl CollectionLogging {
             .log(&ComputeEvent::HydrationStart(HydrationStart {
                 export_id: self.export_id,
             }));
+    }
+
+    /// Record that the collection reached a stage of its lifecycle.
+    ///
+    /// Callers must not report a stage twice, since the lifecycle relation is append-only and the
+    /// demux does not deduplicate.
+    pub fn log_lifecycle(&self, stage: LifecycleStage) {
+        self.logger.log(&ComputeEvent::Lifecycle(Lifecycle {
+            export_id: self.export_id,
+            stage,
+        }));
     }
 
     /// Set the collection as hydrated.

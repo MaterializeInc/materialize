@@ -103,11 +103,25 @@ them.
 | --- | --- | --- |
 | `installed_at` | the `Export` event, from `CreateDataflow` | the dataflow exists on this worker, suspended, so this is also the start of queueing |
 | `started_at` | the dataflow is unsuspended | hydration is actually running |
-| `hydrated_at` | the output frontier passes the as-of | hydration is complete |
+| `hydrated_at` | the reported output frontier passes the as-of | the output is readable, which for a collection that writes means durable |
 
 `hydrated_at - started_at` is hydration time as users mean it, and
 `started_at - installed_at` is the queueing interval. Today's `time_ns` conflates
 the two.
+
+The lifecycle is wider than these three stages, and timestamp columns cannot carry
+all of it. Two things get in the way. The stages do not share a grain: `installed`,
+`started` and `hydrated` are per-worker facts, since each worker hydrates its own
+fragment of the dataflow, while whether the output is durable is a property of the
+sink as a whole. And a timestamp column cannot say *why* the next stage has not
+happened, so a NULL cannot tell a replacement materialized view waiting for a
+cutover apart from an index that will never write.
+
+So the lifecycle proper is recorded as an append-only event log, described under
+"The lifecycle event log", and `mz_compute_hydration_times_per_worker` keeps
+exactly the shape and meaning above. The two are complementary: the timestamps are
+the compact per-worker summary a rollup aggregates, and the log is where causes and
+the write stages live.
 
 Two choices shape everything else, each argued in its own section below. The
 timestamps are stamped by the replica rather than by the compute controller, for
@@ -162,6 +176,142 @@ absorbs anchor skew. That skew is pre-existing across everything derived from
 compute logging and has not been observed to be severe, but it is a real risk and
 this design is the first to invite direct comparison of absolute times, so it is
 acknowledged rather than designed around.
+
+### The lifecycle event log
+
+One append-only log relation, per replica, in memory:
+
+```
+export_id    text        not null
+worker_id    uint8       not null
+event        text        not null
+occurred_at  timestamptz not null
+reason       text        nullable
+details      jsonb       nullable
+```
+
+| event | grain | `reason` |
+| --- | --- | --- |
+| `installed` | per worker | none |
+| `started` | per worker | none |
+| `hydrated` | per worker | none |
+| `write_blocked` | per object | `read_only` |
+| `write_unblocked` | per object | none |
+| `written` | per object | none |
+
+An index emits the first three and stops, which is the index degeneracy of the
+lifecycle falling out of the model rather than being special-cased. Subscribes and
+`COPY TO` stop early for the same reason, and a metric sink folds its output into
+the metrics registry rather than into a shard, so it has no write stages either.
+
+**Grain.** `worker_id` is the worker that observed the event and is never NULL. The
+per-object events are observed by the single worker that maintains the sink's
+shared write frontier, elected as `hashed(sink_id) % peers`, so they appear once
+per object rather than once per worker, and the row records which worker was
+elected for free. Nothing else may read that shared frontier as a measure of
+writing: `mint` clears it on every non-elected worker, where it is then the empty
+antichain and would report having written everything immediately. The election has
+one definition, `sink::materialized_view::frontier_owner`, called both by `mint`
+and by the code that records ownership.
+
+**Which frontier each stage reads.** `hydrated` reads the dataflow's own progress
+frontier, the compute probe, not the reported output frontier. The output frontier
+is the meet of write and compute frontier, which makes it a measure of durability
+rather than of computation, and for a sink-backed collection it is not even uniform
+across workers, for the reason just given. A collection with no compute probe
+produces its output *by* writing it, an index into its own trace, so there the
+write frontier is the progress and `hydrated` coincides with durability.
+
+`written` reads the sink's write frontier passing the as-of, held back until
+`hydrated` has been reported and until writes are permitted. Without the first
+clamp the two can invert, for the reason under "Refresh schedules do not block
+writing".
+
+The second clamp is there because the frontier is the output shard's upper, which
+is a property of the shard rather than of this replica. The as-of is bounded to one
+step below that upper for a non-empty storage export, in
+`as_of_selection::apply_downstream_storage_constraints`, so for a shard that
+already holds data the predicate is true from the moment the dataflow is installed.
+A replica that may not write cannot be the one that advanced it, so reporting the
+stage there would attribute another writer's progress to this replica and put
+`written` ahead of `write_unblocked`. What `written` promises is therefore that the
+output is durable at the as-of and that this replica was permitted to write, not
+that this replica performed the write. On a restarted or scaled-out replica the
+output was already durable, and `written` lands with `hydrated`.
+
+**`write_blocked` is logged on entry, not on exit.** Carrying the cause on
+`write_unblocked` reads more naturally, but then the cause is only observable once
+the block has ended. If it never ends, which is the state an operator is debugging,
+there is no row at all. Logging entry makes "which objects are hydrated but not
+writing, and why" a query over present rows rather than an inference from absence.
+
+Entry means entry into a state where the block matters, which is after hydration.
+Before it, the sink has produced nothing and read-only mode is holding nothing
+back. Every collection starts read-only and is released by the controller, so
+reporting a block from installation would put a `write_blocked` and a
+`write_unblocked` on essentially every materialized view, both before `hydrated`,
+making `write_unblocked - hydrated` negative rather than zero. Gating on hydration
+means the pair appears only when something really was held back, and the intervals
+in the list above are all non-negative by construction.
+
+**`write_unblocked`, not `write_started`.** `mint` produces a batch description as
+soon as the desired frontier advances past the persist frontier, and the persist
+frontier is initialized to the as-of, so for a plain read-write materialized view
+the first write is minted at hydration and a separate "write started" stamp would
+carry no information. What does vary is when writing became *permitted*. Naming it
+that way gives each interval exactly one cause: `started - installed` is queueing,
+`hydrated - started` is compute, and `write_unblocked - hydrated` is blocked time.
+In the common case the blocked pair is absent rather than zero: the controller
+allows writes in the same turn it ships the dataflow, so a collection is normally
+already permitted to write by the time it hydrates, and neither event is logged.
+
+**`reason` is typed, `details` is not.** This follows `mz_source_statuses` and
+`mz_sink_statuses`, which pair a typed status with a nullable `details jsonb`
+documented by example rather than by schema. What people filter and group on stays
+typed, and only the look-at-one-row detail goes in the json. What `details` carries
+is the dataflow's as-of, which every stage is defined relative to: without it
+`hydrated - started` cannot distinguish a genuinely fast hydration from one whose
+as-of was already recent, and a replacement materialized view with a far behind
+as-of is a completely different amount of work at the same duration. That does not
+earn a column and is worth having in the row. Invariant tests must assert on
+`event`, `reason` and `occurred_at` and never on `details`, or the first test that
+pins a field removes the extensibility it exists for.
+
+**Bounds.** At most six rows per object, times workers for the first three events,
+all retracted when the object is dropped. This is in-memory introspection, so
+there is no durable growth to reason about.
+
+**Only `read_only` is attributed.** It is the one cause of a write block that
+compute can observe. Two further attributions would be useful and are not
+available, so they are follow-up work rather than part of this design.
+Distinguishing a `started` that waited on the hydration limiter from one that
+waited on its inputs needs `SequentialHydration` to report which, since both appear
+to the replica as `Schedule` arriving late. And distinguishing a dataflow installed
+by a fresh `CreateDataflow` from one retained across reconciliation is not
+observable here at all, because a retained dataflow emits no new `installed` event.
+
+### Refresh schedules do not block writing
+
+`apply_refresh` rounds a `REFRESH` materialized view's frontier *up* to the next
+refresh time, and it does so off its input frontier, before the dataflow has
+computed anything. The sink therefore sees a desired frontier ahead of the as-of
+immediately, mints a description for the pre-refresh window, and appends an empty
+batch, advancing the shard's upper. A refresh schedule brings writing forward
+rather than holding it back.
+
+`test/testdrive/materialized-view-refresh-options.td` shows this from the outside:
+a materialized view whose first refresh is far in the future reports
+`mz_hydration_statuses.hydrated = true`, and that flag is `time_ns IS NOT NULL`,
+which requires the write frontier to have passed the as-of.
+
+Two consequences. There is no `refresh` cause for `write_blocked` to report,
+because there is no such state. And the shard's upper can pass the as-of while the
+dataflow is still hydrating, which is why `written` is clamped to `hydrated`.
+
+What a refresh schedule does still distort is any rollup reading
+`mz_compute_hydration_statuses.hydration_time` as hydration work, since for a
+refresh materialized view that interval can include waiting on the schedule. That
+is a property of the retained `time_ns` column, not of the log.
 
 ### A new hydration start event
 
@@ -274,10 +424,14 @@ change nor the rename would have touched that relation.
 **`time_ns` is kept rather than replaced.** It is the reason the existing columns
 keep their exact values: retained rather than derived, so nothing is recomputed,
 no precision is lost, and no cross-worker arithmetic is introduced.
-Deriving `time_ns` as `hydrated_at - installed_at` would have moved it to
+It could not be derived from the timestamps in any case. `time_ns` and
+`hydrated_at` fire on the same crossing, but deriving the duration would move it to
 microsecond precision, since `timestamptz` caps there, where today it is true
-nanoseconds. Deriving it after aggregation would additionally have absorbed
-cross-worker install skew and the per-worker anchor skew described above. So
+nanoseconds. It would also change what the interval is measured from: `time_ns`
+runs off a single `Instant` taken when the export state is created, where
+`hydrated_at - installed_at` is a difference of two rounded event times. Deriving
+it after aggregation would additionally have absorbed cross-worker install skew and
+the per-worker anchor skew described above. So
 `time_ns` remains the authoritative per-worker duration, measured from a single
 `Instant` inside one worker, and the timestamps carry episode identity, which
 requires absolute times a duration cannot provide. Two columns with two documented
@@ -312,7 +466,7 @@ in one controller turn and one replica turn.
 | 6 | replica | inserts the suspension token and renders the dataflow, whose operators park on the `StartSignal` | |
 | 7 | replica | `handle_schedule` drops the token and the operators start | **`started_at`** |
 | 8 | replica | the dataflow reads its inputs from the as-of forward and builds arrangements. Nothing is stamped here, this interval is the hydration | |
-| 9 | replica | the output frontier passes the as-of and `set_reported_output_frontier` calls `set_hydrated` | **`hydrated_at`** |
+| 9 | replica | the reported output frontier passes the as-of and `set_reported_output_frontier` calls `set_hydrated`. Separately, `observe_hydration` sees the dataflow's own progress frontier pass the as-of and logs the `hydrated` stage | **`hydrated_at`**, and the `hydrated` event |
 | 10 | replica | the demux writes the retract and insert pair, so the per-worker relation carries all three | |
 | 11 | controller | separately, a `Frontiers` response arrives and `update_output_frontier` flips the controller's own hydration view, which is what the 0dt caught-up check and the autoscaling signal read. One round trip later, and it stamps nothing | |
 
@@ -391,21 +545,16 @@ restarting. Consumers must gate on introspection freshness, as
 `mz_object_arrangement_size_history` already does via
 `fresh_introspection_replicas`.
 
-**`REFRESH` materialized views report a refresh interval, not hydration work.**
-The reported output frontier is the meet of write and compute frontier, and a
-REFRESH MV's write frontier sits at the as-of until the first refresh lands, so
-hydration is not considered complete until then. For `REFRESH EVERY '1 day'`,
-`hydrated_at - started_at` can be most of a day, nearly all of it idle. The
-per-object stamps are still internally consistent, so this is not a defect in the
-relation, but any rollup must exclude these objects or it will never close an
-episode. The controller already receives `refresh_schedule` in `add_collection`,
-so it can mark them.
-
-**Read-only mode changes what the output frontier means.** In read-only mode the
-write frontier is deliberately excluded from the reported output frontier, because
-a read-only dataflow cannot push it forward. So `hydrated_at` during a 0dt
-read-only window reflects compute progress only, which is the intended reading but
-differs from the steady-state one.
+**`REFRESH` materialized views hydrate on their computation.** The compute probe
+is attached before the `apply_refresh` operator, deliberately, with the comment in
+`src/compute/src/sink/materialized_view.rs` explaining that rounding frontiers up
+"makes it impossible to accurately track the progress of the computation". So the
+log's `hydrated` stage reads the pre-rounding frontier. `hydrated_at` agrees, even
+though it reads the meet: a refresh schedule pushes the write frontier ahead of the
+as-of, so the meet is bounded by the compute frontier and crosses when the
+computation does. Both report when the computation caught up rather than anything
+derived from the schedule. What the schedule does affect is writing, and it
+advances it rather than delaying it. See "Refresh schedules do not block writing".
 
 ### Why the replica and not the compute controller
 
@@ -435,6 +584,8 @@ for upgrades.
 
 ### Implementation touch points
 
+The timestamps:
+
 - `src/compute/src/logging/compute.rs`: `ComputeEvent::HydrationStart`, the three
   `ExportState` fields, the packer, `handle_export`, `handle_export_dropped`,
   `handle_hydration` including the `started_at` backfill, and a new
@@ -448,12 +599,50 @@ for upgrades.
   the variant itself is unchanged.
 - `src/catalog/src/builtin/mz_introspection.rs`: the appended columns on the
   existing builtin log. No rename, so no new OID and no `BUILTINS_STATIC` entry.
-- Goldens that hardcode this relation's identity, columns, OIDs or indexes:
-  `test/sqllogictest/oid.slt`, `information_schema_tables.slt`,
-  `mz_catalog_server_index_accounting.slt`, `cluster.slt`,
-  `catalog_server_explain.slt`, `test/cluster/mzcompose.py`, and the autogenerated
-  `test/sqllogictest/autogenerated/mz_introspection.slt`.
-- Docs: the `mz_introspection` system catalog reference page.
+
+The lifecycle log:
+
+- `src/compute-client/src/logging.rs`: a `ComputeLog::LifecycleEvent` variant and
+  its `RelationDesc`, unkeyed, so `index_by` arranges by the whole row. Declaring
+  `(export_id, worker_id, event)` as a key would be true today but is a uniqueness
+  claim the optimizer would act on, and a false key is a correctness hazard rather
+  than a missed optimization.
+- `src/catalog/src/durable/transaction.rs`: a new log id. Existing ids must not be
+  renumbered. Doing so panics on restart with a negative capability on
+  `IntrospectionSourceIndex`.
+- `src/catalog/src/builtin/mz_introspection.rs` and `src/catalog/src/builtin.rs`: a
+  `BuiltinLog` with a fresh OID and an ontology entry, plus its `BUILTINS_STATIC`
+  registration.
+- `src/compute/src/logging/compute.rs`: the `Lifecycle` event and the
+  `LifecycleStage` vocabulary, an as-of field on `Export`, a demux output and
+  packer including the `jsonb` column, and the emitted rows kept on `ExportState`
+  so that they can be retracted verbatim when the export is dropped.
+- `src/compute/src/compute_state.rs`: the stage bookkeeping on `CollectionState`
+  and the observation of both frontiers in `report_frontiers`.
+- `src/compute/src/sink/materialized_view.rs` and `materialized_view_v2.rs`: the
+  shared `frontier_owner` election, and recording on the collection whether this
+  worker owns the sink frontier.
+
+- `src/adapter/src/catalog/open/builtin_schema_migration.rs`: `Replacement` steps for
+  `mz_catalog.mz_indexes` and `mz_catalog.mz_sources` at the workspace's current dev
+  version. Adding a builtin log moves two generated materialized views. `make_mz_indexes`
+  inlines one `VALUES` row per log, naming the log and its `index_by` columns, and
+  `make_mz_sources` inlines one per log alongside the builtin sources. Either fingerprint
+  moving without a step reaches `update_fingerprints` with a mismatch for a builtin that is
+  neither migrated nor ephemeral, which panics and blocks catalog open on upgrade.
+
+Goldens that hardcode a log relation's identity, columns, OIDs or indexes:
+`test/sqllogictest/oid.slt`, `information_schema_tables.slt`,
+`mz_catalog_server_index_accounting.slt`, `cluster.slt`,
+`cockroach/srfs.slt`, the autogenerated
+`test/sqllogictest/autogenerated/mz_introspection.slt`,
+`test/testdrive/indexes.td`, `test/testdrive/catalog.td`, and
+`test/workload-replay/system_catalog_identifiers.txt` and `objects.txt`. Docs: the
+`mz_introspection` system catalog reference page.
+
+`catalog_server_explain.slt` and `test/cluster/mzcompose.py` need no change. The
+former's query filters `o.id NOT LIKE 'si%'`, which excludes per-replica
+introspection log indexes, and the latter queries named relations.
 
 Not touched, and deliberately so: the introspection subscribe,
 `mz_internal.mz_compute_hydration_times`,
@@ -621,8 +810,24 @@ named.
   visibility limit.
 - **Log collections** get a start event rather than a filter.
 - **The per-replica relation is follow-up work,** not part of this design.
+- **The lifecycle is an event log, not more timestamp columns.** The stages do not
+  share a grain and a timestamp cannot carry a cause. See "The lifecycle event
+  log".
+- **`mz_compute_hydration_times_per_worker` keeps its meaning.** `hydrated_at`
+  reads the output frontier, as it always has, so nothing built on it changes
+  value. The log carries the dataflow reading under `hydrated`.
+- **Refresh schedules advance writing rather than blocking it,** established
+  against the refresh tests. So `write_blocked` has no `refresh` cause, and
+  `written` is clamped to `hydrated` to keep the stages ordered. See "Refresh
+  schedules do not block writing".
+- **`worker_id` is not nullable.** A NULL would make the per-object grain visible
+  in the row, at the cost of introducing the only NULL `worker_id` in the logging
+  framework. The grain is documented instead, and the column records which worker
+  was elected.
 
 ## Open questions
 
-None outstanding for this design. The open questions all belong to the per-replica
-rollup and are enumerated under "Follow-up work".
+None outstanding for this design. Two attributions the `reason` vocabulary would
+benefit from are not observable today and are enumerated under "The lifecycle event
+log". The rest of the open questions belong to the per-replica rollup and are
+enumerated under "Follow-up work".

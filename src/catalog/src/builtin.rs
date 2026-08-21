@@ -1106,6 +1106,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Log(&MZ_COMPUTE_IMPORT_FRONTIERS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_ERROR_COUNTS_RAW),
         Builtin::Log(&MZ_COMPUTE_HYDRATION_TIMES_PER_WORKER),
+        Builtin::Log(&MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER),
         Builtin::Log(&MZ_COMPUTE_OPERATOR_HYDRATION_STATUSES_PER_WORKER),
         Builtin::MaterializedView(&MZ_KAFKA_SINKS),
         Builtin::MaterializedView(&MZ_KAFKA_CONNECTIONS),
@@ -2219,6 +2220,21 @@ mod tests {
             fp_base,
             Fingerprint::fingerprint(&&mv_extra),
             "mz_sources fingerprint must change when a builtin source is added"
+        );
+
+        // Adding an extra log must also change the fingerprint, because the log set is inlined
+        // alongside the source set. Without this case, adding a builtin log moves the
+        // `mz_sources` fingerprint with nothing on the PR path to announce that it needs a
+        // migration step, and catalog open panics on the upgrade.
+        let extra_log = logs[0];
+        let mv_extra_log = builtin::make_mz_sources(
+            sources.iter().copied(),
+            logs.iter().copied().chain(std::iter::once(extra_log)),
+        );
+        assert_ne!(
+            fp_base,
+            Fingerprint::fingerprint(&&mv_extra_log),
+            "mz_sources fingerprint must change when a builtin log is added"
         );
     }
 

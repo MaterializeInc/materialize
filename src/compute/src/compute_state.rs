@@ -70,7 +70,7 @@ use uuid::Uuid;
 
 use crate::arrangement::manager::{TraceBundle, TraceManager};
 use crate::logging;
-use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
+use crate::logging::compute::{CollectionLogging, ComputeEvent, LifecycleStage, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
@@ -694,6 +694,7 @@ impl<'a> ActiveComputeState<'a> {
                     object_id,
                     logger,
                     *dataflow_index,
+                    as_of.as_option().copied(),
                     dataflow.import_ids(),
                 );
                 if starts_immediately {
@@ -884,12 +885,17 @@ impl<'a> ActiveComputeState<'a> {
             let mut collection = CollectionState::new(
                 Rc::clone(&dataflow_index),
                 is_subscribe_or_copy,
-                as_of,
+                as_of.clone(),
                 metrics,
             );
 
-            let logging =
-                CollectionLogging::new(id, logger.clone(), *dataflow_index, std::iter::empty());
+            let logging = CollectionLogging::new(
+                id,
+                logger.clone(),
+                *dataflow_index,
+                as_of.as_option().copied(),
+                std::iter::empty(),
+            );
             // Log collections are never suspended and the controller marks them scheduled
             // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
             // start here, or they would sit permanently in the illegal state of being hydrated
@@ -921,6 +927,8 @@ impl<'a> ActiveComputeState<'a> {
 
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
         let mut new_frontier = Antichain::new();
+        // Same, for the frontier that measures dataflow progress.
+        let mut hydration_frontier = Antichain::new();
 
         for (&id, collection) in self.compute_state.collections.iter_mut() {
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
@@ -949,6 +957,36 @@ impl<'a> ActiveComputeState<'a> {
                 .write_frontier
                 .allows_reporting(&new_frontier)
                 .then(|| new_frontier.clone());
+
+            // Collect the frontier that measures the dataflow's own progress, which is what
+            // hydration is about.
+            //
+            // This is deliberately not the output frontier collected below. That folds in the
+            // write frontier, which makes it a measure of durability rather than of dataflow
+            // progress, and for a collection that sinks to persist it is not even uniform across
+            // workers: the sink's `mint` operator maintains the shared sink frontier on one
+            // elected worker and clears it on all the others, so the same dataflow would report
+            // hydration at two different times depending on which worker's log you read.
+            //
+            // A collection with a compute frontier produces its output before writing it, so that
+            // frontier is its progress. A collection without one produces its output *by* writing
+            // it, an index into its own trace, so there the write frontier is the progress and
+            // hydration coincides with durability.
+            hydration_frontier.clear();
+            match &collection.compute_probe {
+                Some(probe) => {
+                    probe.with_frontier(|frontier| {
+                        hydration_frontier.extend(frontier.iter().copied())
+                    });
+                }
+                None => hydration_frontier.clone_from(&new_frontier),
+            }
+
+            // Evaluate the lifecycle predicates here, while both frontiers are still in hand.
+            // `new_frontier` is folded into the output frontier below, which loses the write
+            // frontier this one is about.
+            let hydrated = PartialOrder::less_than(&collection.as_of, &hydration_frontier);
+            let written = PartialOrder::less_than(&collection.as_of, &new_frontier);
 
             // Collect the output frontier and check for progress.
             //
@@ -995,6 +1033,9 @@ impl<'a> ActiveComputeState<'a> {
                 collection
                     .set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
             }
+
+            collection.observe_hydration(hydrated);
+            collection.observe_writes(written);
 
             let response = FrontiersResponse {
                 write_frontier: new_write_frontier,
@@ -1209,6 +1250,12 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
+                // Only a batch upper measures progress. `DroppedAt` reports the empty
+                // antichain, which is the maximum of the order, so a subscribe cancelled while
+                // still hydrating would otherwise read as hydrated at the moment it is dropped.
+                let hydrated = matches!(response, SubscribeResponse::Batch(_))
+                    && PartialOrder::less_than(&collection.as_of, &new_frontier);
+                collection.observe_hydration(hydrated);
                 collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
@@ -1998,6 +2045,21 @@ pub struct CollectionState {
     logging: Option<CollectionLogging>,
     /// Metrics tracked for this collection.
     metrics: CollectionMetrics,
+    /// Whether this worker maintains the authoritative write frontier of this collection's sink.
+    ///
+    /// A persist sink elects one worker to track the output shard's upper and clears the shared
+    /// frontier on all the others, so only the elected worker's copy carries write progress. The
+    /// write lifecycle stages are logged by that worker alone, which also makes them a single
+    /// observation per export rather than one per worker. False for collections whose output
+    /// frontier is not a persist upper at all, such as indexes and metric sinks.
+    pub owns_sink_frontier: bool,
+    /// Which lifecycle stages have been logged for this collection.
+    ///
+    /// Stages are only ever added, never removed. Reconciliation resets the reported frontiers of
+    /// a retained dataflow, so without this the collection would look unhydrated again and re-log
+    /// a stage it already reported. The lifecycle relation is append-only, so a repeat would show
+    /// up as a duplicate row rather than being dropped.
+    logged_stages: BTreeSet<LifecycleStage>,
     /// Send-side to transition a dataflow from read-only mode to read-write mode.
     ///
     /// All dataflows start in read-only mode. Only after receiving a
@@ -2036,6 +2098,8 @@ impl CollectionState {
             compute_probe: None,
             logging: None,
             metrics,
+            owns_sink_frontier: false,
+            logged_stages: BTreeSet::new(),
             read_only_tx,
             read_only_rx,
         }
@@ -2094,10 +2158,84 @@ impl CollectionState {
     }
 
     /// Return whether this collection is hydrated.
+    ///
+    /// This is the output-frontier reading, which folds in the write frontier and so reports
+    /// durability for a collection that sinks to persist. `observe_hydration` reports the
+    /// dataflow-progress reading instead. Both are wanted, and they differ for a materialized view
+    /// by the time its snapshot takes to reach persist.
     fn hydrated(&self) -> bool {
         match &self.reported_frontiers.output_frontier {
             ReportedFrontier::Reported(frontier) => PartialOrder::less_than(&self.as_of, frontier),
             ReportedFrontier::NotReported { .. } => false,
+        }
+    }
+
+    /// Log that this collection reached a lifecycle stage, unless it already reported it.
+    fn log_stage(&mut self, stage: LifecycleStage) {
+        if !self.logged_stages.insert(stage) {
+            return;
+        }
+        if let Some(logging) = &self.logging {
+            logging.log_lifecycle(stage);
+        }
+    }
+
+    /// Observe whether this collection's dataflow has progressed past its as-of, and log the
+    /// `hydrated` stage the first time it has.
+    ///
+    /// The caller decides which frontier measures dataflow progress. See the comment at the call
+    /// site in `report_frontiers`. An empty as-of never hydrates, which is consistent with no
+    /// dataflow being created for one.
+    fn observe_hydration(&mut self, hydrated: bool) {
+        if hydrated {
+            self.log_stage(LifecycleStage::Hydrated);
+        }
+    }
+
+    /// Observe whether this collection's sink has written past its as-of, and log the write
+    /// lifecycle stages it has reached.
+    ///
+    /// Only the worker that maintains the sink frontier reports these stages, which is what makes
+    /// them one observation per export rather than one per worker.
+    ///
+    /// Nothing is reported before the dataflow has hydrated. Until then the sink has produced no
+    /// output, so read-only mode is not holding anything back, and reporting a block there would
+    /// make `write_unblocked - hydrated` negative in the common case rather than zero. Gating here
+    /// also keeps the stages ordered against `written`, which can otherwise arrive first:
+    /// `apply_refresh` rounds a `REFRESH` materialized view's frontier up to the next refresh time
+    /// before the dataflow has computed anything, so its sink writes an empty batch for the
+    /// pre-refresh window and the shard's upper passes the as-of while the dataflow is still
+    /// hydrating.
+    ///
+    /// NOTE: `written` is derived from the output shard's upper, which is a property of the shard
+    /// and not of this replica. The as-of is bounded to one step below that upper for a non-empty
+    /// storage export (`as_of_selection::apply_downstream_storage_constraints`), so for a shard
+    /// that already holds data the predicate is true from the moment the dataflow is installed. A
+    /// replica that may not write can therefore never be the one that advanced it, which is why
+    /// the stage is withheld while writes are blocked. Reporting it there would attribute another
+    /// writer's progress to this replica and put `written` before `write_unblocked`.
+    fn observe_writes(&mut self, written: bool) {
+        if !self.owns_sink_frontier || !self.logged_stages.contains(&LifecycleStage::Hydrated) {
+            return;
+        }
+
+        let read_only = *self.read_only_rx.borrow();
+        if read_only {
+            self.log_stage(LifecycleStage::WriteBlockedReadOnly);
+            return;
+        }
+
+        if self
+            .logged_stages
+            .contains(&LifecycleStage::WriteBlockedReadOnly)
+        {
+            // Only report having been unblocked if we reported being blocked. A collection whose
+            // writes were allowed before we first observed it was never seen to wait.
+            self.log_stage(LifecycleStage::WriteUnblocked);
+        }
+
+        if written {
+            self.log_stage(LifecycleStage::Written);
         }
     }
 

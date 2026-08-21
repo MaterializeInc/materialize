@@ -416,6 +416,28 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_views",
         ),
+        // Required because we added the `mz_compute_lifecycle_events_per_worker` builtin log.
+        // make_mz_indexes inlines one VALUES row per builtin log, naming the log and its
+        // `index_by` columns, so adding or removing a log changes the SQL fingerprint of
+        // `mz_indexes` just as adding a builtin index does. See the NOTE above: this version
+        // must stay at the workspace's current dev version until the change ships.
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_indexes",
+        ),
+        // Adding a builtin log moves two generated materialized views, not one:
+        // make_mz_sources inlines a VALUES row per builtin log alongside the builtin sources,
+        // so `mz_sources` needs the same treatment. Without it, an upgrade from a released
+        // version reaches `update_fingerprints` with a mismatch for a builtin that is neither
+        // migrated nor ephemeral, which panics and blocks catalog open.
+        MigrationStep::replacement(
+            "26.40.0-dev.0",
+            CatalogItemType::MaterializedView,
+            MZ_CATALOG_SCHEMA,
+            "mz_sources",
+        ),
     ]
 });
 
