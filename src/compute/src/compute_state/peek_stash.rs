@@ -19,17 +19,12 @@ use mz_persist_client::Schemas;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{RelationDesc, Row, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 use tokio::sync::oneshot;
 use tracing::debug;
 use uuid::Uuid;
-
-use crate::arrangement::manager::{PaddedTrace, TraceBundle};
-use crate::compute_state::peek_result_iterator;
-use crate::compute_state::peek_result_iterator::PeekResultIterator;
-use crate::typedefs::RowRowAgent;
 
 /// An async task that stashes a peek response in persist and yields a handle to
 /// the batch in a [PeekResponse::Stashed].
@@ -41,10 +36,15 @@ pub struct StashingPeek {
     pub peek: Peek,
     /// Iterator for the results. The worker thread has to continually pump
     /// results from this to the `rows_tx` channel.
-    peek_iterator: Option<PeekResultIterator<PaddedTrace<RowRowAgent<Timestamp, Diff>>>>,
-    /// We can't give a PeekResultIterator to our async upload task because the
-    /// underlying trace reader is not Send/Sync. So we need to use a channel to
-    /// send result rows from the worker thread to the async background task.
+    ///
+    /// Boxed because the two peek paths walk different trace types: the maintenance path a local
+    /// `TraceBundle`, the interactive path a registry `SharedOksHandle`. Only the row stream
+    /// matters here, not which trace produced it.
+    peek_iterator: Option<Box<dyn Iterator<Item = Result<(Row, NonZeroI64), String>>>>,
+    /// We can't give the row iterator to our async upload task because a trace cursor is not
+    /// Send/Sync. So we need to use a channel to send result rows from the worker thread to the
+    /// async background task, and `pump_rows` has to keep walking the iterator on this worker
+    /// thread.
     rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, String>>>,
     /// The result of the background task, eventually.
     pub result: oneshot::Receiver<(PeekResponse, Duration)>,
@@ -56,11 +56,14 @@ pub struct StashingPeek {
 }
 
 impl StashingPeek {
+    /// Starts the background upload for `peek`, pulling its rows from `peek_iterator`.
+    ///
+    /// The caller builds the iterator, since only it knows which trace the peek reads.
     pub fn start_upload(
         persist_clients: Arc<PersistClientCache>,
         persist_location: &PersistLocation,
-        mut peek: Peek,
-        mut trace_bundle: TraceBundle,
+        peek: Peek,
+        peek_iterator: Box<dyn Iterator<Item = Result<(Row, NonZeroI64), String>>>,
         batch_max_runs: usize,
     ) -> Self {
         let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(10);
@@ -71,16 +74,6 @@ impl StashingPeek {
 
         let peek_uuid = peek.uuid;
         let relation_desc = peek.result_desc.clone();
-
-        let oks_handle = trace_bundle.oks_mut();
-
-        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
-            peek.target.id(),
-            peek.map_filter_project.clone(),
-            peek.timestamp,
-            peek.literal_constraints.as_deref_mut(),
-            oks_handle,
-        );
 
         let rows_needed_by_finishing = peek.finishing.num_rows_needed();
 
@@ -120,6 +113,74 @@ impl StashingPeek {
             result: result_rx,
             span: tracing::Span::current(),
             _abort_handle: task_handle.abort_on_drop(),
+        }
+    }
+
+    /// Stashes `peek_iterator`'s rows and blocks until the upload finishes, returning the response.
+    ///
+    /// For a walk that already runs off the serving worker. The worker-pumped path exists because a
+    /// trace cursor is not `Send` and so cannot be given to the upload task. A caller that owns a
+    /// `Send` snapshot has no such problem: it drives the same upload directly and never involves
+    /// the worker.
+    ///
+    /// Must not be called from an async context. It blocks the calling thread for the length of the
+    /// upload, which is why it belongs on a blocking task and why the offload's in-flight cap also
+    /// bounds how many blocking threads this can occupy.
+    pub fn upload_blocking(
+        persist_clients: Arc<PersistClientCache>,
+        persist_location: &PersistLocation,
+        peek: &Peek,
+        peek_iterator: impl Iterator<Item = Result<(Row, NonZeroI64), String>>,
+        batch_max_runs: usize,
+        batch_size: usize,
+    ) -> PeekResponse {
+        let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(10);
+        let persist_location = persist_location.clone();
+        let peek_uuid = peek.uuid;
+        let relation_desc = peek.result_desc.clone();
+        let rows_needed_by_finishing = peek.finishing.num_rows_needed();
+
+        let upload = mz_ore::task::spawn(
+            || format!("peek_stash::stash_peek_response({peek_uuid})"),
+            async move {
+                Self::do_upload(
+                    &persist_clients,
+                    persist_location,
+                    batch_max_runs,
+                    peek_uuid,
+                    relation_desc,
+                    rows_needed_by_finishing,
+                    rows_rx,
+                )
+                .await
+            },
+        );
+
+        let mut peek_iterator = peek_iterator.peekable();
+        loop {
+            let rows: Result<Vec<_>, _> = peek_iterator.by_ref().take(batch_size).collect();
+            let (rows, done) = match rows {
+                Ok(rows) if rows.is_empty() => break,
+                Ok(rows) => {
+                    let done = peek_iterator.peek().is_none();
+                    (Ok(rows), done)
+                }
+                Err(e) => (Err(e), true),
+            };
+            // A send error means the upload stopped reading, which it does once the finishing's
+            // row bound is met. That is a normal early exit, not a failure.
+            if rows_tx.blocking_send(rows).is_err() {
+                break;
+            }
+            if done {
+                break;
+            }
+        }
+        drop(rows_tx);
+
+        match tokio::runtime::Handle::current().block_on(upload) {
+            Ok(response) => response,
+            Err(e) => PeekResponse::Error(e),
         }
     }
 
@@ -211,7 +272,7 @@ impl StashingPeek {
         Ok(result)
     }
 
-    /// Pumps rows from the [PeekResultIterator] to the async task, via our
+    /// Pumps rows from the row iterator to the async task, via our
     /// `rows_tx`. Will pump at most `batch_size` rows in one batch, and at most
     /// the given `num_batches` batches.
     pub fn pump_rows(&mut self, mut num_batches: usize, batch_size: usize) {

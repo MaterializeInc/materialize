@@ -12,11 +12,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{self, AtomicUsize};
 use std::time::{Duration, Instant};
 
 use bytesize::ByteSize;
 use differential_dataflow::Hashable;
-use differential_dataflow::lattice::Lattice;
+use differential_dataflow::lattice::{Lattice, antichain_join};
 use differential_dataflow::trace::cursor::BatchCursor;
 use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
@@ -30,8 +31,9 @@ use mz_compute_client::protocol::response::{
 };
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
-    ENABLE_PEEK_RESPONSE_STASH, PEEK_RESPONSE_STASH_BATCH_MAX_RUNS,
-    PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
+    ENABLE_INDEX_PEEK_OFFLOAD, ENABLE_PEEK_RESPONSE_STASH, INDEX_PEEK_OFFLOAD_MAX_INFLIGHT,
+    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_STASH_BATCH_SIZE,
+    PEEK_STASH_NUM_BATCHES,
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::ConfigSet;
@@ -68,14 +70,18 @@ use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{PaddedTrace, TraceBundle, TraceManager};
+use crate::compute_state::peek_result_iterator::{TraceCursor, TraceStorage};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
-use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::server::{ComputeInstanceContext, ComputeRuntimeRole, ResponseSender};
+use crate::sharing::{ArrangementSharingRegistry, SharedErrsHandle, SharedOksHandle};
+use crate::typedefs::{ErrAgent, RowRowAgent};
 
+mod local_snapshot;
 mod peek_result_iterator;
 mod peek_stash;
 
@@ -106,7 +112,41 @@ pub struct ComputeState {
     /// and the response itself.
     pub copy_to_response_buffer: Rc<RefCell<Vec<(GlobalId, CopyToResponse)>>>,
     /// Peek commands that are awaiting fulfillment.
+    ///
+    /// The maintenance runtime's peeks (local-trace index, persist, stash) live here and are
+    /// retired by the every-step `process_peeks` poll. Interactive shared-index peeks do NOT use
+    /// this map. They resolve through the notification-driven `pending_work`/`dep_index` store
+    /// below.
     pub pending_peeks: BTreeMap<Uuid, PendingPeek>,
+    /// How many offloaded index-peek walks this worker has in flight.
+    ///
+    /// Each one retains the `Arc` batches its cursor covers for the length of the walk, and for the
+    /// upload too if it diverts to the stash, and occupies a blocking-pool thread throughout. It
+    /// does *not* hold the trace back from compacting: both dispatch paths drop their trace handles
+    /// before the walk starts, so the cost is retained memory and a thread, not a compaction hold.
+    /// `INDEX_PEEK_OFFLOAD_MAX_INFLIGHT` caps it and peeks over the cap walk inline instead.
+    ///
+    /// Owned by an `InFlightOffload` guard rather than adjusted by hand, so that every way a peek can
+    /// leave `pending_peeks` (retired, cancelled, dropped by reconciliation) decrements it. Hand
+    /// accounting leaked on the cancel and reconciliation paths and silently disabled the offload
+    /// once the cap was reached.
+    pub in_flight_offloaded_peeks: Arc<AtomicUsize>,
+    /// Interactive-runtime deferred fast-path peeks, keyed by a fresh `WorkId`, owning each item
+    /// until it resolves.
+    ///
+    /// Empty on the maintenance runtime. An item is re-examined only when its target index id is
+    /// marked dirty in the sharing registry (publication or seal) and the worker is woken. See
+    /// `resolve_dirty`. Query dataflows do not defer, they build immediately and bind their imports
+    /// through registry placeholders, so only peeks live here.
+    pub pending_work: BTreeMap<WorkId, SharedIndexPeek>,
+    /// Dependency id to the set of `pending_work` items waiting on it.
+    ///
+    /// Empty on the maintenance runtime. On a dirty event for an id, exactly the `WorkId`s indexed
+    /// here under that id are re-examined, so wakeups scale with what changed, not with total
+    /// pending work.
+    pub dep_index: BTreeMap<GlobalId, BTreeSet<WorkId>>,
+    /// Monotonic counter minting the next `WorkId` for `pending_work`.
+    next_work_id: u64,
     /// The persist location where we can stash large peek results.
     pub peek_stash_persist_location: Option<PersistLocation>,
     /// The logger, from Timely's logging framework, if logs are enabled.
@@ -114,6 +154,11 @@ pub struct ComputeState {
     /// A process-global cache of (blob_uri, consensus_uri) -> PersistClient.
     /// This is intentionally shared between workers.
     pub persist_clients: Arc<PersistClientCache>,
+    /// A per-process registry of published index arrangements.
+    ///
+    /// Intentionally shared between all workers of the process, each of which publishes into its own
+    /// worker-ordinal slot. `Clone` shares the same underlying map.
+    pub sharing_registry: ArrangementSharingRegistry,
     /// Context necessary for rendering txn-wal operators.
     pub txns_ctx: TxnsContext,
     /// History of commands received by this workers and all its peers.
@@ -172,12 +217,20 @@ pub struct ComputeState {
 
     /// The storage worker forwards its introspection logs to the compute worker.
     pub storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
+
+    /// Which of the process's compute runtimes this state belongs to.
+    ///
+    /// Only the maintenance runtime runs the non-idempotent process-global initializers. The
+    /// interactive runtime shares the same process and inherits those globals.
+    role: ComputeRuntimeRole,
 }
 
 impl ComputeState {
     /// Construct a new `ComputeState`.
     pub fn new(
+        role: ComputeRuntimeRole,
         persist_clients: Arc<PersistClientCache>,
+        sharing_registry: ArrangementSharingRegistry,
         txns_ctx: TxnsContext,
         metrics: WorkerMetrics,
         tracing_handle: Arc<TracingHandle>,
@@ -195,9 +248,14 @@ impl ComputeState {
             subscribe_response_buffer: Default::default(),
             copy_to_response_buffer: Default::default(),
             pending_peeks: Default::default(),
+            in_flight_offloaded_peeks: Arc::new(AtomicUsize::new(0)),
+            pending_work: Default::default(),
+            dep_index: Default::default(),
+            next_work_id: 0,
             peek_stash_persist_location: None,
             compute_logger: None,
             persist_clients,
+            sharing_registry,
             txns_ctx,
             command_history,
             max_result_size: u64::MAX,
@@ -213,6 +271,7 @@ impl ComputeState {
             init_system_time: mz_ore::now::SYSTEM_TIME(),
             replica_expiration: Antichain::default(),
             storage_log_reader,
+            role,
         }
     }
 
@@ -244,6 +303,36 @@ impl ComputeState {
         probe
     }
 
+    /// Which of the process's compute runtimes this state serves.
+    pub(crate) fn role(&self) -> ComputeRuntimeRole {
+        self.role
+    }
+
+    /// Mints the next `WorkId` for `pending_work`.
+    fn next_work_id(&mut self) -> WorkId {
+        let id = self.next_work_id;
+        self.next_work_id += 1;
+        WorkId(id)
+    }
+
+    /// Stores `peek` in `pending_work`, indexing it under its target index id so a publication or
+    /// seal event for that id re-examines it.
+    fn enqueue_shared_peek(&mut self, peek: SharedIndexPeek) {
+        let dep = peek.peek.target.id();
+        let work_id = self.next_work_id();
+        self.pending_work.insert(work_id, peek);
+        self.dep_index.entry(dep).or_default().insert(work_id);
+    }
+
+    /// Removes `work_id` from every dependency's waiter set, dropping now-empty sets. Called once a
+    /// pending item is served or cancelled.
+    fn clear_dep_index(&mut self, work_id: WorkId) {
+        self.dep_index.retain(|_dep, waiters| {
+            waiters.remove(&work_id);
+            !waiters.is_empty()
+        });
+    }
+
     /// Apply the current `worker_config` to the compute state.
     fn apply_worker_config(&mut self) {
         use mz_compute_types::dyncfgs::*;
@@ -252,41 +341,45 @@ impl ComputeState {
 
         self.linear_join_spec = LinearJoinSpec::from_config(config);
 
-        if ENABLE_LGALLOC.get(config) {
-            if let Some(path) = &self.context.scratch_directory {
-                let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
-                let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
-                let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
-                let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
-                let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
-                info!(
-                    ?path,
-                    backgrund_interval=?interval,
-                    clear_bytes,
-                    eager_return,
-                    file_growth_dampener,
-                    local_buffer_bytes,
-                    "enabling lgalloc"
-                );
-                let background_worker_config = lgalloc::BackgroundWorkerConfig {
-                    interval,
-                    clear_bytes,
-                };
-                lgalloc::lgalloc_set_config(
-                    lgalloc::LgAlloc::new()
-                        .enable()
-                        .with_path(path.clone())
-                        .with_background_config(background_worker_config)
-                        .eager_return(eager_return)
-                        .file_growth_dampener(file_growth_dampener)
-                        .local_buffer_bytes(local_buffer_bytes),
-                );
+        // lgalloc is process-global. Only the maintenance runtime configures it; the interactive
+        // runtime shares the same process and inherits maintenance's configuration.
+        if self.role.owns_process_globals() {
+            if ENABLE_LGALLOC.get(config) {
+                if let Some(path) = &self.context.scratch_directory {
+                    let clear_bytes = LGALLOC_SLOW_CLEAR_BYTES.get(config);
+                    let eager_return = ENABLE_LGALLOC_EAGER_RECLAMATION.get(config);
+                    let file_growth_dampener = LGALLOC_FILE_GROWTH_DAMPENER.get(config);
+                    let interval = LGALLOC_BACKGROUND_INTERVAL.get(config);
+                    let local_buffer_bytes = LGALLOC_LOCAL_BUFFER_BYTES.get(config);
+                    info!(
+                        ?path,
+                        backgrund_interval=?interval,
+                        clear_bytes,
+                        eager_return,
+                        file_growth_dampener,
+                        local_buffer_bytes,
+                        "enabling lgalloc"
+                    );
+                    let background_worker_config = lgalloc::BackgroundWorkerConfig {
+                        interval,
+                        clear_bytes,
+                    };
+                    lgalloc::lgalloc_set_config(
+                        lgalloc::LgAlloc::new()
+                            .enable()
+                            .with_path(path.clone())
+                            .with_background_config(background_worker_config)
+                            .eager_return(eager_return)
+                            .file_growth_dampener(file_growth_dampener)
+                            .local_buffer_bytes(local_buffer_bytes),
+                    );
+                } else {
+                    debug!("not enabling lgalloc, scratch directory not specified");
+                }
             } else {
-                debug!("not enabling lgalloc, scratch directory not specified");
+                info!("disabling lgalloc");
+                lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
             }
-        } else {
-            info!("disabling lgalloc");
-            lgalloc::lgalloc_set_config(lgalloc::LgAlloc::new().disable());
         }
 
         // Pager backend selection follows scratch-directory availability:
@@ -302,12 +395,16 @@ impl ComputeState {
             mz_ore::pager::set_backend(mz_ore::pager::Backend::Swap);
         }
 
-        crate::memory_limiter::apply_limiter_config(config);
+        // The memory limiter and the columnation lgalloc region flag are process-global. Only
+        // maintenance configures them; the interactive runtime inherits maintenance's settings.
+        if self.role.owns_process_globals() {
+            crate::memory_limiter::apply_limiter_config(config);
 
-        mz_ore::region::ENABLE_LGALLOC_REGION.store(
-            ENABLE_COLUMNATION_LGALLOC.get(config),
-            std::sync::atomic::Ordering::Relaxed,
-        );
+            mz_ore::region::ENABLE_LGALLOC_REGION.store(
+                ENABLE_COLUMNATION_LGALLOC.get(config),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
 
         // NB: arrangement dictionary compression is deliberately NOT applied here. Unlike the
         // settings above, it is captured once at replica creation (see `handle_create_instance`
@@ -434,14 +531,18 @@ impl ComputeState {
         // every server iteration.
         self.server_maintenance_interval = COMPUTE_SERVER_MAINTENANCE_INTERVAL.get(config);
 
-        let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
-        match overflowing_behavior.parse() {
-            Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
-            Err(err) => {
-                error!(
-                    err,
-                    overflowing_behavior, "Invalid value for ore_overflowing_behavior"
-                );
+        // `set_behavior` mutates a process-global. Only maintenance applies it; the interactive
+        // runtime inherits the behavior maintenance installs.
+        if self.role.owns_process_globals() {
+            let overflowing_behavior = ORE_OVERFLOWING_BEHAVIOR.get(config);
+            match overflowing_behavior.parse() {
+                Ok(behavior) => mz_ore::overflowing::set_behavior(behavior),
+                Err(err) => {
+                    error!(
+                        err,
+                        overflowing_behavior, "Invalid value for ore_overflowing_behavior"
+                    );
+                }
             }
         }
     }
@@ -562,12 +663,15 @@ impl<'a> ActiveComputeState<'a> {
         // Apply dictionary compression exactly once, here at instance creation, from the value the
         // controller captured when the replica was created. We deliberately do NOT re-apply it on
         // `handle_update_configuration`, so flipping the flag does not retroactively change this
-        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global and a replica process
-        // hosts a single instance, so this single store covers all of the replica's arrangements.
-        mz_row_spine::DICTIONARY_COMPRESSION.store(
-            config.arrangement_dictionary_compression,
-            std::sync::atomic::Ordering::Relaxed,
-        );
+        // replica's arrangements. `DICTIONARY_COMPRESSION` is process-global. Only the maintenance
+        // runtime stores it; the interactive runtime shares the process and inherits the value, and
+        // both runtimes host a single instance, so this single store covers all arrangements.
+        if self.compute_state.role.owns_process_globals() {
+            mz_row_spine::DICTIONARY_COMPRESSION.store(
+                config.arrangement_dictionary_compression,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+        }
 
         if let Some(offset) = config.expiration_offset {
             self.compute_state.apply_expiration_offset(offset);
@@ -617,6 +721,40 @@ impl<'a> ActiveComputeState<'a> {
         &mut self,
         dataflow: DataflowDescription<RenderPlan, CollectionMetadata>,
     ) {
+        // Tripwire for a Multiplexer routing bug. The Multiplexer's `to_interactive` predicate is
+        // what guarantees that only bounded-read dataflows reach the interactive runtime, and this
+        // runtime's read path assumes that. A violation means the predicate upstream is out of sync
+        // with this one, and the dataflow would be rendered against a runtime that cannot serve it.
+        //
+        // `soft_assert_or_log!` rather than `debug_assert!`, which compiles out under
+        // `[profile.optimized]` and `[profile.release]`. Those are the profiles mzcompose and
+        // `bin/environmentd` build, so a debug assertion here would be absent from the suites that
+        // exercise two-runtime most broadly. This panics where soft assertions are on and logs an
+        // error everywhere else, so a routing bug is visible in production without taking the
+        // replica down for a dataflow that may still render correctly.
+        mz_ore::soft_assert_or_log!(
+            self.compute_state.role() != ComputeRuntimeRole::Interactive
+                || (dataflow.is_transient()
+                    && !dataflow.until.is_empty()
+                    && dataflow.subscribe_ids().next().is_none()
+                    && dataflow.copy_to_ids().next().is_none()),
+            "interactive runtime received a non-bounded-read dataflow: \
+             export_ids={:?} transient={} until_empty={} has_subscribes={} has_copy_tos={}",
+            dataflow.export_ids().collect::<Vec<_>>(),
+            dataflow.is_transient(),
+            dataflow.until.is_empty(),
+            dataflow.subscribe_ids().next().is_some(),
+            dataflow.copy_to_ids().next().is_some(),
+        );
+
+        // Every dataflow builds immediately, in command arrival order. Timely allocates per-worker
+        // channel ids in construction order, so deferring a build until its dependencies publish
+        // would diverge that order across workers, latently unsound under a multi-worker interactive
+        // runtime. On the interactive runtime a query dataflow imports its maintenance-index inputs
+        // from the sharing registry, binding each through a registry placeholder that a maintenance
+        // publisher adopts later (see `render::import_shared_index`). A not-yet-published dependency
+        // therefore yields an empty import held at the minimum frontier, so the build is always
+        // possible without waiting.
         let dataflow_index = Rc::new(self.timely_worker.next_dataflow_index());
         let as_of = dataflow.as_of.clone().unwrap();
 
@@ -738,8 +876,14 @@ impl<'a> ActiveComputeState<'a> {
         // dataflow can export multiple collections and they all share one suspension token, so the
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
-        let suspension_token = self.compute_state.suspended_collections.remove(&id);
-        drop(suspension_token);
+        //
+        // Every dataflow builds immediately on `CreateDataflow`, inserting its
+        // `suspended_collections` entry before the `Schedule` that follows in arrival order can
+        // reach us. A `Schedule` with no entry is therefore a stray or duplicate command, a silent
+        // no-op.
+        if let Some(suspension_token) = self.compute_state.suspended_collections.remove(&id) {
+            drop(suspension_token);
+        }
 
         if let Some(collection) = self.compute_state.collections.get(&id) {
             if let Some(logging) = &collection.logging {
@@ -749,6 +893,47 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     fn handle_allow_compaction(&mut self, id: GlobalId, frontier: Antichain<Timestamp>) {
+        let worker_index = self.timely_worker.index();
+
+        let interactive = self.compute_state.role == ComputeRuntimeRole::Interactive;
+
+        // The multiplexer broadcasts compaction for the collections its peer publishes, which are the
+        // ones this runtime may import, so on the interactive runtime a non-transient id is one of
+        // those. This runtime's own publications are its transient query outputs.
+        let peer_published = interactive && !id.is_transient();
+        if peer_published {
+            // The standing hold: this runtime's own position in the command stream, which the peer's
+            // publisher bounds its compaction by. An importing dataflow of ours whose `CreateDataflow`
+            // is still queued here has registered no reader hold yet, so nothing else keeps the
+            // arrangement at or below the `as_of` it is about to read at.
+            self.compute_state
+                .sharing_registry
+                .note_standing_hold(id, worker_index, &frontier);
+        }
+
+        // Whether there is local work is a question about `collections`, NOT about the id: this
+        // runtime holds empty local copies of the peer's introspection indexes, whose ids are the
+        // peer's to publish, and the peer renders transient collections of its own (subscribes and
+        // copy-tos) that this runtime has never seen. Asking the id instead sends a broadcast frontier
+        // for one of those down the drop path, where `drop_collection` panics on a collection that was
+        // never installed here.
+        if interactive && !self.compute_state.collections.contains_key(&id) {
+            return;
+        }
+
+        if peer_published {
+            if !frontier.is_empty() {
+                // Keeps this runtime's empty local copy of an introspection index in step.
+                self.compute_state
+                    .traces
+                    .allow_compaction(id, frontier.borrow());
+            }
+            // Never `drop_collection` for one of those. It would also `sharing_registry.remove(&id)`
+            // and so unpublish an arrangement this runtime does not own. The empty copies live for
+            // the process lifetime, and the peer drops the real collection on its own stream.
+            return;
+        }
+
         if frontier.is_empty() {
             // Indicates that we may drop `id`, as there are no more valid times to read.
             self.drop_collection(id);
@@ -756,6 +941,11 @@ impl<'a> ActiveComputeState<'a> {
             self.compute_state
                 .traces
                 .allow_compaction(id, frontier.borrow());
+            // Forward the same frontier to the sharing registry so a cross-runtime publisher of this
+            // index follows the controller's logical compaction. A no-op unless `id` is published.
+            self.compute_state
+                .sharing_registry
+                .note_allow_compaction(id, worker_index, &frontier);
         }
     }
 
@@ -763,9 +953,22 @@ impl<'a> ActiveComputeState<'a> {
     fn handle_peek(&mut self, peek: Peek) {
         let pending = match &peek.target {
             PeekTarget::Index { id } => {
-                // Acquire a copy of the trace suitable for fulfilling the peek.
-                let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
-                PendingPeek::index(peek, trace_bundle)
+                if self.compute_state.role == ComputeRuntimeRole::Interactive {
+                    // The interactive runtime maintains no traces of its own; the maintenance
+                    // runtime publishes them into the per-process sharing registry. This peek is
+                    // routed below to `serve_or_defer_shared_peek`, which serves it inline if the
+                    // arrangement is published and sealed, else enqueues it for notification-driven
+                    // resolution. The maintenance runtime keeps using the local `TraceManager`
+                    // below, unchanged.
+                    let worker_index = self.timely_worker.index();
+                    let registry = self.compute_state.sharing_registry.clone();
+                    let max_result_size = self.compute_state.max_result_size;
+                    PendingPeek::index_shared(peek, registry, worker_index, max_result_size)
+                } else {
+                    // Acquire a copy of the trace suitable for fulfilling the peek.
+                    let trace_bundle = self.compute_state.traces.get(id).unwrap().clone();
+                    PendingPeek::index(peek, trace_bundle)
+                }
             }
             PeekTarget::Persist { metadata, .. } => {
                 let metadata = metadata.clone();
@@ -784,12 +987,203 @@ impl<'a> ActiveComputeState<'a> {
             logger.log(&pending.as_log_event(true));
         }
 
-        self.process_peek(&mut Antichain::new(), pending);
+        // The interactive runtime's shared-index peek resolves through the notification-driven
+        // pending-work store, not the every-step `pending_peeks` poll. `IndexShared` is produced
+        // only on the interactive runtime (see the `handle_peek` match above), so this branch
+        // captures exactly that case.
+        if let PendingPeek::IndexShared(shared) = pending {
+            self.serve_or_defer_shared_peek(shared);
+        } else {
+            self.process_peek(&mut Antichain::new(), pending);
+        }
+    }
+
+    /// Runs the inline registry walk for `peek` once. Returns `None` if it was served (the response
+    /// has been sent), or `Some(peek)` if the arrangement is not yet published or sealed and the
+    /// caller should keep it pending.
+    ///
+    /// Shared by the first inline attempt (`serve_or_defer_shared_peek`) and every notification-
+    /// driven re-attempt (`resolve_dirty`), so both walk the registry identically.
+    fn serve_shared_peek_once(&mut self, peek: SharedIndexPeek) -> Option<SharedIndexPeek> {
+        let mut upper = Antichain::new();
+        let (peek_stash_usable, peek_stash_threshold_bytes) = self.peek_stash_config(&peek.peek);
+
+        if let Some(in_flight) = self.acquire_offload_slot() {
+            let stash = self.offload_stash(peek_stash_usable, peek_stash_threshold_bytes);
+            match shared_snapshot_for_offload(
+                &peek.registry,
+                peek.worker_index,
+                &peek.peek,
+                &mut upper,
+                stash.is_some(),
+            ) {
+                OffloadSnapshot::NotReady => return Some(peek),
+                OffloadSnapshot::Response(response) => {
+                    let _span =
+                        span!(parent: &peek.span, Level::DEBUG, "process_peek_response").entered();
+                    self.send_peek_response(PendingPeek::IndexShared(peek), response);
+                    return None;
+                }
+                OffloadSnapshot::Ready {
+                    oks,
+                    errs,
+                    oks_stash,
+                } => {
+                    let offloaded = spawn_offloaded_walk::<SharedOksHandle, SharedErrsHandle>(
+                        peek.peek.clone(),
+                        peek.max_result_size,
+                        oks,
+                        errs,
+                        oks_stash,
+                        stash,
+                        in_flight,
+                        peek.span.clone(),
+                        self.timely_worker.sync_activator_for([].into()),
+                    );
+                    self.compute_state
+                        .metrics
+                        .index_peek_walks_offload_total
+                        .inc();
+                    // From here the peek retires through `pending_peeks`, which every runtime
+                    // scans each step, not through the sharing registry's dirty set.
+                    self.compute_state
+                        .pending_peeks
+                        .insert(offloaded.peek.uuid, PendingPeek::IndexOffload(offloaded));
+                    return None;
+                }
+            }
+        }
+
+        self.compute_state
+            .metrics
+            .index_peek_walks_inline_total
+            .inc();
+        match shared_index_peek_response(
+            &peek.registry,
+            peek.worker_index,
+            &peek.peek,
+            peek.max_result_size,
+            peek_stash_usable,
+            peek_stash_threshold_bytes,
+            &mut upper,
+        ) {
+            PeekStatus::Ready(response) => {
+                let _span =
+                    span!(parent: &peek.span, Level::DEBUG, "process_peek_response").entered();
+                self.send_peek_response(PendingPeek::IndexShared(peek), response);
+                None
+            }
+            PeekStatus::NotReady => Some(peek),
+            PeekStatus::UsePeekStash => {
+                let _span = span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
+
+                // A fresh walk over the same published arrangement: the iterator that produced
+                // `UsePeekStash` was consumed deciding that the result is too big to return
+                // inline. Re-minting the handle is what makes that walk possible, since the
+                // registry hands out an owned cursor rather than a borrow.
+                let Some((mut oks, _errs)) = peek
+                    .registry
+                    .handles(&peek.peek.target.id(), peek.worker_index)
+                else {
+                    // The publication went away between the walk above and here, which the
+                    // controller's read-hold discipline is supposed to prevent. Keep the peek
+                    // pending rather than answering it wrongly.
+                    return Some(peek);
+                };
+                let (oks_cursor, oks_storage) = oks.cursor();
+                let mut literal_constraints = peek.peek.literal_constraints.clone();
+                let peek_iterator =
+                    peek_result_iterator::PeekResultIterator::<SharedOksHandle>::new_over_cursor(
+                        peek.peek.target.id(),
+                        peek.peek.map_filter_project.clone(),
+                        peek.peek.timestamp,
+                        literal_constraints.as_deref_mut(),
+                        oks_cursor,
+                        oks_storage,
+                    );
+
+                let peek_stash_batch_max_runs =
+                    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.get(&self.compute_state.worker_config);
+                let stash_task = peek_stash::StashingPeek::start_upload(
+                    Arc::clone(&self.compute_state.persist_clients),
+                    self.compute_state
+                        .peek_stash_persist_location
+                        .as_ref()
+                        .expect("peek_stash_config verified a location is configured"),
+                    peek.peek.clone(),
+                    Box::new(peek_iterator),
+                    peek_stash_batch_max_runs,
+                );
+
+                // From here the peek retires through `pending_peeks`, which every runtime scans
+                // each step, not through the sharing registry's dirty set.
+                self.compute_state
+                    .pending_peeks
+                    .insert(peek.peek.uuid, PendingPeek::Stash(stash_task));
+                None
+            }
+        }
+    }
+
+    /// Serves a shared-index peek inline if its index is published and sealed, otherwise enqueues it
+    /// in `pending_work` to be re-examined on a publication or seal event.
+    fn serve_or_defer_shared_peek(&mut self, peek: SharedIndexPeek) {
+        if let Some(peek) = self.serve_shared_peek_once(peek) {
+            self.compute_state.enqueue_shared_peek(peek);
+        }
+    }
+
+    /// Re-examines only the pending work waiting on a dirtied dependency id.
+    ///
+    /// Called by the interactive server loop on wake with the drained dirty set. Each affected peek
+    /// re-runs its inline registry walk exactly once. A now-ready peek is served and dropped. One
+    /// still not ready stays enqueued, so a later event re-examines it. This is the
+    /// notification-driven replacement for the every-step `pending_peeks` scan.
+    pub(crate) fn resolve_dirty(&mut self, dirty: BTreeSet<GlobalId>) {
+        // Collect the affected `WorkId`s first, so re-examination does not read the index while it
+        // is being mutated.
+        let mut work_ids = BTreeSet::new();
+        for dep in &dirty {
+            if let Some(waiters) = self.compute_state.dep_index.get(dep) {
+                work_ids.extend(waiters.iter().copied());
+            }
+        }
+
+        for work_id in work_ids {
+            // Take the item so its owned data can drive the walk. Re-inserted below if not ready.
+            let Some(peek) = self.compute_state.pending_work.remove(&work_id) else {
+                continue;
+            };
+            match self.serve_shared_peek_once(peek) {
+                None => self.compute_state.clear_dep_index(work_id),
+                Some(peek) => {
+                    // Still waiting: its `dep_index` entries are untouched, so a later event
+                    // re-examines it.
+                    self.compute_state.pending_work.insert(work_id, peek);
+                }
+            }
+        }
     }
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
         if let Some(peek) = self.compute_state.pending_peeks.remove(&uuid) {
             self.send_peek_response(peek, PeekResponse::Canceled);
+            return;
+        }
+        // Interactive shared-index peeks live in `pending_work`, keyed by `WorkId`. Find the one
+        // carrying this uuid, drop it from the store and its dep index, and report the cancellation.
+        // A scan over pending work is fine here: a cancel is an event, not a per-step poll.
+        let work_id = self
+            .compute_state
+            .pending_work
+            .iter()
+            .find_map(|(work_id, peek)| (peek.peek.uuid == uuid).then_some(*work_id));
+        if let Some(work_id) = work_id {
+            let Some(peek) = self.compute_state.pending_work.remove(&work_id) else {
+                return;
+            };
+            self.compute_state.clear_dep_index(work_id);
+            self.send_peek_response(PendingPeek::IndexShared(peek), PeekResponse::Canceled);
         }
     }
 
@@ -816,6 +1210,11 @@ impl<'a> ActiveComputeState<'a> {
 
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
+        // Drop any published arrangement for this index from the sharing registry. Done
+        // unconditionally rather than gated on the role's publish decision, so a slot published by
+        // a publishing role is always reclaimed. The call is a no-op when nothing was published for
+        // `id`.
+        self.compute_state.sharing_registry.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
         self.compute_state.suspended_collections.remove(&id);
 
@@ -855,6 +1254,17 @@ impl<'a> ActiveComputeState<'a> {
             panic!("dataflow server has already initialized logging");
         }
 
+        let mut config = config;
+        // The interactive runtime maintains no introspection indexes of its own: it serves
+        // introspection peeks from the maintenance runtime's registry-published copies (see
+        // `logging::publish_logging_index`). Force logging off so its replay stays empty. The
+        // dataflows still install (empty, per database-issues#4545), so the logging indexes are
+        // still created and the sanity check below still holds, but they hold no data and, being
+        // non-maintenance, are never published.
+        if self.compute_state.role() == ComputeRuntimeRole::Interactive {
+            config.enable_logging = false;
+        }
+
         let LoggingTraces {
             traces,
             dataflow_index,
@@ -866,6 +1276,8 @@ impl<'a> ActiveComputeState<'a> {
             Rc::clone(&self.compute_state.worker_config),
             self.compute_state.workers_per_process,
             storage_log_reader,
+            self.compute_state.role(),
+            self.compute_state.sharing_registry.clone(),
         );
 
         let dataflow_index = Rc::new(dataflow_index);
@@ -919,6 +1331,14 @@ impl<'a> ActiveComputeState<'a> {
     pub fn report_frontiers(&mut self) {
         let mut responses = Vec::new();
 
+        // The interactive runtime installs empty copies of the maintenance runtime's
+        // logging/introspection indexes (see `initialize_logging`) and shares every non-transient
+        // collection's identity with the maintenance runtime, which owns and reports the real
+        // frontiers. Reporting our empty copies' frontiers races the owner's report for the same
+        // collection id in the controller's single per-collection frontier stream, regressing it.
+        // Report only the wholly-transient query dataflows this runtime exclusively hosts.
+        let report_only_transient = self.compute_state.role() == ComputeRuntimeRole::Interactive;
+
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
         let mut new_frontier = Antichain::new();
 
@@ -926,6 +1346,10 @@ impl<'a> ActiveComputeState<'a> {
             // The compute protocol does not allow `Frontiers` responses for subscribe and copy-to
             // collections (database-issues#4701).
             if collection.is_subscribe_or_copy {
+                continue;
+            }
+
+            if report_only_transient && !id.is_transient() {
                 continue;
             }
 
@@ -1024,95 +1448,214 @@ impl<'a> ActiveComputeState<'a> {
         }
     }
 
+    /// Whether this worker should walk `peek`'s cursor on a blocking task rather than inline.
+    ///
+    /// Declines when too many walks are already in flight, since each pins its batches and holds
+    /// back compaction, and a walk that diverts to the stash holds them for the upload as well.
+    /// Falls back to the inline walk, which is always correct.
+    fn should_offload_peek(&self) -> bool {
+        if !ENABLE_INDEX_PEEK_OFFLOAD.get(&self.compute_state.worker_config) {
+            return false;
+        }
+        let max_inflight = INDEX_PEEK_OFFLOAD_MAX_INFLIGHT.get(&self.compute_state.worker_config);
+        self.compute_state
+            .in_flight_offloaded_peeks
+            .load(atomic::Ordering::SeqCst)
+            < max_inflight
+    }
+
+    /// Claims a slot of the offload's in-flight budget, or `None` at the cap.
+    ///
+    /// Checking and claiming are one step so the count cannot drift from the number of live guards.
+    fn acquire_offload_slot(&self) -> Option<InFlightOffload> {
+        if !self.should_offload_peek() {
+            return None;
+        }
+        let counter = Arc::clone(&self.compute_state.in_flight_offloaded_peeks);
+        counter.fetch_add(1, atomic::Ordering::SeqCst);
+        Some(InFlightOffload(counter))
+    }
+
+    /// Whether `peek`'s result may be stashed in persist rather than returned inline, and the size
+    /// above which it should be.
+    ///
+    /// Stashing needs both a peek whose finishing streams (so rows can be shipped as they are
+    /// produced) and a configured stash location. Both peek paths consult this, so the interactive
+    /// runtime stashes exactly the results the maintenance runtime would.
+    fn peek_stash_config(&self, peek: &Peek) -> (bool, usize) {
+        let eligible = peek.finishing.is_streamable(peek.result_desc.arity());
+
+        let enabled = ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
+        let location_available = self.compute_state.peek_stash_persist_location.is_some();
+        if enabled && !location_available {
+            error!("missing peek_stash_persist_location but peek stash is enabled");
+        }
+
+        let threshold = PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
+        (eligible && enabled && location_available, threshold)
+    }
+
+    /// The stash configuration an offloaded walk needs, or `None` when the stash cannot take this
+    /// peek and the walk must resolve inline.
+    fn offload_stash(
+        &self,
+        peek_stash_usable: bool,
+        threshold_bytes: usize,
+    ) -> Option<OffloadStash> {
+        if !peek_stash_usable {
+            return None;
+        }
+        Some(OffloadStash {
+            persist_clients: Arc::clone(&self.compute_state.persist_clients),
+            persist_location: self
+                .compute_state
+                .peek_stash_persist_location
+                .clone()
+                .expect("peek stash usability implies a configured location"),
+            threshold_bytes,
+            batch_max_runs: PEEK_RESPONSE_STASH_BATCH_MAX_RUNS
+                .get(&self.compute_state.worker_config),
+            batch_size: PEEK_STASH_BATCH_SIZE.get(&self.compute_state.worker_config),
+        })
+    }
+
     /// Either complete the peek (and send the response) or put it in the pending set.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {
             PendingPeek::Index(peek) => {
                 let start = Instant::now();
 
-                let peek_stash_eligible = peek
-                    .peek
-                    .finishing
-                    .is_streamable(peek.peek.result_desc.arity());
+                let (peek_stash_usable, peek_stash_threshold_bytes) =
+                    self.peek_stash_config(&peek.peek);
 
-                let peek_stash_enabled = {
-                    let enabled = ENABLE_PEEK_RESPONSE_STASH.get(&self.compute_state.worker_config);
-                    let peek_persist_stash_available =
-                        self.compute_state.peek_stash_persist_location.is_some();
-                    if !peek_persist_stash_available && enabled {
-                        error!("missing peek_stash_persist_location but peek stash is enabled");
-                    }
-                    enabled && peek_persist_stash_available
-                };
-
-                let peek_stash_threshold_bytes =
-                    PEEK_RESPONSE_STASH_THRESHOLD_BYTES.get(&self.compute_state.worker_config);
-
-                let metrics = IndexPeekMetrics {
-                    seek_fulfillment_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_seek_fulfillment_seconds,
-                    frontier_check_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_frontier_check_seconds,
-                    error_scan_seconds: &self.compute_state.metrics.index_peek_error_scan_seconds,
-                    cursor_setup_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_cursor_setup_seconds,
-                    row_iteration_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_row_iteration_seconds,
-                    row_iteration_rows: &self.compute_state.metrics.index_peek_row_iteration_rows,
-                    result_sort_seconds: &self.compute_state.metrics.index_peek_result_sort_seconds,
-                    result_sort_rows: &self.compute_state.metrics.index_peek_result_sort_rows,
-                    row_collection_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_row_collection_seconds,
-                };
-
-                let status = peek.seek_fulfillment(
-                    upper,
-                    self.compute_state.max_result_size,
-                    peek_stash_enabled && peek_stash_eligible,
-                    peek_stash_threshold_bytes,
-                    &metrics,
-                );
-
-                self.compute_state
-                    .metrics
-                    .index_peek_total_seconds
-                    .observe(start.elapsed().as_secs_f64());
-
-                match status {
-                    PeekStatus::Ready(result) => Some(result),
-                    PeekStatus::NotReady => None,
-                    PeekStatus::UsePeekStash => {
-                        let _span =
-                            span!(parent: &peek.span, Level::DEBUG, "process_stash_peek").entered();
-
-                        let peek_stash_batch_max_runs = PEEK_RESPONSE_STASH_BATCH_MAX_RUNS
-                            .get(&self.compute_state.worker_config);
-
-                        let stash_task = peek_stash::StashingPeek::start_upload(
-                            Arc::clone(&self.compute_state.persist_clients),
+                if let Some(in_flight) = self.acquire_offload_slot() {
+                    let stash = self.offload_stash(peek_stash_usable, peek_stash_threshold_bytes);
+                    match peek.snapshot_for_offload(upper, stash.is_some()) {
+                        OffloadSnapshot::NotReady => None,
+                        OffloadSnapshot::Response(response) => Some(response),
+                        OffloadSnapshot::Ready {
+                            oks,
+                            errs,
+                            oks_stash,
+                        } => {
+                            let offloaded = spawn_offloaded_walk::<
+                                PaddedTrace<RowRowAgent<Timestamp, Diff>>,
+                                ErrAgent<Timestamp, Diff>,
+                            >(
+                                peek.peek.clone(),
+                                self.compute_state.max_result_size,
+                                oks,
+                                errs,
+                                oks_stash,
+                                stash,
+                                in_flight,
+                                peek.span.clone(),
+                                self.timely_worker.sync_activator_for([].into()),
+                            );
                             self.compute_state
-                                .peek_stash_persist_location
-                                .as_ref()
-                                .expect("verified above"),
-                            peek.peek.clone(),
-                            peek.trace_bundle.clone(),
-                            peek_stash_batch_max_runs,
-                        );
+                                .metrics
+                                .index_peek_walks_offload_total
+                                .inc();
+                            self.compute_state
+                                .pending_peeks
+                                .insert(offloaded.peek.uuid, PendingPeek::IndexOffload(offloaded));
+                            return;
+                        }
+                    }
+                } else {
+                    self.compute_state
+                        .metrics
+                        .index_peek_walks_inline_total
+                        .inc();
+                    let metrics = IndexPeekMetrics {
+                        seek_fulfillment_seconds: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_seek_fulfillment_seconds,
+                        frontier_check_seconds: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_frontier_check_seconds,
+                        error_scan_seconds: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_error_scan_seconds,
+                        cursor_setup_seconds: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_cursor_setup_seconds,
+                        row_iteration_seconds: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_row_iteration_seconds,
+                        row_iteration_rows: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_row_iteration_rows,
+                        result_sort_seconds: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_result_sort_seconds,
+                        result_sort_rows: &self.compute_state.metrics.index_peek_result_sort_rows,
+                        row_collection_seconds: &self
+                            .compute_state
+                            .metrics
+                            .index_peek_row_collection_seconds,
+                    };
 
-                        self.compute_state
-                            .pending_peeks
-                            .insert(peek.peek.uuid, PendingPeek::Stash(stash_task));
-                        return;
+                    let status = peek.seek_fulfillment(
+                        upper,
+                        self.compute_state.max_result_size,
+                        peek_stash_usable,
+                        peek_stash_threshold_bytes,
+                        &metrics,
+                    );
+
+                    self.compute_state
+                        .metrics
+                        .index_peek_total_seconds
+                        .observe(start.elapsed().as_secs_f64());
+
+                    match status {
+                        PeekStatus::Ready(result) => Some(result),
+                        PeekStatus::NotReady => None,
+                        PeekStatus::UsePeekStash => {
+                            let _span =
+                                span!(parent: &peek.span, Level::DEBUG, "process_stash_peek")
+                                    .entered();
+
+                            let peek_stash_batch_max_runs = PEEK_RESPONSE_STASH_BATCH_MAX_RUNS
+                                .get(&self.compute_state.worker_config);
+
+                            // A fresh walk over the same trace: the iterator that produced
+                            // `UsePeekStash` was consumed deciding that the result is too big to
+                            // return inline.
+                            let mut trace_bundle = peek.trace_bundle.clone();
+                            let mut literal_constraints = peek.peek.literal_constraints.clone();
+                            let peek_iterator = peek_result_iterator::PeekResultIterator::new(
+                                peek.peek.target.id(),
+                                peek.peek.map_filter_project.clone(),
+                                peek.peek.timestamp,
+                                literal_constraints.as_deref_mut(),
+                                trace_bundle.oks_mut(),
+                            );
+
+                            let stash_task = peek_stash::StashingPeek::start_upload(
+                                Arc::clone(&self.compute_state.persist_clients),
+                                self.compute_state
+                                    .peek_stash_persist_location
+                                    .as_ref()
+                                    .expect("verified above"),
+                                peek.peek.clone(),
+                                Box::new(peek_iterator),
+                                peek_stash_batch_max_runs,
+                            );
+
+                            self.compute_state
+                                .pending_peeks
+                                .insert(peek.peek.uuid, PendingPeek::Stash(stash_task));
+                            return;
+                        }
                     }
                 }
             }
@@ -1123,6 +1666,43 @@ impl<'a> ActiveComputeState<'a> {
                     .observe(duration.as_secs_f64());
                 result
             }),
+            PendingPeek::IndexOffload(peek) => {
+                match peek.result.try_recv() {
+                    Ok((result, duration)) => {
+                        // The walk's own duration, which is the whole peek's cost for an offloaded
+                        // peek. The dispatching path deliberately does not observe this histogram,
+                        // so there is one observation per peek either way. The in-flight slot is
+                        // returned by the guard when this `PendingPeek` drops.
+                        self.compute_state
+                            .metrics
+                            .index_peek_total_seconds
+                            .observe(duration.as_secs_f64());
+                        Some(result)
+                    }
+                    Err(oneshot::error::TryRecvError::Empty) => None,
+                    // The sender is gone without a result, which means the walk's thread panicked:
+                    // tokio catches a panic in a blocking closure and drops the closure's state. The
+                    // peek must be answered, otherwise it sits in `pending_peeks` forever and the
+                    // client waits indefinitely.
+                    Err(oneshot::error::TryRecvError::Closed) => {
+                        soft_panic_or_log!(
+                            "offloaded index peek {} lost its walk without a result",
+                            peek.peek.uuid,
+                        );
+                        Some(PeekResponse::Error(
+                            "offloaded index peek walk failed".to_string(),
+                        ))
+                    }
+                }
+            }
+            PendingPeek::IndexShared(_) => {
+                // Interactive shared-index peeks never reach `process_peek`. `handle_peek` routes
+                // them to `serve_or_defer_shared_peek`, and they are re-examined only by
+                // `resolve_dirty` on a notification, never by the `pending_peeks` poll.
+                unreachable!(
+                    "interactive shared-index peeks resolve via pending_work, not process_peek"
+                )
+            }
             PendingPeek::Stash(stashing_peek) => {
                 let num_batches = PEEK_STASH_NUM_BATCHES.get(&self.compute_state.worker_config);
                 let batch_size = PEEK_STASH_BATCH_SIZE.get(&self.compute_state.worker_config);
@@ -1292,6 +1872,13 @@ impl<'a> ActiveComputeState<'a> {
     }
 }
 
+/// Identifies one item in `ComputeState::pending_work`.
+///
+/// Opaque and minted by `ComputeState::next_work_id`, so the id index can name a waiting item
+/// without borrowing it.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct WorkId(u64);
+
 /// A peek against either an index or a Persist collection.
 ///
 /// Note that `PendingPeek` intentionally does not implement or derive `Clone`,
@@ -1304,6 +1891,12 @@ pub enum PendingPeek {
     /// A peek against an index that is being stashed in the peek stash by an
     /// async background task.
     Stash(peek_stash::StashingPeek),
+    /// An interactive-runtime peek served inline from the arrangement sharing registry.
+    IndexShared(SharedIndexPeek),
+    /// A peek against an index whose cursor walk runs on a blocking task, off the timely worker
+    /// that received it. Produced by either peek path, since both can hand an owned cursor to
+    /// another thread.
+    IndexOffload(IndexOffloadPeek),
 }
 
 impl PendingPeek {
@@ -1343,6 +1936,28 @@ impl PendingPeek {
         PendingPeek::Index(IndexPeek {
             peek,
             trace_bundle,
+            span: tracing::Span::current(),
+        })
+    }
+
+    /// Builds an interactive-runtime index peek served inline from the sharing registry.
+    ///
+    /// The maintenance runtime publishes its indexes into the per-process registry; the interactive
+    /// runtime serves peeks from there. `handle_peek` attempts it once inline via
+    /// [`shared_index_peek_response`]. If the arrangement is not yet published or its upper has not
+    /// sealed the peek timestamp, it is enqueued in `pending_work` and re-examined only when a
+    /// publication or seal marks its target id dirty. No worker-blocking wait, no spawned task.
+    fn index_shared(
+        peek: Peek,
+        registry: ArrangementSharingRegistry,
+        worker_index: usize,
+        max_result_size: u64,
+    ) -> Self {
+        PendingPeek::IndexShared(SharedIndexPeek {
+            peek,
+            registry,
+            worker_index,
+            max_result_size,
             span: tracing::Span::current(),
         })
     }
@@ -1425,6 +2040,8 @@ impl PendingPeek {
             PendingPeek::Index(p) => &p.span,
             PendingPeek::Persist(p) => &p.span,
             PendingPeek::Stash(p) => &p.span,
+            PendingPeek::IndexShared(p) => &p.span,
+            PendingPeek::IndexOffload(p) => &p.span,
         }
     }
 
@@ -1433,8 +2050,40 @@ impl PendingPeek {
             PendingPeek::Index(p) => &p.peek,
             PendingPeek::Persist(p) => &p.peek,
             PendingPeek::Stash(p) => &p.peek,
+            PendingPeek::IndexShared(p) => &p.peek,
+            PendingPeek::IndexOffload(p) => &p.peek,
         }
     }
+}
+
+/// A fast-path index peek whose cursor walk is running on a blocking task.
+///
+/// Note that this intentionally does not implement or derive `Clone`, as each pending peek is
+/// meant to be dropped after it's responded to.
+/// Holds one slot of the offload's in-flight budget for as long as the peek exists.
+///
+/// A started `spawn_blocking` closure cannot be aborted, so dropping this does not stop the walk. It
+/// only returns the slot, which is what keeps the budget honest across cancellation and
+/// reconciliation.
+pub struct InFlightOffload(Arc<AtomicUsize>);
+
+impl Drop for InFlightOffload {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, atomic::Ordering::SeqCst);
+    }
+}
+
+pub struct IndexOffloadPeek {
+    pub(crate) peek: Peek,
+    /// Returns this walk's slot in the in-flight budget when the peek goes away, by any route.
+    _in_flight: InFlightOffload,
+    /// The walk. Dropping this cannot abort a `spawn_blocking` closure that already started, so the
+    /// walk runs to completion and discards its result.
+    _abort_handle: AbortOnDropHandle<()>,
+    /// The result of the walk, eventually.
+    result: oneshot::Receiver<(PeekResponse, Duration)>,
+    /// The `tracing::Span` tracking this peek's operation.
+    span: tracing::Span,
 }
 
 /// An in-progress Persist peek.
@@ -1583,6 +2232,27 @@ pub struct IndexPeek {
     span: tracing::Span,
 }
 
+/// An interactive-runtime index peek served inline from the arrangement sharing registry.
+///
+/// [`shared_index_peek_response`] resolves it against the registry handles. When enqueued in
+/// `pending_work`, `resolve_dirty` re-runs that walk on each publication or seal event for the
+/// target id until the arrangement is published and its upper has sealed the peek timestamp. It
+/// holds only the data that inline walk needs, with no spawned task or blocking wait.
+///
+/// Note that `PendingPeek` intentionally does not implement or derive `Clone`, as each
+/// `PendingPeek` is meant to be dropped after it's responded to.
+pub struct SharedIndexPeek {
+    pub(crate) peek: Peek,
+    /// The per-process registry the maintenance runtime publishes its arrangements into.
+    registry: ArrangementSharingRegistry,
+    /// The worker ordinal whose published slot this peek reads.
+    worker_index: usize,
+    /// Max size in bytes of the peek result.
+    max_result_size: u64,
+    /// The `tracing::Span` tracking this peek's operation.
+    span: tracing::Span,
+}
+
 /// Histogram metrics for index peek phases.
 ///
 /// This struct bundles references to the various histogram metrics used to
@@ -1612,6 +2282,70 @@ impl IndexPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
+    /// Takes owned, `Send` snapshots of the oks and errs traces if the peek is ready to be
+    /// answered, so the walk can move to another thread.
+    ///
+    /// Applies the same two gates as the inline walk, in the same order: the traces must be sealed
+    /// beyond the peek time, and their compaction frontier must not have passed it.
+    fn snapshot_for_offload(
+        &mut self,
+        upper: &mut Antichain<Timestamp>,
+        want_stash: bool,
+    ) -> OffloadSnapshot<PaddedTrace<RowRowAgent<Timestamp, Diff>>, ErrAgent<Timestamp, Diff>> {
+        self.trace_bundle.oks_mut().read_upper(upper);
+        if upper.less_equal(&self.peek.timestamp) {
+            return OffloadSnapshot::NotReady;
+        }
+        self.trace_bundle.errs_mut().read_upper(upper);
+        if upper.less_equal(&self.peek.timestamp) {
+            return OffloadSnapshot::NotReady;
+        }
+
+        let read_frontier = self.trace_bundle.compaction_frontier();
+        if !read_frontier.less_equal(&self.peek.timestamp) {
+            return OffloadSnapshot::Response(PeekResponse::Error(format!(
+                "Arrangement compaction frontier ({:?}) is beyond the time of the attempted read ({})",
+                read_frontier.elements(),
+                self.peek.timestamp,
+            )));
+        }
+
+        // `snapshot_local` needs a batch-aligned `as_of`, meaning one the trace has actually
+        // reached; each trace's own current upper qualifies. The empty frontier the inline walk's
+        // live cursor uses does not, since it would make the snapshot's own since-gate vacuous.
+        // Filtering down to `peek.timestamp` still happens during the walk, as it does inline.
+        let mut oks_upper = Antichain::new();
+        self.trace_bundle.oks_mut().read_upper(&mut oks_upper);
+        let mut errs_upper = Antichain::new();
+        self.trace_bundle.errs_mut().read_upper(&mut errs_upper);
+
+        let oks = local_snapshot::snapshot_local(self.trace_bundle.oks_mut(), &oks_upper);
+        let errs = local_snapshot::snapshot_local(self.trace_bundle.errs_mut(), &errs_upper);
+        let oks_stash = want_stash
+            .then(|| local_snapshot::snapshot_local(self.trace_bundle.oks_mut(), &oks_upper).ok())
+            .flatten();
+        match (oks, errs) {
+            (Ok(oks), Ok(errs)) => OffloadSnapshot::Ready {
+                oks: oks.into_cursor(),
+                errs: errs.into_cursor(),
+                oks_stash: oks_stash.map(|snapshot| snapshot.into_cursor()),
+            },
+            // The gates above already established that the traces cover this read, so a snapshot
+            // failure here would mean the trace moved between the two checks. Nothing runs on this
+            // thread in between, so this is unreachable in practice. Report rather than panic.
+            _ => {
+                soft_panic_or_log!(
+                    "index peek offload: snapshot unavailable at readiness-checked timestamp {}",
+                    self.peek.timestamp,
+                );
+                OffloadSnapshot::Response(PeekResponse::Error(format!(
+                    "Arrangement compaction frontier is beyond the time of the attempted read ({})",
+                    self.peek.timestamp,
+                )))
+            }
+        }
+    }
+
     fn seek_fulfillment(
         &mut self,
         upper: &mut Antichain<Timestamp>,
@@ -1645,6 +2379,8 @@ impl IndexPeek {
             .frontier_check_seconds
             .observe(method_start.elapsed().as_secs_f64());
 
+        // Once we reach this point the peek is known-fulfillable: the frontier and
+        // compaction-frontier checks above have passed.
         let result = self.collect_finished_data(
             max_result_size,
             peek_stash_eligible,
@@ -1671,30 +2407,14 @@ impl IndexPeek {
 
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
-        let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
-        while cursor.key_valid(&storage) {
-            let mut copies = Diff::ZERO;
-            cursor.map_times(&storage, |time, diff| {
-                if time.less_equal(&self.peek.timestamp) {
-                    copies += diff;
-                }
-            });
-            if copies.is_negative() {
-                let error = cursor.key(&storage);
-                error!(
-                    target = %self.peek.target.id(), diff = %copies, %error,
-                    "index peek encountered negative multiplicities in error trace",
-                );
-                return PeekStatus::Ready(PeekResponse::Error(format!(
-                    "Invalid data in source errors, \
-                    saw retractions ({}) for row that does not exist: {}",
-                    -copies, error,
-                )));
-            }
-            if copies.is_positive() {
-                return PeekStatus::Ready(PeekResponse::Error(cursor.key(&storage).to_string()));
-            }
-            cursor.step_key(&storage);
+        let (cursor, storage) = self.trace_bundle.errs_mut().cursor();
+        if let Some(error) = Self::scan_errs_for_error::<PaddedTrace<ErrAgent<Timestamp, Diff>>>(
+            self.peek.target.id(),
+            self.peek.timestamp,
+            cursor,
+            storage,
+        ) {
+            return PeekStatus::Ready(error);
         }
 
         metrics
@@ -1709,6 +2429,54 @@ impl IndexPeek {
             peek_stash_threshold_bytes,
             metrics,
         )
+    }
+
+    /// Scans an errs cursor for any error at or before `peek_timestamp`, returning the first one
+    /// found (or `None`).
+    ///
+    /// Shared between the maintenance errs scan in `collect_finished_data` (cursor borrowed live off
+    /// a local `TraceBundle`) and the interactive inline scan in `shared_index_peek_response`
+    /// (cursor off a registry `SharedErrsHandle`): a `(cursor, storage)` pair looks the same to this
+    /// scan either way.
+    fn scan_errs_for_error<Tr>(
+        target_id: GlobalId,
+        peek_timestamp: Timestamp,
+        mut cursor: peek_result_iterator::TraceCursor<Tr>,
+        storage: peek_result_iterator::TraceStorage<Tr>,
+    ) -> Option<PeekResponse>
+    where
+        Tr: TraceReader<Batch: Navigable>,
+        for<'a> BatchCursor<Tr>: Cursor<
+                Key<'a>: std::fmt::Display,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+    {
+        while cursor.key_valid(&storage) {
+            let mut copies = Diff::ZERO;
+            cursor.map_times(&storage, |time, diff| {
+                if time.less_equal(&peek_timestamp) {
+                    copies += diff;
+                }
+            });
+            if copies.is_negative() {
+                let error = cursor.key(&storage);
+                error!(
+                    target = %target_id, diff = %copies, %error,
+                    "index peek encountered negative multiplicities in error trace",
+                );
+                return Some(PeekResponse::Error(format!(
+                    "Invalid data in source errors, \
+                    saw retractions ({}) for row that does not exist: {}",
+                    -copies, error,
+                )));
+            }
+            if copies.is_positive() {
+                return Some(PeekResponse::Error(cursor.key(&storage).to_string()));
+            }
+            cursor.step_key(&storage);
+        }
+        None
     }
 
     /// Collects data for a known-complete peek from the ok stream.
@@ -1730,15 +2498,12 @@ impl IndexPeek {
                 DiffGat<'a> = &'a Diff,
             >,
     {
-        let max_result_size = usize::cast_from(max_result_size);
-        let count_byte_size = size_of::<NonZeroUsize>();
-
         // Cursor setup timing
         let cursor_setup_start = Instant::now();
 
         // We clone `literal_constraints` here because we don't want to move the constraints
         // out of the peek struct, and don't want to modify in-place.
-        let mut peek_iterator = peek_result_iterator::PeekResultIterator::new(
+        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
             peek.target.id().clone(),
             peek.map_filter_project.clone(),
             peek.timestamp,
@@ -1749,6 +2514,44 @@ impl IndexPeek {
         metrics
             .cursor_setup_seconds
             .observe(cursor_setup_start.elapsed().as_secs_f64());
+
+        Self::drain_ok_iterator(
+            peek_iterator,
+            peek,
+            max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
+            Some(metrics),
+        )
+    }
+
+    /// Drains a [`peek_result_iterator::PeekResultIterator`] into a [`PeekStatus`], sorting and
+    /// truncating per `peek.finishing`.
+    ///
+    /// Shared between the maintenance walk (`collect_ok_finished_data`, iterator borrowed live off a
+    /// local `TraceBundle`) and the interactive inline walk (`shared_index_peek_response`, iterator
+    /// off a registry `SharedOksHandle`): the accumulation logic is identical either way. Only the
+    /// maintenance walk records per-phase metrics; the interactive walk passes `metrics` as `None`.
+    fn drain_ok_iterator<Tr>(
+        mut peek_iterator: peek_result_iterator::PeekResultIterator<Tr>,
+        peek: &Peek,
+        max_result_size: u64,
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+        metrics: Option<&IndexPeekMetrics<'_>>,
+    ) -> PeekStatus
+    where
+        Tr: TraceReader<Batch: Navigable>,
+        for<'a> BatchCursor<Tr>: Cursor<
+                Key<'a>: ExtendDatums + Eq,
+                KeyContainer: BatchContainer<Owned = Row>,
+                Val<'a>: ExtendDatums,
+                TimeGat<'a>: PartialOrder<Timestamp>,
+                DiffGat<'a> = &'a Diff,
+            >,
+    {
+        let max_result_size = usize::cast_from(max_result_size);
+        let count_byte_size = size_of::<NonZeroUsize>();
 
         // Accumulated `Vec<(row, count)>` results that we are likely to return.
         let mut results = Vec::new();
@@ -1812,23 +2615,27 @@ impl IndexPeek {
                 {
                     if peek.finishing.order_by.is_empty() {
                         results.truncate(max_results);
-                        metrics
-                            .row_iteration_seconds
-                            .observe(row_iteration_start.elapsed().as_secs_f64());
-                        metrics
-                            .row_iteration_rows
-                            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
-                        metrics
-                            .result_sort_seconds
-                            .observe(sort_time_accum.as_secs_f64());
-                        metrics
-                            .result_sort_rows
-                            .observe(f64::cast_lossy(rows_sorted));
+                        if let Some(metrics) = metrics {
+                            metrics
+                                .row_iteration_seconds
+                                .observe(row_iteration_start.elapsed().as_secs_f64());
+                            metrics
+                                .row_iteration_rows
+                                .observe(f64::cast_lossy(peek_iterator.rows_processed()));
+                            metrics
+                                .result_sort_seconds
+                                .observe(sort_time_accum.as_secs_f64());
+                            metrics
+                                .result_sort_rows
+                                .observe(f64::cast_lossy(rows_sorted));
+                        }
                         let row_collection_start = Instant::now();
                         let collection = RowCollection::new(results, &peek.finishing.order_by);
-                        metrics
-                            .row_collection_seconds
-                            .observe(row_collection_start.elapsed().as_secs_f64());
+                        if let Some(metrics) = metrics {
+                            metrics
+                                .row_collection_seconds
+                                .observe(row_collection_start.elapsed().as_secs_f64());
+                        }
                         return PeekStatus::Ready(PeekResponse::Rows(vec![collection]));
                     } else {
                         // We can sort `results` and then truncate to `max_results`.
@@ -1860,26 +2667,1525 @@ impl IndexPeek {
             }
         }
 
-        metrics
-            .row_iteration_seconds
-            .observe(row_iteration_start.elapsed().as_secs_f64());
-        metrics
-            .row_iteration_rows
-            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
-        metrics
-            .result_sort_seconds
-            .observe(sort_time_accum.as_secs_f64());
-        metrics
-            .result_sort_rows
-            .observe(f64::cast_lossy(rows_sorted));
+        if let Some(metrics) = metrics {
+            metrics
+                .row_iteration_seconds
+                .observe(row_iteration_start.elapsed().as_secs_f64());
+            metrics
+                .row_iteration_rows
+                .observe(f64::cast_lossy(peek_iterator.rows_processed()));
+            metrics
+                .result_sort_seconds
+                .observe(sort_time_accum.as_secs_f64());
+            metrics
+                .result_sort_rows
+                .observe(f64::cast_lossy(rows_sorted));
+        }
 
         let row_collection_start = Instant::now();
         let collection = RowCollection::new(results, &peek.finishing.order_by);
-        metrics
-            .row_collection_seconds
-            .observe(row_collection_start.elapsed().as_secs_f64());
+        if let Some(metrics) = metrics {
+            metrics
+                .row_collection_seconds
+                .observe(row_collection_start.elapsed().as_secs_f64());
+        }
         PeekStatus::Ready(PeekResponse::Rows(vec![collection]))
     }
+}
+
+/// Serves an interactive-runtime fast-path index peek inline from the arrangement sharing registry,
+/// mirroring the local [`IndexPeek::seek_fulfillment`] gate over the registry handles.
+///
+/// Returns [`PeekStatus::NotReady`] (so the caller enqueues the peek in `pending_work` for a later
+/// notification-driven re-examination) whenever the arrangement is not yet published, or its upper
+/// has not sealed the peek timestamp. Both conditions are transient and clear once the maintenance
+/// runtime publishes and advances the index, so deferral covers the reconciliation race (a `Peek`
+/// replayed before the maintenance runtime re-publishes its index) without blocking the worker.
+///
+/// A timestamp compacted past the arrangement's logical-compaction frontier yields the same
+/// Spawns the cursor walk for `peek` on a blocking task and returns the pending peek that
+/// collects its result.
+///
+/// The caller has already taken the owned cursors, so nothing here touches a trace. That is the
+/// whole point: the batches the cursors cover are `Arc`-backed, so the serving worker can keep
+/// stepping (and the publishing worker can keep merging) while this walk runs elsewhere.
+///
+/// `spawn_blocking`, not `spawn`: a walk over a large arrangement is CPU-bound and would occupy
+/// an async runtime thread for its whole duration.
+fn spawn_offloaded_walk<OksTr, ErrsTr>(
+    peek: Peek,
+    max_result_size: u64,
+    oks: (TraceCursor<OksTr>, TraceStorage<OksTr>),
+    errs: (TraceCursor<ErrsTr>, TraceStorage<ErrsTr>),
+    oks_stash: Option<(TraceCursor<OksTr>, TraceStorage<OksTr>)>,
+    stash: Option<OffloadStash>,
+    in_flight: InFlightOffload,
+    span: tracing::Span,
+    activator: timely::scheduling::activate::SyncActivator,
+) -> IndexOffloadPeek
+where
+    OksTr: TraceReader<Batch: Navigable> + 'static,
+    TraceCursor<OksTr>: Send,
+    TraceStorage<OksTr>: Send,
+    for<'a> BatchCursor<OksTr>: Cursor<
+            Key<'a>: ExtendDatums + Eq,
+            KeyContainer: BatchContainer<Owned = Row>,
+            Val<'a>: ExtendDatums,
+            TimeGat<'a>: PartialOrder<Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+    ErrsTr: TraceReader<Batch: Navigable> + 'static,
+    TraceCursor<ErrsTr>: Send,
+    TraceStorage<ErrsTr>: Send,
+    for<'a> BatchCursor<ErrsTr>: Cursor<
+            Key<'a>: std::fmt::Display,
+            TimeGat<'a>: PartialOrder<Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+{
+    let (result_tx, result_rx) = oneshot::channel();
+    let task_peek = peek.clone();
+    let peek_uuid = peek.uuid;
+
+    let task_handle = mz_ore::task::spawn_blocking(
+        || "index_peek::offload",
+        move || {
+            let start = Instant::now();
+            let response = offloaded_response::<OksTr, ErrsTr>(
+                &task_peek,
+                max_result_size,
+                oks,
+                errs,
+                oks_stash,
+                stash,
+            );
+            match result_tx.send((response, start.elapsed())) {
+                Ok(()) => {}
+                Err((_response, elapsed)) => {
+                    debug!(duration = ?elapsed, "dropping result for cancelled peek {peek_uuid}")
+                }
+            }
+            // Wake the serving worker so `process_peeks` retires this peek. Without it the
+            // result sits in the oneshot until the worker happens to step for another reason.
+            if activator.activate().is_err() {
+                debug!("unable to wake timely after completed offloaded index peek {peek_uuid}");
+            }
+        },
+    );
+
+    IndexOffloadPeek {
+        peek,
+        _in_flight: in_flight,
+        _abort_handle: task_handle.abort_on_drop(),
+        result: result_rx,
+        span,
+    }
+}
+
+/// What an offloaded walk needs to divert to the peek response stash partway through.
+struct OffloadStash {
+    persist_clients: Arc<PersistClientCache>,
+    persist_location: PersistLocation,
+    threshold_bytes: usize,
+    batch_max_runs: usize,
+    batch_size: usize,
+}
+
+/// Builds a peek response from owned cursors, off the serving worker's thread.
+///
+/// Mirrors the inline walk: scan the errors first and report one if present, then drain the ok
+/// rows. A result that grows past the stash threshold diverts to persist from this thread, so the
+/// serving worker is not involved in either outcome.
+fn offloaded_response<OksTr, ErrsTr>(
+    peek: &Peek,
+    max_result_size: u64,
+    oks: (TraceCursor<OksTr>, TraceStorage<OksTr>),
+    errs: (TraceCursor<ErrsTr>, TraceStorage<ErrsTr>),
+    oks_stash: Option<(TraceCursor<OksTr>, TraceStorage<OksTr>)>,
+    stash: Option<OffloadStash>,
+) -> PeekResponse
+where
+    OksTr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<OksTr>: Cursor<
+            Key<'a>: ExtendDatums + Eq,
+            KeyContainer: BatchContainer<Owned = Row>,
+            Val<'a>: ExtendDatums,
+            TimeGat<'a>: PartialOrder<Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+    ErrsTr: TraceReader<Batch: Navigable>,
+    for<'a> BatchCursor<ErrsTr>: Cursor<
+            Key<'a>: std::fmt::Display,
+            TimeGat<'a>: PartialOrder<Timestamp>,
+            DiffGat<'a> = &'a Diff,
+        >,
+{
+    let target_id = peek.target.id();
+    let (errs_cursor, errs_storage) = errs;
+    if let Some(error) = IndexPeek::scan_errs_for_error::<ErrsTr>(
+        target_id,
+        peek.timestamp,
+        errs_cursor,
+        errs_storage,
+    ) {
+        return error;
+    }
+
+    let (oks_cursor, oks_storage) = oks;
+    let peek_iterator = peek_result_iterator::PeekResultIterator::<OksTr>::new_over_cursor(
+        target_id,
+        peek.map_filter_project.clone(),
+        peek.timestamp,
+        peek.literal_constraints.clone().as_deref_mut(),
+        oks_cursor,
+        oks_storage,
+    );
+
+    let (stash_eligible, threshold_bytes) = match &stash {
+        Some(stash) => (true, stash.threshold_bytes),
+        None => (false, 0),
+    };
+
+    // `NotReady` is unreachable: it comes from the frontier checks the caller already passed, not
+    // from draining an owned cursor.
+    match IndexPeek::drain_ok_iterator(
+        peek_iterator,
+        peek,
+        max_result_size,
+        stash_eligible,
+        threshold_bytes,
+        None,
+    ) {
+        PeekStatus::Ready(response) => response,
+        PeekStatus::UsePeekStash => {
+            let stash = stash.expect("diversion only reported when the stash is configured");
+            let (oks_cursor, oks_storage) =
+                oks_stash.expect("spare cursor taken whenever the stash is configured");
+            let peek_iterator = peek_result_iterator::PeekResultIterator::<OksTr>::new_over_cursor(
+                target_id,
+                peek.map_filter_project.clone(),
+                peek.timestamp,
+                peek.literal_constraints.clone().as_deref_mut(),
+                oks_cursor,
+                oks_storage,
+            );
+            peek_stash::StashingPeek::upload_blocking(
+                stash.persist_clients,
+                &stash.persist_location,
+                peek,
+                peek_iterator,
+                stash.batch_max_runs,
+                stash.batch_size,
+            )
+        }
+        PeekStatus::NotReady => {
+            unreachable!("an offloaded index peek always resolves to a response")
+        }
+    }
+}
+
+/// Takes owned cursors over the published arrangement for `peek` if it is ready to be answered.
+///
+/// The registry hands out a `Send` handle and an owned cursor, so unlike the local path this needs
+/// no worker at all: the gates and the cursor could equally be taken off the serving worker. It
+/// applies the same seal and compaction gates as the inline walk in `shared_index_peek_response`.
+fn shared_snapshot_for_offload(
+    registry: &ArrangementSharingRegistry,
+    worker_index: usize,
+    peek: &Peek,
+    upper: &mut Antichain<Timestamp>,
+    want_stash: bool,
+) -> OffloadSnapshot<SharedOksHandle, SharedErrsHandle> {
+    let id = peek.target.id();
+    let Some((mut oks, mut errs)) = registry.handles(&id, worker_index) else {
+        return OffloadSnapshot::NotReady;
+    };
+
+    oks.read_upper(upper);
+    if upper.less_equal(&peek.timestamp) {
+        return OffloadSnapshot::NotReady;
+    }
+    errs.read_upper(upper);
+    if upper.less_equal(&peek.timestamp) {
+        return OffloadSnapshot::NotReady;
+    }
+
+    let read_frontier = antichain_join(
+        &oks.get_logical_compaction(),
+        &errs.get_logical_compaction(),
+    );
+    if !read_frontier.less_equal(&peek.timestamp) {
+        return OffloadSnapshot::Response(PeekResponse::Error(format!(
+            "Arrangement compaction frontier ({:?}) is beyond the time of the attempted read ({})",
+            read_frontier.elements(),
+            peek.timestamp,
+        )));
+    }
+
+    OffloadSnapshot::Ready {
+        oks_stash: want_stash.then(|| oks.cursor()),
+        oks: oks.cursor(),
+        errs: errs.cursor(),
+    }
+}
+
+/// compaction-frontier error the local path returns.
+fn shared_index_peek_response(
+    registry: &ArrangementSharingRegistry,
+    worker_index: usize,
+    peek: &Peek,
+    max_result_size: u64,
+    peek_stash_usable: bool,
+    peek_stash_threshold_bytes: usize,
+    upper: &mut Antichain<Timestamp>,
+) -> PeekStatus {
+    let id = peek.target.id();
+
+    // Non-blocking: an unpublished arrangement defers rather than blocking the worker. Retried on
+    // the next `process_peeks`.
+    let Some((mut oks, mut errs)) = registry.handles(&id, worker_index) else {
+        return PeekStatus::NotReady;
+    };
+
+    // Same seal gate as the local `seek_fulfillment`: while an element of the upper is not beyond
+    // the peek timestamp the result can still change, so defer.
+    oks.read_upper(upper);
+    if upper.less_equal(&peek.timestamp) {
+        return PeekStatus::NotReady;
+    }
+    errs.read_upper(upper);
+    if upper.less_equal(&peek.timestamp) {
+        return PeekStatus::NotReady;
+    }
+
+    // Same compaction-frontier gate and error string as the local path, over the meet of the two
+    // handles' logical-compaction frontiers (the local path takes the same meet in
+    // `TraceBundle::compaction_frontier`).
+    let read_frontier = antichain_join(
+        &oks.get_logical_compaction(),
+        &errs.get_logical_compaction(),
+    );
+    if !read_frontier.less_equal(&peek.timestamp) {
+        let error = format!(
+            "Arrangement compaction frontier ({:?}) is beyond the time of the attempted read ({})",
+            read_frontier.elements(),
+            peek.timestamp,
+        );
+        return PeekStatus::Ready(PeekResponse::Error(error));
+    }
+
+    let (errs_cursor, errs_storage) = errs.cursor();
+    if let Some(error) = IndexPeek::scan_errs_for_error::<SharedErrsHandle>(
+        id,
+        peek.timestamp,
+        errs_cursor,
+        errs_storage,
+    ) {
+        return PeekStatus::Ready(error);
+    }
+
+    let (oks_cursor, oks_storage) = oks.cursor();
+    let peek_iterator =
+        peek_result_iterator::PeekResultIterator::<SharedOksHandle>::new_over_cursor(
+            id,
+            peek.map_filter_project.clone(),
+            peek.timestamp,
+            peek.literal_constraints.clone().as_deref_mut(),
+            oks_cursor,
+            oks_storage,
+        );
+
+    IndexPeek::drain_ok_iterator(
+        peek_iterator,
+        peek,
+        max_result_size,
+        peek_stash_usable,
+        peek_stash_threshold_bytes,
+        None,
+    )
+}
+
+#[cfg(test)]
+mod index_peek_tests {
+    use std::rc::Rc;
+
+    use differential_dataflow::input::Input;
+    use differential_dataflow::operators::arrange::TraceAgent;
+    use differential_dataflow::trace::{Builder, Description, Trace};
+    use mz_compute_types::dataflows::{BuildDesc, IndexDesc};
+    use mz_compute_types::plan::LirRelationExpr;
+    use mz_expr::{
+        AggregateExpr, AggregateFunc, MapFilterProject, MirRelationExpr, MirScalarExpr,
+        OptimizedMirRelationExpr, RowSetFinishing,
+    };
+    use mz_repr::optimize::OptimizerFeatures;
+    use mz_repr::{Datum, RelationDesc, ReprRelationType, SqlScalarType};
+    use mz_row_spine::{RowRowBatcher, RowRowBuilder};
+    use mz_timely_util::columnation::{ColumnationChunker, ColumnationStack};
+    use timely::container::PushInto;
+    use timely::dataflow::operators::generic::OperatorInfo;
+    use timely::progress::Timestamp as _;
+    use uuid::Uuid;
+
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_secrets::{InMemorySecretsController, SecretsController};
+    use mz_storage_types::connections::ConnectionContext;
+    use mz_txn_wal::operator::TxnsContext;
+
+    use super::*;
+    use crate::extensions::arrange::{KeyCollection, MzArrange};
+    use crate::render::errors::DataflowErrorSer;
+    use crate::shared_trace::PublishArrangement;
+    use crate::typedefs::{ErrAgent, ErrBatcher, ErrBuilder, ErrSpine, RowRowAgent, RowRowSpine};
+
+    fn row(x: i64) -> Row {
+        Row::pack_slice(&[Datum::Int64(x)])
+    }
+
+    /// Builds a one-batch `[0, upper)` oks trace with `rows`, wrapped exactly like a real
+    /// index's `TraceBundle.oks` (a `PaddedTrace<RowRowAgent<..>>`), but constructed directly
+    /// (bypassing rendering a dataflow) for test purposes.
+    ///
+    /// The batch is inserted through the `TraceWriter` (not `Trace::insert` on the bare spine
+    /// directly), because the writer tracks its own idea of the trace's current upper and
+    /// asserts new batches are contiguous with it; inserting straight into the spine before
+    /// wrapping desyncs that bookkeeping, and the writer's `Drop` (which seals the trace to the
+    /// empty frontier) then panics. Closing the trace this way is fine for a test snapshot: an
+    /// empty (fully closed) upper is readable at any finite peek timestamp.
+    fn oks_trace_with_rows(
+        upper: Timestamp,
+        rows: Vec<((Row, Row), Timestamp, Diff)>,
+    ) -> PaddedTrace<RowRowAgent<Timestamp, Diff>> {
+        let spine: RowRowSpine<Timestamp, Diff> =
+            Trace::new(OperatorInfo::new(0, 0, Rc::from(vec![0])), None, None);
+        let (agent, mut writer) =
+            TraceAgent::new(spine, OperatorInfo::new(1, 0, Rc::from(vec![0])), None);
+
+        let description = Description::new(
+            Antichain::from_elem(Timestamp::minimum()),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(Timestamp::minimum()),
+        );
+        let mut chunk = ColumnationStack::default();
+        for row in rows {
+            chunk.push_into(row);
+        }
+        let batch = RowRowBuilder::<Timestamp, Diff>::seal(&mut vec![chunk], description);
+        writer.insert(batch, Some(Timestamp::minimum()));
+
+        agent.into()
+    }
+
+    /// Builds a one-batch `[0, upper)` errs trace with no errors, wrapped like a real index's
+    /// `TraceBundle.errs`.
+    fn errs_trace_empty(upper: Timestamp) -> PaddedTrace<ErrAgent<Timestamp, Diff>> {
+        let spine: ErrSpine<Timestamp, Diff> =
+            Trace::new(OperatorInfo::new(2, 0, Rc::from(vec![0])), None, None);
+        let (agent, mut writer) =
+            TraceAgent::new(spine, OperatorInfo::new(3, 0, Rc::from(vec![0])), None);
+
+        let description = Description::new(
+            Antichain::from_elem(Timestamp::minimum()),
+            Antichain::from_elem(upper),
+            Antichain::from_elem(Timestamp::minimum()),
+        );
+        let chunk = ColumnationStack::default();
+        let batch = ErrBuilder::<Timestamp, Diff>::seal(&mut vec![chunk], description);
+        writer.insert(batch, Some(Timestamp::minimum()));
+
+        agent.into()
+    }
+
+    fn test_metrics(registry: &mz_ore::metrics::MetricsRegistry) -> crate::metrics::ComputeMetrics {
+        crate::metrics::ComputeMetrics::register_with(registry, ComputeRuntimeRole::Maintenance)
+    }
+
+    fn make_peek(timestamp: Timestamp) -> Peek {
+        let result_desc = RelationDesc::builder()
+            .with_column("k", SqlScalarType::Int64.nullable(false))
+            .with_column("v", SqlScalarType::Int64.nullable(false))
+            .finish();
+        Peek {
+            target: PeekTarget::Index {
+                id: GlobalId::User(1),
+            },
+            result_desc,
+            literal_constraints: None,
+            uuid: Uuid::new_v4(),
+            timestamp,
+            finishing: RowSetFinishing::trivial(2),
+            map_filter_project: MapFilterProject::new(2)
+                .into_plan()
+                .expect("identity MFP plans")
+                .into_nontemporal()
+                .expect("identity MFP has no temporal filters"),
+            otel_ctx: OpenTelemetryContext::empty(),
+        }
+    }
+
+    fn index_metrics(metrics: &crate::metrics::WorkerMetrics) -> IndexPeekMetrics<'_> {
+        IndexPeekMetrics {
+            seek_fulfillment_seconds: &metrics.index_peek_seek_fulfillment_seconds,
+            frontier_check_seconds: &metrics.index_peek_frontier_check_seconds,
+            error_scan_seconds: &metrics.index_peek_error_scan_seconds,
+            cursor_setup_seconds: &metrics.index_peek_cursor_setup_seconds,
+            row_iteration_seconds: &metrics.index_peek_row_iteration_seconds,
+            row_iteration_rows: &metrics.index_peek_row_iteration_rows,
+            result_sort_seconds: &metrics.index_peek_result_sort_seconds,
+            result_sort_rows: &metrics.index_peek_result_sort_rows,
+            row_collection_seconds: &metrics.index_peek_row_collection_seconds,
+        }
+    }
+
+    /// Publishes `rows` (at time 0, sealed to 1) as a real index arrangement into a fresh registry
+    /// under `id` on worker 0 of 1, mirroring how a maintained index publishes on the maintenance
+    /// runtime.
+    fn publish_kv_index(id: GlobalId, rows: Vec<(Row, Row)>) -> ArrangementSharingRegistry {
+        let registry = ArrangementSharingRegistry::new();
+        publish_kv_index_into(&registry, id, rows);
+        registry
+    }
+
+    /// Like [`publish_kv_index`], but publishes into an existing `registry`.
+    fn publish_kv_index_into(
+        registry: &ArrangementSharingRegistry,
+        id: GlobalId,
+        rows: Vec<(Row, Row)>,
+    ) {
+        let registry_in = registry.clone();
+        timely::execute_directly(move |worker| {
+            worker.dataflow::<Timestamp, _, _>(|scope| {
+                let (mut oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+                let oks = oks_collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("test oks");
+                let (mut errs_input, errs_collection) =
+                    scope.new_collection::<DataflowErrorSer, Diff>();
+                let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                    ColumnationChunker<_>,
+                    ErrBatcher<_, _>,
+                    ErrBuilder<_, _>,
+                    ErrSpine<_, _>,
+                >("test errs");
+
+                let slot = registry_in.get_or_create_placeholder(id, 0, 1);
+                PublishArrangement::adopt(&oks, &slot.oks, || {});
+                PublishArrangement::adopt(&errs, &slot.errs, || {});
+                registry_in.notify(id, 0);
+
+                for (k, v) in rows {
+                    oks_input.update((k, v), Diff::ONE);
+                }
+                oks_input.advance_to(Timestamp::from(1_u64));
+                oks_input.flush();
+                errs_input.advance_to(Timestamp::from(1_u64));
+                errs_input.flush();
+            });
+        });
+    }
+
+    /// The interactive inline walk over the sharing registry returns the same `PeekResponse` as the
+    /// maintenance runtime's local trace walk over the same rows.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // differential-dataflow's Columnation isn't miri-clean
+    fn interactive_shared_peek_matches_local_path() {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = test_metrics(&registry).for_worker(0);
+        let index_metrics = index_metrics(&metrics);
+
+        let kv = vec![(row(1), row(10)), (row(2), row(20)), (row(3), row(30))];
+        let peek_ts = Timestamp::new(0);
+        let trace_upper = Timestamp::new(1);
+
+        // The maintenance runtime's local path over an equivalent, locally built trace bundle.
+        let mut local_peek = IndexPeek {
+            peek: make_peek(peek_ts),
+            trace_bundle: TraceBundle::new(
+                oks_trace_with_rows(
+                    trace_upper,
+                    kv.iter()
+                        .cloned()
+                        .map(|(k, v)| ((k, v), peek_ts, Diff::ONE))
+                        .collect(),
+                ),
+                errs_trace_empty(trace_upper),
+            ),
+            span: tracing::Span::none(),
+        };
+        let mut upper = Antichain::new();
+        let local_response =
+            match local_peek.seek_fulfillment(&mut upper, u64::MAX, false, 0, &index_metrics) {
+                PeekStatus::Ready(response) => response,
+                _ => panic!("local synchronous walk must resolve directly"),
+            };
+
+        // The interactive path: publish the same rows and serve the peek inline off the registry.
+        let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
+        let mut shared_upper = Antichain::new();
+        let shared_response = match shared_index_peek_response(
+            &shared_registry,
+            0,
+            &make_peek(peek_ts),
+            u64::MAX,
+            false,
+            0,
+            &mut shared_upper,
+        ) {
+            PeekStatus::Ready(response) => response,
+            _ => panic!("interactive inline walk must resolve ready"),
+        };
+
+        assert_eq!(
+            local_response, shared_response,
+            "shared-registry peek must return the local path's rows"
+        );
+    }
+
+    /// The interactive walk defers an over-threshold result to the peek stash, exactly as the
+    /// maintenance walk does, rather than returning it inline.
+    ///
+    /// Hard-coding the interactive walk to stash-ineligible made every result return inline, so a
+    /// result over `max_result_size` failed with "result exceeds max size" on a query that streams
+    /// fine through the stash on the maintenance runtime. Since every peek routes to interactive
+    /// while the feature is on, that was a user-visible regression no test could catch: test
+    /// results never approach the limit.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // differential-dataflow's Columnation isn't miri-clean
+    fn interactive_shared_peek_defers_over_threshold_result_to_the_stash() {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = test_metrics(&registry).for_worker(0);
+        let index_metrics = index_metrics(&metrics);
+
+        let kv = vec![(row(1), row(10)), (row(2), row(20)), (row(3), row(30))];
+        let peek_ts = Timestamp::new(0);
+        let trace_upper = Timestamp::new(1);
+        // Any non-empty result is over a zero threshold, which keeps the test about the decision
+        // rather than about row sizes.
+        let threshold = 0;
+
+        let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
+        let mut shared_upper = Antichain::new();
+        let shared_status = shared_index_peek_response(
+            &shared_registry,
+            0,
+            &make_peek(peek_ts),
+            u64::MAX,
+            true,
+            threshold,
+            &mut shared_upper,
+        );
+        assert!(
+            matches!(shared_status, PeekStatus::UsePeekStash),
+            "interactive walk must defer an over-threshold result to the stash"
+        );
+
+        // The maintenance walk over the same rows makes the same call, which is the property that
+        // matters: routing a peek to interactive must not change whether it stashes.
+        let mut local_peek = IndexPeek {
+            peek: make_peek(peek_ts),
+            trace_bundle: TraceBundle::new(
+                oks_trace_with_rows(
+                    trace_upper,
+                    kv.iter()
+                        .cloned()
+                        .map(|(k, v)| ((k, v), peek_ts, Diff::ONE))
+                        .collect(),
+                ),
+                errs_trace_empty(trace_upper),
+            ),
+            span: tracing::Span::none(),
+        };
+        let mut local_upper = Antichain::new();
+        let local_status = local_peek.seek_fulfillment(
+            &mut local_upper,
+            u64::MAX,
+            true,
+            threshold,
+            &index_metrics,
+        );
+        assert!(
+            matches!(local_status, PeekStatus::UsePeekStash),
+            "maintenance walk must defer the same result"
+        );
+    }
+
+    /// The offloaded walk returns exactly what the inline walk returns, on both cursor sources.
+    ///
+    /// Offloading changes where the cursor is walked, never what the walk produces. The response
+    /// is the observable, so both sources are compared against their own inline path over the same
+    /// rows. Driven synchronously here: the task wrapper only moves this call to another thread.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // differential-dataflow's Columnation isn't miri-clean
+    fn offloaded_walk_matches_the_inline_walk() {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = test_metrics(&registry).for_worker(0);
+        let index_metrics = index_metrics(&metrics);
+
+        let kv = vec![(row(1), row(10)), (row(2), row(20)), (row(3), row(30))];
+        let peek_ts = Timestamp::new(0);
+        let trace_upper = Timestamp::new(1);
+
+        let bundle = || {
+            TraceBundle::new(
+                oks_trace_with_rows(
+                    trace_upper,
+                    kv.iter()
+                        .cloned()
+                        .map(|(k, v)| ((k, v), peek_ts, Diff::ONE))
+                        .collect(),
+                ),
+                errs_trace_empty(trace_upper),
+            )
+        };
+
+        // Local source, inline.
+        let mut inline_peek = IndexPeek {
+            peek: make_peek(peek_ts),
+            trace_bundle: bundle(),
+            span: tracing::Span::none(),
+        };
+        let mut upper = Antichain::new();
+        let inline_local =
+            match inline_peek.seek_fulfillment(&mut upper, u64::MAX, false, 0, &index_metrics) {
+                PeekStatus::Ready(response) => response,
+                _ => panic!("inline local walk must resolve directly"),
+            };
+
+        // Local source, offloaded.
+        let mut offload_peek = IndexPeek {
+            peek: make_peek(peek_ts),
+            trace_bundle: bundle(),
+            span: tracing::Span::none(),
+        };
+        let mut upper = Antichain::new();
+        let offloaded_local = match offload_peek.snapshot_for_offload(&mut upper, false) {
+            OffloadSnapshot::Ready {
+                oks,
+                errs,
+                oks_stash,
+            } => offloaded_response::<
+                PaddedTrace<RowRowAgent<Timestamp, Diff>>,
+                ErrAgent<Timestamp, Diff>,
+            >(&make_peek(peek_ts), u64::MAX, oks, errs, oks_stash, None),
+            _ => panic!("local snapshot must be ready"),
+        };
+        assert_eq!(
+            inline_local, offloaded_local,
+            "offloaded walk over a local trace diverged from the inline walk"
+        );
+
+        // Shared source, inline and offloaded, over the same rows published to a registry.
+        let shared_registry = publish_kv_index(GlobalId::User(1), kv.clone());
+        let mut upper = Antichain::new();
+        let inline_shared = match shared_index_peek_response(
+            &shared_registry,
+            0,
+            &make_peek(peek_ts),
+            u64::MAX,
+            false,
+            0,
+            &mut upper,
+        ) {
+            PeekStatus::Ready(response) => response,
+            _ => panic!("inline shared walk must resolve ready"),
+        };
+
+        let mut upper = Antichain::new();
+        let offloaded_shared = match shared_snapshot_for_offload(
+            &shared_registry,
+            0,
+            &make_peek(peek_ts),
+            &mut upper,
+            false,
+        ) {
+            OffloadSnapshot::Ready {
+                oks,
+                errs,
+                oks_stash,
+            } => offloaded_response::<SharedOksHandle, SharedErrsHandle>(
+                &make_peek(peek_ts),
+                u64::MAX,
+                oks,
+                errs,
+                oks_stash,
+                None,
+            ),
+            _ => panic!("shared snapshot must be ready"),
+        };
+        assert_eq!(
+            inline_shared, offloaded_shared,
+            "offloaded walk over a published arrangement diverged from the inline walk"
+        );
+        assert_eq!(
+            inline_local, inline_shared,
+            "both sources must agree in the first place"
+        );
+    }
+
+    /// A local index peek whose timestamp has been compacted past returns a compaction-frontier
+    /// error. The interactive inline path mirrors this exact gate over the registry handles, so
+    /// this asserts the error string the shared path reproduces.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn seek_fulfillment_compacted_past_errors() {
+        let registry = mz_ore::metrics::MetricsRegistry::new();
+        let metrics = test_metrics(&registry).for_worker(0);
+        let index_metrics = index_metrics(&metrics);
+
+        // A peek at time 1, against a trace that has compacted its logical frontier to time 5: the
+        // read is beyond the trace's compaction frontier.
+        let peek_timestamp = Timestamp::new(1);
+        let trace_upper = Timestamp::new(10);
+
+        let mut bundle = TraceBundle::new(
+            oks_trace_with_rows(trace_upper, vec![]),
+            errs_trace_empty(trace_upper),
+        );
+        let compacted = Antichain::from_elem(Timestamp::new(5));
+        bundle.oks_mut().set_logical_compaction(compacted.borrow());
+        bundle.errs_mut().set_logical_compaction(compacted.borrow());
+
+        let mut peek = IndexPeek {
+            peek: make_peek(peek_timestamp),
+            trace_bundle: bundle,
+            span: tracing::Span::none(),
+        };
+        let mut upper = Antichain::new();
+        let response = match peek.seek_fulfillment(&mut upper, u64::MAX, false, 0, &index_metrics) {
+            PeekStatus::Ready(response) => response,
+            _ => panic!("a compacted-past read must resolve directly"),
+        };
+        assert!(
+            matches!(&response, PeekResponse::Error(msg) if msg.contains("compaction frontier")),
+            "expected a compaction-frontier error, got {response:?}",
+        );
+    }
+
+    /// A peek for an index that is not yet published defers via `NotReady` (rather than blocking or
+    /// erroring), and resolves with the correct rows once the maintenance runtime publishes and the
+    /// pending-peek retry runs again.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn interactive_shared_peek_defers_until_published() {
+        let id = GlobalId::User(1);
+        let kv = vec![(row(1), row(10)), (row(2), row(20))];
+        let registry = ArrangementSharingRegistry::new();
+
+        let mut upper = Antichain::new();
+        assert!(
+            matches!(
+                shared_index_peek_response(
+                    &registry,
+                    0,
+                    &make_peek(Timestamp::new(0)),
+                    u64::MAX,
+                    false,
+                    0,
+                    &mut upper,
+                ),
+                PeekStatus::NotReady,
+            ),
+            "an unpublished index must defer",
+        );
+
+        // Publishing lets the retry (a later `process_peeks`) resolve the peek.
+        publish_kv_index_into(&registry, id, kv.clone());
+        let mut upper = Antichain::new();
+        assert!(
+            matches!(
+                shared_index_peek_response(
+                    &registry,
+                    0,
+                    &make_peek(Timestamp::new(0)),
+                    u64::MAX,
+                    false,
+                    0,
+                    &mut upper,
+                ),
+                PeekStatus::Ready(PeekResponse::Rows(_)),
+            ),
+            "a published index must resolve",
+        );
+    }
+
+    /// A peek at a timestamp the arrangement's upper has not yet sealed defers via `NotReady`, then
+    /// resolves once the upper advances past the peek timestamp. Uses a live worker so the
+    /// published trace carries a finite (non-empty) upper, which `execute_directly`'s
+    /// run-to-completion sealing cannot stage.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn interactive_shared_peek_defers_until_sealed() {
+        let id = GlobalId::User(1);
+        timely::execute_directly(move |worker| {
+            let registry = ArrangementSharingRegistry::new();
+            let registry_in = registry.clone();
+            let worker_index = worker.index();
+            let peers = worker.peers();
+
+            let (mut oks_input, mut errs_input) =
+                worker.dataflow::<Timestamp, _, _>(move |scope| {
+                    let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+                    let oks = oks_collection.mz_arrange::<
+                        ColumnationChunker<_>,
+                        RowRowBatcher<_, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >("test oks");
+                    let (errs_input, errs_collection) =
+                        scope.new_collection::<DataflowErrorSer, Diff>();
+                    let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >("test errs");
+
+                    let slot = registry_in.get_or_create_placeholder(id, worker_index, peers);
+                    PublishArrangement::adopt(&oks, &slot.oks, || {});
+                    PublishArrangement::adopt(&errs, &slot.errs, || {});
+                    registry_in.notify(id, worker_index);
+                    (oks_input, errs_input)
+                });
+
+            // A row at time 0, batch sealed so the trace's upper is {1}.
+            oks_input.update((row(1), row(10)), Diff::ONE);
+            oks_input.advance_to(Timestamp::from(1_u64));
+            oks_input.flush();
+            errs_input.advance_to(Timestamp::from(1_u64));
+            errs_input.flush();
+            for _ in 0..16 {
+                worker.step();
+            }
+
+            // upper {1} does not seal a peek at time 1: defer.
+            let mut upper = Antichain::new();
+            assert!(
+                matches!(
+                    shared_index_peek_response(
+                        &registry,
+                        worker_index,
+                        &make_peek(Timestamp::new(1)),
+                        u64::MAX,
+                        false,
+                        0,
+                        &mut upper,
+                    ),
+                    PeekStatus::NotReady,
+                ),
+                "an unsealed peek must defer",
+            );
+
+            // Advance the upper past the peek timestamp; the retry now resolves.
+            oks_input.advance_to(Timestamp::from(2_u64));
+            oks_input.flush();
+            errs_input.advance_to(Timestamp::from(2_u64));
+            errs_input.flush();
+            for _ in 0..16 {
+                worker.step();
+            }
+
+            let mut upper = Antichain::new();
+            assert!(
+                matches!(
+                    shared_index_peek_response(
+                        &registry,
+                        worker_index,
+                        &make_peek(Timestamp::new(1)),
+                        u64::MAX,
+                        false,
+                        0,
+                        &mut upper,
+                    ),
+                    PeekStatus::Ready(PeekResponse::Rows(_)),
+                ),
+                "a sealed peek must resolve",
+            );
+
+            // Keep the publisher inputs alive until here so the publication stayed open.
+            let _keep = (&oks_input, &errs_input);
+        });
+    }
+
+    fn test_compute_instance_context() -> ComputeInstanceContext {
+        ComputeInstanceContext {
+            scratch_directory: None,
+            worker_core_affinity: false,
+            connection_context: ConnectionContext::for_tests(
+                InMemorySecretsController::new().reader(),
+            ),
+        }
+    }
+
+    /// Builds a persist client cache inside a Tokio runtime context, which its pubsub task needs.
+    /// Returns the runtime too so the caller keeps it alive for the cache's lifetime. The cache is
+    /// an `Arc` (so `Send`) and can move into a timely worker closure, unlike the `Rc`-holding
+    /// `ComputeState`, which must be built on the worker thread.
+    fn test_persist_clients() -> (tokio::runtime::Runtime, Arc<PersistClientCache>) {
+        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+        let clients = {
+            let _guard = runtime.enter();
+            Arc::new(PersistClientCache::new_no_metrics())
+        };
+        (runtime, clients)
+    }
+
+    /// Builds an interactive-runtime `ComputeState` over `registry`, with a fresh, isolated metrics
+    /// registry. Enough to drive `handle_peek`/`resolve_dirty` in a test `ActiveComputeState`.
+    fn interactive_compute_state(
+        persist_clients: Arc<PersistClientCache>,
+        registry: ArrangementSharingRegistry,
+    ) -> ComputeState {
+        let metrics_registry = MetricsRegistry::new();
+        let metrics = crate::metrics::ComputeMetrics::register_with(
+            &metrics_registry,
+            ComputeRuntimeRole::Interactive,
+        )
+        .for_worker(0);
+        ComputeState::new(
+            ComputeRuntimeRole::Interactive,
+            persist_clients,
+            registry,
+            TxnsContext::default(),
+            metrics,
+            Arc::new(TracingHandle::disabled()),
+            test_compute_instance_context(),
+            metrics_registry,
+            1,
+            None,
+        )
+    }
+
+    /// Publishes `rows` as a `RowRow` index under `id` on the CURRENT worker (no nested
+    /// `execute_directly`), sealing the batch and draining to the empty upper so the registry's
+    /// `Arc` keeps the snapshot readable after the inputs drop.
+    fn publish_index_current_worker(
+        worker: &mut TimelyWorker,
+        registry: &ArrangementSharingRegistry,
+        id: GlobalId,
+        rows: Vec<(Row, Row)>,
+    ) {
+        let registry_in = registry.clone();
+        let (mut oks_input, mut errs_input) = worker.dataflow::<Timestamp, _, _>(move |scope| {
+            let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+            let oks = oks_collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("test oks");
+            let (errs_input, errs_collection) = scope.new_collection::<DataflowErrorSer, Diff>();
+            let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                ColumnationChunker<_>,
+                ErrBatcher<_, _>,
+                ErrBuilder<_, _>,
+                ErrSpine<_, _>,
+            >("test errs");
+
+            let slot = registry_in.get_or_create_placeholder(id, scope.index(), scope.peers());
+            PublishArrangement::adopt(&oks, &slot.oks, || {});
+            PublishArrangement::adopt(&errs, &slot.errs, || {});
+            registry_in.notify(id, scope.index());
+            (oks_input, errs_input)
+        });
+
+        for (k, v) in rows {
+            oks_input.update((k, v), Diff::ONE);
+        }
+        oks_input.advance_to(Timestamp::from(1_u64));
+        oks_input.flush();
+        errs_input.advance_to(Timestamp::from(1_u64));
+        errs_input.flush();
+        for _ in 0..16 {
+            worker.step();
+        }
+        // Drop the inputs and drain: the batch seals to the empty upper, readable at any finite ts,
+        // and the registry's `Arc` keeps the published chain alive.
+        drop(oks_input);
+        drop(errs_input);
+        for _ in 0..16 {
+            worker.step();
+        }
+    }
+
+    /// A peek issued before its index is published enqueues in `pending_work` (never the maintenance
+    /// `pending_peeks` poll path) and is served only when the target id is presented as dirty to
+    /// `resolve_dirty`. A re-examination with an empty dirty set, even after the data is published
+    /// and ready, serves nothing: this is the no-polling property.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn interactive_peek_resolves_on_publication_not_on_bare_tick() {
+        let id = GlobalId::User(1);
+        let kv = vec![(row(1), row(10)), (row(2), row(20))];
+        // The persist cache spawns a task that needs a Tokio reactor; build it (and keep the
+        // runtime alive) before entering the timely worker thread.
+        let (_rt, persist_clients) = test_persist_clients();
+
+        timely::execute_directly(move |worker| {
+            let registry = ArrangementSharingRegistry::new();
+            // Part A: register this interactive worker's waker, as startup does.
+            registry.register_waker(0, worker.sync_activator_for([].into()));
+
+            let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut response_tx = ResponseSender::for_test(tx);
+
+            // A peek issued before publication enqueues, does not respond, and does not touch the
+            // poll path.
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.handle_peek(make_peek(Timestamp::new(0)));
+                assert_eq!(
+                    active.compute_state.pending_work.len(),
+                    1,
+                    "an unpublished peek must enqueue in pending_work"
+                );
+                assert!(
+                    active.compute_state.pending_peeks.is_empty(),
+                    "the interactive peek must not use the pending_peeks poll path"
+                );
+                assert!(
+                    active.compute_state.dep_index.contains_key(&id),
+                    "the peek must be indexed under its target id"
+                );
+
+                // No-polling: with no dirtied id, re-examination serves nothing.
+                active.resolve_dirty(BTreeSet::new());
+            }
+            assert!(rx.try_recv().is_err(), "no response before publication");
+
+            // Publish the index from this same worker. `insert` marks the id dirty for worker 0.
+            publish_index_current_worker(worker, &registry, id, kv.clone());
+
+            // No-polling: the data is now published and ready, yet a re-examination with an empty
+            // dirty set must NOT serve the peek. Only a dirtied id triggers work.
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.resolve_dirty(BTreeSet::new());
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "a bare tick (empty dirty set) must not resolve pending work"
+            );
+
+            // The genuine wake: drain the dirty inbox (the id, marked by `insert`) and resolve.
+            let dirty = registry.take_dirty(0);
+            assert_eq!(
+                dirty,
+                BTreeSet::from([id]),
+                "publication must have marked the id dirty"
+            );
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.resolve_dirty(dirty);
+                assert!(
+                    active.compute_state.pending_work.is_empty(),
+                    "a served peek is removed from the store"
+                );
+                assert!(
+                    active.compute_state.dep_index.is_empty(),
+                    "a served peek clears its dep index"
+                );
+            }
+            let response = match rx.try_recv() {
+                Ok((ComputeResponse::PeekResponse(_, response, _), _)) => response,
+                other => panic!("expected a peek response, got {other:?}"),
+            };
+            assert!(
+                matches!(response, PeekResponse::Rows(_)),
+                "the served peek must carry rows, got {response:?}"
+            );
+        });
+    }
+
+    /// A published-but-not-sealed peek stays enqueued and is served only after a frontier advance
+    /// drives `note_frontier` (the seal signal `export_index` wires). A re-examination after the
+    /// seal but with no dirty mark serves nothing (no-polling).
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn interactive_peek_resolves_on_seal_via_note_frontier() {
+        let id = GlobalId::User(1);
+        let (_rt, persist_clients) = test_persist_clients();
+
+        timely::execute_directly(move |worker| {
+            let registry = ArrangementSharingRegistry::new();
+            let worker_index = worker.index();
+            registry.register_waker(worker_index, worker.sync_activator_for([].into()));
+
+            let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut response_tx = ResponseSender::for_test(tx);
+
+            // Publish a row at time 0, sealing only to upper {1}.
+            let registry_in = registry.clone();
+            let (mut oks_input, mut errs_input) =
+                worker.dataflow::<Timestamp, _, _>(move |scope| {
+                    let (oks_input, oks_collection) = scope.new_collection::<(Row, Row), Diff>();
+                    let oks = oks_collection.mz_arrange::<
+                        ColumnationChunker<_>,
+                        RowRowBatcher<_, _>,
+                        RowRowBuilder<_, _>,
+                        RowRowSpine<_, _>,
+                    >("test oks");
+                    let (errs_input, errs_collection) =
+                        scope.new_collection::<DataflowErrorSer, Diff>();
+                    let errs = KeyCollection::from(errs_collection).mz_arrange::<
+                        ColumnationChunker<_>,
+                        ErrBatcher<_, _>,
+                        ErrBuilder<_, _>,
+                        ErrSpine<_, _>,
+                    >("test errs");
+
+                    let slot =
+                        registry_in.get_or_create_placeholder(id, scope.index(), scope.peers());
+                    PublishArrangement::adopt(&oks, &slot.oks, || {});
+                    PublishArrangement::adopt(&errs, &slot.errs, || {});
+                    registry_in.notify(id, scope.index());
+                    (oks_input, errs_input)
+                });
+
+            oks_input.update((row(1), row(10)), Diff::ONE);
+            oks_input.advance_to(Timestamp::from(1_u64));
+            oks_input.flush();
+            errs_input.advance_to(Timestamp::from(1_u64));
+            errs_input.flush();
+            for _ in 0..16 {
+                worker.step();
+            }
+            // Drain the publication's dirty mark so the seal signal is observed in isolation.
+            let _ = registry.take_dirty(worker_index);
+
+            // A peek at ts 1: published but not sealed (upper {1}). Enqueues.
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.handle_peek(make_peek(Timestamp::new(1)));
+                assert_eq!(
+                    active.compute_state.pending_work.len(),
+                    1,
+                    "an unsealed peek must enqueue"
+                );
+            }
+            assert!(rx.try_recv().is_err(), "an unsealed peek does not respond");
+
+            // Advance the upper past the peek ts and step, so the shared trace seals ts 1.
+            oks_input.advance_to(Timestamp::from(2_u64));
+            oks_input.flush();
+            errs_input.advance_to(Timestamp::from(2_u64));
+            errs_input.flush();
+            for _ in 0..16 {
+                worker.step();
+            }
+
+            // No-polling: the seal alone does not re-examine the peek until the id is dirtied.
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.resolve_dirty(BTreeSet::new());
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "a seal with no dirty mark must not resolve the peek"
+            );
+
+            // The seal signal: `export_index`'s frontier hook calls `note_frontier`. Drive it.
+            registry.note_frontier(id, worker_index);
+            let dirty = registry.take_dirty(worker_index);
+            assert_eq!(dirty, BTreeSet::from([id]));
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.resolve_dirty(dirty);
+                assert!(
+                    active.compute_state.pending_work.is_empty(),
+                    "a sealed peek is served and removed"
+                );
+            }
+            let response = match rx.try_recv() {
+                Ok((ComputeResponse::PeekResponse(_, response, _), _)) => response,
+                other => panic!("expected a peek response, got {other:?}"),
+            };
+            assert!(
+                matches!(response, PeekResponse::Rows(_)),
+                "the sealed peek must carry rows, got {response:?}"
+            );
+
+            // Keep the publisher inputs alive until here so the publication stayed open.
+            let _keep = (&oks_input, &errs_input);
+        });
+    }
+
+    /// A `(k, v)` `ReprRelationType` of two non-null `int64` columns, matching the rows
+    /// [`publish_index_current_worker`] publishes.
+    fn two_int64_type() -> ReprRelationType {
+        let desc = RelationDesc::builder()
+            .with_column("k", SqlScalarType::Int64.nullable(false))
+            .with_column("v", SqlScalarType::Int64.nullable(false))
+            .finish();
+        ReprRelationType::from(desc.typ())
+    }
+
+    /// Converts a lowered index-only dataflow into the `<RenderPlan, CollectionMetadata>` shape the
+    /// compute protocol ships, mirroring `compute-client`'s `Instance::create_dataflow`. The test
+    /// dataflows import only shared indexes (no storage sources) and export no sinks, so the augment
+    /// step is trivial.
+    fn to_render_dataflow(
+        lowered: DataflowDescription<LirRelationExpr, ()>,
+    ) -> DataflowDescription<RenderPlan, CollectionMetadata> {
+        assert!(
+            lowered.source_imports.is_empty(),
+            "index-only test dataflow imports no storage sources"
+        );
+        let objects_to_build = lowered
+            .objects_to_build
+            .into_iter()
+            .map(|o| BuildDesc {
+                id: o.id,
+                plan: RenderPlan::try_from(o.plan).expect("render plan conversion"),
+            })
+            .collect();
+        DataflowDescription {
+            source_imports: BTreeMap::new(),
+            objects_to_build,
+            index_imports: lowered.index_imports,
+            index_exports: lowered.index_exports,
+            sink_exports: BTreeMap::new(),
+            as_of: lowered.as_of,
+            until: lowered.until,
+            initial_storage_as_of: lowered.initial_storage_as_of,
+            refresh_schedule: lowered.refresh_schedule,
+            debug_name: lowered.debug_name,
+            time_dependence: lowered.time_dependence,
+        }
+    }
+
+    /// A real query dataflow that imports the maintenance index `index_id` (arranging `on_id` by
+    /// `[0]`) and exports `out_index_id` = `count(*)` over it. Built by lowering hand-written MIR,
+    /// exactly as the controller would ship it. No optimization is needed: a reduce lowers
+    /// faithfully.
+    fn reduce_count_dataflow(
+        index_id: GlobalId,
+        on_id: GlobalId,
+        reduce_id: GlobalId,
+        out_index_id: GlobalId,
+        as_of: Timestamp,
+    ) -> DataflowDescription<RenderPlan, CollectionMetadata> {
+        let on_type = two_int64_type();
+        let mut mir =
+            DataflowDescription::<OptimizedMirRelationExpr, ()>::new("test-reduce".into());
+        mir.import_index(
+            index_id,
+            IndexDesc {
+                on_id,
+                key: vec![MirScalarExpr::column(0)],
+            },
+            on_type.clone(),
+            false,
+        );
+        let count = AggregateExpr {
+            func: AggregateFunc::Count,
+            expr: MirScalarExpr::literal_true(),
+            distinct: false,
+        };
+        let reduce = MirRelationExpr::Reduce {
+            input: Box::new(MirRelationExpr::global_get(on_id, on_type)),
+            group_key: vec![],
+            aggregates: vec![count],
+            monotonic: false,
+            expected_group_size: None,
+        };
+        let reduce_type = reduce.typ();
+        mir.insert_plan(
+            reduce_id,
+            OptimizedMirRelationExpr::declare_optimized(reduce),
+        );
+        mir.set_as_of(Antichain::from_elem(as_of));
+        mir.export_index(
+            out_index_id,
+            IndexDesc {
+                on_id: reduce_id,
+                key: vec![MirScalarExpr::column(0)],
+            },
+            reduce_type,
+        );
+        let lowered = LirRelationExpr::finalize_dataflow(mir, &OptimizerFeatures::default(), None)
+            .expect("lowering the reduce dataflow");
+        to_render_dataflow(lowered)
+    }
+
+    /// A peek over a single-column `int64` result, for reading a `count(*)` query output.
+    fn make_count_peek(id: GlobalId, timestamp: Timestamp) -> Peek {
+        let result_desc = RelationDesc::builder()
+            .with_column("count", SqlScalarType::Int64.nullable(false))
+            .finish();
+        Peek {
+            target: PeekTarget::Index { id },
+            result_desc,
+            literal_constraints: None,
+            uuid: Uuid::new_v4(),
+            timestamp,
+            finishing: RowSetFinishing::trivial(1),
+            map_filter_project: MapFilterProject::new(1)
+                .into_plan()
+                .expect("identity MFP plans")
+                .into_nontemporal()
+                .expect("identity MFP has no temporal filters"),
+            otel_ctx: OpenTelemetryContext::empty(),
+        }
+    }
+
+    /// An interactive query dataflow that imports a not-yet-published maintenance index is built
+    /// IMMEDIATELY in arrival order. The import binds through a registry placeholder rather than
+    /// deferring, so the output collection appears in `collections` right away and nothing lands in
+    /// `pending_work`. With the placeholder unadopted, the import produces no data and the output
+    /// frontier holds at the minimum, so a result peek at the as_of stays pending.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn interactive_build_is_immediate() {
+        let index_id = GlobalId::User(1);
+        let on_id = GlobalId::User(2);
+        let reduce_id = GlobalId::User(3);
+        // Transient with a non-empty `until`, matching the bounded-read contract the Multiplexer
+        // enforces for anything it routes to the interactive runtime (see the debug_assert in
+        // `handle_create_dataflow`).
+        let out_index_id = GlobalId::Transient(4);
+        let (_rt, persist_clients) = test_persist_clients();
+
+        timely::execute_directly(move |worker| {
+            let registry = ArrangementSharingRegistry::new();
+            registry.register_waker(0, worker.sync_activator_for([].into()));
+            let mut compute_state = interactive_compute_state(persist_clients, registry.clone());
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            let mut response_tx = ResponseSender::for_test(tx);
+
+            let as_of = Timestamp::new(0);
+            let mut dataflow =
+                reduce_count_dataflow(index_id, on_id, reduce_id, out_index_id, as_of);
+            dataflow.until = Antichain::from_elem(as_of.step_forward());
+
+            // The build is NOT deferred, even though the imported index is unpublished: the import
+            // binds through a placeholder that a maintenance publisher adopts later.
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.handle_create_dataflow(dataflow);
+                assert!(
+                    active.compute_state.pending_work.is_empty(),
+                    "an immediately-built dataflow must not sit in pending_work"
+                );
+                assert!(
+                    active.compute_state.dep_index.is_empty(),
+                    "an immediately-built dataflow indexes nothing under its dependency"
+                );
+                assert!(
+                    active.compute_state.collections.contains_key(&out_index_id),
+                    "the query output collection is built immediately"
+                );
+                // Binding the import through get-or-create created a placeholder slot for the
+                // unpublished dependency, so its handles now exist.
+                assert!(
+                    active
+                        .compute_state
+                        .sharing_registry
+                        .handles(&index_id, 0)
+                        .is_some(),
+                    "the interactive import created a placeholder slot for its dependency"
+                );
+
+                // Start the (suspended) dataflow, as a `Schedule` command would.
+                active.handle_schedule(out_index_id);
+            }
+
+            // Step so the reduce runs over the empty, unadopted placeholder input. Its output frontier
+            // is held at the minimum, so it never seals past the peek time.
+            for _ in 0..64 {
+                worker.step();
+            }
+
+            // A result peek at the as_of cannot resolve while the output frontier is held at the
+            // minimum: it stays pending rather than returning wrong (empty) rows.
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.handle_peek(make_count_peek(out_index_id, as_of));
+                assert_eq!(
+                    active.compute_state.pending_work.len(),
+                    1,
+                    "the result peek stays pending while the output frontier is held at the minimum"
+                );
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "no result is produced while the placeholder input is unadopted"
+            );
+
+            // Tear down the built dataflow so the worker can shut down. Its import over the never
+            // adopted placeholder holds a frontier at the minimum forever, so without dropping it the
+            // dataflow never completes and `execute_directly` would wedge on teardown.
+            {
+                let mut active = ActiveComputeState {
+                    timely_worker: &mut *worker,
+                    compute_state: &mut compute_state,
+                    response_tx: &mut response_tx,
+                };
+                active.handle_allow_compaction(out_index_id, Antichain::new());
+            }
+            for _ in 0..16 {
+                worker.step();
+            }
+        });
+    }
+}
+
+/// The result of trying to take owned cursors for an offloaded index-peek walk.
+///
+/// Generic over the trace types because both peek paths produce one: the local path over the
+/// worker's own `TraceBundle`, the interactive path over registry handles.
+enum OffloadSnapshot<OksTr: TraceReader<Batch: Navigable>, ErrsTr: TraceReader<Batch: Navigable>> {
+    /// The traces are not sealed through the peek time yet. Keep the peek pending.
+    NotReady,
+    /// The peek resolves without a walk, for example because compaction passed its read time.
+    Response(PeekResponse),
+    /// Owned cursors covering the read, ready to be walked on another thread.
+    Ready {
+        oks: (TraceCursor<OksTr>, TraceStorage<OksTr>),
+        errs: (TraceCursor<ErrsTr>, TraceStorage<ErrsTr>),
+        /// A second cursor over the same read, present only when the stash could take this peek.
+        ///
+        /// Diversion to the stash is decided partway through a walk, and the walk consumes its
+        /// cursor. The inline path re-walks from a fresh iterator for the same reason. Taking the
+        /// spare up front keeps that possible without holding the trace handle across threads.
+        oks_stash: Option<(TraceCursor<OksTr>, TraceStorage<OksTr>)>,
+    },
 }
 
 /// For keeping track of the state of pending or ready peeks, and managing
