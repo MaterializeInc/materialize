@@ -16,18 +16,30 @@
 //! It uses `ore::vec::repurpose_allocation` to accomplish this, which contains
 //! unsafe code.
 
+use crate::row::predict::Prediction;
 use crate::{Datum, RowRef};
 
 /// A re-useable vector of `Datum` with no particular lifetime.
 #[derive(Debug, Default, Clone)]
 pub struct DatumVec {
     outer: Vec<Datum<'static>>,
+    /// The class of each column, learned from the rows this instance has decoded.
+    ///
+    /// One instance decodes rows from one collection, so the schema is stable and this settles
+    /// after the first row that is not null in every column. It is a prediction only:
+    /// `Prediction::decode` checks every tag against it and corrects it, so a stale or wrong entry
+    /// costs throughput and never correctness. That is what lets it be learned here rather than
+    /// plumbed down from a `RelationDesc`, which the compute plan does not carry.
+    prediction: Prediction,
 }
 
 impl DatumVec {
     /// Allocate a new instance.
     pub fn new() -> Self {
-        Self { outer: Vec::new() }
+        Self {
+            outer: Vec::new(),
+            prediction: Prediction::new(),
+        }
     }
     /// Borrow an instance with a specific lifetime.
     ///
@@ -42,6 +54,18 @@ impl DatumVec {
 
     /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`.
     pub fn borrow_with<'a>(&'a mut self, row: &'a RowRef) -> DatumVecBorrow<'a> {
+        // Destructured so the prediction can be updated while the datum allocation is in hand.
+        let DatumVec { outer, prediction } = self;
+        let mut inner = std::mem::take(outer);
+        prediction.decode(row, &mut inner);
+        DatumVecBorrow { outer, inner }
+    }
+
+    /// Borrow an instance with a specific lifetime, and pre-populate with a `Row`, decoding every
+    /// datum through the general decoder.
+    ///
+    /// Exists so a benchmark can measure [`DatumVec::borrow_with`] against the path it replaced.
+    pub fn borrow_with_general<'a>(&'a mut self, row: &'a RowRef) -> DatumVecBorrow<'a> {
         let mut borrow = self.borrow();
         borrow.extend(row.iter());
         borrow
