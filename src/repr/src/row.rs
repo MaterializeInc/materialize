@@ -57,6 +57,7 @@ use crate::{Datum, RelationDesc, Timestamp};
 
 pub(crate) mod encode;
 pub mod iter;
+pub(crate) mod predict;
 
 include!(concat!(env!("OUT_DIR"), "/mz_repr.row.rs"));
 
