@@ -433,6 +433,7 @@ struct DataflowBody {
     builds: Vec<BuildSpec>,
     exports: Vec<ExportSpec>,
     as_of: u64,
+    until: Option<u64>,
     optimize: bool,
 }
 
@@ -446,6 +447,7 @@ fn parse_dataflow_body(
 ) -> anyhow::Result<DataflowBody> {
     let name = opt_string(args, "name");
     let as_of = req_u64(args, "as-of")?;
+    let until = opt_u64(args, "until")?;
     let optimize = flags.iter().any(|f| f == "optimize");
     let mut imports = Vec::new();
     let mut builds = Vec::new();
@@ -485,6 +487,7 @@ fn parse_dataflow_body(
         builds,
         exports,
         as_of,
+        until,
         optimize,
     })
 }
@@ -568,6 +571,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 builds,
                 exports,
                 as_of,
+                until,
                 optimize,
             } = parse_dataflow_body(&args, &flags, body)?;
             Command::CreateDataflow {
@@ -576,9 +580,14 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                 builds,
                 exports,
                 as_of,
+                until,
                 optimize,
+                defer: flags.iter().any(|f| f == "defer"),
             }
         }
+        "submit-dataflow" => Command::SubmitDataflow {
+            name: req(&args, "name")?.to_string(),
+        },
         "explain" => {
             // `explain ref=<name>` renders a previously declared dataflow; otherwise
             // the dataflow is given inline with the `create-dataflow` body.
@@ -595,6 +604,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                     builds,
                     exports,
                     as_of,
+                    until,
                     optimize,
                 } = parse_dataflow_body(&args, &flags, body)?;
                 ExplainTarget::Inline {
@@ -603,6 +613,7 @@ fn parse_command(input: &str) -> anyhow::Result<Command> {
                     builds,
                     exports,
                     as_of,
+                    until,
                     optimize,
                 }
             };
@@ -785,7 +796,9 @@ mod tests {
                     key: vec![0]
                 }],
                 as_of: 0,
+                until: None,
                 optimize: false,
+                defer: false,
             }
         );
 
@@ -835,6 +848,7 @@ mod tests {
                         key: vec![0],
                     }],
                     as_of: 0,
+                    until: None,
                     optimize: true,
                 }
             }
@@ -1017,6 +1031,23 @@ mod tests {
         assert_eq!(
             rewrite(&items, std::slice::from_ref(&stanza.expected)),
             content
+        );
+    }
+
+    /// `defer` on the directive line is picked up, and `submit-dataflow` names the deferred
+    /// dataflow.
+    #[mz_ore::test]
+    fn parses_deferred_create_and_submit() {
+        let input = "create-dataflow name=d as-of=0 defer\n  import index=1001\n  build id=2000\n    Get u1000\n  export index=2001 on=2000 key=[0]";
+        assert!(matches!(
+            parse_command(input).unwrap(),
+            Command::CreateDataflow { defer: true, .. }
+        ));
+        assert_eq!(
+            parse_command("submit-dataflow name=d").unwrap(),
+            Command::SubmitDataflow {
+                name: "d".to_string()
+            }
         );
     }
 }
