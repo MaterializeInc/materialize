@@ -335,6 +335,18 @@ impl ClusterSpec for Config {
 
     const NAME: &str = "compute";
 
+    fn cluster_name(&self) -> std::borrow::Cow<'static, str> {
+        match self.role {
+            // The solo and maintenance runtimes keep the bare "compute" span name so single-runtime
+            // logs are unchanged. The interactive runtime gets a distinct name so the two runtimes
+            // of a two-runtime process are separable.
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => {
+                std::borrow::Cow::Borrowed(Self::NAME)
+            }
+            ComputeRuntimeRole::Interactive => std::borrow::Cow::Borrowed("compute-interactive"),
+        }
+    }
+
     fn run_worker(
         &self,
         timely_worker: &mut TimelyWorker,
@@ -931,4 +943,102 @@ fn spawn_channel_adapter(
             }
         },
     );
+}
+
+#[cfg(test)]
+mod two_runtime_tests {
+    use std::sync::Arc;
+
+    use mz_cluster_client::client::TimelyConfig;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_ore::tracing::TracingHandle;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_secrets::{InMemorySecretsController, SecretsController};
+    use mz_storage_types::connections::ConnectionContext;
+    use mz_txn_wal::operator::TxnsContext;
+
+    use super::{ComputeInstanceContext, ComputeRuntimeRole, serve};
+    use crate::sharing::ArrangementSharingRegistry;
+
+    /// A single-worker, single-process Timely cluster. `create_sockets` binds an ephemeral listener
+    /// (port 0) but, with one peer, never connects out, so two such runtimes boot in one process
+    /// without a port collision.
+    fn single_process_config() -> TimelyConfig {
+        TimelyConfig {
+            workers: 1,
+            process: 0,
+            addresses: vec!["127.0.0.1:0".to_string()],
+            arrangement_exert_proportionality: 0,
+            enable_zero_copy: false,
+            enable_zero_copy_lgalloc: false,
+            zero_copy_limit: None,
+        }
+    }
+
+    fn test_context() -> ComputeInstanceContext {
+        ComputeInstanceContext {
+            scratch_directory: None,
+            worker_core_affinity: false,
+            connection_context: ConnectionContext::for_tests(
+                InMemorySecretsController::new().reader(),
+            ),
+        }
+    }
+
+    /// Boots the maintenance and interactive compute runtimes in one process via the real `serve`
+    /// path, sharing one metrics registry and one arrangement-sharing registry. Proves the second
+    /// `serve` does not panic on duplicate metric registration (the role label keeps the series
+    /// distinct) and that both runtimes yield working client builders.
+    ///
+    /// Reading a maintenance-rendered index from the interactive runtime through the shared
+    /// registry is covered by the bare-Timely harness in `crate::sharing`. Driving two full `serve`
+    /// stacks to a rendered `CreateInstance` here would mean replaying the whole controller
+    /// protocol, so this test proves boot and metric non-collision instead.
+    #[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 4))]
+    async fn two_runtimes_boot_sharing_one_registry() {
+        let metrics_registry = MetricsRegistry::new();
+        let sharing_registry = ArrangementSharingRegistry::new();
+        let persist_clients = Arc::new(PersistClientCache::new_no_metrics());
+        let txns_ctx = TxnsContext::default();
+        let tracing_handle = Arc::new(TracingHandle::disabled());
+
+        let maintenance = serve(
+            single_process_config(),
+            ComputeRuntimeRole::Maintenance,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            sharing_registry.clone(),
+            txns_ctx.clone(),
+            Arc::clone(&tracing_handle),
+            test_context(),
+            Vec::new(),
+        )
+        .await
+        .expect("maintenance runtime boots");
+
+        let interactive = serve(
+            single_process_config(),
+            ComputeRuntimeRole::Interactive,
+            &metrics_registry,
+            Arc::clone(&persist_clients),
+            sharing_registry.clone(),
+            txns_ctx,
+            Arc::clone(&tracing_handle),
+            test_context(),
+            Vec::new(),
+        )
+        .await
+        .expect("interactive runtime boots on the same registry");
+
+        // Building a client from each builder proves both runtimes wired up their worker channels.
+        let maintenance_client = maintenance();
+        let interactive_client = interactive();
+
+        // The worker threads created by `serve` loop forever, so dropping the containers would join
+        // and hang. Leak the builders and clients: the test process reclaims them on exit.
+        std::mem::forget(maintenance);
+        std::mem::forget(interactive);
+        std::mem::forget(maintenance_client);
+        std::mem::forget(interactive_client);
+    }
 }
