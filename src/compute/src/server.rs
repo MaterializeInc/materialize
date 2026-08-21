@@ -349,6 +349,18 @@ impl ClusterSpec for Config {
 
     const NAME: &str = "compute";
 
+    fn cluster_name(&self) -> std::borrow::Cow<'static, str> {
+        match self.role {
+            // The solo and maintenance runtimes keep the bare "compute" span name so single-runtime
+            // logs are unchanged. The interactive runtime gets a distinct name so the two runtimes
+            // of a two-runtime process are separable.
+            ComputeRuntimeRole::Solo | ComputeRuntimeRole::Maintenance => {
+                std::borrow::Cow::Borrowed(Self::NAME)
+            }
+            ComputeRuntimeRole::Interactive => std::borrow::Cow::Borrowed("compute-interactive"),
+        }
+    }
+
     fn run_worker(
         &self,
         timely_worker: &mut TimelyWorker,
