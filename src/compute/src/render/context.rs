@@ -619,8 +619,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
     /// reads is the consumer's choice, and a delta join reads both within one operator, so a
     /// binding's definition cannot know which form to collapse.
     ///
-    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace`) alone, whose error traces
-    /// this dataflow cannot rewrite in place. Their errors arrive bounded by the exporting
+    /// NOTE: Leaves imported arrangements (`ArrangementFlavor::Trace` and
+    /// `ArrangementFlavor::SharedTrace`) alone, whose error traces this dataflow cannot rewrite in
+    /// place. Their errors arrive bounded by the exporting
     /// dataflow's last level of sharing rather than collapsed to one, since nothing collapses at an
     /// export. A global read more than once within one dataflow is not collapsed either, because
     /// only local bindings reach this.
@@ -636,7 +637,9 @@ impl<'scope, T: RenderTimestamp> CollectionBundle<'scope, T> {
                     let name = format!("Distinct errors[{key:?}]");
                     ArrangementFlavor::Local(oks, distinct_arranged_errs(errs, &name))
                 }
-                flavor @ ArrangementFlavor::Trace(..) => flavor,
+                flavor @ (ArrangementFlavor::Trace(..) | ArrangementFlavor::SharedTrace(..)) => {
+                    flavor
+                }
             };
             self.arranged.insert(key, flavor);
         }

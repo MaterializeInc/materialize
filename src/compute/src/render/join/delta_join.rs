@@ -320,6 +320,9 @@ fn bundle_errs<'scope, T: RenderTimestamp>(
             ArrangementFlavor::Trace(_id, _oks, errs) => {
                 errs.clone().as_collection(|k, _v| k.clone())
             }
+            ArrangementFlavor::SharedTrace(_id, _oks, errs) => {
+                errs.clone().as_collection(|k, _v| k.clone())
+            }
         };
         collected.push(errs);
     }
