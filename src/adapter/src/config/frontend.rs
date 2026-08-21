@@ -760,9 +760,13 @@ impl Rule {
 ///
 /// Caching keeps the file off the coordinator loop: create-time scoped resolution
 /// runs the scoped passes inline on the loop that serializes all DDL and query
-/// sequencing, where a synchronous read has no business. That path is
-/// best-effort and re-reconciled by the next sync tick, so a value up to one tick
-/// old is fine there.
+/// sequencing, where a synchronous read has no business.
+///
+/// The read the sync loop is working through and the parse the scoped passes
+/// resolve against are held separately, because a rule is recorded as an override
+/// only where it differs from the environment-wide value, so the two must come
+/// from the same file. [`Self::current`] is this tick's read; [`Self::published`]
+/// is the newest read whose environment-wide section the loop has already pushed.
 #[derive(Debug)]
 struct CachedConfigFile {
     /// The contents the cache was built from, or `None` if that read failed.
@@ -772,7 +776,21 @@ struct CachedConfigFile {
     contents: Option<String>,
     /// The parse of [`Self::contents`], or `None` if the read failed or the
     /// document was not a JSON object.
-    file: Option<Arc<ConfigFile>>,
+    ///
+    /// The environment-wide pass of the tick that read it folds this into
+    /// [`SynchronizedParameters`], and whether it is `Some` is the
+    /// current-read-valid bit behind
+    /// [`SystemParameterFrontend::has_scoped_desired_state`]: the reconcile must
+    /// not prune against a file it could not read.
+    current: Option<Arc<ConfigFile>>,
+    /// The newest parse whose environment-wide section is already committed to
+    /// the catalog. What the scoped passes resolve against; see
+    /// [`SystemParameterFrontend::published_config_file`] for why.
+    ///
+    /// [`SystemParameterFrontend::publish_config_file`] advances this from
+    /// [`Self::current`], and only for a valid parse, so it doubles as the last
+    /// known valid policy across a failed read.
+    published: Option<Arc<ConfigFile>>,
 }
 
 /// A position in the config-sync file, naming it in a diagnostic about what is
@@ -1056,10 +1074,11 @@ impl SystemParameterFrontend {
     /// [SystemParameterFrontend] and return `true` iff at least one parameter
     /// value was modified.
     pub fn pull(&self, params: &mut SynchronizedParameters) -> bool {
-        // The file is read exactly once per tick, here, and the scoped passes read
-        // the cache this refreshes. Reading it per parameter would let a rewrite
-        // land mid-loop and be observed as a torn read, and reading it in the
-        // scoped passes would put a synchronous read on the coordinator loop,
+        // The file is read exactly once per tick, here, and the scoped passes
+        // resolve against the parse this read is promoted to once its
+        // environment-wide values are pushed. Reading it per parameter would let a
+        // rewrite land mid-loop and be observed as a torn read, and reading it in
+        // the scoped passes would put a synchronous read on the coordinator loop,
         // which resolves a new object's overrides at create time.
         let file = match &self.client {
             SystemParameterFrontendClient::File { path } => {
@@ -1119,7 +1138,13 @@ impl SystemParameterFrontend {
     }
 
     /// Refreshes the cached config-sync file from `read`, the outcome of reading
-    /// it at `path`, and returns the new parse.
+    /// it at `path`, and returns the new parse for the environment-wide pass.
+    ///
+    /// This does not make the new parse visible to the scoped passes:
+    /// [`Self::publish_config_file`] does, once the caller has pushed this read's
+    /// environment-wide values. Until then the scoped passes keep resolving
+    /// against the previously published parse, whose baseline is the one they
+    /// would be compared to.
     ///
     /// Everything the file is diagnosed for, both the shape warnings the parse
     /// emits and the scoped-section diagnostics, is reported here and only when
@@ -1138,7 +1163,7 @@ impl SystemParameterFrontend {
 
         if let Some(cached) = &*cache {
             if cached.contents.as_deref() == read.as_deref().ok() {
-                return cached.file.clone();
+                return cached.current.clone();
             }
         }
 
@@ -1161,30 +1186,72 @@ impl SystemParameterFrontend {
                 warn!("{diagnostic}");
             }
         }
+        let published = cache.as_ref().and_then(|cached| cached.published.clone());
         *cache = Some(CachedConfigFile {
             contents,
-            file: file.clone(),
+            current: file.clone(),
+            // Carried over rather than advanced here: this read's rules become
+            // visible to the scoped passes only once `publish_config_file`
+            // reports its baseline committed.
+            published,
         });
 
         file
     }
 
-    /// The config-sync file as of the last [`Self::pull`], or `None` if no read
-    /// of it has succeeded.
-    fn cached_config_file(&self) -> Option<Arc<ConfigFile>> {
+    /// The newest config-sync file whose environment-wide section is committed to
+    /// the catalog, or `None` if no read of it has ever parsed.
+    ///
+    /// What the scoped passes resolve against, for the two reasons this is split
+    /// from the current read.
+    ///
+    /// A rule is recorded as an override only where it differs from the
+    /// environment-wide value (see [`classify_scoped_value`]), so a file's rules
+    /// have to be judged against that same file's baseline. Were a read published
+    /// before the sync loop pushed its top-level parameters, a create landing in
+    /// that window would pair the new rules with the old baseline and could omit
+    /// an override its first configuration requires. The next reconcile repairs
+    /// the durable row, but for a render-frozen parameter that is already too
+    /// late, which is the whole reason the create-time fold exists.
+    ///
+    /// It also stays put across a failed read or an unparseable document, so an
+    /// object created while the ConfigMap has briefly vanished or is half-written
+    /// still gets the last known valid overrides rather than none, and identical
+    /// replicas do not diverge on when they happened to be created. Pruning is
+    /// held back over that window separately, by
+    /// [`Self::has_scoped_desired_state`], which tracks the current read.
+    fn published_config_file(&self) -> Option<Arc<ConfigFile>> {
         self.config_file
             .lock()
             .expect("config file cache lock poisoned")
             .as_ref()
-            .and_then(|cached| cached.file.clone())
+            .and_then(|cached| cached.published.clone())
+    }
+
+    /// Promotes the current read to the published parse, the caller having pushed
+    /// that read's environment-wide values to the catalog.
+    ///
+    /// Call this after the push and before the scoped reconcile of the same tick;
+    /// [`Self::published_config_file`] describes what that ordering buys. A no-op
+    /// when the current read failed or did not parse, which is what leaves the
+    /// last valid parse available to create-time evaluation.
+    pub fn publish_config_file(&self) {
+        let mut cache = self
+            .config_file
+            .lock()
+            .expect("config file cache lock poisoned");
+        if let Some(cached) = &mut *cache {
+            if cached.current.is_some() {
+                cached.published = cached.current.clone();
+            }
+        }
     }
 
     /// Whether the frontend knows the desired state of the scoped parameters.
     ///
-    /// `false` when the config-sync file has never been read and parsed
-    /// successfully, which includes a file that is missing (the ConfigMap volume
-    /// is mounted optional, so it can disappear), unreadable, or not a JSON
-    /// object.
+    /// `false` when the *most recent* read of the config-sync file did not parse,
+    /// which includes a file that is missing (the ConfigMap volume is mounted
+    /// optional, so it can disappear), unreadable, or not a JSON object.
     ///
     /// The scoped desired state is complete: the reconcile prunes every override
     /// absent from it. A caller must therefore skip the reconcile while this is
@@ -1192,10 +1259,21 @@ impl SystemParameterFrontend {
     /// durably drop every scoped override on a typo and restore it once the file
     /// is fixed. Always `true` for LaunchDarkly, whose evaluation falls back to
     /// the environment-wide value when it has nothing to say.
+    ///
+    /// Deliberately the current read rather than
+    /// [`Self::published_config_file`]: holding back the prune is only about not
+    /// acting on a desired state we do not have, whereas the create path is better
+    /// served by the last valid one than by nothing. The two questions are
+    /// answered from the two halves of the cache for that reason.
     pub fn has_scoped_desired_state(&self) -> bool {
         match &self.client {
             SystemParameterFrontendClient::LaunchDarkly { .. } => true,
-            SystemParameterFrontendClient::File { .. } => self.cached_config_file().is_some(),
+            SystemParameterFrontendClient::File { .. } => self
+                .config_file
+                .lock()
+                .expect("config file cache lock poisoned")
+                .as_ref()
+                .is_some_and(|cached| cached.current.is_some()),
         }
     }
 
@@ -1312,12 +1390,12 @@ impl SystemParameterFrontend {
 
         let client = match &self.client {
             SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
-            // Resolved from the cache `pull` refreshes, so this does no I/O: the
-            // create path calls it on the coordinator loop. An empty result here
-            // means "no overrides", so a caller reconciling the full desired state
-            // must first check `has_scoped_desired_state`.
+            // Resolved from the published parse, so this does no I/O: the create
+            // path calls it on the coordinator loop. An empty result here means
+            // "no overrides", so a caller reconciling the full desired state must
+            // first check `has_scoped_desired_state`.
             SystemParameterFrontendClient::File { .. } => {
-                let Some(file) = self.cached_config_file() else {
+                let Some(file) = self.published_config_file() else {
                     return out;
                 };
                 return self.file_replica_overrides(&file, params, param_names, replicas);
@@ -1374,7 +1452,7 @@ impl SystemParameterFrontend {
             SystemParameterFrontendClient::LaunchDarkly { client, .. } => client,
             // See the file arm of `pull_replica_overrides`.
             SystemParameterFrontendClient::File { .. } => {
-                let Some(file) = self.cached_config_file() else {
+                let Some(file) = self.published_config_file() else {
                     return out;
                 };
                 return self.file_cluster_overrides(&file, params, param_names, clusters);
@@ -1949,6 +2027,19 @@ mod tests {
     /// Parses a document the test knows to be a JSON object.
     fn parse(contents: &str) -> ConfigFile {
         ConfigFile::parse(contents).expect("document is a JSON object")
+    }
+
+    /// One tick of the sync loop's handling of the file: read it, then publish
+    /// that read once its environment-wide values would have been pushed. The
+    /// scoped passes see nothing until the publish, so a test that skips it is
+    /// testing the window rather than the steady state.
+    fn sync_tick(
+        frontend: &SystemParameterFrontend,
+        params: &SynchronizedParameters,
+        read: io::Result<String>,
+    ) {
+        frontend.refresh_config_file(Path::new(CONFIG_PATH), read, params);
+        frontend.publish_config_file();
     }
 
     fn cluster_ctx(id: u64, name: &str) -> ClusterEvalContext {
@@ -3119,52 +3210,137 @@ mod tests {
     }
 
     /// A whole-document failure, an unreadable file or a document that is not a
-    /// JSON object, must express "no information", not "no overrides": the scoped
-    /// desired state is complete, so treating a failure as an empty state would
-    /// durably prune every scoped override and restore it once the file is fixed.
+    /// JSON object, must express "no information" rather than "no overrides", and
+    /// the two consumers of that need opposite things from it.
+    ///
+    /// The reconcile prunes against a desired state it takes to be complete, so it
+    /// is skipped while the current read is bad: treating the failure as an empty
+    /// state would durably drop every scoped override and restore it once the file
+    /// is fixed.
+    ///
+    /// Create-time evaluation has no durable state to protect and cannot wait. An
+    /// object created in that window either folds its overrides into its first
+    /// configuration or resolves to the environment-wide value, which for a
+    /// render-frozen parameter no later reconcile can undo. So it keeps resolving
+    /// against the last valid parse, and two identical replicas do not end up
+    /// under different policy for having been created on either side of a
+    /// ConfigMap that briefly vanished.
     #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_read_failure_keeps_scoped_overrides() {
         let params = SynchronizedParameters::default();
         let frontend = file_frontend();
         let clusters = [cluster_ctx(1, "analytics")];
+        let expected = BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))]);
 
         // A readable file establishes the override.
-        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(scoped_file(true)), &params);
+        sync_tick(&frontend, &params, Ok(scoped_file(true)));
         assert!(frontend.has_scoped_desired_state());
         assert_eq!(
             frontend.pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters),
-            BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))])
+            expected
         );
 
         for failure in [
             Err(io::Error::from(io::ErrorKind::NotFound)),
             Ok("}not json{".to_string()),
         ] {
-            frontend.refresh_config_file(Path::new(CONFIG_PATH), failure, &params);
+            sync_tick(&frontend, &params, failure);
             // The reconcile is skipped wholesale on this signal, which is what
-            // leaves the existing overrides in place. The empty resolution below
-            // would prune them if it were reconciled.
+            // leaves the existing durable overrides in place.
             assert!(!frontend.has_scoped_desired_state());
-            assert!(
-                frontend
-                    .pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters)
-                    .is_empty()
+            // The create path, however, still resolves the last valid rules, so a
+            // replica created now is not stranded at the environment-wide value.
+            assert_eq!(
+                frontend.pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters),
+                expected,
+                "a failed read dropped the last valid parse"
             );
 
             // A readable file again resolves as before.
-            frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(scoped_file(true)), &params);
+            sync_tick(&frontend, &params, Ok(scoped_file(true)));
             assert!(frontend.has_scoped_desired_state());
         }
 
         // An empty document, on the other hand, is a complete desired state of
-        // "no overrides", so it does prune.
-        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok("{}".to_string()), &params);
+        // "no overrides", so it does replace the last valid parse and prune.
+        sync_tick(&frontend, &params, Ok("{}".to_string()));
         assert!(frontend.has_scoped_desired_state());
         assert!(
             frontend
                 .pull_cluster_overrides(&params, &[CLUSTER_PARAM], &clusters)
                 .is_empty()
+        );
+    }
+
+    /// A file's rules become visible to the scoped passes only once that same
+    /// file's environment-wide section is committed, because an override is
+    /// recorded only where a rule differs from the environment-wide value.
+    ///
+    /// Between the read and the push the catalog still holds the old baseline. A
+    /// create landing there must therefore be resolved from the old file, whose
+    /// rules that baseline belongs to, and not from the new one, whose rules
+    /// against the old baseline can silently agree with it and record nothing.
+    /// The reconcile would repair the row on the next tick, but the create-time
+    /// fold exists precisely because that is too late for a render-frozen
+    /// parameter.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
+    fn test_rules_are_published_with_their_baseline() {
+        let frontend = file_frontend();
+        let clusters = [cluster_ctx(1, "analytics")];
+
+        // The baseline before and after the new file's top-level section is
+        // pushed. The parameter is `off` environment-wide by default.
+        let before = SynchronizedParameters::default();
+        let mut after = SynchronizedParameters::default();
+        assert!(after.modify(CLUSTER_PARAM, "on"));
+        assert_eq!(before.get(CLUSTER_PARAM), "off");
+        assert_eq!(after.get(CLUSTER_PARAM), "on");
+
+        // The file in force: the rule turns the parameter on for `analytics`
+        // while it is off everywhere else.
+        sync_tick(&frontend, &before, Ok(scoped_file(true)));
+        let established = BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "true"))]);
+        assert_eq!(
+            frontend.pull_cluster_overrides(&before, &[CLUSTER_PARAM], &clusters),
+            established
+        );
+
+        // The file is rewritten to turn the parameter on environment-wide and
+        // hold `analytics` back at `false`. Read, but not yet pushed.
+        let flipped = format!(
+            r#"{{
+                "{CLUSTER_PARAM}": true,
+                "segments": {{"analytics": {{
+                    "contextKind": "cluster",
+                    "clauses": [
+                        {{"attribute": "cluster_name", "op": "in", "values": ["analytics"]}}
+                    ]
+                }}}},
+                "rules": [
+                    {{"segment": "analytics", "parameters": {{"{CLUSTER_PARAM}": false}}}}
+                ]
+            }}"#
+        );
+        frontend.refresh_config_file(Path::new(CONFIG_PATH), Ok(flipped), &before);
+
+        // Still the old file's answer. Resolving the new rules here would compare
+        // `false` against the not-yet-pushed `off`, call it "matches the
+        // environment", and record nothing -- after which the push would take
+        // `analytics` to `on`, the one value its rule forbids.
+        assert_eq!(
+            frontend.pull_cluster_overrides(&before, &[CLUSTER_PARAM], &clusters),
+            established,
+            "a read was published to the scoped passes ahead of its baseline"
+        );
+
+        // Once the push has landed, the new rules resolve against the baseline
+        // they were written for.
+        frontend.publish_config_file();
+        assert_eq!(
+            frontend.pull_cluster_overrides(&after, &[CLUSTER_PARAM], &clusters),
+            BTreeMap::from([(ClusterId::User(1), overrides(CLUSTER_PARAM, "false"))])
         );
     }
 
