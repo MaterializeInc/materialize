@@ -877,6 +877,159 @@ fn reader_floor_bounds_merges_and_no_reader_merges_freely() {
     });
 }
 
+/// A clone inherits its source's physical hold, not the weaker frontier its source reports.
+///
+/// `register`/`register_at` seed the hold at the chain coverage while reporting the published
+/// `since`, which is weaker. Registering the reported frontier for a clone would silently install a
+/// hold below the coverage the source was seeded with, and since the accumulation is a meet, that
+/// clone becomes a floor under every other hold for as long as it lives.
+#[mz_ore::test]
+fn clone_inherits_the_hold_not_the_reported_frontier() {
+    timely::execute_directly(move |worker| {
+        let (published, mut input) = worker.dataflow::<Timestamp, _, _>(|scope| {
+            let (input, collection) = scope.new_collection::<(Row, Row), Diff>();
+            let arranged = collection.mz_arrange::<
+                ColumnationChunker<_>,
+                RowRowBatcher<_, _>,
+                RowRowBuilder<_, _>,
+                RowRowSpine<_, _>,
+            >("clone oks");
+            (adopt_fresh(&arranged), input)
+        });
+        for t in 0..4u64 {
+            tick(
+                worker,
+                &mut input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+
+        // The chain now covers 4, while the published `since` is still the minimum, so the two
+        // frontiers a handle carries are distinguishable.
+        let handle = published.handle();
+        let (since, _upper) = handle.frontiers();
+        let coverage = Antichain::from_elem(Timestamp::from(4_u64));
+        assert_eq!(
+            since,
+            Antichain::from_elem(Timestamp::MIN),
+            "no compaction was requested, so `since` should still be the minimum"
+        );
+
+        let clone = handle.clone();
+        drop(handle);
+        let holds = published.physical_holds();
+        assert_eq!(
+            holds,
+            vec![coverage],
+            "the clone's hold is not the coverage its source was seeded with, so it sits below \
+             every boundary the source still needed"
+        );
+        drop(clone);
+    });
+}
+
+/// A live import does not pin the published spine's physical compaction.
+///
+/// The import's own read hold is the only registration a consumer that keeps the stream leaves
+/// behind, so if that hold never rises the accumulated physical frontier never rises either, and
+/// the spine stops merging for the life of the import. The cost is unbounded rather than constant:
+/// one stranded batch per seal, whose retractions never consolidate, and a `CursorList` over all of
+/// them on every `cursor_through`.
+///
+/// Same two-arm shape as [`reader_floor_bounds_merges_and_no_reader_merges_freely`], and for the
+/// same reason: the observable is the difference between the arms' chain lengths, which is immune to
+/// the spine's particular merge policy.
+#[mz_ore::test]
+fn live_import_does_not_pin_merging() {
+    timely::execute_directly(move |worker| {
+        let (imported, control, mut imported_input, mut control_input) = worker
+            .dataflow::<Timestamp, _, _>(|scope| {
+                let (imported_input, imported_collection) =
+                    scope.new_collection::<(Row, Row), Diff>();
+                let imported_arranged = imported_collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("imported oks");
+                let (control_input, control_collection) =
+                    scope.new_collection::<(Row, Row), Diff>();
+                let control_arranged = control_collection.mz_arrange::<
+                    ColumnationChunker<_>,
+                    RowRowBatcher<_, _>,
+                    RowRowBuilder<_, _>,
+                    RowRowSpine<_, _>,
+                >("control oks");
+                (
+                    adopt_fresh(&imported_arranged),
+                    adopt_fresh(&control_arranged),
+                    imported_input,
+                    control_input,
+                )
+            });
+
+        // Seal a few times so the chain the import seeds from is non-empty.
+        for t in 0..4u64 {
+            tick(
+                worker,
+                &mut imported_input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+            tick(
+                worker,
+                &mut control_input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+
+        // A live import: empty `until`, so it never completes and its read hold lives as long as
+        // the dataflow. Keep only the stream and drop the trace, which is what `as_collection` and
+        // the reduce path do during construction, leaving the import's own hold as the only
+        // registration.
+        let handle = imported.handle();
+        worker.dataflow::<Timestamp, _, _>(|scope| {
+            let arranged = handle.import_snapshot_at(
+                scope.clone(),
+                "live import",
+                Antichain::from_elem(Timestamp::from(4_u64)),
+                Antichain::new(),
+            );
+            drop(arranged.trace);
+        });
+        // Drop the minting handle, as `crate::render::import_shared_index` does: the import owns
+        // its own clone, and a live mint would pin the floor at its own registration coverage and
+        // mask what this test is about.
+        drop(handle);
+
+        for t in 4..40u64 {
+            tick(
+                worker,
+                &mut imported_input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+            tick(
+                worker,
+                &mut control_input,
+                Timestamp::from(t),
+                Timestamp::from(t + 1),
+            );
+        }
+
+        let imported_len = imported.chain_len();
+        let control_len = control.chain_len();
+        assert!(
+            imported_len <= control_len + 2,
+            "imported chain {imported_len} against unimported {control_len}: the live import's \
+             read hold is not following the stream on the physical axis, so the spine cannot merge \
+             for as long as the import lives"
+        );
+    });
+}
+
 /// A fresh importer is seeded with the frontier its seeded chain covers, not the stream frontier
 /// that lags it.
 ///
