@@ -317,22 +317,22 @@ const DroppedReplicasFooter = ({
   );
 };
 
-export interface CriticalPathClusterMetricsProps {
-  node: RenderableNode;
-  pageObjectId: string;
+export interface ClusterReplicaMetricsProps {
+  cluster: Cluster | null;
   timestamp: Date | null;
   bucketSizeMs: number;
   lookbackMs: number;
 }
 
-export const CriticalPathClusterMetrics = ({
-  node,
-  pageObjectId,
+/** Per-replica memory/CPU utilization for one cluster at a point in time,
+ * with any replicas dropped inside the window called out. */
+export const ClusterReplicaMetrics = ({
+  cluster,
   timestamp,
   bucketSizeMs,
   lookbackMs,
-}: CriticalPathClusterMetricsProps) => {
-  const clusterId = node.cluster?.id ?? null;
+}: ClusterReplicaMetricsProps) => {
+  const clusterId = cluster?.id ?? null;
   const {
     data: bucketsByReplicaId,
     isLoading,
@@ -348,9 +348,14 @@ export const CriticalPathClusterMetrics = ({
     Math.floor((timestamp ?? new Date()).getTime() / bucketSizeMs) *
     bucketSizeMs;
   const buckets = Object.values(bucketsByReplicaId ?? {});
-  const replicas = buckets.flatMap((bs) =>
+  const atAnchor = buckets.flatMap((bs) =>
     bs.filter((b) => b.bucketStart.getTime() === targetBucketStartMs),
   );
+  // Right after a replica swap the anchor bucket can predate the new
+  // replica's first metrics; fall back to each replica's latest bucket so a
+  // live cluster is not reported as inactive.
+  const replicas =
+    atAnchor.length > 0 ? atAnchor : buckets.flatMap((bs) => bs.slice(-1));
   const replicasInWindow: ReplicaInWindow[] = buckets
     .flatMap((bs) => bs.slice(-1))
     .map(({ replicaId, name, size, bucketEnd }) => ({
@@ -362,13 +367,8 @@ export const CriticalPathClusterMetrics = ({
 
   return (
     <VStack align="stretch" spacing={3} width="100%">
-      <ClusterMetricsHeader
-        node={node}
-        pageObjectId={pageObjectId}
-        timestamp={timestamp}
-      />
       <ReplicaMetricsList
-        cluster={node.cluster}
+        cluster={cluster}
         replicas={replicas}
         isLoading={isLoading}
         isError={isError}
@@ -380,3 +380,33 @@ export const CriticalPathClusterMetrics = ({
     </VStack>
   );
 };
+
+export interface CriticalPathClusterMetricsProps {
+  node: RenderableNode;
+  pageObjectId: string;
+  timestamp: Date | null;
+  bucketSizeMs: number;
+  lookbackMs: number;
+}
+
+export const CriticalPathClusterMetrics = ({
+  node,
+  pageObjectId,
+  timestamp,
+  bucketSizeMs,
+  lookbackMs,
+}: CriticalPathClusterMetricsProps) => (
+  <VStack align="stretch" spacing={3} width="100%">
+    <ClusterMetricsHeader
+      node={node}
+      pageObjectId={pageObjectId}
+      timestamp={timestamp}
+    />
+    <ClusterReplicaMetrics
+      cluster={node.cluster}
+      timestamp={timestamp}
+      bucketSizeMs={bucketSizeMs}
+      lookbackMs={lookbackMs}
+    />
+  </VStack>
+);
