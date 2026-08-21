@@ -579,6 +579,13 @@ CREATE CONNECTION awsconn TO AWS (ACCESS KEY ID = 'id', ENDPOINT = 'endpoint', R
 CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("awsconn")]), connection_type: Aws, if_not_exists: false, values: [ConnectionOption { name: AccessKeyId, value: Some(Value(String("id"))) }, ConnectionOption { name: Endpoint, value: Some(Value(String("endpoint"))) }, ConnectionOption { name: Region, value: Some(Value(String("region"))) }, ConnectionOption { name: AssumeRoleArn, value: Some(Value(String("role-arn"))) }, ConnectionOption { name: SecretAccessKey, value: Some(Value(String("key"))) }, ConnectionOption { name: SessionToken, value: Some(Value(String("token"))) }], with_options: [] })
 
 parse-statement
+CREATE CONNECTION icebergconn TO ICEBERG CATALOG (CATALOG TYPE 'rest', URL 'https://example/api/catalog', CREDENTIAL 'id:secret', OAUTH2 SERVER URL 'https://example/oidc/v1/token', SCOPE 'all-apis', WAREHOUSE 'wh')
+----
+CREATE CONNECTION icebergconn TO ICEBERG CATALOG (CATALOG TYPE = 'rest', URL = 'https://example/api/catalog', CREDENTIAL = 'id:secret', OAUTH2 SERVER URL = 'https://example/oidc/v1/token', SCOPE = 'all-apis', WAREHOUSE = 'wh')
+=>
+CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("icebergconn")]), connection_type: IcebergCatalog, if_not_exists: false, values: [ConnectionOption { name: CatalogType, value: Some(Value(String("rest"))) }, ConnectionOption { name: Url, value: Some(Value(String("https://example/api/catalog"))) }, ConnectionOption { name: Credential, value: Some(Value(String("id:secret"))) }, ConnectionOption { name: Oauth2ServerUrl, value: Some(Value(String("https://example/oidc/v1/token"))) }, ConnectionOption { name: Scope, value: Some(Value(String("all-apis"))) }, ConnectionOption { name: Warehouse, value: Some(Value(String("wh"))) }], with_options: [] })
+
+parse-statement
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES ('use1-az1', 'use1-az4'))
 ----
 CREATE CONNECTION privatelinkconn TO AWS PRIVATELINK (SERVICE NAME = 'com.amazonaws.vpce.us-east-1.vpce-svc-0e123abc123198abc', AVAILABILITY ZONES = ('use1-az1', 'use1-az4'))
@@ -3033,7 +3040,7 @@ CreateConnection(CreateConnectionStatement { name: UnresolvedItemName([Ident("my
 parse-statement
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
 ----
-error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or GCP or HOST or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
+error: Expected one of ACCESS or ASSUME or AVAILABILITY or AWS or BROKER or BROKERS or CATALOG or CREDENTIAL or DATABASE or ENDPOINT or GCP or HOST or OAUTH2 or PASSWORD or PORT or PUBLIC or PROGRESS or REGION or REGISTRY or SASL or SCOPE or SECRET or SECURITY or SERVICE or SESSION or SSH or SSL or URL or USER or USERNAME or WAREHOUSE, found left parenthesis
 CREATE CONNECTION my_ssh_tunnel FOR SSH TUNNEL (PUBLIC KEY 3 = nope)
                                                ^
 

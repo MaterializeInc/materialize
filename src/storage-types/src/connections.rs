@@ -93,6 +93,9 @@ pub mod string_or_secret;
 
 const REST_CATALOG_PROP_SCOPE: &str = "scope";
 const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
+/// Overrides the OAuth2 token endpoint. Spelled `uri` because that is the property name the
+/// Iceberg REST clients agree on, even though the SQL option says `URL`.
+const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
 
 /// A credential loader that wraps an aws-sdk-rust credentials provider for use with
 /// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
@@ -611,6 +614,13 @@ pub enum IcebergCatalogAuth<C: ConnectionAccess = InlinedConnection> {
         credential: StringOrSecret,
         /// OAuth2 scope
         scope: Option<String>,
+        /// Where to exchange `credential` for a bearer token.
+        ///
+        /// `None` uses the endpoint the Iceberg REST specification defines relative to the
+        /// catalog URL, `<url>/v1/oauth/tokens`. Catalogs that host their token endpoint
+        /// elsewhere, or behind an auth gateway that will not serve an unauthenticated
+        /// exchange, need this override.
+        server_url: Option<String>,
     },
     Gcp(GcpConnectionReference<C>),
 }
@@ -636,9 +646,15 @@ impl<R: ConnectionResolver> IntoInlineConnection<IcebergCatalogAuth, R>
     fn into_inline_connection(self, r: R) -> IcebergCatalogAuth {
         match self {
             IcebergCatalogAuth::Gcp(x) => IcebergCatalogAuth::Gcp(x.into_inline_connection(&r)),
-            IcebergCatalogAuth::OAuth { credential, scope } => {
-                IcebergCatalogAuth::OAuth { credential, scope }
-            }
+            IcebergCatalogAuth::OAuth {
+                credential,
+                scope,
+                server_url,
+            } => IcebergCatalogAuth::OAuth {
+                credential,
+                scope,
+                server_url,
+            },
         }
     }
 }
@@ -918,7 +934,11 @@ impl IcebergCatalogConnection<InlinedConnection> {
         // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
         // construction pipeline.
         let (storage_factory, custom_authenticator) = match &rest.auth {
-            IcebergCatalogAuth::OAuth { credential, scope } => {
+            IcebergCatalogAuth::OAuth {
+                credential,
+                scope,
+                server_url,
+            } => {
                 let credential = credential
                     .get_string(
                         in_task,
@@ -927,6 +947,13 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     .await
                     .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
                 props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
+
+                if let Some(server_url) = server_url {
+                    props.insert(
+                        REST_CATALOG_PROP_OAUTH2_SERVER_URI.to_string(),
+                        server_url.clone(),
+                    );
+                }
 
                 if let Some(scope) = scope {
                     props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());

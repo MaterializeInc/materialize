@@ -2974,6 +2974,7 @@ impl<'a> Parser<'a> {
                 ENDPOINT,
                 GCP,
                 HOST,
+                OAUTH2,
                 PASSWORD,
                 PORT,
                 PUBLIC,
@@ -3031,6 +3032,10 @@ impl<'a> Parser<'a> {
                     ConnectionOptionName::GcpConnection
                 }
                 HOST => ConnectionOptionName::Host,
+                OAUTH2 => {
+                    self.expect_keywords(&[SERVER, URL])?;
+                    ConnectionOptionName::Oauth2ServerUrl
+                }
                 PASSWORD => ConnectionOptionName::Password,
                 PORT => ConnectionOptionName::Port,
                 PUBLIC => {
