@@ -2,24 +2,18 @@
 
 ## Summary
 
-This document describes **two independent mechanisms** that were originally
-conceived as one, and that measurement has since separated. Keeping them
-distinct is the most important thing a reader can take from it.
+This document describes the **interactive runtime**: a second, in-process timely runtime
+that renders temporary dataflows and serves reads directly off the arrangements the
+maintenance runtime builds, zero-copy through a per-process sharing registry. It is a
+placement choice for rendered dataflows.
 
-* **Peek offloading** moves a fast-path index peek's *walk* off the serving
-  timely worker onto a blocking task. It is a substrate choice for one kind of
-  work, needs no second runtime, and is gated by `ENABLE_INDEX_PEEK_OFFLOAD`. It is parked,
-  and orthogonal to the rest of this document: see [peek-placement.md](peek-placement.md).
-* **Dataflow offloading** runs a second, in-process "interactive" timely runtime
-  that renders temporary dataflows and serves reads directly off the
-  arrangements the "maintenance" runtime builds, zero-copy through a per-process
-  sharing registry. It is a placement choice for rendered dataflows, and is
-  gated by `ENABLE_COMPUTE_INTERACTIVE_RUNTIME`.
-
-They fix different problems, they are distinguished by different workloads, and
-they should be adopted, flagged and rolled separately. See [Two mechanisms, not
-one](#two-mechanisms-not-one) for what each one buys and the scenarios that tell
-them apart.
+A second mechanism, **peek offloading**, moves a fast-path index peek's *walk* off the
+serving timely worker onto a blocking task. The two were originally conceived as one and
+measurement separated them: they fix different problems, are distinguished by different
+workloads, and should be adopted, flagged and rolled separately. Peek offloading needs no
+second runtime, this design needs none of it, and it is parked pending an experiment. It
+appears here only where the comparison bounds what the interactive runtime is claimed to
+buy. See [Peek placement is a separate axis](#peek-placement-is-a-separate-axis).
 
 The feature is gated by the `ENABLE_COMPUTE_INTERACTIVE_RUNTIME` dyncfg, off in
 production and on by default in CI. With the dyncfg off, a replica runs a single
@@ -29,9 +23,9 @@ runtime, and no `role` metric label. It is not a byte-identical deployment: the
 which the goldens show (`relations.slt` prints batch type names, and the `ii_t4`
 arrangement-size bound moved).
 
-This document is the single design of record. It supersedes the four planning
-and design documents that preceded it in this directory (see [Implementation
-history](#implementation-history)).
+This document is the single design of record and is self-contained. The measurements it
+cites by `E` number live in the project document "Interactive read isolation: experimental
+evaluation", along with the experiment definitions and what remains unmeasured.
 
 ## Motivation
 
@@ -241,7 +235,7 @@ what makes it cheap: transient ids are never retained by reconciliation, so noth
 regresses there, they pass both frontier-reporting gates unchanged, and their exports
 are freshly rendered so the shared-trace re-export path is not reached. It needs the
 compaction downgrade described in
-[Compaction feedback exists, and two frozen holds defeat it](#compaction-feedback-exists-and-two-frozen-holds-defeat-it),
+[Compaction feedback exists, and a frozen hold defeats it](#compaction-feedback-exists-and-a-frozen-hold-defeats-it),
 plus two call-site bugs in `import_index_shared` recorded in the open findings. A
 `SUBSCRIBE` sink needs the stream and not the trace, so it is the easiest case of that
 downgrade, but the downgrade is what any other long-lived interactive dataflow needs and
@@ -313,26 +307,10 @@ which is M1, and at the time no experiment addressed M2 at all. E2 and E12 are n
 in tension. Together they are the cleanest demonstration available that M1 and M2 are
 distinct mechanisms with disjoint remedies.
 
-**S1 reaches M1, and its quantum should be stated rather than characterized.** PR
-#38040 ships `peek_yielding = work:100000,time:10` per peek per activation and
-`peek_yielding_total = work:1000000,time:100` across all peeks, with a round-robin
-resume so a peek that missed its turn goes first next time. Applied to this
-document's own fixtures: on E1's three concurrent 2170 ms scans a point read is
-reached within one activation, so its added wait is roughly 30 to 40 ms against the
-offload's measured 184.5 ms; on E11 it is roughly 10 to 20 ms against 109.2 ms. **So
-on the two fixtures that carry the peek argument, S1 is predicted to match or beat
-S5.** The quantum floor rising with dataflow and worker count bounds S1's
-*throughput* overhead, not the victim's delay, and an earlier draft conflated the
-two.
-
-**S1 also reaches the swap case, and the residual claim for S5 is narrow.** A sliced
-swapped walk yields between chunks, so the victim gets in. That no scheme yields out
-of a single page fault is true and irrelevant to a 29 s stall, which is tens of
-thousands of faults. What is left uniquely to S5 is the swapped walk's *own*
-duration, 2.3 s offloaded against 3.6, 4.7 and 56.4 s inline, and this document
-states elsewhere that this effect is unattributed and that preemption cannot explain
-it. **So S5's unique justification currently rests on one unattributed measurement
-and on an unmeasured claim about S1's quantum floor.**
+**S1 against S5 on M1 is the peek program's choice, not this design's**, and it is
+unsettled: S1's reach on M1 is predicted from its quantum and never measured, and what is
+left uniquely to S5 is the swapped walk's own duration, which is the unattributed M11
+effect. Both are tracked with the peek work.
 
 **M4, M6 and M7 each have exactly one candidate row and no work behind it**, which is
 better than the blank they had but is not an answer. M4 is the worst of the three,
@@ -386,160 +364,71 @@ corrections above.
 
 ### What follows
 
-The peek-placement question, S1 against S5, is **parked pending an experiment** rather than
-settled here, and it is orthogonal to the interactive runtime: see
-[peek-placement.md](peek-placement.md) for the decision rule and the two table cells that
-decide it. Two corrections belong with the conclusions below. Placement and preemption are
-independent, so an off-worker walk that yields is a fourth candidate rather than a
-contradiction, and this section's framing of S1 and S5 as alternatives is incomplete. And
-S1's advantage on M1 is predicted throughout, never measured, which is what the experiment
-is for.
+Two conclusions bear on this design. The rest of the matrix belongs to the peek program and
+is tracked in the project's peek issues.
 
-* **S1 is the right default.** It costs no core and no thread, it reaches M1, it is
-  predicted to match or beat S5 on both fixtures this document leans on, and it
-  removes S5's cliff for free by making the fallback path preemptible.
-* **S5 is dominated by the pair S1 plus S4 on every measured axis.** On M1 it
-  competes with S1 and is predicted to lose on E1 and E11. On M2 E12 measured it 17%
-  worse than doing nothing. On M8 it ties S4, and its advantage over S1 there sits
-  below the resolution of the reported metric. What is left is the swapped walk's own
-  duration, which this document records as unattributed, and the possibility that
-  S1's quantum floor is too high on a busy replica, which is unmeasured. So the
-  decision rule is narrow but real: **if S4 ships, S5 adds nothing measured. If S4
-  does not ship, S5 is the cheap way to get the freshness result that S1 only mostly
-  gets, without a port or a fleet roll.** Either way it wants a routing rule that
-  keeps it away from M2, where it is a regression.
-* **S2 is real under S1 and cosmetic under S5**, the reverse of what an earlier
-  draft said. A started `spawn_blocking` closure cannot be aborted, as this
-  document's own follow-up list records, so on the offload path a cancel flag ends
-  the client's wait while the CPU is still spent and the compaction hold is still
-  held for the full walk. Under S1 the scan stops.
-* **S3 stands alone on M3, and its structural argument is stronger than its
-  measurements.** Cooperative yielding needs a yield point retrofitted per operator.
-  `linear_join_yielding` covers linear joins and `storage_source_decode_fuel` covers
-  the persist decode, while nothing covers reduce, top-k, arrange, threshold or
-  delta joins. Coverage grows one operator at a time and never completes, whereas a
-  second runtime covers every operator at once. But **M4 is the dominant term for
-  the workload S3 is justified by**, and nothing here addresses it.
-* **S4 is not separable and should not be cut.** It is how peeks are routed once
-  two runtimes exist, and it is the only shipped mechanism that reaches M2.
-* **S0 is the baseline these have to beat**, and the only one that reaches M5.
-* **S7 deserves a check before the field case is used as an argument.** The skewed
-  lookup costs what it costs because a minimum over one key's millions of values is
-  a linear walk. An index on the key and the ordering column together would make it
-  a bounded seek, which removes the work rather than relocating it. This document
-  calls that fixture the strongest argument for enabling the offload by default
-  without asking whether the query has an index problem.
+* **S3 stands alone on M3, and its structural argument is stronger than its measurements.**
+  Cooperative yielding needs a yield point retrofitted per operator. `linear_join_yielding`
+  covers linear joins and `storage_source_decode_fuel` covers the persist decode, while
+  nothing covers reduce, top-k, arrange, threshold or delta joins. Coverage grows one
+  operator at a time and never completes, whereas a second runtime covers every operator at
+  once. But **M4 is the dominant term for the workload S3 is justified by**, and nothing
+  here addresses it.
+* **S4 is not separable and should not be cut.** With two runtimes the multiplexer routes
+  *every* peek to the interactive runtime unconditionally, so S4 is not a component that can
+  be removed. It is also the only shipped mechanism that reaches M2, and it reaches it for
+  the reason S5 does not: the interactive worker's `step_or_park` is not the one running the
+  maintenance operator. E12 measured p90 4.5 ms against inline's 129.5 ms, matching a control
+  that runs identical write traffic with the merging index on another cluster, which is the
+  floor achievable while writes happen at all. The step histogram shows why: the maintenance
+  runtime still recorded 206 steps above 128 ms and 25 above 512 ms while the interactive
+  runtime looked idle. The long work did not get cheaper, it moved off the serving thread.
 
-### What is missing from the table
+An earlier draft proposed cutting S4 on the strength of E2. That was wrong twice over,
+because E2's fixture is a point lookup behind concurrent *peeks*, which is M1, and at the
+time no experiment addressed M2 at all. E2 and E12 are not in tension. Together they are the
+cleanest demonstration available that M1 and M2 are distinct mechanisms with disjoint
+remedies.
 
-Two are code checks, cheap and capable of changing a conclusion. Do these first.
+**S0 is the baseline these have to beat, and the only one that reaches M5.** An untargeted
+peek is broadcast to every replica and the first response wins, so peek latency is a minimum
+over replicas, and because the timestamp comes from the oracle rather than from any replica's
+frontier, a replica whose index frontier is current answers while a hydrating one is still
+catching up. The argument against a read replica below is about price and about introspection
+being replica-local, not about reach.
 
-* **Does the reported freshness number aggregate across replicas as a minimum?**
-  `mz_wallclock_lag_history` carries a `replica_id`, so if the surfaced value is not a
-  minimum over replicas then S0 does not mask M8 and its cell is simply wrong. That
-  decides whether the incumbent reaches the mechanism with the widest blast radius.
-* **Does the fast path exploit an index on the key together with the ordering
-  column?** If it turns the skewed lookup into a bounded seek, the field case that
-  motivated much of this work is a plan defect, and S7 dominates the peek program for
-  that shape. A code read plus one `EXPLAIN`.
-* ~~Why are subscribes excluded from the interactive runtime?~~ **Answered.** The
-  subscribe clause only bites for `SUBSCRIBE ... UP TO`, because an ordinary
-  subscribe's `until` is already empty and the neighbouring condition already excludes
-  it. Nothing in the subscribe response path blocks interactive: the response buffer is
-  per-runtime, `process_subscribes` runs on every role, `SubscribeResponse` passes
-  `filter_response` verbatim, and subscribes emit no `Frontiers` at all so the
-  transience gates never touch them. The real constraints are the read-hold gap above
-  and the two `import_index_shared` bugs in the open findings. So S14 is available, and
-  it is a wider change than dropping one clause.
+**M5 is measured on one fixture.** E12 ran its inline and two-runtime arms at both isolation
+levels. For single-runtime inline the level makes no difference at all, 129.5 against
+132.4 ms at p90, because M2 already dominates. With the peek moved off the busy worker,
+strict serializable's tail returns: p99 185.8 ms against 5.8 ms, and 4.5% of requests above
+ten times the idle median against none. So M5 costs real latency, and it is only visible
+once M2 is removed. It is the mechanism that bounds how much any peek-placement work can
+deliver at the default isolation level.
 
-Then the measurements, in order of how much they would change the table.
+S1 and S5 fail in opposite directions and each is the other's fix. S1 has no admission
+control, so parked scans pin batch sets and delay compaction without bound. S5 has admission
+control and then falls off a cliff into the original non-preemptive behavior for whichever
+peek arrives past the limit.
 
-1. **S1 measured rather than argued**, on E1, E11, E12 and E13's write-heavy variant.
-   It is the only unmeasured row that could displace a shipped mechanism. On E12 the
-   prediction is that it looks like the inline arm, because slicing lets the *peek*
-   yield and that does nothing for a peek stuck behind an operator. If that holds, M2
-   belongs to placement alone.
-2. **M8 under a write load heavy enough to need most of the worker.** E13 wrote one row
-   per 100 ms, so a small share of the worker was ample and slicing kept up. The
-   argument that slicing cannot preserve freshness was refuted at that load and is
-   untested at a load where maintenance actually needs the worker.
-3. **M11's discriminator**, the per-walk major-fault bracket. It is the last effect
-   uniquely attributable to S5, and until it resolves, S5 is scored on an unexplained
-   measurement.
-4. **A single-phase rerun of E2.** Its null is the basis for calling the second runtime
-   inert for peek latency, and it was measured across two deployments with the stash
-   off. E7 had the same confound and was rerun; E2 was not.
-5. **S2 against M8**, which E13's harness makes cheap: cancel a peek mid-walk and watch
-   the frontier. It is the difference between a cancelled query costing the replica
-   nothing and costing it the full walk.
-6. **A `SUBSCRIBE` snapshot's freshness cost.** E13's fixture applies almost unchanged:
-   substitute a subscribe over a large collection for the index walk. The predicted
-   result is the same 43x shape at a larger magnitude, since the work is bounded by
-   collection size rather than by result size, and with no arm that fixes it, because
-   subscribes cannot leave the maintenance runtime. If that holds, the largest
-   freshness event a single statement can cause is one that none of the shipped work
-   addresses.
-7. **M9 at all.** Nothing measures whether held-back compaction lengthens later
-   activations enough to matter, and it is the one mechanism the solutions cause.
-8. **The strict serializable arms for E1, E11 and E8b.** E12 supplies the level for one
-   fixture and shows M5 is only visible once M2 is removed, so these are worth the
-   repeat rather than urgent.
+### What the matrix does not settle
 
-E12 and E13 each settled what was item one on this list at the time. E12 inverted two
-cells and cost S5 its claim on M2. E13 refuted a prediction registered against it and
-cost S5 its claim to be uniquely best on freshness.
+The evidence behind every cell, the experiment definitions, and the full list of what remains
+unmeasured live in the project document "Interactive read isolation: experimental
+evaluation". Four gaps bear directly on this design.
 
-### Where the design exploration stands
-
-Written as a handover. The purpose of this section is to let someone argue
-implementation order from evidence rather than from the order things happened to get
-built.
-
-**Settled, with measurement.**
-
-* The mechanisms are distinct and their remedies are disjoint. E2 and E12 together are
-  the proof: a point lookup behind concurrent *peeks* and a point lookup behind an
-  *operator activation* respond to different solutions.
-* Cooperative peek slicing reaches M1 and M8 and not M2. Routing peeks to the
-  interactive runtime reaches M2 and M8 and not M1. Running the walk on another thread
-  reaches M1 and M8, and is measurably *worse* than doing nothing on M2.
-* Serving a peek costs freshness, 43x on the measured fixture, and freshness is the one
-  cost here that reaches a customer.
-* The frontier wait is real and only becomes visible once queueing is removed.
-* Publication does not duplicate resident memory.
-
-**Open, and each one blocks an ordering argument.**
-
-* **Cooperative slicing is unmeasured on every axis.** It is scored `argued` on M1, and
-  on M8 only at a light write load. It is the only unmeasured row that could displace
-  something already built, so nothing should be ordered ahead of measuring it.
-* **The offload has no axis on which it is uniquely best.** Its remaining claims are the
-  unexplained swap-walk speedup and an unmeasured quantum floor. Until one of those
-  resolves, an order that puts it first cannot be defended.
-* **M4, M6, M7 and M12 have one candidate row each and no work behind any of them**, and
-  M4 is measured, unconditional, and dominant for the workload the second runtime is
-  justified by. An order that ignores them is choosing to leave the largest measured
-  floor in place.
-* **Two code checks are cheap and could each move a row**: whether the reported
-  freshness number is a minimum across replicas, and whether the fast path exploits an
-  index on the key plus the ordering column.
-* **The physical-hold divergence from `TraceAgent` is a correctness prerequisite**, not
-  a follow-up. Anything that keeps a trace handle across activations depends on it,
-  which includes every `SUBSCRIBE` or long-lived dataflow proposal here.
-
-**Where this document is not yet internally consistent.** Several sections were written
-before the measurements and the code review, and were corrected in place. The corrected
-ones carry an explicit `NOTE:`. Sections without one have not been re-checked against
-E12, E13, or the `TraceAgent` findings, and the ones most likely to be stale are the
-ones that argue from the peek results: the fork's implications, "what it does not buy",
-and the commitment. `pr-split.md` is stale in its ordering premise and says so at the
-top.
-
-**What a clean-up pass should produce.** One ordering, derived from the matrix rather
-than from build history, in which every step names the mechanism it reaches, the
-evidence for that reach, and what it depends on. The matrix is now good enough to derive
-that. The sections arguing for individual pieces are not, because they predate it.
-
+* **Making the peek walk cooperative is unmeasured on peek-versus-peek queueing.** It is the
+  only unmeasured candidate that could retire something already built, so nothing in the peek
+  program should be ordered ahead of measuring it.
+* **No arm ran on a CPU-saturated replica.** Every measured win here was taken with core
+  headroom, which is the condition both mechanisms depend on, and the experiment for it was
+  planned and never run.
+* **M4 is measured, unconditional and unaddressed**, and it is the dominant term for the
+  workload the second runtime is justified by: about 900 ms of creation and teardown against
+  roughly 1400 ms of tail that placement recovers.
+* **Two cheap code checks could each move a row.** Whether the reported freshness number
+  aggregates across replicas as a minimum, which decides whether S0 reaches M8 at all. And
+  whether the fast path exploits an index on the key together with the ordering column, which
+  would make the skewed-lookup fixture a plan defect rather than a scheduling one.
 ## Why this architecture
 
 This is a deliberate architectural commitment, not an isolated feature. It is
@@ -570,12 +459,11 @@ The right frame is separation of concerns:
 A single runtime cannot be both without compromising one of them. Two runtimes
 let each be pure.
 
-### Two mechanisms, not one
+### Peek placement is a separate axis
 
-The original thesis was that a second runtime delivers read isolation, and that
-peeks were one of the reads it would isolate. Measurement did not support the
-second half. The two mechanisms turn out to be independent, and only one of them
-is needed for peeks.
+The original thesis was that a second runtime delivers read isolation, and that peeks were
+one of the reads it would isolate. Measurement separated two mechanisms that had been
+conceived as one, and only one of them needs a second runtime.
 
 | | Peek offloading | Dataflow offloading |
 |---|---|---|
@@ -583,131 +471,53 @@ is needed for peeks.
 | Unit of work | one peek's cursor walk | a whole temporary dataflow |
 | Fixes | head-of-line blocking between peeks on one worker | interference between maintenance work and interactive rendering |
 | Needs the second runtime | no | yes, it *is* the second runtime |
-| Deployment cost | a dyncfg, no restart | a port, a fleet roll, doubled timely worker threads, the sharing registry, and the command-ordering invariant and capping that go with it |
-| Flag | `ENABLE_INDEX_PEEK_OFFLOAD` | `ENABLE_COMPUTE_INTERACTIVE_RUNTIME` |
+| Deployment cost | a dyncfg, no restart | a port, a fleet roll, doubled timely worker threads, the sharing registry, and the protocol invariant that goes with them |
 
-Peek offloading applies on either runtime, so the two compose. The single place
-they meet is serving a peek from the sharing registry, where an interactive peek
-takes an owned cursor over a published arrangement and may then be walked on a
-blocking task like any other.
+No measured scenario is moved by both, and one is moved in *opposite* directions: a point
+lookup on a replica taking 500,000-row insert batches reaches p90 4.5 ms on the second
+runtime, and 148.2 ms on the offload against inline's 129.5 ms. So the split is not "peeks
+against dataflows". It is which queue the work is stuck in.
 
-#### The scenarios that tell them apart
+The two properties behind the split are worth naming, because a third remedy follows from
+them. *Preemptibility* is whether a short request can displace a long one already running.
+In a non-preemptive work-conserving server a short request waits for the residual of the job
+in progress, and a timely worker's per-activation service time spans six orders of magnitude
+from a point lookup to a full arrangement scan, so that residual rather than the load level
+sets the shape of the waiting-time tail. E11's timeline is the signature: lookups arriving
+behind a skewed one complete at a fixed *instant* rather than after a fixed delay.
+*Capacity* is whether a core is free to run on, and neither mechanism supplies it.
 
-Each row is a measured experiment; the numbers and method are in
-`evaluation.md`. What matters here is which mechanism moves the result.
+Two remedies exist for a large residual, not one: preempt the long job, or dispatch on size
+so it never lands in front of a short one. Peek offloading does neither. It adds a *server*.
+The walk never yields, it runs on a different OS thread, so the interleaving is delegated to
+the kernel and how well that works depends on runnable threads against available cores. That
+is why its measured wins arrive on a replica with CPU headroom, and why its behaviour on a
+saturated box is a separate and unmeasured question.
 
-| Scenario | Peek offloading | Dataflow offloading |
-|---|---|---|
-| Point lookups behind concurrent full scans, walk cost swept 23 ms to 2170 ms | fixes it: tail flat at 185 ms against 6163 ms | no effect |
-| `WHERE key = <lit> ORDER BY .. LIMIT 1` where one key holds millions of values | fixes it: 58 of 261 lookups over 200 ms become 0 of 261 | no effect |
-| A walk over an arrangement resident in swap | fixes it, by the largest margin measured: 29.2 s worst case becomes 152 ms | no effect |
-| Late-materialization join while a 60M-row index hydrates | cannot apply, this is a dataflow and not a peek | fixes it: tail halves, 2835 ms to 1456 ms |
-| Introspection and `EXPLAIN ANALYZE` while a replica hydrates | cannot apply | fixes it: 4.4 to 7.5 s polls become about 160 ms |
-| Observing the shape of hydration memory at all | cannot apply | enables it: at 5 s per poll the sawtooth is invisible and reads as a smooth ramp |
-| A point lookup on a replica taking 500k-row insert batches | **makes it worse**: p90 148.2 against 129.5 ms | fixes it: p90 4.5 ms, matching a write-traffic-only control |
+**Peek placement is therefore orthogonal to this design and is not settled here.** It is
+parked pending one experiment, and neither the parking nor the experiment touches the
+interactive runtime. Making the walk cooperative is a third candidate, implemented outside
+this branch, predicted to match or beat the offload on both fixtures the offload's case
+rests on. Note that chunking a peek walk is not the same move as
+[yielding in maintenance](#why-not-yield-for-interactivity-in-one-runtime), which is ruled
+out on different grounds: a peek walk consumes no input and consolidates nothing, so
+run-to-completion is not part of its contract.
 
-No row is moved by both, and the last row is moved in *opposite directions*. That is
-the fork. Note that the last row is a peek fixed by the runtime and made worse by the
-substrate, so the fork is not "peeks against dataflows". It is which queue the work is
-stuck in.
-
-#### Why the fork exists: preemption, not capacity
-
-The fork is not an artifact of which experiments happened to be run. It follows
-from there being two independent properties, and each mechanism supplying exactly
-one of them.
-
-*Preemptibility* is whether a short request can displace a long one that is
-already running. In a non-preemptive work-conserving server, what a short request
-waits for is the residual of the job in progress. Mean waiting time in an M/G/1
-FCFS queue is `λE[S²] / (2(1-ρ))`, so it depends on the second moment of the
-service-time distribution *and* on arrival rate and utilization. A timely worker's
-per-activation service time spans six orders of magnitude, from a point lookup to a
-full arrangement scan, so the second moment is enormous, and what that buys is a
-waiting-time tail whose *shape* is set by the residual rather than by how loaded the
-server is. The arrival rate still decides how many requests are victims, which
-E11's write-up states correctly in those terms. E11's timeline is the signature.
-Lookups arriving behind the skewed one complete at a fixed instant rather than after
-a fixed delay, 2019.9 ms then 1921, 1821, 1721 and downward to 235.8 ms. Every
-arrival is waiting for the same completion, which is residual service time and not
-contention.
-
-Two remedies exist for that, not one. Preempt the long job, or dispatch on size so
-it never lands in front of a short one. This document reaches for the second in
-[the incremental path](#the-incremental-path-from-here) and should not claim the
-first is the only option.
-
-*Capacity* is whether a core is free to run on. It is a separate question and
-neither mechanism supplies it.
-
-Peek offloading is best described as adding a *server* rather than as adding
-preemption. The walk itself never yields. What changes is that it runs on a
-different OS thread, so the interleaving is delegated to the kernel, and how well
-that works depends on runnable threads against available cores. That is why the
-measured 33x arrives on a replica with CPU headroom, and why the behavior on a
-CPU-saturated box is a separate question. **That question is unmeasured.** The
-experiment for it was planned and not run.
-
-A second timely runtime adds another non-preemptive server too, so for peeks it
-relocates a queue rather than removing one, which is what the direct A/B found. That
-A/B is itself weaker than it reads, see the rerun listed in
-[Problems and mechanisms](#problems-and-mechanisms). Where the second runtime does
-win, the unit of work is a rendered dataflow, and there the problem was never
-queueing behind one long activation. It was that the only dataflow scheduler
-available was saturated.
-
-Read that way, there are exactly two ways to get a short peek past a long one, and
-an OS thread is one of them rather than the only one. Three schedulers exist in the
-process. Timely yields at operator boundaries, tokio yields at await points, and a
-cursor walk offers neither, so an uncooperative walk can only be displaced by the
-kernel. The alternative is to make the walk cooperative by chunking it and checking
-for other pending work every so many rows, which needs no thread but does need a
-re-entrant cursor position and a quantum to tune. **That alternative is implemented**
-and is scored as S1 in
-[Problems and mechanisms](#problems-and-mechanisms), where it is predicted to match
-or beat the thread on the fixtures measured here. Chunking a peek walk is also not
-the same move as
-[yielding in maintenance](#why-not-yield-for-interactivity-in-one-runtime), which
-is ruled out on different grounds. A peek walk consumes no input and consolidates
-nothing, so run-to-completion is not part of its contract.
-
-#### Implications
-
-**Of the two mechanisms in this document, peek offloading is the cheaper one.** It
-carries the measured peek benefit here, it costs a thread and a dyncfg, and it needs
-no fleet roll. A direct A/B found the second runtime adds nothing on top of it for
-peek latency, single-runtime-with-offload and two-runtime-with-offload being close
-at every scan cost tested, though that A/B spanned two deployments and wants a rerun.
-
-NOTE: this comparison is between the two mechanisms *in this document* and is not a
-claim that peek offloading is the best available answer to peek latency. Cooperative
-slicing is a third option, it is implemented outside this branch, and it is predicted
-to match or beat the offload on both fixtures measured here at a fraction of the
-cost. See [Problems and mechanisms](#problems-and-mechanisms) for the scoring and for
-what would have to be measured to settle it.
-
-**The second runtime's justification is temporary dataflows and observability,
-not peek latency.** Any review that judges the sharing registry, the protocol
-invariant and the capping against a peek-latency claim is judging them against
-the wrong benefit. The claim to defend is that a replica stays useful, and stays
-*introspectable*, while it is busy maintaining collections. The observability
-case is the strongest form of it: a replica that cannot answer introspection
-while something is wrong with it cannot be diagnosed while something is wrong
-with it, and the alternative to an answer is not a slower answer but a
+What the second runtime is left with is what it should be judged on: **temporary dataflows
+and observability, not peek latency.** Any review weighing the sharing registry and its
+protocol against a peek-latency claim is weighing them against the wrong benefit. The claim
+to defend is that a replica stays useful, and stays *introspectable*, while it is busy
+maintaining collections. The observability case is the strongest form of it: a replica that
+cannot answer introspection while something is wrong with it cannot be diagnosed while
+something is wrong with it, and the alternative to an answer is not a slower answer but a
 misleading one.
 
-**Neither mechanism adds CPU**, but they degrade differently under saturation.
-Peek offloading moves a walk to a thread that still needs a core, so on a
-CPU-bound box it only reorders work. Its best case is therefore a walk that is
-*blocked* rather than computing, which is why the swap result is its largest
-margin. The second runtime doubles timely worker threads at every replica size,
-so it is not free even when idle, and that doubling is fixed by the equal-peer
-requirement rather than chosen, so it is not a knob to turn down.
-
-**The routing policy should follow the fork.** Sending everything to one place
-throws away the distinction: peeks want a substrate, rendered dataflows want a
-runtime.
-
+One asymmetry under saturation. Peek offloading moves a walk to a thread that still needs a
+core, so on a CPU-bound box it only reorders work, and its best case is a walk that is
+*blocked* rather than computing, which is why the swap result is its largest margin. The
+second runtime doubles timely worker threads at every replica size, so it is not free even
+when idle, and that doubling is fixed by the equal-peer requirement rather than chosen, so
+it is not a knob to turn down.
 ### Why not a read replica
 
 Introspection cannot be offloaded. A replica's introspection describes that
@@ -743,7 +553,7 @@ That was the original expectation and it did not survive measurement: the walk
 substrate does that. It *does* improve peek latency when the peek is queued behind a
 long operator activation, where the substrate cannot help and makes matters slightly
 worse, measured in E12 as p90 129.5 to 4.5 ms. See
-[Two mechanisms, not one](#two-mechanisms-not-one).
+[Peek placement is a separate axis](#peek-placement-is-a-separate-axis).
 
 It also does not touch the control plane. Peeks still serialize behind DDL on the
 single coordinator thread. For non-introspection reads under load that control
@@ -866,8 +676,8 @@ The absent CPU quota means `num_cpus::get()` finds no quota to read and falls ba
 to the node's CPU count, so `clusterd` sizes its tokio worker pool to the *node*
 rather than to the replica. On a large node that is dozens of worker threads for a
 small replica, on top of two runtimes' timely workers and tokio's 512-thread
-blocking pool default. Nothing accounts for this, and it argues for the dedicated
-pool in the follow-ups rather than against it.
+blocking pool default. Nothing accounts for this, and it argues for giving interactive work
+a bounded pool of its own rather than sharing tokio's.
 
 It also refines the section above rather than contradicting it. CPU is shareable
 and the request makes that floor real, so colocating for CPU is sound. What is not
@@ -987,85 +797,131 @@ Three known symptoms are the same missing invariant, not three separate problems
 | Reconciliation drops and recreates an index under the same `GlobalId` | slot identity | maintenance, through drop and re-render | an interactive import |
 | A never-adopted placeholder is evicted | slot existence | whoever evicts | an interactive import |
 
-### The fix: make the requirement visible on the governing stream
+### The fix: broadcast compaction and a standing hold
 
-The multiplexer is the one place that observes both runtimes' command streams, and its send path is
-sequential. So it can restore the ordering without a new command at all.
+Reconstructing I1b is the wrong move. I1b was lost because of a routing decision, not
+because two runtimes cannot have it. `CreateDataflow` goes only to the rendering runtime and
+`AllowCompaction` only to the owning one, so the two commands that must be ordered are
+placed on different streams. Send compaction to both runtimes and each runtime has them on
+one ordered stream again, which is I1b restored rather than simulated.
 
-When it routes `CreateDataflow(D, X, imports = [I])` to interactive, it first records a hold on each
-import at `X`. Any later `AllowCompaction(I, F)` it sends to maintenance is capped at the lowest
-`as_of` any in-flight interactive dataflow still reads `I` at, and the uncapped frontier is
-remembered. When `D` is dropped, which the controller signals by allowing `D`'s export to compact to
-the empty frontier, its holds release and the deferred compaction is forwarded so `I` is not pinned.
+Two changes.
 
-Under-compacting is always safe, so the capped value needs no agreement from the controller: the
-controller's frontier accounting is unchanged, and the replica simply keeps more history than it was
-told it could discard.
+**Broadcast compaction.** The multiplexer forwards `AllowCompaction` to both runtimes
+instead of routing it to the owning one. It keeps routing `CreateDataflow` by ownership.
 
-Capping rather than a new `HoldFor` command matters for a multi-process replica. Only `Hello` and
-`UpdateConfiguration` are broadcast to every process; every other command, including both
-`CreateDataflow` and `AllowCompaction`, goes to process 0 and reaches the other processes through the
-intra-runtime channel. So process 0's multiplexer sees the whole ordering problem and can fix it
-alone, and a hold command would have had to travel the same path to no additional effect.
+**A standing hold per shared collection.** The rendering runtime holds every shared
+collection it may import at the last compaction frontier *it* has applied. The publisher
+bounds the owning runtime's compaction by that hold, alongside the reader registrations it
+already meets.
 
-This restores I1b by construction, on the stream where the compaction is actually applied. It keeps
-maintenance decoupled from interactive: maintenance never waits for interactive to make progress, it
-only learns earlier what interactive will need. It generalizes to I2's other two rows, since a hold
-that pins `since` can pin slot identity as well.
+> **I1c.** A shared arrangement compacts only as fast as the slowest runtime's stream
+> position.
 
-The alternative considered and rejected was an in-process sequence barrier, where interactive
-publishes the command sequence number it has processed and maintenance defers publishing a
-compaction until interactive passes it. It needs no protocol change, but it fails on two counts. It
-couples maintenance's compaction to interactive's progress, which the non-goals refuse. And a replica
-can span processes, so an in-process barrier cannot observe the runtimes in the other processes at
-all, which makes it not merely undesirable but insufficient.
+That is what makes an individual read correct, and it is derived from the importing runtime
+rather than from the controller's per-dataflow bookkeeping, so the direct dependency is the
+mechanism.
 
-### A model that checks it
+**Broadcast alone is not enough**, and the counterexample is what decided the design.
+Restoring the ordering *within* each stream does not restore it *between* them, because the
+runtimes still drain at their own rates. The controller creates a dataflow at `as_of = 0`,
+drops it at once as a cancelled peek does, releasing its own read hold, and then allows
+compaction to 1. The owning runtime applies that and publishes it while the create is still
+queued on the rendering runtime. When the rendering runtime reaches the create, it builds a
+dataflow at `as_of = 0` over a collection compacted to 1. The controller did nothing wrong:
+from its point of view the dataflow is gone.
 
-`protocol/` in this directory holds a Lean 4 model of the protocol: one index, one interactive
-dataflow, the controller's read hold, the multiplexer's cap, two independent command queues, and the
-point at which each runtime realizes a command. `ci/test/lean-protocol.sh` checks it, and the CI
-pipeline runs that on every change to the directory.
+The standing hold closes exactly that window. The bound is the rendering runtime's applied
+frontier, still 0, and it advances only when that runtime applies the broadcast compaction,
+which is queued *behind* the create.
 
-I1 is `Protocol.since_le_as_of`. Two further properties are proved: `physical_le_since`, that the
-publisher never forwards a physical compaction frontier beyond the published `since`, and
-`no_regression`, that a compaction frontier in flight never regresses what maintenance applied. All
-three fall out of one inductive invariant, `Inv`, proved preserved by every step.
+**The standing hold costs nothing.** It pins each collection at the controller's own
+compaction frontier, which the controller already guarantees is readable, and which the
+publisher's writer-driven fallback already targets when no reader is registered. So it adds
+no pin that was not there. What it removes is the publisher's freedom to run ahead of the
+rendering runtime.
 
-The model also refutes the two behaviours the implementation used to have. `Step` is parameterised by
-two booleans selecting them, and each has a counterexample:
-`release_on_drop_violates_invariant` retires the multiplexer's hold on the controller's drop rather
-than on the interactive runtime's confirmation, and `physical_from_upper_violates_invariant` forwards
-the stream `upper` as the physical compaction target. A model that can only express the fixed system
-cannot tell you it fixed anything.
+**What it needs from the runtimes.** The rendering runtime must accept `AllowCompaction` for
+collections it does not host and treat it as advancing the standing hold rather than as
+compacting a local trace. It must keep not reporting frontiers for shared collections, which
+`ComputeState::report_frontiers` already handles through its transient-only filter. And a
+collection's standing hold is installed when the collection first appears and removed when
+its compaction reaches the empty frontier, so it needs no per-dataflow identity.
 
-This replaced a TLA+ sketch of the same invariant. That sketch was never run, because the repository
-has no TLC runner and no CI job for one, and it turned out to admit a four-step counterexample to its
-own stated I1 with capping on. A stated-but-unchecked property is worse than none, since it reads as
-assurance. In Lean an unproved goal fails the build, so that particular failure cannot recur, and the
-proof holds for all times rather than a small finite set of them.
+#### As implemented
 
-The trade is worth naming. TLC searches for counterexamples; Lean does not. The two refutations above
-are only as good as the imagination that produced them, so this model certifies a fix rather than
-hunting for the next defect. The interleavings review misses are still where the risk is.
+The standing hold is one frontier per publication point
+(`SharedTraceState::standing_hold`), joined so it only rises, and the publisher's logical
+target is met against it. The published `since` is then bounded by it without further work,
+because `since` derives from the publisher's own agent hold and that hold is the join of
+targets it has already forwarded. A `debug_assert` in the publisher states that, so an edit
+letting the target escape the bound fails there rather than admitting a reader below what
+the trace holds.
 
-What the model does not cover, and what should be added before anything rests on it more broadly:
-liveness, so nothing here says a deferred compaction is eventually forwarded; more than one dataflow
-or index; and the remaining rows of I2, index replacement under reconciliation and placeholder
-eviction.
+Two things were not obvious from the design.
 
+**The hold must be seeded at the adoption floor, not at the minimum time.** An arrangement
+whose importing runtime has not yet applied any compaction for it would otherwise be pinned
+at the minimum time for as long as that lasts, which for a collection the controller never
+compacts again is forever. The publisher's own compaction frontier at adoption is the right
+seed: the controller does not offer an `as_of` below a collection's `since`, so no importer
+can need a frontier below it. That also makes the no-broadcast-yet behaviour identical to
+the writer-driven fallback.
+
+**The rendering runtime tells its own publications apart by transience, not by whether it
+hosts the collection.** It holds empty local copies of the maintenance runtime's
+introspection indexes, so "do I have a collection for this id" answers yes for ids whose
+*publication* is the peer's. A non-transient id there is the peer's, a transient one is its
+own. It must also not apply the broadcast frontier as the writer-driven floor, which is the
+peer's to drive, and it must not run `drop_collection` for a broadcast drop, which would
+remove the peer's slot from the registry.
+
+#### The price: compaction is coupled to the rendering runtime's drain rate
+
+A stalled rendering runtime stalls compaction on every shared arrangement. That is the price
+of I1c and it is the intended behaviour, but it is new: before the split a slow reader could
+not hold maintenance back. It wants a metric on the gap between the two runtimes' applied
+frontiers, so the coupling is observable before it becomes a memory incident.
+
+#### Rejected alternatives
+
+Every earlier mechanism reconstructed I1b instead of restoring it, and all are deleted.
+
+* **Cap the frontier at the multiplexer.** Record a hold per interactive dataflow at its
+  `as_of`, cap any later `AllowCompaction` at the lowest such hold, and forward the deferred
+  frontier when the dataflow drops. Under-compacting is always safe, so the capped value
+  needed no agreement from the controller. It failed at its *retirement* point rather than at
+  the cap: `send` is an unbounded push with no ack, so maintenance could be told to compact
+  before interactive dequeued the create the hold was taken for. Capping is safe without an
+  ack because the frontier is withheld entirely. Releasing is not.
+* **Synthesize an `AcquireHolds` command on the owning runtime's stream**, with a matching
+  release. The release can overtake a create the rendering runtime has not processed, which
+  is why the release had to travel on the rendering runtime's stream, and that asymmetry is
+  what made the mechanism hard to reason about.
+* **An in-process sequence barrier**, where interactive publishes the command sequence
+  number it has processed and maintenance defers publishing a compaction until interactive
+  passes it. It needs no protocol change and fails on two counts. It couples maintenance's
+  compaction to interactive's progress, which the non-goals refuse. And a replica can span
+  processes, so an in-process barrier cannot observe the runtimes in the other processes at
+  all, which makes it insufficient rather than merely undesirable.
+
+The deletion removed `ComputeCommand::AcquireHolds` and `ReleaseHolds`,
+`compute_state/command_hold.rs`, the registry's holder-reclaim path, the multiplexer's
+`held_exports`, `hold_floor`, `deferred_compaction` and `compaction_floor`, and
+`SharedTraceState::writer_since` with its derived `refresh_since`. It also dissolved the
+epoch-boundary question rather than solving it: a standing hold is per collection and
+carries no dataflow identity, so a replayed dataflow receiving a fresh transient id cannot
+conflate two holders, and the replica clears nothing at a reconnection.
 ## The bounded-read boundary
 
 The interactive runtime serves a read only when the dataflow is **wholly transient**
 *and* its `until` is a finite non-empty frontier *and* it carries no `SUBSCRIBE` sink
 *and* it carries no `COPY TO` sink. Everything else runs on the maintenance runtime.
 
-NOTE: an earlier version of this paragraph said the predicate keys on
-`until`-finiteness rather than on transience. It requires both, and transience is not
-redundant: a durable dataflow can also carry a finite `until`, since a `REFRESH AT`
-materialized view sets one, and interactive's frontier reports are forwarded only for
-transient ids. Routing such a dataflow to interactive would get its frontier reports
-dropped, so it has to stay on maintenance regardless of `until`.
+Transience is not redundant with `until`-finiteness. A durable dataflow can also carry a
+finite `until`, since a `REFRESH AT` materialized view sets one, and interactive's frontier
+reports are forwarded only for transient ids. Routing such a dataflow to interactive would
+get its frontier reports dropped, so it stays on maintenance regardless of `until`.
 
 Of the two sink exclusions, only `COPY TO`'s has a recorded reason, its S3 sink being
 refused by reconciliation. The subscribe clause turns out to bite only for
@@ -1154,10 +1010,6 @@ readiness and `since` gating operate on `meet(oks, errs)`.
 
 ### Bounded import is a call-site choice, not a limit of the primitive
 
-NOTE: an earlier version of this section claimed the primitive could only do bounded
-snapshots and that live following had been removed as dead code. **That was wrong,
-and the primitive's own documentation says so.**
-
 `SharedTraceHandle::import_snapshot_at(scope, name, as_of, until)` bounds the import
 by `until`, and `shared_trace.rs` states the contract directly: "For a single-time
 interactive read pass `until = as_of.step_forward()` ... An empty `until` performs no
@@ -1168,10 +1020,9 @@ bound except on the publisher's terminal signal. The signature is the analogue o
 maintenance path's `TraceAgent::import_frontier_core(outer, name, as_of, until)`, into
 which maintained dataflows pass an empty `until` routinely.
 
-The feed is live already. `adopt_named` is a sink on the arrangement stream that on
-every activation pushes arrived batches to every registered queue, pushes a `Frontier`
-instruction when `upper` advances, and activates every importer. What was deleted was
-a second function that duplicated this, not a capability.
+The feed is live already. `adopt_named` is a sink on the arrangement stream that on every
+activation pushes arrived batches to every registered queue, pushes a `Frontier` instruction
+when `upper` advances, and activates every importer.
 
 **What actually makes interactive imports bounded is the call site.**
 `import_index_shared` in `render.rs` synthesizes `snapshot_until` as
@@ -1182,7 +1033,7 @@ is a one-argument change.
 
 The reason that matters is that it moves the obstacle. Following imports are not the
 hard part. See
-[Compaction feedback exists, and two frozen holds defeat it](#compaction-feedback-exists-and-two-frozen-holds-defeat-it).
+[Compaction feedback exists, and a frozen hold defeats it](#compaction-feedback-exists-and-a-frozen-hold-defeats-it).
 
 Import is pairwise: importer worker `i` reads publisher worker `i`. That is sound
 only when both sides shard keys the same way, `key.hashed() % peers`, with equal
@@ -1192,74 +1043,51 @@ the requested `as_of` means the controller offered an unreadable `as_of`, a
 protocol error, and the import must panic rather than silently read coalesced
 data.
 
-### Compaction feedback exists, and two frozen holds defeat it
-
-NOTE: this section has been wrong twice. It first said there is no way to advance a
-cross-runtime read hold, which is false because the mechanism exists. It then said the
-hold only needs early release, which is false for any importer that keeps a trace
-handle. What follows is the version that matches the code.
+### Compaction feedback exists, and a frozen hold defeats it
 
 An arranged collection is two things: a stream of batches, and a handle to the trace. A
 long-running dataflow generally needs both. A join looks up each side's incoming batches
-against the *other* side's trace, so it holds a trace handle for its whole life and
-cannot release it. Such an importer must instead **downgrade** logical and physical
-compaction as its own frontier advances, or the publisher can never merge or truncate
-in the background. So compaction information has to flow backwards, from the importing
-runtime to the publishing one.
+against the *other* side's trace, so it holds a trace handle for its whole life and cannot
+release it. Such an importer must instead **downgrade** logical and physical compaction as
+its own frontier advances, or the publisher can never merge or truncate in the background.
+So compaction information has to flow backwards, from the importing runtime to the
+publishing one.
 
-**That backward channel exists, and it is shared memory rather than protocol, which is
-why it needs no new command.**
+That backward channel exists, and it is shared memory rather than protocol, which is why it
+needs no new command.
 
 * `SharedTraceHandle` implements `TraceReader`, and its `set_logical_compaction` and
   `set_physical_compaction` mirror the handle's frontier into
   `SharedTraceState::logical_holds[id]` and `physical_holds[id]`.
-* On every activation the publisher computes
-  `compaction_target(&state.logical_holds, &writer_logical)` and the physical analogue,
-  and forwards the result to its own `TraceAgent`.
-* Handles handed downstream behave normally. Differential's join and reduce downgrade
-  their trace handles as their frontiers advance, and `TraceFrontier` forwards the
-  downgrades through. So a well-behaved importer already causes the maintenance trace to
-  compact.
+* On every activation the publisher computes the meet of those holds against its
+  writer-driven floor and the standing hold, and forwards the result to its own
+  `TraceAgent`.
+* Handles handed downstream behave normally. Differential's join and reduce downgrade their
+  trace handles as their frontiers advance, and `TraceFrontier` forwards the downgrades
+  through, so a well-behaved importer already causes the maintenance trace to compact.
 
-**Two frozen holds defeat it, at two different levels.**
-
-First, in the replica, `import_shared_index`'s caller sets
+**One frozen hold defeats it.** `import_shared_index`'s caller sets
 `set_logical_compaction(as_of)` and `set_physical_compaction(as_of)` on `oks_hold` and
-`errs_hold` and then retains those handles as dataflow tokens, never downgrading them.
-The reason this is fatal rather than merely redundant is the aggregation:
-`compaction_target` is a **meet** across all holds, so a single hold pinned at `as_of`
-dominates it no matter how far every other hold advances. The downstream handles
-downgrade correctly and it makes no difference.
+`errs_hold` and then retains those handles as dataflow tokens, never downgrading them. That
+is fatal rather than merely redundant because of the aggregation: the target is a **meet**
+across all holds, so a single hold pinned at `as_of` dominates it no matter how far every
+other hold advances. The downstream handles downgrade correctly and it makes no difference.
 
-Second, the multiplexer's `InteractiveHold { imports, as_of }` is written once from the
-dataflow's `as_of` and `hold_floor` returns it unchanged, so the `AllowCompaction` sent
-to maintenance is capped at the importer's start time until `release_holds` fires on an
-export reaching the empty frontier. Even with the in-replica holds fixed, maintenance is
-never *told* it may compact past `as_of`.
+For a single-time read the pin lasts milliseconds and is not observable. For a long-lived
+importer it pins the imported index's `since` at the importer's start time for the
+importer's whole life, which is why this is a prerequisite for any long-lived interactive
+dataflow rather than a follow-up.
 
-For a single-time read both pins last milliseconds and neither is observable. For a
-long-lived importer each independently pins the imported index's `since` at the
-importer's start time for its whole life, and the controller's `AllowCompaction`s
-accumulate in `deferred_compaction` unforwarded.
-
-**So the fix is to downgrade both, not to release either.** In the replica, feed the
-export's frontier into the retained handles' `set_logical_compaction` rather than
-pinning them at `as_of`, or do not retain a separate hold at all. In the multiplexer,
-advance `InteractiveHold.as_of` from interactive's own observed progress, which arrives
-as `Frontiers` for a transient export or as `SubscribeResponse::Batch(upper)`. One
-constraint there: `recv` is documented cancel-safe, so awaiting a `send` inside it would
-break that, and a released compaction has to be stashed and flushed at the top of
-`send`.
-
-Release rather than downgrade is sufficient only for an importer that needs the stream
-and never the trace, which a `SUBSCRIBE` sink plausibly is. That is a narrower case than
-the general one and it should not be the basis of the design.
+**So the fix is to downgrade, not to release.** Feed the export's frontier into the retained
+handles' `set_logical_compaction` rather than pinning them at `as_of`, or do not retain a
+separate hold at all. Release rather than downgrade is sufficient only for an importer that
+needs the stream and never the trace, which a `SUBSCRIBE` sink plausibly is. That is a
+narrower case than the general one and it should not be the basis of the design.
 
 Separately, and not a compaction problem: the import queue is unbounded with no
-backpressure, deliberately, so that maintenance progress is never coupled to a slow
-reader. A long-lived importer that lags holds a second copy of every undrained batch for
-as long as it lags.
-
+backpressure, deliberately, so that maintenance progress is never coupled to a slow reader.
+A long-lived importer that lags holds a second copy of every undrained batch for as long as
+it lags.
 ## The registry
 
 `ArrangementSharingRegistry` (`src/compute/src/sharing.rs`) maps a `GlobalId` to a
@@ -1294,11 +1122,11 @@ per-worker slot holding the published `oks` and `errs` points.
 
 The interactive runtime serves everything through the registry.
 
-* **Fast-path index peeks** read the published arrangement directly, served inline
-  on the interactive runtime's own worker step (`PendingPeek::IndexShared`). An
-  earlier plan offloaded the arrangement walk to a tokio task off a maintenance
-  worker. That was abandoned: once reads live in a separate runtime, the runtime
-  itself is the isolation mechanism, and no async hand-off is needed.
+* **Fast-path index peeks** read the published arrangement directly, served inline on the
+  interactive runtime's own worker step (`PendingPeek::IndexShared`). Once reads live in a
+  separate runtime, the runtime itself is the isolation mechanism, so no async hand-off is
+  needed for this design to work. Walking off the worker stays available as an independent
+  substrate choice on either runtime, which is the orthogonal axis above.
 * **Slow-path query dataflows** import the maintenance arrangements as real
   `ArrangementFlavor::SharedTrace` arrangements and render joins and reduces over
   them. Importing as a real arrangement, not a substituted collection, is
@@ -1424,26 +1252,6 @@ against the code are fixed. These are the ones that remain, kept here because ea
 is a real hazard with a known mechanism rather than a speculation, and each needs a
 decision rather than a patch.
 
-* **A reader's physical hold on a published trace is inert, so the publisher's
-  spine can merge across a reader's cut.** `TraceAgent::set_physical_compaction`
-  joins monotonically, and with no readers the publisher forwards the stream upper
-  as its physical fallback, so a reader registering a hold below that has no
-  effect. A merge completing inside one join invocation can then make
-  `batches_through` observe a batch whose bounds straddle the reader's cut, which
-  is a hard assert and, under shared fate, aborts the process. The logical
-  dimension is correct for the mirror-image reason. This is the most serious open
-  item and it is in the sharing primitive.
-* **Releasing an interactive hold is ordered against command enqueue, not against
-  the interactive runtime having rendered.** `send` is an unbounded push with no
-  ack, so maintenance can be told to compact before interactive dequeues the
-  create it is holding for. Capping is safe without an ack because the frontier is
-  withheld entirely; releasing is not. The correct release point is a signal from
-  the interactive runtime, which the current protocol does not have. This is the
-  same class of bug as the one the capping was introduced to fix, one level up.
-  NOTE: read this together with
-  [Compaction feedback exists, and two frozen holds defeat it](#compaction-feedback-exists-and-two-frozen-holds-defeat-it).
-  Release ordering is the drop-time corner of that larger gap, and once holds advance,
-  release stops being what unblocks compaction.
 * **`import_index_shared` silently drops `SnapshotMode`.** The maintenance import
   honours `SnapshotMode::Exclude`, which is what `WITH (SNAPSHOT = false)` lowers to.
   The shared import's signature has no `snapshot_mode` parameter at all, so the mode is
@@ -1542,30 +1350,12 @@ decision rather than a patch.
 
   It remains a race rather than a certainty, since being permitted to merge is not
   merging and the spine's fuel schedule decides when.
-* **`compaction_floor` is never evicted**, so the multiplexer retains one entry per
-  collection id ever seen, including every transient peek dataflow, for the life of
-  the connection. The neighbouring `transient_owner` is evicted precisely to avoid
-  this.
 * **A peek against a dropped or never-published shared id hangs silently.** The
   registry returns no handle, the peek reports not-ready and is re-enqueued, and
   nothing will mark it again. The local path fails loudly on the same condition.
   Never-adopted placeholders are also never evicted.
 * **`reexport`'s failure is discarded at both call sites**, so an alias that was
   never established becomes a permanently unresolvable peek rather than an error.
-* **The in-flight offload cap is invisible.** A walk declined because the cap is
-  reached increments the same counter as one declined because the flag is off, so
-  saturation cannot be distinguished from the feature being disabled. It wants a
-  gauge.
-* **The protocol model does not cover liveness.** `Protocol/TwoRuntime.lean` proves
-  the safety invariants and refutes the two retired behaviours, but its
-  compaction flush is an action that may fire rather than one that must, so
-  nothing there says a deferred compaction is eventually forwarded. It also admits
-  only one dataflow and one index, so index replacement under reconciliation and
-  placeholder eviction are unmodelled.
-* **The stash diversion has no test.** The equivalence test that compares an
-  offloaded walk against an inline one passes `want_stash: false` in every arm, so
-  the diverting path and `upload_blocking` are unexercised.
-
 * **The coordinator control plane is a parallel, unsolved bottleneck.** Peeks
   serialize behind DDL on the single coordinator thread, upstream of compute.
   Two-runtime fixes the data plane and does not touch this. For non-introspection
@@ -1574,14 +1364,6 @@ decision rather than a patch.
   ceiling, and a heavy scan can clog light point reads sharing the loop. A future
   admission or lane policy would protect a cheap-read lane and decide where
   expensive reads spill.
-* **Peek placement is static.** All peeks go to interactive today. Whether some
-  should be admitted to maintenance (work-stealing when interactive saturates and
-  maintenance idles) is a deferrable optimization. It is purely additive and
-  changes no correctness. The signal to build it is a measured workload that
-  saturates the interactive loop while maintenance sits idle. Routing a read to
-  maintenance trades against the isolation guarantee, so the policy is
-  workload-dependent, isolation-first for latency-SLA reads and
-  placement-for-throughput for bulk reads.
 * **Thread names collide across runtimes.** Timely names worker threads
   `timely:work-{index}` by a per-instance-local index, so the maintenance and
   interactive runtimes (and storage) emit identical OS thread names in one
@@ -1609,9 +1391,13 @@ decision rather than a patch.
   re-reading the chain after compaction is forwarded does not change it. The
   arrangement-size logger identifies batches by address and sums every batch it can
   still upgrade a `Weak` to, so a second live batch per worker is being held
-  somewhere in the publish path. Whether that is a reporting artifact or real
+  somewhere in the publish path. **It did not reproduce on staging**, where E6 measured both
+  the reported size and the resident set coming slightly *down* with the flag on, and
+  measured import as nearly free at 4.5 MiB for 48 interactive dataflows over a 95 MiB
+  index. That run crossed two builds, so it establishes only that no doubling appeared,
+  rather than that the effect is absent. Whether it is a reporting artifact or real
   retention decides whether the feature carries a memory regression, so it should be
-  settled before the flag is considered for production. `test/testdrive/introspection-sources.td`
+  settled on a single build before the flag is considered for production. `test/testdrive/introspection-sources.td`
   carries the raised bound and a pointer to this entry.
 * **Storage introspection is patched into maintenance introspection.** A
   pre-existing coupling, where storage's introspection is merged into the compute
@@ -1627,72 +1413,25 @@ decision rather than a patch.
 
 ### The incremental path from here
 
-What is on the branch is deliberately the least opinionated version of the idea.
-It moves a walk to another thread and it counts which substrate ran it. It picks
-no pool sizing policy, asserts no scheduling priority, measures no shared-cache
-interference, and encodes no routing policy beyond a flag. That is the right first
-step rather than a shortcut, because each item below is a separate decision with
-its own evidence requirement, and none of them has to land with the first one.
-Recorded here so the sequence is a plan rather than a rediscovery.
+What is on the branch is deliberately the least opinionated version of the idea. It gives
+interactive work its own run loop and nothing else: it asserts no scheduling priority,
+reserves no core, and measures no shared-cache interference. That is the right first step
+rather than a shortcut, because each item below is a separate decision with its own evidence
+requirement, and none has to land with the first one. Recorded here so the sequence is a plan
+rather than a rediscovery.
 
-Ordered by expected value per line of change.
+All three are about how the two runtimes share CPU, which is the one resource colocation can
+actually arbitrate. Ordered by expected value per line of change.
 
-1. **A dedicated bounded pool for interactive work, with a chunked and cancellable
-   walk.** The walk runs on tokio's blocking pool, which is built for IO-blocking
-   work and is documented as unsuitable for CPU-bound work. Three consequences.
-   The pool is effectively unbounded at its 512-thread default, so the in-flight
-   limit has to be a hand-maintained counter rather than queue depth, which is
-   where a leak already occurred and was fixed. The pool is shared with persist's
-   blocking IO, so a burst of walks and a burst of blob operations contend with no
-   discipline and no way to express a preference. And a started blocking closure
-   cannot be aborted, so a cancelled peek still spends its full walk and still
-   holds its compaction hold for the duration. That last one matters most:
-   cancellability is the one structural advantage interactive work has over
-   maintenance work, and the current substrate discards it. A fixed pool behind a
-   bounded queue makes the limit structural, unshares from persist, and gives the
-   walk somewhere to poll a cancel flag.
-2. **Per-walk fault and context-switch accounting.** `getrusage(RUSAGE_THREAD)`
-   bracketed around the walk in both arms, reported under the `substrate` label
-   the walk counter already carries. `src/metrics/src/rusage.rs` already does the
-   same call with `RUSAGE_SELF`, so the dependency and the pattern exist. This is
-   worth doing early because E8b is the largest margin on the branch and its
-   mechanism is unattributed. The offloaded walk was not merely more predictable
-   but faster on the same data at the same swap depth, 2.3 s against 3.6, 4.7 and
-   56.4 s, and preemption cannot explain that, because preemption governs the
-   other peeks' latency rather than this walk's own duration. Equal major-fault
-   counts with different durations would mean fault queue depth, since swap-in is
-   a synchronous per-thread major fault and concurrency comes only from the number
-   of threads faulting at once. Inline taking *more* faults for the same walk
-   would mean the interleaved timely working set is re-evicting the walk's pages,
-   and the lesson would be locality rather than parallelism. The two point at
-   opposite pool sizings, so this measurement has to precede item 1's sizing
-   decision. It also settles whether `index_peek_offload_max_inflight` has one
-   sensible default at all, since a swap-bound walk is blocked rather than
-   computing and wants a limit far above the core count that a resident walk
-   wants.
-
-   The counter is unambiguous here in a way it would not be elsewhere.
-   `ru_majflt` counts any read from backing store, but `clusterd` uses no
-   file-backed mappings for arrangement data, so every major fault it takes is
-   anonymous swap-in and no disentangling is required.
-
-   The same measurement points at a remedy that neither a pool nor a thread count
-   can reach. A swap-in is synchronous *because* it is a fault, so the queue depth
-   a walk achieves is bounded by how many threads are faulting. Prefetching the
-   next batch's region with `madvise(MADV_WILLNEED)` while consuming the current
-   one converts those faults into asynchronous readahead, which raises queue depth
-   from one thread and needs no sizing decision at all. That attacks the mechanism
-   rather than buying depth with threads, and it is testable against the E8b
-   fixture directly.
-3. **Scheduler priority instead of a reservation.** Nice values under CFS express
+1. **Scheduler priority instead of a reservation.** Nice values under CFS express
    only weight ratios and are too weak to be useful here, but the fleet's kernels
    run EEVDF, where `sched_setattr` with a short request and a low latency-nice
    gives a thread an earlier deadline and lets it preempt a batch thread promptly
    rather than at a slice boundary. It costs nothing when nothing contends, it is
-   per-thread so it applies to exactly the interactive pool, and the usual caveat
+   per-thread so it applies to exactly the interactive runtime's workers, and the usual caveat
    that priority only orders within a cgroup's share does not bite because both
    runtimes sit in one pod. This is the cheapest lever not yet pulled.
-4. **A core reservation and pinning, both conditional on a change of QoS class.**
+2. **A core reservation and pinning, both conditional on a change of QoS class.**
    Neither is available today and the reason is the class, not the code. Swap is
    granted only to Burstable pods, sized from the memory request. Exclusive cores
    are granted only to Guaranteed pods with integer CPU requests under the static
@@ -1731,7 +1470,7 @@ Ordered by expected value per line of change.
    same partitioning. Making the runtimes unequal would require that partitioning
    to become a contract between them, visible to whatever re-routed across the
    mismatch, and it has to stay an implementation detail of the compute layer
-   instead. See [Bounded import, not live replay](#bounded-import-not-live-replay).
+   instead. See [Bounded import is a call-site choice, not a limit of the primitive](#bounded-import-is-a-call-site-choice-not-a-limit-of-the-primitive).
 
    So the reservation is expressed by sizing *both* runtimes one worker below the
    core count and leaving a core for the interactive threads and for tokio.
@@ -1775,7 +1514,7 @@ Ordered by expected value per line of change.
    explicitly. And `core_affinity::get_core_ids()` enumerates logical CPUs with no
    guaranteed order, which is why the existing code sorts them, so whether the
    first N ids are N distinct physical cores is platform-dependent.
-5. **Shared-cache and memory-bandwidth interference during hydration.** Core
+3. **Shared-cache and memory-bandwidth interference during hydration.** Core
    partitioning is not sufficient on its own. A batch task streaming through the
    last-level cache degrades a colocated latency-sensitive task's tail even when
    the two never share a core, and the published remedy is to throttle the batch
@@ -1786,17 +1525,6 @@ Ordered by expected value per line of change.
    effect is material the answer is a feedback loop from interactive queueing to
    hydration concurrency. Deliberately last of the mechanisms, because it is the
    only one that needs a controller.
-6. **Routing and admission that follow the fork.** Peeks want a substrate and
-   rendered dataflows want a runtime, so one routing decision for both throws the
-   distinction away. Beyond that, offloading unconditionally pays a handoff for
-   peeks that would have finished immediately, which is visible as the flat 105 ms
-   floor where the offload buys nothing. Response time is minimized by serving
-   short requests first, which requires a size estimate, and the estimate already
-   exists: the arrangement key bounds behind `EXPLAIN MEMORY BOUND` and
-   `mz_arrangement_distinct_keys` classify a peek as cheap or expensive before
-   dispatch. Short peeks stay inline, long peeks offload. That reuses shipped
-   machinery rather than adding a heuristic.
-
 ### What a serving layer would need
 
 A serving layer is latency-sensitive and cannot be cleanly separated from index
@@ -1893,8 +1621,15 @@ floor moved from the fork's `trace_box_unstable` read to the controller's
 `AllowCompaction` and the stream upper, so the build now depends only on released
 differential-dataflow.
 
-The prior planning documents in this directory (`implementation-plan.md`,
-`stage2-detailed-plan.md`, `arrangement-sharing-lifecycle-design.md`,
-`arrangement-sharing-lifecycle-plan.md`) are superseded by this document. Their
-task checklists are fully executed and their fork-era mechanics no longer reflect
-the code.
+The read-hold protocol went through three mechanisms before the current one. Two
+reconstructed the lost command ordering rather than restoring it, and both are recorded
+under [Rejected alternatives](#rejected-alternatives).
+
+Every planning and evaluation document that preceded this one has been folded in or moved
+out, so this directory holds one design document and nothing else. The planning documents
+(`implementation-plan.md`, `stage2-detailed-plan.md`,
+`arrangement-sharing-lifecycle-design.md`, `arrangement-sharing-lifecycle-plan.md`,
+`read-holds.md`, `broadcast-compaction.md`, `pr-split.md`) are superseded: their task
+checklists are executed and their fork-era mechanics no longer reflect the code. The
+experimental evaluation moved to the project document named in the summary, and the peek
+placement and stash-plumbing documents moved with the peek-offload work they belong to.

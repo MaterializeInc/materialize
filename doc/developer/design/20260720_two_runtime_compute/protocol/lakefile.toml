@@ -1,8 +1,0 @@
-name = "mz-protocol"
-defaultTargets = ["Protocol"]
-
-[[lean_lib]]
-name = "Protocol"
-# `sorry` is only a warning by default, and an unproved goal is exactly the
-# failure mode this model exists to rule out. Make it fail the build.
-leanOptions = { warningAsError = true }

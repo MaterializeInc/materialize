@@ -39,7 +39,6 @@ copyright_files=$(grep -vE \
     -e '(^|/)Gemfile\.lock$' \
     -e '^netlify\.toml$' \
     -e '^rustfmt\.toml$' \
-    -e '(^|/)lean-toolchain$' \
     -e '^clippy\.toml$' \
     -e '^\.config/nextest\.toml$' \
     -e '(^|/)yarn\.lock$' \
