@@ -103,8 +103,8 @@ pub const COLUMN_CHUNK_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
     1,
     "The youngest chunk generation whose spilled bodies are lz4-compressed in the buffer \
      pool; younger generations store uncompressed. 0 compresses every spilled body.",
-)
-.scoped(ParameterScope::Replica);
+    ParameterScope::Replica,
+);
 
 /// Resident-bytes budget fraction for chunk spilling. Two consumers read
 /// it: the column pager's tiered policy multiplies it against the
