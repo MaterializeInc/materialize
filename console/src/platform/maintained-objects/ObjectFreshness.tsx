@@ -20,6 +20,7 @@ import React from "react";
 
 import { calculateBucketSizeFromLookback } from "~/api/materialize/freshness/lagHistory";
 import TimePeriodSelect from "~/components/TimePeriodSelect";
+import { SourceStatistics } from "~/platform/sources/SourceOverview/SourceStatistics";
 import { MaterializeTheme } from "~/theme";
 import { formatDate } from "~/utils/dateFormat";
 
@@ -126,6 +127,24 @@ export const ObjectFreshness = ({
 
           {isSource && (
             <>
+              <Divider />
+
+              <VStack align="start" spacing={1} width="100%">
+                <Text textStyle="heading-sm">Ingestion history</Text>
+                <Text
+                  textStyle="text-small"
+                  color={colors.foreground.secondary}
+                >
+                  Throughput, committed updates, and backlog for this source
+                  over the selected window.
+                </Text>
+              </VStack>
+
+              <SourceStatistics
+                source={{ id: item.id, type: item.sourceType ?? "" }}
+                timePeriodMinutes={timePeriodMinutes}
+              />
+
               <Divider />
 
               <VStack align="start" spacing={1} width="100%">

@@ -29,7 +29,9 @@ import { useSourceStatistics } from "../queries";
 import { bucketAggregator, sourceReplicationMessagesAreRows } from "./utils";
 
 export interface SourceStatisticsProps {
-  source: Source;
+  /** Only `id` and `type` are read, so callers outside the source overview
+   * page can pass a minimal object. */
+  source: Pick<Source, "id" | "type">;
   timePeriodMinutes: number;
 }
 
