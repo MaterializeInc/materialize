@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/coord.rs
-revision: a702b8be70
+revision: 09bb18d3c8
 ---
 
 # adapter::coord
