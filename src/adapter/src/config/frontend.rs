@@ -1232,9 +1232,9 @@ impl SystemParameterFrontend {
     /// that read's environment-wide values to the catalog.
     ///
     /// Call this after the push and before the scoped reconcile of the same tick;
-    /// [`Self::published_config_file`] describes what that ordering buys. A no-op
-    /// when the current read failed or did not parse, which is what leaves the
-    /// last valid parse available to create-time evaluation.
+    /// the `published_config_file` accessor describes what that ordering buys. A
+    /// no-op when the current read failed or did not parse, which is what leaves
+    /// the last valid parse available to create-time evaluation.
     pub fn publish_config_file(&self) {
         let mut cache = self
             .config_file
@@ -1260,11 +1260,11 @@ impl SystemParameterFrontend {
     /// is fixed. Always `true` for LaunchDarkly, whose evaluation falls back to
     /// the environment-wide value when it has nothing to say.
     ///
-    /// Deliberately the current read rather than
-    /// [`Self::published_config_file`]: holding back the prune is only about not
-    /// acting on a desired state we do not have, whereas the create path is better
-    /// served by the last valid one than by nothing. The two questions are
-    /// answered from the two halves of the cache for that reason.
+    /// Deliberately the current read rather than the published parse: holding
+    /// back the prune is only about not acting on a desired state we do not have,
+    /// whereas the create path is better served by the last valid one than by
+    /// nothing. The two questions are answered from the two halves of the cache
+    /// for that reason.
     pub fn has_scoped_desired_state(&self) -> bool {
         match &self.client {
             SystemParameterFrontendClient::LaunchDarkly { .. } => true,
