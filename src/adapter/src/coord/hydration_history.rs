@@ -263,19 +263,18 @@ fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> St
     // cutoff is an RFC 3339 timestamp we formatted ourselves. Nothing in this
     // query comes from a user.
     //
-    // NOTE: The grouping is not cross-worker. We key rows by item id, while the
-    // log keys them by global id, and one item can own several global ids at once,
-    // as a materialized view being replaced does. Each has its own dataflow and so
-    // its own log row, and a replica that installs both in the same instant would
-    // otherwise write this table's identity twice in one batch.
+    // NOTE: The catalog joins only filter. We store the dataflow's id, so
+    // the grain stays one row per dataflow, which is also what makes the identity
+    // unique without any aggregation: the log holds one row per
+    // `(export_id, worker_id)`, and we read a single worker.
     format!(
         "SELECT
-            ids.id AS object_id,
+            t.export_id AS object_id,
             '{cluster_id}'::text AS cluster_id,
             '{replica_id}'::text AS replica_id,
             t.installed_at,
-            min(t.started_at) AS started_at,
-            min(t.hydrated_at) AS finished_at,
+            t.started_at,
+            t.hydrated_at,
             'hydrated'::text AS status
         FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
         JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
@@ -283,22 +282,21 @@ fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> St
         WHERE t.worker_id = 0
           AND t.hydrated_at IS NOT NULL
           AND t.hydrated_at >= TIMESTAMPTZ '{cutoff}'
-          AND ids.id LIKE 'u%'
+          AND t.export_id LIKE 'u%'
           AND o.type IN ('index', 'materialized-view')
           AND NOT EXISTS (
               SELECT 1
               FROM mz_internal.mz_object_hydration_history AS h
-              WHERE h.object_id = ids.id
+              WHERE h.object_id = t.export_id
                 AND h.replica_id = '{replica_id}'::text
                 AND h.installed_at = t.installed_at
-          )
-        GROUP BY ids.id, t.installed_at"
+          )"
     )
 }
 
 /// A bounded batch of history rows that have aged out.
 ///
-/// Only rows with a `finished_at` age out. Every row written today has one, and
+/// Only rows with a `hydrated_at` age out. Every row written today has one, and
 /// a row without one would be immortal here, so an unfinished-episode
 /// representation needs a second age basis before it can be recorded.
 fn retention_sql(cutoff: &str) -> String {
@@ -310,10 +308,10 @@ fn retention_sql(cutoff: &str) -> String {
         "SELECT * FROM (
             SELECT
                 object_id, cluster_id, replica_id, installed_at, started_at,
-                finished_at, status
+                hydrated_at, status
             FROM mz_internal.mz_object_hydration_history
-            WHERE finished_at < TIMESTAMPTZ '{cutoff}'
-            ORDER BY finished_at
+            WHERE hydrated_at < TIMESTAMPTZ '{cutoff}'
+            ORDER BY hydrated_at
             LIMIT {RETENTION_BATCH_SIZE}
         )"
     )
@@ -492,16 +490,18 @@ mod tests {
 
     /// Cross-worker stamps are not comparable, since each process anchors its
     /// logging clock at its own `SystemTime`. The query must therefore stay on one
-    /// worker, and must not grow a cross-worker aggregate again.
+    /// worker, and must not grow an aggregate again: reading one worker is what
+    /// makes `(object_id, replica_id, installed_at)` unique without one.
     #[mz_ore::test]
-    fn collect_reads_one_worker() {
+    fn collect_reads_one_worker_without_aggregating() {
         let sql = collect_sql(
             ClusterId::user(1).expect("valid cluster ID"),
             ReplicaId::User(2),
             "1970-01-01T00:00:00+00:00",
         );
         assert!(sql.contains("t.worker_id = 0"), "{sql}");
-        assert!(!sql.contains("count("), "{sql}");
-        assert!(!sql.contains("max("), "{sql}");
+        for aggregate in ["count(", "max(", "min(", "GROUP BY"] {
+            assert!(!sql.contains(aggregate), "{aggregate} in {sql}");
+        }
     }
 }

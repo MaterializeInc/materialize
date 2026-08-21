@@ -87,13 +87,15 @@ mv_const hydrated_test_1 true false
 # turn cannot be recorded, rather than a special case. `idx` and `mv` keep their
 # dataflows installed, so they are stable.
 #
-# The recorded interval must be ordered, and a start is only recorded when the
-# replica observed one, so a NULL start is legal and satisfies the second column.
+# The recorded interval must be ordered. The replica reports the installation time
+# when it observed no start, so `started_at` is in practice never NULL, and the
+# coalesce only keeps the assertion honest if that ever changes.
 > SELECT o.name, r.name, h.status,
-         h.installed_at <= h.finished_at,
-         coalesce(h.installed_at <= h.started_at AND h.started_at <= h.finished_at, true)
+         h.installed_at <= h.hydrated_at,
+         coalesce(h.installed_at <= h.started_at AND h.started_at <= h.hydrated_at, true)
   FROM mz_internal.mz_object_hydration_history AS h
-  JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
   JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
   WHERE o.name IN ('idx', 'mv')
   ORDER BY o.name, r.name;
@@ -145,7 +147,8 @@ mv_const hydrated_test_2 true false
 
 > SELECT o.name, r.name, h.status
   FROM mz_internal.mz_object_hydration_history AS h
-  JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
   JOIN mz_catalog.mz_cluster_replicas AS r ON r.id = h.replica_id
   WHERE o.name IN ('idx', 'mv')
   ORDER BY o.name, r.name;
@@ -189,7 +192,8 @@ mv       hydrated_test_2 true
 # nothing. Repeated sweeps must also not duplicate an already recorded episode.
 > SELECT count(*)
   FROM mz_internal.mz_object_hydration_history AS h
-  JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+  JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+  JOIN mz_catalog.mz_objects AS o ON o.id = g.id
   WHERE o.name IN ('idx', 'mv');
 4
 

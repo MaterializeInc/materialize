@@ -1449,9 +1449,10 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
     def episodes() -> list[list]:
         return c.sql_query("""
             SELECT h.installed_at::text, h.started_at::text,
-                   h.finished_at::text, h.status
+                   h.hydrated_at::text, h.status
             FROM mz_internal.mz_object_hydration_history AS h
-            JOIN mz_catalog.mz_objects AS o ON o.id = h.object_id
+            JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = g.id
             WHERE o.name = 'hydration_history_i'
             ORDER BY h.installed_at""")
 
