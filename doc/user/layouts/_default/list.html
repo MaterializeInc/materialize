@@ -7,7 +7,7 @@
     {{- if not (strings.HasSuffix $basePath "/") -}}{{- $basePath = printf "%s/" $basePath -}}{{- end -}}
     {{- $pagePath := .RelPermalink | strings.TrimPrefix $basePath -}}
     {{- $mdURL := printf "%smarkdown-docs/%sindex.md" $basePath $pagePath -}}
-    <a class="btn-ghost" href="{{ $mdURL }}">View as Markdown</a>
+    <a class="btn-ghost" href="{{ $mdURL }}" rel="nofollow">View as Markdown</a>
   </div>
 {{ end }}
 
