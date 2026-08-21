@@ -7,7 +7,6 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-import { NUMBER_OR_NULL } from "~/test/sql/matchers";
 import {
   executeSqlHttp,
   getMaterializeClient,
@@ -42,10 +41,6 @@ describe("buildClusterSubscribe", () => {
           id: expect.any(String),
           name: "r1",
           size: "bootstrap",
-          cpuPercent: NUMBER_OR_NULL,
-          memoryPercent: NUMBER_OR_NULL,
-          diskPercent: NUMBER_OR_NULL,
-          heapPercent: NUMBER_OR_NULL,
           statuses: [
             {
               process_id: 0,
@@ -83,10 +78,6 @@ describe("buildClusterSubscribe", () => {
             id: expect.any(String),
             name: "r1",
             size: "bootstrap",
-            cpuPercent: NUMBER_OR_NULL,
-            memoryPercent: NUMBER_OR_NULL,
-            diskPercent: NUMBER_OR_NULL,
-            heapPercent: NUMBER_OR_NULL,
             statuses: [
               {
                 process_id: 0,

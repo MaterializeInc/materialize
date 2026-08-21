@@ -9,50 +9,10 @@
 
 import * as Sentry from "@sentry/react";
 import { QueryKey } from "@tanstack/react-query";
-import { InferResult, sql } from "kysely";
+import { InferResult } from "kysely";
 
 import { executeSqlV2, queryBuilder } from "~/api/materialize";
-import {
-  buildClusterReplicaUtilizationTable,
-  getOwners,
-  jsonArrayFrom,
-} from "~/api/materialize/expressionBuilders";
-
-/**
- * Replica utilization percentages, guaranteed one row per replica.
- *
- * The shared utilization builder groups by (replica_id, process_id), which is
- * the key of the underlying view, so it emits a row per process. Joining that
- * straight into the replica list would duplicate every multi-process replica
- * and inflate the replica count, so collapse the processes here.
- *
- * Dividing by the row count rather than using AVG mirrors the shared builder:
- * an offline process still has a row, with null metrics, and is meant to drag
- * the replica's number down rather than be skipped. Averaging percentages is
- * only sound because every process of a replica has the same allocation, so
- * the per-process denominators are identical.
- *
- * Heap is the exception and takes the max instead. Its denominator is
- * `heap_limit`, which the orchestrator reports per process rather than the
- * size catalog configuring per size, so the processes are not guaranteed to
- * share a denominator and an average of the percentages would not be a
- * percentage of anything. The max is also what the shared builder documents
- * for multi-process replicas.
- */
-function buildReplicaUtilization() {
-  return queryBuilder
-    .selectFrom(buildClusterReplicaUtilizationTable().as("cru"))
-    .groupBy("cru.replica_id")
-    .select([
-      "cru.replica_id as replicaId",
-      sql<number | null>`SUM(cru.cpu_percent) / COUNT(*)`.as("cpuPercent"),
-      sql<number | null>`SUM(cru.memory_percent) / COUNT(*)`.as(
-        "memoryPercent",
-      ),
-      sql<number | null>`SUM(cru.disk_percent) / COUNT(*)`.as("diskPercent"),
-      sql<number | null>`MAX(cru.heap_percent)`.as("heapPercent"),
-    ]);
-}
+import { getOwners, jsonArrayFrom } from "~/api/materialize/expressionBuilders";
 
 export type ClusterListFilters = {
   queryOwnership?: boolean;
@@ -105,10 +65,6 @@ export const buildClustersQuery = ({
         name: string;
         size: string | null;
         disk: boolean | null;
-        cpuPercent: number | null;
-        memoryPercent: number | null;
-        diskPercent: number | null;
-        heapPercent: number | null;
         statuses: {
           replica_id: string;
           process_id: string;
@@ -119,22 +75,11 @@ export const buildClustersQuery = ({
       }>(
         eb
           .selectFrom("mz_cluster_replicas as cr")
-          // A left join keeps replicas that have no metrics rows yet. The
-          // cluster detail query inner joins here, which drops them.
-          .leftJoin(
-            buildReplicaUtilization().as("cru"),
-            "cru.replicaId",
-            "cr.id",
-          )
           .select((replicaEb) => [
             "cr.id",
             "cr.name",
             "cr.size",
             "cr.disk",
-            "cru.cpuPercent",
-            "cru.memoryPercent",
-            "cru.diskPercent",
-            "cru.heapPercent",
             jsonArrayFrom(
               replicaEb
                 .selectFrom("mz_cluster_replica_statuses as crs_inner")

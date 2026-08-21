@@ -10,25 +10,26 @@
 import { Box, HStack, Text, useTheme } from "@chakra-ui/react";
 import React from "react";
 
+import {
+  calculateMemDiskUtilizationStatus,
+  DEFAULT_THRESHOLD_PERCENTAGES,
+  utilizationStatusToColor,
+} from "~/platform/environment-overview/utils";
 import { MaterializeTheme } from "~/theme";
+import { formatPercentage } from "~/utils/format";
 
 export interface PercentBarProps {
-  value: number | null | undefined;
+  /**
+   * Utilization as a fraction of the allocation, where 1 is fully used.
+   * Callers reading a relation that reports percentages must divide by 100.
+   */
+  fraction: number | null | undefined;
 }
 
-const getPercentColor = (
-  percent: number,
-  colors: MaterializeTheme["colors"],
-) => {
-  if (percent > 90) return colors.accent.red;
-  if (percent > 70) return colors.accent.orange;
-  return colors.accent.green;
-};
-
-const PercentBar = ({ value }: PercentBarProps) => {
+const PercentBar = ({ fraction }: PercentBarProps) => {
   const { colors } = useTheme<MaterializeTheme>();
 
-  if (value === null || value === undefined) {
+  if (fraction === null || fraction === undefined) {
     return (
       <Text as="span" color={colors.foreground.secondary}>
         —
@@ -36,14 +37,22 @@ const PercentBar = ({ value }: PercentBarProps) => {
     );
   }
 
-  // Color and width track the value as shown, not a rounded copy of it, so a
-  // reading of 90.4% reads as over the red threshold rather than sitting at it.
-  const barColor = getPercentColor(value, colors);
+  // Shares thresholds and palette with the utilization cards so one reading is
+  // coloured the same wherever it appears. Thresholds see the unrounded value,
+  // so a reading just above a boundary is coloured for where it sits rather
+  // than for its rounded display value.
+  const barColor = utilizationStatusToColor(
+    calculateMemDiskUtilizationStatus({
+      thresholdPercentages: DEFAULT_THRESHOLD_PERCENTAGES,
+      peakMemDiskUtilizationPercent: fraction,
+    }),
+    colors,
+  );
 
   return (
     <HStack spacing="2" minWidth="80px">
       <Text as="span" whiteSpace="nowrap" minWidth="32px">
-        {value.toFixed(1)}%
+        {formatPercentage(fraction, 1)}
       </Text>
       <Box
         width="48px"
@@ -55,7 +64,7 @@ const PercentBar = ({ value }: PercentBarProps) => {
       >
         <Box
           height="100%"
-          width={`${Math.min(value, 100)}%`}
+          width={`${Math.min(1, fraction) * 100}%`}
           borderRadius="full"
           bg={barColor}
           transition="width 0.3s ease"

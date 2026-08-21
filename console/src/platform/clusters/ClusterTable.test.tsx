@@ -68,10 +68,6 @@ const buildReplica = (overrides: Partial<Replica> = {}): Replica => ({
   name: "r1",
   size: "50cc",
   disk: true,
-  cpuPercent: 12.5,
-  memoryPercent: 40,
-  diskPercent: 25,
-  heapPercent: 45,
   statuses: [
     {
       replica_id: "u10",

@@ -10,7 +10,6 @@
 import { queryBuilder } from "~/api/materialize";
 import { buildSubscribeQuery } from "~/api/materialize/buildSubscribeQuery";
 import { buildClustersQuery } from "~/api/materialize/cluster/clusterList";
-import { NUMBER_OR_NULL } from "~/test/sql/matchers";
 import { getMaterializeClient } from "~/test/sql/materializeSqlClient";
 import { testdrive } from "~/test/sql/mzcompose";
 
@@ -47,10 +46,6 @@ describe("useClustersDropdown subscribe", () => {
           id: expect.any(String),
           name: "r1",
           size: "bootstrap",
-          cpuPercent: NUMBER_OR_NULL,
-          memoryPercent: NUMBER_OR_NULL,
-          diskPercent: NUMBER_OR_NULL,
-          heapPercent: NUMBER_OR_NULL,
           statuses: [
             {
               process_id: 0,

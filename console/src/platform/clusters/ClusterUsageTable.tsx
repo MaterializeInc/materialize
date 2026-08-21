@@ -15,6 +15,7 @@ import {
   ClusterWithOwnership,
   Replica,
 } from "~/api/materialize/cluster/clusterList";
+import { ReplicaUtilization } from "~/api/materialize/cluster/replicaUtilization";
 import useLatestOfflineReplica, {
   LatestOfflineReplicaInfo,
 } from "~/api/materialize/cluster/useLatestOfflineReplica";
@@ -38,6 +39,33 @@ import {
   ClusterNameCell,
   ClusterTableMeta,
 } from "./clusterTableCells";
+import { useReplicaUtilization } from "./queries";
+
+/**
+ * The utilization readings a replica row displays, as fractions of the
+ * replica's allocation. Null for a replica with no sample in the window.
+ */
+type ReplicaUtilizationValues = Omit<ReplicaUtilization, "replicaId">;
+
+const NO_UTILIZATION: ReplicaUtilizationValues = {
+  cpuPercent: null,
+  memoryPercent: null,
+  diskPercent: null,
+  heapPercent: null,
+};
+
+/**
+ * Utilization arrives from a separate query than the replica itself, so it is
+ * merged onto the replica before the table sees it. Sorting a cluster row by
+ * its busiest replica happens in a column accessor, which TanStack gives the
+ * row and nothing else, so the readings have to live on the row data rather
+ * than be looked up from table meta.
+ */
+type ReplicaWithUtilization = Replica & ReplicaUtilizationValues;
+
+type ClusterRowData = Omit<ClusterWithOwnership, "replicas"> & {
+  replicas: ReplicaWithUtilization[];
+};
 
 /**
  * One row in the clusters table: a cluster, or one of its replicas nested
@@ -45,9 +73,9 @@ import {
  * to share the parent's row type.
  */
 type ClusterRow =
-  | ({ rowType: "cluster" } & ClusterWithOwnership)
+  | ({ rowType: "cluster" } & ClusterRowData)
   // `clusterName` mirrors the parent's name for the global filter's benefit.
-  | ({ rowType: "replica"; clusterName: string } & Replica);
+  | ({ rowType: "replica"; clusterName: string } & ReplicaWithUtilization);
 
 const CLUSTER_ROW_CLASS = "cluster-row";
 
@@ -59,7 +87,7 @@ const ReplicaPercentCell = ({ value }: { value: number | null }) => {
   if (value === null) {
     return <>-</>;
   }
-  return <PercentBar value={value} />;
+  return <PercentBar fraction={value} />;
 };
 
 /** Formats a status-change timestamp for display, or "-" when there is none. */
@@ -112,9 +140,9 @@ const ReplicaLastStatusChangeCell = ({
  * If the two disagree, a cluster can sort above another whose replicas all rank
  * higher, because the two levels are being ranked by different rules.
  */
-const maxReplicaValue = <T,>(
-  replicas: Replica[],
-  read: (replica: Replica) => T | null,
+const maxReplicaValue = <R extends Replica, T>(
+  replicas: R[],
+  read: (replica: R) => T | null,
   compare: (a: T, b: T) => number,
 ): T | null =>
   replicas.reduce<T | null>((max, replica) => {
@@ -177,7 +205,7 @@ const columnHelper = createColumnHelper<ClusterRow>();
 const percentColumn = (
   id: string,
   header: string,
-  read: (replica: Replica) => number | null,
+  read: (replica: ReplicaWithUtilization) => number | null,
 ) =>
   columnHelper.accessor(
     // Sorting recurses into sub-rows with this same value, so a cluster
@@ -309,6 +337,7 @@ export interface ClusterUsageTableProps {
 export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   const { data: offlineReplicaMap, error: offlineReplicaError } =
     useLatestOfflineReplica();
+  const { data: replicaUtilization } = useReplicaUtilization();
   const { colors, space } = useTheme<MaterializeTheme>();
 
   const meta: ClusterTableMeta = { offlineReplicaMap };
@@ -316,8 +345,23 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   // TanStack recomputes its row models whenever `data` changes identity, so the
   // tagged copies have to outlive the render that built them.
   const rows = React.useMemo<ClusterRow[]>(
-    () => clusters.map((cluster) => ({ rowType: "cluster", ...cluster })),
-    [clusters],
+    () =>
+      clusters.map((cluster) => ({
+        rowType: "cluster",
+        ...cluster,
+        replicas: cluster.replicas.map((replica) => {
+          const utilization = replicaUtilization?.get(replica.id);
+          return {
+            ...replica,
+            cpuPercent: utilization?.cpuPercent ?? NO_UTILIZATION.cpuPercent,
+            memoryPercent:
+              utilization?.memoryPercent ?? NO_UTILIZATION.memoryPercent,
+            diskPercent: utilization?.diskPercent ?? NO_UTILIZATION.diskPercent,
+            heapPercent: utilization?.heapPercent ?? NO_UTILIZATION.heapPercent,
+          };
+        }),
+      })),
+    [clusters, replicaUtilization],
   );
 
   const table = useUniversalTable({

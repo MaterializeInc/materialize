@@ -12,6 +12,7 @@ import userEvent from "@testing-library/user-event";
 import React from "react";
 
 import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
+import { ReplicaUtilization } from "~/api/materialize/cluster/replicaUtilization";
 import { getStore } from "~/jotai";
 import { allClusters } from "~/store/allClusters";
 import { mockSubscribeState } from "~/test/mockSubscribe";
@@ -58,9 +59,17 @@ beforeEach(() => {
 // A row's actions menu renders only for clusters the user owns, and `useOwners`
 // reports "not the owner" until its query resolves. Claiming ownership up front
 // keeps the menu in the DOM without standing up the roles query.
+// Utilization arrives from its own polled query, so the fixtures register it
+// here and the table reads it back through the mocked hook.
+const replicaUtilization = new Map<string, ReplicaUtilization>();
+
 vi.mock("./queries", async () => {
   const actual = await vi.importActual("./queries");
-  return { ...actual, useOwners: () => ({ isOwner: () => true }) };
+  return {
+    ...actual,
+    useOwners: () => ({ isOwner: () => true }),
+    useReplicaUtilization: () => ({ data: replicaUtilization }),
+  };
 });
 
 const STATUS_UPDATED_AT = "2024-03-05T10:00:00.000Z";
@@ -69,44 +78,78 @@ const STATUS_UPDATED_AT = "2024-03-05T10:00:00.000Z";
 const formatted = (timestamp: string) =>
   formatDate(timestamp, FRIENDLY_DATETIME_FORMAT_NO_SECONDS);
 
-const buildReplica = (overrides: Partial<Replica> = {}): Replica => ({
-  id: "u10",
-  name: "r1",
-  size: "50cc",
-  disk: true,
-  cpuPercent: 12.5,
-  memoryPercent: 40,
-  diskPercent: 25,
-  heapPercent: 45,
-  statuses: [
-    {
-      replica_id: "u10",
-      process_id: "0",
-      reason: null,
-      status: "online",
-      updated_at: STATUS_UPDATED_AT,
-    },
-  ],
-  ...overrides,
-});
+/**
+ * Builds a replica and registers its utilization under the replica's id.
+ *
+ * Utilization is not part of the replica payload, but every call site wants to
+ * state a replica and its readings together, so the builder splits them: the
+ * replica is returned, the readings go into `replicaUtilization`. Readings are
+ * fractions of the allocation, as the view reports them.
+ */
+const buildReplica = ({
+  cpuPercent = 0.125,
+  memoryPercent = 0.4,
+  diskPercent = 0.25,
+  heapPercent = 0.45,
+  ...overrides
+}: Partial<Replica> & Partial<Omit<ReplicaUtilization, "replicaId">> = {}) => {
+  const replica: Replica = {
+    id: "u10",
+    name: "r1",
+    size: "50cc",
+    disk: true,
+    statuses: [
+      {
+        replica_id: "u10",
+        process_id: "0",
+        reason: null,
+        status: "online",
+        updated_at: STATUS_UPDATED_AT,
+      },
+    ],
+    ...overrides,
+  };
+  replicaUtilization.set(replica.id, {
+    replicaId: replica.id,
+    cpuPercent,
+    memoryPercent,
+    diskPercent,
+    heapPercent,
+  });
+  return replica;
+};
 
-/** A second replica, so the default cluster covers the multi-replica case. */
-const SECOND_REPLICA = buildReplica({
-  id: "u11",
-  name: "r2",
-  size: "100cc",
-});
+/**
+ * A second replica, so the default cluster covers the multi-replica case.
+ *
+ * A function rather than a constant: building it also registers its
+ * utilization, and a module-scope constant would register once and then be
+ * overwritten by any test that reuses id `u11`.
+ */
+const secondReplica = () =>
+  buildReplica({
+    id: "u11",
+    name: "r2",
+    size: "100cc",
+  });
 
 // User cluster ids ("u" prefix) matter: system clusters are filtered out of the
 // list unless the "show system objects" toggle is on.
-const buildCluster = (overrides: Partial<Cluster> = {}): Cluster => ({
+//
+// `replicas` is destructured rather than defaulted in the literal: building a
+// replica also registers its utilization, so an eagerly evaluated default would
+// re-register the default ids and overwrite whatever the caller just set.
+const buildCluster = ({
+  replicas,
+  ...overrides
+}: Partial<Cluster> = {}): Cluster => ({
   id: "u1",
   name: "compute",
   size: "50cc",
   disk: true,
   managed: true,
   ownerId: "u1",
-  replicas: [buildReplica(), SECOND_REPLICA],
+  replicas: replicas ?? [buildReplica(), secondReplica()],
   latestStatusUpdate: STATUS_UPDATED_AT,
   ...overrides,
 });
@@ -261,7 +304,7 @@ describe("ClustersList replica rows", () => {
               },
             ],
           }),
-          SECOND_REPLICA,
+          secondReplica(),
         ],
       }),
     ]);
@@ -283,7 +326,7 @@ describe("ClustersList replica rows", () => {
     it("renders zero as a percentage rather than blank", async () => {
       await renderClustersList([
         buildCluster({
-          replicas: [buildReplica(withValue(0)), SECOND_REPLICA],
+          replicas: [buildReplica(withValue(0)), secondReplica()],
         }),
       ]);
 
@@ -295,7 +338,7 @@ describe("ClustersList replica rows", () => {
     it("renders a dash when the replica has no sample", async () => {
       await renderClustersList([
         buildCluster({
-          replicas: [buildReplica(withValue(null)), SECOND_REPLICA],
+          replicas: [buildReplica(withValue(null)), secondReplica()],
         }),
       ]);
 
@@ -312,7 +355,7 @@ describe("ClustersList replica rows", () => {
   it("renders a dash when the replica has no size", async () => {
     await renderClustersList([
       buildCluster({
-        replicas: [buildReplica({ size: null }), SECOND_REPLICA],
+        replicas: [buildReplica({ size: null }), secondReplica()],
       }),
     ]);
 
@@ -322,7 +365,7 @@ describe("ClustersList replica rows", () => {
   it("renders a dash when the replica has no statuses", async () => {
     await renderClustersList([
       buildCluster({
-        replicas: [buildReplica({ statuses: [] }), SECOND_REPLICA],
+        replicas: [buildReplica({ statuses: [] }), secondReplica()],
       }),
     ]);
 
@@ -460,24 +503,24 @@ describe("ClustersList CPU sorting", () => {
       id: "u1",
       name: "alpha",
       replicas: [
-        buildReplica({ id: "u10", name: "a-0", cpuPercent: 0 }),
-        buildReplica({ id: "u11", name: "a-50", cpuPercent: 50 }),
+        buildReplica({ id: "u10", name: "a-0", cpuPercent: 0.0 }),
+        buildReplica({ id: "u11", name: "a-50", cpuPercent: 0.5 }),
       ],
     }),
     buildCluster({
       id: "u2",
       name: "bravo",
       replicas: [
-        buildReplica({ id: "u20", name: "b-30", cpuPercent: 30 }),
-        buildReplica({ id: "u21", name: "b-31", cpuPercent: 31 }),
+        buildReplica({ id: "u20", name: "b-30", cpuPercent: 0.3 }),
+        buildReplica({ id: "u21", name: "b-31", cpuPercent: 0.31 }),
       ],
     }),
     buildCluster({
       id: "u3",
       name: "charlie",
       replicas: [
-        buildReplica({ id: "u30", name: "c-89", cpuPercent: 89 }),
-        buildReplica({ id: "u31", name: "c-90", cpuPercent: 90 }),
+        buildReplica({ id: "u30", name: "c-89", cpuPercent: 0.89 }),
+        buildReplica({ id: "u31", name: "c-90", cpuPercent: 0.9 }),
       ],
     }),
   ];
@@ -534,12 +577,14 @@ describe("ClustersList CPU sorting", () => {
       buildCluster({
         id: "u1",
         name: "alpha",
-        replicas: [buildReplica({ id: "u10", name: "a-1", cpuPercent: 12.48 })],
+        replicas: [
+          buildReplica({ id: "u10", name: "a-1", cpuPercent: 0.1248 }),
+        ],
       }),
       buildCluster({
         id: "u2",
         name: "bravo",
-        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 12.5 })],
+        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.125 })],
       }),
     ]);
 
@@ -569,7 +614,7 @@ describe("ClustersList CPU sorting", () => {
       buildCluster({
         id: "u2",
         name: "bravo-sampled",
-        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 3 })],
+        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 })],
       }),
     ]);
 
@@ -589,7 +634,7 @@ describe("ClustersList CPU sorting", () => {
       buildCluster({
         id: "u2",
         name: "bravo-sampled",
-        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 3 })],
+        replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 })],
       }),
     ]);
 
