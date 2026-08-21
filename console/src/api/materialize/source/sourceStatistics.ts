@@ -84,6 +84,16 @@ const sourceStatisticsQueryWithReplicaId = ({
         )
         .end()
         .as("offsetDelta"),
+      sql<number | null>`max("offset_known"::numeric)`.as("offsetKnown"),
+      sql<number | null>`max("offset_committed"::numeric)`.as(
+        "offsetCommitted",
+      ),
+      sql<number>`coalesce(sum("records_indexed"::numeric), 0)`.as(
+        "recordsIndexed",
+      ),
+      sql<number>`coalesce(sum("bytes_indexed"::numeric), 0)`.as(
+        "bytesIndexed",
+      ),
       eb
         .case()
         .when(sql`bool_or("rehydration_latency" IS NULL)`)
@@ -143,6 +153,16 @@ const legacySourceStatisticsQuery = ({ sourceId }: SourceStatisticsArgs) =>
         )
         .end()
         .as("offsetDelta"),
+      sql<number | null>`max("offset_known"::numeric)`.as("offsetKnown"),
+      sql<number | null>`max("offset_committed"::numeric)`.as(
+        "offsetCommitted",
+      ),
+      sql<number>`coalesce(sum("records_indexed"::numeric), 0)`.as(
+        "recordsIndexed",
+      ),
+      sql<number>`coalesce(sum("bytes_indexed"::numeric), 0)`.as(
+        "bytesIndexed",
+      ),
       eb
         .case()
         .when(sql`bool_or("rehydration_latency" IS NULL)`)

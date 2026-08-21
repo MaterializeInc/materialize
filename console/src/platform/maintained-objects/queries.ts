@@ -222,9 +222,18 @@ export const useMaintainedObjectsList = ({
 
 export interface ObjectSourceStatistics {
   messagesReceived: number;
+  bytesReceived: number;
   snapshotRecordsKnown: number;
   snapshotRecordsStaged: number;
   rehydrationLatency: IPostgresInterval | null;
+  /** Latest upstream offset; null for source types without offsets. */
+  offsetKnown: number | null;
+  /** Latest durably ingested offset; null like `offsetKnown`. */
+  offsetCommitted: number | null;
+  /** Keys held in upsert state, summed across subsources. */
+  recordsIndexed: number;
+  /** Bytes of upsert state, summed across subsources. */
+  bytesIndexed: number;
 }
 
 export function useObjectSourceStatistics(sourceId: string) {
@@ -238,9 +247,15 @@ export function useObjectSourceStatistics(sourceId: string) {
       if (!row) return null;
       return {
         messagesReceived: Number(row.messagesReceived ?? 0),
+        bytesReceived: Number(row.bytesReceived ?? 0),
         snapshotRecordsKnown: Number(row.snapshotRecordsKnown ?? 0),
         snapshotRecordsStaged: Number(row.snapshotRecordsStaged ?? 0),
         rehydrationLatency: row.rehydrationLatency as IPostgresInterval | null,
+        offsetKnown: row.offsetKnown === null ? null : Number(row.offsetKnown),
+        offsetCommitted:
+          row.offsetCommitted === null ? null : Number(row.offsetCommitted),
+        recordsIndexed: Number(row.recordsIndexed ?? 0),
+        bytesIndexed: Number(row.bytesIndexed ?? 0),
       };
     },
   });
