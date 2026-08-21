@@ -136,6 +136,22 @@ hydrating is skipped and picked up by a later sweep. The cutoff and the anti-joi
 apply to the aggregate's output, since as `WHERE` clauses either one would drop the
 unfinished rows and make that check trivially true.
 
+Compute intends to split this stamp in two (CPU-226): `hydrated_at` redefined as
+the dataflow stage, uniform across workers and across read-only mode, and a new
+`written_at` for the durable stage. `hydrated_at` stays the stamp that gates
+recording here. A materialized view being replaced runs read-only and does not write
+until cutover, so gating on a write stamp would never record the hydration a
+deployment most wants to measure, and would wait forever on a replacement that is
+rolled back. `written_at` arrives as an additive nullable column, which schema
+evolution keeps the existing rows through.
+
+That split changes what a recorded `hydrated_at` means for a materialized view,
+from the durable stage to the dataflow stage, and rows already written are not
+relabelled. The staged rollout is what makes that cheap: if the split lands before
+production is enabled, only CI and staging ever hold the older meaning. Once the
+stamp is uniform across workers, the aggregate can also collapse back to a single
+worker, which removes the skew below.
+
 Two consequences. An interval can span workers in different processes, each
 anchoring its logging clock at its own `SystemTime`, so skew inflates a duration.
 Nothing rejects a row for looking inconsistent, deliberately, because a guard on
