@@ -23,6 +23,7 @@ use tokio::sync::mpsc;
 
 use crate::metrics::ComputeMetrics;
 use crate::server::ComputeRuntimeRole;
+use crate::sharing::ArrangementSharingRegistry;
 
 use super::index_peek_tests::{
     TARGET_ID, cancelling_errors, index_peek_with_uuid, rows_answer, trace_bundle, wide_ok_rows,
@@ -104,7 +105,9 @@ impl Harness {
         };
 
         let state = ComputeState::new(
+            ComputeRuntimeRole::Solo,
             Arc::new(PersistClientCache::new_no_metrics()),
+            ArrangementSharingRegistry::new(),
             TxnsContext::default(),
             metrics,
             Arc::new(TracingHandle::disabled()),
