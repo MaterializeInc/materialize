@@ -32,6 +32,8 @@ export const ObjectMetadata = ({ item }: ObjectMetadataProps) => {
           sourceId={item.id}
           sourceType={item.sourceType}
           sourceStatus={item.sourceStatus}
+          lag={item.lag}
+          cluster={item.cluster}
         />
       )}
       <ObjectColumnsList
