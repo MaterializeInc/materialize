@@ -87,9 +87,11 @@ mv_const hydrated_test_1 true false
 # turn cannot be recorded, rather than a special case. `idx` and `mv` keep their
 # dataflows installed, so they are stable.
 #
-# The recorded interval must be ordered. The replica reports the installation time
-# when it observed no start, so `started_at` is in practice never NULL, and the
-# coalesce only keeps the assertion honest if that ever changes.
+# The recorded interval must be ordered. The stamps are aggregated over a replica's
+# workers, so on a multi-process replica the ends can come from different process
+# clocks and the interval carries their skew. These replicas are single-process, so
+# the ordering is exact here. The coalesce covers a NULL start, which the replica no
+# longer produces but the column still permits.
 > SELECT o.name, r.name, h.status,
          h.installed_at <= h.hydrated_at,
          coalesce(h.installed_at <= h.started_at AND h.started_at <= h.hydrated_at, true)

@@ -1446,14 +1446,14 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
     row count of one would instead assert that rehydration goes unrecorded.
     """
 
-    def episodes() -> list[list]:
-        return c.sql_query("""
+    def episodes(name: str = "hydration_history_i") -> list[list]:
+        return c.sql_query(f"""
             SELECT h.installed_at::text, h.started_at::text,
                    h.hydrated_at::text, h.status
             FROM mz_internal.mz_object_hydration_history AS h
             JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
             JOIN mz_catalog.mz_objects AS o ON o.id = g.id
-            WHERE o.name = 'hydration_history_i'
+            WHERE o.name = '{name}'
             ORDER BY h.installed_at""")
 
     c.down(destroy_volumes=True)
@@ -1474,6 +1474,8 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             CREATE TABLE hydration_history_t (a int);
             CREATE INDEX hydration_history_i
                 IN CLUSTER hydration_history ON hydration_history_t (a);
+            CREATE MATERIALIZED VIEW hydration_history_mv
+                IN CLUSTER hydration_history AS SELECT a + 1 AS a FROM hydration_history_t;
             """))
 
         deadline = time.time() + 120
@@ -1486,6 +1488,23 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         assert (
             len(before) == 1
         ), f"expected exactly one episode, got {before} (empty means it timed out)"
+
+        # The materialized view's episode has to appear too. On this replica only
+        # one of the two workers has a write-inclusive `hydrated_at`, so a
+        # collector that reads a single worker or skips the completeness check can
+        # still produce a row here, but it would be one that precedes the snapshot
+        # write. What this pins down is that requiring every worker does not stop
+        # a materialized view from being recorded at all.
+        deadline = time.time() + 120
+        mv_episodes = []
+        while time.time() < deadline:
+            mv_episodes = episodes("hydration_history_mv")
+            if mv_episodes:
+                break
+            time.sleep(0.5)
+        assert (
+            len(mv_episodes) == 1
+        ), f"expected one materialized view episode, got {mv_episodes}"
 
         c.kill("materialized")
         c.up("materialized")

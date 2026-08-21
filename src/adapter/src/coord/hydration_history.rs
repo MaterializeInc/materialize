@@ -245,16 +245,27 @@ fn next_replica(
 
 /// The rows this replica has completed that the history table is missing.
 ///
-/// Reads worker 0 only, which loses nothing. A worker stamps `hydrated_at` when the
-/// reported output frontier passes the as_of, and that frontier moves only as
-/// timely's dataflow-wide progress tracking allows, so no worker sees it advance
-/// while another still holds capabilities below it. Worker 0's stamp therefore
-/// already accounts for the slowest worker, and there is no need to know the worker
-/// count or to wait for a complete set of rows.
+/// Aggregates every worker's row for an export, and records nothing until all of
+/// them have hydrated. One worker is not enough, because a materialized view's
+/// persist sink has a single active worker, `hash(sink_id) % workers`. Only that
+/// worker's reported output frontier is gated on the shard upper, so only its
+/// `hydrated_at` covers the initial snapshot write. Every other worker clears its
+/// sink write frontier and stamps at compute completion, which for a materialized
+/// view is before the data is durable. Taking `max` over a complete set of workers
+/// is therefore the only way to get a finish that means the same thing for every
+/// object, and it is the rule `mz_compute_hydration_times` already applies.
 ///
-/// Reading one worker also keeps the two stamps on one clock. Each process anchors
-/// its logging clock at its own `SystemTime`, so comparing `installed_at` from one
-/// worker with `hydrated_at` from another measures skew as much as elapsed time.
+/// Completeness needs no worker count. The log carries a row per
+/// `(export_id, worker_id)` from installation with a null `hydrated_at`, so
+/// `count(*) = count(hydrated_at)` says every worker that has the dataflow has
+/// finished. An object still hydrating is skipped rather than recorded with a
+/// finish that precedes its write, and a later sweep picks it up.
+///
+/// The interval spans workers, so it carries whatever skew there is between the
+/// process clocks that stamped its ends. Each process anchors its logging clock at
+/// its own `SystemTime`. That inflates a duration, and nothing here rejects a row
+/// for being inconsistent, which is deliberate: an ordering guard on cross-worker
+/// stamps rejects complete episodes permanently, since the log values never change.
 ///
 /// Needs no batch bound. The result is at most the replica's not-yet-recorded
 /// dataflows.
@@ -263,33 +274,47 @@ fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> St
     // cutoff is an RFC 3339 timestamp we formatted ourselves. Nothing in this
     // query comes from a user.
     //
-    // NOTE: The catalog joins only filter. We store the dataflow's id, so
-    // the grain stays one row per dataflow, which is also what makes the identity
-    // unique without any aggregation: the log holds one row per
-    // `(export_id, worker_id)`, and we read a single worker.
+    // NOTE: The cutoff and the anti-join sit outside the aggregate deliberately. As
+    // a `WHERE` clause either one drops not-yet-hydrated rows, which would make
+    // `count(*) = count(hydrated_at)` trivially true and hand back a compute-only
+    // finish for a materialized view whose active worker is still writing.
+    //
+    // NOTE: `hydrated_at` is the terminal stamp for an episode. Should the log gain
+    // a separate stamp for the durable write, it must not join this completeness
+    // check, however symmetric that looks. A materialized view being replaced runs
+    // read-only and does not write until cutover, so gating on a write stamp would
+    // never record the hydration that a deployment most wants to measure, and would
+    // wait forever on a replacement that is rolled back.
     format!(
         "SELECT
-            t.export_id AS object_id,
+            e.object_id,
             '{cluster_id}'::text AS cluster_id,
             '{replica_id}'::text AS replica_id,
-            t.installed_at,
-            t.started_at,
-            t.hydrated_at,
+            e.installed_at,
+            e.started_at,
+            e.hydrated_at,
             'hydrated'::text AS status
-        FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
-        JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
-        JOIN mz_catalog.mz_objects AS o ON o.id = ids.id
-        WHERE t.worker_id = 0
-          AND t.hydrated_at IS NOT NULL
-          AND t.hydrated_at >= TIMESTAMPTZ '{cutoff}'
-          AND t.export_id LIKE 'u%'
-          AND o.type IN ('index', 'materialized-view')
+        FROM (
+            SELECT
+                t.export_id AS object_id,
+                min(t.installed_at) AS installed_at,
+                min(t.started_at) AS started_at,
+                max(t.hydrated_at) AS hydrated_at
+            FROM mz_introspection.mz_compute_hydration_times_per_worker AS t
+            JOIN mz_internal.mz_object_global_ids AS ids ON ids.global_id = t.export_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = ids.id
+            WHERE t.export_id LIKE 'u%'
+              AND o.type IN ('index', 'materialized-view')
+            GROUP BY t.export_id
+            HAVING count(*) = count(t.hydrated_at)
+        ) AS e
+        WHERE e.hydrated_at >= TIMESTAMPTZ '{cutoff}'
           AND NOT EXISTS (
               SELECT 1
               FROM mz_internal.mz_object_hydration_history AS h
-              WHERE h.object_id = t.export_id
+              WHERE h.object_id = e.object_id
                 AND h.replica_id = '{replica_id}'::text
-                AND h.installed_at = t.installed_at
+                AND h.installed_at = e.installed_at
           )"
     )
 }
@@ -488,20 +513,32 @@ mod tests {
         assert_eq!(next_replica(&[], None), None);
     }
 
-    /// Cross-worker stamps are not comparable, since each process anchors its
-    /// logging clock at its own `SystemTime`. The query must therefore stay on one
-    /// worker, and must not grow an aggregate again: reading one worker is what
-    /// makes `(object_id, replica_id, installed_at)` unique without one.
+    /// A materialized view's finish is only durable on the sink's active worker, so
+    /// the query has to see every worker and take the latest stamp. Pinning a single
+    /// worker, or letting the cutoff or the anti-join filter rows before the
+    /// completeness check, silently reintroduces a finish that precedes the write.
     #[mz_ore::test]
-    fn collect_reads_one_worker_without_aggregating() {
+    fn collect_requires_every_worker() {
+        let cutoff = "1970-01-01T00:00:00+00:00";
         let sql = collect_sql(
             ClusterId::user(1).expect("valid cluster ID"),
             ReplicaId::User(2),
-            "1970-01-01T00:00:00+00:00",
+            cutoff,
         );
-        assert!(sql.contains("t.worker_id = 0"), "{sql}");
-        for aggregate in ["count(", "max(", "min(", "GROUP BY"] {
-            assert!(!sql.contains(aggregate), "{aggregate} in {sql}");
-        }
+        assert!(
+            sql.contains("HAVING count(*) = count(t.hydrated_at)"),
+            "{sql}"
+        );
+        assert!(sql.contains("max(t.hydrated_at)"), "{sql}");
+        assert!(!sql.contains("worker_id"), "{sql}");
+
+        // Both of these have to apply to the aggregate's output, not to the rows
+        // feeding it.
+        let aggregate_end = sql.find(") AS e").expect("aggregate subquery");
+        assert!(sql.find(cutoff).expect("cutoff") > aggregate_end, "{sql}");
+        assert!(
+            sql.find("NOT EXISTS").expect("anti-join") > aggregate_end,
+            "{sql}"
+        );
     }
 }
