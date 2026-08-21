@@ -30,9 +30,15 @@
 //! constructed per backend.
 //!
 //! Hedging operates within a single `retry_external` attempt, before any
-//! failure surfaces. The retry ladder, which is what recovers this failure
-//! class when hedging is off (at the cost of the full hang), stays untouched
-//! as the backstop.
+//! failure surfaces. The retrying in `retry_external`, which is what
+//! recovers this failure class when hedging is off (at the cost of the full
+//! hang), stays untouched as the backstop. The governing principle for
+//! every race below: the primary's outcome is authoritative, and the hedge
+//! is opportunistic, invisible unless it wins. Nothing here assumes callers
+//! retry: every branch of the race degrades to the outcome of the un-hedged
+//! get, delayed by at most one hedge delay, so a caller that treats a get
+//! error as fatal sees the same error it would have seen without hedging,
+//! at most that one delay later.
 //!
 //! NOTE: enabling hedging largely suppresses the old fingerprints of the
 //! dead-connection class (client timeout counters, the SDK's
@@ -340,11 +346,13 @@ impl HedgedBlob {
         let mut primary = std::pin::pin!(self.primary.get(key));
         // NOTE: `Timeout` polls the wrapped future before checking the
         // deadline, so a primary that is ready exactly at the delay
-        // boundary wins here without firing a hedge.
+        // boundary wins here without firing a hedge. A deadline-first
+        // combinator would not be incorrect, just wasteful: it would fire
+        // a redundant hedge (spending budget and skewing metrics) whenever
+        // the primary completes right at the boundary.
         if let Ok(res) = tokio::time::timeout(delay, primary.as_mut()).await {
-            // The fast path: the primary's result verbatim, success or
-            // error. A fast error stays on the ordinary retry-ladder path,
-            // since hedging targets hangs, not failures.
+            // A fast error is returned verbatim: hedging targets hangs,
+            // not failures.
             return res;
         }
         let Some((hedge_blob, guard)) = self.admit() else {
@@ -352,14 +360,16 @@ impl HedgedBlob {
         };
         self.metrics.fired.inc();
         let mut hedge = std::pin::pin!(hedge_blob.get(key));
-        // First success wins. The losing future is dropped, which cancels
-        // the request in flight (there is no task boundary between here and
-        // the backend). An error on one leg does not end the race: the slow
-        // leg is expected to be a hung request, and a fast-failing hedge
-        // must not convert a get that was about to succeed into an error.
+        // The losing future is dropped, which cancels the request in flight
+        // (there is no task boundary between here and the backend). An error
+        // on one leg does not end the race: the slow leg is expected to be a
+        // hung request, and a fast-failing hedge must not convert a get that
+        // was about to succeed into an error.
         // NOTE: `select` polls its first argument first, so a primary that
         // is ready simultaneously with the hedge is never miscredited as a
-        // hedge win. tokio::select! does NOT have this property unless
+        // hedge win, which matters because hedges_won is the detection
+        // signal that replaces the suppressed timeout counters (see the
+        // module doc). tokio::select! does NOT have this property unless
         // marked `biased`.
         match select(primary.as_mut(), hedge.as_mut()).await {
             Either::Left((Ok(res), _hedge)) => Ok(res),
@@ -368,12 +378,22 @@ impl HedgedBlob {
                 Ok(res)
             }
             Either::Left((Err(primary_err), hedge)) => {
-                // The primary failed after the hedge fired. If the hedge is
-                // healthy it wins within about one round trip, so wait a
-                // bounded extra window for it. Without the bound, a slow
-                // hedge would hold the get far past the point where
-                // returning the error to the retry ladder (which recovers
-                // this failure class reliably) is the better move.
+                // The primary failed after the hedge fired. Give the hedge
+                // a bounded grace window before returning the error: the
+                // window is only there to let an already-healthy hedge win,
+                // which takes about one round trip; reusing the hedge delay
+                // as its length caps the added latency of every branch at
+                // one delay (see the module doc). Beyond that, returning the
+                // primary's error is the better move: it is the un-hedged
+                // outcome, and the callers that wrap gets in retry_external
+                // recover this failure class promptly on a fresh
+                // connection, while an unbounded wait would gamble that
+                // recovery on the hedge leg's health, holding the get and
+                // its hedge slot for up to the blob client's per-attempt
+                // timeout when both legs are unhealthy. The guard stays
+                // held across the window on purpose: the hedge is still in
+                // flight, so the slot still bounds real work (contrast the
+                // hedge-error branch below).
                 match tokio::time::timeout(delay, hedge).await {
                     Ok(Ok(res)) => {
                         self.record_win(key, start);
@@ -382,11 +402,13 @@ impl HedgedBlob {
                     Ok(Err(hedge_err)) => {
                         self.metrics.errors.inc();
                         warn!(%key, %hedge_err, "hedged blob get: both requests failed");
-                        // Callers see the same error object they would have
-                        // seen without hedging. Do not attach the hedge
-                        // error as context: ExternalError::is_timeout
-                        // matches on the error string, so appending text can
-                        // change how the error is classified.
+                        // Do not attach the hedge error as context (the
+                        // warning above records it): the error surface
+                        // must not depend on whether a hedge fired (see
+                        // the module doc), and hedge text mentioning
+                        // timeouts could make a string-matching consumer
+                        // like ExternalError::is_timeout misclassify a
+                        // non-timeout error.
                         Err(primary_err)
                     }
                     Err(_elapsed) => {
