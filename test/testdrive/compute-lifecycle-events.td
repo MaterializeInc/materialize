@@ -18,6 +18,15 @@
 
 $ set-sql-timeout duration=60s
 
+# A dropped export's rows are retracted after a delay, so that its history stays
+# readable for a while. Shorten both delays rather than disabling them, so the
+# delayed path is the one under test. Values below the introspection interval are
+# floored to it, so 2s is the effective minimum here.
+
+$ postgres-execute connection=postgres://mz_system:materialize@${testdrive.materialize-internal-sql-addr}
+ALTER SYSTEM SET compute_lifecycle_retraction_delay = '2s';
+ALTER SYSTEM SET compute_lifecycle_retraction_delay_transient = '2s';
+
 > CREATE CLUSTER test SIZE 'scale=1,workers=2'
 > SET cluster = test
 
@@ -106,12 +115,21 @@ true
 # positively here. The invariant block at the end of this file requires the
 # blocked/unblocked pair to be absent or complete, never that it is present.
 
-# Dropping an object retracts its rows, so the log does not accumulate
-# lifecycles of objects that no longer exist. Transient dataflows are excluded:
-# a peek installs one with a `t` prefixed export id that is never in
-# `mz_objects`, so it would read as an orphan for as long as it lives.
+# Dropping an object records a `dropped` stage, so a lingering history says what
+# became of the object rather than only that it once existed.
 
 > DROP MATERIALIZED VIEW mv
+
+> SELECT DISTINCT l.event
+  FROM mz_introspection.mz_compute_lifecycle_events_per_worker l
+  WHERE l.details->>'as_of' IS NOT NULL AND l.event = 'dropped'
+dropped
+
+# The rows are then retracted, so the log does not accumulate the lifecycles of
+# objects that no longer exist. Transient dataflows are excluded from the orphan
+# check: a peek installs one with a `t` prefixed export id that is never in
+# `mz_objects`, so it reads as an orphan for as long as it lives.
+
 > DROP INDEX idx
 
 > SELECT count(*)
@@ -132,7 +150,7 @@ $ set-max-tries max-tries=1
   FROM mz_introspection.mz_compute_lifecycle_events_per_worker
   WHERE event NOT IN (
             'installed', 'started', 'hydrated',
-            'write_blocked', 'write_unblocked', 'written'
+            'write_blocked', 'write_unblocked', 'written', 'dropped'
         )
      OR reason NOT IN ('read_only')
      OR (reason IS NOT NULL AND event <> 'write_blocked')

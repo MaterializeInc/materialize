@@ -3146,6 +3146,8 @@ class FlipFlagsAction(Action):
             "compute_replica_expiration_offset",
             "enable_compute_render_fueled_as_specific_collection",
             "compute_temporal_bucketing_summary",
+            "compute_lifecycle_retraction_delay",
+            "compute_lifecycle_retraction_delay_transient",
             "enable_compute_logical_backpressure",
             "enable_replica_targeted_materialized_views",
             "compute_logical_backpressure_max_retained_capabilities",

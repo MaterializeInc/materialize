@@ -166,6 +166,7 @@ impl LoggingContext<'_> {
                 self.config,
                 self.c_event_queue.clone(),
                 Rc::clone(&self.shared_state),
+                Rc::clone(&self.worker_config),
             );
             collections.extend(compute_collections);
 
