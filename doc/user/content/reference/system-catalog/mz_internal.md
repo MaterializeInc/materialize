@@ -1395,7 +1395,7 @@ logging an execution is controlled by the
 to log nothing; a value of 0.8 means to log approximately 80% of
 statement executions. If `statement_logging_sample_rate` is higher
 than `statement_logging_max_sample_rate`, the latter is used instead. In
-Materialize Cloud, that cap is set by Materialize; in self-managed deployments,
+Materialize Cloud, that cap is set by Materialize. In self-managed deployments,
 it is set by the operator.
 
 | Field                   | Type                         | Meaning                                                                                                                                                                                                                                                                                                    |

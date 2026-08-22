@@ -291,7 +291,7 @@ attribute performance information to each LIR operator.
 ## How do I troubleshoot slow queries?
 
 Materialize stores a (sampled) log of the SQL statements that are issued against
-your Materialize region in the last **three days**, along with various metadata
+your Materialize region in the last **24 hours**, along with various metadata
 about these statements. You can access this log via the **"Query history"** tab
 in the [Materialize console](/console/). You can filter
 and sort statements by type, duration, and other dimensions.
@@ -300,10 +300,11 @@ This data is also available via the
 [mz_internal.mz_recent_activity_log](/reference/system-catalog/mz_internal/#mz_recent_activity_log)
 catalog table.
 
-It's important to note that the default (and max) sample rate for most
-Materialize organizations is 99%, which means that not all statements will be
-captured in the log. The sampling rate is not user-configurable, and may change
-at any time.
+It's important to note that statements are sampled, so not all of them will be
+captured in the log. In Materialize Cloud, the default and maximum sample rate
+for most organizations is 99%, and Materialize may change it at any time. In
+self-managed deployments, the maximum sample rate is set by the operator. See
+[Query History](/self-managed-deployments/query-history/).
 
 If you're looking for a complete audit history, use the [mz_audit_events](/reference/system-catalog/mz_catalog/#mz_audit_events)
 catalog table, which records all DDL commands issued against your Materialize
