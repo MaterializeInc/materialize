@@ -216,7 +216,7 @@ pub struct Args {
     /// Overrides environmentd's default `statement_logging_max_sample_rate`. A
     /// rate of 0 disables statement logging entirely. Leave unset to keep
     /// environmentd's own default.
-    #[clap(long)]
+    #[clap(long, value_parser = parse_sample_rate)]
     statement_logging_max_sample_rate: Option<f64>,
 
     #[clap(long)]
@@ -343,6 +343,17 @@ fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
 
 fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, serde_json::Error> {
     serde_json::from_str(val)
+}
+
+/// Rejects rates environmentd's `NUMERIC_BOUNDED_0_1_INCLUSIVE` constraint
+/// would reject, which it does by refusing to open its catalog. Validating here
+/// surfaces the mistake where the rate was configured.
+fn parse_sample_rate(s: &str) -> anyhow::Result<f64> {
+    let rate: f64 = s.parse()?;
+    if !(0.0..=1.0).contains(&rate) {
+        anyhow::bail!("sample rate must be between 0 and 1, got {rate}");
+    }
+    Ok(rate)
 }
 
 #[tokio::main]
