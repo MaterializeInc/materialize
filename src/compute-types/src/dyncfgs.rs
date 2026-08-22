@@ -245,6 +245,32 @@ pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "The summary to apply to frontiers in temporal bucketing in compute.",
 );
 
+/// How long to keep a dropped export's lifecycle rows before retracting them.
+///
+/// The rows of `mz_compute_lifecycle_events_per_worker` are retracted when an export is dropped,
+/// which without a delay makes an object's history vanish the moment it goes away. Delaying the
+/// retraction leaves the history readable for a while after the fact.
+///
+/// Clamped up to the logging interval, since a shorter delay can round to the same update
+/// timestamp as the insertion and leave the rows never separately visible.
+pub const LIFECYCLE_RETRACTION_DELAY: Config<Duration> = Config::new(
+    "compute_lifecycle_retraction_delay",
+    Duration::from_secs(300),
+    "How long to keep a dropped export's rows in the compute lifecycle log.",
+);
+
+/// As [`LIFECYCLE_RETRACTION_DELAY`], for transient exports.
+///
+/// Transient exports are created per peek and per subscribe, so their churn is driven by query
+/// rate rather than by DDL. Retaining them for the same duration as user objects would cost
+/// hundreds of megabytes on a busy replica, where a few seconds is enough for a reader to observe
+/// them at all.
+pub const LIFECYCLE_RETRACTION_DELAY_TRANSIENT: Config<Duration> = Config::new(
+    "compute_lifecycle_retraction_delay_transient",
+    Duration::from_secs(5),
+    "How long to keep a dropped transient export's rows in the compute lifecycle log.",
+);
+
 /// The yielding behavior with which linear joins should be rendered.
 pub const LINEAR_JOIN_YIELDING: Config<&str> = Config::new(
     "linear_join_yielding",
@@ -575,6 +601,8 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
         .add(&TEMPORAL_BUCKETING_SUMMARY)
+        .add(&LIFECYCLE_RETRACTION_DELAY)
+        .add(&LIFECYCLE_RETRACTION_DELAY_TRANSIENT)
         .add(&LINEAR_JOIN_YIELDING)
         .add(&ENABLE_LGALLOC)
         .add(&LGALLOC_BACKGROUND_INTERVAL)

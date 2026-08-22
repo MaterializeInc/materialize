@@ -198,11 +198,13 @@ details      jsonb       nullable
 | `write_blocked` | per object | `read_only` |
 | `write_unblocked` | per object | none |
 | `written` | per object | none |
+| `dropped` | per worker | none |
 
-An index emits the first three and stops, which is the index degeneracy of the
-lifecycle falling out of the model rather than being special-cased. Subscribes and
-`COPY TO` stop early for the same reason, and a metric sink folds its output into
-the metrics registry rather than into a shard, so it has no write stages either.
+An index emits the first three and then `dropped`, stopping short of the write
+stages, which is the index degeneracy of the lifecycle falling out of the model
+rather than being special-cased. Subscribes and `COPY TO` stop early for the same
+reason, and a metric sink folds its output into the metrics registry rather than
+into a shard, so it has no write stages either.
 
 **Grain.** `worker_id` is the worker that observed the event and is never NULL. The
 per-object events are observed by the single worker that maintains the sink's
@@ -277,9 +279,37 @@ earn a column and is worth having in the row. Invariant tests must assert on
 `event`, `reason` and `occurred_at` and never on `details`, or the first test that
 pins a field removes the extensibility it exists for.
 
-**Bounds.** At most six rows per object, times workers for the first three events,
-all retracted when the object is dropped. This is in-memory introspection, so
-there is no durable growth to reason about.
+**Bounds.** At most seven rows per object, times workers for the four per-worker
+events, all retracted a delay after the object is dropped. This is in-memory
+introspection, so there is no durable growth to reason about, but for the length of
+that delay a dropped object's rows are still resident.
+
+The delay is what makes a dropped object's history readable at all, and the two
+populations churn at rates too different to share one value. A transient export
+exists per peek and per subscribe, so its rate is the query rate: at eight workers
+and two hundred peeks per second, a five minute window holds around 1.4 million
+rows, hundreds of megabytes. A few seconds is enough for a reader to observe them
+and costs single digit megabytes. A user object is dropped by DDL, so a thousand
+drops inside a five minute window is under ten megabytes, and there the history is
+the thing worth keeping. Hence `compute_lifecycle_retraction_delay` and
+`compute_lifecycle_retraction_delay_transient`, defaulting to five minutes and five
+seconds.
+
+Both are floored at the logging interval in code rather than by convention. The
+demux rounds update timestamps up to that interval, so a shorter delay can round to
+the same timestamp as the insertion, retracting the rows before any reader can
+observe them and defeating the point. Reading the delays per batch rather than at
+construction is what lets a `dyncfg` change take effect without recreating the
+logging dataflow, and it makes them eligible for per-replica overrides, so a
+replica under investigation can retain longer than the rest.
+
+**`dropped` is a stage, not just a retraction.** Without it a lingering row says
+only that an export reached some stage, not whether it still exists, so "hydrated
+but never written" cannot be told apart from "dropped before it wrote". With it the
+last event names the object's fate and the delay is pure retention. It also makes
+the log self-describing while a delay window is open: a row whose `export_id` no
+longer appears in `mz_objects` is explained by its own `dropped` event rather than
+reading as a leak.
 
 **Only `read_only` is attributed.** It is the one cause of a write block that
 compute can observe. Two further attributions would be useful and are not
@@ -518,15 +548,21 @@ downstream of it. Those objects get fresh timestamps on a replica that has been 
 for a long time. That is arguably correct, since the dataflows really were
 rebuilt, but it is not obvious from the outside.
 
-**Very short episodes may not be observable at all.** The demux assigns updates a
-timestamp rounded up to the logging interval, and the introspection write path
-consolidates: the subscribe handler discards the subscribe timestamp and flattens
-a batch into one append, and the storage write task consolidates on its own batch
-interval. So an object whose transitions all fall inside one such window presents
-only its final state, and an object that dies before its rows reach persist leaves
-no record. In the limit this is unavoidable, and stamping event time rather than
-the rounded update timestamp is what keeps it to a visibility limit rather than an
-accuracy one: an episode that is recorded is recorded accurately.
+**Very short episodes are recorded, but not as a sequence of states.** The demux
+assigns updates a timestamp rounded up to the logging interval, and the
+introspection write path consolidates: the subscribe handler discards the subscribe
+timestamp and flattens a batch into one append, and the storage write task
+consolidates on its own batch interval. An object whose transitions all fall inside
+one such window therefore appears with its whole history at once rather than
+progressing through it. Stamping event time rather than the rounded update
+timestamp is what keeps that a limit on snapshots rather than on accuracy: the
+sequence and the intervals survive the rounding even where the intermediate states
+are never separately visible.
+
+What is not lost is the episode itself, and that is the retraction delay's doing. A
+dataflow that comes and goes inside one interval still leaves its rows behind for a
+reader to find, which is the case that matters most, since a dataflow dropped
+before it hydrated is exactly the one someone is looking for.
 
 **A crash is not a compute event and is not reported here.** A replica that dies
 cannot report its own death. What the relation shows is that a dropped object's
@@ -616,7 +652,14 @@ The lifecycle log:
 - `src/compute/src/logging/compute.rs`: the `Lifecycle` event and the
   `LifecycleStage` vocabulary, an as-of field on `Export`, a demux output and
   packer including the `jsonb` column, and the emitted rows kept on `ExportState`
-  so that they can be retracted verbatim when the export is dropped.
+  so that they can be retracted verbatim, at a delayed timestamp, when the export
+  is dropped.
+- `src/compute-types/src/dyncfgs.rs`: the two retraction delays. They reach the
+  replica through `ComputeCommand::UpdateConfiguration`, which applies them in place
+  to the `ConfigSet` the logging dataflow holds, so no plumbing beyond registration
+  is needed. `misc/python/materialize/mzcompose/__init__.py` and
+  `misc/python/materialize/parallel_workload/action.py` must both list the flag
+  names, or `check-test-flags` fails.
 - `src/compute/src/compute_state.rs`: the stage bookkeeping on `CollectionState`
   and the observation of both frontiers in `report_frontiers`.
 - `src/compute/src/sink/materialized_view.rs` and `materialized_view_v2.rs`: the
@@ -658,6 +701,8 @@ New testdrive coverage worth adding:
 - An import-free dataflow carrying `started_at` from creation, equal to its
   `installed_at`, and satisfying the ordering invariant.
 - Log collections having all three timestamps set.
+- A dropped object's rows outliving the drop by the configured delay, carrying a
+  `dropped` event, and then disappearing.
 - All timestamps surviving an environmentd restart unchanged.
 - A replica restart yielding entirely fresh values.
 
