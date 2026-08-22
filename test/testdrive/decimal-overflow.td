@@ -32,9 +32,14 @@ contains:value out of range: underflow
 ! SELECT '999999999999999999999999999999999999999'::decimal * 10::decimal;
 contains:value out of range: overflow
 
-# ROUND creates a value that is too large
-! SELECT ROUND('999999999999999999999999999999999999999'::decimal,1);
+# ROUND carries into a value that is too large
+! SELECT ROUND('999999999999999999999999999999999999999'::decimal,-1);
 contains:value out of range: overflow
+
+# A positive scale only right-pads with zeroes, so it cannot make the value too
+# large. The scale clamps to what the datum can hold.
+> SELECT ROUND('999999999999999999999999999999999999999'::decimal,1);
+999999999999999999999999999999999999999
 
 # POW
 ! SELECT POW(99999::decimal,9);

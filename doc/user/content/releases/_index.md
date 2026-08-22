@@ -19,6 +19,89 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.38.0
+*Released to Materialize Cloud: 2026-08-19* <br>
+
+### Dictionary compression {#v26.38-dictionary-compression}
+
+{{< public-preview />}}
+
+Dictionary compression reduces the memory that
+[arrangements](/get-started/arrangements/#arrangements) use when a column holds the same values repeatedly. Instead of storing a repeated column value each time it appears, Materialize stores that value once and has each row reference it. This can reduce steady state memory requirements after [hydration](/concepts/hydration/) has completed.
+
+Dictionary compression is off by default. You opt in per cluster with the
+`EXPERIMENTAL ARRANGEMENT COMPRESSION` option:
+
+```mzsql
+-- Turn compression on for a new cluster
+CREATE CLUSTER my_cluster (
+    SIZE = '100cc',
+    EXPERIMENTAL ARRANGEMENT COMPRESSION = true
+);
+
+-- Or turn it on for an existing cluster
+ALTER CLUSTER my_cluster SET (EXPERIMENTAL ARRANGEMENT COMPRESSION = true);
+```
+
+For more information, see:
+- [Guide: Dictionary compression](/transform-data/dictionary-compression/), including [when it helps and when it does not](/transform-data/dictionary-compression/#the-tradeoff)
+- [`CREATE CLUSTER`: Dictionary compression](/sql/create-cluster/#dictionary-compression)
+- [`ALTER CLUSTER`: Dictionary compression](/sql/alter-cluster/#dictionary-compression)
+
+<!--
+### Integrate with your observability stack {#v26.38-self-managed-observability}
+
+<red>*Materialize Self-Managed only*</red>
+
+Materialize Self-Managed now integrates with the observability tools you already
+run. You can export metrics, and optionally logs, from Materialize to Datadog,
+Honeycomb, Google Cloud Monitoring, Prometheus remote write, or any monitoring
+backend with an Open Telemetry (OTLP) endpoint. Template dashboards and alerts are provided to
+help you get started.
+
+Follow the instructions for your destination:
+- [Datadog](/manage/monitor/self-managed/datadog/)
+- [Honeycomb](/manage/monitor/self-managed/honeycomb/)
+- [Google Cloud Monitoring](/manage/monitor/self-managed/google-cloud-monitoring/)
+- [Prometheus remote write](/manage/monitor/self-managed/prometheus-remote-write/), for Mimir, Amazon Managed Prometheus, or Grafana Cloud
+- [OpenTelemetry](/manage/monitor/self-managed/opentelemetry/), for any other OTLP endpoint, including your own collector
+
+If you don't have an observability stack set up, the [Materialize Terraform
+modules](/self-managed-deployments/installation/#install-using-terraform-modules)
+can deploy one alongside Materialize. It collects metrics from Materialize and
+from your Kubernetes cluster, collects Materialize's container logs and
+Kubernetes events, stores both in your own object storage, and ships [Grafana](/manage/monitor/self-managed/grafana/)
+dashboards and Alertmanager alert rules to query them. The stack is controlled by
+the `enable_observability` variable, which defaults to `true` starting with
+v11.0.0 of the modules.
+
+For more information, see:
+- [Monitoring Self-Managed Materialize](/manage/monitor/self-managed/)
+- [How logs and metrics are stored and delivered](/manage/monitor/self-managed/storage/)
+- [Alerting](/manage/monitor/self-managed/alerting/)
+-->
+
+### Improvements {#v26.38-improvements}
+- **Notice for single-replica sources on multi-replica clusters**: Materialize now warns when a command leaves a cluster holding more than one replica alongside PostgreSQL, MySQL, or SQL Server sources, which always run on a single replica, since the extra replicas make those sources neither more fault tolerant nor faster to ingest.
+- **Self-Managed: Graceful resizing of system clusters**: `ALTER CLUSTER ... SET (SIZE ...)` on a system cluster such as `mz_catalog_server` or `mz_system` now runs as a background graceful reconfiguration, with a 24-hour default deadline and a rollback on timeout, instead of recreating the whole replica set at once, so `SHOW CLUSTERS` settles on the new configuration rather than flipping to it.
+
+### Agent Skills {#v26.38-agent-skills}
+- **materialize-debug-freshness**: New agent skill for diagnosing why an object is behind wall-clock time, whether that surfaces as a stale materialized view, index, or sink, or as a freshness alert. Running on the read-only tools of the Materialize developer MCP server, it ranks what is lagging, attributes the lag to a single hop, then rules out in-progress hydration, a replica dominated by one dataflow, and per-worker skew before naming the culprit operator and the SQL responsible for the expensive work.
+- **mz-deploy**: New agent skill covering the `mz-deploy` CLI — project layout, the compile/test/apply/stage/promote workflow, deploy IDs and staging suffixes, schema-granularity conflict detection, stable API schemas, profile resolution, and the `EXECUTE UNIT TEST` grammar.
+- **mz-sql-lsp**: New Claude Code plugin, installable from the `agent-skills` repository's new `materialize` plugin marketplace, that registers the `mz-deploy` language server for `.sql` files so agents can use go-to-definition, hover, and workspace symbols in an mz-deploy project instead of text search.
+
+### Bug Fixes {#v26.38-bug-fixes}
+- Fixed an `INSERT` that ran concurrently with an `ALTER TABLE ... ADD COLUMN` crashing the server; the insert now fails with a retryable serialization error instead.
+- Fixed an environment restarting every few seconds and never becoming reachable when it held a sealed collection whose dependency had no readable history left; such a collection no longer blocks startup, so an operator can drop and recreate the affected object.
+- Fixed filter pushdown discarding data that matched the query when a float column contained negative `NaN` values, so the query returned too few rows.
+- Fixed a `TIMESTAMPTZ` literal near the end of the representable range, and rounding such a value to a lower precision, aborting the server.
+- Fixed several date/time and range text-format bugs: a sub-second value that rounded up to a full second rendered about a second early, a `TIME` string naming no time field was accepted instead of erroring, a quoted range bound kept its quotes so a `tsrange` could not survive a `::text::tsrange` round trip, and a BC date was not quoted inside a composite value.
+- Fixed a regular expression exhausting server memory before erroring — a pattern under the documented 1 MiB limit could allocate several gigabytes while being translated — by also rejecting patterns with more than 2000 character classes, counting each Unicode, Perl, or POSIX class such as `\p{L}`, `\d`, or `[[:alpha:]]`, and each range such as `a-z`.
+- Fixed a webhook source's `CHECK` expression having no bound on the memory it may allocate, which let concurrent requests to a source with an amplifying check exhaust server memory; a check that exceeds the budget, 20 MiB per request by default, is now refused with a `400` response.
+- Fixed the enforced connection limit picking up an `ALTER SYSTEM SET max_connections` from a transaction that was then rolled back, so the limit clients were held to could differ from the committed value.
+- Fixed `dbt-materialize`'s `deploy_init` failing when `CI_TAG` is set, the setup the blue/green deployment documentation prescribes, and made it quote the deployment schema consistently so a schema name that is not a bare lowercase identifier is handled correctly throughout the operation.
+- Fixed the comment `dbt-materialize`'s `deploy_promote` puts on each promoted schema ending without a timestamp.
+
 ## v26.37.0
 *Released to Materialize Cloud: 2026-08-12* <br>
 *Released to Materialize Self-Managed: 2026-08-13* <br>

@@ -24,6 +24,7 @@ Concept                                  | Description
 [Sources](/concepts/sources/)            | Sources describe an external system you want Materialize to read data from.
 [Views](/concepts/views/)    | Views represent a named query that you want to save for repeated execution. You can use **indexed views** and **materialized views** to incrementally maintain the results of views.
 [Indexes](/concepts/indexes/)            | Indexes represent query results stored in memory.
+[Arrangements](/get-started/arrangements/) | Arrangements are the in-memory data structures that maintain indexes and materialized views.
 [Sinks](/concepts/sinks/)                | Sinks describe an external system you want Materialize to write data to.
 [Snapshotting](/concepts/snapshotting/) | The initial sync of a source's data from an upstream system, before the source can serve queries.
 [Hydration](/concepts/hydration/) | {{< include-from-yaml data="hydration-details" name="definition" >}}
