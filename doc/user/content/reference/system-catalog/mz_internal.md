@@ -37,9 +37,11 @@ The `mz_object_global_ids` table maps Materialize catalog item IDs to global IDs
 {{< public-preview />}}
 
 {{< warning >}}
-Do not rely on all statements being logged in this view. Materialize
-controls the maximum rate at which statements are sampled, and may change
-this rate at any time.
+Do not rely on all statements being logged in this view. The maximum rate at
+which statements are sampled is capped by the
+`statement_logging_max_sample_rate` system parameter. In Materialize Cloud,
+Materialize controls this cap and may change it at any time. In self-managed
+deployments, it is set by the operator.
 {{< /warning >}}
 
 {{< warning >}}
@@ -54,8 +56,11 @@ Entries in this log may be sampled. The sampling rate is controlled by
 the configuration parameter `statement_logging_sample_rate`, which may be set
 to any value between 0 and 1. For example, to disable statement
 logging entirely for a session, execute `SET
-statement_logging_sample_rate TO 0`. Materialize may apply a lower
-sampling rate than the one set in this parameter.
+statement_logging_sample_rate TO 0`. The effective rate is the lower of this
+parameter and the `statement_logging_max_sample_rate` system parameter, so a
+lower cap may apply than the one set here. In self-managed deployments, see
+[Query History](/self-managed-deployments/query-history/) for how to configure
+the cap.
 
 The view can be accessed by Materialize _superusers_ or users that have been
 granted the [`mz_monitor` role](/security/appendix/appendix-built-in-roles/#system-catalog-roles).
@@ -1389,8 +1394,9 @@ logging an execution is controlled by the
 `statement_logging_sample_rate` configuration parameter. A value of 0 means
 to log nothing; a value of 0.8 means to log approximately 80% of
 statement executions. If `statement_logging_sample_rate` is higher
-than `statement_logging_max_sample_rate` (which is set by Materialize
-and cannot be changed by users), the latter is used instead.
+than `statement_logging_max_sample_rate`, the latter is used instead. In
+Materialize Cloud, that cap is set by Materialize; in self-managed deployments,
+it is set by the operator.
 
 | Field                   | Type                         | Meaning                                                                                                                                                                                                                                                                                                    |
 |-------------------------|------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|

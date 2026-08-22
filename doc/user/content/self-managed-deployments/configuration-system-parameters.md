@@ -211,6 +211,7 @@ The following are some commonly configured system parameters:
 | `max_clusters` | Maximum number of clusters in the region |
 | `max_sources` | Maximum number of sources in the region |
 | `max_sinks` | Maximum number of sinks in the region |
+| `statement_logging_max_sample_rate` | Cap on the fraction of statements recorded in [query history](/self-managed-deployments/query-history/) |
 
 For a complete list of available system parameters and their descriptions, see
 the [configuration parameters](/sql/alter-system-set/#key-configuration-parameters)
@@ -251,6 +252,27 @@ data:
   system-params.json: |
     {
       "allowed_cluster_replica_sizes": "'25cc', '50cc', '100cc', '200cc'"
+    }
+```
+
+### Sample ConfigMap: Configuring the Query History Sample Rate
+
+The following sample ConfigMap YAML sets the
+`statement_logging_max_sample_rate` parameter, which caps the fraction of
+statements recorded in [query
+history](/self-managed-deployments/query-history/). A value set here overrides
+the Helm chart's default and persists in the catalog:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mz-system-params
+  namespace: materialize-environment
+data:
+  system-params.json: |
+    {
+      "statement_logging_max_sample_rate": 0.5
     }
 ```
 
@@ -311,6 +333,7 @@ kubectl logs -l app=environmentd -n materialize-environment | grep -i "system.*p
 
 ## See also
 
+- [Query History](/self-managed-deployments/query-history/)
 - [Materialize Operator Configuration](/installation/configuration/)
 - [Materialize CRD Field Descriptions](/installation/appendix-materialize-crd-field-descriptions/)
 - [Troubleshooting](/installation/troubleshooting/)
