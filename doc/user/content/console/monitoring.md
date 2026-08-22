@@ -20,6 +20,6 @@ The **Monitoring** section contains the following screens:
 | Feature | Description |
 |---------|-------------|
 | **Environment Overview** | Review the health of your environment. |
-| **Query History** | Access your query history. |
+| **Query History** | Access your query history. Query history is sampled. In self-managed deployments, the sample rate is configurable. See [Query History](/self-managed-deployments/query-history/). |
 | **Sources** | Review your sources. You can select a source to go to its [Database object explorer page](/console/data/). |
 | **Sinks** | Review your sinks. You can select a sink to go to its [Database object explorer page](/console/data/). |
