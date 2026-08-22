@@ -609,6 +609,8 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_dataflow_max_inflight_bytes_cc",
     "compute_flat_map_fuel",
     "compute_temporal_bucketing_summary",
+    "compute_lifecycle_retraction_delay",
+    "compute_lifecycle_retraction_delay_transient",
     "consolidating_vec_growth_dampener",
     "copy_to_s3_parquet_row_group_file_ratio",
     "copy_to_s3_arrow_builder_buffer_ratio",

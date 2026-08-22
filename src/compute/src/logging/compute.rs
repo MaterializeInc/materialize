@@ -21,7 +21,9 @@ use columnar::{Columnar, Index, Ref};
 use differential_dataflow::VecCollection;
 use differential_dataflow::collection::AsCollection;
 use differential_dataflow::trace::{BatchReader, Cursor, Navigable};
+use mz_compute_types::dyncfgs::{LIFECYCLE_RETRACTION_DELAY, LIFECYCLE_RETRACTION_DELAY_TRANSIENT};
 use mz_compute_types::plan::LirId;
+use mz_dyncfg::ConfigSet;
 use mz_ore::cast::CastFrom;
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::{Datum, Diff, GlobalId, Row, RowRef, Timestamp};
@@ -208,6 +210,11 @@ pub enum LifecycleStage {
     WriteUnblocked,
     /// The export's sink advanced the output shard's upper past the as-of.
     Written,
+    /// The export was dropped.
+    ///
+    /// Terminal. Its rows are retracted after a delay, so a reader that sees this stage is looking
+    /// at the history of an object that no longer exists.
+    Dropped,
 }
 
 impl LifecycleStage {
@@ -223,6 +230,7 @@ impl LifecycleStage {
             Self::WriteBlockedReadOnly => ("write_blocked", Some("read_only")),
             Self::WriteUnblocked => ("write_unblocked", None),
             Self::Written => ("written", None),
+            Self::Dropped => ("dropped", None),
         }
     }
 }
@@ -375,8 +383,11 @@ pub(super) fn construct<'scope>(
     config: &mz_compute_client::logging::LoggingConfig,
     event_queue: EventQueue<Column<(Duration, ComputeEvent)>>,
     shared_state: Rc<RefCell<SharedLoggingState>>,
+    worker_config: Rc<ConfigSet>,
 ) -> Return {
     let logging_interval_ms = std::cmp::max(1, config.interval.as_millis());
+    let logging_interval =
+        Duration::from_millis(u64::try_from(logging_interval_ms).expect("must fit"));
 
     scope.scoped("compute logging", move |scope| {
         let enable_logging = config.enable_logging;
@@ -465,6 +476,17 @@ pub(super) fn construct<'scope>(
                         dataflow_global_ids: dataflow_global_ids.session_with_builder(&cap),
                     };
 
+                    // Read the delays per batch rather than once, so that a configuration change
+                    // takes effect without recreating the logging dataflow. The floor keeps a
+                    // delay from rounding to the same update timestamp as the insertion, which
+                    // would leave a dropped export's rows never separately visible.
+                    let retraction_delay = LIFECYCLE_RETRACTION_DELAY
+                        .get(&worker_config)
+                        .max(logging_interval);
+                    let retraction_delay_transient = LIFECYCLE_RETRACTION_DELAY_TRANSIENT
+                        .get(&worker_config)
+                        .max(logging_interval);
+
                     let shared_state = &mut shared_state.borrow_mut();
                     for (time, event) in data.borrow().into_index_iter() {
                         DemuxHandler {
@@ -473,6 +495,8 @@ pub(super) fn construct<'scope>(
                             output: &mut output_sessions,
                             logging_interval_ms,
                             time,
+                            retraction_delay,
+                            retraction_delay_transient,
                         }
                         .handle(event);
                     }
@@ -980,13 +1004,25 @@ struct DemuxHandler<'a, 'b, 'c> {
     logging_interval_ms: u128,
     /// The current event time.
     time: Duration,
+    /// How long to delay retracting a dropped export's lifecycle rows.
+    retraction_delay: Duration,
+    /// Same, for transient exports.
+    retraction_delay_transient: Duration,
 }
 
 impl DemuxHandler<'_, '_, '_> {
     /// Return the timestamp associated with the current event, based on the event time and the
     /// logging interval.
     fn ts(&self) -> Timestamp {
-        let time_ms = self.time.as_millis();
+        self.ts_at(Duration::ZERO)
+    }
+
+    /// Return the timestamp `offset` past the current event's, rounded as [`Self::ts`] rounds.
+    ///
+    /// Giving an update at a time beyond the session's capability is allowed, so this is how a
+    /// retraction is scheduled into the future.
+    fn ts_at(&self, offset: Duration) -> Timestamp {
+        let time_ms = (self.time + offset).as_millis();
         let interval = self.logging_interval_ms;
         let rounded = (time_ms / interval + 1) * interval;
         rounded.try_into().expect("must fit")
@@ -1094,11 +1130,42 @@ impl DemuxHandler<'_, '_, '_> {
             .hydration_time
             .give((datum, ts, Diff::MINUS_ONE));
 
-        // Remove lifecycle logging for this export.
-        for (key, value) in export.lifecycle_rows.values() {
+        // Record the drop as a lifecycle stage of its own, then retract the whole history at a
+        // later timestamp. Without the `dropped` stage the delay would be unreadable: a lingering
+        // row would say only that an export reached some stage, not whether it still exists, so
+        // "hydrated but never written" could not be told apart from "dropped before it wrote".
+        let details = lifecycle_details(export.as_of);
+        let dropped = {
+            let (key, value) = self.state.pack_lifecycle_update(
+                export_id,
+                dataflow_index,
+                LifecycleStage::Dropped,
+                self.time,
+                details.unpack_first(),
+            );
+            (key.to_owned(), value.to_owned())
+        };
+        self.output
+            .lifecycle
+            .give(((&*dropped.0, &*dropped.1), ts, Diff::ONE));
+
+        // Transient exports are created per peek and per subscribe, so they churn with query rate
+        // rather than with DDL. They keep a short delay, enough for a reader to observe them,
+        // where a user object can afford to linger.
+        let delay = if export_id.is_transient() {
+            self.retraction_delay_transient
+        } else {
+            self.retraction_delay
+        };
+        let retract_ts = self.ts_at(delay);
+        for (key, value) in export
+            .lifecycle_rows
+            .values()
+            .chain(std::iter::once(&dropped))
+        {
             self.output
                 .lifecycle
-                .give(((&**key, &**value), ts, Diff::MINUS_ONE));
+                .give(((&**key, &**value), retract_ts, Diff::MINUS_ONE));
         }
 
         // Remove operator hydration logging for this export.
