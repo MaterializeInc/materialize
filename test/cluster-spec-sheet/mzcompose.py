@@ -2161,6 +2161,7 @@ class SourceIngestionScenario(ClusterScalingScenario):
         #         UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9) h
         # ) nums
         # WHERE n BETWEEN 1 AND 50000000;
+        # OPTIMIZE TABLE tbl;
 
         # Kafka (Confluent)
         # node /usr/local/bin/datagen -f avro -n 50000000 -w 0 -p qa_cluster_spec_sheet -s table.json
