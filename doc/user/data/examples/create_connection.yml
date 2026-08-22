@@ -778,6 +778,40 @@
 
         The name of a [GCP connection](#gcp) to use for authentication.
 
+- name: "syntax-iceberg-catalog-rest"
+  code: |
+    CREATE CONNECTION <connection_name> TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = '<catalog_url>',
+        CREDENTIAL = SECRET <credential_secret>,
+        WAREHOUSE = '<warehouse>',
+        SCOPE = '<scope>'
+    );
+  syntax_elements:
+    - name: "`<connection_name>`"
+      description: |
+        A name for the connection.
+    - name: "`URL`"
+      description: |
+        *Value:* `text`. Required.
+
+        Base URL of the Iceberg REST catalog, e.g. `https://polaris.example.com/api/catalog`
+    - name: "`CREDENTIAL`"
+      description: |
+        *Value:* secret or `text`. Required.
+
+        OAuth2 client credentials for the catalog, in the form `<client_id>:<client_secret>`.
+    - name: "`WAREHOUSE`"
+      description: |
+        *Value:* `text`. Optional.
+
+        The warehouse name, as expected by the catalog.
+    - name: "`SCOPE`"
+      description: |
+        *Value:* `text`. Optional.
+
+        OAuth2 scope to request, e.g. `PRINCIPAL_ROLE:ALL` for Apache Polaris.
+
 - name: "example-iceberg-catalog-connection"
   description: |
     The following example creates an [AWS connection](/sql/create-connection/#aws) and an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for AWS S3 Tables:
@@ -814,5 +848,22 @@
         URL = 'https://biglake.googleapis.com/iceberg/v1/restcatalog',
         WAREHOUSE = 'gs://<bucket>',
         GCP CONNECTION = gcp_connection
+    );
+  testable: false
+
+- name: "example-iceberg-catalog-rest-connection"
+  description: |
+    The following example creates an [Iceberg catalog connection](/sql/create-connection/#iceberg-catalog) for a self-managed Iceberg REST catalog, such as Apache Polaris:
+  code: |
+    -- OAuth2 client credentials for the catalog, as client_id:client_secret.
+    CREATE SECRET iceberg_credential AS '<client_id>:<client_secret>';
+
+    -- Create the Iceberg catalog connection pointing to the REST catalog.
+    CREATE CONNECTION iceberg_catalog_connection TO ICEBERG CATALOG (
+        CATALOG TYPE = 'rest',
+        URL = 'https://polaris.example.com/api/catalog',
+        CREDENTIAL = SECRET iceberg_credential,
+        WAREHOUSE = 'my_warehouse',
+        SCOPE = 'PRINCIPAL_ROLE:ALL'
     );
   testable: false
