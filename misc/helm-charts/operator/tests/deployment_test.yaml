@@ -94,6 +94,14 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--statement-logging-target-data-rate=512"
 
+- it: should render a large statement logging target data rate as an integer
+  values:
+  - values/large-target-data-rate.yaml
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-target-data-rate=1048576"
+
 - it: should set resources correctly
   asserts:
   - equal:

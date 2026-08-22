@@ -1,0 +1,6 @@
+# Helm parses values files through YAML to JSON, so numbers arrive as float64
+# and render in exponential form at or above 1e6. A rate this size has to come
+# from a values file to reproduce that, `set:` values stay integers.
+operator:
+  args:
+    statementLoggingTargetDataRate: 1048576
