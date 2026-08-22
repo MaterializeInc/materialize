@@ -62,6 +62,12 @@ pub async fn plan(
         .await
         .map_err(CliError::Connection)?;
 
+    let to_create: BTreeSet<_> = target_ids.difference(&existing).cloned().collect();
+    client
+        .validation()
+        .validate_source_references(planned_project, &to_create)
+        .await?;
+
     let schemas: BTreeSet<_> = target_objects
         .iter()
         .filter(|(obj_id, _)| !existing.contains(obj_id))

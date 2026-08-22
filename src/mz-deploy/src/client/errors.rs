@@ -163,6 +163,23 @@ impl From<mz_postgres_util::PostgresError> for ConnectionError {
     }
 }
 
+/// One source whose exposed references do not cover everything the project's
+/// tables ask of it.
+#[derive(Debug)]
+pub struct SourceReferenceMismatch {
+    /// The source the tables read from.
+    pub source: ObjectId,
+    /// Tables the project wants to create, each paired with the reference it
+    /// asks for as written in the project.
+    pub tables: Vec<(ObjectId, String)>,
+    /// References the source does expose, to help spot a typo.
+    pub available: Vec<String>,
+    /// Why the source's references could not be read, when they could not be.
+    /// `available` then holds whatever the catalog last recorded, which may be
+    /// out of date.
+    pub unreadable: Option<String>,
+}
+
 /// Errors that can occur during project validation against the database.
 #[derive(Debug)]
 pub enum DatabaseValidationError {
@@ -211,6 +228,8 @@ pub enum DatabaseValidationError {
     MissingSources(Vec<ObjectId>),
     /// Connections referenced by the project do not exist in the database.
     MissingConnections(Vec<ObjectId>),
+    /// Tables reference upstream objects their source does not expose.
+    MissingSourceReferences(Vec<SourceReferenceMismatch>),
     /// Objects depend on tables that have not yet been created.
     MissingTableDependencies {
         objects_needing_tables: Vec<(ObjectId, Vec<ObjectId>)>,
@@ -218,6 +237,11 @@ pub enum DatabaseValidationError {
     /// A database query failed during validation.
     QueryError(ConnectionError),
 }
+
+/// How many of a source's exposed references to list before summarizing the
+/// rest as a count. A publication can hold thousands; a handful is enough to
+/// spot a misspelled name.
+const AVAILABLE_REFERENCE_LIMIT: usize = 10;
 
 impl fmt::Display for DatabaseValidationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -481,6 +505,50 @@ impl fmt::Display for DatabaseValidationError {
                 )?;
                 Ok(())
             }
+            DatabaseValidationError::MissingSourceReferences(mismatches) => {
+                let help_style = Style::new().bright_cyan().bold();
+                writeln!(
+                    f,
+                    "The following tables reference upstream objects their source does not expose:"
+                )?;
+                for mismatch in mismatches {
+                    writeln!(f)?;
+                    writeln!(f, "  from {}:", mismatch.source)?;
+                    for (table, reference) in &mismatch.tables {
+                        writeln!(f, "    - {} ({})", table, reference)?;
+                    }
+                    if let Some(reason) = &mismatch.unreadable {
+                        writeln!(f)?;
+                        writeln!(
+                            f,
+                            "    could not read the references for {}: {}",
+                            mismatch.source, reason
+                        )?;
+                    }
+                    if !mismatch.available.is_empty() {
+                        writeln!(f)?;
+                        writeln!(f, "    references it does expose:")?;
+                        for reference in mismatch.available.iter().take(AVAILABLE_REFERENCE_LIMIT) {
+                            writeln!(f, "      - {}", reference)?;
+                        }
+                        let extra = mismatch
+                            .available
+                            .len()
+                            .saturating_sub(AVAILABLE_REFERENCE_LIMIT);
+                        if extra > 0 {
+                            writeln!(f, "      ... and {} more", extra)?;
+                        }
+                    }
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "{} Confirm the object exists upstream and that the source's publication,",
+                    "help:".if_supports_color(Stream::Stderr, |t| help_style.style(t))
+                )?;
+                writeln!(f, "      schema filter, and credentials include it.")?;
+                Ok(())
+            }
             DatabaseValidationError::MissingTableDependencies {
                 objects_needing_tables,
             } => {
@@ -541,6 +609,50 @@ pub fn format_relative_path(path: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn object(schema: &str, object: &str) -> ObjectId {
+        ObjectId::new("app".to_string(), schema.to_string(), object.to_string())
+    }
+
+    #[mz_ore::test]
+    fn test_missing_source_references_error_display() {
+        let error =
+            DatabaseValidationError::MissingSourceReferences(vec![SourceReferenceMismatch {
+                source: object("ingest", "pg_source"),
+                tables: vec![(object("ingest", "widgets"), "public.widgets".to_string())],
+                available: vec!["public.orders".to_string(), "public.users".to_string()],
+                unreadable: None,
+            }]);
+        let output = error.to_string();
+
+        assert!(
+            output.contains("app.ingest.widgets (public.widgets)"),
+            "{output}"
+        );
+        assert!(output.contains("from app.ingest.pg_source:"), "{output}");
+        assert!(output.contains("- public.users"), "{output}");
+        assert!(!output.contains("could not read"), "{output}");
+    }
+
+    #[mz_ore::test]
+    fn test_missing_source_references_error_display_unreadable() {
+        let error =
+            DatabaseValidationError::MissingSourceReferences(vec![SourceReferenceMismatch {
+                source: object("ingest", "pg_source"),
+                tables: vec![(object("ingest", "widgets"), "public.widgets".to_string())],
+                available: (0..12).map(|i| format!("public.t{i}")).collect(),
+                unreadable: Some("permission denied".to_string()),
+            }]);
+        let output = error.to_string();
+
+        assert!(
+            output.contains(
+                "could not read the references for app.ingest.pg_source: permission denied"
+            ),
+            "{output}"
+        );
+        assert!(output.contains("... and 2 more"), "{output}");
+    }
 
     #[mz_ore::test]
     fn test_missing_table_dependencies_error_display() {
