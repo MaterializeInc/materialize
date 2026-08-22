@@ -212,6 +212,7 @@ The following are some commonly configured system parameters:
 | `max_sources` | Maximum number of sources in the region |
 | `max_sinks` | Maximum number of sinks in the region |
 | `statement_logging_max_sample_rate` | Cap on the fraction of statements recorded in [query history](/self-managed-deployments/query-history/). Setting it here overrides the Helm chart value. |
+| `statement_logging_target_data_rate` | Sustained bytes per second that statement logging may write. Bounds query history growth on busy instances. |
 
 For a complete list of available system parameters and their descriptions, see
 the [configuration parameters](/sql/alter-system-set/#key-configuration-parameters)

@@ -48,9 +48,11 @@ Because the system parameter is a cap, lowering it reduces logging for every
 session regardless of what individual sessions request.
 
 Sampling is not the only limit. Materialize also throttles statement logging to
-a target byte rate, `statement_logging_target_data_rate`, so executions beyond
-that budget are dropped even at a high sample rate. A sample rate of `1.0`
-therefore does not guarantee that every statement is recorded.
+a sustained byte rate, `statement_logging_target_data_rate`, which defaults to
+2071 bytes per second. Sampled executions beyond that budget are dropped, so a
+sample rate of `1.0` does not guarantee that every statement is recorded. On
+busy instances this byte rate, rather than the sample rate, is what actually
+bounds how much history you collect.
 
 {{< note >}}
 Unlike Materialize Cloud, self-managed deployments log statements issued by the
@@ -60,10 +62,19 @@ catalog queries, is sampled alongside your workload and counts toward the cost
 described below.
 {{< /note >}}
 
-## Tune the sample rate
+## Tune statement logging
 
-There are two places to change the maximum sample rate. They interact, so read
-the note on precedence below before picking one.
+Two parameters bound how much query history you collect:
+
+| Parameter | Chart value | Bounds |
+|-----------|-------------|--------|
+| `statement_logging_max_sample_rate` | `operator.args.statementLoggingMaxSampleRate` (`0.1`) | The fraction of executions considered for logging. |
+| `statement_logging_target_data_rate` | `operator.args.statementLoggingTargetDataRate` (unset) | The sustained bytes per second written, 2071 by default. |
+
+Raise the sample rate for more representative history. Lower the data rate to
+hold storage growth down. Each can be set either through the Helm chart or as a
+system parameter, and those two paths interact, so read the note on precedence
+below before picking one.
 
 ### Using the Helm chart
 
@@ -81,11 +92,15 @@ Or, in your `values.yaml`:
 operator:
   args:
     statementLoggingMaxSampleRate: 0.5
+    statementLoggingTargetDataRate: 4096
 ```
 
-Setting the value to `0` disables statement logging entirely. Already-logged
+Setting `statementLoggingMaxSampleRate` to `0` disables statement logging
+entirely. Already-logged
 statements remain visible until they age out of the 24-hour window. Setting the
 value to `null` inherits `environmentd`'s default of `0.99`.
+`statementLoggingTargetDataRate` is unset by default, which inherits
+`environmentd`'s default of 2071 bytes per second.
 
 The operator passes this value to `environmentd` as the *default* for
 `statement_logging_max_sample_rate`, so it only takes effect when `environmentd`
@@ -160,7 +175,9 @@ Raising the sample rate gives more complete query history at the cost of:
 Workloads dominated by a high rate of small, fast queries are the ones where a
 high sample rate is most likely to be felt. If you raise the rate, do it
 incrementally and watch `environmentd` CPU utilization and your storage
-footprint.
+footprint. Because the byte rate is what bounds sustained growth, lowering
+`statement_logging_target_data_rate` is the more direct control if your concern
+is storage rather than sampling fidelity.
 
 ## See also
 
