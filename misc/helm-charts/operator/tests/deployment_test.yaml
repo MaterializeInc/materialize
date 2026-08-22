@@ -80,6 +80,20 @@ tests:
       path: spec.template.spec.containers[0].args
       content: "--statement-logging-max-sample-rate="
 
+- it: should omit the statement logging target data rate by default
+  asserts:
+  - notContains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-target-data-rate="
+
+- it: should set a custom statement logging target data rate
+  set:
+    operator.args.statementLoggingTargetDataRate: 512
+  asserts:
+  - contains:
+      path: spec.template.spec.containers[0].args
+      content: "--statement-logging-target-data-rate=512"
+
 - it: should set resources correctly
   asserts:
   - equal:

@@ -79,6 +79,9 @@ spec:
         {{- if not (kindIs "invalid" .Values.operator.args.statementLoggingMaxSampleRate) }}
         - "--statement-logging-max-sample-rate={{ .Values.operator.args.statementLoggingMaxSampleRate }}"
         {{- end }}
+        {{- if not (kindIs "invalid" .Values.operator.args.statementLoggingTargetDataRate) }}
+        - "--statement-logging-target-data-rate={{ .Values.operator.args.statementLoggingTargetDataRate }}"
+        {{- end }}
         {{- range $key, $value := include "materialize-operator.selectorLabels" . | fromYaml }}
         - "--orchestratord-pod-selector-labels={{ $key }}={{ $value }}"
         {{- end }}

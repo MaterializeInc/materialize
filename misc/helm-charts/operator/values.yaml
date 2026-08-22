@@ -48,6 +48,14 @@ operator:
     # `0` to disable statement logging entirely, or set it to `null` to inherit
     # environmentd's default.
     statementLoggingMaxSampleRate: 0.1
+    # -- (int) Caps the sustained volume statement logging writes, in bytes per
+    # second, via environmentd's `statement_logging_target_data_rate`. This is
+    # the binding limit on busy environments, where it throttles sampled
+    # statements that would exceed it. Lower it to hold query history growth
+    # down on environments with limited storage, keeping in mind that the
+    # recorded history is retained for the lifetime of the environment. Set it
+    # to `null` to inherit environmentd's default of 2071 bytes per second.
+    statementLoggingTargetDataRate:
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
     # -- Whether to install the v1 version of the Materialize CRD and the

@@ -218,6 +218,12 @@ pub struct Args {
     /// environmentd's own default.
     #[clap(long, value_parser = parse_sample_rate)]
     statement_logging_max_sample_rate: Option<f64>,
+    /// Overrides environmentd's default `statement_logging_target_data_rate`,
+    /// in bytes per second. Unlike the sample rate, this caps the sustained
+    /// volume statement logging writes. Leave unset to keep environmentd's own
+    /// default.
+    #[clap(long)]
+    statement_logging_target_data_rate: Option<usize>,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
@@ -643,6 +649,7 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             enable_security_context: args.enable_security_context,
             enable_internal_statement_logging: args.enable_internal_statement_logging,
             statement_logging_max_sample_rate: args.statement_logging_max_sample_rate,
+            statement_logging_target_data_rate: args.statement_logging_target_data_rate,
             orchestratord_pod_selector_labels: args.orchestratord_pod_selector_labels,
             environmentd_node_selector: args.environmentd_node_selector,
             environmentd_affinity: args.environmentd_affinity,

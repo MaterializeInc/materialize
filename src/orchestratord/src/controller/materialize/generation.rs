@@ -721,6 +721,12 @@ fn create_environmentd_statefulset_object(
         ));
     }
 
+    if let Some(rate) = config.statement_logging_target_data_rate {
+        args.push(format!(
+            "--system-parameter-default=statement_logging_target_data_rate={rate}"
+        ));
+    }
+
     if !mz.spec.enable_rbac {
         args.push("--system-parameter-default=enable_rbac_checks=false".into());
     }
