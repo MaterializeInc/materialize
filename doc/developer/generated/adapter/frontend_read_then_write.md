@@ -1,6 +1,6 @@
 ---
 source: src/adapter/src/frontend_read_then_write.rs
-revision: 00299a05e3
+revision: 30e4b1d241
 ---
 
 # adapter::frontend_read_then_write
@@ -45,4 +45,4 @@ A subscribe channel that closes on its own exits via `OccOutcome::Blind`, return
 - `apply_mutation_to_mir`: DELETE negates the expression; UPDATE wraps it in a `Let` binding and unions negated old rows with mapped new rows; INSERT passes through unchanged.
 - `build_success_response`: builds the `ExecuteResponse` before writing, enforcing result-size caps row-by-row for RETURNING expressions to bound temporary allocation.
 - `submit_blind_write`: sends `Command::AttemptWrite` with `write_ts: None`, letting group commit choose the timestamp.
-- `classify_write_result`: maps `WriteResult` to `WriteOutcome`, translating `TargetChanged` to `ConcurrentDependencyMutation` for consistent client-visible error codes.
+- `classify_write_result`: maps `WriteResult` to `WriteOutcome`, translating `TargetChanged` to `ConcurrentDependencyMutation` and `TimestampTooFarAhead` to `ReadThenWriteTimestampTooFarAhead` for consistent client-visible error codes.

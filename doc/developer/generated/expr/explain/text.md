@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/explain/text.rs
-revision: 72277f8ac9
+revision: c6be08fe4f
 ---
 
 # mz-expr::explain::text
