@@ -1580,6 +1580,20 @@ fn uuid_generate_v5(a: uuid::Uuid, b: &str) -> uuid::Uuid {
     uuid::Uuid::new_v5(&a, b.as_bytes())
 }
 
+/// Reports whether `n` is an integer *in value*.
+///
+/// The exponent alone does not answer this: `Row` encoding folds trailing
+/// zeroes into the exponent, so `2.0` reaches us either as coefficient `2`
+/// with exponent `0` or as coefficient `20` with exponent `-1` depending on
+/// whether the value made a round trip through a `Row`. Reducing first makes
+/// the answer a property of the value rather than of its representation, which
+/// callers whose fallibility depends on it (see `crate::interpret`) require.
+fn is_integral_numeric(mut n: Numeric) -> bool {
+    numeric::cx_datum().reduce(&mut n);
+    // Reduced integral values always have a non-negative exponent.
+    n.exponent() >= 0
+}
+
 #[sqlfunc(output_type = "Numeric", propagates_nulls = true)]
 fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
     if a.is_zero() {
@@ -1592,7 +1606,7 @@ fn power_numeric(mut a: Numeric, b: Numeric) -> Result<Numeric, EvalError> {
             ));
         }
     }
-    if a.is_negative() && b.exponent() < 0 {
+    if a.is_negative() && !is_integral_numeric(b) {
         // Equivalent to PG error:
         // > a negative number raised to a non-integer power yields a complex result
         return Err(EvalError::ComplexOutOfRange("pow".into()));
@@ -3316,6 +3330,39 @@ mod test {
         assert_unique("UnaryFunc", UnaryFunc::variant_names());
         assert_unique("BinaryFunc", BinaryFunc::variant_names());
         assert_unique("VariadicFunc", VariadicFunc::variant_names());
+    }
+
+    #[mz_ore::test]
+    fn power_numeric_integral_exponent_representations() {
+        // `Row` encoding reduces numerics, so the same integral exponent
+        // reaches `power_numeric` with different exponents depending on where
+        // it came from. Whether the call errors must not depend on that, or the
+        // abstract interpreter (which reads its datums back out of a `Row`) can
+        // rule out an error the evaluator produces.
+        let parse = |s: &str| -> Numeric { numeric::cx_datum().parse(s).unwrap() };
+
+        for exponent in ["2", "2.0", "2.000", "2E+0", "0.2E+1"] {
+            let exponent = parse(exponent);
+            let mut reduced = exponent;
+            numeric::cx_datum().reduce(&mut reduced);
+            assert_eq!(
+                power_numeric(parse("-2"), exponent).unwrap(),
+                parse("4"),
+                "unreduced exponent {exponent} (reduced: {reduced})"
+            );
+        }
+
+        for exponent in ["2.5", "-0.1", "0.25E+1"] {
+            let exponent = parse(exponent);
+            assert_eq!(
+                power_numeric(parse("-2"), exponent),
+                Err(EvalError::ComplexOutOfRange("pow".into())),
+                "non-integral exponent {exponent}"
+            );
+        }
+
+        // A NaN exponent stays NaN rather than tripping the integrality guard.
+        assert!(power_numeric(parse("-2.5"), parse("NaN")).unwrap().is_nan());
     }
 
     #[mz_ore::test]
