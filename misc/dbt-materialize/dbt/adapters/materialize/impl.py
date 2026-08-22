@@ -111,6 +111,7 @@ class MaterializeConfig(AdapterConfig):
     partition_by: Optional[List[str]] = None
     refresh_interval: Optional[MaterializeRefreshIntervalConfig] = None
     retain_history: Optional[str] = None
+    owner: Optional[str] = None
 
 
 class MaterializeAdapter(PostgresAdapter, SQLAdapter):
