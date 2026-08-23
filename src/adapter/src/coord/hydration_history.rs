@@ -9,7 +9,7 @@
 
 //! Durable history collection for completed compute-object hydration episodes.
 //!
-//! One sweep visits a single managed user replica, installs a replica-targeted
+//! One sweep visits a single user replica, installs a replica-targeted
 //! subscribe that diffs that replica's live hydration timestamps against the
 //! durable history table, and appends what is missing through the timestamped
 //! OCC write path. Including the history table in the read expression is what
@@ -40,6 +40,7 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_repr::CatalogItemId;
 use mz_sql::plan::{MutationKind, Params, Plan, ReadThenWritePlan};
+use rand::{Rng, SeedableRng, rngs};
 use tracing::warn;
 
 use crate::catalog::Catalog;
@@ -78,13 +79,30 @@ const MUTATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// it takes.
 const RETENTION_BATCH_SIZE: usize = 1000;
 
+/// Milliseconds until the next fire on this environment's own grid.
+///
+/// The grid has period `interval_ms` and is shifted by `offset`. When this
+/// environment's point in the current period has already passed, the next one is a
+/// full period later.
+fn next_fire_delay(now: EpochMillis, interval_ms: EpochMillis, offset: EpochMillis) -> Duration {
+    let this_period = (now - (now % interval_ms)).saturating_add(offset);
+    let next = if this_period > now {
+        this_period
+    } else {
+        this_period.saturating_add(interval_ms)
+    };
+    Duration::from_millis(next.saturating_sub(now))
+}
+
 impl Coordinator {
     /// Schedules the next hydration history sweep.
     ///
     /// Fires are aligned to interval boundaries so that they stay evenly spaced
-    /// across restarts, and each sleep is capped so a configuration change is
-    /// picked up promptly. Sweeps never overlap: the next one is only scheduled
-    /// once the previous one has finished or failed.
+    /// across restarts, offset per environment so that a fleet-wide interval does
+    /// not make every environment sweep at the same instant, and each sleep is
+    /// capped so a configuration change is picked up promptly. Sweeps never
+    /// overlap: the next one is only scheduled once the previous one has finished
+    /// or failed.
     ///
     /// NOTE: Alignment reads the wall clock, so a test that freezes `NowFn` and
     /// configures an interval longer than the recheck cap never reaches a
@@ -103,8 +121,11 @@ impl Coordinator {
             let interval_ms = EpochMillis::try_from(interval.as_millis())
                 .unwrap_or(EpochMillis::MAX)
                 .max(1);
-            let now = self.now();
-            let remaining = Duration::from_millis(interval_ms - (now % interval_ms));
+            let remaining = next_fire_delay(
+                self.now(),
+                interval_ms,
+                self.hydration_history_schedule_offset(interval_ms),
+            );
             if remaining <= SCHEDULE_RECHECK_CAP {
                 (remaining, true)
             } else {
@@ -123,6 +144,32 @@ impl Coordinator {
             // Best effort: the coordinator may be shutting down.
             let _ = internal_cmd_tx.send(message);
         });
+    }
+
+    /// A stable offset into the collection interval for this environment.
+    ///
+    /// Seeded from the organization id, so it survives restarts but differs
+    /// between environments. Without it every environment would sweep on the same
+    /// absolute grid, turning each boundary into a fleet-wide burst of dataflow
+    /// installs, oracle round trips and persist writes.
+    fn hydration_history_schedule_offset(&self, interval_ms: EpochMillis) -> EpochMillis {
+        const SEED_LEN: usize = 32;
+        let mut seed = [0; SEED_LEN];
+        for (i, byte) in self
+            .catalog()
+            .state()
+            .config()
+            .environment_id
+            .organization_id()
+            .as_bytes()
+            .into_iter()
+            .take(SEED_LEN)
+            .enumerate()
+        {
+            seed[i] = *byte;
+        }
+        // `random_range` panics on an empty range, and `interval_ms` is at least 1.
+        rngs::SmallRng::from_seed(seed).random_range(0..interval_ms)
     }
 
     /// Runs one sweep: collect from the next replica, then apply retention.
@@ -511,6 +558,38 @@ mod tests {
             Some(replicas[0])
         );
         assert_eq!(next_replica(&[], None), None);
+    }
+
+    /// Every environment shares one interval, so the grid has to be shifted per
+    /// environment or the whole fleet sweeps at the same instant.
+    #[mz_ore::test]
+    fn fire_delay_is_offset_within_the_interval() {
+        let interval = 60_000;
+
+        // Before this environment's point in the period, we wait for it.
+        assert_eq!(
+            next_fire_delay(1_000, interval, 5_000),
+            Duration::from_millis(4_000)
+        );
+        // On it, we take the next period rather than firing twice.
+        assert_eq!(
+            next_fire_delay(5_000, interval, 5_000),
+            Duration::from_millis(interval)
+        );
+        // After it, the next period's point.
+        assert_eq!(
+            next_fire_delay(6_000, interval, 5_000),
+            Duration::from_millis(59_000)
+        );
+        // A zero offset is plain alignment, and never returns a zero delay.
+        assert_eq!(
+            next_fire_delay(59_999, interval, 0),
+            Duration::from_millis(1)
+        );
+        assert_eq!(
+            next_fire_delay(60_000, interval, 0),
+            Duration::from_millis(interval)
+        );
     }
 
     /// A materialized view's finish is only durable on the sink's active worker, so
