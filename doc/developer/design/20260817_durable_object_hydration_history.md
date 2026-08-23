@@ -136,6 +136,21 @@ hydrating is skipped and picked up by a later sweep. The cutoff and the anti-joi
 apply to the aggregate's output, since as `WHERE` clauses either one would drop the
 unfinished rows and make that check trivially true.
 
+Compute is adding an append-only lifecycle log for the same stages, currently
+proposed in #38403: one row per export, worker and event, with a reason and the
+dataflow's as-of. It leaves `mz_compute_hydration_times_per_worker` alone, so
+everything above keeps its meaning and nothing recorded here is relabelled.
+
+That log is the signal this design says is missing, and moving onto it later buys
+three things at once: stages that mean the same thing on every worker, a reason
+that distinguishes a replacement waiting for cutover from an index that will never
+write, and the as-of, without which an interval says nothing about how much work
+was done, since a replacement with a far behind as-of does far more of it in the
+same wall-clock time. Recording should keep gating on hydration when that happens.
+A replacement runs read-only and does not write until cutover, so gating on a write
+stage would never record the hydration a deployment most wants to measure, and
+would wait forever on a rollback.
+
 Two consequences. An interval can span workers in different processes, each
 anchoring its logging clock at its own `SystemTime`, so skew inflates a duration.
 Nothing rejects a row for looking inconsistent, deliberately, because a guard on
@@ -204,7 +219,9 @@ Sweeps never overlap and each visits one replica, which bounds compute load and
 keeps the collector from contending with itself in the serialized timestamped-write
 path. Fires align to interval boundaries and each sleep is capped, so lowering a
 long interval takes effect within the cap rather than after the old interval
-elapses.
+elapses. The grid is offset by an amount seeded from the organization id, since the
+interval is one fleet-wide setting and an unshifted grid would have every
+environment sweep at the same instant.
 
 **Background mutations take no OCC write permit.** The permits are one semaphore
 shared by every read-then-write in the process, not one per table. A session's wait
