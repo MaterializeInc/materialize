@@ -60,7 +60,7 @@ use mz_server_core::listeners::v26_32_0::ListenersConfig;
 use mz_server_core::listeners::{
     AllowedRoles, AuthenticatorKind, HttpListenerConfig, HttpRoutesEnabled, RouteGroup,
 };
-use mz_server_core::{ReloadTrigger, TlsCertConfig};
+use mz_server_core::{ClientCertMode, ReloadTrigger, TlsCertConfig};
 use mz_sql::catalog::EnvironmentId;
 use mz_storage_types::connections::ConnectionContext;
 use mz_tracing::CloneableEnvFilter;
@@ -103,6 +103,7 @@ pub static KAFKA_ADDRS: LazyLock<String> =
 pub struct TestHarness {
     data_directory: Option<PathBuf>,
     tls: Option<TlsCertConfig>,
+    tls_proxy_ca: Option<PathBuf>,
     frontegg: Option<FronteggAuthenticator>,
     external_login_password_mz_system: Option<Password>,
     listeners_config: ListenersConfig,
@@ -146,6 +147,7 @@ impl Default for TestHarness {
         TestHarness {
             data_directory: None,
             tls: None,
+            tls_proxy_ca: None,
             frontegg: None,
             external_login_password_mz_system: None,
             listeners_config: ListenersConfig {
@@ -299,6 +301,7 @@ impl TestHarness {
         self.tls = Some(TlsCertConfig {
             cert: cert_path.into(),
             key: key_path.into(),
+            client_certs: ClientCertMode::Disable,
         });
         for (_, listener) in &mut self.listeners_config.sql {
             listener.enable_tls = true;
@@ -306,6 +309,27 @@ impl TestHarness {
         for (_, listener) in &mut self.listeners_config.http {
             listener.enable_tls = true;
         }
+        self
+    }
+
+    /// Asks clients for a TLS certificate during the handshake, the prerequisite
+    /// for mutual TLS.
+    ///
+    /// Requires [`Self::with_tls`] to have been called; a server with no
+    /// identity of its own cannot ask for one.
+    pub fn with_client_cert_requests(mut self) -> Self {
+        let tls = self
+            .tls
+            .as_mut()
+            .expect("with_client_cert_requests requires with_tls");
+        tls.client_certs = ClientCertMode::Request;
+        self
+    }
+
+    /// Sets the authority that issues trusted-proxy identities, i.e. the peers
+    /// permitted to forward a client certificate on another party's behalf.
+    pub fn with_tls_proxy_ca(mut self, ca_path: impl Into<PathBuf>) -> Self {
+        self.tls_proxy_ca = Some(ca_path.into());
         self
     }
 
@@ -901,6 +925,7 @@ impl Listeners {
                 cloud_resource_controller: None,
                 system_dyncfgs,
                 tls: config.tls,
+                tls_proxy_ca: config.tls_proxy_ca,
                 frontegg: config.frontegg,
                 frontegg_oauth_issuer_url: None,
                 unsafe_mode: config.unsafe_mode,

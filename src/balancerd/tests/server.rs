@@ -38,9 +38,11 @@ use mz_ore::now::SYSTEM_TIME;
 use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
 use mz_ore::{assert_contains, assert_err, assert_ok, task};
-use mz_server_core::TlsCertConfig;
+use mz_pgwire_common::MZ_CLIENT_CERT_KEY;
+use mz_server_core::{ClientCertMode, TlsCertConfig};
 use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
 use openssl::x509::X509;
+use postgres::config::SslMode;
 use tokio::sync::oneshot;
 use uuid::Uuid;
 
@@ -166,6 +168,7 @@ async fn test_balancer() {
     let cert_config = Some(TlsCertConfig {
         cert: server_cert.clone(),
         key: server_key.clone(),
+        client_certs: ClientCertMode::Disable,
     });
 
     let body = r#"{"query": "select 12234"}"#;
@@ -192,6 +195,7 @@ async fn test_balancer() {
             envd_server.http_local_addr().to_string(),
             cert_config.clone(),
             true,
+            None,
             MetricsRegistry::new(),
             ticker,
             None,
@@ -407,4 +411,398 @@ async fn test_balancer() {
             .await
             .unwrap();
     }
+}
+
+/// Mutual TLS end to end through the balancer.
+///
+/// This is the case the whole design exists for: the balancer terminates the
+/// client's TLS, so it is the only party that can prove the client holds its
+/// certificate's private key, while `environmentd` is the only party that knows
+/// which issuers the tenant trusts. The balancer forwards the chain and
+/// `environmentd` judges it.
+///
+/// Four certificate authorities are in play, and keeping them distinct is the
+/// point of the test:
+///
+/// * `server_ca` issues the balancer's and environmentd's serving certificates.
+/// * `proxy_ca` issues the balancer's *client* identity, which is what lets
+///   environmentd believe a forwarded certificate.
+/// * `client_ca` issues end-client certificates and is what the tenant
+///   configures as `mtls_client_ca`.
+/// * `rogue_ca` issues certificates nobody should accept.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_balancer_mtls_forwarding() {
+    let server_ca = Ca::new_root("server ca").unwrap();
+    let (server_cert, server_key) = server_ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let proxy_ca = Ca::new_root("proxy ca").unwrap();
+    let (proxy_cert, proxy_key) = proxy_ca.request_client_cert("balancerd").unwrap();
+    let client_ca = Ca::new_root("client ca").unwrap();
+    let rogue_ca = Ca::new_root("rogue ca").unwrap();
+
+    // environmentd: requests client certificates, trusts `client_ca` for end
+    // clients and `proxy_ca` for proxies, and requires a certificate.
+    let envd_server = test_util::TestHarness::default()
+        .with_tls(server_cert.clone(), server_key.clone())
+        .with_client_cert_requests()
+        .with_tls_proxy_ca(proxy_ca.ca_cert_path())
+        .with_system_parameter_default("mtls_mode".into(), "require".into())
+        .with_system_parameter_default(
+            "mtls_client_ca".into(),
+            std::fs::read_to_string(client_ca.ca_cert_path()).unwrap(),
+        )
+        .start()
+        .await;
+
+    let cancel_dir = tempfile::tempdir().unwrap();
+    let balancer_cfg = BalancerConfig::new(
+        &BUILD_INFO,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        CancellationResolver::Directory(cancel_dir.path().to_owned()),
+        BalancerResolver::Static(envd_server.sql_local_addr().to_string()),
+        envd_server.http_local_addr().to_string(),
+        // The balancer asks clients for certificates so it has something to
+        // forward.
+        Some(TlsCertConfig {
+            cert: server_cert.clone(),
+            key: server_key.clone(),
+            client_certs: ClientCertMode::Request,
+        }),
+        // Internal TLS, presenting the proxy identity: without this environmentd
+        // has no reason to believe anything the balancer forwards.
+        true,
+        Some(TlsCertConfig {
+            cert: proxy_cert.clone(),
+            key: proxy_key.clone(),
+            client_certs: ClientCertMode::Disable,
+        }),
+        MetricsRegistry::new(),
+        Box::pin(futures::stream::empty()),
+        None,
+        None,
+        Duration::ZERO,
+        None,
+        None,
+        None,
+        TracingHandle::disabled(),
+        vec![],
+    );
+    let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
+    let balancer_addr = balancer_server.pgwire.0.local_addr();
+    task::spawn(|| "balancer", async {
+        balancer_server.serve().await.unwrap();
+    });
+
+    // Connects through the balancer, optionally presenting a client identity.
+    let connect = |identity: Option<(std::path::PathBuf, std::path::PathBuf)>| {
+        let conn_str = format!(
+            "user=materialize host={} port={} sslmode=require",
+            balancer_addr.ip(),
+            balancer_addr.port()
+        );
+        async move {
+            let tls = make_pg_tls(move |b: &mut SslConnectorBuilder| {
+                // The balancer's serving certificate is not the subject of this
+                // test, so skip verifying it.
+                b.set_verify(SslVerifyMode::NONE);
+                if let Some((cert, key)) = &identity {
+                    b.set_certificate_chain_file(cert)?;
+                    b.set_private_key_file(key, openssl::ssl::SslFiletype::PEM)?;
+                }
+                Ok(())
+            });
+            let (client, conn) = tokio_postgres::connect(&conn_str, tls).await?;
+            task::spawn(|| "mtls-pg_client", async move {
+                let _ = conn.await;
+            });
+            Ok::<_, tokio_postgres::Error>(client)
+        }
+    };
+
+    // A client certificate from the trusted authority is admitted, having been
+    // captured by the balancer and validated by environmentd.
+    let (client_cert, client_key) = client_ca.request_client_cert("client").unwrap();
+    let client = connect(Some((client_cert.clone(), client_key.clone())))
+        .await
+        .expect("trusted client certificate admitted through the balancer");
+    let res: i32 = client.query_one("SELECT 3", &[]).await.unwrap().get(0);
+    assert_eq!(res, 3);
+
+    // No client certificate: the balancer forwards nothing, so environmentd
+    // refuses under `require`.
+    let err = connect(None)
+        .await
+        .expect_err("connection without a client certificate refused");
+    assert_contains!(
+        err.to_string_with_causes(),
+        "a client certificate is required"
+    );
+
+    // A certificate from an authority the tenant does not trust is refused, even
+    // though the balancer forwarded it perfectly well. The balancer deliberately
+    // does not judge chains, so this rejection can only be environmentd's.
+    let (rogue_cert, rogue_key) = rogue_ca.request_client_cert("client").unwrap();
+    let err = connect(Some((rogue_cert, rogue_key)))
+        .await
+        .expect_err("certificate from an untrusted authority refused");
+    assert_contains!(
+        err.to_string_with_causes(),
+        "client certificate is not trusted"
+    );
+
+    // The trust anchors are live configuration even with the balancer in the
+    // path: rotating them revokes the certificate that just worked.
+    //
+    // The internal port negotiates TLS like every other listener here, since
+    // `with_tls` enables it everywhere. It presents no client certificate,
+    // which is fine: internal users are exempt from the policy.
+    let admin = envd_server
+        .connect()
+        .internal()
+        .ssl_mode(SslMode::Require)
+        .with_tls(make_pg_tls(|b: &mut SslConnectorBuilder| {
+            Ok(b.set_verify(SslVerifyMode::NONE))
+        }))
+        .await
+        .unwrap();
+    admin
+        .batch_execute(&format!(
+            "ALTER SYSTEM SET mtls_client_ca = '{}'",
+            std::fs::read_to_string(rogue_ca.ca_cert_path()).unwrap()
+        ))
+        .await
+        .unwrap();
+    assert_err!(
+        connect(Some((client_cert, client_key))).await,
+        "the rotated-out authority is no longer trusted"
+    );
+}
+
+/// A balancer that forwards a chain but cannot prove it is a proxy gets its
+/// assertion ignored.
+///
+/// This is the fail-closed direction of the design. The client's certificate is
+/// genuine and the balancer forwards it faithfully, but the balancer presents no
+/// identity of its own, so `environmentd` has no way to distinguish it from any
+/// other peer that can reach the port. It must therefore ignore the forwarded
+/// chain and refuse the connection, rather than trusting an unauthenticated
+/// assertion.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_forwarded_cert_ignored_from_unauthenticated_proxy() {
+    let server_ca = Ca::new_root("server ca").unwrap();
+    let (server_cert, server_key) = server_ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+    let proxy_ca = Ca::new_root("proxy ca").unwrap();
+    let client_ca = Ca::new_root("client ca").unwrap();
+
+    let envd_server = test_util::TestHarness::default()
+        .with_tls(server_cert.clone(), server_key.clone())
+        .with_client_cert_requests()
+        .with_tls_proxy_ca(proxy_ca.ca_cert_path())
+        .with_system_parameter_default("mtls_mode".into(), "require".into())
+        .with_system_parameter_default(
+            "mtls_client_ca".into(),
+            std::fs::read_to_string(client_ca.ca_cert_path()).unwrap(),
+        )
+        .start()
+        .await;
+
+    let cancel_dir = tempfile::tempdir().unwrap();
+    let balancer_cfg = BalancerConfig::new(
+        &BUILD_INFO,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        CancellationResolver::Directory(cancel_dir.path().to_owned()),
+        BalancerResolver::Static(envd_server.sql_local_addr().to_string()),
+        envd_server.http_local_addr().to_string(),
+        Some(TlsCertConfig {
+            cert: server_cert.clone(),
+            key: server_key.clone(),
+            client_certs: ClientCertMode::Request,
+        }),
+        // Internal TLS on, but with no client identity: the balancer is
+        // anonymous to environmentd.
+        true,
+        None,
+        MetricsRegistry::new(),
+        Box::pin(futures::stream::empty()),
+        None,
+        None,
+        Duration::ZERO,
+        None,
+        None,
+        None,
+        TracingHandle::disabled(),
+        vec![],
+    );
+    let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
+    let balancer_addr = balancer_server.pgwire.0.local_addr();
+    task::spawn(|| "balancer", async {
+        balancer_server.serve().await.unwrap();
+    });
+
+    let (client_cert, client_key) = client_ca.request_client_cert("client").unwrap();
+    let conn_str = format!(
+        "user=materialize host={} port={} sslmode=require",
+        balancer_addr.ip(),
+        balancer_addr.port()
+    );
+    let tls = make_pg_tls(move |b: &mut SslConnectorBuilder| {
+        b.set_verify(SslVerifyMode::NONE);
+        b.set_certificate_chain_file(&client_cert)?;
+        b.set_private_key_file(&client_key, openssl::ssl::SslFiletype::PEM)?;
+        Ok(())
+    });
+    let err = match tokio_postgres::connect(&conn_str, tls).await {
+        Ok(_) => panic!("a chain forwarded by an unauthenticated peer must be ignored"),
+        Err(e) => e,
+    };
+    assert_contains!(
+        err.to_string_with_causes(),
+        "a client certificate is required"
+    );
+}
+
+/// The balancer rejects a client that supplies `mz_client_cert` itself.
+///
+/// The parameter is the balancer's to set. A client that sets it is trying to
+/// hand `environmentd` an identity it never proved, so the connection is refused
+/// at the balancer rather than forwarded with the client's value overwritten.
+/// This is the same treatment `mz_forwarded_for` and `mz_connection_uuid` get.
+///
+/// Driven with a hand-built startup packet because no Postgres client library
+/// will send an arbitrary startup parameter.
+#[mz_ore::test(tokio::test(flavor = "multi_thread", worker_threads = 1))]
+#[cfg_attr(miri, ignore)] // too slow
+#[allow(clippy::disallowed_methods)]
+async fn test_balancer_rejects_client_supplied_cert_param() {
+    let server_ca = Ca::new_root("server ca").unwrap();
+    let (server_cert, server_key) = server_ca
+        .request_cert("server", vec![IpAddr::V4(Ipv4Addr::LOCALHOST)])
+        .unwrap();
+
+    let envd_server = test_util::TestHarness::default()
+        .with_tls(server_cert.clone(), server_key.clone())
+        .start()
+        .await;
+
+    let cancel_dir = tempfile::tempdir().unwrap();
+    let balancer_cfg = BalancerConfig::new(
+        &BUILD_INFO,
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
+        CancellationResolver::Directory(cancel_dir.path().to_owned()),
+        BalancerResolver::Static(envd_server.sql_local_addr().to_string()),
+        envd_server.http_local_addr().to_string(),
+        Some(TlsCertConfig {
+            cert: server_cert.clone(),
+            key: server_key.clone(),
+            client_certs: ClientCertMode::Request,
+        }),
+        false,
+        None,
+        MetricsRegistry::new(),
+        Box::pin(futures::stream::empty()),
+        None,
+        None,
+        Duration::ZERO,
+        None,
+        None,
+        None,
+        TracingHandle::disabled(),
+        vec![],
+    );
+    let balancer_server = BalancerService::new(balancer_cfg).await.unwrap();
+    let balancer_addr = balancer_server.pgwire.0.local_addr();
+    task::spawn(|| "balancer", async {
+        balancer_server.serve().await.unwrap();
+    });
+
+    let error = send_startup_over_tls(
+        balancer_addr,
+        BTreeMap::from([
+            ("user".to_string(), "materialize".to_string()),
+            (
+                MZ_CLIENT_CERT_KEY.to_string(),
+                "anything at all".to_string(),
+            ),
+        ]),
+    )
+    .await
+    .expect("the server should answer with an error");
+    assert_contains!(&error, MZ_CLIENT_CERT_KEY);
+    assert_contains!(&error, "invalid parameter");
+}
+
+/// Opens a TLS pgwire connection to `addr`, sends a startup message with
+/// `params`, and returns the text of the `ErrorResponse` the server replies
+/// with, or `None` if the reply is not an error.
+///
+/// Speaks just enough of the protocol for the negative test above: the reply is
+/// expected to be a single `ErrorResponse`, whose fields are NUL-terminated
+/// key/value pairs.
+async fn send_startup_over_tls(
+    addr: SocketAddr,
+    params: BTreeMap<String, String>,
+) -> Option<String> {
+    use bytes::BytesMut;
+    use mz_pgwire_common::{ACCEPT_SSL_ENCRYPTION, FrontendStartupMessage, VERSION_3};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut buf = BytesMut::new();
+    FrontendStartupMessage::SslRequest.encode(&mut buf).unwrap();
+    stream.write_all(&buf).await.unwrap();
+    let mut response = [0u8; 1];
+    stream.read_exact(&mut response).await.unwrap();
+    assert_eq!(
+        response,
+        [ACCEPT_SSL_ENCRYPTION],
+        "balancer should accept TLS"
+    );
+
+    let mut connector =
+        openssl::ssl::SslConnector::builder(openssl::ssl::SslMethod::tls()).unwrap();
+    connector.set_verify(SslVerifyMode::NONE);
+    let mut ssl = connector
+        .build()
+        .configure()
+        .unwrap()
+        .into_ssl("balancer")
+        .unwrap();
+    ssl.set_connect_state();
+    let mut stream = tokio_openssl::SslStream::new(ssl, stream).unwrap();
+    std::pin::Pin::new(&mut stream).connect().await.unwrap();
+
+    buf.clear();
+    FrontendStartupMessage::Startup {
+        version: VERSION_3,
+        params,
+    }
+    .encode(&mut buf)
+    .unwrap();
+    stream.write_all(&buf).await.unwrap();
+
+    // Read the tag and length, then the body.
+    let mut header = [0u8; 5];
+    stream.read_exact(&mut header).await.ok()?;
+    if header[0] != b'E' {
+        return None;
+    }
+    let len = usize::cast_from(u32::from_be_bytes([
+        header[1], header[2], header[3], header[4],
+    ]));
+    let mut body = vec![0u8; len - 4];
+    stream.read_exact(&mut body).await.ok()?;
+    Some(String::from_utf8_lossy(&body).replace('\0', " "))
 }

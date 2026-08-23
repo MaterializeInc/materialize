@@ -33,7 +33,9 @@ use mz_adapter::{
 use mz_adapter_types::dyncfgs::OIDC_GROUP_CLAIM;
 use mz_auth::Authenticated;
 use mz_auth::password::Password;
+use mz_authenticator::client_cert::{CertSource, MtlsPolicy, TrustStoreCache};
 use mz_authenticator::{Authenticator, GenericOidcAuthenticator};
+use mz_dyncfg::ConfigSet;
 use mz_frontegg_auth::Authenticator as FronteggAuthenticator;
 use mz_ore::cast::CastFrom;
 use mz_ore::netio::AsyncReady;
@@ -42,8 +44,8 @@ use mz_ore::str::StrExt;
 use mz_ore::{assert_none, assert_ok, instrument, soft_assert_eq_or_log, soft_assert_or_log};
 use mz_pgcopy::{CopyCsvFormatParams, CopyFormatParams, CopyTextFormatParams};
 use mz_pgwire_common::{
-    ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity, VERSION_3,
-    VERSIONS,
+    ClientCertChain, ConnectionCounter, Cursor, ErrorResponse, Format, FrontendMessage, Severity,
+    VERSION_3, VERSIONS,
 };
 use mz_repr::{
     CatalogItemId, ColumnIndex, Datum, RelationDesc, RowArena, RowIterator, RowRef,
@@ -77,6 +79,7 @@ use crate::message::{
     self, BackendMessage, SASLServerFinalMessage, SASLServerFinalMessageKinds,
     SASLServerFirstMessage,
 };
+use crate::metrics::Metrics;
 
 /// Reports whether the given stream begins with a pgwire handshake.
 ///
@@ -107,6 +110,21 @@ where
     pub tls_mode: Option<TlsMode>,
     /// A client for the adapter.
     pub adapter_client: mz_adapter::Client,
+    /// The certificate chain that speaks for the client, if any.
+    ///
+    /// Already resolved by the caller: either presented on this connection's own
+    /// handshake, or forwarded by a peer that authenticated as a trusted proxy.
+    /// A chain claimed by a peer that is not a trusted proxy never arrives here.
+    pub client_cert: Option<ClientCertChain>,
+    /// Where [`Self::client_cert`] came from.
+    pub client_cert_source: CertSource,
+    /// Caches the parsed `mtls_client_ca` trust anchors.
+    pub mtls_trust_cache: Arc<TrustStoreCache>,
+    /// Live system dyncfgs, read locally so the pre-authentication mutual TLS
+    /// check costs no coordinator round trip.
+    pub dyncfgs: Arc<ConfigSet>,
+    /// Connection metrics.
+    pub metrics: Metrics,
     /// The connection to the client.
     pub conn: &'a mut FramedConn<A>,
     /// The universally unique identifier for the connection.
@@ -146,6 +164,11 @@ pub async fn run<'a, A, I>(
     RunParams {
         tls_mode,
         adapter_client,
+        client_cert,
+        client_cert_source,
+        mtls_trust_cache,
+        dyncfgs,
+        metrics,
         conn,
         conn_uuid,
         version,
@@ -196,6 +219,50 @@ where
         return conn.send(err).await;
     }
 
+    // Mutual TLS admission control.
+    //
+    // This runs before the authenticator so that a client without an acceptable
+    // certificate is turned away without being offered a password prompt, a
+    // SASL challenge, or a token exchange. That ordering is the whole point of
+    // the gate: it is meant to stand in for a network-level restriction, and a
+    // network-level restriction does not let you attempt a credential.
+    //
+    // Internal users are exempt, matching the network policy carve-out in
+    // `Coordinator::handle_startup_inner`. Internal listeners are secured by
+    // whoever deployed the system, not by tenant SQL.
+    //
+    // Read from the local `ConfigSet` rather than `get_system_vars`, which is a
+    // coordinator round trip. This check runs before authentication, so routing
+    // it through the coordinator would let any peer that can reach the port
+    // queue a coordinator message per connection attempt. The coordinator
+    // applies `ALTER SYSTEM SET` into this set, so it is still current.
+    let mtls_policy = MtlsPolicy::from_configs(&dyncfgs, &mtls_trust_cache);
+    if !is_internal_user && mtls_policy.is_enabled() {
+        match mtls_policy.check(client_cert.as_ref(), client_cert_source, &user) {
+            Ok(None) => {}
+            Ok(Some(identity)) => {
+                metrics.client_cert_validation("trusted").inc();
+                debug!(
+                    user = %user,
+                    common_name = ?identity.common_name,
+                    issuer = %identity.issuer,
+                    source = ?identity.source,
+                    "client certificate accepted",
+                );
+            }
+            Err(err) => {
+                metrics.client_cert_validation(err.metric_label()).inc();
+                warn!(user = %user, "connection rejected by mutual TLS policy: {err:?}");
+                return conn
+                    .send(ErrorResponse::fatal(
+                        SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
+                        err.client_message(),
+                    ))
+                    .await;
+            }
+        }
+    }
+
     let authenticator_kind = authenticator.kind();
 
     let (mut session, expired) = match authenticator {
@@ -208,8 +275,7 @@ where
                 }
             };
 
-            let group_claim =
-                OIDC_GROUP_CLAIM.get(adapter_client.get_system_vars().await.dyncfgs());
+            let group_claim = OIDC_GROUP_CLAIM.get(&dyncfgs);
             let auth_response = frontegg
                 .authenticate(&user, &password, Some(&group_claim))
                 .await;

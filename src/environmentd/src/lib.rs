@@ -40,6 +40,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_auth::password::Password;
 use mz_authenticator::GenericOidcAuthenticator;
+use mz_authenticator::client_cert::{ProxyCa, TrustStoreCache};
 use mz_build_info::{BuildInfo, build_info};
 use mz_catalog::config::ClusterReplicaSizeMap;
 use mz_catalog::durable::BootstrapArgs;
@@ -102,6 +103,13 @@ pub struct Config {
     // === Connection options. ===
     /// TLS encryption and authentication configuration.
     pub tls: Option<TlsCertConfig>,
+    /// Path to the certificate authority that issues identities to trusted
+    /// proxies, e.g. `balancerd`.
+    ///
+    /// Only a peer whose own certificate chains to this authority may forward an
+    /// end client's certificate. When unset, forwarded client certificates are
+    /// ignored entirely.
+    pub tls_proxy_ca: Option<PathBuf>,
     /// Trigger to attempt to reload TLS certififcates.
     #[derivative(Debug = "ignore")]
     pub tls_reload_certs: ReloadTrigger,
@@ -280,6 +288,9 @@ impl Listener<SqlListenerConfig> {
         oidc: GenericOidcAuthenticator,
         metrics: MetricsConfig,
         helm_chart_version: Option<String>,
+        proxy_ca: Option<ProxyCa>,
+        mtls_trust_cache: Arc<TrustStoreCache>,
+        dyncfgs: Arc<ConfigSet>,
     ) -> ListenerHandle {
         let label = leak_listener_name(&name);
         let tls = tls_reloading_context.map(|context| mz_server_core::ReloadingTlsConfig {
@@ -303,6 +314,9 @@ impl Listener<SqlListenerConfig> {
                 active_connection_counter,
                 helm_chart_version,
                 allowed_roles: self.config.allowed_roles,
+                proxy_ca,
+                mtls_trust_cache,
+                dyncfgs,
             });
             mz_server_core::serve(ServeConfig {
                 conns: self.connection_stream,
@@ -391,6 +405,30 @@ impl Listeners {
             Some(tls_config) => Some(tls_config.reloading_context(config.tls_reload_certs)?),
             None => None,
         };
+
+        // The proxy authority is read once at startup: it is infrastructure
+        // identity, and a deployment that cannot read it must not come up
+        // silently trusting nobody, because that would turn a forwarded-identity
+        // deployment into one that rejects every connection.
+        let proxy_ca = match &config.tls_proxy_ca {
+            Some(path) => {
+                let pem = std::fs::read(path).map_err(|e| {
+                    AdapterError::Internal(format!(
+                        "reading --tls-proxy-ca {}: {e}",
+                        path.display()
+                    ))
+                })?;
+                let ca = ProxyCa::from_pem(&pem).map_err(|e| {
+                    AdapterError::Internal(format!(
+                        "parsing --tls-proxy-ca {}: {e}",
+                        path.display()
+                    ))
+                })?;
+                Some(ca)
+            }
+            None => None,
+        };
+        let mtls_trust_cache = Arc::new(TrustStoreCache::new());
 
         let active_connection_counter = ConnectionCounter::default();
         let (deployment_state, deployment_state_handle) = DeploymentState::new();
@@ -855,6 +893,9 @@ impl Listeners {
                         oidc.clone(),
                         metrics.clone(),
                         config.helm_chart_version.clone(),
+                        proxy_ca.clone(),
+                        Arc::clone(&mtls_trust_cache),
+                        Arc::clone(&config.system_dyncfgs),
                     )
                     .await,
             );

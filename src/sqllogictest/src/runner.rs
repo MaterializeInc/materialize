@@ -1336,6 +1336,7 @@ impl<'a> RunnerInner<'a> {
             cloud_resource_controller: None,
             system_dyncfgs,
             tls: None,
+            tls_proxy_ca: None,
             frontegg: None,
             frontegg_oauth_issuer_url: None,
             cors_allowed_origin: AllowOrigin::list([]),

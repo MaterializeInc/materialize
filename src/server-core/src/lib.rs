@@ -29,7 +29,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::netio::AsyncReady;
 use mz_ore::option::OptionExt;
 use mz_ore::task::JoinSetExt;
-use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod};
+use openssl::ssl::{SslAcceptor, SslContext, SslFiletype, SslMethod, SslVerifyMode};
 use proxy_header::{ParseConfig, ProxiedAddress, ProxyHeader};
 use schemars::JsonSchema;
 use scopeguard::ScopeGuard;
@@ -473,6 +473,33 @@ pub enum TlsMode {
     Require,
 }
 
+/// Whether a server asks its peers for a client certificate.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    Deserialize,
+    Serialize,
+    PartialEq,
+    Eq,
+    JsonSchema,
+    Default
+)]
+pub enum ClientCertMode {
+    /// Never ask for a client certificate.
+    #[default]
+    Disable,
+    /// Ask for a client certificate, but neither require one nor evaluate the
+    /// chain during the handshake.
+    ///
+    /// OpenSSL still verifies the handshake's `CertificateVerify` signature, so
+    /// a peer that presents a certificate has proven it holds the private key.
+    /// Only the *trust* decision is deferred, to the authentication layer, which
+    /// owns the trust anchors and can be reconfigured at runtime while an
+    /// `SslContext` cannot.
+    Request,
+}
+
 /// Configures TLS encryption for connections.
 #[derive(Debug, Clone)]
 pub struct TlsCertConfig {
@@ -480,6 +507,8 @@ pub struct TlsCertConfig {
     pub cert: PathBuf,
     /// The path to the TLS key.
     pub key: PathBuf,
+    /// Whether to ask peers for a client certificate.
+    pub client_certs: ClientCertMode,
 }
 
 impl TlsCertConfig {
@@ -494,6 +523,17 @@ impl TlsCertConfig {
         let mut builder = SslAcceptor::mozilla_intermediate_v5(SslMethod::tls())?;
         builder.set_certificate_chain_file(&self.cert)?;
         builder.set_private_key_file(&self.key, SslFiletype::PEM)?;
+        match self.client_certs {
+            ClientCertMode::Disable => (),
+            ClientCertMode::Request => {
+                // `PEER` without `FAIL_IF_NO_PEER_CERT` makes the certificate
+                // optional, and the callback accepts every chain because this
+                // layer holds no trust anchors. Returning `false` here would
+                // abort the handshake before the authentication layer, which
+                // does hold them, ever sees the certificate.
+                builder.set_verify_callback(SslVerifyMode::PEER, |_verified, _ctx| true);
+            }
+        }
         Ok(builder.build().into_context())
     }
 
@@ -610,9 +650,35 @@ pub struct TlsCliArgs {
         value_name = "PATH"
     )]
     tls_key: Option<PathBuf>,
+    /// Ask clients for a TLS certificate during the handshake.
+    ///
+    /// Certificates are captured but not validated during the handshake;
+    /// whether one is trusted, and whether one is required, is decided by the
+    /// authentication layer from configuration that can change at runtime.
+    /// Enabling this is a prerequisite for mutual TLS but does not by itself
+    /// require or enforce anything.
+    #[clap(long, env = "TLS_REQUEST_CLIENT_CERTS", requires = "tls_cert")]
+    tls_request_client_certs: bool,
+    /// Certificate authority that issues identities to trusted proxies, e.g.
+    /// `balancerd`.
+    ///
+    /// A peer whose own certificate chains to this authority may forward an end
+    /// client's certificate on that client's behalf. Without this, forwarded
+    /// certificates are ignored, because there is nothing to distinguish a
+    /// proxy from anyone else who can reach the port.
+    ///
+    /// This is a file rather than SQL configuration deliberately: it is
+    /// infrastructure identity that must be trustworthy before any SQL runs.
+    #[clap(long, env = "TLS_PROXY_CA", value_name = "PATH")]
+    tls_proxy_ca: Option<PathBuf>,
 }
 
 impl TlsCliArgs {
+    /// The authority that issues trusted-proxy identities, if any.
+    pub fn proxy_ca(&self) -> Option<PathBuf> {
+        self.tls_proxy_ca.clone()
+    }
+
     /// Convert args into configuration.
     pub fn into_config(self) -> Result<Option<TlsCertConfig>, anyhow::Error> {
         if self.tls_mode == "disable" {
@@ -622,11 +688,25 @@ impl TlsCliArgs {
             if self.tls_key.is_some() {
                 bail!("cannot specify --tls-mode=disable and --tls-key simultaneously");
             }
+            if self.tls_request_client_certs {
+                bail!(
+                    "cannot specify --tls-mode=disable and --tls-request-client-certs simultaneously"
+                );
+            }
             Ok(None)
         } else {
             let cert = self.tls_cert.unwrap();
             let key = self.tls_key.unwrap();
-            Ok(Some(TlsCertConfig { cert, key }))
+            let client_certs = if self.tls_request_client_certs {
+                ClientCertMode::Request
+            } else {
+                ClientCertMode::Disable
+            };
+            Ok(Some(TlsCertConfig {
+                cert,
+                key,
+                client_certs,
+            }))
         }
     }
 }

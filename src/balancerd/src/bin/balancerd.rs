@@ -34,7 +34,7 @@ use mz_ore::error::ErrorExt;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::retry::Retry;
 use mz_ore::tracing::TracingHandle;
-use mz_server_core::TlsCliArgs;
+use mz_server_core::{ClientCertMode, TlsCertConfig, TlsCliArgs};
 use tracing::{Instrument, info, info_span, warn};
 
 #[derive(Debug, clap::Parser)]
@@ -66,6 +66,28 @@ pub struct ServiceArgs {
     /// Whether to initiate internal connections over TLS
     #[clap(long)]
     internal_tls: bool,
+    /// Certificate identifying this balancer to `environmentd` on internal
+    /// connections.
+    ///
+    /// `environmentd` honours a forwarded client certificate only from a peer
+    /// whose own certificate chains to its `--tls-proxy-ca`, so this is required
+    /// for mutual TLS through the balancer. Without it internal connections are
+    /// still encrypted, but anonymous.
+    #[clap(
+        long,
+        env = "INTERNAL_TLS_CERT",
+        requires = "internal_tls_key",
+        value_name = "PATH"
+    )]
+    internal_tls_cert: Option<PathBuf>,
+    /// Private key for `--internal-tls-cert`.
+    #[clap(
+        long,
+        env = "INTERNAL_TLS_KEY",
+        requires = "internal_tls_cert",
+        value_name = "PATH"
+    )]
+    internal_tls_key: Option<PathBuf>,
     /// Static pgwire resolver address to use for local testing.
     #[clap(
         long,
@@ -350,6 +372,22 @@ pub async fn run(
             "exactly one of --static-resolver-addr or --frontegg-resolver-template must be present"
         ),
     };
+    // Clap's `requires` pairing guarantees these are both set or both unset.
+    let internal_tls_cert = match (args.internal_tls_cert, args.internal_tls_key) {
+        (Some(cert), Some(key)) => {
+            if !args.internal_tls {
+                anyhow::bail!("--internal-tls-cert requires --internal-tls");
+            }
+            Some(TlsCertConfig {
+                cert,
+                key,
+                // The balancer is the client on this leg, so it never asks the
+                // peer for a certificate.
+                client_certs: ClientCertMode::Disable,
+            })
+        }
+        _ => None,
+    };
     let config = BalancerConfig::new(
         &BUILD_INFO,
         args.internal_http_listen_addr,
@@ -360,6 +398,7 @@ pub async fn run(
         args.https_sni_resolver_template,
         args.tls.into_config()?,
         args.internal_tls,
+        internal_tls_cert,
         metrics_registry,
         mz_server_core::default_cert_reload_ticker(),
         args.launchdarkly_sdk_key,

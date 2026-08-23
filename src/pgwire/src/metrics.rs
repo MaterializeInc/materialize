@@ -14,6 +14,7 @@ use mz_ore::metrics::{IntCounter, MetricsRegistry};
 #[derive(Clone, Debug)]
 pub struct MetricsConfig {
     connection_status: IntCounterVec,
+    client_cert_validations: IntCounterVec,
 }
 
 impl MetricsConfig {
@@ -23,6 +24,11 @@ impl MetricsConfig {
                 name: "mz_connection_status",
                 help: "Count of completed network connections, by status",
                 var_labels: ["source", "status"],
+            }),
+            client_cert_validations: registry.register(metric! {
+                name: "mz_pgwire_client_cert_validations_total",
+                help: "Count of mutual TLS client certificate evaluations, by outcome",
+                var_labels: ["source", "result"],
             }),
         }
     }
@@ -42,6 +48,11 @@ impl Metrics {
         // always emitted as time series
         self_.connection_status(false);
         self_.connection_status(true);
+        // `trusted` and `absent` are the two outcomes an operator watches during
+        // an mTLS rollout, so emit them from the start rather than only once one
+        // occurs.
+        self_.client_cert_validation("trusted");
+        self_.client_cert_validation("absent");
 
         self_
     }
@@ -50,6 +61,15 @@ impl Metrics {
         self.inner
             .connection_status
             .with_label_values(&[self.source_label(), Self::status_label(is_ok)])
+    }
+
+    /// Counts one client certificate evaluation. `result` is `trusted`, or the
+    /// label of the [`mz_authenticator::client_cert::MtlsError`] that rejected
+    /// it.
+    pub fn client_cert_validation(&self, result: &str) -> IntCounter {
+        self.inner
+            .client_cert_validations
+            .with_label_values(&[self.source_label(), result])
     }
 
     fn status_label(is_ok: bool) -> &'static str {
