@@ -25,9 +25,10 @@
 //! streaming interface. Extending hedging to any of them is forbidden.
 //!
 //! The hedge handle must not share a connection pool (or DNS state) with the
-//! primary, otherwise the hedge can be assigned the very connection that is
-//! dying. See [crate::cfg::open_hedge_sibling] for how that isolation is
-//! constructed per backend.
+//! primary, otherwise the hedge can be handed a connection dying in the same
+//! event that stalled the primary, exactly when a hedge matters most. See
+//! [crate::cfg::open_hedge_sibling] for how that isolation is constructed
+//! per backend.
 //!
 //! Hedging operates within a single `retry_external` attempt, before any
 //! failure surfaces. The retrying in `retry_external`, which is what
