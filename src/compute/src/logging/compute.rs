@@ -913,8 +913,15 @@ struct ExportState {
     /// The lifecycle rows logged for this export so far, keyed by the stage they report.
     ///
     /// The lifecycle relation is append-only for the life of an export, so the rows are kept to
-    /// retract them when it is dropped. Re-deriving them at drop time would risk drifting from
-    /// what was inserted.
+    /// retract exactly what was inserted. That makes the retraction correct by construction rather
+    /// than contingent on `pack_lifecycle_update` remaining a pure function of state that outlives
+    /// the insert, which it is today.
+    ///
+    /// The relation declares no key, so `index_by` arranges by the whole row and each entry holds
+    /// one, around a kilobyte per export per worker once every stage is reached. That cost is
+    /// accepted in exchange for the guarantee. Keeping only each stage's `occurred_at` and
+    /// repacking at drop time would cost a small fraction of that, and is the change to make if
+    /// the memory ever matters more than the guarantee.
     ///
     /// Keying by stage is what makes "at most one row per export, worker and stage" true by
     /// construction rather than a property of every caller getting its own guard right. A reader
