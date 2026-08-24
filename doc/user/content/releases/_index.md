@@ -19,6 +19,16 @@ Starting with the v26.1.0 release, Materialize releases on a weekly schedule for
 both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for details.
 {{</ note >}}
 
+## v26.38.2
+*Released to Materialize Cloud: 2026-08-24* <br>
+*Released to Materialize Self-Managed: 2026-08-25* <br>
+
+### Agent Skills {#v26.38.2-agent-skills}
+- **materialize-debug-freshness**: New skill that diagnoses why an object is behind wall-clock time, sweeping source and sink status, attributing lag hop by hop through `mz_materialization_lag`, and — once hydration is confirmed — ranking the dataflows on a replica and then that dataflow's operators back to the query clause responsible.
+
+### Bug Fixes {#v26.38.2-bug-fixes}
+- Fixed slow catalog queries immediately after a zero-downtime upgrade that migrated builtin materialized views: the migrated views and everything downstream of them used to hydrate all at once at cut-over, spiking CPU on `mz_catalog_server`, and now hydrate before cut-over instead.
+
 ## v26.38.0
 *Released to Materialize Cloud: 2026-08-19* <br>
 
