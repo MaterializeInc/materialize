@@ -468,10 +468,14 @@ impl Sweep {
             // the replica's clock, so a replica whose clock trails `environmentd`
             // by more than its introspection interval keeps sitting below the
             // target and waits here until this fires, every sweep.
-            Err(_) => warn!(
+            Err(_) if step == "collect" => warn!(
                 %step, %cluster_id, %replica_id,
                 "hydration history step timed out, \
                  the replica's introspection frontier may be trailing the write frontier"
+            ),
+            Err(_) => warn!(
+                %step, %cluster_id, %replica_id,
+                "hydration history step timed out"
             ),
         }
     }
