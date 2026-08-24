@@ -400,10 +400,9 @@ snk           hydrated_test_4 true
 > DROP SOURCE src CASCADE
 > DROP MATERIALIZED VIEW mv
 
-# Retention runs in the same sweep but is not replica-targeted: it goes to the
-# catalog server, so it keeps working with no user replicas at all. It retracts
-# aged-out rows through the same OCC path, in bounded batches. A zero retention
-# period expires everything.
+# Retention runs in the same sweep on the catalog server. It retracts aged-out rows
+# through the same OCC path, in bounded batches. A zero retention period expires
+# everything.
 $ postgres-execute connection=mz_system
 ALTER SYSTEM SET hydration_history_retention_period = '0s';
 
