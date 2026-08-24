@@ -7,7 +7,7 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Shared object metadata for catalog reconciliation.
+//! Shared object metadata and orchestration for catalog reconciliation.
 
 use mz_sql_parser::ast::{
     AlterDefaultPrivilegesStatement, ColumnName, CommentObjectType, CommentStatement,
@@ -16,16 +16,21 @@ use mz_sql_parser::ast::{
     RawNetworkPolicyName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
     UnresolvedSchemaName,
 };
+use std::borrow::Borrow;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::cli::CliError;
-use crate::cli::commands::comments::{self, CommentTarget};
-use crate::cli::commands::default_privileges;
-use crate::cli::commands::grants as grant_reconciliation;
+use crate::cli::commands::comments::CommentTarget;
+use crate::cli::commands::{comments, default_privileges, grants};
 use crate::cli::executor::DeploymentExecutor;
-use crate::client::Client;
+use crate::client::{Client, CurrentObjectState, ObjectComment, ObjectGrant};
+use crate::project::ir::compiled;
 use crate::project::ir::object_id::ObjectId;
 
 /// A catalog object kind managed by mz-deploy.
+///
+/// This is the single source of truth for the SQL and catalog metadata that
+/// grant, comment, and default-privilege reconciliation need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectKind {
     Table,
@@ -33,13 +38,24 @@ pub enum ObjectKind {
     Secret,
     Connection,
     Cluster,
-    NetworkPolicy,
     Role,
+    NetworkPolicy,
     Database,
     Schema,
 }
 
 impl ObjectKind {
+    /// The object type stored in `mz_objects`.
+    pub fn catalog_object_type(self) -> &'static str {
+        match self {
+            Self::Table => "table",
+            Self::Source => "source",
+            Self::Secret => "secret",
+            Self::Connection => "connection",
+            _ => unreachable!("{} is not stored in mz_objects", self.label()),
+        }
+    }
+
     /// The system catalog relation that stores objects of this kind.
     pub fn catalog_table(self) -> &'static str {
         match self {
@@ -48,8 +64,8 @@ impl ObjectKind {
             Self::Secret => "mz_secrets",
             Self::Connection => "mz_connections",
             Self::Cluster => "mz_clusters",
-            Self::NetworkPolicy => "mz_network_policies",
             Self::Role => "mz_roles",
+            Self::NetworkPolicy => "mz_network_policies",
             Self::Database => "mz_databases",
             Self::Schema => "mz_schemas",
         }
@@ -107,8 +123,8 @@ impl ObjectKind {
             Self::Secret => "secret",
             Self::Connection => "connection",
             Self::Cluster => "cluster",
-            Self::NetworkPolicy => "network policy",
             Self::Role => "role",
+            Self::NetworkPolicy => "network policy",
             Self::Database => "database",
             Self::Schema => "schema",
         }
@@ -117,7 +133,7 @@ impl ObjectKind {
 
 /// A concrete catalog object being reconciled.
 pub enum ReconcileTarget<'a> {
-    /// A schema-qualified database object.
+    /// A schema-qualified object in `mz_catalog.mz_objects`.
     Item { kind: ObjectKind, id: &'a ObjectId },
     /// An object identified by one global name.
     Named { kind: ObjectKind, name: &'a str },
@@ -140,8 +156,8 @@ impl<'a> ReconcileTarget<'a> {
         debug_assert!(matches!(
             kind,
             ObjectKind::Cluster
-                | ObjectKind::NetworkPolicy
                 | ObjectKind::Role
+                | ObjectKind::NetworkPolicy
                 | ObjectKind::Database
         ));
         Self::Named { kind, name }
@@ -173,14 +189,7 @@ impl<'a> ReconcileTarget<'a> {
     pub fn grant_target(&self) -> Option<GrantTargetSpecification<Raw>> {
         let object_type = self.kind().grant_type()?;
         let name = match self {
-            Self::Item { id, .. } => {
-                let item_name = UnresolvedItemName::qualified(&[
-                    Ident::new_unchecked(id.expect_database()),
-                    Ident::new_unchecked(id.schema()),
-                    Ident::new_unchecked(id.object()),
-                ]);
-                UnresolvedObjectName::Item(item_name)
-            }
+            Self::Item { id, .. } => UnresolvedObjectName::Item(unresolved_item_name(id)),
             Self::Named {
                 kind: ObjectKind::Cluster,
                 name,
@@ -314,142 +323,183 @@ impl<'a> ReconcileTarget<'a> {
     }
 }
 
-/// Read and reconcile grants for one object.
-pub async fn grants(
-    client: &Client,
-    executor: &DeploymentExecutor<'_>,
-    target: &ReconcileTarget<'_>,
-    desired: &[GrantPrivilegesStatement<Raw>],
-) -> Result<(), CliError> {
-    let introspection = client.introspection();
-    let kind = target.kind();
-    let (current, default_privileges) = match target {
-        ReconcileTarget::Item { id, .. } => (
-            introspection
-                .get_database_object_grants(
-                    kind.catalog_table(),
-                    id.expect_database(),
-                    id.schema(),
-                    id.object(),
-                )
-                .await
-                .map_err(CliError::Connection)?,
-            introspection
-                .get_default_privilege_grants_for_database_object(
-                    kind.catalog_table(),
-                    id.expect_database(),
-                    id.schema(),
-                    id.object(),
-                    kind.default_privilege_type()
-                        .expect("database objects support default privileges"),
-                )
-                .await
-                .map_err(CliError::Connection)?,
-        ),
-        ReconcileTarget::Named {
-            kind: ObjectKind::Cluster,
-            name,
-        } => (
-            introspection
-                .get_cluster_grants(name)
-                .await
-                .map_err(CliError::Connection)?,
-            introspection
-                .get_default_privilege_grants_for_cluster(name)
-                .await
-                .map_err(CliError::Connection)?,
-        ),
-        ReconcileTarget::Named {
-            kind: ObjectKind::NetworkPolicy,
-            name,
-        } => (
-            introspection
-                .get_network_policy_grants(name)
-                .await
-                .map_err(CliError::Connection)?,
-            introspection
-                .get_default_privilege_grants_for_network_policy(name)
-                .await
-                .map_err(CliError::Connection)?,
-        ),
-        ReconcileTarget::Named {
-            kind: ObjectKind::Database,
-            name,
-        } => (
-            introspection
-                .get_database_grants(name)
-                .await
-                .map_err(CliError::Connection)?,
-            introspection
-                .get_default_privilege_grants_for_database(name)
-                .await
-                .map_err(CliError::Connection)?,
-        ),
-        ReconcileTarget::Schema { database, schema } => (
-            introspection
-                .get_schema_grants(database, schema)
-                .await
-                .map_err(CliError::Connection)?,
-            introspection
-                .get_default_privilege_grants_for_schema(database, schema)
-                .await
-                .map_err(CliError::Connection)?,
-        ),
-        ReconcileTarget::Named { kind, .. } => {
-            unreachable!("{} has no object grants", kind.label())
+/// Catalog state read in bulk for every object in one apply phase.
+pub struct ReconcileState<K: Ord> {
+    objects: BTreeMap<K, CurrentObjectState>,
+}
+
+impl<K: Ord> ReconcileState<K> {
+    fn from_parts(
+        grants: BTreeMap<K, Vec<ObjectGrant>>,
+        default_privileges: BTreeMap<K, Vec<ObjectGrant>>,
+        comments: BTreeMap<K, Vec<ObjectComment>>,
+    ) -> Self {
+        let mut objects: BTreeMap<K, CurrentObjectState> = BTreeMap::new();
+        for (key, grants) in grants {
+            objects.entry(key).or_default().grants = grants;
         }
-    };
-    grant_reconciliation::reconcile(executor, target, desired, &current, &default_privileges).await
+        for (key, default_privileges) in default_privileges {
+            objects.entry(key).or_default().default_privileges = default_privileges;
+        }
+        for (key, comments) in comments {
+            objects.entry(key).or_default().comments = comments;
+        }
+        Self { objects }
+    }
+
+    /// The catalog state for `key`, if any was recorded.
+    pub fn get<Q>(&self, key: &Q) -> Option<&CurrentObjectState>
+    where
+        K: Borrow<Q>,
+        Q: Ord + ?Sized,
+    {
+        self.objects.get(key)
+    }
 }
 
-/// Read and reconcile comments for one object.
-pub async fn comments(
-    client: &Client,
-    executor: &DeploymentExecutor<'_>,
-    target: &ReconcileTarget<'_>,
-    desired: &[CommentStatement<Raw>],
-) -> Result<(), CliError> {
-    let introspection = client.introspection();
-    let current = match target {
-        ReconcileTarget::Item { kind, id } => introspection
-            .get_database_object_comments(
+impl ReconcileState<ObjectId> {
+    /// Read grants and comments for schema-qualified objects of one kind.
+    pub async fn for_database_objects(
+        client: &Client,
+        kind: ObjectKind,
+        objects: &BTreeSet<ObjectId>,
+    ) -> Result<Self, CliError> {
+        let introspection = client.introspection();
+        let catalog_object_type = kind.catalog_object_type();
+        let default_privilege_type = kind
+            .default_privilege_type()
+            .expect("database objects support default privileges");
+        let (grants, default_privileges, comments) = futures::try_join!(
+            introspection.get_database_object_grants(objects, catalog_object_type),
+            introspection.get_default_privilege_grants_for_database_objects(
+                objects,
+                catalog_object_type,
+                default_privilege_type,
+            ),
+            introspection.get_database_object_comments(objects, catalog_object_type),
+        )?;
+        Ok(Self::from_parts(grants, default_privileges, comments))
+    }
+}
+
+impl ReconcileState<String> {
+    /// Read grants and comments for globally named objects of one kind.
+    pub async fn for_named_objects(
+        client: &Client,
+        kind: ObjectKind,
+        names: &[&str],
+    ) -> Result<Self, CliError> {
+        let introspection = client.introspection();
+        let grants = async {
+            match kind {
+                ObjectKind::Cluster => introspection.get_cluster_grants(names).await,
+                ObjectKind::NetworkPolicy => introspection.get_network_policy_grants(names).await,
+                _ => unreachable!("{} is not a grant-bearing named object", kind.label()),
+            }
+        };
+        let object_type = kind
+            .default_privilege_type()
+            .expect("grant-bearing named objects support default privileges");
+        let (grants, default_privileges, comments) = futures::try_join!(
+            grants,
+            introspection.get_default_privilege_grants_for_named_objects(
                 kind.catalog_table(),
-                id.expect_database(),
-                id.schema(),
-                id.object(),
-            )
-            .await
-            .map_err(CliError::Connection)?,
-        ReconcileTarget::Named { kind, name } => introspection
-            .get_named_object_comments(kind.catalog_table(), name)
-            .await
-            .map_err(CliError::Connection)?,
-        ReconcileTarget::Schema { database, schema } => introspection
-            .get_schema_comments(database, schema)
-            .await
-            .map_err(CliError::Connection)?,
-    };
-    comments::reconcile(executor, target, desired, &current).await
+                names,
+                object_type,
+            ),
+            introspection.get_named_object_comments(kind.catalog_table(), names),
+        )?;
+        Ok(Self::from_parts(grants, default_privileges, comments))
+    }
 }
 
-/// Reconcile grants and comments for one grant-bearing object.
+/// Reconcile grants and comments for one target.
 pub async fn grants_and_comments(
-    client: &Client,
     executor: &DeploymentExecutor<'_>,
     target: &ReconcileTarget<'_>,
     desired_grants: &[GrantPrivilegesStatement<Raw>],
     desired_comments: &[CommentStatement<Raw>],
+    current: &CurrentObjectState,
 ) -> Result<(), CliError> {
-    grants(client, executor, target, desired_grants).await?;
-    comments(client, executor, target, desired_comments).await
+    if target.grant_target().is_some() {
+        grants::reconcile(
+            executor,
+            target,
+            desired_grants,
+            &current.grants,
+            &current.default_privileges,
+        )
+        .await?;
+    }
+    comments::reconcile(executor, target, desired_comments, &current.comments).await
 }
 
-fn item_name(id: &ObjectId) -> RawItemName {
-    RawItemName::Name(UnresolvedItemName::qualified(&[
-        Ident::new_unchecked(id.expect_database()),
-        Ident::new_unchecked(id.schema()),
-        Ident::new_unchecked(id.object()),
-    ]))
+/// Reconcile one compiled database object from phase-level catalog state.
+pub async fn database_object(
+    executor: &DeploymentExecutor<'_>,
+    id: &ObjectId,
+    object: &compiled::DatabaseObject,
+    kind: ObjectKind,
+    state: &ReconcileState<ObjectId>,
+) -> Result<(), CliError> {
+    let empty = CurrentObjectState::default();
+    grants_and_comments(
+        executor,
+        &ReconcileTarget::item(kind, id),
+        &object.grants,
+        &object.comments,
+        state.get(id).unwrap_or(&empty),
+    )
+    .await
+}
+
+/// Reconcile one named object from phase-level catalog state.
+pub async fn named_object(
+    executor: &DeploymentExecutor<'_>,
+    name: &str,
+    kind: ObjectKind,
+    desired_grants: &[GrantPrivilegesStatement<Raw>],
+    desired_comments: &[CommentStatement<Raw>],
+    state: &ReconcileState<String>,
+) -> Result<(), CliError> {
+    let empty = CurrentObjectState::default();
+    grants_and_comments(
+        executor,
+        &ReconcileTarget::named(kind, name),
+        desired_grants,
+        desired_comments,
+        state.get(name).unwrap_or(&empty),
+    )
+    .await
+}
+
+/// Read the catalog state needed to reconcile a database or schema scope.
+async fn current_scope_state(
+    client: &Client,
+    target: &ReconcileTarget<'_>,
+) -> Result<CurrentObjectState, CliError> {
+    let introspection = client.introspection();
+    let (grants, default_privileges, comments) = match target {
+        ReconcileTarget::Named {
+            kind: ObjectKind::Database,
+            name,
+        } => futures::try_join!(
+            introspection.get_database_grants(name),
+            introspection.get_default_privilege_grants_for_database(name),
+            introspection.get_one_named_object_comments("mz_databases", name),
+        )?,
+        ReconcileTarget::Schema { database, schema } => futures::try_join!(
+            introspection.get_schema_grants(database, schema),
+            introspection.get_default_privilege_grants_for_schema(database, schema),
+            introspection.get_schema_comments(database, schema),
+        )?,
+        _ => unreachable!("scope reconciliation requires a database or schema"),
+    };
+    Ok(CurrentObjectState {
+        grants,
+        default_privileges,
+        comments,
+    })
 }
 
 /// Reconcile all state declared by one database or schema modifier file.
@@ -461,23 +511,46 @@ pub async fn scope(
     desired_comments: &[CommentStatement<Raw>],
     desired_default_privileges: &[AlterDefaultPrivilegesStatement<Raw>],
 ) -> Result<(), CliError> {
-    grants_and_comments(client, executor, target, desired_grants, desired_comments).await?;
-
-    let current = match target {
-        ReconcileTarget::Named {
-            kind: ObjectKind::Database,
-            name,
-        } => client
-            .introspection()
-            .get_database_default_privileges(name)
-            .await
-            .map_err(CliError::Connection)?,
-        ReconcileTarget::Schema { database, schema } => client
-            .introspection()
-            .get_schema_default_privileges(database, schema)
-            .await
-            .map_err(CliError::Connection)?,
-        _ => unreachable!("scope reconciliation requires a database or schema"),
+    let introspection = client.introspection();
+    let current_default_privileges = async {
+        match target {
+            ReconcileTarget::Named {
+                kind: ObjectKind::Database,
+                name,
+            } => introspection
+                .get_database_default_privileges(name)
+                .await
+                .map_err(CliError::Connection),
+            ReconcileTarget::Schema { database, schema } => introspection
+                .get_schema_default_privileges(database, schema)
+                .await
+                .map_err(CliError::Connection),
+            _ => unreachable!("scope reconciliation requires a database or schema"),
+        }
     };
-    default_privileges::reconcile(executor, target, desired_default_privileges, &current).await
+    let (current, current_default_privileges) = futures::try_join!(
+        current_scope_state(client, target),
+        current_default_privileges
+    )?;
+    grants_and_comments(executor, target, desired_grants, desired_comments, &current).await?;
+    default_privileges::reconcile(
+        executor,
+        target,
+        desired_default_privileges,
+        &current_default_privileges,
+    )
+    .await
+}
+
+/// The fully-qualified name of a schema-qualified object.
+fn item_name(id: &ObjectId) -> RawItemName {
+    RawItemName::Name(unresolved_item_name(id))
+}
+
+fn unresolved_item_name(id: &ObjectId) -> UnresolvedItemName {
+    UnresolvedItemName::qualified(&[
+        Ident::new_unchecked(id.expect_database()),
+        Ident::new_unchecked(id.schema()),
+        Ident::new_unchecked(id.object()),
+    ])
 }

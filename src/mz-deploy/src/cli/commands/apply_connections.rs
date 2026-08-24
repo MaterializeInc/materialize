@@ -10,8 +10,7 @@
 //! Apply connections command - create missing connections and reconcile drifted ones.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects;
-use crate::cli::commands::reconcile::ObjectKind;
+use crate::cli::commands::reconcile::{self, ObjectKind};
 use crate::cli::executor::ObjectAction;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectResult, compile_apply_project_and_connect,
@@ -50,10 +49,11 @@ impl Connections {
 
     async fn handle_existing(
         &self,
-        client: &Client,
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        live_sql: Option<&str>,
+        state: &reconcile::ReconcileState<ObjectId>,
     ) -> Result<ObjectAction, CliError> {
         let Statement::CreateConnection(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateConnection");
@@ -68,21 +68,15 @@ impl Connections {
             _ => unreachable!(),
         };
 
-        let live_sql = client
-            .introspection()
-            .get_connection_create_sql(obj_id.expect_database(), obj_id.schema(), obj_id.object())
-            .await
-            .map_err(CliError::Connection)?;
-
         let action = match live_sql {
             None => {
-                // Object was in catalog batch check but SHOW CREATE returned nothing —
-                // treat as needing creation.
+                // Object was in the catalog existence check but SHOW CREATE
+                // returned nothing — treat as needing creation.
                 executor.execute_sql(&resolved_stmt).await?;
                 ObjectAction::Created
             }
             Some(sql) => {
-                let live_create = parse_create_connection_sql(&sql)?;
+                let live_create = parse_create_connection_sql(sql)?;
                 let (to_set, to_drop) =
                     diff_connection_options(&resolved_stmt.values, &live_create.values);
 
@@ -107,24 +101,17 @@ impl Connections {
             }
         };
 
-        apply_objects::reconcile_grants_and_comments(
-            client,
-            executor,
-            obj_id,
-            typed_obj,
-            OBJECT_KIND,
-        )
-        .await?;
+        reconcile::database_object(executor, obj_id, typed_obj, OBJECT_KIND, state).await?;
 
         Ok(action)
     }
 
     async fn handle_new(
         &self,
-        client: &Client,
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        state: &reconcile::ReconcileState<ObjectId>,
     ) -> Result<ObjectAction, CliError> {
         let resolved_stmt = match self
             .resolver
@@ -137,14 +124,7 @@ impl Connections {
 
         executor.execute_sql(&resolved_stmt).await?;
 
-        apply_objects::reconcile_grants_and_comments(
-            client,
-            executor,
-            obj_id,
-            typed_obj,
-            OBJECT_KIND,
-        )
-        .await?;
+        reconcile::database_object(executor, obj_id, typed_obj, OBJECT_KIND, state).await?;
 
         Ok(ObjectAction::Created)
     }
@@ -176,9 +156,20 @@ pub async fn plan(
     let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
     let existing = client
         .introspection()
-        .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_table())
+        .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_object_type())
         .await
         .map_err(CliError::Connection)?;
+
+    let (reconcile_state, live_sql) = futures::try_join!(
+        reconcile::ReconcileState::for_database_objects(client, OBJECT_KIND, &target_ids),
+        async {
+            client
+                .introspection()
+                .get_connection_create_sqls(&existing)
+                .await
+                .map_err(CliError::Connection)
+        },
+    )?;
 
     // Every schema this phase manages, not just the ones hosting a missing
     // object. `prepare_schemas` creates only what is absent, and reconciles the
@@ -203,17 +194,24 @@ pub async fn plan(
         executor.take_statements();
         let action = if existing.contains(&obj_id) {
             connections
-                .handle_existing(client, executor, &obj_id, typed_obj)
+                .handle_existing(
+                    executor,
+                    &obj_id,
+                    typed_obj,
+                    live_sql.get(&obj_id).map(String::as_str),
+                    &reconcile_state,
+                )
                 .await?
         } else {
             connections
-                .handle_new(client, executor, &obj_id, typed_obj)
+                .handle_new(executor, &obj_id, typed_obj, &reconcile_state)
                 .await?
         };
+        let statements = executor.take_statements();
         results.push(ObjectResult {
             object: obj_id.to_string(),
-            action,
-            statements: executor.take_statements(),
+            action: action.with_reconciled(!statements.is_empty()),
+            statements,
             redacted_statements: vec![],
             transaction_group: None,
             post_statements: vec![],

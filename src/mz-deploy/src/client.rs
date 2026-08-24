@@ -141,8 +141,9 @@ pub use deployment_ops::{
 pub use errors::{ConnectionError, DatabaseValidationError, format_relative_path};
 pub use introspection::DependentSink;
 pub use models::{
-    ApplyState, Cluster, ClusterConfig, ClusterReplica, ConflictRecord, DefaultPrivilege,
-    DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata, DeploymentMode,
-    DeploymentObjectRecord, ObjectComment, ObjectGrant, PendingStatement, ProductionClusterRecord,
-    ReplacementMvRecord, SchemaDeploymentRecord, StagingDeployment,
+    ApplyState, Cluster, ClusterConfig, ClusterReplica, ConflictRecord, CurrentObjectState,
+    DefaultPrivilege, DeploymentDetails, DeploymentHistoryEntry, DeploymentKind,
+    DeploymentMetadata, DeploymentMode, DeploymentObjectRecord, ObjectComment, ObjectGrant,
+    PendingStatement, ProductionClusterRecord, ReplacementMvRecord, SchemaDeploymentRecord,
+    StagingDeployment,
 };

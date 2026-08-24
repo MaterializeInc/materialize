@@ -10,7 +10,7 @@
 //! Network policies apply command - converge live network policy state to match definitions.
 
 use crate::cli::CliError;
-use crate::cli::commands::reconcile::{self, ObjectKind, ReconcileTarget};
+use crate::cli::commands::reconcile::{self, ObjectKind};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
@@ -18,6 +18,8 @@ use crate::client::Client;
 use crate::config::Settings;
 use crate::project::network_policies::{self, NetworkPolicyDefinition};
 use mz_sql_parser::ast::AlterNetworkPolicyStatement;
+
+const OBJECT_KIND: ObjectKind = ObjectKind::NetworkPolicy;
 
 /// Plan network policy changes without executing or printing.
 pub async fn plan(
@@ -38,9 +40,27 @@ pub async fn plan(
         });
     }
 
+    let names: Vec<&str> = definitions.iter().map(|def| def.name.as_str()).collect();
+    let (reconcile_state, existing) = futures::try_join!(
+        reconcile::ReconcileState::for_named_objects(client, OBJECT_KIND, &names),
+        async {
+            client
+                .introspection()
+                .existing_network_policies(&names)
+                .await
+                .map_err(CliError::Connection)
+        },
+    )?;
+
     let mut object_results = Vec::new();
     for def in &definitions {
-        let obj_result = plan_network_policy(client, executor, def).await?;
+        let obj_result = plan_network_policy(
+            executor,
+            def,
+            existing.contains(&def.name),
+            &reconcile_state,
+        )
+        .await?;
         object_results.push(obj_result);
     }
 
@@ -68,21 +88,15 @@ pub async fn run(settings: &Settings, dry_run: bool) -> Result<ApplyPlan, CliErr
 /// Plan a single network policy definition: create if missing, alter if exists,
 /// then plan grants, revocations, and comments.
 async fn plan_network_policy(
-    client: &Client,
     executor: &DeploymentExecutor<'_>,
     def: &NetworkPolicyDefinition,
+    exists: bool,
+    state: &reconcile::ReconcileState<String>,
 ) -> Result<ObjectResult, CliError> {
     let policy_name = &def.name;
 
     // Drain any prior statements
     executor.take_statements();
-
-    // Check if network policy already exists
-    let exists = client
-        .introspection()
-        .network_policy_exists(policy_name)
-        .await
-        .map_err(CliError::Connection)?;
 
     let action = if exists {
         // ALTER NETWORK POLICY to converge rules
@@ -97,12 +111,13 @@ async fn plan_network_policy(
         ObjectAction::Created
     };
 
-    reconcile::grants_and_comments(
-        client,
+    reconcile::named_object(
         executor,
-        &ReconcileTarget::named(ObjectKind::NetworkPolicy, policy_name),
+        policy_name,
+        OBJECT_KIND,
         &def.grants,
         &def.comments,
+        state,
     )
     .await?;
 

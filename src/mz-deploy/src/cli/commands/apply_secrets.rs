@@ -10,8 +10,7 @@
 //! Apply secrets command - create missing secrets and update existing ones.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects;
-use crate::cli::commands::reconcile::ObjectKind;
+use crate::cli::commands::reconcile::{self, ObjectKind};
 use crate::cli::executor::ObjectAction;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectResult, compile_apply_project_and_connect,
@@ -46,10 +45,10 @@ impl Secrets {
 
     async fn handle_existing(
         &self,
-        client: &Client,
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        state: &reconcile::ReconcileState<ObjectId>,
     ) -> Result<(ObjectAction, Vec<String>), CliError> {
         let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateSecret");
@@ -62,24 +61,17 @@ impl Secrets {
         };
         let redacted_statements = vec![alter_stmt.to_string()];
 
-        apply_objects::reconcile_grants_and_comments(
-            client,
-            executor,
-            obj_id,
-            typed_obj,
-            OBJECT_KIND,
-        )
-        .await?;
+        reconcile::database_object(executor, obj_id, typed_obj, OBJECT_KIND, state).await?;
 
         Ok((ObjectAction::Altered, redacted_statements))
     }
 
     async fn handle_new(
         &self,
-        client: &Client,
         executor: &DeploymentExecutor<'_>,
         obj_id: &ObjectId,
         typed_obj: &compiled::DatabaseObject,
+        state: &reconcile::ReconcileState<ObjectId>,
     ) -> Result<(ObjectAction, Vec<String>), CliError> {
         let Statement::CreateSecret(ref create_stmt) = typed_obj.stmt else {
             unreachable!("filtered for CreateSecret");
@@ -87,14 +79,7 @@ impl Secrets {
         let resolved_stmt = self.resolver.resolve_secret_for_cli(create_stmt).await?;
         let redacted_statements = vec![resolved_stmt.to_string()];
 
-        apply_objects::reconcile_grants_and_comments(
-            client,
-            executor,
-            obj_id,
-            typed_obj,
-            OBJECT_KIND,
-        )
-        .await?;
+        reconcile::database_object(executor, obj_id, typed_obj, OBJECT_KIND, state).await?;
 
         Ok((ObjectAction::Created, redacted_statements))
     }
@@ -124,11 +109,16 @@ pub async fn plan(
     }
 
     let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
-    let existing = client
-        .introspection()
-        .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_table())
-        .await
-        .map_err(CliError::Connection)?;
+    let (existing, reconcile_state) = futures::try_join!(
+        async {
+            client
+                .introspection()
+                .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_object_type())
+                .await
+                .map_err(CliError::Connection)
+        },
+        reconcile::ReconcileState::for_database_objects(client, OBJECT_KIND, &target_ids),
+    )?;
 
     // Every schema this phase manages, not just the ones hosting a missing
     // object. `prepare_schemas` creates only what is absent, and reconciles the
@@ -153,11 +143,11 @@ pub async fn plan(
         executor.take_statements();
         let (action, redacted_statements) = if existing.contains(&obj_id) {
             secrets
-                .handle_existing(client, executor, &obj_id, typed_obj)
+                .handle_existing(executor, &obj_id, typed_obj, &reconcile_state)
                 .await?
         } else {
             secrets
-                .handle_new(client, executor, &obj_id, typed_obj)
+                .handle_new(executor, &obj_id, typed_obj, &reconcile_state)
                 .await?
         };
         results.push(ObjectResult {
