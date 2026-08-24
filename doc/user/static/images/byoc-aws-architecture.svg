@@ -1,52 +1,63 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 520" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 540" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" role="img" aria-labelledby="t d">
   <title id="t">BYOC on AWS: what runs where</title>
-  <desc id="d">Your Materialize environment (EKS, RDS, S3, observability) runs inside your own AWS account. The Materialize control plane runs separately and manages your environment by assuming a scoped IAM role that you create, while redacted telemetry flows back to Materialize.</desc>
+  <desc id="d">Your Materialize environment (EKS, RDS, S3, observability) runs inside a dedicated AWS account that you own, kept separate from your core AWS infrastructure. The Materialize control plane runs separately and manages your environment by assuming a scoped IAM role that you create, while redacted telemetry flows back to Materialize.</desc>
 
-  <rect x="0" y="0" width="900" height="520" fill="#FFFFFF"/>
+  <rect x="0" y="0" width="900" height="540" fill="#FFFFFF"/>
 
   <text x="28" y="36" font-size="19" font-weight="700" fill="#15202B">BYOC on AWS: what runs where</text>
-  <text x="28" y="58" font-size="12.5" fill="#5B6472">Materialize manages the deployment across the account boundary. Your data stays in your account.</text>
+  <text x="28" y="58" font-size="12.5" fill="#5B6472">Materialize manages the deployment across the account boundary. Your data stays in your own dedicated account.</text>
 
-  <!-- Your AWS account -->
-  <rect x="28" y="78" width="496" height="416" rx="12" fill="#F1F6FF" stroke="#2D6CDF" stroke-width="1.5"/>
-  <text x="48" y="106" font-size="15" font-weight="700" fill="#2D6CDF">Your AWS account</text>
+  <!-- Your dedicated AWS account -->
+  <rect x="28" y="78" width="496" height="436" rx="12" fill="#F1F6FF" stroke="#2D6CDF" stroke-width="1.5"/>
+  <text x="48" y="106" font-size="15" font-weight="700" fill="#2D6CDF">Your dedicated AWS account</text>
+
+  <!-- "Dedicated account" badge -->
+  <rect x="356" y="90" width="152" height="22" rx="11" fill="#FFFFFF" stroke="#2D6CDF" stroke-width="1.1"/>
+  <g stroke="#2D6CDF" stroke-width="1.2" fill="none">
+    <rect x="370" y="99.5" width="9" height="7" rx="1.5"/>
+    <path d="M372,99.5 v-2.2 a2.5,2.5 0 0 1 5,0 v2.2"/>
+  </g>
+  <text x="387" y="105" font-size="10.5" font-weight="600" fill="#2D6CDF">Dedicated account</text>
+
+  <text x="48" y="126" font-size="11" fill="#5B6472">Kept separate from your core AWS infrastructure while BYOC stabilizes</text>
 
   <!-- VPC -->
-  <rect x="48" y="120" width="456" height="296" rx="10" fill="#FFFFFF" stroke="#9DB6E8" stroke-width="1.1" stroke-dasharray="5 3"/>
-  <text x="64" y="141" font-size="12" font-weight="600" fill="#3A4658">VPC</text>
+  <rect x="48" y="138" width="456" height="296" rx="10" fill="#FFFFFF" stroke="#9DB6E8" stroke-width="1.1" stroke-dasharray="5 3"/>
+  <text x="64" y="159" font-size="12" font-weight="600" fill="#3A4658">VPC</text>
 
   <!-- EKS -->
-  <rect x="66" y="152" width="420" height="74" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="82" y="178" font-size="13.5" font-weight="700" fill="#15202B">Amazon EKS</text>
-  <text x="82" y="200" font-size="11.5" fill="#4A5568">Runs your Materialize instance + console</text>
+  <rect x="66" y="170" width="420" height="74" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="82" y="196" font-size="13.5" font-weight="700" fill="#15202B">Amazon EKS</text>
+  <text x="82" y="218" font-size="11.5" fill="#4A5568">Runs your Materialize instance + console</text>
 
   <!-- RDS -->
-  <rect x="66" y="238" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="82" y="264" font-size="13.5" font-weight="700" fill="#15202B">Amazon RDS</text>
-  <text x="82" y="284" font-size="11.5" fill="#4A5568">Metadata database</text>
+  <rect x="66" y="256" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="82" y="282" font-size="13.5" font-weight="700" fill="#15202B">Amazon RDS</text>
+  <text x="82" y="302" font-size="11.5" fill="#4A5568">Metadata database</text>
 
   <!-- S3 -->
-  <rect x="286" y="238" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="302" y="264" font-size="13.5" font-weight="700" fill="#15202B">Amazon S3</text>
-  <text x="302" y="284" font-size="11.5" fill="#4A5568">Object storage</text>
+  <rect x="286" y="256" width="200" height="62" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="302" y="282" font-size="13.5" font-weight="700" fill="#15202B">Amazon S3</text>
+  <text x="302" y="302" font-size="11.5" fill="#4A5568">Object storage</text>
 
   <!-- Observability -->
-  <rect x="66" y="312" width="420" height="60" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
-  <text x="82" y="338" font-size="13.5" font-weight="700" fill="#15202B">Observability</text>
-  <text x="82" y="357" font-size="11.5" fill="#4A5568">In-account logs + metrics</text>
+  <rect x="66" y="330" width="420" height="60" rx="8" fill="#F7F9FE" stroke="#CBD5E6"/>
+  <text x="82" y="356" font-size="13.5" font-weight="700" fill="#15202B">Observability</text>
+  <text x="82" y="375" font-size="11.5" fill="#4A5568">In-account logs + metrics</text>
 
   <!-- notes -->
-  <text x="48" y="444" font-size="11.5" font-style="italic" fill="#2D6CDF">Your data never leaves your account.</text>
-  <text x="48" y="464" font-size="11.5" fill="#5B6472">Apps connect privately over AWS PrivateLink.</text>
+  <text x="48" y="462" font-size="11.5" font-style="italic" fill="#2D6CDF">Your data never leaves your account.</text>
+  <text x="48" y="482" font-size="11.5" fill="#5B6472">Apps connect privately over AWS PrivateLink.</text>
+  <text x="48" y="501" font-size="10.5" fill="#8A93A3">Why dedicated: cleaner blast radius, clearer audit &amp; cost visibility.</text>
 
   <!-- Materialize control plane -->
-  <rect x="672" y="170" width="200" height="180" rx="12" fill="#F4EEFF" stroke="#7F4EFF" stroke-width="1.5"/>
-  <text x="692" y="200" font-size="15" font-weight="700" fill="#7F4EFF">Materialize</text>
-  <text x="692" y="222" font-size="12" font-weight="600" fill="#3A4658">Control plane</text>
-  <text x="692" y="250" font-size="11.5" fill="#4A5568">Provisioning</text>
-  <text x="692" y="270" font-size="11.5" fill="#4A5568">Upgrades</text>
-  <text x="692" y="290" font-size="11.5" fill="#4A5568">Monitoring</text>
-  <text x="692" y="310" font-size="11.5" fill="#4A5568">Billing</text>
+  <rect x="672" y="180" width="200" height="180" rx="12" fill="#F4EEFF" stroke="#7F4EFF" stroke-width="1.5"/>
+  <text x="692" y="210" font-size="15" font-weight="700" fill="#7F4EFF">Materialize</text>
+  <text x="692" y="232" font-size="12" font-weight="600" fill="#3A4658">Control plane</text>
+  <text x="692" y="260" font-size="11.5" fill="#4A5568">Provisioning</text>
+  <text x="692" y="280" font-size="11.5" fill="#4A5568">Upgrades</text>
+  <text x="692" y="300" font-size="11.5" fill="#4A5568">Monitoring</text>
+  <text x="692" y="320" font-size="11.5" fill="#4A5568">Billing</text>
 
   <defs>
     <marker id="ap" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
@@ -58,12 +69,12 @@
   </defs>
 
   <!-- manage: control plane -> account (Materialize manages the environment, using a role you own) -->
-  <line x1="672" y1="226" x2="528" y2="226" stroke="#7F4EFF" stroke-width="2" marker-end="url(#ap)"/>
-  <text x="600" y="216" font-size="10.5" fill="#7F4EFF" text-anchor="middle">manages your environment</text>
-  <text x="600" y="240" font-size="9.5" fill="#8A77C9" text-anchor="middle">assumes scoped IAM role</text>
+  <line x1="672" y1="236" x2="528" y2="236" stroke="#7F4EFF" stroke-width="2" marker-end="url(#ap)"/>
+  <text x="600" y="226" font-size="10.5" fill="#7F4EFF" text-anchor="middle">manages your environment</text>
+  <text x="600" y="250" font-size="9.5" fill="#8A77C9" text-anchor="middle">assumes scoped IAM role</text>
 
   <!-- telemetry: account -> control plane -->
-  <line x1="528" y1="300" x2="670" y2="300" stroke="#5B6472" stroke-width="2" marker-end="url(#ag)"/>
-  <text x="600" y="292" font-size="10.5" fill="#5B6472" text-anchor="middle">redacted</text>
-  <text x="600" y="316" font-size="9.5" fill="#7A828F" text-anchor="middle">logs + metrics</text>
+  <line x1="528" y1="310" x2="670" y2="310" stroke="#5B6472" stroke-width="2" marker-end="url(#ag)"/>
+  <text x="600" y="302" font-size="10.5" fill="#5B6472" text-anchor="middle">redacted</text>
+  <text x="600" y="326" font-size="9.5" fill="#7A828F" text-anchor="middle">logs + metrics</text>
 </svg>
