@@ -21,22 +21,16 @@
 //!   is freed without I/O.
 //!
 //! Reads of a spilled body are copy-out and scoped to the call that needs
-//! them: the body is read into caller-owned memory and no reference into pool
-//! memory ever exists outside the pool. That contract is what lets the pool
-//! evict with no reader accounting at all.
+//! them, the contract that lets the pool evict with no reader accounting
+//! (see [`mz_ore::pool`]).
 //!
 //! Spilling happens in [`Chunk::settle`], the trait's designated commit point:
 //! chunks moved to settled output are handed to the pool when spilling is
-//! enabled (see [`set_compute_spill_enabled`] and [`set_storage_spill_enabled`]).
-//! The spill destination resolves per commit from three pieces of mutable
-//! state. A thread-local pool override, for tests and benches, wins outright.
-//! Otherwise the compute and storage gates, composed as an OR, route commits
-//! to the process pool installed by [`crate::pool_config`], and with no pool
-//! installed chunks stay resident. A second thread-local holds the reusable
-//! scratch that call-scoped reads of spilled bodies copy into.
-//! Grading is by serialized bytes, the ship size
-//! [`Column`] already targets, rather than by the record-count `TARGET`,
-//! since record count does not bound bytes for variable-width data.
+//! enabled (see [`set_compute_spill_enabled`] and [`set_storage_spill_enabled`]
+//! for how the per-commit destination resolves). Grading is by serialized
+//! bytes, the ship size [`Column`] already targets, rather than by the
+//! record-count `TARGET`, since record count does not bound bytes for
+//! variable-width data.
 //!
 //! Chunks whose data is a `(key, val)` pair additionally implement
 //! [`UnloadChunk`], the bulk-read capability: sorted probe keys in, matching
@@ -141,9 +135,8 @@ static COMPRESS_MIN_DEPTH: AtomicU8 = AtomicU8::new(DEFAULT_COMPRESS_MIN_DEPTH);
 ///
 /// The floor cannot strand a long-lived body uncompressed: a chunk that a
 /// merge carries forward untouched also ages a generation, and its body is
-/// re-spilled under the compressing codec when it crosses the floor. Without
-/// that, key-disjoint input (a monotonically increasing key) would hold its
-/// entire spilled backlog identity-coded for the backlog's lifetime.
+/// re-spilled under the compressing codec when it crosses the floor (see
+/// `survive_merge`).
 ///
 /// `0` compresses every spilled body. Consulted at every commit, so changes
 /// apply to running dataflows.
@@ -442,26 +435,20 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     }
 
     /// Age a chunk that a merge carried forward untouched by one generation.
-    ///
     /// Depth counts merge cadences lived through, not rewrites, so a
-    /// pass-through survivor ages like a merged chunk. The bump itself is
-    /// always free: depth rides on the chunk, so it does not care whether the
-    /// body is shared.
+    /// pass-through survivor ages like a merged chunk; the bump rides on the
+    /// chunk, so it is free whether or not the body is shared.
     ///
     /// An identity-coded body at or past the floor wants migrating, so a
-    /// sole owner re-spills it compressed: surviving a merge disproves the
-    /// imminent-rewrite premise that exempted it, and without the re-spill
+    /// sole owner re-spills it compressed; without the re-spill,
     /// key-disjoint input would keep its whole spilled backlog
     /// identity-coded for as long as it lived. The test is the body's stored
     /// codec against the floor, not a depth transition, so a migration that
-    /// cannot happen now is retried at the next survival rather than
-    /// consumed: skipping it while the body is shared or while no pool is
-    /// installed, or lowering the floor long after a body spilled, all
-    /// converge on a compressed body instead of stranding one.
-    ///
-    /// A shared body is skipped because re-spilling this reference cannot
-    /// change what the other holder stores, and the compaction merger that
-    /// shares bodies rewrites its clones immediately.
+    /// cannot happen now (a shared body, no pool installed, a floor lowered
+    /// long after the spill) is retried at the next survival rather than
+    /// consumed. A shared body is skipped because re-spilling this reference
+    /// cannot change what the other holder stores, and the compaction merger
+    /// that shares bodies rewrites its clones immediately.
     fn survive_merge(self) -> Self
     where
         T: Timestamp,
@@ -642,10 +629,6 @@ where
     ///
     /// Fronts whose data ranges are disjoint never load at all: the resident
     /// fence entries decide, and the lower front moves to the output whole.
-    /// Chunks the merge carries forward untouched (that fast path, and a
-    /// survivor `merge_from` never consumed) age one generation through
-    /// `survive_merge`, which re-spills a body only at the compression-floor
-    /// crossing and otherwise leaves it untouched.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         // Disjoint fast path: when one front lies strictly below the other's
         // first data item (equal boundary data could still interleave on
@@ -1951,7 +1934,6 @@ mod tests {
         );
     }
 
-    /// A tiny chunk stays resident regardless of the spill gate.
     #[mz_ore::test]
     fn small_chunks_stay_resident() {
         set_spill_override(Some(test_pool()));
@@ -2263,7 +2245,6 @@ mod tests {
         assert_eq!(collect_column(&reread), data);
     }
 
-    /// Merge depth saturates at `u8::MAX` instead of wrapping.
     #[mz_ore::test]
     fn merge_depth_saturates() {
         let a = ColumnChunk::Resident(
@@ -2283,8 +2264,6 @@ mod tests {
         }
     }
 
-    /// `into_column` on a shared resident chunk copies instead of stealing
-    /// the shared body.
     #[mz_ore::test]
     fn into_column_copies_shared_resident() {
         let data: Vec<Tuple> = vec![((1, 1), 0, 1), ((2, 2), 0, 1)];
