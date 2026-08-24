@@ -1282,11 +1282,14 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                // A subscribe's batch upper is its dataflow progress. Both `DroppedAt` and the
-                // empty-upper batch that signals completion carry the empty antichain, which
-                // `observe_hydration` rejects, so neither a cancelled nor a completed subscribe
-                // reports hydration it never reached.
-                collection.observe_hydration(&new_frontier);
+                // Only a batch upper measures progress. `DroppedAt` reports the empty antichain,
+                // the maximum of the order, so a subscribe cancelled while still hydrating would
+                // otherwise read as hydrated at the moment it is dropped. A subscribe that runs to
+                // its `up_to` also finishes with an empty upper, but it carries that in a batch and
+                // really did compute through its as-of, so it counts.
+                if matches!(response, SubscribeResponse::Batch(_)) {
+                    collection.observe_hydration(&new_frontier);
+                }
                 collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
@@ -2228,16 +2231,19 @@ impl CollectionState {
     /// `progress` must measure the dataflow's own computation rather than the durability of its
     /// output. See the comment where it is collected in `report_frontiers`.
     ///
-    /// NOTE: an empty `progress` reports completion, not hydration. The empty antichain is the
-    /// maximum of the order, so comparing against it would report hydration for every dataflow
-    /// that shuts down, including one dropped or bounded before it computed anything: a
-    /// `SUBSCRIBE ... UP TO` whose bound equals its as-of emits no rows and still signals
-    /// completion with an empty batch upper. An empty as-of never hydrates either, which is
-    /// consistent with no dataflow being created for one.
+    /// An empty `progress` counts as hydrated, matching [`Self::hydrated`]. The empty antichain is
+    /// the maximum of the order, and a dataflow that reaches it has computed everything it ever
+    /// will: an inputless collection, such as an index on `SELECT 1`, emits its rows and drops its
+    /// capability without ever holding a non-empty frontier beyond its as-of, so rejecting empty
+    /// would leave it permanently unhydrated here while the durability reading calls it hydrated.
+    /// The write stages are gated on this one, so it would also never report a write.
+    ///
+    /// It follows that emptiness cannot be used to tell completion from cancellation. A caller
+    /// that can observe a dataflow ending without having computed its as-of must exclude that
+    /// itself, as `process_subscribes` does for `DroppedAt`.
+    ///
+    /// An empty as-of never hydrates, which is consistent with no dataflow being created for one.
     fn observe_hydration(&mut self, progress: &Antichain<Timestamp>) {
-        if progress.is_empty() {
-            return;
-        }
         if PartialOrder::less_than(&self.as_of, progress) {
             self.log_stage(LifecycleStage::Hydrated);
         }
