@@ -663,6 +663,34 @@ struct Migration {
     config: BuiltinItemMigrationConfig,
 }
 
+/// Whether `builtin` participates in a forced migration using `mechanism`.
+fn participates_in_forced_migration(
+    builtin: &Builtin<NameReference>,
+    mechanism: Mechanism,
+) -> bool {
+    use Builtin::*;
+    match builtin {
+        // A forced replacement allocates a fresh shard, which discards the
+        // table's contents. Exclude the tables whose contents are the point:
+        // storage usage is retained for billing, and hydration history cannot
+        // be rebuilt from any other source.
+        //
+        // Hydration history takes part in a forced `Evolution`, which keeps the
+        // rows. It has to: dev upgrades force one for every object, and a table
+        // left out of the plan never gets its new schema registered, so
+        // `update_fingerprints` panics at open as soon as the desc changes. See
+        // the tripwire in `validate_migration_steps` for how to give up the
+        // replacement exemption deliberately.
+        Table(table) => {
+            **table != *MZ_STORAGE_USAGE_BY_SHARD
+                && (mechanism != Mechanism::Replacement || **table != *MZ_OBJECT_HYDRATION_HISTORY)
+        }
+        MaterializedView(..) => true,
+        Source(source) => **source != *MZ_CATALOG_RAW,
+        Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
+    }
+}
+
 impl Migration {
     async fn run(self, steps: &[MigrationStep]) -> anyhow::Result<MigrationRunResult> {
         info!(
@@ -847,33 +875,7 @@ impl Migration {
             // added in this version; the leader will allocate their shards during bootstrap, and
             // there is nothing to evolve or replace.
             .filter(|(_, info)| info.shard_id.is_some())
-            .filter(|(_, info)| {
-                use Builtin::*;
-                match info.builtin {
-                    // A forced replacement allocates a fresh shard, which
-                    // discards the table's contents. Exclude the tables whose
-                    // contents are the point: storage usage is retained for
-                    // billing, and hydration history cannot be rebuilt from any
-                    // other source.
-                    //
-                    // The hydration history takes part in a forced `Evolution`,
-                    // which keeps the rows. It has to: dev upgrades force one for
-                    // every object, and a table left out of the plan never gets
-                    // its new schema registered, so `update_fingerprints` panics
-                    // at open as soon as the desc changes. The exemption is best
-                    // effort, not a guarantee. See the tripwire in
-                    // `validate_migration_steps` for how to give it up
-                    // deliberately.
-                    Table(table) => {
-                        **table != *MZ_STORAGE_USAGE_BY_SHARD
-                            && (mechanism != Mechanism::Replacement
-                                || **table != *MZ_OBJECT_HYDRATION_HISTORY)
-                    }
-                    MaterializedView(..) => true,
-                    Source(source) => **source != *MZ_CATALOG_RAW,
-                    Log(..) | View(..) | Type(..) | Func(..) | Index(..) | Connection(..) => false,
-                }
-            })
+            .filter(|(_, info)| participates_in_forced_migration(info.builtin, mechanism))
             .map(|(object, _)| object.clone())
             .collect();
 

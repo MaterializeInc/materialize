@@ -27,6 +27,20 @@ use tracing::info;
 
 use super::*;
 
+#[mz_ore::test]
+fn hydration_history_forced_migration_policy() {
+    let hydration_history = Builtin::Table(&*MZ_OBJECT_HYDRATION_HISTORY);
+
+    assert!(participates_in_forced_migration(
+        &hydration_history,
+        Mechanism::Evolution
+    ));
+    assert!(!participates_in_forced_migration(
+        &hydration_history,
+        Mechanism::Replacement
+    ));
+}
+
 #[test] // allow(test-attribute)
 #[cfg_attr(miri, ignore)] // too slow
 fn test_builtin_schema_migration() {
