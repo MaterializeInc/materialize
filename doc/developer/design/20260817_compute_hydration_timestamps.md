@@ -637,8 +637,15 @@ Frozen. These will not change meaning, and nothing below will be removed:
   dataflow-progress reading would have readiness cut over before the output is durable.
 - `(export_id, worker_id)` is the exact join between the two relations. Both are per
   worker, so joining on `export_id` alone multiplies rows by the worker count.
-- A lifecycle row implies a live export. Rows are retracted at the drop timestamp, so
-  a consumer does not need to handle rows whose `export_id` has left `mz_objects`.
+- Rows are retracted when the replica processes the drop, which is not when the
+  catalog transaction commits. `DROP` returns once the catalog row is gone, while the
+  retraction still has to reach the replica as an empty `AllowCompaction`, be logged by
+  the demux, and travel through the introspection subscribe and a storage append. A
+  consumer will therefore observe lifecycle rows whose `export_id` is no longer in
+  `mz_objects`, and must not use an inner join against the catalog to filter if losing
+  the tail of an episode matters. This is not specific to this relation:
+  `mz_compute_hydration_times_per_worker` rows also disappear only when the replica
+  retracts them.
 
 Open sets. A consumer must tolerate additions rather than enumerate these
 exhaustively, even though the invariant tests assert closed vocabularies for the

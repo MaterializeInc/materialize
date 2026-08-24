@@ -117,10 +117,14 @@ true
 # positively here. The invariant block at the end of this file requires the
 # blocked/unblocked pair to be absent or complete, never that it is present.
 
-# Dropping an object retracts its rows, so the log does not accumulate
-# lifecycles of objects that no longer exist. Transient dataflows are excluded:
-# a peek installs one with a `t` prefixed export id that is never in
-# `mz_objects`, so it would read as an orphan for as long as it lives.
+# Dropping an object retracts its rows, so the log does not accumulate lifecycles
+# of objects that no longer exist. This converges rather than holding at every
+# instant: `DROP` returns once the catalog row is gone, while the retraction still
+# has to reach the replica, be logged, and travel through the introspection
+# subscribe, so the retry is doing real work here and a consumer has to tolerate
+# the gap. Transient dataflows are excluded: a peek installs one with a `t`
+# prefixed export id that is never in `mz_objects`, so it would read as an orphan
+# for as long as it lives.
 
 > DROP MATERIALIZED VIEW mv
 > DROP INDEX idx
