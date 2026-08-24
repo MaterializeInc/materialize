@@ -715,7 +715,10 @@ longer exist.
 
 Recording is best effort. Only successful hydration is recorded, an episode can be
 missed if the object or its replica goes away before the episode is recorded, and a
-schema change to this table in a future release may clear its contents.
+schema change to this table in a future release may clear its contents. On a
+multi-process replica, timestamps come from process-local logging clocks and include
+their clock skew. A process whose clock is ahead can be absent at the sampled
+logical timestamp, so the recorded finish can precede the latest process's finish.
 
 <!-- RELATION_SPEC mz_internal.mz_object_hydration_history -->
 | Field          | Type                         | Meaning                                                                                                                  |
