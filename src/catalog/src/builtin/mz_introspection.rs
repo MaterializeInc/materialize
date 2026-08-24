@@ -358,7 +358,11 @@ pub static MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER: LazyLock<BuiltinLog> =
                           logged by every worker, since each worker hydrates its own fragment \
                           of the dataflow. The write events are logged only by the worker that \
                           maintains the sink frontier, so they appear once per export rather \
-                          than once per worker.",
+                          than once per worker. `installed` is logged unconditionally by every \
+                          worker, so counting the `installed` events for an export gives the \
+                          number of workers reporting on it. Compare a per-worker stage's count \
+                          against that to tell whether every worker has reached it, rather than \
+                          against the cluster's configured worker count.",
             links: &const {
                 [OntologyLink {
                     name: "lifecycle_event_of",

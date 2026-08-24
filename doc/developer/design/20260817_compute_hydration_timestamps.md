@@ -214,6 +214,25 @@ antichain and would report having written everything immediately. The election h
 one definition, `sink::materialized_view::frontier_owner`, called both by `mint`
 and by the code that records ownership.
 
+**`installed` is the denominator.** A consumer asking whether every worker has reached
+a stage cannot count rows and compare against a worker count it does not have, and it
+should not have to join the catalog to find one. The relation is append-only, so a
+worker that has not hydrated has no `hydrated` row at all rather than a NULL, which is
+the shape `mz_compute_hydration_times_per_worker` relies on for its
+`count(*) = count(time_ns)` check. What replaces it is `installed`, which every worker
+logs unconditionally when the export is created: the count of `installed` events is the
+number of workers reporting on that export, so
+
+```sql
+count(*) FILTER (WHERE event = 'hydrated') = count(*) FILTER (WHERE event = 'installed')
+```
+
+is the all-workers-reported test, and the per-object stages are expected exactly once
+(or not at all, for an export that never writes). Which stages have which grain is a
+fixed property of the vocabulary, not of the object or the cluster, so a consumer
+encodes it once rather than deriving it per query. This is a contract the relation owes
+its readers, not an incidental property.
+
 **Which frontier each stage reads.** `hydrated` reads the dataflow's own progress
 frontier, the compute probe, not the reported output frontier. The output frontier
 is the meet of write and compute frontier, which makes it a measure of durability
