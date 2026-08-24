@@ -610,6 +610,53 @@ computation does. Both report when the computation caught up rather than anythin
 derived from the schedule. What the schedule does affect is writing, and it
 advances it rather than delaying it. See "Refresh schedules do not block writing".
 
+**Compatibility: what a consumer may rely on.** Downstream work builds rollups and
+history relations on top of these two relations, so what is frozen and what may still
+move needs saying explicitly rather than being inferred from the current
+implementation.
+
+Frozen. These will not change meaning, and nothing below will be removed:
+
+- The six `event` values, and their meanings.
+- Which events have which grain. `installed`, `started` and `hydrated` are per worker.
+  `write_blocked`, `write_unblocked` and `written` are per object, observed by the
+  elected frontier owner. The grain is a property of the event name, fixed for all
+  objects and all cluster shapes, so a consumer encodes it once rather than deriving
+  it per query.
+- `installed` as the all-workers-reported denominator, per "`installed` is the
+  denominator" above.
+- `occurred_at` is a wallclock instant, carrying its worker's epoch anchor.
+- `hydrated` is always the dataflow-progress reading and `written` is always
+  "durable through the as-of, and this replica was permitted to write". Neither varies
+  by object type. That is the whole point of spending two terms on it rather than
+  overloading one.
+- `mz_compute_hydration_times_per_worker.hydrated_at` and `time_ns` remain the
+  durability reading, computed in the demux. That relation will not become a view over
+  the lifecycle log. `mz_compute_hydration_statuses.hydrated` is `time_ns IS NOT NULL`
+  and the blue-green readiness query is defined on it, so pointing it at the earlier
+  dataflow-progress reading would have readiness cut over before the output is durable.
+- `(export_id, worker_id)` is the exact join between the two relations. Both are per
+  worker, so joining on `export_id` alone multiplies rows by the worker count.
+- A lifecycle row implies a live export. Rows are retracted at the drop timestamp, so
+  a consumer does not need to handle rows whose `export_id` has left `mz_objects`.
+
+Open sets. A consumer must tolerate additions rather than enumerate these
+exhaustively, even though the invariant tests assert closed vocabularies for the
+values that exist today:
+
+- New `event` values. The two candidates are a per-worker durability stage, and a
+  stage recording that this replica's own append made the output durable.
+- New `reason` values. Two useful attributions are not observable today and are
+  described under "The lifecycle event log".
+- New keys in `details`.
+
+The corollary for `written` is worth stating on its own, because it is the one place
+where a follow-up could plausibly redefine an existing term. Attributing a write to
+the replica that performed it, per "Attributing `written` to the replica that wrote",
+arrives as a new stage. `written` keeps the meaning above. A consumer reading
+`written` today will still be reading the same thing afterwards, and one that wants
+attribution opts into the new stage.
+
 ### Why the replica and not the compute controller
 
 The compute controller evaluates a very similar hydration predicate already in
