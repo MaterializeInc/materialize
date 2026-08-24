@@ -10,14 +10,16 @@
 //! Shared object metadata for catalog reconciliation.
 
 use mz_sql_parser::ast::{
-    ColumnName, CommentObjectType, CommentStatement, GrantPrivilegesStatement,
-    GrantTargetAllSpecification, GrantTargetSpecification, GrantTargetSpecificationInner, Ident,
-    ObjectType, Privilege, Raw, RawClusterName, RawItemName, RawNetworkPolicyName,
-    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName,
+    AlterDefaultPrivilegesStatement, ColumnName, CommentObjectType, CommentStatement,
+    GrantPrivilegesStatement, GrantTargetAllSpecification, GrantTargetSpecification,
+    GrantTargetSpecificationInner, Ident, ObjectType, Privilege, Raw, RawClusterName, RawItemName,
+    RawNetworkPolicyName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName,
+    UnresolvedSchemaName,
 };
 
 use crate::cli::CliError;
 use crate::cli::commands::comments::{self, CommentTarget};
+use crate::cli::commands::default_privileges;
 use crate::cli::commands::grants as grant_reconciliation;
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::Client;
@@ -370,11 +372,31 @@ pub async fn grants(
                 .await
                 .map_err(CliError::Connection)?,
         ),
+        ReconcileTarget::Named {
+            kind: ObjectKind::Database,
+            name,
+        } => (
+            introspection
+                .get_database_grants(name)
+                .await
+                .map_err(CliError::Connection)?,
+            introspection
+                .get_default_privilege_grants_for_database(name)
+                .await
+                .map_err(CliError::Connection)?,
+        ),
+        ReconcileTarget::Schema { database, schema } => (
+            introspection
+                .get_schema_grants(database, schema)
+                .await
+                .map_err(CliError::Connection)?,
+            introspection
+                .get_default_privilege_grants_for_schema(database, schema)
+                .await
+                .map_err(CliError::Connection)?,
+        ),
         ReconcileTarget::Named { kind, .. } => {
-            unreachable!("{} scope grants are reconciled separately", kind.label())
-        }
-        ReconcileTarget::Schema { .. } => {
-            unreachable!("schema grants are reconciled separately")
+            unreachable!("{} has no object grants", kind.label())
         }
     };
     grant_reconciliation::reconcile(executor, target, desired, &current, &default_privileges).await
@@ -428,4 +450,34 @@ fn item_name(id: &ObjectId) -> RawItemName {
         Ident::new_unchecked(id.schema()),
         Ident::new_unchecked(id.object()),
     ]))
+}
+
+/// Reconcile all state declared by one database or schema modifier file.
+pub async fn scope(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    target: &ReconcileTarget<'_>,
+    desired_grants: &[GrantPrivilegesStatement<Raw>],
+    desired_comments: &[CommentStatement<Raw>],
+    desired_default_privileges: &[AlterDefaultPrivilegesStatement<Raw>],
+) -> Result<(), CliError> {
+    grants_and_comments(client, executor, target, desired_grants, desired_comments).await?;
+
+    let current = match target {
+        ReconcileTarget::Named {
+            kind: ObjectKind::Database,
+            name,
+        } => client
+            .introspection()
+            .get_database_default_privileges(name)
+            .await
+            .map_err(CliError::Connection)?,
+        ReconcileTarget::Schema { database, schema } => client
+            .introspection()
+            .get_schema_default_privileges(database, schema)
+            .await
+            .map_err(CliError::Connection)?,
+        _ => unreachable!("scope reconciliation requires a database or schema"),
+    };
+    default_privileges::reconcile(executor, target, desired_default_privileges, &current).await
 }

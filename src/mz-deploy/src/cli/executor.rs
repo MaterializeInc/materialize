@@ -32,6 +32,7 @@
 //!    single `BEGIN`/`COMMIT` block with automatic `ROLLBACK` on failure.
 
 use crate::cli::CliError;
+use crate::cli::commands::scopes;
 use crate::cli::git::get_git_commit;
 use crate::client::{Client, ClusterConfig, quote_identifier};
 use crate::config::Settings;
@@ -40,10 +41,11 @@ use crate::project::ir::graph::Project;
 use crate::project::resolve::normalize;
 use crate::project::{self, ir::compiled};
 use crate::{info, verbose};
+use mz_sql_parser::ast::{Raw, Statement};
 use owo_colors::{OwoColorize, Stream};
 use serde::Serialize;
 use std::cell::RefCell;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 
@@ -55,6 +57,19 @@ pub enum ObjectAction {
     Altered,
     UpToDate,
     Skipped,
+}
+
+impl ObjectAction {
+    /// Upgrade `UpToDate` to `Altered` when reconciliation emitted statements.
+    ///
+    /// Grant and comment reconciliation runs after the create-or-alter decision,
+    /// so an object whose own definition matches can still have drift to close.
+    pub fn with_reconciled(self, emitted_statements: bool) -> Self {
+        match self {
+            ObjectAction::UpToDate if emitted_statements => ObjectAction::Altered,
+            action => action,
+        }
+    }
 }
 
 impl fmt::Display for ObjectAction {
@@ -516,43 +531,77 @@ impl<'a> DeploymentExecutor<'a> {
             return Ok(());
         }
 
-        // Step 1: Create databases
+        // Step 1: Create the databases that do not exist yet.
+        //
+        // `CREATE ... IF NOT EXISTS` would be harmless, but emitting it
+        // unconditionally would put a statement in every plan even when nothing
+        // has changed. Scope reconciliation below runs on every apply, so the
+        // existence check is what keeps a converged plan empty.
         let databases: BTreeSet<&str> = schema_set.iter().map(|sq| sq.database.as_str()).collect();
+        let database_names: Vec<String> = databases.iter().map(|db| db.to_string()).collect();
+        let existing_databases = self
+            .client
+            .introspection()
+            .check_databases_exist(&database_names)
+            .await
+            .map_err(CliError::Connection)?;
         for db in &databases {
+            if existing_databases.contains(*db) {
+                continue;
+            }
             let sql = format!("CREATE DATABASE IF NOT EXISTS {}", quote_identifier(db));
             self.execute_sql(&sql).await?;
         }
 
-        // Step 2: Create schemas (with optional staging suffix)
-        for sq in schema_set {
-            let schema_name = match staging_suffix {
-                Some(suffix) => format!("{}{}", sq.schema, suffix),
-                None => sq.schema.clone(),
-            };
-            verbose!(
-                "Creating schema {}.{} if not exists",
-                sq.database,
-                schema_name
-            );
+        // Step 2: Create the schemas that do not exist yet (with optional
+        // staging suffix).
+        let target_schemas: Vec<(String, String)> = schema_set
+            .iter()
+            .map(|sq| {
+                let schema_name = match staging_suffix {
+                    Some(suffix) => format!("{}{}", sq.schema, suffix),
+                    None => sq.schema.clone(),
+                };
+                (sq.database.clone(), schema_name)
+            })
+            .collect();
+        let existing_schemas = self
+            .client
+            .introspection()
+            .check_schemas_exist(&target_schemas)
+            .await
+            .map_err(CliError::Connection)?;
+        for (database, schema_name) in &target_schemas {
+            if existing_schemas.contains(&(database.clone(), schema_name.clone())) {
+                continue;
+            }
+            verbose!("Creating schema {}.{} if not exists", database, schema_name);
             let sql = format!(
                 "CREATE SCHEMA IF NOT EXISTS {}.{}",
-                quote_identifier(&sq.database),
-                quote_identifier(&schema_name)
+                quote_identifier(database),
+                quote_identifier(schema_name)
             );
             self.execute_sql(&sql).await?;
         }
 
-        // Step 3: Execute mod_statements filtered by schema_set membership
+        // Step 3: Reconcile the mod statements for each database and schema
+        // being prepared. Statements are grouped by scope first because the
+        // reconcilers diff a scope's whole declared state against the catalog,
+        // rather than deciding statement by statement.
+        let mut database_configs: BTreeMap<&str, Vec<Statement<Raw>>> = BTreeMap::new();
+        let mut schema_configs: BTreeMap<(&str, String), Vec<Statement<Raw>>> = BTreeMap::new();
+
         for mod_stmt in planned_project.iter_mod_statements() {
             match mod_stmt {
                 project::ModStatement::Database {
                     database,
                     statement,
                 } => {
-                    let has_schema = schema_set.iter().any(|sq| sq.database == *database);
-                    if has_schema {
-                        verbose!("Applying database setup for: {}", database);
-                        self.execute_sql(statement).await?;
+                    if databases.contains(database) {
+                        database_configs
+                            .entry(database)
+                            .or_default()
+                            .push(statement.clone());
                     }
                 }
                 project::ModStatement::Schema {
@@ -560,27 +609,42 @@ impl<'a> DeploymentExecutor<'a> {
                     schema,
                     statement,
                 } => {
-                    if schema_set.contains(&project::SchemaQualifier::new(
+                    if !schema_set.contains(&project::SchemaQualifier::new(
                         database.to_string(),
                         schema.to_string(),
                     )) {
-                        if let Some(suffix) = staging_suffix {
-                            let staging_schema = format!("{}{}", schema, suffix);
+                        continue;
+                    }
+                    // Under a staging suffix the statements target the suffixed
+                    // schema, so both the SQL and the reconciliation scope have
+                    // to be renamed together.
+                    let (target_schema, statement) = match staging_suffix {
+                        Some(suffix) => {
                             let mut rewritten = statement.clone();
                             normalize::rewrite_schema_names(
                                 std::slice::from_mut(&mut rewritten),
                                 schema,
                                 suffix,
                             );
-                            verbose!("Applying schema setup for: {}.{}", database, staging_schema);
-                            self.execute_sql(&rewritten).await?;
-                        } else {
-                            verbose!("Applying schema setup for: {}.{}", database, schema);
-                            self.execute_sql(statement).await?;
+                            (format!("{}{}", schema, suffix), rewritten)
                         }
-                    }
+                        None => (schema.to_string(), statement.clone()),
+                    };
+                    schema_configs
+                        .entry((database, target_schema))
+                        .or_default()
+                        .push(statement);
                 }
             }
+        }
+
+        for (database, statements) in database_configs {
+            verbose!("Reconciling database setup for: {}", database);
+            scopes::reconcile_database(self.client, self, database, &statements).await?;
+        }
+        for ((database, schema), statements) in schema_configs {
+            verbose!("Reconciling schema setup for: {}.{}", database, schema);
+            scopes::reconcile_schema(self.client, self, database, &schema, &statements).await?;
         }
 
         Ok(())

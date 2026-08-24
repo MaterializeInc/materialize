@@ -81,6 +81,7 @@ pub mod profile;
 pub mod promote;
 pub mod reconcile;
 pub mod roles;
+pub mod scopes;
 pub mod setup;
 mod setup_schema;
 pub mod sql;

@@ -305,6 +305,27 @@ pub(super) async fn get_current_user(client: &Client) -> Result<String, Connecti
     Ok(row.get(0))
 }
 
+/// Check which databases from a set of names exist.
+pub(super) async fn check_databases_exist(
+    client: &Client,
+    databases: &[String],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    if databases.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+
+    let query = format!(
+        "SELECT name FROM mz_catalog.mz_databases WHERE name IN ({})",
+        sql_placeholders(databases.len())
+    );
+    let params: Vec<&(dyn ToSql + Sync)> = databases
+        .iter()
+        .map(|database| database as &(dyn ToSql + Sync))
+        .collect();
+    let rows = client.query(&query, &params).await?;
+    Ok(rows.iter().map(|row| row.get("name")).collect())
+}
+
 /// Check which schemas from a set of (database, schema) pairs exist.
 ///
 /// Returns a BTreeSet of (database, schema) tuples that exist.
@@ -962,6 +983,97 @@ pub(super) async fn get_database_object_grants(
         .collect())
 }
 
+/// Get privilege grants on a database.
+pub(super) async fn get_database_grants(
+    client: &Client,
+    database: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    get_named_object_grants(client, "mz_databases", database).await
+}
+
+/// Get privilege grants on a schema.
+pub(super) async fn get_schema_grants(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = r#"
+        WITH privilege AS (
+            SELECT mz_internal.mz_aclexplode(s.privileges).*, s.owner_id
+            FROM mz_schemas s
+            JOIN mz_databases d ON s.database_id = d.id
+            WHERE d.name = $1 AND s.name = $2
+        )
+        SELECT
+            CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
+            p.privilege_type
+        FROM privilege AS p
+        LEFT JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        WHERE (
+            p.grantee = 'p'
+            OR grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
+          AND p.grantee != p.owner_id
+        ORDER BY grantee, p.privilege_type
+        "#;
+
+    let rows = client.query(query, &[&database, &schema]).await?;
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
+/// Get default privilege grants that apply to a database.
+pub(super) async fn get_default_privilege_grants_for_database(
+    client: &Client,
+    database: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    get_default_privilege_grants_for_named_object(client, "mz_databases", database, "database")
+        .await
+}
+
+/// Get default privilege grants that apply to a schema.
+pub(super) async fn get_default_privilege_grants_for_schema(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    let query = r#"
+        SELECT
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
+            dp_priv.privilege_type
+        FROM mz_default_privileges dp
+        CROSS JOIN LATERAL unnest(
+            mz_internal.mz_format_privileges(dp.privileges)
+        ) AS dp_priv(privilege_type)
+        JOIN mz_schemas s ON s.name = $2
+        JOIN mz_databases d ON s.database_id = d.id
+        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        WHERE d.name = $1
+          AND dp.object_type = 'schema'
+          AND (dp.role_id = s.owner_id OR dp.role_id = 'p')
+          AND (dp.database_id IS NULL OR dp.database_id = d.id)
+          AND dp.schema_id IS NULL
+          AND (
+              dp.grantee = 'p'
+              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          )
+        "#;
+
+    let rows = client.query(query, &[&database, &schema]).await?;
+    Ok(rows
+        .iter()
+        .map(|row| ObjectGrant {
+            grantee: row.get("grantee"),
+            privilege_type: row.get("privilege_type"),
+        })
+        .collect())
+}
+
 /// Get default privilege grants for a named infrastructure object (cluster, network policy).
 ///
 /// Queries `mz_default_privileges` to find grants that would be auto-applied
@@ -1094,6 +1206,75 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
             privilege_type: row.get("privilege_type"),
         })
         .collect())
+}
+
+/// Read the default-privilege rules owned by one database or schema scope.
+async fn get_default_privileges(
+    client: &Client,
+    scope_predicate: &str,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Vec<crate::client::DefaultPrivilege>, ConnectionError> {
+    let query = format!(
+        r#"
+        SELECT
+            CASE WHEN dp.role_id = 'p' THEN 'public' ELSE target.name END AS target_role,
+            dp.object_type,
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
+            upper(dp_priv.privilege_type) AS privilege
+        FROM mz_default_privileges dp
+        CROSS JOIN LATERAL unnest(
+            mz_internal.mz_format_privileges(dp.privileges)
+        ) AS dp_priv(privilege_type)
+        LEFT JOIN mz_roles AS target ON dp.role_id = target.id
+        LEFT JOIN mz_roles AS grantee ON dp.grantee = grantee.id
+        WHERE {}
+        "#,
+        scope_predicate
+    );
+
+    let rows = client.query(&query, params).await?;
+    Ok(rows
+        .iter()
+        .map(|row| crate::client::DefaultPrivilege {
+            target_role: row.get("target_role"),
+            object_type: row.get("object_type"),
+            grantee: row.get("grantee"),
+            privilege: row.get("privilege"),
+        })
+        .collect())
+}
+
+/// Get the default-privilege rules scoped to a database.
+pub(super) async fn get_database_default_privileges(
+    client: &Client,
+    database: &str,
+) -> Result<Vec<crate::client::DefaultPrivilege>, ConnectionError> {
+    get_default_privileges(
+        client,
+        "dp.database_id = (SELECT id FROM mz_databases WHERE name = $1)
+           AND dp.schema_id IS NULL",
+        &[&database],
+    )
+    .await
+}
+
+/// Get the default-privilege rules scoped to a schema.
+pub(super) async fn get_schema_default_privileges(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<crate::client::DefaultPrivilege>, ConnectionError> {
+    get_default_privileges(
+        client,
+        "dp.schema_id = (
+             SELECT s.id
+             FROM mz_schemas s
+             JOIN mz_databases d ON s.database_id = d.id
+             WHERE d.name = $1 AND s.name = $2
+         )",
+        &[&database, &schema],
+    )
+    .await
 }
 
 /// Get the comments on a database object, including comments on its columns.
@@ -1273,6 +1454,14 @@ impl IntrospectionClient<'_> {
         check_schemas_exist(self.client, schemas).await
     }
 
+    /// Check which databases from a set of names exist.
+    pub async fn check_databases_exist(
+        &self,
+        databases: &[String],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        check_databases_exist(self.client, databases).await
+    }
+
     /// Check which clusters from a set of names exist.
     pub async fn check_clusters_exist(
         &self,
@@ -1440,6 +1629,57 @@ impl IntrospectionClient<'_> {
         name: &str,
     ) -> Result<Vec<ObjectGrant>, ConnectionError> {
         get_database_object_grants(self.client, catalog_table, database, schema, name).await
+    }
+
+    /// Get grants on a database.
+    pub async fn get_database_grants(
+        &self,
+        database: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_database_grants(self.client, database).await
+    }
+
+    /// Get grants on a schema.
+    pub async fn get_schema_grants(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_schema_grants(self.client, database, schema).await
+    }
+
+    /// Get default privilege grants that apply to a database.
+    pub async fn get_default_privilege_grants_for_database(
+        &self,
+        database: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_default_privilege_grants_for_database(self.client, database).await
+    }
+
+    /// Get default privilege grants that apply to a schema.
+    pub async fn get_default_privilege_grants_for_schema(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
+        get_default_privilege_grants_for_schema(self.client, database, schema).await
+    }
+
+    /// Get default-privilege rules scoped to a database.
+    pub async fn get_database_default_privileges(
+        &self,
+        database: &str,
+    ) -> Result<Vec<crate::client::DefaultPrivilege>, ConnectionError> {
+        get_database_default_privileges(self.client, database).await
+    }
+
+    /// Get default-privilege rules scoped to a schema.
+    pub async fn get_schema_default_privileges(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<crate::client::DefaultPrivilege>, ConnectionError> {
+        get_schema_default_privileges(self.client, database, schema).await
     }
 
     /// Get comments on a database object, including its columns.
