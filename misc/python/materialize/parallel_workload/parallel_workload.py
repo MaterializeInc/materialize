@@ -100,6 +100,7 @@ def run(
     scenario: Scenario,
     num_threads: int | None,
     naughty_identifiers: bool,
+    correctness: bool,
     replicas: int,
     composition: Composition | None,
     azurite: bool,
@@ -110,7 +111,7 @@ def run(
     rng = random.Random(random.randrange(SEED_RANGE))
 
     print(
-        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} --replicas={replicas} (--host={host})"
+        f"+++ Running with: --seed={seed} --threads={num_threads} --runtime={runtime} --complexity={complexity.value} --scenario={scenario.value} {'--naughty-identifiers ' if naughty_identifiers else ''} {'--correctness ' if correctness else ''}--replicas={replicas} (--host={host})"
     )
     initialize_logging()
 
@@ -119,7 +120,15 @@ def run(
     ).timestamp()
 
     database = Database(
-        rng, seed, host, ports, complexity, scenario, naughty_identifiers, num_threads
+        rng,
+        seed,
+        host,
+        ports,
+        complexity,
+        scenario,
+        naughty_identifiers,
+        num_threads,
+        correctness,
     )
 
     system_conn = psycopg.connect(
@@ -252,6 +261,15 @@ def run(
             action_list = covered[i]
         else:
             action_list = worker_rng.choices(candidate_lists, weights)[0]
+        if correctness:
+            # The verifying readers must always exist, no matter what the
+            # other threads get assigned: SelectAction compares tables and
+            # their shadow objects against the tracked states, FetchAction
+            # verifies the subscribe change stream.
+            if i == 0:
+                action_list = read_action_list
+            elif i == 1:
+                action_list = fetch_action_list
         actions = [
             action_class(worker_rng, composition)
             for action_class in action_list.action_classes
@@ -821,6 +839,11 @@ def parse_common_args(parser: argparse.ArgumentParser) -> None:
         help="Whether to use naughty strings as identifiers, makes the queries unreadable",
     )
     parser.add_argument(
+        "--correctness",
+        action="store_true",
+        help="Whether to check for correctness, restricts the queries that can run",
+    )
+    parser.add_argument(
         "--fast-startup",
         action="store_true",
         help="Whether to initialize expensive parts like SQLsmith, sources, sinks (for fast local testing, reduces coverage)",
@@ -894,6 +917,7 @@ def main() -> int:
         Scenario(args.scenario),
         args.threads,
         args.naughty_identifiers,
+        args.correctness,
         args.replicas,
         composition=None,  # only works in mzcompose
         azurite=args.azurite,
