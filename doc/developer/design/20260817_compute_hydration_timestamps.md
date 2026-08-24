@@ -751,9 +751,23 @@ Goldens that hardcode a log relation's identity, columns, OIDs or indexes:
 `test/workload-replay/system_catalog_identifiers.txt` and `objects.txt`. Docs: the
 `mz_introspection` system catalog reference page.
 
-`catalog_server_explain.slt` and `test/cluster/mzcompose.py` need no change. The
-former's query filters `o.id NOT LIKE 'si%'`, which excludes per-replica
-introspection log indexes, and the latter queries named relations.
+Two of those are worth naming precisely, because adding a *column* to an existing log
+reaches them while leaving everything else alone, and neither is found by searching for
+a count. `cluster.slt` lists each per-replica index's key columns with their positions,
+so a column added to an unkeyed log shifts every position after it. `cockroach/srfs.slt`
+runs `SELECT relname, unnest(indkey)`, so it gains a row per index instance. The
+reliable way to find this class is to search every file that mentions the relation by
+name and read what it asserts, rather than to reason about which kinds of value could
+have moved.
+
+`catalog_server_explain.slt` needs its `Constant (N rows)` counts bumped. Its query
+filters `o.id NOT LIKE 'si%'`, so no new EXPLAIN entry appears for the per-replica log
+index, but the existing plans embed the inlined builtin `VALUES` sets as constant
+nodes, so every count over a catalog relation that gained a row moves, including the
+two ontology counts moved by a new entity and link. The question a new builtin raises
+here is not whether a plan is added but whether the existing plans change.
+
+`test/cluster/mzcompose.py` needs no change, since it queries named relations.
 
 Not touched, and deliberately so: the introspection subscribe,
 `mz_internal.mz_compute_hydration_times`,
