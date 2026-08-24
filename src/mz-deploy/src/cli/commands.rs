@@ -77,6 +77,7 @@ pub mod mcp;
 pub mod new_project;
 pub mod profile;
 pub mod promote;
+pub mod reconcile;
 pub mod roles;
 pub mod setup;
 mod setup_schema;
