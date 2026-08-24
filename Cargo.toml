@@ -673,9 +673,9 @@ async-compression = { git = "https://github.com/MaterializeInc/async-compression
 # NOTE: The `[workspace.dependencies]` version requirement above must stay
 # semver-compatible with this revision's crate version, otherwise Cargo drops
 # these patches into `[[patch.unused]]` and silently builds against crates.io.
-iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
-iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
-iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "958ac5b3c318026aeb362485c593e4956aeabe95" }
+iceberg = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "5c5c18987891601337b0837c7fd52ae633de715e" }
+iceberg-catalog-rest = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "5c5c18987891601337b0837c7fd52ae633de715e" }
+iceberg-storage-opendal = { git = "https://github.com/MaterializeInc/iceberg-rust.git", rev = "5c5c18987891601337b0837c7fd52ae633de715e" }
 
 # Custom duckdb crate to support mz needs
 # All changes should go to the `mz_changes` branch.
