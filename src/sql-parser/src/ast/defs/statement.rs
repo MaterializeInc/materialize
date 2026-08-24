@@ -5836,8 +5836,8 @@ impl<T: AstInfo> AstDisplay for AbbreviatedGrantStatement<T> {
         f.write_str("GRANT ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.object_type);
-        f.write_str("S TO ");
+        write_grant_object_type_plural(f, &self.object_type);
+        f.write_str(" TO ");
         f.write_node(&display::comma_separated(&self.grantees));
     }
 }
@@ -5860,8 +5860,8 @@ impl<T: AstInfo> AstDisplay for AbbreviatedRevokeStatement<T> {
         f.write_str("REVOKE ");
         f.write_node(&self.privileges);
         f.write_str(" ON ");
-        f.write_node(&self.object_type);
-        f.write_str("S FROM ");
+        write_grant_object_type_plural(f, &self.object_type);
+        f.write_str(" FROM ");
         f.write_node(&display::comma_separated(&self.revokees));
     }
 }
