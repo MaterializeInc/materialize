@@ -118,6 +118,7 @@ def get_minimal_system_parameters(
         "enable_storage_introspection_logs": "true",
         "enable_compute_error_distinct": "true",
         "enable_compute_temporal_bucketing": "true",
+        "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
         "grpc_client_http2_keep_alive_timeout": "5s",
@@ -294,6 +295,11 @@ def get_variable_system_parameters(
         ),
         VariableSystemParameter(
             "enable_simplify_from_less_existence",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
+            "enable_union_cancellation_after_relation_cse",
             "true",
             ["true", "false"],
         ),
