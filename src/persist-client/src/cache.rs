@@ -673,7 +673,7 @@ pub(crate) const STATE_UPDATE_LEASE_TIMEOUT: Config<Duration> = Config::new(
     "The amount of time for a command to wait for a previous command to finish before executing. \
         (If zero, commands will not wait for others to complete.) Higher values reduce database contention \
         at the cost of higher worst-case latencies for individual requests.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> LockingTypedState<K, V, T, D> {

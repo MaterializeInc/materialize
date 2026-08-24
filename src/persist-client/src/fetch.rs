@@ -66,7 +66,7 @@ pub(crate) const FETCH_SEMAPHORE_COST_ADJUSTMENT: Config<f64> = Config::new(
     "\
     An adjustment multiplied by encoded_size_bytes to approximate an upper \
     bound on the size in lgalloc, which includes the decoded version.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
@@ -77,7 +77,7 @@ pub(crate) const FETCH_SEMAPHORE_PERMIT_ADJUSTMENT: Config<f64> = Config::new(
     parsed, expressed as a multiplier of the process's memory limit. This data \
     all spills to lgalloc, so values > 1.0 are safe. Only applied to cc \
     replicas.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
@@ -86,14 +86,14 @@ pub(crate) const PART_DECODE_FORMAT: Config<&'static str> = Config::new(
     "\
     Format we'll use to decode a Persist Part, either 'row', \
     'row_with_validate', or 'arrow' (Materialize).",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const OPTIMIZE_IGNORED_DATA_FETCH: Config<bool> = Config::new(
     "persist_optimize_ignored_data_fetch",
     true,
     "CYA to allow opt-out of a performance optimization to skip fetching ignored data",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
@@ -101,7 +101,7 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_READ: Config<bool> = Config::new(
     false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch containing that part",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 #[derive(Debug, Clone)]

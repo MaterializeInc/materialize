@@ -77,10 +77,10 @@ use tracing::error;
 /// from what it is named after:
 ///
 /// - A config realized inside a `clusterd` process is [`Replica`]. That covers
-///   the compute and storage worker config sets, the persist client config set,
-///   and `mz_metrics`, all of which the per-replica dyncfg push reaches.
-///   `environmentd` may read such a config too, for its own process. That read
-///   legitimately sees the environment-wide value.
+///   the compute and storage worker config sets and `mz_metrics`, which the
+///   per-replica dyncfg push reaches. `environmentd` may read such a config too,
+///   for its own process. That read legitimately sees the environment-wide
+///   value.
 /// - A config that `environmentd` resolves for *one specific replica*, whether
 ///   it ships the value there or acts on it itself, is also [`Replica`]. The
 ///   read site has to resolve that replica's override, either with
@@ -98,6 +98,14 @@ use tracing::error;
 /// (because they render the same dataflow and their outputs are compared) is
 /// [`Environment`] even when it is read on `clusterd`. Per-replica divergence in
 /// *how* a dataflow is rendered is fine, in *what* it produces is not.
+///
+/// NOTE: persist configs are [`Environment`] as a class, even though the persist
+/// client runs on `clusterd` and the per-replica push reaches its config set.
+/// The same client code also runs in `environmentd`, and every copy of it acts
+/// on shared durable state. A replica-scoped persist config could never reach
+/// the `environmentd` client, so a rollout targeting replicas would leave a
+/// shard's other writer on the old value indefinitely. [`Environment`] is the
+/// only scope covering every persist client in an environment.
 ///
 /// [`Cluster`]: ParameterScope::Cluster
 /// [`Environment`]: ParameterScope::Environment

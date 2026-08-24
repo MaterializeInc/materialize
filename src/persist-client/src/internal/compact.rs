@@ -145,7 +145,7 @@ pub(crate) const COMPACTION_MINIMUM_TIMEOUT: Config<Duration> = Config::new(
     "\
     The minimum amount of time to allow a persist compaction request to run \
     before timing it out (Materialize).",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
@@ -153,7 +153,7 @@ pub(crate) const COMPACTION_CHECK_PROCESS_FLAG: Config<bool> = Config::new(
     true,
     "Whether Compactor will obey the process_requests flag in PersistConfig, \
         which allows dynamically disabling compaction. If false, all compaction requests will be processed.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Create a `[CompactionInput::IdRange]` from a set of `SpineId`s.

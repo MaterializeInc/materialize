@@ -617,7 +617,7 @@ pub(crate) const READER_LEASE_DURATION: Config<Duration> = Config::new(
     "persist_reader_lease_duration",
     Duration::from_secs(60 * 15),
     "The time after which we'll clean up stale read leases",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>

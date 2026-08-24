@@ -78,7 +78,7 @@ pub(crate) const CLAIM_UNCLAIMED_COMPACTIONS: Config<bool> = Config::new(
     false,
     "If an append doesn't result in a compaction request, but there is some uncompacted batch \
     in state, compact that instead.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
@@ -87,14 +87,14 @@ pub(crate) const CLAIM_COMPACTION_PERCENT: Config<usize> = Config::new(
     "Claim a compaction with the given percent chance, if claiming compactions is enabled. \
     (If over 100, we'll always claim at least one; for example, if set to 365, we'll claim at least \
     three and have a 65% chance of claiming a fourth.)",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const CLAIM_COMPACTION_MIN_VERSION: Config<String> = Config::new(
     "persist_claim_compaction_min_version",
     String::new(),
     "If set to a valid version string, compact away any earlier versions if possible.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> Machine<K, V, T, D>
@@ -1147,28 +1147,28 @@ pub(crate) const NEXT_LISTEN_BATCH_RETRYER_FIXED_SLEEP: Config<Duration> = Confi
     Duration::from_millis(1200), // pubsub is on by default!
     "\
     The fixed sleep when polling for new batches from a Listen or Subscribe. Skipped if zero.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_INITIAL_BACKOFF: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_initial_backoff",
     Duration::from_millis(100), // pubsub is on by default!
     "The initial backoff when polling for new batches from a Listen or Subscribe.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_MULTIPLIER: Config<u32> = Config::new(
     "persist_next_listen_batch_retryer_multiplier",
     2,
     "The backoff multiplier when polling for new batches from a Listen or Subscribe.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const NEXT_LISTEN_BATCH_RETRYER_CLAMP: Config<Duration> = Config::new(
     "persist_next_listen_batch_retryer_clamp",
     Duration::from_secs(16), // pubsub is on by default!
     "The backoff clamp duration when polling for new batches from a Listen or Subscribe.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) fn next_listen_batch_retry_params(cfg: &ConfigSet) -> RetryParameters {

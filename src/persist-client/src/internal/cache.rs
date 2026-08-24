@@ -38,14 +38,14 @@ pub(crate) const BLOB_CACHE_MEM_LIMIT_BYTES: Config<usize> = Config::new(
     // 128MiB
     128 * 1024 * 1024,
     "Capacity of in-mem blob cache in bytes (Materialize).",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_CACHE_SCALE_WITH_THREADS: Config<bool> = Config::new(
     "persist_blob_cache_scale_with_threads",
     false,
     "Whether or not the size of the in-mem blob cache scales with the number of threads in the current process (Materialize).",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_CACHE_SCALE_FACTOR_BYTES: Config<usize> = Config::new(
@@ -53,7 +53,7 @@ pub(crate) const BLOB_CACHE_SCALE_FACTOR_BYTES: Config<usize> = Config::new(
     // 32MiB
     32 * 1024 * 1024,
     "Scale factor for the in-mem blob cache, in bytes, if scaling with threads (Materialize).",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 impl BlobMemCache {

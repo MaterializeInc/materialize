@@ -95,7 +95,7 @@ pub mod operators {
         "\
         The maximum amount of work to do in the persist_source mfp_and_decode \
         operator before yielding.",
-        ParameterScope::Replica,
+        ParameterScope::Environment,
     );
 }
 pub mod read;

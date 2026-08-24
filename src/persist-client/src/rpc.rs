@@ -59,7 +59,7 @@ pub(crate) const PUBSUB_CLIENT_ENABLED: Config<bool> = Config::new(
     "persist_pubsub_client_enabled",
     true,
     "Whether to connect to the Persist PubSub service.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// For connected clients, determines whether to push state diffs to the PubSub
@@ -69,7 +69,7 @@ pub(crate) const PUBSUB_PUSH_DIFF_ENABLED: Config<bool> = Config::new(
     "persist_pubsub_push_diff_enabled",
     true,
     "Whether to push state diffs to Persist PubSub.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// For connected clients, determines whether to push state diffs to the PubSub
@@ -79,7 +79,7 @@ pub(crate) const PUBSUB_SAME_PROCESS_DELEGATE_ENABLED: Config<bool> = Config::ne
     "persist_pubsub_same_process_delegate_enabled",
     true,
     "Whether to push state diffs to Persist PubSub on the same process.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Timeout per connection attempt to Persist PubSub service.
@@ -87,7 +87,7 @@ pub(crate) const PUBSUB_CONNECT_ATTEMPT_TIMEOUT: Config<Duration> = Config::new(
     "persist_pubsub_connect_attempt_timeout",
     Duration::from_secs(5),
     "Timeout per connection attempt to Persist PubSub service.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Timeout per request attempt to Persist PubSub service.
@@ -95,7 +95,7 @@ pub(crate) const PUBSUB_REQUEST_TIMEOUT: Config<Duration> = Config::new(
     "persist_pubsub_request_timeout",
     Duration::from_secs(5),
     "Timeout per request attempt to Persist PubSub service.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Maximum backoff when retrying connection establishment to Persist PubSub service.
@@ -103,7 +103,7 @@ pub(crate) const PUBSUB_CONNECT_MAX_BACKOFF: Config<Duration> = Config::new(
     "persist_pubsub_connect_max_backoff",
     Duration::from_secs(60),
     "Maximum backoff when retrying connection establishment to Persist PubSub service.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Size of channel used to buffer send messages to PubSub service.
@@ -111,7 +111,7 @@ pub(crate) const PUBSUB_CLIENT_SENDER_CHANNEL_SIZE: Config<usize> = Config::new(
     "persist_pubsub_client_sender_channel_size",
     25,
     "Size of channel used to buffer send messages to PubSub service.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Size of channel used to buffer received messages from PubSub service.
@@ -119,7 +119,7 @@ pub(crate) const PUBSUB_CLIENT_RECEIVER_CHANNEL_SIZE: Config<usize> = Config::ne
     "persist_pubsub_client_receiver_channel_size",
     25,
     "Size of channel used to buffer received messages from PubSub service.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Size of channel used per connection to buffer broadcasted messages from PubSub server.
@@ -127,7 +127,7 @@ pub(crate) const PUBSUB_SERVER_CONNECTION_CHANNEL_SIZE: Config<usize> = Config::
     "persist_pubsub_server_connection_channel_size",
     25,
     "Size of channel used per connection to buffer broadcasted messages from PubSub server.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Size of channel used by the state cache to broadcast shard state references.
@@ -135,7 +135,7 @@ pub(crate) const PUBSUB_STATE_CACHE_SHARD_REF_CHANNEL_SIZE: Config<usize> = Conf
     "persist_pubsub_state_cache_shard_ref_channel_size",
     25,
     "Size of channel used by the state cache to broadcast shard state references.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Backoff after an established connection to Persist PubSub service fails.
@@ -143,7 +143,7 @@ pub(crate) const PUBSUB_RECONNECT_BACKOFF: Config<Duration> = Config::new(
     "persist_pubsub_reconnect_backoff",
     Duration::from_secs(5),
     "Backoff after an established connection to Persist PubSub service fails.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Max message size, used to configure gRPC servers and clients.
