@@ -34,11 +34,14 @@ use columnar::{Columnar, Index};
 use differential_dataflow::{AsCollection, Collection, VecCollection};
 use mz_repr::{DatumVec, DatumVecBorrow, Diff, Row};
 use mz_timely_util::columnar::Column;
+use mz_timely_util::columnar::batcher::ColumnChunker;
 use mz_timely_util::columnar::builder::ColumnBuilder;
-use mz_timely_util::operator::CollectionExt;
+use mz_timely_util::columnar::columnar_exchange_data;
+use mz_timely_util::columnar::merge_batcher::ColumnMergeBatcher;
+use mz_timely_util::operator::{CollectionExt, consolidate_pact};
 use timely::ContainerBuilder;
 use timely::container::CapacityContainerBuilder;
-use timely::dataflow::channels::pact::Pipeline;
+use timely::dataflow::channels::pact::{ExchangeCore, Pipeline};
 use timely::dataflow::operators::generic::builder_rc::OperatorBuilder;
 use timely::dataflow::operators::generic::{Operator, OutputBuilder};
 use timely::dataflow::{Scope, Stream, StreamVec};
@@ -254,14 +257,7 @@ impl<'scope, T: RenderTimestamp> CollectionEdge<'scope, T> {
             CollectionEdge::Vec(c) => CollectionEdge::Vec(CollectionExt::consolidate_named::<
                 KeyBatcher<_, _, _>,
             >(c, name)),
-            CollectionEdge::Columnar(c) => {
-                // TODO: Consolidate natively over columns. The pieces exist
-                // (`columnar_exchange`, the columnar merge batchers), which
-                // would avoid the row round-trip below.
-                let c = columnar_to_vec(c);
-                let c = CollectionExt::consolidate_named::<KeyBatcher<_, _, _>>(c, name);
-                CollectionEdge::Columnar(vec_to_columnar(c))
-            }
+            CollectionEdge::Columnar(c) => CollectionEdge::Columnar(columnar_consolidate(c, name)),
         }
     }
 }
@@ -294,6 +290,67 @@ where
                         for (v, t, d) in data.borrow().into_index_iter() {
                             let d = -Diff::into_owned(d);
                             session.give((v, t, &d));
+                        }
+                    });
+                }
+            },
+        )
+        .as_collection()
+}
+
+/// Consolidates a [`ColumnarCollection`] natively, without a row round-trip.
+///
+/// Mirrors the `Vec` arm's [`CollectionExt::consolidate_named`], but keeps the
+/// data columnar throughout: a [`ColumnChunker`] sorts and consolidates the
+/// input columns and a [`ColumnMergeBatcher`] merges them under a
+/// [`columnar_exchange_data`] pact. Both hold their data in [`Column`], and the
+/// batcher's chunks already carry the collection's own shape, so nothing on
+/// this path visits a record or materializes an owned [`Row`]. The exchange
+/// pact still re-encodes per record, see the TODO at the pact.
+///
+/// This uses [`consolidate_pact`], not `mz_arrange_core`. A consolidate emits a
+/// consolidated collection, so building and reading back a maintained trace
+/// would be wasted work.
+pub fn columnar_consolidate<'scope, T>(
+    collection: ColumnarCollection<'scope, T, Row, Diff>,
+    name: &str,
+) -> ColumnarCollection<'scope, T, Row, Diff>
+where
+    T: RenderTimestamp,
+{
+    // TODO: This pact re-serializes every record into a per-destination
+    // `ColumnBuilder`, the one remaining full re-encode on this path. Routing a
+    // column in bulk needs contiguous ranges of records sharing a destination,
+    // which the exchange function cannot identify from a hash per record, so
+    // bulk routing needs a different formulation and is left as future work.
+    let exchange =
+        ExchangeCore::<ColumnBuilder<_>, _>::new_core(columnar_exchange_data::<Row, T, Diff>);
+    let consolidated = consolidate_pact::<
+        ColumnChunker<(Row, T, Diff)>,
+        ColumnMergeBatcher<Row, T, Diff>,
+        _,
+        _,
+    >(collection.inner, exchange, name);
+
+    // Flatten the sealed chain into one container per chunk, which is what a
+    // downstream edge carries. This moves containers and visits no record.
+    //
+    // TODO: This ships a whole sealed snapshot in one activation, an un-fueled
+    // burst hazard on large consolidations. It is the same behavior as the
+    // `Vec` arm's `consolidate_named` unpack (see
+    // `mz_timely_util::operator::consolidate_named`), not new here. A future
+    // fuel fix should cover both arms, so the burst is not fixed on one and
+    // left on the other.
+    consolidated
+        .unary::<CapacityContainerBuilder<Column<(Row, T, Diff)>>, _, _, _>(
+            Pipeline,
+            &format!("Flatten {name}"),
+            |_cap, _info| {
+                move |input, output| {
+                    input.for_each(|time, data| {
+                        let mut session = output.session(&time);
+                        for mut chunk in data.drain(..).flatten() {
+                            session.give_container(&mut chunk);
                         }
                     });
                 }
@@ -539,24 +596,54 @@ mod tests {
     fn consolidate_named_preserves_columnar() {
         let row1 = Row::pack_slice(&[Datum::Int32(1)]);
         let row2 = Row::pack_slice(&[Datum::Int32(2)]);
-        let expected = vec![(row1.clone(), Timestamp::from(0_u64), Diff::from(2))];
-        let captured = timely::execute_directly(move |worker| {
+        let row3 = Row::pack_slice(&[Datum::Int32(3)]);
+        // Accumulation and cancellation across two distinct timestamps:
+        // `row1` accumulates to two at t=0 and to one at t=1 (kept separate by
+        // time); `row2` cancels at t=0 and `row3` cancels at t=1, so both are
+        // absent from the output.
+        let expected = vec![
+            (row1.clone(), Timestamp::from(0_u64), Diff::from(2)),
+            (row1.clone(), Timestamp::from(1_u64), Diff::ONE),
+        ];
+
+        // The columnar arm keeps the `Columnar` variant. No-ColumnarToVec is a
+        // by-inspection property: `consolidate_named`'s columnar arm calls
+        // `columnar_consolidate` (native `ColumnMergeBatcher` merge), never
+        // `columnar_to_vec`. The `into_vec` below is the capture harness
+        // decoding for the test only, not part of the consolidate.
+        let (vec_captured, col_captured) = timely::execute_directly(move |worker| {
             worker.dataflow::<Timestamp, _, _>(|scope| {
                 let (mut input, collection) = scope.new_collection();
-                let edge =
-                    CollectionEdge::Columnar(vec_to_columnar(collection)).consolidate_named("Test");
-                assert!(matches!(edge, CollectionEdge::Columnar(_)));
-                let captured = edge.into_vec().inner.capture();
-                // `row1` accumulates to a diff of two, `row2` cancels.
+                let mut captures = Vec::new();
+                for edge in [
+                    CollectionEdge::Vec(collection.clone()),
+                    CollectionEdge::Columnar(vec_to_columnar(collection)),
+                ] {
+                    let is_columnar = matches!(edge, CollectionEdge::Columnar(_));
+                    let edge = edge.consolidate_named("Test");
+                    assert_eq!(matches!(edge, CollectionEdge::Columnar(_)), is_columnar);
+                    captures.push(edge.into_vec().inner.capture());
+                }
+                let col = captures.pop().unwrap();
+                let vec = captures.pop().unwrap();
+                // t=0: row1 accumulates (+1, +1), row2 cancels (+1, -1).
+                input.advance_to(Timestamp::from(0_u64));
                 input.update(row1.clone(), Diff::ONE);
-                input.update(row1, Diff::ONE);
+                input.update(row1.clone(), Diff::ONE);
                 input.update(row2.clone(), Diff::ONE);
                 input.update(row2, -Diff::ONE);
+                // t=1: row1 survives (+1), row3 cancels (+1, -1).
                 input.advance_to(Timestamp::from(1_u64));
+                input.update(row1, Diff::ONE);
+                input.update(row3.clone(), Diff::ONE);
+                input.update(row3, -Diff::ONE);
+                input.advance_to(Timestamp::from(2_u64));
                 input.flush();
-                captured
+                (vec, col)
             })
         });
-        assert_eq!(extract_sorted(captured), expected);
+        let vec_updates = extract_sorted(vec_captured);
+        assert_eq!(vec_updates, expected);
+        assert_eq!(extract_sorted(col_captured), vec_updates);
     }
 }
