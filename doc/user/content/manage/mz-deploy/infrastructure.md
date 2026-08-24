@@ -117,4 +117,6 @@ CREATE TABLE orders FROM SOURCE pg_source
 (REFERENCE public.orders);
 ```
 
+Before creating anything, `apply tables` checks each `REFERENCE` against what its source can currently read from the upstream system. A reference the source cannot read fails the command, in a dry run as well as a real apply, and the error suggests any reference the source does expose that is spelled closely enough to be the one you meant. Tables reading from a source the same command is creating are not checked ahead of time, because the source does not exist yet; those references are resolved when the table is created.
+
 After `apply tables`, the table's column schema is automatically captured in `types.lock`. This is how `compile` knows what columns `orders` has when type-checking views that reference it. See [Local development — Lock types](/manage/mz-deploy/local-development/#lock-types) for details.

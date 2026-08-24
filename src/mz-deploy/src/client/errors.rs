@@ -163,6 +163,38 @@ impl From<mz_postgres_util::PostgresError> for ConnectionError {
     }
 }
 
+/// One table whose reference its source does not expose.
+#[derive(Debug)]
+pub struct MissingSourceReference {
+    /// The table the project wants to create.
+    pub table: ObjectId,
+    /// The reference it asks for, as written in the project.
+    pub reference: String,
+    /// Exposed references spelled close enough to be the intended one, best
+    /// first. Empty when nothing came close.
+    pub suggestions: Vec<String>,
+}
+
+/// One source whose exposed references do not cover everything the project's
+/// tables ask of it.
+#[derive(Debug)]
+pub struct SourceReferenceMismatch {
+    /// The source the tables read from.
+    pub source: ObjectId,
+    /// The source's catalog ID, so the hint can name a query that lists every
+    /// reference it exposes.
+    pub source_id: String,
+    /// Tables asking for a reference the source does not expose.
+    pub tables: Vec<MissingSourceReference>,
+    /// How many references the source does expose. A count well below what the
+    /// upstream system holds points at the source's filters rather than a typo.
+    pub available_count: usize,
+    /// Why the source's references could not be refreshed, when they could not
+    /// be. The counts and suggestions then come from whatever the catalog last
+    /// recorded, which may be out of date.
+    pub unreadable: Option<String>,
+}
+
 /// Errors that can occur during project validation against the database.
 #[derive(Debug)]
 pub enum DatabaseValidationError {
@@ -211,6 +243,8 @@ pub enum DatabaseValidationError {
     MissingSources(Vec<ObjectId>),
     /// Connections referenced by the project do not exist in the database.
     MissingConnections(Vec<ObjectId>),
+    /// Tables reference upstream objects their source does not expose.
+    MissingSourceReferences(Vec<SourceReferenceMismatch>),
     /// Objects depend on tables that have not yet been created.
     MissingTableDependencies {
         objects_needing_tables: Vec<(ObjectId, Vec<ObjectId>)>,
@@ -481,6 +515,52 @@ impl fmt::Display for DatabaseValidationError {
                 )?;
                 Ok(())
             }
+            DatabaseValidationError::MissingSourceReferences(mismatches) => {
+                let help_style = Style::new().bright_cyan().bold();
+                writeln!(
+                    f,
+                    "The following tables reference upstream objects their source does not expose:"
+                )?;
+                for mismatch in mismatches {
+                    writeln!(f)?;
+                    writeln!(f, "  from {}:", mismatch.source)?;
+                    for table in &mismatch.tables {
+                        writeln!(f, "    - {} ({})", table.table, table.reference)?;
+                        if !table.suggestions.is_empty() {
+                            writeln!(f, "      did you mean: {}?", table.suggestions.join(", "))?;
+                        }
+                    }
+                    if let Some(reason) = &mismatch.unreadable {
+                        writeln!(f)?;
+                        writeln!(
+                            f,
+                            "    could not read the references for {}: {}",
+                            mismatch.source, reason
+                        )?;
+                    }
+                    if mismatch.available_count > 0 {
+                        writeln!(f)?;
+                        writeln!(
+                            f,
+                            "    {} exposes {} references. To see them all:",
+                            mismatch.source, mismatch.available_count
+                        )?;
+                        writeln!(
+                            f,
+                            "      SELECT namespace, name FROM mz_internal.mz_source_references"
+                        )?;
+                        writeln!(f, "      WHERE source_id = '{}';", mismatch.source_id)?;
+                    }
+                }
+                writeln!(f)?;
+                writeln!(
+                    f,
+                    "{} Confirm the object exists upstream and that the source's publication,",
+                    "help:".if_supports_color(Stream::Stderr, |t| help_style.style(t))
+                )?;
+                writeln!(f, "      schema filter, and credentials include it.")?;
+                Ok(())
+            }
             DatabaseValidationError::MissingTableDependencies {
                 objects_needing_tables,
             } => {
@@ -541,6 +621,115 @@ pub fn format_relative_path(path: &std::path::Path) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn object(schema: &str, object: &str) -> ObjectId {
+        ObjectId::new("app".to_string(), schema.to_string(), object.to_string())
+    }
+
+    #[mz_ore::test]
+    fn test_missing_source_references_error_display() {
+        let error =
+            DatabaseValidationError::MissingSourceReferences(vec![SourceReferenceMismatch {
+                source: object("ingest", "pg_source"),
+                source_id: "u1043".to_string(),
+                tables: vec![MissingSourceReference {
+                    table: object("ingest", "widgets"),
+                    reference: "public.widgest".to_string(),
+                    suggestions: vec!["public.widgets".to_string()],
+                }],
+                available_count: 1284,
+                unreadable: None,
+            }]);
+        let output = error.to_string();
+
+        assert!(
+            output.contains("app.ingest.widgets (public.widgest)"),
+            "{output}"
+        );
+        assert!(output.contains("from app.ingest.pg_source:"), "{output}");
+        assert!(output.contains("did you mean: public.widgets?"), "{output}");
+        assert!(
+            output.contains("app.ingest.pg_source exposes 1284 references"),
+            "{output}"
+        );
+        assert!(output.contains("WHERE source_id = 'u1043';"), "{output}");
+        assert!(!output.contains("could not read"), "{output}");
+    }
+
+    #[mz_ore::test]
+    fn test_missing_source_references_error_display_multiple_suggestions() {
+        let error =
+            DatabaseValidationError::MissingSourceReferences(vec![SourceReferenceMismatch {
+                source: object("ingest", "pg_source"),
+                source_id: "u1043".to_string(),
+                tables: vec![MissingSourceReference {
+                    table: object("ingest", "widgets"),
+                    reference: "sales.widgets".to_string(),
+                    suggestions: vec!["public.widgets".to_string(), "staging.widgets".to_string()],
+                }],
+                available_count: 2,
+                unreadable: None,
+            }]);
+        let output = error.to_string();
+
+        assert!(
+            output.contains("did you mean: public.widgets, staging.widgets?"),
+            "{output}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_missing_source_references_error_display_without_suggestions() {
+        let error =
+            DatabaseValidationError::MissingSourceReferences(vec![SourceReferenceMismatch {
+                source: object("ingest", "pg_source"),
+                source_id: "u1043".to_string(),
+                tables: vec![MissingSourceReference {
+                    table: object("ingest", "widgets"),
+                    reference: "public.widgets".to_string(),
+                    suggestions: Vec::new(),
+                }],
+                available_count: 3,
+                unreadable: None,
+            }]);
+        let output = error.to_string();
+
+        // Nothing came close, so the query and the upstream advice are all the
+        // error can offer.
+        assert!(!output.contains("did you mean"), "{output}");
+        assert!(
+            output.contains("app.ingest.pg_source exposes 3 references"),
+            "{output}"
+        );
+        assert!(
+            output.contains("Confirm the object exists upstream"),
+            "{output}"
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_missing_source_references_error_display_unreadable() {
+        let error =
+            DatabaseValidationError::MissingSourceReferences(vec![SourceReferenceMismatch {
+                source: object("ingest", "pg_source"),
+                source_id: "u1043".to_string(),
+                tables: vec![MissingSourceReference {
+                    table: object("ingest", "widgets"),
+                    reference: "public.widgets".to_string(),
+                    suggestions: Vec::new(),
+                }],
+                available_count: 12,
+                unreadable: Some("permission denied".to_string()),
+            }]);
+        let output = error.to_string();
+
+        assert!(
+            output.contains(
+                "could not read the references for app.ingest.pg_source: permission denied"
+            ),
+            "{output}"
+        );
+    }
 
     #[mz_ore::test]
     fn test_missing_table_dependencies_error_display() {

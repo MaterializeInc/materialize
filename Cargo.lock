@@ -6930,6 +6930,7 @@ dependencies = [
  "mz-catalog",
  "mz-controller-types",
  "mz-expr",
+ "mz-mysql-util",
  "mz-ore",
  "mz-postgres-util",
  "mz-repr",

@@ -27,6 +27,8 @@
 //! | Schema ownership | `validate_schema_ownership_impl` | Current role owns all production schemas that will be swapped |
 //! | Cluster ownership | `validate_cluster_ownership_impl` | Current role owns all production clusters that will be swapped |
 //! | Table dependencies | `validate_table_dependencies_impl` | Tables depended on by objects being deployed exist |
+//! | Source references | `validate_source_references_impl` | Each `CREATE TABLE FROM SOURCE` names an object its source can read |
+
 //!
 //! ## Batching Strategy
 //!
@@ -35,14 +37,19 @@
 //! while minimizing round trips.
 
 use crate::client::connection::{Client, ValidationClient};
-use crate::client::errors::DatabaseValidationError;
+use crate::client::errors::{
+    DatabaseValidationError, MissingSourceReference, SourceReferenceMismatch,
+};
 use crate::client::sql_placeholders;
 use crate::project::SchemaQualifier;
 use crate::project::ast::Statement;
 use crate::project::ir::graph;
 use crate::project::ir::object_id::ObjectId;
-use mz_sql_parser::ast::CreateSinkConnection;
+use crate::suggest::{MAX_DID_YOU_MEAN, did_you_mean};
+use crate::verbose;
+use mz_sql_parser::ast::{CreateSinkConnection, Ident, UnresolvedItemName};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio_postgres::types::ToSql;
@@ -485,6 +492,20 @@ impl ValidationClient<'_> {
         validate_cluster_ownership_impl(self.client, cluster_set).await
     }
 
+    /// Validate that every `CREATE TABLE ... FROM SOURCE` in `tables_to_create`
+    /// names an upstream object its source can read.
+    ///
+    /// Refreshes each source's references before checking, so the check reads
+    /// what the upstream system exposes now rather than what it exposed when
+    /// the source was created.
+    pub async fn validate_source_references(
+        &self,
+        planned_project: &graph::Project,
+        tables_to_create: &BTreeSet<ObjectId>,
+    ) -> Result<(), DatabaseValidationError> {
+        validate_source_references_impl(self.client, planned_project, tables_to_create).await
+    }
+
     /// Validate that all tables referenced by objects to be deployed exist in the database.
     pub async fn validate_table_dependencies(
         &self,
@@ -873,4 +894,470 @@ pub(crate) async fn validate_table_dependencies_impl(
     }
 
     Ok(())
+}
+
+/// One row of `mz_internal.mz_source_references`: an upstream object a source
+/// can read.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct SourceReference {
+    namespace: Option<String>,
+    name: String,
+}
+
+impl fmt::Display for SourceReference {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.namespace {
+            Some(namespace) => write!(f, "{}.{}", namespace, self.name),
+            None => write!(f, "{}", self.name),
+        }
+    }
+}
+
+/// Split a reference as written into its object name and, when the reference is
+/// qualified, the namespace immediately preceding it.
+///
+/// A leading database qualifier (only SQL Server references carry one) is
+/// dropped: `mz_source_references` records no database, so there is nothing to
+/// match it against.
+fn split_reference(reference: &UnresolvedItemName) -> Option<(&Ident, Option<&Ident>)> {
+    let mut parts = reference.0.iter().rev();
+    let name = parts.next()?;
+    Some((name, parts.next()))
+}
+
+/// Whether the recorded references can settle `reference` at all.
+///
+/// MySQL's system schemas are the blind spot. Both `CREATE SOURCE` and
+/// `ALTER SOURCE ... REFRESH REFERENCES` retrieve MySQL tables with system
+/// schemas excluded, so `mz_source_references` never lists a table in `mysql`,
+/// `sys`, `performance_schema`, or `information_schema`. Creating a table from
+/// such a reference does resolve it, so only the server can judge one, and
+/// reporting it missing here would block a deploy that works.
+///
+/// The namespace alone decides this, without consulting the source's connection
+/// type. A Postgres or SQL Server schema that happens to be named `mysql` or
+/// `sys` is skipped too, which costs nothing beyond leaving those references to
+/// the server.
+fn reference_is_verifiable(reference: &UnresolvedItemName) -> bool {
+    let Some((_, Some(namespace))) = split_reference(reference) else {
+        return true;
+    };
+    !mz_mysql_util::SYSTEM_SCHEMAS.contains(&namespace.as_str())
+}
+
+/// Whether `reference`, as written in a `CREATE TABLE ... FROM SOURCE`
+/// statement, names one of `available`.
+///
+/// Mirrors the server's resolution (`SourceReferenceResolver`), except that a
+/// bare object name matches in any namespace: the ambiguous case is left for
+/// the server to report.
+fn reference_is_available(reference: &UnresolvedItemName, available: &[SourceReference]) -> bool {
+    let Some((name, namespace)) = split_reference(reference) else {
+        return false;
+    };
+
+    available.iter().any(|candidate| {
+        candidate.name == name.as_str()
+            && match namespace {
+                Some(namespace) => candidate.namespace.as_deref() == Some(namespace.as_str()),
+                None => true,
+            }
+    })
+}
+
+/// Everything one source records about what it can read.
+#[derive(Debug)]
+struct SourceReferences {
+    /// The source's catalog ID, which names it in an error's suggested query.
+    id: String,
+    references: Vec<SourceReference>,
+}
+
+/// Exposed references spelled closely enough to `reference` to be the one the
+/// project meant, best first. Empty when nothing comes close.
+///
+/// A candidate whose object name is exactly right and whose namespace is not
+/// leads, no matter how unalike the two namespaces are. Naming the right object
+/// in the wrong schema is both a common slip and one edit distance scores as
+/// unrelated. The rest are ranked on the object name alone. Scoring the
+/// reference whole would let a shared namespace pad the distance budget without
+/// saying anything about whether the names match: `public.widgets` and
+/// `public.orders` sit 4 edits apart, inside the budget a name that long earns,
+/// and are nothing alike.
+///
+/// Suggestions carry the namespace even where the project wrote a bare
+/// reference. That stays a valid substitution and says where the object lives.
+fn suggest_references(
+    reference: &UnresolvedItemName,
+    available: &[SourceReference],
+) -> Vec<String> {
+    let Some((name, _)) = split_reference(reference) else {
+        return Vec::new();
+    };
+
+    let (exact, rest): (Vec<&SourceReference>, Vec<&SourceReference>) = available
+        .iter()
+        .partition(|candidate| candidate.name == name.as_str());
+    let mut suggestions: Vec<String> = exact.iter().map(|c| c.to_string()).collect();
+
+    let mut names: Vec<&str> = rest.iter().map(|c| c.name.as_str()).collect();
+    names.sort();
+    names.dedup();
+    for near in did_you_mean(name.as_str(), &names) {
+        // One name can sit in several namespaces, and which one the project
+        // meant is exactly what it got wrong, so offer each.
+        suggestions.extend(
+            rest.iter()
+                .filter(|candidate| candidate.name == near)
+                .map(|candidate| candidate.to_string()),
+        );
+    }
+
+    suggestions.truncate(MAX_DID_YOU_MEAN);
+    suggestions
+}
+
+/// Query the references recorded for each of `sources`, keyed by the source's
+/// fully qualified name.
+async fn query_source_references(
+    client: &Client,
+    sources: &BTreeSet<ObjectId>,
+) -> Result<BTreeMap<ObjectId, SourceReferences>, DatabaseValidationError> {
+    let mut by_source: BTreeMap<ObjectId, SourceReferences> = BTreeMap::new();
+    if sources.is_empty() {
+        return Ok(by_source);
+    }
+
+    let fqn_to_source: BTreeMap<String, &ObjectId> = sources
+        .iter()
+        .map(|source| (source.to_string(), source))
+        .collect();
+    let fqns: Vec<String> = fqn_to_source.keys().cloned().collect();
+
+    for chunk in fqns.chunks(LOOKUP_BATCH_SIZE) {
+        let placeholders = sql_placeholders(chunk.len());
+        let query = format!(
+            r#"
+            SELECT d.name || '.' || sc.name || '.' || s.name AS source,
+                   s.id AS source_id,
+                   refs.namespace,
+                   refs.name
+            FROM mz_internal.mz_source_references refs
+            JOIN mz_catalog.mz_sources s ON refs.source_id = s.id
+            JOIN mz_catalog.mz_schemas sc ON s.schema_id = sc.id
+            JOIN mz_catalog.mz_databases d ON sc.database_id = d.id
+            WHERE d.name || '.' || sc.name || '.' || s.name IN ({placeholders})
+            "#,
+        );
+
+        #[allow(clippy::as_conversions)]
+        let params: Vec<&(dyn ToSql + Sync)> =
+            chunk.iter().map(|fqn| fqn as &(dyn ToSql + Sync)).collect();
+
+        let rows = client
+            .query(&query, &params)
+            .await
+            .map_err(DatabaseValidationError::QueryError)?;
+
+        for row in rows {
+            let fqn: String = row.get("source");
+            let Some(source) = fqn_to_source.get(&fqn) else {
+                continue;
+            };
+            by_source
+                .entry((*source).clone())
+                .or_insert_with(|| SourceReferences {
+                    id: row.get("source_id"),
+                    references: Vec::new(),
+                })
+                .references
+                .push(SourceReference {
+                    namespace: row.get("namespace"),
+                    name: row.get("name"),
+                });
+        }
+    }
+
+    for source in by_source.values_mut() {
+        source.references.sort();
+    }
+
+    Ok(by_source)
+}
+
+/// Internal implementation of validate_source_references.
+pub(crate) async fn validate_source_references_impl(
+    client: &Client,
+    planned_project: &graph::Project,
+    tables_to_create: &BTreeSet<ObjectId>,
+) -> Result<(), DatabaseValidationError> {
+    let mut requested: BTreeMap<ObjectId, Vec<(ObjectId, UnresolvedItemName)>> = BTreeMap::new();
+    for table_id in tables_to_create {
+        let Some(obj) = planned_project.find_object(table_id) else {
+            continue;
+        };
+        let Statement::CreateTableFromSource(ref stmt) = obj.typed_object.stmt else {
+            continue;
+        };
+        // Without a REFERENCE clause the table reads the source's single
+        // output, so there is no name to check.
+        let Some(reference) = &stmt.external_reference else {
+            continue;
+        };
+        if !reference_is_verifiable(reference) {
+            continue;
+        }
+        let source_id = ObjectId::from_raw_item_name(
+            &stmt.source,
+            table_id.expect_database(),
+            table_id.schema(),
+        );
+        requested
+            .entry(source_id)
+            .or_default()
+            .push((table_id.clone(), reference.clone()));
+    }
+    if requested.is_empty() {
+        return Ok(());
+    }
+
+    // A source the project creates in this same run does not exist yet: apply
+    // plans every phase before executing any of it. Nothing can be checked
+    // against a source that isn't there, and its references will be recorded
+    // when it is created.
+    let sources: BTreeSet<ObjectId> = requested.keys().cloned().collect();
+    let existing_sources =
+        query_existing_object_ids(client, &sources, CatalogLookup::Sources).await?;
+    requested.retain(|source, _| existing_sources.contains(source));
+    if requested.is_empty() {
+        return Ok(());
+    }
+
+    // The recorded references are a snapshot from when the source was created,
+    // while creating the table resolves its reference against the upstream
+    // system as it is now. Refresh first so a miss here is a real miss.
+    let mut unreadable: BTreeMap<ObjectId, String> = BTreeMap::new();
+    for source in requested.keys() {
+        let sql = format!(
+            "ALTER SOURCE {} REFRESH REFERENCES",
+            source.to_unresolved_item_name()
+        );
+        verbose!("{}", sql);
+        if let Err(e) = client.execute(&sql, &[]).await {
+            // The role may not own the source, or the source may not support
+            // the statement. Fall back to the recorded references and say so
+            // if a table then fails to match.
+            unreadable.insert(source.clone(), e.to_string());
+        }
+    }
+
+    let available = query_source_references(client, &existing_sources).await?;
+
+    let mut mismatches = Vec::new();
+    for (source, tables) in requested {
+        let Some(recorded) = available.get(&source) else {
+            // A source with no recorded references tells us nothing: an empty
+            // record is not the same as an empty upstream system, and failing
+            // here would reject tables that apply fine.
+            continue;
+        };
+        let missing: Vec<MissingSourceReference> = tables
+            .into_iter()
+            .filter(|(_, reference)| !reference_is_available(reference, &recorded.references))
+            .map(|(table, reference)| MissingSourceReference {
+                table,
+                suggestions: suggest_references(&reference, &recorded.references),
+                reference: reference.to_string(),
+            })
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        mismatches.push(SourceReferenceMismatch {
+            unreadable: unreadable.get(&source).cloned(),
+            source_id: recorded.id.clone(),
+            available_count: recorded.references.len(),
+            source,
+            tables: missing,
+        });
+    }
+
+    if !mismatches.is_empty() {
+        return Err(DatabaseValidationError::MissingSourceReferences(mismatches));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn reference(parts: &[&str]) -> UnresolvedItemName {
+        UnresolvedItemName(parts.iter().map(|p| Ident::new_unchecked(*p)).collect())
+    }
+
+    fn available(namespace: Option<&str>, name: &str) -> SourceReference {
+        SourceReference {
+            namespace: namespace.map(str::to_string),
+            name: name.to_string(),
+        }
+    }
+
+    #[mz_ore::test]
+    fn test_reference_is_available() {
+        let refs = vec![
+            available(Some("public"), "users"),
+            available(Some("sales"), "orders"),
+        ];
+
+        assert!(reference_is_available(
+            &reference(&["public", "users"]),
+            &refs
+        ));
+        // A bare name resolves in whichever namespace holds it.
+        assert!(reference_is_available(&reference(&["orders"]), &refs));
+        // A leading database qualifier has nothing to match against.
+        assert!(reference_is_available(
+            &reference(&["upstream", "sales", "orders"]),
+            &refs
+        ));
+
+        assert!(!reference_is_available(
+            &reference(&["sales", "users"]),
+            &refs
+        ));
+        assert!(!reference_is_available(&reference(&["widgets"]), &refs));
+        assert!(!reference_is_available(
+            &reference(&["public", "users"]),
+            &[]
+        ));
+    }
+
+    #[mz_ore::test]
+    fn test_reference_is_verifiable() {
+        assert!(reference_is_verifiable(&reference(&["public", "users"])));
+        assert!(reference_is_verifiable(&reference(&["users"])));
+
+        // MySQL system schemas are never recorded, so nothing here can be
+        // judged against the recorded set.
+        assert!(!reference_is_verifiable(&reference(&["mysql", "users"])));
+        assert!(!reference_is_verifiable(&reference(&["sys", "users"])));
+        assert!(!reference_is_verifiable(&reference(&[
+            "performance_schema",
+            "users"
+        ])));
+        assert!(!reference_is_verifiable(&reference(&[
+            "information_schema",
+            "tables"
+        ])));
+        // The namespace is the part before the object name, whatever precedes it.
+        assert!(!reference_is_verifiable(&reference(&[
+            "upstream", "mysql", "users"
+        ])));
+    }
+
+    #[mz_ore::test]
+    fn test_suggest_references_catches_a_typo() {
+        let refs = vec![
+            available(Some("public"), "widgets"),
+            available(Some("public"), "orders"),
+        ];
+
+        assert_eq!(
+            suggest_references(&reference(&["public", "widgest"]), &refs),
+            vec!["public.widgets".to_string()]
+        );
+        // A bare reference is answered with the namespace the object lives in.
+        assert_eq!(
+            suggest_references(&reference(&["widgest"]), &refs),
+            vec!["public.widgets".to_string()]
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_suggest_references_leads_with_the_right_name_in_another_namespace() {
+        let refs = vec![
+            available(Some("public"), "widgets"),
+            available(Some("staging"), "widgets"),
+            available(Some("sales"), "widgetry"),
+        ];
+
+        // Edit distance alone would rank sales.widgetry, in the very namespace
+        // asked for and two characters off, ahead of the two exact name matches.
+        assert_eq!(
+            suggest_references(&reference(&["sales", "widgets"]), &refs),
+            vec![
+                "public.widgets".to_string(),
+                "staging.widgets".to_string(),
+                "sales.widgetry".to_string()
+            ]
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_suggest_references_ignores_the_namespace_when_scoring() {
+        // Scoring whole references would put public.orders within 4 edits of
+        // public.widgets, inside the budget a name that long earns, purely
+        // because they share a namespace.
+        let refs = vec![
+            available(Some("public"), "orders"),
+            available(Some("public"), "users"),
+            available(Some("public"), "products"),
+        ];
+
+        assert!(suggest_references(&reference(&["public", "widgets"]), &refs).is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_suggest_references_stays_quiet_when_nothing_is_close() {
+        let refs = vec![
+            available(Some("public"), "users"),
+            available(Some("public"), "orders"),
+        ];
+
+        assert!(
+            suggest_references(&reference(&["public", "shipping_manifests"]), &refs).is_empty()
+        );
+        assert!(suggest_references(&reference(&["public", "users"]), &[]).is_empty());
+    }
+
+    #[mz_ore::test]
+    fn test_suggest_references_is_capped() {
+        let refs: Vec<SourceReference> = (0..10)
+            .map(|i| available(Some(&format!("s{i}")), "widgets"))
+            .collect();
+
+        assert_eq!(
+            suggest_references(&reference(&["public", "widgets"]), &refs).len(),
+            MAX_DID_YOU_MEAN
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_suggest_references_offers_every_namespace_holding_the_name() {
+        // Which namespace holds the object is the part the project got wrong,
+        // so a misspelling that resolves to one name in two schemas offers both.
+        let refs = vec![
+            available(Some("public"), "widgets"),
+            available(Some("staging"), "widgets"),
+        ];
+
+        assert_eq!(
+            suggest_references(&reference(&["widgest"]), &refs),
+            vec!["public.widgets".to_string(), "staging.widgets".to_string()]
+        );
+    }
+
+    #[mz_ore::test]
+    fn test_reference_is_available_without_namespace() {
+        // Kafka topics and other unnamespaced references record a null namespace.
+        let refs = vec![available(None, "events")];
+
+        assert!(reference_is_available(&reference(&["events"]), &refs));
+        assert!(!reference_is_available(
+            &reference(&["public", "events"]),
+            &refs
+        ));
+    }
 }
