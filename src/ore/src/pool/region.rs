@@ -229,12 +229,9 @@ impl Region {
 
     /// Allocates a slot index, or `None` if every slot of the class is in
     /// use; the flag reports whether the slot came from the warm list (its
-    /// pages are resident; writing it faults nothing).
-    ///
-    /// Slots are scoped to residency (eviction frees them), so demand scales
-    /// with the *resident* set — bounded by the pool budget plus in-flight
-    /// slack — and exhaustion means residency outgrew the class reservation;
-    /// callers degrade rather than fail.
+    /// pages are resident; writing it faults nothing). Exhaustion means
+    /// residency outgrew the class reservation; callers degrade rather
+    /// than fail.
     pub(crate) fn alloc(&self) -> Option<(u32, bool)> {
         self.slots
             .lock()
