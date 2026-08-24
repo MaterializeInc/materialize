@@ -271,6 +271,12 @@ impl Coordinator {
         // `snapshot_latest` requires that the collection consolidates to a
         // set. `mz_cluster_replica_frontiers` is a controller-managed builtin
         // written with ±1 diffs, so it satisfies that invariant.
+        //
+        // NOTE: these are the leader's frontiers only because we read the leader's shard.
+        // `validate_migration_steps` forbids migrating `mz_cluster_replica_frontiers` for this
+        // reason, so a declared migration can't reach here. A test forcing replacement across all
+        // builtins bypasses that guard, hands us a shard we write ourselves, and the lag check
+        // below then compares this deployment against itself.
         let live_frontiers = self
             .controller
             .storage_collections
@@ -614,10 +620,57 @@ impl Coordinator {
             let live_write_frontier = match live_frontiers.get(&id) {
                 Some(frontier) => frontier,
                 None => {
-                    // The collection didn't previously exist, so consider
-                    // ourselves hydrated as long as our write_ts is > 0.
-                    tracing::info!(?write_frontier, "collection {id} not in live frontiers");
-                    if write_frontier.less_equal(&Timestamp::minimum()) {
+                    // No live frontier to compare against, either because the collection didn't
+                    // exist on the leader or because the leader hosts it as something
+                    // `mz_cluster_replica_frontiers` doesn't track. A table→MV conversion is the
+                    // latter: it keeps the table's `GlobalId`, still a table on the leader, so the
+                    // new MV lands here instead of the strong path below.
+                    //
+                    // Require hydration, not just a write frontier past the minimum. A fresh MV's
+                    // sink reaches frontier 1 after one batch, which would otherwise look caught
+                    // up mid-hydration and bring back the cut-over spike this gate prevents.
+                    let collection_hydrated = match collection_type {
+                        CollectionType::Compute => {
+                            self.controller
+                                .compute
+                                .collection_hydrated(cluster.id, id)
+                                .await?
+                        }
+                        CollectionType::Storage => {
+                            self.controller.storage.collection_hydrated(id)?
+                        }
+                    };
+
+                    // Also require the frontier to be within the allowed lag, the bound the
+                    // live-frontier path applies, with `now` standing in for the missing live
+                    // frontier. Hydration is one-shot: a collection that hydrated and then stalled
+                    // would otherwise satisfy this branch forever.
+                    //
+                    // NOTE: there is deliberately no `cutoff` escape hatch here. A frontier frozen
+                    // at the minimum is exactly what this gate must catch, so a collection stuck
+                    // here blocks promotion until `with_0dt_deployment_max_wait` elapses.
+                    let write_frontier_plus_allowed_lag = Antichain::from_iter(
+                        write_frontier
+                            .iter()
+                            .map(|t| t.step_forward_by(&allowed_lag)),
+                    );
+                    let within_lag = PartialOrder::less_equal(
+                        &Antichain::from_elem(now),
+                        &write_frontier_plus_allowed_lag,
+                    );
+
+                    tracing::info!(
+                        ?write_frontier,
+                        %collection_hydrated,
+                        %within_lag,
+                        ?allowed_lag,
+                        ?now,
+                        "collection {id} not in live frontiers"
+                    );
+                    if write_frontier.less_equal(&Timestamp::minimum())
+                        || !collection_hydrated
+                        || !within_lag
+                    {
                         all_caught_up = false;
                     }
                     continue;

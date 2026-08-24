@@ -648,6 +648,7 @@ impl Catalog {
 
         let OpenCatalogResult {
             catalog,
+            last_seen_version: _,
             migrated_storage_collections_0dt: _,
             new_builtin_collections: _,
             builtin_table_updates: _,
