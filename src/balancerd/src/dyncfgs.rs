@@ -46,6 +46,15 @@ pub const INJECT_PROXY_PROTOCOL_HEADER_HTTP: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Maximum number of client connections to proxy at once.
+pub const MAX_CONNECTIONS: Config<u32> = Config::new(
+    "balancerd_max_connections",
+    5000,
+    "Maximum number of client connections to proxy at once, across the pgwire and HTTPS \
+    listeners. Connections beyond this are rejected. Zero disables the limit.",
+    ParameterScope::Environment,
+);
+
 /// Sets the filter to apply to stderr logging.
 pub const LOGGING_FILTER: Config<&str> = Config::new(
     "balancerd_log_filter",
@@ -106,6 +115,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SIGTERM_CONNECTION_WAIT)
         .add(&SIGTERM_LISTEN_WAIT)
         .add(&INJECT_PROXY_PROTOCOL_HEADER_HTTP)
+        .add(&MAX_CONNECTIONS)
         .add(&LOGGING_FILTER)
         .add(&OPENTELEMETRY_FILTER)
         .add(&LOGGING_FILTER_DEFAULTS)
@@ -131,6 +141,11 @@ pub(crate) fn set_defaults(
             config_updates.add_dynamic(
                 INJECT_PROXY_PROTOCOL_HEADER_HTTP.name(),
                 mz_dyncfg::ConfigVal::Bool(bool::from_str(v)?),
+            )
+        } else if k.as_str() == MAX_CONNECTIONS.name() {
+            config_updates.add_dynamic(
+                MAX_CONNECTIONS.name(),
+                mz_dyncfg::ConfigVal::U32(u32::from_str(v)?),
             )
         } else {
             return Err(anyhow!("Invalid default config value {k}"));

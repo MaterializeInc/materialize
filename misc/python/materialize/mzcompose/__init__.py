@@ -689,6 +689,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "balancerd_sigterm_connection_wait",
     "balancerd_sigterm_listen_wait",
     "balancerd_inject_proxy_protocol_header_http",
+    "balancerd_max_connections",
     "balancerd_log_filter",
     "balancerd_opentelemetry_filter",
     "balancerd_log_filter_defaults",
