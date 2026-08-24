@@ -735,10 +735,6 @@ impl DemuxState {
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
             Datum::from(time_ns),
-            epoch_offset_datum(timestamps.installed_at),
-            timestamps
-                .started_at
-                .map_or(Datum::Null, epoch_offset_datum),
             timestamps
                 .hydrated_at
                 .map_or(Datum::Null, epoch_offset_datum),
@@ -860,6 +856,10 @@ impl DemuxState {
 }
 
 /// Wallclock instants of an export's hydration lifecycle, as durations since the Unix epoch.
+///
+/// Only `hydrated_at` reaches `mz_compute_hydration_times_per_worker`. `installed_at` and
+/// `started_at` are kept to order and back-fill the lifecycle log's `installed` and `started`
+/// events, which are where a consumer reads them.
 ///
 /// These are sampled from compute logging event times, which advance off an `Instant` anchored to
 /// the epoch once per worker when logging is initialized. They are therefore monotone within a
@@ -1184,8 +1184,7 @@ impl DemuxHandler<'_, '_, '_> {
         &mut self,
         HydrationStartReference { export_id }: Ref<'_, HydrationStart>,
     ) {
-        let ts = self.ts();
-        // Stamp the event time rather than `ts`, as in `handle_export`.
+        // Stamp the event time rather than the rounded update timestamp, as in `handle_export`.
         let started_at = self.time;
         let export_id = Columnar::into_owned(export_id);
 
@@ -1200,22 +1199,12 @@ impl DemuxHandler<'_, '_, '_> {
             return;
         }
 
-        let old_timestamps = export.hydration_timestamps;
         export.hydration_timestamps.started_at = Some(started_at);
-        let new_timestamps = export.hydration_timestamps;
-        let time_ns = export.hydration_time_ns;
 
-        let retraction = self
-            .state
-            .pack_hydration_time_update(export_id, time_ns, &old_timestamps);
-        self.output
-            .hydration_time
-            .give((retraction, ts, Diff::MINUS_ONE));
-        let insertion = self
-            .state
-            .pack_hydration_time_update(export_id, time_ns, &new_timestamps);
-        self.output.hydration_time.give((insertion, ts, Diff::ONE));
-
+        // No `hydration_time` output here. That relation carries only `time_ns` and
+        // `hydrated_at`, neither of which this event changes, so the retract-and-reinsert pair
+        // would be a no-op. `started_at` is now kept only to guard this handler and to
+        // back-fill `started` in `handle_hydration`.
         self.log_lifecycle(export_id, LifecycleStage::Started);
     }
 

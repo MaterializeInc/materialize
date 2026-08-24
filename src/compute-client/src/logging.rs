@@ -353,18 +353,24 @@ impl LogVariant {
                 .with_key(vec![0, 1])
                 .finish(),
 
+            // NOTE: `hydrated_at` here is the *durability* reading, taken when the reported
+            // output frontier passes the as-of. That frontier is the meet of the write and
+            // compute frontiers, so for a collection that sinks to persist it moves only once
+            // the output is durable, while for an index, which produces its output by writing
+            // its own trace, it coincides with computation. One column therefore meant two
+            // things depending on the object.
+            //
+            // `mz_compute_lifecycle_events_per_worker` splits that ambiguity into separate
+            // terms: its `hydrated` is the dataflow-progress reading and its `written` is the
+            // durability one, so neither depends on the object type. This relation keeps the
+            // combined reading, because `mz_compute_hydration_statuses` and the blue-green
+            // readiness query are defined on it. The instants that were unambiguous,
+            // `installed_at` and `started_at`, moved to the lifecycle relation rather than
+            // being maintained in both.
             LogVariant::Compute(ComputeLog::HydrationTime) => RelationDesc::builder()
                 .with_column("export_id", SqlScalarType::String.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("time_ns", SqlScalarType::UInt64.nullable(true))
-                .with_column(
-                    "installed_at",
-                    SqlScalarType::TimestampTz { precision: None }.nullable(false),
-                )
-                .with_column(
-                    "started_at",
-                    SqlScalarType::TimestampTz { precision: None }.nullable(true),
-                )
                 .with_column(
                     "hydrated_at",
                     SqlScalarType::TimestampTz { precision: None }.nullable(true),

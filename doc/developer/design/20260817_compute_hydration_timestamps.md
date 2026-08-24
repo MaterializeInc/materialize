@@ -236,6 +236,28 @@ event, occurred_at` recovers the dataflow-level facts, and the redundancy is vis
 rather than implied. The column also means the relation carries the export-to-dataflow
 mapping that `mz_compute_exports_per_worker` holds, for eight bytes a row.
 
+**One reading per term.** `mz_compute_hydration_times_per_worker.hydrated_at` is the
+durability reading, taken when the reported output frontier passes the as-of. That
+frontier is the meet of the write and compute frontiers, so for a collection that
+sinks to persist it moves only once the output is durable, while for an index, which
+produces its output by writing its own trace, it coincides with computation. One
+column therefore meant two different things depending on the object type, and a
+consumer could not tell which without knowing what it was looking at.
+
+The lifecycle log splits that ambiguity into separate terms rather than redefining the
+column: `hydrated` is always the dataflow-progress reading and `written` is always the
+durability one, neither depending on the object type. `hydrated_at` and `time_ns` stay
+where they are, because `mz_compute_hydration_statuses` and the blue-green readiness
+query are defined on them, and moving readiness onto the earlier compute reading would
+have it cut over before the output is durable.
+
+What does move is `installed_at` and `started_at`. Those were unambiguous, so keeping
+them in both relations meant two mechanisms maintaining the same instants and the same
+`installed_at <= started_at` invariant. They are now the lifecycle log's `installed`
+and `started` events alone. The two relations join on `(export_id, worker_id)`, both
+being per worker, so a consumer that wants the queueing interval and the duration
+together reads them from one join rather than from one row.
+
 **`installed` is the denominator.** A consumer asking whether every worker has reached
 a stage cannot count rows and compare against a worker count it does not have, and it
 should not have to join the catalog to find one. The relation is append-only, so a
