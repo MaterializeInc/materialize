@@ -32,6 +32,10 @@ select x from (select x, 1/a from (select 2 as x), t);
 #
 # This query also exercises `UnionBranchCancellation` running again after the final `RelationCSE`: it folds a
 # `union(get l0, negate(get l0), constant)` left behind by the earlier passes into the fast path below.
+#
+# NOTE: That cancellation collapses the whole query to a constant fast path, so this query no longer exercises the
+# `dummy` scenario described in the first paragraph. It is kept for the `UnionBranchCancellation` coverage, and the
+# original `dummy` coverage would need a different query.
 query T multiline
 EXPLAIN OPTIMIZED PLAN WITH(humanized expressions, arity, join implementations) AS VERBOSE TEXT FOR
 select
