@@ -62,7 +62,7 @@ mz_compute_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_fro
 mz_compute_hydration_times_ind  CREATE␠INDEX␠"mz_compute_hydration_times_ind"␠IN␠CLUSTER␠[s2]␠ON␠[s754␠AS␠"mz_internal"."mz_compute_hydration_times"]␠("replica_id")
 mz_compute_hydration_times_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_hydration_times_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_hydration_times_per_worker"␠("export_id",␠"worker_id")
 mz_compute_import_frontiers_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_import_frontiers_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_import_frontiers_per_worker"␠("export_id",␠"import_id",␠"worker_id")
-mz_compute_lifecycle_events_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_lifecycle_events_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_lifecycle_events_per_worker"␠("export_id",␠"worker_id",␠"event",␠"occurred_at",␠"reason",␠"details")
+mz_compute_lifecycle_events_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_lifecycle_events_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_lifecycle_events_per_worker"␠("export_id",␠"worker_id",␠"dataflow_id",␠"event",␠"occurred_at",␠"reason",␠"details")
 mz_compute_lir_mapping_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_lir_mapping_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_lir_mapping_per_worker"␠("global_id",␠"lir_id",␠"worker_id")
 mz_compute_operator_durations_histogram_raw_s2_primary_idx  CREATE␠INDEX␠"mz_compute_operator_durations_histogram_raw_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_operator_durations_histogram_raw"␠("id",␠"worker_id",␠"duration_ns")
 mz_compute_operator_hydration_statuses_per_worker_s2_primary_idx  CREATE␠INDEX␠"mz_compute_operator_hydration_statuses_per_worker_s2_primary_idx"␠IN␠CLUSTER␠[s2]␠ON␠"mz_introspection"."mz_compute_operator_hydration_statuses_per_worker"␠("export_id",␠"lir_id",␠"worker_id")
@@ -366,6 +366,7 @@ mz_compute_import_frontiers_per_worker  export_id
 mz_compute_import_frontiers_per_worker  import_id
 mz_compute_import_frontiers_per_worker  time
 mz_compute_import_frontiers_per_worker  worker_id
+mz_compute_lifecycle_events_per_worker  dataflow_id
 mz_compute_lifecycle_events_per_worker  details
 mz_compute_lifecycle_events_per_worker  event
 mz_compute_lifecycle_events_per_worker  export_id

@@ -375,6 +375,7 @@ impl LogVariant {
             LogVariant::Compute(ComputeLog::LifecycleEvent) => RelationDesc::builder()
                 .with_column("export_id", SqlScalarType::String.nullable(false))
                 .with_column("worker_id", SqlScalarType::UInt64.nullable(false))
+                .with_column("dataflow_id", SqlScalarType::UInt64.nullable(false))
                 .with_column("event", SqlScalarType::String.nullable(false))
                 .with_column(
                     "occurred_at",
