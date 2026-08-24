@@ -2679,15 +2679,10 @@ class BoundedStalenessReadAction(Action):
     restored afterwards, since bounded staleness is read-only and would break
     writes."""
 
-    def applicable(self, exe: Executor) -> bool:
-        return exe.db.flags.get("enable_bounded_staleness_isolation", "FALSE") == "TRUE"
-
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
             [
-                # The flag was flipped off between applicable() and run().
-                "is not available",
                 # The freshness bound could not be met. Bounded staleness
                 # never blocks, it errors instead.
                 "not been materialized",
@@ -2988,9 +2983,6 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["enable_bounded_staleness_isolation"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
             BOOLEAN_FLAG_VALUES
         )

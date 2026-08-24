@@ -1084,9 +1084,9 @@ impl Coordinator {
 
         // If the resolved `transaction_isolation` default names a feature-flagged
         // isolation level whose flag is now disabled (e.g. a role default set
-        // while `bounded staleness` was enabled, then the flag turned off), drop
-        // it so the session falls back to the built-in default rather than
-        // silently using a gated level.
+        // while `strong session serializable` was enabled, then the flag turned
+        // off), drop it so the session falls back to the built-in default rather
+        // than silently using a gated level.
         if let Some(value) = session_defaults.get(TRANSACTION_ISOLATION_VAR_NAME) {
             if check_transaction_isolation_feature_flag(
                 TRANSACTION_ISOLATION_VAR_NAME,
