@@ -22,7 +22,7 @@ use differential_dataflow::difference::Monoid;
 use differential_dataflow::lattice::Lattice;
 use futures::Stream;
 use futures_util::{StreamExt, stream};
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastLossy;
 use mz_ore::halt;
 use mz_ore::instrument;
@@ -617,6 +617,7 @@ pub(crate) const READER_LEASE_DURATION: Config<Duration> = Config::new(
     "persist_reader_lease_duration",
     Duration::from_secs(60 * 15),
     "The time after which we'll clean up stale read leases",
+    ParameterScope::Environment,
 );
 
 impl<K, V, T, D> ReadHandle<K, V, T, D>

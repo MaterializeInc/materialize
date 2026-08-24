@@ -697,9 +697,11 @@ impl Coordinator {
         // Apply replica-scoped overrides after clusters are created (so their
         // compute instances exist) but before replicas are created below. The
         // override layer must be set before `create_replica`, so the new
-        // replica's first configuration replays with its override. The push
-        // reads the catalog working copy, which already reflects this
-        // transaction's scoped-config changes.
+        // replica's first configuration replays with its override, and so the
+        // configuration the controller freezes into the replica's process at
+        // provisioning time resolves against it. The push reads the catalog
+        // working copy, which already reflects this transaction's scoped-config
+        // changes.
         if replica_scoped_config_changed {
             self.push_replica_dyncfg_overrides();
         }

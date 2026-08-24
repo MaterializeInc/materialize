@@ -31,7 +31,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use futures::Stream;
 use futures_util::StreamExt;
 use itertools::Itertools;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::cast::CastFrom;
 use mz_ore::now::EpochMillis;
 use mz_ore::soft_panic_or_log;
@@ -92,6 +92,7 @@ pub(crate) const ROLLUP_THRESHOLD: Config<usize> = Config::new(
     "persist_rollup_threshold",
     128,
     "The number of seqnos between rollups.",
+    ParameterScope::Environment,
 );
 
 /// Determines how long to wait before an active rollup is considered
@@ -100,6 +101,7 @@ pub(crate) const ROLLUP_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "persist_rollup_fallback_threshold_ms",
     5000,
     "The number of milliseconds before a worker claims an already claimed rollup.",
+    ParameterScope::Environment,
 );
 
 /// Feature flag the new active rollup tracking mechanism.
@@ -108,6 +110,7 @@ pub(crate) const ROLLUP_USE_ACTIVE_ROLLUP: Config<bool> = Config::new(
     "persist_rollup_use_active_rollup",
     true,
     "Whether to use the new active rollup tracking mechanism.",
+    ParameterScope::Environment,
 );
 
 /// Determines how long to wait before an active GC is considered
@@ -116,6 +119,7 @@ pub(crate) const GC_FALLBACK_THRESHOLD_MS: Config<usize> = Config::new(
     "persist_gc_fallback_threshold_ms",
     900000,
     "The number of milliseconds before a worker claims an already claimed GC.",
+    ParameterScope::Environment,
 );
 
 /// See the config description string.
@@ -123,6 +127,7 @@ pub(crate) const GC_MIN_VERSIONS: Config<usize> = Config::new(
     "persist_gc_min_versions",
     32,
     "The number of un-GCd versions that may exist in state before we'll trigger a GC.",
+    ParameterScope::Environment,
 );
 
 /// See the config description string.
@@ -130,6 +135,7 @@ pub(crate) const GC_MAX_VERSIONS: Config<usize> = Config::new(
     "persist_gc_max_versions",
     128_000,
     "The maximum number of versions to GC in a single GC run.",
+    ParameterScope::Environment,
 );
 
 /// Feature flag the new active GC tracking mechanism.
@@ -138,12 +144,14 @@ pub(crate) const GC_USE_ACTIVE_GC: Config<bool> = Config::new(
     "persist_gc_use_active_gc",
     false,
     "Whether to use the new active GC tracking mechanism.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const ENABLE_INCREMENTAL_COMPACTION: Config<bool> = Config::new(
     "persist_enable_incremental_compaction",
     false,
     "Whether to enable incremental compaction.",
+    ParameterScope::Environment,
 );
 
 /// A token to disambiguate state commands that could not otherwise be
