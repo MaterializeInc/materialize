@@ -45,6 +45,7 @@ use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::catalog::Catalog;
+use crate::command::ExecuteResponse;
 use crate::coord::{Coordinator, Message};
 use crate::peek_client::CoordinatorClient;
 use crate::session::Session;
@@ -76,8 +77,8 @@ const MUTATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// Retention has to be bounded: the OCC path refuses a selection larger than
 /// `max_result_size` before submitting any write, so an unbounded delete over a
 /// large backlog would fail identically on every sweep and never shrink the
-/// table. Deleting a bounded batch converges instead, across as many sweeps as
-/// it takes.
+/// table. Retention repeats bounded batches until it drains the fixed-cutoff
+/// backlog.
 const RETENTION_BATCH_SIZE: usize = 1000;
 
 /// Milliseconds until the next fire on this environment's own grid.
@@ -405,27 +406,43 @@ impl Sweep {
     /// Appends this replica's completed episodes that the table is missing.
     async fn collect(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         let sql = collect_sql(cluster_id, replica_id, &self.cutoff);
-        self.run(
-            "collect",
-            cluster_id,
-            replica_id,
-            MutationKind::Insert,
-            &sql,
-        )
-        .await
+        let _ = self
+            .run(
+                "collect",
+                cluster_id,
+                replica_id,
+                MutationKind::Insert,
+                &sql,
+            )
+            .await;
     }
 
-    /// Retracts a bounded batch of aged-out rows.
+    /// Retracts aged-out rows in bounded batches.
     async fn retain(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         let sql = retention_sql(&self.cutoff);
-        self.run(
-            "retention",
-            cluster_id,
-            replica_id,
-            MutationKind::Delete,
-            &sql,
-        )
-        .await
+        loop {
+            let Some(response) = self
+                .run(
+                    "retention",
+                    cluster_id,
+                    replica_id,
+                    MutationKind::Delete,
+                    &sql,
+                )
+                .await
+            else {
+                break;
+            };
+            let ExecuteResponse::Deleted(deleted) = response else {
+                mz_ore::soft_panic_or_log!(
+                    "hydration history retention returned a non-delete response"
+                );
+                break;
+            };
+            if deleted < RETENTION_BATCH_SIZE {
+                break;
+            }
+        }
     }
 
     /// Runs one mutation, logging rather than propagating failure.
@@ -442,12 +459,13 @@ impl Sweep {
         replica_id: ReplicaId,
         kind: MutationKind,
         sql: &str,
-    ) {
+    ) -> Option<ExecuteResponse> {
         let mutation = async {
             let plan = plan_mutation(&self.catalog, self.history_id, kind, sql)?;
             let mut session = Session::dummy();
             session.start_transaction_single_stmt(self.wall_time);
-            self.client
+            let response = self
+                .client
                 .background_read_then_write(
                     &mut session,
                     plan,
@@ -456,27 +474,31 @@ impl Sweep {
                     &self.catalog,
                 )
                 .await?;
-            Ok::<_, AdapterError>(())
+            Ok::<_, AdapterError>(response)
         };
         match tokio::time::timeout(MUTATION_TIMEOUT, mutation).await {
-            Ok(Ok(())) => {}
+            Ok(Ok(response)) => Some(response),
             Ok(Err(error)) => {
-                warn!(%step, %cluster_id, %replica_id, %error, "hydration history step failed")
+                warn!(%step, %cluster_id, %replica_id, %error, "hydration history step failed");
+                None
             }
             // The oracle names the timestamp to write at and the subscribe's
             // frontier has to reach it. The log half of that frontier advances on
             // the replica's clock, so a replica whose clock trails `environmentd`
             // by more than its introspection interval keeps sitting below the
             // target and waits here until this fires, every sweep.
-            Err(_) if step == "collect" => warn!(
-                %step, %cluster_id, %replica_id,
-                "hydration history step timed out, \
-                 the replica's introspection frontier may be trailing the write frontier"
-            ),
-            Err(_) => warn!(
-                %step, %cluster_id, %replica_id,
-                "hydration history step timed out"
-            ),
+            Err(_) if step == "collect" => {
+                warn!(
+                    %step, %cluster_id, %replica_id,
+                    "hydration history step timed out, \
+                     the replica's introspection frontier may be trailing the write frontier"
+                );
+                None
+            }
+            Err(_) => {
+                warn!(%step, %cluster_id, %replica_id, "hydration history step timed out");
+                None
+            }
         }
     }
 }
