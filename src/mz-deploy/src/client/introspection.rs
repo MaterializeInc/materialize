@@ -26,6 +26,7 @@ use crate::project::SchemaQualifier;
 use crate::project::ir::object_id::ObjectId;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet};
+use tokio_postgres::Row;
 use tokio_postgres::types::ToSql;
 
 /// A sink that depends on an object in a schema being dropped.
@@ -41,6 +42,107 @@ pub struct DependentSink {
     pub dependency_schema: String,
     pub dependency_name: String,
     pub dependency_type: String,
+}
+
+/// A `target` CTE holding the `(database, schema, object)` name triples a bulk
+/// catalog read is restricted to.
+///
+/// The triples arrive as three parallel arrays bound to `$1`, `$2`, and `$3` by
+/// [`array_literal`], and are zipped back into rows server-side. The statement
+/// text is therefore identical however many objects a project manages, and a
+/// query that needs parameters of its own numbers them from `$4` on.
+///
+/// The three name components are matched separately rather than against a
+/// concatenated fully-qualified name. A concatenation would have to agree with
+/// the catalog on when an identifier needs quoting, and a name containing a `.`
+/// would make it ambiguous.
+const TARGET_OBJECTS_CTE: &str = "\
+    target AS (
+        SELECT
+            ($1::text::text[])[i] AS database,
+            ($2::text::text[])[i] AS schema,
+            ($3::text::text[])[i] AS object
+        FROM generate_series(1, array_length($1::text::text[], 1)) AS g(i)
+    )";
+
+/// A `target` CTE holding the names a bulk read over a named-object catalog
+/// table is restricted to.
+///
+/// Names arrive as one array bound to `$1` by [`array_literal`], so a query that
+/// needs parameters of its own numbers them from `$2` on.
+const TARGET_NAMES_CTE: &str = "\
+    target AS (SELECT name FROM unnest($1::text::text[]) AS u(name))";
+
+/// Encode names as a PostgreSQL array literal, to bind as the single `text`
+/// parameter that a bulk read's `$n::text::text[]` casts to an array.
+///
+/// Materialize's pgwire cannot decode an array-typed bind parameter, so an array
+/// has to travel as text and be cast server-side. Every element is double-quoted
+/// with its `"` and `\` escaped, which makes the encoding total: a name holding
+/// a comma, a brace, a quote, or nothing at all survives it unchanged.
+fn array_literal<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+    let mut literal = String::from("{");
+    for (i, value) in values.into_iter().enumerate() {
+        if i > 0 {
+            literal.push(',');
+        }
+        literal.push('"');
+        for ch in value.chars() {
+            if matches!(ch, '"' | '\\') {
+                literal.push('\\');
+            }
+            literal.push(ch);
+        }
+        literal.push('"');
+    }
+    literal.push('}');
+    literal
+}
+
+/// The three parallel name arrays [`TARGET_OBJECTS_CTE`] zips back together,
+/// each encoded by [`array_literal`].
+fn target_object_arrays(objects: &BTreeSet<ObjectId>) -> [String; 3] {
+    [
+        array_literal(objects.iter().map(ObjectId::expect_database)),
+        array_literal(objects.iter().map(ObjectId::schema)),
+        array_literal(objects.iter().map(ObjectId::object)),
+    ]
+}
+
+/// Group rows carrying the `database`, `schema`, and `object` columns of
+/// [`TARGET_OBJECTS_CTE`] by the object they describe.
+///
+/// An object the catalog holds no rows for is absent from the map rather than
+/// present with an empty vector, so callers must treat a miss as "nothing
+/// recorded".
+fn group_by_object<T>(
+    rows: &[Row],
+    mut value: impl FnMut(&Row) -> T,
+) -> BTreeMap<ObjectId, Vec<T>> {
+    let mut grouped: BTreeMap<ObjectId, Vec<T>> = BTreeMap::new();
+    for row in rows {
+        let id = ObjectId::new(row.get("database"), row.get("schema"), row.get("object"));
+        grouped.entry(id).or_default().push(value(row));
+    }
+    grouped
+}
+
+/// Group rows carrying the `name` column of [`TARGET_NAMES_CTE`] by the object
+/// they describe. Absent means "nothing recorded", as in [`group_by_object`].
+fn group_by_name<T>(rows: &[Row], mut value: impl FnMut(&Row) -> T) -> BTreeMap<String, Vec<T>> {
+    let mut grouped: BTreeMap<String, Vec<T>> = BTreeMap::new();
+    for row in rows {
+        grouped.entry(row.get("name")).or_default().push(value(row));
+    }
+    grouped
+}
+
+/// Read an [`ObjectGrant`] out of a row of one of the privilege queries.
+fn object_grant(row: &Row) -> ObjectGrant {
+    ObjectGrant {
+        grantee: row.get("grantee"),
+        privilege_type: row.get("privilege_type"),
+    }
 }
 
 /// Check if a schema exists in the specified database.
@@ -59,19 +161,6 @@ pub(super) async fn schema_exists(
     "#;
 
     let row = client.query_one(query, &[&schema, &database]).await?;
-
-    Ok(row.get("exists"))
-}
-
-/// Check if a cluster exists.
-pub(super) async fn cluster_exists(client: &Client, name: &str) -> Result<bool, ConnectionError> {
-    let query = r#"
-        SELECT EXISTS(
-            SELECT 1 FROM mz_catalog.mz_clusters WHERE name = $1
-        ) AS exists
-    "#;
-
-    let row = client.query_one(query, &[&name]).await?;
 
     Ok(row.get("exists"))
 }
@@ -108,6 +197,47 @@ pub(super) async fn get_cluster(
     }))
 }
 
+/// Get the clusters named in `names`, keyed by cluster name.
+///
+/// A name with no cluster is absent from the map.
+pub(super) async fn get_clusters(
+    client: &Client,
+    names: &[&str],
+) -> Result<BTreeMap<String, Cluster>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let query = r#"
+        SELECT
+            c.id,
+            c.name,
+            c.managed,
+            c.size,
+            c.replication_factor::bigint AS replication_factor
+        FROM mz_catalog.mz_clusters c
+        WHERE c.name = ANY($1::text::text[])
+    "#;
+
+    let rows = client
+        .query(query, &[&array_literal(names.iter().copied())])
+        .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let cluster = Cluster {
+                id: row.get("id"),
+                name: row.get("name"),
+                managed: row.get("managed"),
+                size: row.get("size"),
+                replication_factor: row.get("replication_factor"),
+            };
+            (cluster.name.clone(), cluster)
+        })
+        .collect())
+}
+
 /// The canonical `CREATE CLUSTER` statement for a cluster, as the server renders
 /// it from the catalog. Returns `None` if the cluster does not exist.
 ///
@@ -119,6 +249,32 @@ pub(super) async fn get_cluster_create_sql(
     let query = format!("SHOW CREATE CLUSTER {}", quote_identifier(name));
     let rows = client.query(&query, &[]).await?;
     Ok(rows.first().map(|row| row.get("create_sql")))
+}
+
+/// The canonical `CREATE CLUSTER` statement for each of `names`, keyed by
+/// cluster name.
+///
+/// `SHOW CREATE CLUSTER` names one cluster at a time, and no catalog relation
+/// carries the statement it renders, so there is one statement per cluster no
+/// matter what. Issuing them together lets the connection pipeline them, so the
+/// whole set costs one round trip instead of one per cluster.
+///
+/// A name whose cluster does not exist is absent from the map. Errors on an
+/// unmanaged cluster, which has no `SHOW CREATE CLUSTER` form.
+pub(super) async fn get_cluster_create_sqls(
+    client: &Client,
+    names: &[&str],
+) -> Result<BTreeMap<String, String>, ConnectionError> {
+    let reads = names.iter().map(|name| async move {
+        let sql = get_cluster_create_sql(client, name).await?;
+        Ok::<_, ConnectionError>(sql.map(|sql| (name.to_string(), sql)))
+    });
+
+    Ok(futures::future::try_join_all(reads)
+        .await?
+        .into_iter()
+        .flatten()
+        .collect())
 }
 
 /// List all clusters.
@@ -234,20 +390,45 @@ pub(super) async fn get_cluster_config(
     }
 }
 
-/// Check if a network policy exists.
-pub(super) async fn network_policy_exists(
+/// Which of `names` name an existing object in `catalog_table`.
+///
+/// Used in place of a per-name `EXISTS` probe when a phase needs to know the
+/// answer for a whole set of names.
+async fn existing_names(
     client: &Client,
-    name: &str,
-) -> Result<bool, ConnectionError> {
-    let query = r#"
-        SELECT EXISTS(
-            SELECT 1 FROM mz_catalog.mz_network_policies WHERE name = $1
-        ) AS exists
-    "#;
+    catalog_table: &str,
+    names: &[&str],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeSet::new());
+    }
 
-    let row = client.query_one(query, &[&name]).await?;
+    let query = format!(
+        "SELECT o.name FROM {} o WHERE o.name = ANY($1::text::text[])",
+        catalog_table
+    );
 
-    Ok(row.get("exists"))
+    let rows = client
+        .query(&query, &[&array_literal(names.iter().copied())])
+        .await?;
+
+    Ok(rows.iter().map(|row| row.get("name")).collect())
+}
+
+/// Which of `names` name an existing role.
+pub(super) async fn existing_roles(
+    client: &Client,
+    names: &[&str],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    existing_names(client, "mz_catalog.mz_roles", names).await
+}
+
+/// Which of `names` name an existing network policy.
+pub(super) async fn existing_network_policies(
+    client: &Client,
+    names: &[&str],
+) -> Result<BTreeSet<String>, ConnectionError> {
+    existing_names(client, "mz_catalog.mz_network_policies", names).await
 }
 
 /// Check if a role exists.
@@ -263,41 +444,57 @@ pub(super) async fn role_exists(client: &Client, name: &str) -> Result<bool, Con
     Ok(row.get("exists"))
 }
 
-/// Get the members granted to a role.
-pub(super) async fn get_role_members(
+/// The members granted to each of `names`, keyed by role name.
+///
+/// A role with no members is absent from the map.
+pub(super) async fn get_role_members_bulk(
     client: &Client,
-    role_name: &str,
-) -> Result<Vec<String>, ConnectionError> {
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = r#"
-        SELECT m.name AS member
+        SELECT r.name, m.name AS member
         FROM mz_catalog.mz_role_members rm
         JOIN mz_catalog.mz_roles r ON r.id = rm.role_id
         JOIN mz_catalog.mz_roles m ON m.id = rm.member
-        WHERE r.name = $1
-        ORDER BY m.name
+        WHERE r.name = ANY($1::text::text[])
+        ORDER BY r.name, m.name
     "#;
 
-    let rows = client.query(query, &[&role_name]).await?;
+    let rows = client
+        .query(query, &[&array_literal(names.iter().copied())])
+        .await?;
 
-    Ok(rows.iter().map(|row| row.get("member")).collect())
+    Ok(group_by_name(&rows, |row| row.get("member")))
 }
 
-/// Get session default parameter names for a role.
-pub(super) async fn get_role_parameters(
+/// The session defaults set on each of `names`, keyed by role name.
+///
+/// A role with no session defaults is absent from the map.
+pub(super) async fn get_role_parameters_bulk(
     client: &Client,
-    role_name: &str,
-) -> Result<Vec<String>, ConnectionError> {
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = r#"
-        SELECT rp.parameter_name
+        SELECT r.name, rp.parameter_name
         FROM mz_catalog.mz_role_parameters rp
         JOIN mz_catalog.mz_roles r ON r.id = rp.role_id
-        WHERE r.name = $1
-        ORDER BY rp.parameter_name
+        WHERE r.name = ANY($1::text::text[])
+        ORDER BY r.name, rp.parameter_name
     "#;
 
-    let rows = client.query(query, &[&role_name]).await?;
+    let rows = client
+        .query(query, &[&array_literal(names.iter().copied())])
+        .await?;
 
-    Ok(rows.iter().map(|row| row.get("parameter_name")).collect())
+    Ok(group_by_name(&rows, |row| row.get("parameter_name")))
 }
 
 /// Get the current Materialize user/role.
@@ -878,26 +1075,38 @@ pub(super) async fn drop_staging_clusters(
     Ok(())
 }
 
-/// Get privilege grants on a named infrastructure object (cluster, network policy).
+/// Get privilege grants on each of a set of named infrastructure objects
+/// (clusters, network policies).
 ///
 /// `catalog_table` is the system catalog table (e.g., `"mz_clusters"`,
 /// `"mz_network_policies"`). Returns `(grantee, privilege_type)` pairs from
-/// `mz_aclexplode`, filtering out system roles.
+/// `mz_aclexplode`, filtering out system roles. A name the catalog records no
+/// grants for is absent from the map.
 async fn get_named_object_grants(
     client: &Client,
     catalog_table: &str,
-    name: &str,
-) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = format!(
         r#"
-        -- Explode the ACL bitmap into individual (grantee, privilege_type) rows.
-        -- Each object stores privileges as a compact bitmap; mz_aclexplode unpacks it.
-        WITH privilege AS (
-            SELECT mz_internal.mz_aclexplode(privileges).*, owner_id
-            FROM {}
-            WHERE name = $1
+        WITH {},
+        -- Explode each object's ACL bitmap into individual
+        -- (grantee, privilege_type) rows. Each object stores its privileges as a
+        -- compact bitmap; mz_aclexplode unpacks it.
+        privilege AS (
+            SELECT
+                target.name,
+                mz_internal.mz_aclexplode(o.privileges).*,
+                o.owner_id
+            FROM {} o
+            JOIN target ON target.name = o.name
         )
         SELECT
+            p.name,
             -- `p` is the PUBLIC pseudo-role. It has no `mz_roles` row, so it is
             -- resolved here rather than by the join, which would drop it.
             CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
@@ -913,61 +1122,85 @@ async fn get_named_object_grants(
           -- Owners implicitly have all privileges; don't surface those as explicit grants.
           AND p.grantee != p.owner_id
         -- Ordered so the revocations a plan emits are deterministic.
-        ORDER BY grantee, p.privilege_type
+        ORDER BY p.name, grantee, p.privilege_type
         "#,
-        catalog_table
+        TARGET_NAMES_CTE, catalog_table
     );
 
-    let rows = client.query(&query, &[&name]).await?;
+    let rows = client
+        .query(&query, &[&array_literal(names.iter().copied())])
+        .await?;
 
-    Ok(rows
-        .iter()
-        .map(|row| ObjectGrant {
-            grantee: row.get("grantee"),
-            privilege_type: row.get("privilege_type"),
-        })
-        .collect())
+    Ok(group_by_name(&rows, object_grant))
 }
 
-/// Get privilege grants on a cluster by name.
+/// Get privilege grants on one named infrastructure object.
+async fn get_one_named_object_grants(
+    client: &Client,
+    catalog_table: &str,
+    name: &str,
+) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    Ok(get_named_object_grants(client, catalog_table, &[name])
+        .await?
+        .remove(name)
+        .unwrap_or_default())
+}
+
+/// Get privilege grants on each of a set of clusters, keyed by cluster name.
 pub(super) async fn get_cluster_grants(
     client: &Client,
-    name: &str,
-) -> Result<Vec<ObjectGrant>, ConnectionError> {
-    get_named_object_grants(client, "mz_clusters", name).await
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+    get_named_object_grants(client, "mz_clusters", names).await
 }
 
-/// Get privilege grants on a network policy by name.
+/// Get privilege grants on each of a set of network policies, keyed by name.
 pub(super) async fn get_network_policy_grants(
     client: &Client,
-    name: &str,
-) -> Result<Vec<ObjectGrant>, ConnectionError> {
-    get_named_object_grants(client, "mz_network_policies", name).await
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+    get_named_object_grants(client, "mz_network_policies", names).await
 }
 
-/// Get privilege grants on a database object (table, source, secret, connection).
+/// Get privilege grants on each of a set of database objects (tables, sources,
+/// secrets, connections).
 ///
-/// `catalog_table` is the system catalog table name (e.g., `"mz_tables"`, `"mz_secrets"`).
+/// `catalog_table` is the system catalog table the objects live in (e.g.,
+/// `"mz_tables"`, `"mz_secrets"`). An object the catalog records no grants for is
+/// absent from the map.
 pub(super) async fn get_database_object_grants(
     client: &Client,
     catalog_table: &str,
-    database: &str,
-    schema: &str,
-    name: &str,
-) -> Result<Vec<ObjectGrant>, ConnectionError> {
+    objects: &BTreeSet<ObjectId>,
+) -> Result<BTreeMap<ObjectId, Vec<ObjectGrant>>, ConnectionError> {
+    if objects.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = format!(
         r#"
-        -- Locate the object by its fully-qualified name (database.schema.object)
-        -- using a 3-table join chain: catalog_table -> mz_schemas -> mz_databases.
-        -- Then explode the ACL bitmap into individual privilege rows.
-        WITH privilege AS (
-            SELECT mz_internal.mz_aclexplode(t.privileges).*, t.owner_id
+        WITH {},
+        -- Locate the target objects by name, then explode each one's ACL bitmap
+        -- into individual privilege rows.
+        privilege AS (
+            SELECT
+                target.database,
+                target.schema,
+                target.object,
+                mz_internal.mz_aclexplode(t.privileges).*,
+                t.owner_id
             FROM {} t
             JOIN mz_schemas s ON t.schema_id = s.id
             JOIN mz_databases d ON s.database_id = d.id
-            WHERE d.name = $1 AND s.name = $2 AND t.name = $3
+            JOIN target
+                ON target.database = d.name
+               AND target.schema = s.name
+               AND target.object = t.name
         )
         SELECT
+            p.database,
+            p.schema,
+            p.object,
             -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
             CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
             p.privilege_type
@@ -978,20 +1211,18 @@ pub(super) async fn get_database_object_grants(
             OR grantee.name NOT IN ('none', 'mz_system', 'mz_support')
         )
           AND p.grantee != p.owner_id
-        ORDER BY grantee, p.privilege_type
+        -- Ordered so the revocations a plan emits are deterministic.
+        ORDER BY p.database, p.schema, p.object, grantee, p.privilege_type
         "#,
-        catalog_table
+        TARGET_OBJECTS_CTE, catalog_table
     );
 
-    let rows = client.query(&query, &[&database, &schema, &name]).await?;
+    let [databases, schemas, names] = target_object_arrays(objects);
+    let rows = client
+        .query(&query, &[&databases, &schemas, &names])
+        .await?;
 
-    Ok(rows
-        .iter()
-        .map(|row| ObjectGrant {
-            grantee: row.get("grantee"),
-            privilege_type: row.get("privilege_type"),
-        })
-        .collect())
+    Ok(group_by_object(&rows, object_grant))
 }
 
 /// Get privilege grants on a schema.
@@ -1080,133 +1311,204 @@ pub(super) async fn get_default_privilege_grants_for_schema(
         .collect())
 }
 
-/// Get default privilege grants for a named infrastructure object (cluster, network policy).
+/// Get the default privilege grants for each of a set of named infrastructure
+/// objects (clusters, network policies).
 ///
-/// Queries `mz_default_privileges` to find grants that would be auto-applied
-/// to the given object based on its owner and any PUBLIC default privileges.
-/// These grants should be protected from revocation during reconciliation.
+/// Queries `mz_default_privileges` for the grants that would be auto-applied to
+/// each object based on its owner and any PUBLIC default privileges. These
+/// grants are protected from revocation during reconciliation. A name with no
+/// such rules is absent from the map.
+async fn get_default_privilege_grants_for_named_objects(
+    client: &Client,
+    catalog_table: &str,
+    names: &[&str],
+    object_type: &str,
+) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let query = format!(
+        r#"
+        -- The grants ALTER DEFAULT PRIVILEGES rules auto-apply to each target
+        -- object. Reconciliation protects them from revocation.
+        WITH {},
+        -- Resolve each target to the owner that decides which rules reach it.
+        resolved AS (
+            SELECT target.name, obj.owner_id
+            FROM {} obj
+            JOIN target ON target.name = obj.name
+        )
+        SELECT
+            r.name,
+            -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
+            dp_priv.privilege_type
+        FROM resolved AS r
+        JOIN mz_default_privileges dp
+            -- Match rules targeting the object's owner, or PUBLIC ('p') rules
+            -- that apply to all owners.
+            ON (dp.role_id = r.owner_id OR dp.role_id = 'p')
+           AND dp.object_type = $2
+            -- Named objects (clusters, network policies) are not schema-scoped,
+            -- so only global default privileges (both NULL) apply.
+           AND dp.database_id IS NULL
+           AND dp.schema_id IS NULL
+        -- Expand the privilege bitmap into individual privilege type strings.
+        CROSS JOIN LATERAL unnest(
+            mz_internal.mz_format_privileges(dp.privileges)
+        ) AS dp_priv(privilege_type)
+        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        WHERE (
+            dp.grantee = 'p'
+            OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
+        ORDER BY r.name, grantee, dp_priv.privilege_type
+        "#,
+        TARGET_NAMES_CTE, catalog_table
+    );
+
+    let names = array_literal(names.iter().copied());
+    let rows = client.query(&query, &[&names, &object_type]).await?;
+
+    Ok(group_by_name(&rows, object_grant))
+}
+
+/// Get the default privilege grants for one named infrastructure object.
 async fn get_default_privilege_grants_for_named_object(
     client: &Client,
     catalog_table: &str,
     name: &str,
     object_type: &str,
 ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-    let query = format!(
-        r#"
-        -- Query default privileges from ALTER DEFAULT PRIVILEGES rules.
-        -- These are auto-applied grants that should be protected from revocation.
-        SELECT
-            -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
-            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
-            dp_priv.privilege_type
-        FROM mz_default_privileges dp
-        -- Expand the privilege bitmap into individual privilege type strings.
-        CROSS JOIN LATERAL unnest(
-            mz_internal.mz_format_privileges(dp.privileges)
-        ) AS dp_priv(privilege_type)
-        JOIN {} obj ON obj.name = $1
-        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
-        WHERE dp.object_type = $2
-          -- Match rules targeting the object's owner, or PUBLIC ('p') rules
-          -- that apply to all owners.
-          AND (dp.role_id = obj.owner_id OR dp.role_id = 'p')
-          -- Named objects (clusters, network policies) are not schema-scoped,
-          -- so only global default privileges (both NULL) apply.
-          AND dp.database_id IS NULL
-          AND dp.schema_id IS NULL
-          AND (
-              dp.grantee = 'p'
-              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
-          )
-        "#,
-        catalog_table
-    );
-
-    let rows = client.query(&query, &[&name, &object_type]).await?;
-
-    Ok(rows
-        .iter()
-        .map(|row| ObjectGrant {
-            grantee: row.get("grantee"),
-            privilege_type: row.get("privilege_type"),
-        })
-        .collect())
+    Ok(
+        get_default_privilege_grants_for_named_objects(client, catalog_table, &[name], object_type)
+            .await?
+            .remove(name)
+            .unwrap_or_default(),
+    )
 }
 
-/// Get default privilege grants for a cluster by name.
-pub(super) async fn get_default_privilege_grants_for_cluster(
+/// Get the default privilege grants for each of a set of clusters.
+pub(super) async fn get_default_privilege_grants_for_clusters(
     client: &Client,
-    name: &str,
-) -> Result<Vec<ObjectGrant>, ConnectionError> {
-    get_default_privilege_grants_for_named_object(client, "mz_clusters", name, "cluster").await
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+    get_default_privilege_grants_for_named_objects(client, "mz_clusters", names, "cluster").await
 }
 
-/// Get default privilege grants for a network policy by name.
-pub(super) async fn get_default_privilege_grants_for_network_policy(
+/// Get the default privilege grants for each of a set of network policies.
+pub(super) async fn get_default_privilege_grants_for_network_policies(
     client: &Client,
-    name: &str,
-) -> Result<Vec<ObjectGrant>, ConnectionError> {
-    get_default_privilege_grants_for_named_object(client, "mz_network_policies", name, "type").await
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+    get_default_privilege_grants_for_named_objects(client, "mz_network_policies", names, "type")
+        .await
 }
 
-/// Get default privilege grants for a database object (table, source, secret, connection).
+/// Get the default privilege grants for each of a set of database objects
+/// (tables, sources, secrets, connections).
 ///
-/// Queries `mz_default_privileges` to find grants that would be auto-applied
-/// to the given object based on its owner, database, schema, and any PUBLIC
-/// default privileges. These grants should be protected from revocation.
-pub(super) async fn get_default_privilege_grants_for_database_object(
+/// Queries `mz_default_privileges` for the grants that would be auto-applied to
+/// each object based on its owner, database, schema, and any PUBLIC default
+/// privileges. These grants are protected from revocation. An object with no
+/// such rules is absent from the map.
+pub(super) async fn get_default_privilege_grants_for_database_objects(
     client: &Client,
     catalog_table: &str,
-    database: &str,
-    schema: &str,
-    name: &str,
+    objects: &BTreeSet<ObjectId>,
     object_type: &str,
-) -> Result<Vec<ObjectGrant>, ConnectionError> {
+) -> Result<BTreeMap<ObjectId, Vec<ObjectGrant>>, ConnectionError> {
+    if objects.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = format!(
         r#"
-        -- Query default privileges from ALTER DEFAULT PRIVILEGES rules
-        -- for a schema-qualified database object.
+        -- The grants ALTER DEFAULT PRIVILEGES rules auto-apply to each target
+        -- object. Reconciliation protects them from revocation.
+        WITH {},
+        -- Resolve each target to the owner, database, and schema that decide
+        -- which rules reach it.
+        resolved AS (
+            SELECT
+                target.database,
+                target.schema,
+                target.object,
+                obj.owner_id,
+                d.id AS database_id,
+                s.id AS schema_id
+            FROM {} obj
+            JOIN mz_schemas s ON obj.schema_id = s.id
+            JOIN mz_databases d ON s.database_id = d.id
+            JOIN target
+                ON target.database = d.name
+               AND target.schema = s.name
+               AND target.object = obj.name
+        )
         SELECT
+            r.database,
+            r.schema,
+            r.object,
             -- `p` is the PUBLIC pseudo-role, which has no `mz_roles` row.
             CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
             dp_priv.privilege_type
-        FROM mz_default_privileges dp
+        FROM resolved AS r
+        JOIN mz_default_privileges dp
+            -- Match rules targeting the object's owner, or PUBLIC ('p') rules.
+            ON (dp.role_id = r.owner_id OR dp.role_id = 'p')
+           AND dp.object_type = $4
+            -- Match both global rules (database_id IS NULL) and rules scoped to
+            -- the object's own database. Global rules apply to all databases.
+           AND (dp.database_id IS NULL OR dp.database_id = r.database_id)
+            -- Same for schema: global or scoped to the object's own schema.
+           AND (dp.schema_id IS NULL OR dp.schema_id = r.schema_id)
         -- Expand the privilege bitmap into individual privilege type strings.
         CROSS JOIN LATERAL unnest(
             mz_internal.mz_format_privileges(dp.privileges)
         ) AS dp_priv(privilege_type)
-        -- Locate the object by FQN to determine its owner, database, and schema.
-        JOIN {} obj ON obj.name = $3
-        JOIN mz_schemas s ON obj.schema_id = s.id
-        JOIN mz_databases d ON s.database_id = d.id
         LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
-        WHERE d.name = $1 AND s.name = $2
-          AND dp.object_type = $4
-          -- Match rules targeting the object's owner, or PUBLIC ('p') rules.
-          AND (dp.role_id = obj.owner_id OR dp.role_id = 'p')
-          -- Match both global rules (database_id IS NULL) and rules scoped to
-          -- this specific database. Global rules apply to all databases.
-          AND (dp.database_id IS NULL OR dp.database_id = d.id)
-          -- Same for schema: global or scoped to this specific schema.
-          AND (dp.schema_id IS NULL OR dp.schema_id = s.id)
-          AND (
-              dp.grantee = 'p'
-              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
-          )
+        WHERE (
+            dp.grantee = 'p'
+            OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
+        ORDER BY r.database, r.schema, r.object, grantee, dp_priv.privilege_type
         "#,
-        catalog_table
+        TARGET_OBJECTS_CTE, catalog_table
     );
 
+    let [databases, schemas, names] = target_object_arrays(objects);
     let rows = client
-        .query(&query, &[&database, &schema, &name, &object_type])
+        .query(&query, &[&databases, &schemas, &names, &object_type])
         .await?;
 
-    Ok(rows
-        .iter()
-        .map(|row| ObjectGrant {
-            grantee: row.get("grantee"),
-            privilege_type: row.get("privilege_type"),
-        })
+    Ok(group_by_object(&rows, object_grant))
+}
+
+/// The canonical `CREATE CONNECTION` SQL for each of `connections`, keyed by
+/// object.
+///
+/// `mz_connections.create_sql` renders secret references in the catalog's
+/// internal `SECRET [<id> AS <name>]` form, which is not parseable SQL, so the
+/// statement has to come from `SHOW CREATE CONNECTION` one connection at a time.
+/// Issuing them together lets the connection pipeline them, so the whole set
+/// costs one round trip instead of one per connection.
+///
+/// A connection that does not exist is absent from the map.
+pub(super) async fn get_connection_create_sqls(
+    client: &Client,
+    connections: &BTreeSet<ObjectId>,
+) -> Result<BTreeMap<ObjectId, String>, ConnectionError> {
+    let reads = connections.iter().map(|id| async move {
+        let sql = get_connection_create_sql(client, id.expect_database(), id.schema(), id.object())
+            .await?;
+        Ok::<_, ConnectionError>(sql.map(|sql| (id.clone(), sql)))
+    });
+
+    Ok(futures::future::try_join_all(reads)
+        .await?
+        .into_iter()
+        .flatten()
         .collect())
 }
 
@@ -1294,77 +1596,107 @@ pub(super) async fn get_schema_default_privileges(
     .await
 }
 
-/// Get the comments on a database object (table, source, secret, connection),
-/// including comments on its columns.
+/// Get the comments on each of a set of database objects (tables, sources,
+/// secrets, connections), including comments on their columns.
 ///
-/// `catalog_table` is the system catalog table name (e.g., `"mz_tables"`).
+/// `catalog_table` is the system catalog table the objects live in (e.g.,
+/// `"mz_tables"`). An object carrying no comments is absent from the map.
 pub(super) async fn get_database_object_comments(
     client: &Client,
     catalog_table: &str,
-    database: &str,
-    schema: &str,
-    name: &str,
-) -> Result<Vec<ObjectComment>, ConnectionError> {
+    objects: &BTreeSet<ObjectId>,
+) -> Result<BTreeMap<ObjectId, Vec<ObjectComment>>, ConnectionError> {
+    if objects.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
     let query = format!(
         r#"
-        -- Locate the object by its fully-qualified name, then pick up every
-        -- comment recorded against it. `object_sub_id` is NULL for a comment on
-        -- the object itself and the 1-based column position otherwise, so the
-        -- LEFT JOIN resolves it to a column name and leaves object-level
-        -- comments with a NULL column.
+        -- Every comment recorded against a target object. `object_sub_id` is
+        -- NULL for a comment on the object itself and the 1-based column
+        -- position otherwise, so the LEFT JOIN resolves it to a column name and
+        -- leaves object-level comments with a NULL column.
+        WITH {}
         SELECT
+            target.database,
+            target.schema,
+            target.object,
             col.name AS column_name,
             c.comment
         FROM mz_internal.mz_comments c
         JOIN {} t ON c.id = t.id
         JOIN mz_schemas s ON t.schema_id = s.id
         JOIN mz_databases d ON s.database_id = d.id
+        JOIN target
+            ON target.database = d.name
+           AND target.schema = s.name
+           AND target.object = t.name
         LEFT JOIN mz_columns col
             ON col.id = c.id AND col.position::int4 = c.object_sub_id
-        WHERE d.name = $1 AND s.name = $2 AND t.name = $3
+        ORDER BY target.database, target.schema, target.object, c.object_sub_id
         "#,
-        catalog_table
+        TARGET_OBJECTS_CTE, catalog_table
     );
 
-    let rows = client.query(&query, &[&database, &schema, &name]).await?;
+    let [databases, schemas, names] = target_object_arrays(objects);
+    let rows = client
+        .query(&query, &[&databases, &schemas, &names])
+        .await?;
 
-    Ok(rows
-        .iter()
-        .map(|row| ObjectComment {
-            column: row.get("column_name"),
-            comment: row.get("comment"),
-        })
-        .collect())
+    Ok(group_by_object(&rows, |row| ObjectComment {
+        column: row.get("column_name"),
+        comment: row.get("comment"),
+    }))
 }
 
-/// Get the comment on a named object (cluster, role, network policy, database).
+/// Get the comment on each of a set of named objects (clusters, roles, network
+/// policies, databases).
 ///
 /// `catalog_table` is the system catalog table (e.g., `"mz_clusters"`). These
-/// objects have no columns, so every result has a `None` column.
+/// objects have no columns, so every result has a `None` column. A name carrying
+/// no comment is absent from the map.
 pub(super) async fn get_named_object_comments(
+    client: &Client,
+    catalog_table: &str,
+    names: &[&str],
+) -> Result<BTreeMap<String, Vec<ObjectComment>>, ConnectionError> {
+    if names.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let query = format!(
+        r#"
+        WITH {}
+        SELECT target.name, c.comment
+        FROM mz_internal.mz_comments c
+        JOIN {} o ON c.id = o.id
+        JOIN target ON target.name = o.name
+        WHERE c.object_sub_id IS NULL
+        ORDER BY target.name
+        "#,
+        TARGET_NAMES_CTE, catalog_table
+    );
+
+    let rows = client
+        .query(&query, &[&array_literal(names.iter().copied())])
+        .await?;
+
+    Ok(group_by_name(&rows, |row| ObjectComment {
+        column: None,
+        comment: row.get("comment"),
+    }))
+}
+
+/// Get the comment on one named object.
+pub(super) async fn get_one_named_object_comments(
     client: &Client,
     catalog_table: &str,
     name: &str,
 ) -> Result<Vec<ObjectComment>, ConnectionError> {
-    let query = format!(
-        r#"
-        SELECT c.comment
-        FROM mz_internal.mz_comments c
-        JOIN {} o ON c.id = o.id
-        WHERE o.name = $1 AND c.object_sub_id IS NULL
-        "#,
-        catalog_table
-    );
-
-    let rows = client.query(&query, &[&name]).await?;
-
-    Ok(rows
-        .iter()
-        .map(|row| ObjectComment {
-            column: None,
-            comment: row.get("comment"),
-        })
-        .collect())
+    Ok(get_named_object_comments(client, catalog_table, &[name])
+        .await?
+        .remove(name)
+        .unwrap_or_default())
 }
 
 /// Get the comment on a schema.
@@ -1576,29 +1908,41 @@ impl IntrospectionClient<'_> {
         schema_exists(self.client, database, schema).await
     }
 
-    /// Check if a network policy exists.
-    pub async fn network_policy_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        network_policy_exists(self.client, name).await
-    }
-
     /// Check if a role exists.
     pub async fn role_exists(&self, name: &str) -> Result<bool, ConnectionError> {
         role_exists(self.client, name).await
     }
 
-    /// Get the members granted to a role.
-    pub async fn get_role_members(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        get_role_members(self.client, name).await
+    /// Which of `names` name an existing role.
+    pub async fn existing_roles(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        existing_roles(self.client, names).await
     }
 
-    /// Get session default parameter names for a role.
-    pub async fn get_role_parameters(&self, name: &str) -> Result<Vec<String>, ConnectionError> {
-        get_role_parameters(self.client, name).await
+    /// Which of `names` name an existing network policy.
+    pub async fn existing_network_policies(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeSet<String>, ConnectionError> {
+        existing_network_policies(self.client, names).await
     }
 
-    /// Check if a cluster exists.
-    pub async fn cluster_exists(&self, name: &str) -> Result<bool, ConnectionError> {
-        cluster_exists(self.client, name).await
+    /// Get the members granted to each of `names`, keyed by role name.
+    pub async fn get_role_members_bulk(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+        get_role_members_bulk(self.client, names).await
+    }
+
+    /// Get the session defaults set on each of `names`, keyed by role name.
+    pub async fn get_role_parameters_bulk(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<String>>, ConnectionError> {
+        get_role_parameters_bulk(self.client, names).await
     }
 
     /// Get a cluster by name.
@@ -1606,12 +1950,20 @@ impl IntrospectionClient<'_> {
         get_cluster(self.client, name).await
     }
 
-    /// Get the canonical `CREATE CLUSTER` SQL for an existing managed cluster.
-    pub async fn get_cluster_create_sql(
+    /// Get the clusters named in `names`, keyed by cluster name.
+    pub async fn get_clusters(
         &self,
-        name: &str,
-    ) -> Result<Option<String>, ConnectionError> {
-        get_cluster_create_sql(self.client, name).await
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Cluster>, ConnectionError> {
+        get_clusters(self.client, names).await
+    }
+
+    /// Get the canonical `CREATE CLUSTER` SQL for each of `names`.
+    pub async fn get_cluster_create_sqls(
+        &self,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, String>, ConnectionError> {
+        get_cluster_create_sqls(self.client, names).await
     }
 
     /// List all clusters.
@@ -1627,57 +1979,53 @@ impl IntrospectionClient<'_> {
         get_cluster_config(self.client, name).await
     }
 
-    /// Get privilege grants on a cluster by name.
+    /// Get privilege grants on each of a set of clusters, keyed by name.
     pub async fn get_cluster_grants(
         &self,
-        name: &str,
-    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-        get_cluster_grants(self.client, name).await
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+        get_cluster_grants(self.client, names).await
     }
 
-    /// Get privilege grants on a network policy by name.
+    /// Get privilege grants on each of a set of network policies, keyed by name.
     pub async fn get_network_policy_grants(
         &self,
-        name: &str,
-    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-        get_network_policy_grants(self.client, name).await
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+        get_network_policy_grants(self.client, names).await
     }
 
-    /// Get privilege grants on a database object.
+    /// Get privilege grants on each of a set of database objects.
     pub async fn get_database_object_grants(
         &self,
         catalog_table: &str,
-        database: &str,
-        schema: &str,
-        name: &str,
-    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-        get_database_object_grants(self.client, catalog_table, database, schema, name).await
+        objects: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeMap<ObjectId, Vec<ObjectGrant>>, ConnectionError> {
+        get_database_object_grants(self.client, catalog_table, objects).await
     }
 
-    /// Get the `CREATE CONNECTION` SQL for an existing connection.
-    pub async fn get_connection_create_sql(
+    /// Get the `CREATE CONNECTION` SQL for each of `connections`.
+    pub async fn get_connection_create_sqls(
         &self,
-        database: &str,
-        schema: &str,
-        name: &str,
-    ) -> Result<Option<String>, ConnectionError> {
-        get_connection_create_sql(self.client, database, schema, name).await
+        connections: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeMap<ObjectId, String>, ConnectionError> {
+        get_connection_create_sqls(self.client, connections).await
     }
 
-    /// Get default privilege grants for a cluster by name.
-    pub async fn get_default_privilege_grants_for_cluster(
+    /// Get the default privilege grants for each of a set of clusters.
+    pub async fn get_default_privilege_grants_for_clusters(
         &self,
-        name: &str,
-    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-        get_default_privilege_grants_for_cluster(self.client, name).await
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+        get_default_privilege_grants_for_clusters(self.client, names).await
     }
 
-    /// Get default privilege grants for a network policy by name.
-    pub async fn get_default_privilege_grants_for_network_policy(
+    /// Get the default privilege grants for each of a set of network policies.
+    pub async fn get_default_privilege_grants_for_network_policies(
         &self,
-        name: &str,
-    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-        get_default_privilege_grants_for_network_policy(self.client, name).await
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<ObjectGrant>>, ConnectionError> {
+        get_default_privilege_grants_for_network_policies(self.client, names).await
     }
 
     /// Get privilege grants on a database by name.
@@ -1685,7 +2033,7 @@ impl IntrospectionClient<'_> {
         &self,
         database: &str,
     ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-        get_named_object_grants(self.client, "mz_databases", database).await
+        get_one_named_object_grants(self.client, "mz_databases", database).await
     }
 
     /// Get privilege grants on a schema.
@@ -1745,24 +2093,33 @@ impl IntrospectionClient<'_> {
         get_schema_default_privileges(self.client, database, schema).await
     }
 
-    /// Get the comments on a database object, including its column comments.
+    /// Get the comments on each of a set of database objects, including their
+    /// column comments.
     pub async fn get_database_object_comments(
         &self,
         catalog_table: &str,
-        database: &str,
-        schema: &str,
-        name: &str,
-    ) -> Result<Vec<ObjectComment>, ConnectionError> {
-        get_database_object_comments(self.client, catalog_table, database, schema, name).await
+        objects: &BTreeSet<ObjectId>,
+    ) -> Result<BTreeMap<ObjectId, Vec<ObjectComment>>, ConnectionError> {
+        get_database_object_comments(self.client, catalog_table, objects).await
     }
 
-    /// Get the comment on a named object (cluster, role, network policy, database).
+    /// Get the comment on each of a set of named objects (clusters, roles,
+    /// network policies, databases).
     pub async fn get_named_object_comments(
+        &self,
+        catalog_table: &str,
+        names: &[&str],
+    ) -> Result<BTreeMap<String, Vec<ObjectComment>>, ConnectionError> {
+        get_named_object_comments(self.client, catalog_table, names).await
+    }
+
+    /// Get the comment on one named object.
+    pub async fn get_one_named_object_comments(
         &self,
         catalog_table: &str,
         name: &str,
     ) -> Result<Vec<ObjectComment>, ConnectionError> {
-        get_named_object_comments(self.client, catalog_table, name).await
+        get_one_named_object_comments(self.client, catalog_table, name).await
     }
 
     /// Get the comment on a schema by name.
@@ -1774,23 +2131,72 @@ impl IntrospectionClient<'_> {
         get_schema_comments(self.client, database, schema).await
     }
 
-    /// Get default privilege grants for a database object.
-    pub async fn get_default_privilege_grants_for_database_object(
+    /// Get the default privilege grants for each of a set of database objects.
+    pub async fn get_default_privilege_grants_for_database_objects(
         &self,
         catalog_table: &str,
-        database: &str,
-        schema: &str,
-        name: &str,
+        objects: &BTreeSet<ObjectId>,
         object_type: &str,
-    ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-        get_default_privilege_grants_for_database_object(
+    ) -> Result<BTreeMap<ObjectId, Vec<ObjectGrant>>, ConnectionError> {
+        get_default_privilege_grants_for_database_objects(
             self.client,
             catalog_table,
-            database,
-            schema,
-            name,
+            objects,
             object_type,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{array_literal, target_object_arrays};
+    use crate::project::ir::object_id::ObjectId;
+    use std::collections::BTreeSet;
+
+    #[mz_ore::test]
+    fn test_array_literal_quotes_every_element() {
+        assert_eq!(array_literal(["a", "b"]), r#"{"a","b"}"#);
+        let empty: [&str; 0] = [];
+        assert_eq!(array_literal(empty), "{}");
+    }
+
+    /// A name that would otherwise be read as array syntax has to survive the
+    /// encoding: an unquoted `,` or `}` would split or truncate the array, and
+    /// `NULL` would decode as a null element rather than the literal name.
+    #[mz_ore::test]
+    fn test_array_literal_neutralizes_array_syntax() {
+        assert_eq!(
+            array_literal(["a,b", "{c}", "", "NULL", " d "]),
+            r#"{"a,b","{c}","","NULL"," d "}"#
+        );
+    }
+
+    /// `"` and `\` are the two characters an array literal escapes with `\`, so
+    /// each has to be escaped to survive as itself.
+    #[mz_ore::test]
+    fn test_array_literal_escapes_quote_and_backslash() {
+        assert_eq!(array_literal([r#"say "hi""#]), r#"{"say \"hi\""}"#);
+        assert_eq!(array_literal([r"back\slash"]), r#"{"back\\slash"}"#);
+        assert_eq!(array_literal([r#"\""#]), r#"{"\\\""}"#);
+    }
+
+    /// The three arrays are parallel: index `i` of each names one component of
+    /// the same object, in the set's iteration order.
+    #[mz_ore::test]
+    fn test_target_object_arrays_stay_parallel() {
+        let objects = BTreeSet::from([
+            ObjectId::new("db1".into(), "s1".into(), "t1".into()),
+            ObjectId::new("db2".into(), "s2".into(), "t2".into()),
+        ]);
+
+        assert_eq!(
+            target_object_arrays(&objects),
+            [
+                r#"{"db1","db2"}"#.to_string(),
+                r#"{"s1","s2"}"#.to_string(),
+                r#"{"t1","t2"}"#.to_string(),
+            ]
+        );
     }
 }

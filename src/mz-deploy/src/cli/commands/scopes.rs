@@ -77,11 +77,13 @@ pub async fn reconcile_database(
         &config.grants,
     )
     .await?;
+    let comment_object = CommentObject::Database(database);
+    let current_comments = comment_object.current_comments(client).await?;
     comments::reconcile(
-        client,
         executor,
-        &CommentObject::Database(database),
+        &comment_object,
         &config.comments,
+        &current_comments,
     )
     .await?;
     default_privileges::reconcile(
@@ -110,11 +112,13 @@ pub async fn reconcile_schema(
         &config.grants,
     )
     .await?;
+    let comment_object = CommentObject::Schema { database, schema };
+    let current_comments = comment_object.current_comments(client).await?;
     comments::reconcile(
-        client,
         executor,
-        &CommentObject::Schema { database, schema },
+        &comment_object,
         &config.comments,
+        &current_comments,
     )
     .await?;
     default_privileges::reconcile(

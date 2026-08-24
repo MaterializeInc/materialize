@@ -10,8 +10,8 @@
 //! Apply sources command - create sources that don't exist in the database.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects;
 use crate::cli::commands::grants;
+use crate::cli::commands::reconcile;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
     compile_apply_project_and_connect,
@@ -52,11 +52,16 @@ pub async fn plan(
     }
 
     let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
-    let existing = client
-        .introspection()
-        .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
-        .await
-        .map_err(CliError::Connection)?;
+    let (existing, reconcile_state) = futures::try_join!(
+        async {
+            client
+                .introspection()
+                .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
+                .await
+                .map_err(CliError::Connection)
+        },
+        reconcile::ReconcileState::for_database_objects(client, &GRANT_KIND, &target_ids),
+    )?;
 
     // Every schema this phase manages, not just the ones hosting a missing
     // object. `prepare_schemas` creates only what is absent, and reconciles the
@@ -81,12 +86,12 @@ pub async fn plan(
         executor.take_statements();
 
         let action = if existing.contains(&obj_id) {
-            apply_objects::reconcile_grants_and_comments(
-                client,
+            reconcile::grants_and_comments(
                 executor,
                 &obj_id,
                 typed_obj,
                 &GRANT_KIND,
+                &reconcile_state,
             )
             .await?;
             ObjectAction::UpToDate
@@ -95,12 +100,12 @@ pub async fn plan(
             for index in &typed_obj.indexes {
                 executor.execute_sql(index).await?;
             }
-            apply_objects::reconcile_grants_and_comments(
-                client,
+            reconcile::grants_and_comments(
                 executor,
                 &obj_id,
                 typed_obj,
                 &GRANT_KIND,
+                &reconcile_state,
             )
             .await?;
             ObjectAction::Created

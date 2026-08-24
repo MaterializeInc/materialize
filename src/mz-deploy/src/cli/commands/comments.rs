@@ -26,7 +26,7 @@ use mz_sql_parser::ast::{
     RawNetworkPolicyName, UnresolvedDatabaseName, UnresolvedItemName, UnresolvedSchemaName,
 };
 use owo_colors::{OwoColorize, Stream, Style};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What a comment attaches to within one object.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -112,30 +112,34 @@ impl<'a> CommentObject<'a> {
         }
     }
 
-    /// The comments the catalog currently records for this object.
-    async fn current_comments(&self, client: &Client) -> Result<Vec<ObjectComment>, CliError> {
+    /// Read this one object's comments from the catalog.
+    ///
+    /// For a caller reconciling a single object. A caller looping over many
+    /// objects should read them all at once through
+    /// [`ReconcileState`](crate::cli::commands::reconcile::ReconcileState)
+    /// instead: this read costs a full round trip per object.
+    pub async fn current_comments(&self, client: &Client) -> Result<Vec<ObjectComment>, CliError> {
         let introspection = client.introspection();
         let result = match self {
+            Self::Schema { database, schema } => {
+                introspection.get_schema_comments(database, schema).await
+            }
             Self::Table(id) | Self::Source(id) | Self::Secret(id) | Self::Connection(id) => {
                 introspection
                     .get_database_object_comments(
                         self.catalog_table(),
-                        id.expect_database(),
-                        id.schema(),
-                        id.object(),
+                        &BTreeSet::from([(*id).clone()]),
                     )
                     .await
+                    .map(|mut by_object| by_object.remove(id).unwrap_or_default())
             }
             Self::Cluster(name)
             | Self::Role(name)
             | Self::NetworkPolicy(name)
             | Self::Database(name) => {
                 introspection
-                    .get_named_object_comments(self.catalog_table(), name)
+                    .get_one_named_object_comments(self.catalog_table(), name)
                     .await
-            }
-            Self::Schema { database, schema } => {
-                introspection.get_schema_comments(database, schema).await
             }
         };
         result.map_err(CliError::Connection)
@@ -234,14 +238,13 @@ fn item_name(obj_id: &ObjectId) -> RawItemName {
 /// Reconcile comments on one object: set what differs, clear what the project
 /// no longer declares.
 pub async fn reconcile(
-    client: &Client,
     executor: &DeploymentExecutor<'_>,
     object: &CommentObject<'_>,
     comments: &[CommentStatement<Raw>],
+    current: &[ObjectComment],
 ) -> Result<(), CliError> {
-    let current = object.current_comments(client).await?;
     let desired = desired_comments(comments);
-    let changes = comment_changes(&desired, &current, object);
+    let changes = comment_changes(&desired, current, object);
 
     let dash_style = Style::new().red().bold();
     for stmt in &changes {

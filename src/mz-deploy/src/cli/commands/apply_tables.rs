@@ -10,8 +10,8 @@
 //! Apply tables command - create tables that don't exist in the database.
 
 use crate::cli::CliError;
-use crate::cli::commands::apply_objects;
 use crate::cli::commands::grants;
+use crate::cli::commands::reconcile;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
     compile_apply_project_and_connect,
@@ -56,11 +56,16 @@ pub async fn plan(
     }
 
     let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
-    let existing = client
-        .introspection()
-        .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
-        .await
-        .map_err(CliError::Connection)?;
+    let (existing, reconcile_state) = futures::try_join!(
+        async {
+            client
+                .introspection()
+                .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
+                .await
+                .map_err(CliError::Connection)
+        },
+        reconcile::ReconcileState::for_database_objects(client, &GRANT_KIND, &target_ids),
+    )?;
 
     let to_create: BTreeSet<_> = target_ids.difference(&existing).cloned().collect();
     client
@@ -91,12 +96,12 @@ pub async fn plan(
         executor.take_statements();
 
         if existing.contains(&obj_id) {
-            apply_objects::reconcile_grants_and_comments(
-                client,
+            reconcile::grants_and_comments(
                 executor,
                 &obj_id,
                 typed_obj,
                 &GRANT_KIND,
+                &reconcile_state,
             )
             .await?;
             let statements = executor.take_statements();
@@ -117,14 +122,8 @@ pub async fn plan(
         for index in &typed_obj.indexes {
             executor.execute_sql(index).await?;
         }
-        apply_objects::reconcile_grants_and_comments(
-            client,
-            executor,
-            &obj_id,
-            typed_obj,
-            &GRANT_KIND,
-        )
-        .await?;
+        reconcile::grants_and_comments(executor, &obj_id, typed_obj, &GRANT_KIND, &reconcile_state)
+            .await?;
         let post_statements = executor.take_statements();
 
         let transaction_group = match &typed_obj.stmt {

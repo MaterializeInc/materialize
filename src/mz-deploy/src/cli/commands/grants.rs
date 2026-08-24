@@ -10,6 +10,7 @@
 //! Shared helpers for grant reconciliation across apply commands.
 
 use crate::cli::CliError;
+use crate::cli::commands::reconcile::ReconcileState;
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::{Client, ObjectGrant};
 use crate::info;
@@ -107,6 +108,14 @@ pub enum GrantNamedObjectKind {
 }
 
 impl GrantNamedObjectKind {
+    /// The system catalog table that holds this object kind.
+    pub fn catalog_table(&self) -> &'static str {
+        match self {
+            Self::Cluster => "mz_clusters",
+            Self::NetworkPolicy => "mz_network_policies",
+        }
+    }
+
     fn grant_target(&self, name: &str) -> GrantTargetSpecification<Raw> {
         let (object_type, object_name) = match self {
             Self::Cluster => (
@@ -216,119 +225,90 @@ pub async fn reconcile_scope(
                 .map_err(CliError::Connection)?,
         ),
     };
-    let protected: BTreeSet<_> = default_privs
-        .iter()
-        .map(|g| (g.grantee.clone(), g.privilege_type.to_uppercase()))
-        .collect();
-    let desired = desired_grants(grants, scope.all_privileges());
-    let target = scope.grant_target();
-    execute_grants(
+    emit(
         executor,
-        &missing_grant_statements(&desired, &current, &target),
+        &current,
+        &default_privs,
+        &desired_grants(grants, scope.all_privileges()),
+        &scope.grant_target(),
+        scope.label(),
+        &scope.display_name(),
     )
-    .await?;
-    let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
-    execute_revocations(executor, &revocations, scope.label(), &scope.display_name()).await
+    .await
 }
 
 /// Reconcile grants for a named infrastructure object (cluster or network policy).
 ///
-/// Three-step algorithm:
-/// 1. Query the live grant state and default-privilege grants from the catalog.
-/// 2. GRANT the desired grants that are missing (desired - current).
-/// 3. REVOKE the stale ones (current - desired - protected).
+/// GRANTs the desired grants that are missing (desired - current), then REVOKEs
+/// the stale ones (current - desired - protected).
 pub async fn reconcile_named_object(
-    client: &Client,
     executor: &DeploymentExecutor<'_>,
     name: &str,
     grants: &[GrantPrivilegesStatement<Raw>],
     kind: &GrantNamedObjectKind,
+    state: &ReconcileState<String>,
 ) -> Result<(), CliError> {
-    let introspection = client.introspection();
-    let (current, default_privs) = match kind {
-        GrantNamedObjectKind::Cluster => (
-            introspection
-                .get_cluster_grants(name)
-                .await
-                .map_err(CliError::Connection)?,
-            introspection
-                .get_default_privilege_grants_for_cluster(name)
-                .await
-                .map_err(CliError::Connection)?,
-        ),
-        GrantNamedObjectKind::NetworkPolicy => (
-            introspection
-                .get_network_policy_grants(name)
-                .await
-                .map_err(CliError::Connection)?,
-            introspection
-                .get_default_privilege_grants_for_network_policy(name)
-                .await
-                .map_err(CliError::Connection)?,
-        ),
-    };
-    let protected: BTreeSet<_> = default_privs
-        .iter()
-        .map(|g| (g.grantee.clone(), g.privilege_type.to_uppercase()))
-        .collect();
-    let desired = desired_grants(grants, kind.all_privileges());
     let target = kind.grant_target(name);
-    execute_grants(
+    emit(
         executor,
-        &missing_grant_statements(&desired, &current, &target),
+        state.grants(name),
+        state.default_privileges(name),
+        &desired_grants(grants, kind.all_privileges()),
+        &target,
+        kind.label(),
+        &name,
     )
-    .await?;
-    let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
-    execute_revocations(executor, &revocations, kind.label(), &name).await
+    .await
 }
 
-/// Reconcile grants for a single object: grant what is missing, revoke what is stale.
-///
-/// Three-step algorithm:
-/// 1. Query the live grant state and default-privilege grants from the catalog.
-/// 2. GRANT the desired grants that are missing (desired - current).
-/// 3. REVOKE the stale ones (current - desired - protected).
+/// Reconcile grants for a single database object: grant what is missing, revoke
+/// what is stale.
 pub async fn reconcile(
-    client: &Client,
     executor: &DeploymentExecutor<'_>,
     obj_id: &ObjectId,
     grants: &[GrantPrivilegesStatement<Raw>],
     kind: &GrantObjectKind,
+    state: &ReconcileState<ObjectId>,
 ) -> Result<(), CliError> {
-    let current = client
-        .introspection()
-        .get_database_object_grants(
-            kind.catalog_table(),
-            obj_id.expect_database(),
-            obj_id.schema(),
-            obj_id.object(),
-        )
-        .await
-        .map_err(CliError::Connection)?;
-    let default_privs = client
-        .introspection()
-        .get_default_privilege_grants_for_database_object(
-            kind.catalog_table(),
-            obj_id.expect_database(),
-            obj_id.schema(),
-            obj_id.object(),
-            kind.object_type_str(),
-        )
-        .await
-        .map_err(CliError::Connection)?;
-    let protected: BTreeSet<_> = default_privs
+    let target = kind.grant_target(obj_id);
+    emit(
+        executor,
+        state.grants(obj_id),
+        state.default_privileges(obj_id),
+        &desired_grants(grants, kind.all_privileges()),
+        &target,
+        kind.label(),
+        obj_id,
+    )
+    .await
+}
+
+/// GRANT what `desired` holds and `current` does not, then REVOKE what `current`
+/// holds and neither `desired` nor `default_privileges` does.
+///
+/// A grant an `ALTER DEFAULT PRIVILEGES` rule would immediately re-apply is
+/// never revoked: revoking it would emit a statement on every apply and still
+/// leave the grant in place.
+async fn emit(
+    executor: &DeploymentExecutor<'_>,
+    current: &[ObjectGrant],
+    default_privileges: &[ObjectGrant],
+    desired: &BTreeSet<(String, String)>,
+    target: &GrantTargetSpecification<Raw>,
+    label: &str,
+    display_name: &impl fmt::Display,
+) -> Result<(), CliError> {
+    let protected: BTreeSet<_> = default_privileges
         .iter()
         .map(|g| (g.grantee.clone(), g.privilege_type.to_uppercase()))
         .collect();
-    let desired = desired_grants(grants, kind.all_privileges());
-    let target = kind.grant_target(obj_id);
     execute_grants(
         executor,
-        &missing_grant_statements(&desired, &current, &target),
+        &missing_grant_statements(desired, current, target),
     )
     .await?;
-    let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
-    execute_revocations(executor, &revocations, kind.label(), obj_id).await
+    let revocations = stale_grant_revocations(current, desired, &protected, target);
+    execute_revocations(executor, &revocations, label, display_name).await
 }
 
 /// Extract `(grantee, privilege_type)` pairs from parsed GRANT statements.
