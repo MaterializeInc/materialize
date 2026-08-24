@@ -56,7 +56,7 @@ pub const CDC_CLEANUP_CHANGE_TABLE: Config<bool> = Config::new(
     false,
     "When enabled we'll notify SQL Server that it can cleanup the change tables \
     as the source makes progress and commits data.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Maximum number of deletes that we'll make from a single SQL Server change table.
@@ -70,7 +70,7 @@ pub const CDC_CLEANUP_CHANGE_TABLE_MAX_DELETES: Config<u32> = Config::new(
     // TODO(sql_server2): Call the cleanup function iteratively.
     1_000_000,
     "Maximum number of entries that can be deleted by using a single statement.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 pub static SQL_SERVER_PROGRESS_DESC: LazyLock<RelationDesc> = LazyLock::new(|| {

@@ -73,16 +73,37 @@ use tracing::error;
 /// LaunchDarkly sync loop evaluates and where the resolved value may be
 /// overridden. See `doc/developer/design/20260609_scoped_feature_flags.md`.
 ///
-/// The scope of a [`Config`] follows from where its value is *realized*, not
-/// from what it is named after:
+/// [`Environment`] is the safe declaration, and the right one when in doubt. It
+/// preserves the unscoped behavior of a single value everywhere. A finer scope
+/// *enables* divergence, so declaring one asserts that divergence is both safe
+/// and useful for this config. Getting that wrong introduces a way to break an
+/// environment that did not previously exist, while erring toward
+/// [`Environment`] only forgoes a capability. Prefer forgoing the capability.
 ///
-/// - A config realized inside a `clusterd` process is [`Replica`]. That covers
-///   the compute and storage worker config sets and `mz_metrics`, which the
-///   per-replica dyncfg push reaches. `environmentd` may read such a config too,
-///   for its own process. That read legitimately sees the environment-wide
-///   value.
+/// Where a config is *realized* is therefore a necessary condition for a finer
+/// scope, not a sufficient one. A config qualifies for [`Replica`] only if it is
+/// realized per replica, and should be declared [`Replica`] only if it also
+/// tunes that replica process's own resource usage (memory, CPU, I/O,
+/// concurrency, timing) and cannot change what a dataflow produces, what reaches
+/// durable state, or anything externally visible. `lgalloc`, the memory limiter,
+/// the spill and pager knobs, and the timely zero-copy settings are the shape to
+/// match.
+///
+/// In particular, declare [`Environment`] for a flag selecting a different
+/// implementation or code path whose output-equivalence is an assumption rather
+/// than a guarantee. Where the assumption holds, [`Environment`] costs nothing.
+/// Where it does not, a per-replica rollout turns one bug into query results
+/// that differ by which replica served them.
+///
+/// Which contexts a config can be realized in:
+///
+/// - A config realized inside a `clusterd` process is a [`Replica`] candidate.
+///   That covers the compute and storage worker config sets and `mz_metrics`,
+///   which the per-replica dyncfg push reaches. `environmentd` may read such a
+///   config too, for its own process. That read legitimately sees the
+///   environment-wide value.
 /// - A config that `environmentd` resolves for *one specific replica*, whether
-///   it ships the value there or acts on it itself, is also [`Replica`]. The
+///   it ships the value there or acts on it itself, is also a candidate. The
 ///   read site has to resolve that replica's override, either with
 ///   [`Config::get_with_overrides`] or from a per-replica config set. Without
 ///   that, the override never takes effect and the declaration is a silent

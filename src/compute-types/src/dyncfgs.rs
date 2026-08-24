@@ -21,7 +21,7 @@ pub const ENABLE_HALF_JOIN2: Config<bool> = Config::new(
     "enable_compute_half_join2",
     true,
     "Whether compute should use `half_join2` rather than DD's `half_join` to render delta joins.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Whether rendering should collapse error multiplicities to one where it arranges errors.
@@ -203,7 +203,7 @@ pub const ENABLE_MZ_JOIN_CORE: Config<bool> = Config::new(
     true,
     "Whether compute should use `mz_join_core` rather than DD's `JoinCore::join_core` to render \
      linear joins.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Use sync Timely operators with Tokio tasks for the MV sink.
@@ -211,7 +211,7 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     "enable_compute_sync_mv_sink",
     false,
     "Use sync Timely operators with Tokio tasks for the MV sink.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Whether rendering should use the new MV sink correction buffer implementation.
@@ -219,7 +219,7 @@ pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
     "enable_compute_correction_v2",
     true,
     "Whether compute should use the new MV sink correction buffer implementation.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The size factor of subsequent chains in the correction V2 buffer.
@@ -243,7 +243,7 @@ pub const ENABLE_COMPUTE_TEMPORAL_BUCKETING: Config<bool> = Config::new(
     "enable_compute_temporal_bucketing",
     false,
     "Whether to enable temporal bucketing in compute.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The summary to apply to the frontier in temporal bucketing in compute.
@@ -251,7 +251,7 @@ pub const TEMPORAL_BUCKETING_SUMMARY: Config<Duration> = Config::new(
     "compute_temporal_bucketing_summary",
     Duration::from_secs(2),
     "The summary to apply to frontiers in temporal bucketing in compute.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The yielding behavior with which linear joins should be rendered.
@@ -403,7 +403,7 @@ pub const COPY_TO_S3_PARQUET_ROW_GROUP_FILE_RATIO: Config<usize> = Config::new(
     20,
     "The ratio (defined as a percentage) of row-group size to max-file-size. \
         Must be <= 100.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// See `src/storage-operators/src/s3_oneshot_sink/parquet.rs` for more details.
@@ -412,7 +412,7 @@ pub const COPY_TO_S3_ARROW_BUILDER_BUFFER_RATIO: Config<usize> = Config::new(
     150,
     "The ratio (defined as a percentage) of arrow-builder size to row-group size. \
         Must be >= 100.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The size of each part in the multi-part upload to use when uploading files to S3.
@@ -420,7 +420,7 @@ pub const COPY_TO_S3_MULTIPART_PART_SIZE_BYTES: Config<usize> = Config::new(
     "copy_to_s3_multipart_part_size_bytes",
     1024 * 1024 * 8,
     "The size of each part in a multipart upload to S3.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Main switch to enable or disable replica expiration.
@@ -456,7 +456,7 @@ pub const COMPUTE_APPLY_COLUMN_DEMANDS: Config<bool> = Config::new(
     "compute_apply_column_demands",
     true,
     "When enabled, passes applys column demands to the RelationDesc used to read out of Persist.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The amount of output the flat-map operator produces before yielding. Set to a high value to
@@ -473,7 +473,7 @@ pub const ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION: Config<bool> = Co
     "enable_compute_render_fueled_as_specific_collection",
     true,
     "When enabled, renders `as_specific_collection` using a fueled flat-map operator.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Whether to apply logical backpressure in compute dataflows.
@@ -533,7 +533,7 @@ pub const ENABLE_PEEK_RESPONSE_STASH: Config<bool> = Config::new(
     "enable_compute_peek_response_stash",
     true,
     "Whether to enable the peek response stash, for sending back large peek responses. Will only be used for results that exceed compute_peek_response_stash_threshold_bytes.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The threshold for peek response size above which we should use the peek
@@ -543,7 +543,7 @@ pub const PEEK_RESPONSE_STASH_THRESHOLD_BYTES: Config<usize> = Config::new(
     "compute_peek_response_stash_threshold_bytes",
     1024 * 10, /* 10KB */
     "The threshold above which to use the peek response stash, for sending back large peek responses.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The target number of maximum runs in the batches written to the stash.
@@ -558,7 +558,7 @@ pub const PEEK_RESPONSE_STASH_BATCH_MAX_RUNS: Config<usize> = Config::new(
     // `clusterd` side.
     2,
     "The target number of maximum runs in the batches written to the stash.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The target size for batches of rows we read out of the peek stash.
@@ -583,7 +583,7 @@ pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
     "compute_peek_stash_num_batches",
     100,
     "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The size of each batch, as number of rows, pumped from the peek result
@@ -592,7 +592,7 @@ pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
     "compute_peek_stash_batch_size",
     100000,
     "The size, as number of rows, of each batch pumped from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The collection interval for the Prometheus metrics introspection source.
@@ -630,7 +630,7 @@ pub const MV_SINK_ADVANCE_PERSIST_FRONTIERS: Config<bool> = Config::new(
     "compute_mv_sink_advance_persist_frontiers",
     true,
     "Whether the MV sink's write operator advances its internal persist frontiers to the as_of.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Adds the full set of all compute `Config`s.

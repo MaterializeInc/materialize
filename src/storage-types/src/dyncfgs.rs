@@ -35,7 +35,7 @@ pub const DELAY_SOURCES_PAST_REHYDRATION: Config<bool> = Config::new(
     true,
     "Whether or not to delay sources producing values in some scenarios \
         (namely, upsert) till after rehydration is finished",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Whether storage dataflows should suspend execution while downstream operators are still
@@ -45,7 +45,7 @@ pub const SUSPENDABLE_SOURCES: Config<bool> = Config::new(
     true,
     "Whether storage dataflows should suspend execution while downstream operators are still \
         processing data.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 // Controller
@@ -101,7 +101,7 @@ pub const KAFKA_CLIENT_ID_ENRICHMENT_RULES: Config<fn() -> serde_json::Value> = 
     "kafka_client_id_enrichment_rules",
     || serde_json::json!([]),
     "Rules for enriching the `client.id` property of Kafka clients with additional data.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The maximum time we will wait before re-polling rdkafka to see if new partitions/data are
@@ -134,7 +134,7 @@ pub const KAFKA_DEFAULT_AWS_PRIVATELINK_ENDPOINT_IDENTIFICATION_ALGORITHM: Confi
         "none",
         "The value we set for the 'ssl.endpoint.identification.algorithm' option in the Kafka \
     Connection config. default: 'none'",
-        ParameterScope::Replica,
+        ParameterScope::Environment,
     );
 
 pub const KAFKA_BUFFERED_EVENT_RESIZE_THRESHOLD_ELEMENTS: Config<usize> = Config::new(
@@ -193,7 +193,7 @@ pub const KAFKA_SINK_MESSAGE_MAX_BYTES: Config<usize> = Config::new(
     "kafka_sink_message_max_bytes",
     1_000_000,
     "Sets message.max.bytes in librdkafka for Kafka sink producers.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Sets batch.size in librdkafka for Kafka sink producers.
@@ -205,7 +205,7 @@ pub const KAFKA_SINK_BATCH_SIZE: Config<usize> = Config::new(
     "kafka_sink_batch_size",
     1_000_000,
     "Sets batch.size in librdkafka for Kafka sink producers.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Sets batch.num.messages in librdkafka for Kafka sink producers.
@@ -216,7 +216,7 @@ pub const KAFKA_SINK_BATCH_NUM_MESSAGES: Config<usize> = Config::new(
     "kafka_sink_batch_num_messages",
     10_000,
     "Sets batch.num.messages in librdkafka for Kafka sink producers.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 // MySQL
@@ -284,7 +284,7 @@ pub const PG_SCHEMA_VALIDATION_INTERVAL: Config<Duration> = Config::new(
     "pg_schema_validation_interval",
     Duration::from_secs(15),
     "Interval to re-validate the schemas of ingested tables.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Controls behavior of PG Source when the upstream DB timeline changes. The default behavior
@@ -378,7 +378,7 @@ pub const STORAGE_ROCKSDB_USE_MERGE_OPERATOR: Config<bool> = Config::new(
     "storage_rocksdb_use_merge_operator",
     true,
     "Use the native rocksdb merge operator where possible.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// If `storage_upsert_prevent_snapshot_buffering` is true, this prevents the upsert
@@ -433,7 +433,7 @@ pub const STORAGE_USE_CONTINUAL_FEEDBACK_UPSERT: Config<bool> = Config::new(
     "storage_use_continual_feedback_upsert",
     true,
     "Whether to use the new continual feedback upsert operator.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Whether to use the v2 upsert operator.
@@ -441,7 +441,7 @@ pub const ENABLE_UPSERT_V2: Config<bool> = Config::new(
     "enable_upsert_v2",
     false,
     "Whether to use the v2 upsert operator.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The interval at which the storage server performs maintenance tasks.
@@ -457,7 +457,7 @@ pub const SINK_PROGRESS_SEARCH: Config<bool> = Config::new(
     "storage_sink_progress_search",
     true,
     "If set, iteratively search the progress topic for a progress record with increasing lookback.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Configure how to behave when trying to create an existing topic with specified configs.
@@ -467,7 +467,7 @@ pub const SINK_ENSURE_TOPIC_CONFIG: Config<&'static str> = Config::new(
     "If `skip`, don't check the config of existing topics; if `check`, fetch the config and \
     warn if it does not match the expected configs; if `alter`, attempt to change the upstream to \
     match the expected configs.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// Configure mz-ore overflowing type behavior.
@@ -475,7 +475,7 @@ pub const ORE_OVERFLOWING_BEHAVIOR: Config<&'static str> = Config::new(
     "ore_overflowing_behavior",
     "soft_panic",
     "Overflow behavior for Overflowing types. One of 'ignore', 'panic', 'soft_panic'.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// The time after which we delete per-replica statistics (for sources and
