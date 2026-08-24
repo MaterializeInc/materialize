@@ -224,7 +224,8 @@ export it maintains.
 
 Splitting the relation along that seam would be honest about where each fact lives and
 worse to use. The identifier a consumer has is the export id, which is what
-`mz_objects.id` holds; dataflow ids are per worker and internal to a replica. A
+`mz_objects.id` holds, while a dataflow id is a replica-local index rather than a
+catalog id, even though it is the same index on every worker of that replica. A
 dataflow-grain relation could not hold hydration or the write stages at all, so the
 split would produce two relations rather than one, and the most basic question would
 join through the export-to-dataflow map to answer.
