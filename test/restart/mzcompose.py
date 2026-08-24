@@ -1540,11 +1540,23 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         c.kill("materialized")
         c.up("materialized")
 
-        # The pre-restart episode must still be present and byte-identical.
-        after = episodes()
+        # The pre-restart episode must remain byte-identical, and restarting the
+        # replica must produce exactly one episode with a fresh installation.
+        deadline = time.time() + 120
+        after = []
+        fresh = []
+        while time.time() < deadline:
+            after = episodes()
+            fresh = [episode for episode in after if episode[0] != before[0][0]]
+            if before[0] in after and len(fresh) == 1:
+                break
+            time.sleep(0.5)
         assert (
             before[0] in after
         ), f"restart lost the pre-restart episode: had {before}, now {after}"
+        assert (
+            len(after) == 2 and len(fresh) == 1
+        ), f"expected one preserved and one fresh episode, got {after}"
 
         # Let several sweeps run. The pre-restart episode must not be duplicated,
         # and the post-restart episode must settle at one row too.
@@ -1556,6 +1568,7 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
         assert len(settled) == len(
             set(tuple(row) for row in settled)
         ), f"sweeps duplicated a hydration episode: {settled}"
+        assert len(settled) == 2, f"expected two settled episodes, got {settled}"
 
 
 def workflow_default(c: Composition) -> None:
