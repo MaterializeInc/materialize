@@ -761,7 +761,7 @@ impl<'a> ActiveComputeState<'a> {
         // Report the start for every export of the dataflow, not just the one this command named.
         // Computation begins for all of them at this instant, so crediting each export from its
         // own `Schedule` would date the earlier ones to before their dataflow was running and
-        // overstate the compute time between `started` and `hydrated`.
+        // overstate the compute time between `started` and `snapshot_complete`.
         let Some(dataflow_index) = self
             .compute_state
             .collections
@@ -948,8 +948,8 @@ impl<'a> ActiveComputeState<'a> {
             );
             // Log collections are never suspended and the controller marks them scheduled
             // implicitly, so no `Schedule` command ever arrives for them. Record their hydration
-            // start here, or they would sit permanently in the illegal state of being hydrated
-            // without having started.
+            // start here, or they would sit permanently in the illegal state of having completed
+            // a snapshot without having started.
             logging.set_hydration_start();
             collection.logging = Some(logging);
 
@@ -978,7 +978,7 @@ impl<'a> ActiveComputeState<'a> {
         // Maintain a single allocation for `new_frontier` to avoid allocating on every iteration.
         let mut new_frontier = Antichain::new();
         // Same, for the frontier that measures dataflow progress.
-        let mut hydration_frontier = Antichain::new();
+        let mut snapshot_frontier = Antichain::new();
         // Same, for the write frontier. The output frontier fold below reuses `new_frontier` and
         // so destroys the write frontier that `observe_writes` needs, and the observers cannot run
         // before the fold because `reported` borrows the collection until after it.
@@ -1013,27 +1013,27 @@ impl<'a> ActiveComputeState<'a> {
                 .then(|| new_frontier.clone());
 
             // Collect the frontier that measures the dataflow's own progress, which is what
-            // hydration is about.
+            // `snapshot_complete` is about.
             //
             // This is deliberately not the output frontier collected below. That folds in the
             // write frontier, which makes it a measure of durability rather than of dataflow
             // progress, and for a collection that sinks to persist it is not even uniform across
             // workers: the sink's `mint` operator maintains the shared sink frontier on one
             // elected worker and clears it on all the others, so the same dataflow would report
-            // hydration at two different times depending on which worker's log you read.
+            // the stage at two different times depending on which worker's log you read.
             //
             // A collection with a compute frontier produces its output before writing it, so that
             // frontier is its progress. A collection without one produces its output *by* writing
             // it, an index into its own trace, so there the write frontier is the progress and
-            // hydration coincides with durability.
-            hydration_frontier.clear();
+            // computing the snapshot coincides with making it durable.
+            snapshot_frontier.clear();
             match &collection.compute_probe {
                 Some(probe) => {
                     probe.with_frontier(|frontier| {
-                        hydration_frontier.extend(frontier.iter().copied())
+                        snapshot_frontier.extend(frontier.iter().copied())
                     });
                 }
-                None => hydration_frontier.clone_from(&new_frontier),
+                None => snapshot_frontier.clone_from(&new_frontier),
             }
 
             write_frontier.clone_from(&new_frontier);
@@ -1085,7 +1085,7 @@ impl<'a> ActiveComputeState<'a> {
             }
 
             // Hydration must be observed first, since the write stages are gated on it.
-            collection.observe_hydration(&hydration_frontier);
+            collection.observe_snapshot(&snapshot_frontier);
             collection.observe_writes(&write_frontier);
 
             let response = FrontiersResponse {
@@ -1302,12 +1302,12 @@ impl<'a> ActiveComputeState<'a> {
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
                 // Only a batch upper measures progress. `DroppedAt` reports the empty antichain,
-                // the maximum of the order, so a subscribe cancelled while still hydrating would
-                // otherwise read as hydrated at the moment it is dropped. A subscribe that runs to
+                // the maximum of the order, so a subscribe cancelled mid-computation would
+                // otherwise report a complete snapshot at the moment it is dropped. One that runs to
                 // its `up_to` also finishes with an empty upper, but it carries that in a batch and
                 // really did compute through its as-of, so it counts.
                 if matches!(response, SubscribeResponse::Batch(_)) {
-                    collection.observe_hydration(&new_frontier);
+                    collection.observe_snapshot(&new_frontier);
                 }
                 collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
@@ -2111,7 +2111,7 @@ pub struct CollectionState {
     /// Which lifecycle stages have been logged for this collection.
     ///
     /// Stages are only ever added, never removed. Reconciliation resets the reported frontiers of
-    /// a retained dataflow, so without this the collection would look unhydrated again and re-log
+    /// a retained dataflow, so without this the collection would look unfinished again and re-log
     /// a stage it already reported. The lifecycle relation is append-only, so a repeat would show
     /// up as a duplicate row rather than being dropped.
     logged_stages: BTreeSet<LifecycleStage>,
@@ -2215,7 +2215,7 @@ impl CollectionState {
     /// Return whether this collection is hydrated.
     ///
     /// This is the output-frontier reading, which folds in the write frontier and so reports
-    /// durability for a collection that sinks to persist. `observe_hydration` reports the
+    /// durability for a collection that sinks to persist. `observe_snapshot` reports the
     /// dataflow-progress reading instead. Both are wanted, and they differ for a materialized view
     /// by the time its snapshot takes to reach persist.
     fn hydrated(&self) -> bool {
@@ -2235,27 +2235,28 @@ impl CollectionState {
         }
     }
 
-    /// Observe this collection's dataflow progress and log the `hydrated` stage the first time
-    /// that progress has passed the as-of.
+    /// Observe this collection's dataflow progress and log the `snapshot_complete` stage the
+    /// first time that progress has passed the as-of.
     ///
     /// `progress` must measure the dataflow's own computation rather than the durability of its
     /// output. See the comment where it is collected in `report_frontiers`.
     ///
-    /// An empty `progress` counts as hydrated, matching [`Self::hydrated`]. The empty antichain is
-    /// the maximum of the order, and a dataflow that reaches it has computed everything it ever
+    /// An empty `progress` counts as complete, matching [`Self::hydrated`]. The empty antichain
+    /// is the maximum of the order, and a dataflow that reaches it has computed everything it ever
     /// will: an inputless collection, such as an index on `SELECT 1`, emits its rows and drops its
     /// capability without ever holding a non-empty frontier beyond its as-of, so rejecting empty
-    /// would leave it permanently unhydrated here while the durability reading calls it hydrated.
-    /// The write stages are gated on this one, so it would also never report a write.
+    /// would leave it permanently short of this stage while the durability reading calls it
+    /// hydrated. The write stages are gated on this one, so it would also never report a write.
     ///
     /// It follows that emptiness cannot be used to tell completion from cancellation. A caller
     /// that can observe a dataflow ending without having computed its as-of must exclude that
     /// itself, as `process_subscribes` does for `DroppedAt`.
     ///
-    /// An empty as-of never hydrates, which is consistent with no dataflow being created for one.
-    fn observe_hydration(&mut self, progress: &Antichain<Timestamp>) {
+    /// An empty as-of never reaches this stage, which is consistent with no dataflow being
+    /// created for one.
+    fn observe_snapshot(&mut self, progress: &Antichain<Timestamp>) {
         if PartialOrder::less_than(&self.as_of, progress) {
-            self.log_stage(LifecycleStage::Hydrated);
+            self.log_stage(LifecycleStage::SnapshotComplete);
         }
     }
 
@@ -2265,9 +2266,9 @@ impl CollectionState {
     /// Only the worker that maintains the sink frontier reports these stages, which is what makes
     /// them one observation per export rather than one per worker.
     ///
-    /// Nothing is reported before the dataflow has hydrated. Until then the sink has produced no
+    /// Nothing is reported before the snapshot is complete. Until then the sink has produced no
     /// output, so read-only mode is not holding anything back, and reporting a block there would
-    /// make `write_unblocked - hydrated` negative in the common case rather than zero. Gating here
+    /// make `write_unblocked - snapshot_complete` negative rather than zero. Gating here
     /// also keeps the stages ordered against `written`, which can otherwise arrive first:
     /// `apply_refresh` rounds a `REFRESH` materialized view's frontier up to the next refresh time
     /// before the dataflow has computed anything, so its sink writes an empty batch for the
@@ -2294,15 +2295,21 @@ impl CollectionState {
         }
 
         if *self.read_only_rx.borrow() {
-            // Report the block only once the dataflow has hydrated. Before that the sink has
+            // Report the block only once the snapshot is complete. Before that the sink has
             // produced nothing, so read-only mode is holding nothing back.
-            if self.logged_stages.contains(&LifecycleStage::Hydrated) {
+            if self
+                .logged_stages
+                .contains(&LifecycleStage::SnapshotComplete)
+            {
                 self.log_stage(LifecycleStage::WriteBlockedReadOnly);
             }
             return;
         }
 
-        if !self.logged_stages.contains(&LifecycleStage::Hydrated) {
+        if !self
+            .logged_stages
+            .contains(&LifecycleStage::SnapshotComplete)
+        {
             return;
         }
 

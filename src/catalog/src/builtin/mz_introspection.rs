@@ -369,7 +369,7 @@ pub static MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER: LazyLock<BuiltinLog> =
             description: "Lifecycle events of each compute export, as observed by the worker \
                           that logged them. Every event carries the wallclock instant it \
                           occurred at, so durations between stages are differences of \
-                          `occurred_at`. The `installed`, `started` and `hydrated` events are \
+                          `occurred_at`. The `installed`, `started` and `snapshot_complete` events \
                           logged by every worker, since each worker hydrates its own fragment \
                           of the dataflow. The write events are logged only by the worker that \
                           maintains the sink frontier, so they appear once per export rather \

@@ -23,7 +23,7 @@ $ set-sql-timeout duration=60s
 
 > CREATE TABLE t (a int)
 
-# An index has no persist sink, so its lifecycle stops at `hydrated`. Every
+# An index has no persist sink, so its lifecycle stops at `snapshot_complete`. Every
 # worker hydrates its own fragment of the dataflow, so each of the three stages
 # is reported once per worker.
 
@@ -36,7 +36,7 @@ $ set-sql-timeout duration=60s
   GROUP BY l.event
 installed 2
 started 2
-hydrated 2
+snapshot_complete 2
 
 # The stages are ordered within each worker, and `occurred_at` is a wallclock
 # instant rather than an offset from some arbitrary origin.
@@ -44,7 +44,7 @@ hydrated 2
 > SELECT DISTINCT
       max(l.occurred_at) FILTER (WHERE l.event = 'started')
           >= max(l.occurred_at) FILTER (WHERE l.event = 'installed'),
-      max(l.occurred_at) FILTER (WHERE l.event = 'hydrated')
+      max(l.occurred_at) FILTER (WHERE l.event = 'snapshot_complete')
           >= max(l.occurred_at) FILTER (WHERE l.event = 'started'),
       max(l.occurred_at) BETWEEN now() - '1 hour'::interval AND now()
   FROM mz_introspection.mz_compute_lifecycle_events_per_worker l
@@ -89,21 +89,21 @@ written 1
 > SELECT l.event, count(*)
   FROM mz_introspection.mz_compute_lifecycle_events_per_worker l
   JOIN mz_materialized_views mv ON (mv.id = l.export_id)
-  WHERE mv.name = 'mv' AND l.event = 'hydrated'
+  WHERE mv.name = 'mv' AND l.event = 'snapshot_complete'
   GROUP BY l.event
-hydrated 2
+snapshot_complete 2
 
-# `written` never precedes `hydrated`, which is what makes the interval between
-# them the time taken to make the hydrated output durable.
+# `written` never precedes `snapshot_complete`, which is what makes the interval
+# between them the time taken to make the computed snapshot durable.
 #
 # The comparison has to be per worker. `written` is reported only by the worker
 # that maintains the sink frontier, and it is ordered after that worker's own
-# `hydrated`. Another worker may hydrate later still, so comparing `written`
-# against the maximum `hydrated` across all workers proves nothing.
+# `snapshot_complete`. Another worker may finish later still, so comparing `written`
+# against the maximum `snapshot_complete` across all workers proves nothing.
 
 > SELECT DISTINCT
       max(l.occurred_at) FILTER (WHERE l.event = 'written')
-          >= max(l.occurred_at) FILTER (WHERE l.event = 'hydrated')
+          >= max(l.occurred_at) FILTER (WHERE l.event = 'snapshot_complete')
   FROM mz_introspection.mz_compute_lifecycle_events_per_worker l
   JOIN mz_materialized_views mv ON (mv.id = l.export_id)
   WHERE mv.name = 'mv'
@@ -111,7 +111,7 @@ hydrated 2
   HAVING count(*) FILTER (WHERE l.event = 'written') > 0
 true
 
-# `write_blocked` is only reported for an object that has hydrated and is still
+# `write_blocked` is only reported for an object whose snapshot is complete and is still
 # not permitted to write, which is a replica in read-only mode awaiting a
 # cutover. Testdrive cannot reach that state, so there is nothing to assert
 # positively here. The invariant block at the end of this file requires the
@@ -146,7 +146,7 @@ $ set-max-tries max-tries=1
 > SELECT count(*)
   FROM mz_introspection.mz_compute_lifecycle_events_per_worker
   WHERE event NOT IN (
-            'installed', 'started', 'hydrated',
+            'installed', 'started', 'snapshot_complete',
             'write_blocked', 'write_unblocked', 'written'
         )
      OR reason NOT IN ('read_only')
@@ -165,9 +165,9 @@ $ set-max-tries max-tries=1
       GROUP BY export_id, worker_id
   )
   WHERE NOT ('installed' = ANY(events))
-     OR ('hydrated' = ANY(events) AND NOT 'started' = ANY(events))
+     OR ('snapshot_complete' = ANY(events) AND NOT 'started' = ANY(events))
      OR ('write_unblocked' = ANY(events) AND NOT 'write_blocked' = ANY(events))
-     OR ('written' = ANY(events) AND NOT 'hydrated' = ANY(events))
+     OR ('written' = ANY(events) AND NOT 'snapshot_complete' = ANY(events))
 0
 
 # A stage is reported at most once per export and worker, which is what lets a

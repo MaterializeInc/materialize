@@ -190,7 +190,8 @@ pub struct Lifecycle {
 
 /// A stage of an export's lifecycle.
 ///
-/// NOTE: Only the stages from [`LifecycleStage::Hydrated`] on are carried by a [`Lifecycle`]
+/// NOTE: Only the stages from [`LifecycleStage::SnapshotComplete`] on are carried by a
+/// [`Lifecycle`]
 /// event. `Installed` and `Started` are logged from the [`Export`] and [`HydrationStart`] events,
 /// which already mark those moments for the hydration time relation. They are variants here so
 /// that the stage vocabulary has a single definition.
@@ -200,8 +201,14 @@ pub enum LifecycleStage {
     Installed,
     /// The export's dataflow was unsuspended, so hydration work may begin.
     Started,
-    /// The dataflow's own progress frontier passed its as-of.
-    Hydrated,
+    /// The dataflow's own progress frontier passed its as-of, so its snapshot at the as-of is
+    /// computed.
+    ///
+    /// Deliberately not named for hydration. `mz_compute_hydration_times_per_worker.hydrated_at`
+    /// and `CollectionState::hydrated` are the durability reading, taken from a frontier that
+    /// folds in the write frontier, and they mean something different for an object that sinks to
+    /// persist. Sharing the word would put the ambiguity back.
+    SnapshotComplete,
     /// The export's sink may not write, because the dataflow is in read-only mode.
     WriteBlockedReadOnly,
     /// The export's sink may write.
@@ -219,7 +226,7 @@ impl LifecycleStage {
         match self {
             Self::Installed => ("installed", None),
             Self::Started => ("started", None),
-            Self::Hydrated => ("hydrated", None),
+            Self::SnapshotComplete => ("snapshot_complete", None),
             Self::WriteBlockedReadOnly => ("write_blocked", Some("read_only")),
             Self::WriteUnblocked => ("write_unblocked", None),
             Self::Written => ("written", None),

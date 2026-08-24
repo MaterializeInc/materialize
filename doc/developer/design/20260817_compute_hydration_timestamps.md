@@ -111,7 +111,7 @@ the two.
 
 The lifecycle is wider than these three stages, and timestamp columns cannot carry
 all of it. Two things get in the way. The stages do not share a grain: `installed`,
-`started` and `hydrated` are per-worker facts, since each worker hydrates its own
+`started` and `snapshot_complete` are per-worker facts, since each worker hydrates its own
 fragment of the dataflow, while whether the output is durable is a property of the
 sink as a whole. And a timestamp column cannot say *why* the next stage has not
 happened, so a NULL cannot tell a replacement materialized view waiting for a
@@ -195,7 +195,7 @@ details      jsonb       nullable
 | --- | --- | --- |
 | `installed` | per worker | none |
 | `started` | per worker | none |
-| `hydrated` | per worker | none |
+| `snapshot_complete` | per worker | none |
 | `write_blocked` | per object | `read_only` |
 | `write_unblocked` | per object | none |
 | `written` | per object | none |
@@ -216,7 +216,8 @@ one definition, `sink::materialized_view::frontier_owner`, called both by `mint`
 and by the code that records ownership.
 
 **`dataflow_id`, and why the relation is keyed by export.** The stages do not all
-describe the same object. `hydrated` and the write stages are properties of one export:
+describe the same object. `snapshot_complete` and the write stages are properties of one
+export:
 hydration reads that export's own progress, and the write stages read its sink.
 `installed` and `started` describe the dataflow, which can maintain more than one
 export, and `started` is the instant that dataflow was unsuspended, shared by every
@@ -239,9 +240,9 @@ mapping that `mz_compute_exports_per_worker` holds, for eight bytes a row.
 **`installed` is the denominator.** A consumer asking whether every worker has reached
 a stage cannot count rows and compare against a worker count it does not have, and it
 should not have to join the catalog to find one. The relation is append-only, so a
-worker that has not hydrated has no `hydrated` row at all rather than a NULL, which is
-the shape `mz_compute_hydration_times_per_worker` relies on for its
-`count(*) = count(time_ns)` check. What replaces it is `installed`, which every worker
+worker that has not finished its snapshot has no `snapshot_complete` row at all rather
+than a NULL, which is the shape `mz_compute_hydration_times_per_worker` relies on for
+its `count(*) = count(time_ns)` check. What replaces it is `installed`, which every worker
 logs unconditionally when the export is created: the count of `installed` events is the
 number of workers reporting on that export, so
 
@@ -255,16 +256,16 @@ fixed property of the vocabulary, not of the object or the cluster, so a consume
 encodes it once rather than deriving it per query. This is a contract the relation owes
 its readers, not an incidental property.
 
-**Which frontier each stage reads.** `hydrated` reads the dataflow's own progress
+**Which frontier each stage reads.** `snapshot_complete` reads the dataflow's own progress
 frontier, the compute probe, not the reported output frontier. The output frontier
 is the meet of write and compute frontier, which makes it a measure of durability
 rather than of computation, and for a sink-backed collection it is not even uniform
 across workers, for the reason just given. A collection with no compute probe
 produces its output *by* writing it, an index into its own trace, so there the
-write frontier is the progress and `hydrated` coincides with durability.
+write frontier is the progress and `snapshot_complete` coincides with durability.
 
 `written` reads the sink's write frontier passing the as-of, held back until
-`hydrated` has been reported and until writes are permitted. Without the first
+`snapshot_complete` has been reported and until writes are permitted. Without the first
 clamp the two can invert, for the reason under "Refresh schedules do not block
 writing".
 
@@ -278,7 +279,8 @@ stage there would attribute another writer's progress to this replica and put
 `written` ahead of `write_unblocked`. What `written` promises is therefore that the
 output is durable at the as-of and that this replica was permitted to write, not
 that this replica performed the write. On a restarted or scaled-out replica the
-output was already durable, so `written` lands with `hydrated`, and on a replica cut
+output was already durable, so `written` lands with `snapshot_complete`, and on a replica
+cut
 over out of read-only mode it lands with `write_unblocked`. Neither interval measures
 anything in those cases, and a reader has to know that.
 
@@ -303,7 +305,7 @@ Entry means entry into a state where the block matters, which is after hydration
 Before it, the sink has produced nothing and read-only mode is holding nothing
 back. Every collection starts read-only and is released by the controller, so
 reporting a block from installation would put a `write_blocked` and a
-`write_unblocked` on essentially every materialized view, both before `hydrated`,
+`write_unblocked` on essentially every materialized view, both before `snapshot_complete`,
 making `write_unblocked - hydrated` negative rather than zero. Gating on hydration
 means the pair appears only when something really was held back, and the intervals
 in the list above are all non-negative by construction.
@@ -360,7 +362,7 @@ which requires the write frontier to have passed the as-of.
 
 Two consequences. There is no `refresh` cause for `write_blocked` to report,
 because there is no such state. And the shard's upper can pass the as-of while the
-dataflow is still hydrating, which is why `written` is clamped to `hydrated`.
+dataflow is still hydrating, which is why `written` is clamped to `snapshot_complete`.
 
 What a refresh schedule does still distort is any rollup reading
 `mz_compute_hydration_statuses.hydration_time` as hydration work, since for a
@@ -520,7 +522,7 @@ in one controller turn and one replica turn.
 | 6 | replica | inserts the suspension token and renders the dataflow, whose operators park on the `StartSignal` | |
 | 7 | replica | `handle_schedule` drops the token and the operators start | **`started_at`** |
 | 8 | replica | the dataflow reads its inputs from the as-of forward and builds arrangements. Nothing is stamped here, this interval is the hydration | |
-| 9 | replica | the reported output frontier passes the as-of and `set_reported_output_frontier` calls `set_hydrated`. Separately, `observe_hydration` sees the dataflow's own progress frontier pass the as-of and logs the `hydrated` stage | **`hydrated_at`**, and the `hydrated` event |
+| 9 | replica | the reported output frontier passes the as-of and `set_reported_output_frontier` calls `set_hydrated`. Separately, `observe_snapshot` sees the dataflow's own progress frontier pass the as-of and logs the `snapshot_complete` stage | **`hydrated_at`**, and the `snapshot_complete` event |
 | 10 | replica | the demux writes the retract and insert pair, so the per-worker relation carries all three | |
 | 11 | controller | separately, a `Frontiers` response arrives and `update_output_frontier` flips the controller's own hydration view, which is what the 0dt caught-up check and the autoscaling signal read. One round trip later, and it stamps nothing | |
 
@@ -603,7 +605,8 @@ restarting. Consumers must gate on introspection freshness, as
 is attached before the `apply_refresh` operator, deliberately, with the comment in
 `src/compute/src/sink/materialized_view.rs` explaining that rounding frontiers up
 "makes it impossible to accurately track the progress of the computation". So the
-log's `hydrated` stage reads the pre-rounding frontier. `hydrated_at` agrees, even
+log's `snapshot_complete` stage reads the pre-rounding frontier. `hydrated_at` agrees,
+even
 though it reads the meet: a refresh schedule pushes the write frontier ahead of the
 as-of, so the meet is bounded by the compute frontier and crosses when the
 computation does. Both report when the computation caught up rather than anything
@@ -618,7 +621,7 @@ implementation.
 Frozen. These will not change meaning, and nothing below will be removed:
 
 - The six `event` values, and their meanings.
-- Which events have which grain. `installed`, `started` and `hydrated` are per worker.
+- Which events have which grain. `installed`, `started` and `snapshot_complete` are per worker.
   `write_blocked`, `write_unblocked` and `written` are per object, observed by the
   elected frontier owner. The grain is a property of the event name, fixed for all
   objects and all cluster shapes, so a consumer encodes it once rather than deriving
@@ -626,7 +629,7 @@ Frozen. These will not change meaning, and nothing below will be removed:
 - `installed` as the all-workers-reported denominator, per "`installed` is the
   denominator" above.
 - `occurred_at` is a wallclock instant, carrying its worker's epoch anchor.
-- `hydrated` is always the dataflow-progress reading and `written` is always
+- `snapshot_complete` is always the dataflow-progress reading and `written` is always
   "durable through the as-of, and this replica was permitted to write". Neither varies
   by object type. That is the whole point of spending two terms on it rather than
   overloading one.
@@ -933,10 +936,10 @@ named.
   log".
 - **`mz_compute_hydration_times_per_worker` keeps its meaning.** `hydrated_at`
   reads the output frontier, as it always has, so nothing built on it changes
-  value. The log carries the dataflow reading under `hydrated`.
+  value. The log carries the dataflow reading under `snapshot_complete`.
 - **Refresh schedules advance writing rather than blocking it,** established
   against the refresh tests. So `write_blocked` has no `refresh` cause, and
-  `written` is clamped to `hydrated` to keep the stages ordered. See "Refresh
+  `written` is clamped to `snapshot_complete` to keep the stages ordered. See "Refresh
   schedules do not block writing".
 - **`worker_id` is not nullable.** A NULL would make the per-object grain visible
   in the row, at the cost of introducing the only NULL `worker_id` in the logging
