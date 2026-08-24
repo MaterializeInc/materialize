@@ -37,6 +37,23 @@ operator:
     # -- Log filtering settings for startup logs
     startupLogFilter: "INFO,mz_orchestratord=TRACE"
     enableInternalStatementLogging: true
+    # -- (float) Caps the fraction of statements recorded in query history, via
+    # environmentd's `statement_logging_max_sample_rate`. This is the rate
+    # Materialize Cloud runs at. Sampling costs CPU on environmentd, but the
+    # volume written is bounded by `statementLoggingTargetDataRate` rather than
+    # by this, so lowering this gives up query history completeness without
+    # lowering the ceiling on what statement logging stores. Set it to `0` to
+    # disable statement logging entirely, or to `null` to inherit environmentd's
+    # default.
+    statementLoggingMaxSampleRate: 0.99
+    # -- (int) Caps the sustained volume statement logging writes, in bytes per
+    # second, via environmentd's `statement_logging_target_data_rate`. This is
+    # what actually bounds how fast query history grows, and the recorded
+    # history is retained for the lifetime of the environment, so lower it on
+    # environments with limited storage. Must be greater than 0. Set it to
+    # `null` to inherit environmentd's default of 2071 bytes per second, which
+    # is the rate Materialize Cloud runs at.
+    statementLoggingTargetDataRate:
     # Newer versions ignore this setting and always enforce license key checks.
     enableLicenseKeyChecks: false
     # -- Whether to install the v1 version of the Materialize CRD and the
