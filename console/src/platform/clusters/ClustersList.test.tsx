@@ -24,9 +24,9 @@ import {
 
 import ClustersListPage from "./ClustersList";
 
-// Replica sub-rows are gated on this flag. The global useFlags mock in
-// vitest.setup.ts returns no flags at all, so without this override getSubRows
-// never produces a replica row and none of these tests reach the code.
+// The per-replica table is gated on this flag. The global useFlags mock in
+// vitest.setup.ts returns no flags at all, so without this override the list
+// renders the one-row-per-cluster table and none of these tests reach the code.
 vi.mock("~/hooks/useFlags", () => ({
   useFlags: () => ({ "usage-metrics-in-cluster-list-CNS121": true }),
 }));
@@ -165,28 +165,13 @@ const renderClustersList = async (clusters: Cluster[]) => {
   return rendered;
 };
 
-/** The caret that expands `clusterName`, or null when the cluster has none. */
-const caretFor = (clusterName: string) =>
-  screen.queryByRole("button", { name: `Show replicas of ${clusterName}` });
-
-/** Rows start expanded, so clicking the caret collapses rather than expands. */
-const toggleCluster = async (
-  user: ReturnType<typeof userEvent.setup>,
-  clusterName: string,
-) => {
-  const caret = caretFor(clusterName);
-  if (!caret) throw new Error(`no expand caret found for "${clusterName}"`);
-  await user.click(caret);
-};
-
 /**
  * Position of each visible column, so assertions name what they read instead of
  * hard-coding an index that shifts whenever a column is added.
  */
 const COLUMN = {
-  /** Grouped tables lead with a caret column, empty on replica rows. */
-  caret: 0,
-  name: 1,
+  cluster: 0,
+  replica: 1,
   size: 2,
   cpu: 3,
   memory: 4,
@@ -195,6 +180,12 @@ const COLUMN = {
   lastStatusChange: 7,
   actions: 8,
 } as const;
+
+const bodyRows = () =>
+  screen
+    .getAllByRole("row")
+    // The header row is a row too, and has no data cells.
+    .slice(1);
 
 const rowFor = (rowLabel: string) => {
   const row = screen.getByText(rowLabel).closest("tr");
@@ -208,16 +199,12 @@ const cellsForRow = (rowLabel: string) =>
     .getAllByRole("cell")
     .map((cell) => cell.textContent);
 
-/**
- * Name-column text of every body row, in render order, so cluster rows and the
- * replicas nested under them appear in one flat list.
- */
-const rowOrder = () =>
-  screen
-    .getAllByRole("row")
-    // The header row is a row too, and has no data cells.
-    .slice(1)
-    .map((row) => within(row).getAllByRole("cell")[COLUMN.name].textContent);
+/** Text of `column` in every body row, in render order. */
+const columnOrder = (column: number) =>
+  bodyRows().map((row) => within(row).getAllByRole("cell")[column].textContent);
+
+/** Replica-column text of every body row, in render order. */
+const rowOrder = () => columnOrder(COLUMN.replica);
 
 /** Applies `sort`, then reads the resulting row order. */
 const rowOrderAfter = async (
@@ -229,31 +216,19 @@ const rowOrderAfter = async (
 };
 
 describe("ClustersList replica rows", () => {
-  it("renders replica rows without requiring a click", async () => {
+  it("renders one row per replica, naming the cluster on each", async () => {
     await renderClustersList([buildCluster()]);
 
-    expect(screen.getByText("compute")).toBeInTheDocument();
-    expect(screen.getByText("r1")).toBeInTheDocument();
-    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "true");
+    expect(rowOrder()).toEqual(["r1", "r2"]);
+    expect(columnOrder(COLUMN.cluster)).toEqual(["compute", "compute"]);
   });
 
-  it("collapses a cluster's replicas when its caret is clicked", async () => {
-    const user = userEvent.setup();
+  it("renders a replica's cluster, name, size, utilization and last status change", async () => {
     await renderClustersList([buildCluster()]);
 
-    await toggleCluster(user, "compute");
-
-    expect(screen.queryByText("r1")).not.toBeInTheDocument();
-    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("renders a replica's name, size, utilization and last status change", async () => {
-    await renderClustersList([buildCluster()]);
-
-    // The caret column is empty on a replica row, and actions are
-    // cluster-scoped, so that cell stays blank too.
+    // The actions cell holds an icon-only menu button, so it reads as empty.
     expect(cellsForRow("r1")).toEqual([
-      "",
+      "compute",
       "r1",
       "50cc",
       "12.5%",
@@ -270,6 +245,36 @@ describe("ClustersList replica rows", () => {
 
     expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
     expect(cellsForRow("r2")[COLUMN.size]).toBe("100cc");
+  });
+
+  it("interleaves nothing: each cluster's replicas carry its name", async () => {
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "compute",
+        replicas: [buildReplica({ id: "u10", name: "alpha" })],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "ingest",
+        replicas: [buildReplica({ id: "u20", name: "beta" })],
+      }),
+    ]);
+
+    expect(cellsForRow("alpha")[COLUMN.cluster]).toBe("compute");
+    expect(cellsForRow("beta")[COLUMN.cluster]).toBe("ingest");
+  });
+
+  it("keeps a cluster with no replicas in the list", async () => {
+    await renderClustersList([buildCluster({ replicas: [] })]);
+
+    // Dropping the row would hide the cluster from the clusters list entirely.
+    const cells = cellsForRow("compute");
+    expect(cells[COLUMN.cluster]).toBe("compute");
+    expect(cells[COLUMN.replica]).toBe("-");
+    expect(cells[COLUMN.size]).toBe("-");
+    expect(cells[COLUMN.cpu]).toBe("-");
+    expect(cells[COLUMN.lastStatusChange]).toBe("-");
   });
 
   it("renders the most recent status when a replica has several processes", async () => {
@@ -312,8 +317,8 @@ describe("ClustersList replica rows", () => {
     expect(cellsForRow("r1")[COLUMN.lastStatusChange]).toBe(formatted(newest));
   });
 
-  // The three utilization columns are built by one shared factory, so each
-  // rendering rule is asserted against all of them rather than CPU alone.
+  // The utilization columns are built by one shared factory, so each rendering
+  // rule is asserted against all of them rather than CPU alone.
   describe.each([
     ["CPU", COLUMN.cpu, (value: number | null) => ({ cpuPercent: value })],
     [
@@ -322,6 +327,7 @@ describe("ClustersList replica rows", () => {
       (value: number | null) => ({ memoryPercent: value }),
     ],
     ["Disk", COLUMN.disk, (value: number | null) => ({ diskPercent: value })],
+    ["Heap", COLUMN.heap, (value: number | null) => ({ heapPercent: value })],
   ])("the %s column", (_label, column, withValue) => {
     it("renders zero as a percentage rather than blank", async () => {
       await renderClustersList([
@@ -343,12 +349,6 @@ describe("ClustersList replica rows", () => {
       ]);
 
       expect(cellsForRow("r1")[column]).toBe("-");
-    });
-
-    it("is empty on cluster rows", async () => {
-      await renderClustersList([buildCluster()]);
-
-      expect(cellsForRow("compute")[column]).toBe("");
     });
   });
 
@@ -380,14 +380,11 @@ describe("ClustersList replica rows", () => {
     });
     await renderClustersList([buildCluster()]);
 
-    const warning = () =>
-      screen.queryAllByRole("img", { name: "Ran out of memory" });
-    expect(warning()).toHaveLength(1);
-
-    const r1Row = screen.getByText("r1").closest("tr");
-    if (!r1Row) throw new Error("no row for r1");
     expect(
-      within(r1Row).getByRole("img", { name: "Ran out of memory" }),
+      screen.queryAllByRole("img", { name: "Ran out of memory" }),
+    ).toHaveLength(1);
+    expect(
+      within(rowFor("r1")).getByRole("img", { name: "Ran out of memory" }),
     ).toBeInTheDocument();
   });
 
@@ -403,86 +400,88 @@ describe("ClustersList replica rows", () => {
     ).not.toBeInTheDocument();
   });
 
-  // The heading styling hangs off this class rather than off `[data-group-row]`,
-  // which only marks rows that can expand. jsdom does not apply emotion's
-  // stylesheet, so these assert which rows carry the class, not how it looks.
-  describe("cluster row class", () => {
-    it("marks cluster rows and not replica rows", async () => {
-      await renderClustersList([buildCluster()]);
-
-      expect(rowFor("compute")).toHaveClass("cluster-row");
-      expect(rowFor("r1")).not.toHaveClass("cluster-row");
-      expect(rowFor("r2")).not.toHaveClass("cluster-row");
-    });
-
-    it("marks a cluster with no replicas, which is not a group row", async () => {
-      await renderClustersList([buildCluster({ replicas: [] })]);
-
-      // No caret, so `[data-group-row]` is absent. The class still applies.
-      expect(caretFor("compute")).not.toBeInTheDocument();
-      expect(rowFor("compute")).not.toHaveAttribute("data-group-row");
-      expect(rowFor("compute")).toHaveClass("cluster-row");
-    });
-
-    it("keeps Chakra's generated class alongside it", async () => {
-      await renderClustersList([buildCluster()]);
-
-      // `&.cluster-row td` compiles to a compound of both classes, so losing
-      // either one silently drops the styling.
-      const classes = rowFor("compute").className.split(/\s+/);
-      expect(classes).toContain("cluster-row");
-      expect(classes.some((name) => name.startsWith("css-"))).toBe(true);
-    });
-  });
-
-  it("does not make a cluster without replicas expandable", async () => {
-    await renderClustersList([buildCluster({ replicas: [] })]);
-
-    expect(caretFor("compute")).not.toBeInTheDocument();
-  });
-
-  it("shows a single replica's row without a click", async () => {
-    await renderClustersList([buildCluster({ replicas: [buildReplica()] })]);
-
-    expect(caretFor("compute")).toHaveAttribute("aria-expanded", "true");
-    expect(cellsForRow("r1")[COLUMN.size]).toBe("50cc");
-  });
-
-  it("shows nothing but the name on a cluster row", async () => {
+  it("does not nest rows under an expandable cluster row", async () => {
     await renderClustersList([buildCluster()]);
 
-    // A cluster row is a heading: its replicas carry the data. Only the name
-    // and the actions menu belong to it.
-    const cells = cellsForRow("compute");
-    expect(cells[COLUMN.name]).toContain("compute");
-    expect(cells[COLUMN.size]).toBe("");
-    expect(cells[COLUMN.cpu]).toBe("");
-    expect(cells[COLUMN.memory]).toBe("");
-    expect(cells[COLUMN.disk]).toBe("");
-    expect(cells[COLUMN.lastStatusChange]).toBe("");
+    // A flat table has no caret column, so nothing can be collapsed away.
+    expect(
+      screen.queryByRole("button", { name: /^Show replicas of/ }),
+    ).not.toBeInTheDocument();
+    expect(bodyRows()).toHaveLength(2);
   });
 });
 
 const clickHeader = (user: ReturnType<typeof userEvent.setup>, name: RegExp) =>
   user.click(screen.getByRole("columnheader", { name }));
+
 /**
- * Every sorting fixture below names its clusters in alphabetical order and then
- * arranges their replica values so that neither the ascending nor the descending
- * result matches that order.
+ * Every sorting fixture below names its replicas so that neither the ascending
+ * nor the descending result matches the order the rows arrive in.
  *
  * This matters because `orderedClusters` hands the table its clusters sorted by
- * name, and TanStack breaks ties by row index. A cluster accessor that returns a
- * constant therefore reproduces alphabetical order exactly, so a fixture whose
- * expected order happens to be alphabetical passes even when the aggregate is
- * missing entirely. Three clusters are the minimum that can defeat this in both
- * directions.
+ * name, and TanStack breaks ties by row index. A fixture whose expected order
+ * happens to match arrival order therefore passes even when the column sorts on
+ * nothing at all.
  */
+
+describe("ClustersList Cluster sorting", () => {
+  const clickClusterHeader = (user: ReturnType<typeof userEvent.setup>) =>
+    clickHeader(user, /^Cluster/);
+
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "alpha",
+      replicas: [buildReplica({ id: "u10", name: "a-1" })],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      replicas: [buildReplica({ id: "u20", name: "b-1" })],
+    }),
+  ];
+
+  it("sorts by cluster name, ascending by default", async () => {
+    await renderClustersList(twoClusters());
+
+    expect(columnOrder(COLUMN.cluster)).toEqual(["alpha", "bravo"]);
+  });
+
+  it("reverses the clusters when the header is clicked", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await clickClusterHeader(user);
+
+    expect(columnOrder(COLUMN.cluster)).toEqual(["bravo", "alpha"]);
+  });
+
+  it("keeps a cluster's replicas together", async () => {
+    await renderClustersList([
+      buildCluster({
+        id: "u1",
+        name: "alpha",
+        replicas: [
+          buildReplica({ id: "u10", name: "a-1" }),
+          buildReplica({ id: "u11", name: "a-2" }),
+        ],
+      }),
+      buildCluster({
+        id: "u2",
+        name: "bravo",
+        replicas: [buildReplica({ id: "u20", name: "b-1" })],
+      }),
+    ]);
+
+    expect(rowOrder()).toEqual(["a-1", "a-2", "b-1"]);
+  });
+});
 
 describe("ClustersList CPU sorting", () => {
   const clickCpuHeader = (user: ReturnType<typeof userEvent.setup>) =>
     clickHeader(user, /^CPU/);
 
-  // Each per-replica column pins its own first sort direction, and CPU's is
+  // Each utilization column pins its own first sort direction, and CPU's is
   // descending.
   const sortByCpuDescending = clickCpuHeader;
 
@@ -494,9 +493,8 @@ describe("ClustersList CPU sorting", () => {
   };
 
   /**
-   * Ranked by peak the order is bravo (31), alpha (50), charlie (90). Ranked by
-   * floor or by mean it is alpha, bravo, charlie, which is also the alphabetical
-   * order, so a min-based, mean-based, or missing aggregate all fail visibly.
+   * Two clusters whose replicas interleave by CPU, so a sort that ranked
+   * clusters first and replicas within them could not produce the flat order.
    */
   const interleavedClusters = () => [
     buildCluster({
@@ -512,66 +510,36 @@ describe("ClustersList CPU sorting", () => {
       name: "bravo",
       replicas: [
         buildReplica({ id: "u20", name: "b-30", cpuPercent: 0.3 }),
-        buildReplica({ id: "u21", name: "b-31", cpuPercent: 0.31 }),
-      ],
-    }),
-    buildCluster({
-      id: "u3",
-      name: "charlie",
-      replicas: [
-        buildReplica({ id: "u30", name: "c-89", cpuPercent: 0.89 }),
-        buildReplica({ id: "u31", name: "c-90", cpuPercent: 0.9 }),
+        buildReplica({ id: "u21", name: "b-90", cpuPercent: 0.9 }),
       ],
     }),
   ];
 
-  it("orders clusters by their busiest replica", async () => {
+  it("orders every replica by CPU, across clusters", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByCpuDescending, user)).toEqual([
-      "charlie",
-      "c-90",
-      "c-89",
-      "alpha",
+      "b-90",
       "a-50",
-      "a-0",
-      "bravo",
-      "b-31",
       "b-30",
+      "a-0",
     ]);
   });
 
-  it("reverses clusters and their replicas together when sorted ascending", async () => {
+  it("reverses the replicas when sorted ascending", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
-      "bravo",
-      "b-30",
-      "b-31",
-      "alpha",
       "a-0",
+      "b-30",
       "a-50",
-      "charlie",
-      "c-89",
-      "c-90",
+      "b-90",
     ]);
   });
 
-  it("keeps each cluster's replicas contiguous beneath it", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(interleavedClusters());
-
-    const order = await rowOrderAfter(sortByCpuAscending, user);
-
-    // Sorted flat, the replicas would run 0, 30, 31, 50, 89, 90, splitting
-    // alpha's pair around bravo's.
-    const alphaAt = order.indexOf("alpha");
-    expect(order.slice(alphaAt, alphaAt + 3)).toEqual(["alpha", "a-0", "a-50"]);
-  });
-
-  it("compares cluster maxima numerically rather than as text", async () => {
+  it("compares readings numerically rather than as text", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
@@ -589,45 +557,37 @@ describe("ClustersList CPU sorting", () => {
     ]);
 
     // Text collation reads these as (12, 48) and (12, 5) and would rank 12.48
-    // above 12.5, leaving alpha first.
+    // above 12.5, leaving a-1 first.
     expect(await rowOrderAfter(sortByCpuDescending, user)).toEqual([
-      "bravo",
       "b-1",
-      "alpha",
       "a-1",
     ]);
   });
 
-  // Nulls trail the sampled clusters ascending and lead them descending, which
+  // Nulls trail the sampled replicas ascending and lead them descending, which
   // is how `nullsLast` behaves for every column in this table.
-  it("sorts a cluster whose replicas report no CPU after the sampled ones", async () => {
+  it("sorts an unsampled replica after the sampled ones", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         id: "u1",
-        name: "alpha-unsampled",
-        replicas: [
-          buildReplica({ id: "u10", name: "a-1", cpuPercent: null }),
-          buildReplica({ id: "u11", name: "a-2", cpuPercent: null }),
-        ],
+        name: "alpha",
+        replicas: [buildReplica({ id: "u10", name: "a-1", cpuPercent: null })],
       }),
       buildCluster({
         id: "u2",
-        name: "bravo-sampled",
+        name: "bravo",
         replicas: [buildReplica({ id: "u20", name: "b-1", cpuPercent: 0.03 })],
       }),
     ]);
 
     expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
-      "bravo-sampled",
       "b-1",
-      "alpha-unsampled",
       "a-1",
-      "a-2",
     ]);
   });
 
-  it("sorts a cluster with no replicas at all after the sampled ones", async () => {
+  it("sorts a cluster with no replicas after the sampled ones", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({ id: "u1", name: "alpha-empty", replicas: [] }),
@@ -638,11 +598,7 @@ describe("ClustersList CPU sorting", () => {
       }),
     ]);
 
-    expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual([
-      "bravo-sampled",
-      "b-1",
-      "alpha-empty",
-    ]);
+    expect(await rowOrderAfter(sortByCpuAscending, user)).toEqual(["b-1", "-"]);
   });
 });
 
@@ -659,11 +615,6 @@ describe("ClustersList Size sorting", () => {
     await clickSizeHeader(user);
   };
 
-  /**
-   * Ranked by largest replica the order is bravo (200cc), alpha (400cc), charlie
-   * (1600cc). Ranked by smallest it is alphabetical, so a min-based or missing
-   * aggregate fails visibly.
-   */
   const interleavedClusters = () => [
     buildCluster({
       id: "u1",
@@ -678,50 +629,20 @@ describe("ClustersList Size sorting", () => {
       name: "bravo",
       replicas: [
         buildReplica({ id: "u20", name: "b-100", size: "100cc" }),
-        buildReplica({ id: "u21", name: "b-200", size: "200cc" }),
-      ],
-    }),
-    buildCluster({
-      id: "u3",
-      name: "charlie",
-      replicas: [
-        buildReplica({ id: "u30", name: "c-800", size: "800cc" }),
-        buildReplica({ id: "u31", name: "c-1600", size: "1600cc" }),
+        buildReplica({ id: "u21", name: "b-800", size: "800cc" }),
       ],
     }),
   ];
 
-  it("orders clusters by their largest replica", async () => {
+  it("orders every replica by size, across clusters", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortBySizeDescending, user)).toEqual([
-      "charlie",
-      "c-1600",
-      "c-800",
-      "alpha",
+      "b-800",
       "a-400",
-      "a-25",
-      "bravo",
-      "b-200",
       "b-100",
-    ]);
-  });
-
-  it("reverses clusters and their replicas together when sorted ascending", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(interleavedClusters());
-
-    expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
-      "bravo",
-      "b-100",
-      "b-200",
-      "alpha",
       "a-25",
-      "a-400",
-      "charlie",
-      "c-800",
-      "c-1600",
     ]);
   });
 
@@ -741,34 +662,30 @@ describe("ClustersList Size sorting", () => {
     ]);
 
     // Character by character "100cc" precedes "50cc", which ascending would put
-    // alpha first.
+    // a-1 first.
     expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
-      "bravo",
       "b-1",
-      "alpha",
       "a-1",
     ]);
   });
 
-  it("sorts a cluster whose replicas report no size after the sized ones", async () => {
+  it("sorts a replica with no size after the sized ones", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
         id: "u1",
-        name: "alpha-unsized",
+        name: "alpha",
         replicas: [buildReplica({ id: "u10", name: "a-1", size: null })],
       }),
       buildCluster({
         id: "u2",
-        name: "bravo-sized",
+        name: "bravo",
         replicas: [buildReplica({ id: "u20", name: "b-1", size: "50cc" })],
       }),
     ]);
 
     expect(await rowOrderAfter(sortBySizeAscending, user)).toEqual([
-      "bravo-sized",
       "b-1",
-      "alpha-unsized",
       "a-1",
     ]);
   });
@@ -803,11 +720,6 @@ describe("ClustersList Last status change sorting", () => {
       ],
     });
 
-  /**
-   * Ranked by newest replica the order is bravo (Mar 11), alpha (Mar 20),
-   * charlie (Mar 28). Ranked by oldest it is alphabetical, so a min-based or
-   * missing aggregate fails visibly.
-   */
   const interleavedClusters = () => [
     buildCluster({
       id: "u1",
@@ -822,54 +734,36 @@ describe("ClustersList Last status change sorting", () => {
       name: "bravo",
       replicas: [
         replicaAt("u20", "b-10", "2024-03-10T08:00:00.000Z"),
-        replicaAt("u21", "b-11", "2024-03-11T08:00:00.000Z"),
-      ],
-    }),
-    buildCluster({
-      id: "u3",
-      name: "charlie",
-      replicas: [
-        replicaAt("u30", "c-25", "2024-03-25T08:00:00.000Z"),
-        replicaAt("u31", "c-28", "2024-03-28T08:00:00.000Z"),
+        replicaAt("u21", "b-28", "2024-03-28T08:00:00.000Z"),
       ],
     }),
   ];
 
-  it("orders clusters by their most recently changed replica", async () => {
+  it("orders every replica by its last status change, across clusters", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
-      "bravo",
-      "b-10",
-      "b-11",
-      "alpha",
       "a-01",
+      "b-10",
       "a-20",
-      "charlie",
-      "c-25",
-      "c-28",
+      "b-28",
     ]);
   });
 
-  it("reverses clusters and their replicas together when sorted descending", async () => {
+  it("reverses the replicas when sorted descending", async () => {
     const user = userEvent.setup();
     await renderClustersList(interleavedClusters());
 
     expect(await rowOrderAfter(sortByStatusDescending, user)).toEqual([
-      "charlie",
-      "c-28",
-      "c-25",
-      "alpha",
+      "b-28",
       "a-20",
-      "a-01",
-      "bravo",
-      "b-11",
       "b-10",
+      "a-01",
     ]);
   });
 
-  it("ranks a cluster by its replicas, not by its own latestStatusUpdate", async () => {
+  it("ranks a replica by its own status, not its cluster's latestStatusUpdate", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
@@ -881,24 +775,21 @@ describe("ClustersList Last status change sorting", () => {
       buildCluster({
         id: "u2",
         name: "stale-history",
-        // The status history reaches far past anything its replicas report, which
-        // is what a dropped replica leaves behind.
+        // The status history reaches far past anything its replicas report,
+        // which is what a dropped replica leaves behind.
         latestStatusUpdate: "2099-01-01T00:00:00.000Z",
         replicas: [replicaAt("u20", "h-1", "2024-03-01T08:00:00.000Z")],
       }),
     ]);
 
-    // Ranking on latestStatusUpdate would leave live first, which is also the
-    // alphabetical order.
+    // Ranking on latestStatusUpdate would leave l-1 first.
     expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
-      "stale-history",
       "h-1",
-      "live",
       "l-1",
     ]);
   });
 
-  it("sorts a cluster whose replicas have no statuses after the rest", async () => {
+  it("sorts a replica with no statuses after the rest", async () => {
     const user = userEvent.setup();
     await renderClustersList([
       buildCluster({
@@ -914,19 +805,13 @@ describe("ClustersList Last status change sorting", () => {
     ]);
 
     expect(await rowOrderAfter(sortByStatusAscending, user)).toEqual([
-      "bravo-reporting",
       "b-1",
-      "alpha-silent",
       "a-1",
     ]);
   });
 });
 
 describe("ClustersList search", () => {
-  /**
-   * `compute` holds the only 100cc replica, so its aggregate Size matches
-   * "100cc" even though that cell renders blank on a cluster row.
-   */
   const twoClusters = () => [
     buildCluster({
       id: "u1",
@@ -953,44 +838,32 @@ describe("ClustersList search", () => {
     await waitFor(() => expect(rowOrder()).toEqual(expected));
   };
 
-  it("shows a matching replica under its cluster, without its siblings", async () => {
+  it("matches a replica by name", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await expectRowsMatching(user, "alpha", ["compute", "alpha"]);
+    await expectRowsMatching(user, "alpha", ["alpha"]);
   });
 
-  it("shows every replica of a cluster whose name matches", async () => {
+  it("keeps every replica of a cluster whose name matches", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    // The cluster is the hit here, so its replicas come along rather than
-    // leaving a heading with nothing under it.
-    await expectRowsMatching(user, "compute", ["compute", "alpha", "beta"]);
+    await expectRowsMatching(user, "compute", ["alpha", "beta"]);
   });
 
   it("leaves other clusters out when one cluster matches", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await expectRowsMatching(user, "ingest", ["ingest", "gamma"]);
+    await expectRowsMatching(user, "ingest", ["gamma"]);
   });
 
   it("matches replicas on columns other than the name", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
-    await expectRowsMatching(user, "100cc", ["compute", "beta"]);
-  });
-
-  it("does not expand a cluster matched only by an aggregate of its replicas", async () => {
-    const user = userEvent.setup();
-    await renderClustersList(twoClusters());
-
-    // "100cc" is compute's aggregate Size as well as beta's own, but that cell
-    // is blank on the cluster row, so treating it as a cluster hit would surface
-    // alpha for a term found nowhere the user can see.
-    await expectRowsMatching(user, "100cc", ["compute", "beta"]);
+    await expectRowsMatching(user, "100cc", ["beta"]);
   });
 
   it("shows no rows when nothing matches", async () => {
@@ -1002,10 +875,8 @@ describe("ClustersList search", () => {
 });
 
 describe("ClustersList keyboard navigation", () => {
-  // A cluster with replicas puts an expand caret ahead of its name, which would
-  // shift every tab stop in the row. These tests are about the name and the
-  // actions menu, so they leave the caret out.
-  const unexpandableCluster = () => buildCluster({ replicas: [] });
+  const singleReplicaCluster = () =>
+    buildCluster({ replicas: [buildReplica()] });
 
   const clusterNameLink = () =>
     screen.getByRole("link", {
@@ -1014,7 +885,7 @@ describe("ClustersList keyboard navigation", () => {
 
   it("tabs from the page controls to the cluster name, then its actions", async () => {
     const user = userEvent.setup();
-    await renderClustersList([unexpandableCluster()]);
+    await renderClustersList([singleReplicaCluster()]);
 
     // The header's system-objects switch and the table's search box precede the
     // rows in document order.
@@ -1033,7 +904,7 @@ describe("ClustersList keyboard navigation", () => {
 
   it("opens the cluster detail view on Enter", async () => {
     const user = userEvent.setup();
-    await renderClustersList([unexpandableCluster()]);
+    await renderClustersList([singleReplicaCluster()]);
 
     clusterNameLink().focus();
     await user.keyboard("{Enter}");
@@ -1044,7 +915,7 @@ describe("ClustersList keyboard navigation", () => {
 
   it("opens the actions menu on Enter", async () => {
     const user = userEvent.setup();
-    await renderClustersList([unexpandableCluster()]);
+    await renderClustersList([singleReplicaCluster()]);
 
     const actionsButton = screen.getByRole("button", { name: "More actions" });
     actionsButton.focus();
@@ -1057,5 +928,14 @@ describe("ClustersList keyboard navigation", () => {
     expect(
       screen.getByRole("menuitem", { name: "Drop cluster" }),
     ).toBeVisible();
+  });
+
+  it("offers the cluster's actions on each of its replica rows", async () => {
+    await renderClustersList([buildCluster()]);
+
+    // The menu acts on the cluster, so both replica rows carry one.
+    expect(
+      screen.getAllByRole("button", { name: "More actions" }),
+    ).toHaveLength(2);
   });
 });
