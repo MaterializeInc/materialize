@@ -11,7 +11,7 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::apply_objects;
-use crate::cli::commands::grants;
+use crate::cli::commands::reconcile::ObjectKind;
 use crate::cli::executor::ObjectAction;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectResult, compile_apply_project_and_connect,
@@ -31,7 +31,7 @@ use mz_sql_parser::parser::parse_statements;
 use std::collections::{BTreeMap, BTreeSet};
 
 const PHASE_NAME: &str = "connections";
-const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Connection;
+const OBJECT_KIND: ObjectKind = ObjectKind::Connection;
 
 fn matches(stmt: &Statement) -> bool {
     matches!(stmt, Statement::CreateConnection(_))
@@ -112,7 +112,7 @@ impl Connections {
             executor,
             obj_id,
             typed_obj,
-            &GRANT_KIND,
+            OBJECT_KIND,
         )
         .await?;
 
@@ -142,7 +142,7 @@ impl Connections {
             executor,
             obj_id,
             typed_obj,
-            &GRANT_KIND,
+            OBJECT_KIND,
         )
         .await?;
 
@@ -176,7 +176,7 @@ pub async fn plan(
     let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
     let existing = client
         .introspection()
-        .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
+        .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_table())
         .await
         .map_err(CliError::Connection)?;
 

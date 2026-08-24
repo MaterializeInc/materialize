@@ -11,6 +11,7 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
+use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
@@ -98,12 +99,11 @@ async fn plan_network_policy(
     };
 
     // Reconcile grants
-    grants::reconcile_named_object(
+    grants::reconcile(
         client,
         executor,
-        policy_name,
+        &ReconcileTarget::named(ObjectKind::NetworkPolicy, policy_name),
         &def.grants,
-        &grants::GrantNamedObjectKind::NetworkPolicy,
     )
     .await?;
 

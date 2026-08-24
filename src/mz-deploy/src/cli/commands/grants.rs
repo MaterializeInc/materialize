@@ -10,151 +10,56 @@
 //! Shared helpers for grant reconciliation across apply commands.
 
 use crate::cli::CliError;
+use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::{Client, ObjectGrant};
 use crate::info;
-use crate::project::ir::object_id::ObjectId;
 use mz_sql_parser::ast::{
-    GrantPrivilegesStatement, GrantTargetSpecification, GrantTargetSpecificationInner, Ident,
-    ObjectType, Privilege, PrivilegeSpecification, Raw, RevokePrivilegesStatement,
-    UnresolvedItemName, UnresolvedObjectName,
+    GrantPrivilegesStatement, GrantTargetSpecification, Ident, Privilege, PrivilegeSpecification,
+    Raw, RevokePrivilegesStatement,
 };
 use owo_colors::{OwoColorize, Stream, Style};
 use std::collections::BTreeSet;
 use std::fmt;
 
-/// The kind of database object for grant reconciliation.
-///
-/// Groups the catalog table name, SQL keyword, privilege set, and display label
-/// that vary per object type so callers don't have to pass four loose strings.
-#[derive(Clone, Copy)]
-pub enum GrantObjectKind {
-    Table,
-    Source,
-    Secret,
-    Connection,
-}
-
-impl GrantObjectKind {
-    pub fn catalog_table(&self) -> &'static str {
-        match self {
-            Self::Table => "mz_tables",
-            Self::Source => "mz_sources",
-            Self::Secret => "mz_secrets",
-            Self::Connection => "mz_connections",
-        }
-    }
-
-    pub fn grant_target(&self, obj_id: &ObjectId) -> GrantTargetSpecification<Raw> {
-        let object_type = match self {
-            Self::Table | Self::Source => ObjectType::Table,
-            Self::Secret => ObjectType::Secret,
-            Self::Connection => ObjectType::Connection,
-        };
-        let item_name = UnresolvedItemName::qualified(&[
-            Ident::new_unchecked(obj_id.expect_database()),
-            Ident::new_unchecked(obj_id.schema()),
-            Ident::new_unchecked(obj_id.object()),
-        ]);
-        build_grant_target(object_type, UnresolvedObjectName::Item(item_name))
-    }
-
-    pub fn all_privileges(&self) -> &'static [&'static str] {
-        match self {
-            Self::Table => &["SELECT", "INSERT", "UPDATE", "DELETE"],
-            Self::Source => &["SELECT"],
-            Self::Secret | Self::Connection => &["USAGE"],
-        }
-    }
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Table => "table",
-            Self::Source => "source",
-            Self::Secret => "secret",
-            Self::Connection => "connection",
-        }
-    }
-
-    /// The `object_type` string used in `mz_default_privileges`.
-    pub fn object_type_str(&self) -> &'static str {
-        match self {
-            Self::Table | Self::Source => "table",
-            Self::Secret => "secret",
-            Self::Connection => "connection",
-        }
-    }
-}
-
-/// Build a [`GrantTargetSpecification`] for a single named object.
-fn build_grant_target(
-    object_type: ObjectType,
-    name: UnresolvedObjectName,
-) -> GrantTargetSpecification<Raw> {
-    GrantTargetSpecification::Object {
-        object_type,
-        object_spec_inner: GrantTargetSpecificationInner::Objects { names: vec![name] },
-    }
-}
-
-/// The kind of named infrastructure object for grant reconciliation.
-///
-/// Named objects (clusters, network policies) use simpler catalog lookups
-/// than schema-qualified database objects.
-pub enum GrantNamedObjectKind {
-    Cluster,
-    NetworkPolicy,
-}
-
-impl GrantNamedObjectKind {
-    fn grant_target(&self, name: &str) -> GrantTargetSpecification<Raw> {
-        let (object_type, object_name) = match self {
-            Self::Cluster => (
-                ObjectType::Cluster,
-                UnresolvedObjectName::Cluster(Ident::new_unchecked(name)),
-            ),
-            Self::NetworkPolicy => (
-                ObjectType::NetworkPolicy,
-                UnresolvedObjectName::NetworkPolicy(Ident::new_unchecked(name)),
-            ),
-        };
-        build_grant_target(object_type, object_name)
-    }
-
-    fn all_privileges(&self) -> &'static [&'static str] {
-        match self {
-            Self::Cluster => &["USAGE", "CREATE"],
-            Self::NetworkPolicy => &["USAGE"],
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Cluster => "cluster",
-            Self::NetworkPolicy => "network policy",
-        }
-    }
-}
-
-/// Reconcile grants for a named infrastructure object (cluster or network policy).
-///
-/// Three-step algorithm:
-/// 1. Apply all desired GRANTs idempotently (GRANT is a no-op if already present).
-/// 2. Query the live grant state and default-privilege grants from the catalog.
-/// 3. Compute the set difference (current - desired - protected) and REVOKE stale grants.
-pub async fn reconcile_named_object(
+/// Reconcile grants for one catalog object.
+pub async fn reconcile(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
-    name: &str,
+    target: &ReconcileTarget<'_>,
     grants: &[GrantPrivilegesStatement<Raw>],
-    kind: &GrantNamedObjectKind,
 ) -> Result<(), CliError> {
     for grant in grants {
         executor.execute_sql(grant).await?;
     }
     let introspection = client.introspection();
-    let (current, default_privs) = match kind {
-        GrantNamedObjectKind::Cluster => (
+    let kind = target.kind();
+    let (current, default_privs) = match target {
+        ReconcileTarget::Item { id, .. } => (
+            introspection
+                .get_database_object_grants(
+                    kind.catalog_table(),
+                    id.expect_database(),
+                    id.schema(),
+                    id.object(),
+                )
+                .await
+                .map_err(CliError::Connection)?,
+            introspection
+                .get_default_privilege_grants_for_database_object(
+                    kind.catalog_table(),
+                    id.expect_database(),
+                    id.schema(),
+                    id.object(),
+                    kind.default_privilege_type(),
+                )
+                .await
+                .map_err(CliError::Connection)?,
+        ),
+        ReconcileTarget::Named {
+            kind: ObjectKind::Cluster,
+            name,
+        } => (
             introspection
                 .get_cluster_grants(name)
                 .await
@@ -164,7 +69,10 @@ pub async fn reconcile_named_object(
                 .await
                 .map_err(CliError::Connection)?,
         ),
-        GrantNamedObjectKind::NetworkPolicy => (
+        ReconcileTarget::Named {
+            kind: ObjectKind::NetworkPolicy,
+            name,
+        } => (
             introspection
                 .get_network_policy_grants(name)
                 .await
@@ -174,62 +82,18 @@ pub async fn reconcile_named_object(
                 .await
                 .map_err(CliError::Connection)?,
         ),
+        ReconcileTarget::Named { kind, .. } => {
+            unreachable!("invalid named {} target", kind.label())
+        }
     };
     let protected: BTreeSet<_> = default_privs
         .iter()
         .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
         .collect();
     let desired = desired_grants(grants, kind.all_privileges());
-    let target = kind.grant_target(name);
-    let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
-    execute_revocations(executor, &revocations, kind.label(), &name).await
-}
-
-/// Reconcile grants for a single object: apply desired grants, revoke stale ones.
-///
-/// Three-step algorithm:
-/// 1. Apply all desired GRANTs idempotently (GRANT is a no-op if already present).
-/// 2. Query the live grant state and default-privilege grants from the catalog.
-/// 3. Compute the set difference (current - desired - protected) and REVOKE stale grants.
-pub async fn reconcile(
-    client: &Client,
-    executor: &DeploymentExecutor<'_>,
-    obj_id: &ObjectId,
-    grants: &[GrantPrivilegesStatement<Raw>],
-    kind: &GrantObjectKind,
-) -> Result<(), CliError> {
-    for grant in grants {
-        executor.execute_sql(grant).await?;
-    }
-    let current = client
-        .introspection()
-        .get_database_object_grants(
-            kind.catalog_table(),
-            obj_id.expect_database(),
-            obj_id.schema(),
-            obj_id.object(),
-        )
-        .await
-        .map_err(CliError::Connection)?;
-    let default_privs = client
-        .introspection()
-        .get_default_privilege_grants_for_database_object(
-            kind.catalog_table(),
-            obj_id.expect_database(),
-            obj_id.schema(),
-            obj_id.object(),
-            kind.object_type_str(),
-        )
-        .await
-        .map_err(CliError::Connection)?;
-    let protected: BTreeSet<_> = default_privs
-        .iter()
-        .map(|g| (g.grantee.to_lowercase(), g.privilege_type.to_uppercase()))
-        .collect();
-    let desired = desired_grants(grants, kind.all_privileges());
-    let target = kind.grant_target(obj_id);
-    let revocations = stale_grant_revocations(&current, &desired, &protected, &target);
-    execute_revocations(executor, &revocations, kind.label(), obj_id).await
+    let grant_target = target.grant_target();
+    let revocations = stale_grant_revocations(&current, &desired, &protected, &grant_target);
+    execute_revocations(executor, &revocations, kind.label(), &target.display_name()).await
 }
 
 /// Extract `(grantee, privilege_type)` pairs from parsed GRANT statements.
@@ -357,6 +221,7 @@ pub async fn execute_revocations(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project::ir::object_id::ObjectId;
     use mz_sql_parser::ast::Statement;
     use mz_sql_parser::parser::parse_statements;
 
@@ -377,11 +242,11 @@ mod tests {
     }
 
     fn cluster_target(name: &str) -> GrantTargetSpecification<Raw> {
-        GrantNamedObjectKind::Cluster.grant_target(name)
+        ReconcileTarget::named(ObjectKind::Cluster, name).grant_target()
     }
 
     fn network_policy_target(name: &str) -> GrantTargetSpecification<Raw> {
-        GrantNamedObjectKind::NetworkPolicy.grant_target(name)
+        ReconcileTarget::named(ObjectKind::NetworkPolicy, name).grant_target()
     }
 
     fn obj_id(db: &str, schema: &str, name: &str) -> ObjectId {
@@ -389,19 +254,19 @@ mod tests {
     }
 
     fn table_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
-        GrantObjectKind::Table.grant_target(&obj_id(db, schema, name))
+        ReconcileTarget::item(ObjectKind::Table, &obj_id(db, schema, name)).grant_target()
     }
 
     fn secret_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
-        GrantObjectKind::Secret.grant_target(&obj_id(db, schema, name))
+        ReconcileTarget::item(ObjectKind::Secret, &obj_id(db, schema, name)).grant_target()
     }
 
     fn connection_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
-        GrantObjectKind::Connection.grant_target(&obj_id(db, schema, name))
+        ReconcileTarget::item(ObjectKind::Connection, &obj_id(db, schema, name)).grant_target()
     }
 
     fn source_target(db: &str, schema: &str, name: &str) -> GrantTargetSpecification<Raw> {
-        GrantObjectKind::Source.grant_target(&obj_id(db, schema, name))
+        ReconcileTarget::item(ObjectKind::Source, &obj_id(db, schema, name)).grant_target()
     }
 
     /// Convert revocations to strings for easier assertion.

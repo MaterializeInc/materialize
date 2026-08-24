@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 use crate::cli::CliError;
 use crate::cli::commands::grants;
+use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
@@ -137,12 +138,11 @@ async fn plan_cluster(
     };
 
     // Reconcile grants
-    grants::reconcile_named_object(
+    grants::reconcile(
         client,
         executor,
-        cluster_name,
+        &ReconcileTarget::named(ObjectKind::Cluster, cluster_name),
         &def.grants,
-        &grants::GrantNamedObjectKind::Cluster,
     )
     .await?;
 

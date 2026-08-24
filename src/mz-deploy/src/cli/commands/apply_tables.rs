@@ -11,7 +11,7 @@
 
 use crate::cli::CliError;
 use crate::cli::commands::apply_objects;
-use crate::cli::commands::grants;
+use crate::cli::commands::reconcile::ObjectKind;
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult,
     compile_apply_project_and_connect,
@@ -24,7 +24,7 @@ use crate::project::ir::graph::Project;
 use std::collections::BTreeSet;
 
 const PHASE_NAME: &str = "tables";
-const GRANT_KIND: grants::GrantObjectKind = grants::GrantObjectKind::Table;
+const OBJECT_KIND: ObjectKind = ObjectKind::Table;
 
 fn matches(stmt: &Statement) -> bool {
     matches!(
@@ -58,7 +58,7 @@ pub async fn plan(
     let target_objects = planned_project.get_sorted_objects_filtered(&target_ids)?;
     let existing = client
         .introspection()
-        .check_catalog_objects_exist(&target_ids, GRANT_KIND.catalog_table())
+        .check_catalog_objects_exist(&target_ids, OBJECT_KIND.catalog_table())
         .await
         .map_err(CliError::Connection)?;
 
@@ -93,7 +93,7 @@ pub async fn plan(
                 executor,
                 &obj_id,
                 typed_obj,
-                &GRANT_KIND,
+                OBJECT_KIND,
             )
             .await?;
             results.push(ObjectResult {
@@ -118,7 +118,7 @@ pub async fn plan(
             executor,
             &obj_id,
             typed_obj,
-            &GRANT_KIND,
+            OBJECT_KIND,
         )
         .await?;
         let post_statements = executor.take_statements();
