@@ -222,7 +222,7 @@ pub struct Args {
     /// in bytes per second. Unlike the sample rate, this caps the sustained
     /// volume statement logging writes. Leave unset to keep environmentd's own
     /// default.
-    #[clap(long)]
+    #[clap(long, value_parser = parse_data_rate)]
     statement_logging_target_data_rate: Option<usize>,
 
     #[clap(long)]
@@ -358,6 +358,17 @@ fn parse_sample_rate(s: &str) -> anyhow::Result<f64> {
     let rate: f64 = s.parse()?;
     if !(0.0..=1.0).contains(&rate) {
         anyhow::bail!("sample rate must be between 0 and 1, got {rate}");
+    }
+    Ok(rate)
+}
+
+/// Rejects a rate of 0. The token bucket starts empty and refills at this rate,
+/// so 0 throttles every statement forever rather than disabling logging
+/// legibly. Use the sample rate to opt out instead.
+fn parse_data_rate(s: &str) -> anyhow::Result<usize> {
+    let rate: usize = s.parse()?;
+    if rate == 0 {
+        anyhow::bail!("target data rate must be greater than 0");
     }
     Ok(rate)
 }

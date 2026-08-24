@@ -51,7 +51,7 @@ tests:
   asserts:
   - contains:
       path: spec.template.spec.containers[0].args
-      content: "--statement-logging-max-sample-rate=0.1"
+      content: "--statement-logging-max-sample-rate=0.99"
 
 - it: should set a custom statement logging sample rate
   set:
@@ -75,7 +75,7 @@ tests:
   asserts:
   - notContains:
       path: spec.template.spec.containers[0].args
-      content: "--statement-logging-max-sample-rate=0.1"
+      content: "--statement-logging-max-sample-rate=0.99"
   - notContains:
       path: spec.template.spec.containers[0].args
       content: "--statement-logging-max-sample-rate="
