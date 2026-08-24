@@ -707,9 +707,11 @@ The `mz_object_history` view enriches the [`mz_catalog.mz_objects`](/reference/s
 ## `mz_object_hydration_history`
 
 The `mz_object_hydration_history` table records completed hydration of indexes and
-materialized views, with one row for each time a dataflow hydrated on a replica. Rows
-are retained for 30 days, and `object_id`, `cluster_id`, and `replica_id` may name
-objects that no longer exist.
+materialized views, with one row for each time a dataflow hydrated on a replica.
+By default, rows are retained for 30 days while collection is enabled. Disabling
+collection also suspends retention, so existing rows remain until collection is
+enabled again. `object_id`, `cluster_id`, and `replica_id` may name objects that no
+longer exist.
 
 Recording is best effort. Only successful hydration is recorded, an episode can be
 missed if the object or its replica goes away before the episode is recorded, and a
