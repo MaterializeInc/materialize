@@ -59,6 +59,7 @@ from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.mz import Mz
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.schema_registry import SchemaRegistry
+from materialize.mzcompose.services.sql_server import SqlServer
 from materialize.mzcompose.services.ssh_bastion_host import SshBastionHost
 from materialize.mzcompose.services.testdrive import Testdrive
 from materialize.ui import UIError
@@ -328,6 +329,38 @@ NAME_PATTERN = re.compile(
     r"^(?:cluster|replica|role):\S+$|^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$"
 )
 
+# `replay_workload` prints the console URL via `c.port("materialized", 6874)`,
+# so the workload-mode service must publish the same ports the replay
+# composition does, not just the SQL ports this harness reads.
+# An AWS connection's external_id ends in the connection's own catalog id
+# (mz_<environment-uuid>_s825). Whole-cell canonicalization cannot reach an id
+# embedded in a larger string, and builtin ids shift whenever builtins are
+# added, so the trailing id is scrubbed instead.
+EXTERNAL_ID_PATTERN = re.compile(r"(mz_[0-9a-f-]{36})_[su]\d+")
+
+# A Postgres source's replication slot name carries a freshly generated UUID,
+# so it differs between the two sides for the same source.
+SLOT_PATTERN = re.compile(r"materialize_[0-9a-f]{32}")
+
+# The SSH bastion keypair is generated per environment, so a connection's
+# stored PUBLIC KEY differs between the two sides by construction.
+SSH_KEY_PATTERN = re.compile(r"ssh-ed25519 [A-Za-z0-9+/=]+")
+
+# `AS OF <millis>` is stamped into the create_sql of a REFRESH materialized
+# view from the wall clock at creation time, so it necessarily differs between
+# two environments. Scrub the digits and keep the clause, so its presence and
+# position still compare while the value does not.
+AS_OF_PATTERN = re.compile(r"\bAS OF \d+")
+
+# Columns whose ids live in a namespace other than "object", by convention.
+# A relation's `id_namespace_by_column` overrides this.
+NAMESPACE_BY_COLUMN_NAME = {
+    "schema_id": "schema",
+    "database_id": "database",
+}
+
+WORKLOAD_MZ_PORTS = [6875, 6874, 6876, 6877, 6878, 6880, 6881, 26257]
+
 SERVICES = [
     Materialized(name="mz_old"),  # Overridden below
     Materialized(name="mz_new"),  # Overridden below
@@ -338,13 +371,42 @@ SERVICES = [
     Materialized(
         cluster_replica_size=cluster_replica_sizes,
         additional_system_parameter_defaults=additional_system_parameter_defaults,
+        ports=WORKLOAD_MZ_PORTS,
+        environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
     ),
-    Kafka(auto_create_topics=False),
+    # These mirror test/workload-replay/mzcompose.py rather than using
+    # defaults. The replay framework creates Kafka topics from the host with
+    # confluent_kafka.admin, so the broker needs a published host port and a
+    # HOST advertised listener; Testdrive needs the vars the capture's
+    # generated DDL references.
+    Kafka(
+        auto_create_topics=False,
+        ports=["30123:30123"],
+        allow_host_ports=True,
+        advertised_listeners=[
+            "HOST://127.0.0.1:30123",
+            "PLAINTEXT://kafka:9092",
+        ],
+        environment_extra=[
+            "KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,PLAINTEXT:PLAINTEXT",
+        ],
+    ),
     SchemaRegistry(),
     Postgres(),
     MySql(),
+    SqlServer(),
     SshBastionHost(allow_any_key=True),
-    Testdrive(),
+    Testdrive(
+        seed=1,
+        no_reset=True,
+        no_consistency_checks=True,
+        entrypoint_extra=[
+            f"--var=default-storage-size={Materialized.Size.DEFAULT_SIZE}-1",
+            f"--var=mysql-root-password={MySql.DEFAULT_ROOT_PASSWORD}",
+            f"--var=default-sql-server-user={SqlServer.DEFAULT_USER}",
+            f"--var=default-sql-server-password={SqlServer.DEFAULT_SA_PASSWORD}",
+        ],
+    ),
     Mz(app_password=""),
 ]
 
@@ -400,6 +462,8 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
     """
     namespaces: dict[str, dict[str, str]] = {
         "object": {},
+        "schema": {},
+        "database": {},
         "cluster": {},
         "replica": {},
         "role": {},
@@ -424,6 +488,20 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
     namespaces["replica"] = {row[0]: row[1] for row in cursor.fetchall()}
     cursor.execute(b"SELECT id, 'role:' || name FROM mz_roles")
     namespaces["role"] = {row[0]: row[1] for row in cursor.fetchall()}
+    # Schemas and databases are not in mz_objects, so their ids must resolve in
+    # their own namespaces. Sharing the object namespace silently maps a schema
+    # id onto whichever unrelated object holds the same id, and because object
+    # ids shift between builds the two sides then disagree on a row that is
+    # actually identical.
+    cursor.execute(
+        b"""
+        SELECT s.id, 'schema:' || coalesce(d.name || '.', '') || s.name
+        FROM mz_schemas s LEFT JOIN mz_databases d ON s.database_id = d.id
+        """
+    )
+    namespaces["schema"] = {row[0]: row[1] for row in cursor.fetchall()}
+    cursor.execute(b"SELECT id, 'database:' || name FROM mz_databases")
+    namespaces["database"] = {row[0]: row[1] for row in cursor.fetchall()}
 
     dumps = {}
     for relation, config in ((r, RELATIONS[r]) for r in relations):
@@ -438,9 +516,14 @@ def dump(cursor: Any, relations: list[str], user_rows_only: bool) -> Snapshot:
             for column, value in zip(columns, raw):
                 if column in config.ignore_columns:
                     continue
-                value = str(value)
+                value = AS_OF_PATTERN.sub("AS OF <TIMESTAMP>", str(value))
+                value = SSH_KEY_PATTERN.sub("ssh-ed25519 <KEY>", value)
+                value = SLOT_PATTERN.sub("materialize_<SLOT>", value)
+                value = EXTERNAL_ID_PATTERN.sub(r"\1_<ID>", value)
                 if ID_PATTERN.match(value):
-                    namespace = config.id_namespace_by_column.get(column, "object")
+                    namespace = config.id_namespace_by_column.get(
+                        column, NAMESPACE_BY_COLUMN_NAME.get(column, "object")
+                    )
                     value = namespaces[namespace].get(value, value)
                 if (
                     column in config.sort_array_columns
@@ -499,6 +582,8 @@ def workload_snapshot(
             image=image,
             cluster_replica_size=cluster_replica_sizes,
             additional_system_parameter_defaults=additional_system_parameter_defaults,
+            ports=WORKLOAD_MZ_PORTS,
+            environment_extra=["MZ_NO_BUILTIN_CONSOLE=0"],
             use_default_volumes=False,
         )
     ):
