@@ -31,6 +31,7 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 - **materialize-debug-freshness**: A new skill that diagnoses why an object is behind wall-clock time, sweeping source and sink status, attributing lag hop by hop, and ranking the dataflows and operators responsible.
 
 ### Bug Fixes {#v26.39-bug-fixes}
+- Fixed zero-downtime upgrades cutting over before built-in materialized views rebuilt by the upgrade had hydrated, which made them all hydrate at once at cut-over, spiking `mz_catalog_server` CPU and slowing catalog queries.
 - Fixed crashes and coordinator stalls when planning queries with long `JOIN` chains or long chains of CTEs.
 - Fixed a `column "table_func_0" does not exist` error when a table function in the `SELECT` list is combined with `GROUP BY`, aggregates, or `HAVING`.
 - Fixed out-of-memory crashes caused by large `SELECT` results over the HTTP and WebSocket APIs and by slow-reading `SUBSCRIBE` clients, with results now streaming incrementally over the WebSocket API, the result size limit now enforced on the HTTP API, and an error returned when a `SUBSCRIBE` client falls too far behind.
