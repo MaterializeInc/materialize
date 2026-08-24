@@ -89,11 +89,14 @@ so an unfinished episode needs a second age basis before it can be recorded at a
 
 The table lives in `mz_internal` to mark it unstable while it settles.
 
-No index initially, and not a retained-metrics object either, both because of size:
-an index arranges the whole table on the catalog server, and the retained-metrics
-flag pins a 30 day compaction window on top of it. The table grows with objects
-times replicas times re-hydrations, and nothing queries it by key yet. Adding an
-index later is a migration we can do when a query needs one.
+No index initially, and not a retained-metrics object either, both because of size.
+The collector does anti-join by `(object_id, replica_id, installed_at)`, but its
+subscribe runs on the selected user replica. An index arranged on the catalog
+server cannot serve that dataflow, so it would pin the whole table without removing
+the collector's recurring import and arrangement cost. That cost grows with retained
+history and is accepted by this sampling design. Adding an index later is a
+migration we can do when a query that can use it needs one. The retained-metrics
+flag would independently pin a 30 day compaction window, so it stays off too.
 
 ## Why concurrent writers converge
 
