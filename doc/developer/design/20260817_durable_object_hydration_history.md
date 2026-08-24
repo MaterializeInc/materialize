@@ -190,13 +190,15 @@ writes their retractions at the observed frontier. Collection applies the same
 cutoff, so a still-live log row cannot resurrect an episode retention just
 retracted.
 
-Retention deletes a bounded batch per sweep and converges over as many sweeps as it
-takes. The bound is not a nicety. The OCC path refuses a selection larger than
-`max_result_size` before submitting any write, so one unbounded delete over a large
-backlog would fail identically forever and never shrink the table. The bound has to
-sit inside a derived table, because a top-level `LIMIT` lands in the plan's
-`RowSetFinishing`, which the OCC path deliberately discards, and the delete would
-be silently unbounded again.
+Retention deletes successive bounded batches until one is not full. The fixed
+cutoff makes the eligible set finite, and collection refuses to insert rows behind
+that cutoff, so a successful sweep drains the backlog even when more than one batch
+expires at once. The bound is not a nicety. The OCC path refuses a selection larger
+than `max_result_size` before submitting any write, so one unbounded delete over a
+large backlog would fail identically forever and never shrink the table. The bound
+has to sit inside a derived table, because a top-level `LIMIT` lands in the plan's
+`RowSetFinishing`, which the OCC path deliberately discards, and the delete would be
+silently unbounded again.
 
 Retention runs on the catalog server, so it keeps working when there are no user
 replicas at all, and it runs even when that sweep's collection failed. A
