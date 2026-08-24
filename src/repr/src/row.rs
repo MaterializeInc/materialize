@@ -1261,6 +1261,90 @@ enum Tag {
 }
 
 impl Tag {
+    /// The tag's discriminant, usable in const context.
+    #[allow(clippy::as_conversions)]
+    const fn byte(self) -> u8 {
+        self as u8
+    }
+}
+
+/// Assert that the listed tags are consecutive, in the order given.
+///
+/// Every family below is addressed by arithmetic rather than by name: `push_datum` writes
+/// `first + n` for a body of `n` bytes, and `Tag::actual_int_length` inverts that. A variant
+/// inserted into the middle of a family, or two members swapped, silently changes how many bytes
+/// a tag claims, which corrupts the datum rather than failing to compile. These assertions turn
+/// that into a compile error at the definition.
+macro_rules! assert_consecutive {
+    ($($tag:ident),+ $(,)?) => {
+        const _: () = {
+            let tags: &[u8] = &[$(Tag::$tag.byte()),+];
+            let mut i = 1;
+            while i < tags.len() {
+                assert!(
+                    tags[i] == tags[i - 1] + 1,
+                    concat!("tags are not consecutive: ", stringify!($($tag),+))
+                );
+                i += 1;
+            }
+        };
+    };
+}
+
+// The variable-length integer families, each ordered by the byte count of the body.
+assert_consecutive!(NonNegativeInt16_0, NonNegativeInt16_8, NonNegativeInt16_16);
+assert_consecutive!(
+    NonNegativeInt32_0,
+    NonNegativeInt32_8,
+    NonNegativeInt32_16,
+    NonNegativeInt32_24,
+    NonNegativeInt32_32,
+);
+assert_consecutive!(
+    NonNegativeInt64_0,
+    NonNegativeInt64_8,
+    NonNegativeInt64_16,
+    NonNegativeInt64_24,
+    NonNegativeInt64_32,
+    NonNegativeInt64_40,
+    NonNegativeInt64_48,
+    NonNegativeInt64_56,
+    NonNegativeInt64_64,
+);
+assert_consecutive!(NegativeInt16_0, NegativeInt16_8, NegativeInt16_16);
+assert_consecutive!(
+    NegativeInt32_0,
+    NegativeInt32_8,
+    NegativeInt32_16,
+    NegativeInt32_24,
+    NegativeInt32_32,
+);
+assert_consecutive!(
+    NegativeInt64_0,
+    NegativeInt64_8,
+    NegativeInt64_16,
+    NegativeInt64_24,
+    NegativeInt64_32,
+    NegativeInt64_40,
+    NegativeInt64_48,
+    NegativeInt64_56,
+    NegativeInt64_64,
+);
+assert_consecutive!(UInt8_0, UInt8_8);
+assert_consecutive!(UInt16_0, UInt16_8, UInt16_16);
+assert_consecutive!(UInt32_0, UInt32_8, UInt32_16, UInt32_24, UInt32_32);
+assert_consecutive!(
+    UInt64_0, UInt64_8, UInt64_16, UInt64_24, UInt64_32, UInt64_40, UInt64_48, UInt64_56,
+    UInt64_64,
+);
+
+// The length-prefixed families, each ordered by the width of the length prefix. `read_lengthed_datum`
+// selects the width by name, but `predict` selects it by the tag's distance from the first member.
+assert_consecutive!(BytesTiny, BytesShort, BytesLong, BytesHuge);
+assert_consecutive!(StringTiny, StringShort, StringLong, StringHuge);
+assert_consecutive!(ListTiny, ListShort, ListLong, ListHuge);
+
+impl Tag {
     fn actual_int_length(self) -> Option<usize> {
         use Tag::*;
         let val = match self {
