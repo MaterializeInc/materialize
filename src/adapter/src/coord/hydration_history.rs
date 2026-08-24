@@ -41,6 +41,7 @@ use mz_ore::task;
 use mz_repr::CatalogItemId;
 use mz_sql::plan::{MutationKind, Params, Plan, ReadThenWritePlan};
 use rand::{Rng, SeedableRng, rngs};
+use sha2::{Digest, Sha256};
 use tracing::warn;
 
 use crate::catalog::Catalog;
@@ -92,6 +93,14 @@ fn next_fire_delay(now: EpochMillis, interval_ms: EpochMillis, offset: EpochMill
         this_period.saturating_add(interval_ms)
     };
     Duration::from_millis(next.saturating_sub(now))
+}
+
+/// Stable offset within `interval_ms` for one environment id.
+fn environment_schedule_offset(environment_id: &str, interval_ms: EpochMillis) -> EpochMillis {
+    let seed: [u8; 32] = Sha256::digest(environment_id).into();
+    // `random_range` panics on an empty range, and callers clamp the interval to
+    // at least one millisecond.
+    rngs::SmallRng::from_seed(seed).random_range(0..interval_ms)
 }
 
 impl Coordinator {
@@ -148,28 +157,14 @@ impl Coordinator {
 
     /// A stable offset into the collection interval for this environment.
     ///
-    /// Seeded from the organization id, so it survives restarts but differs
-    /// between environments. Without it every environment would sweep on the same
-    /// absolute grid, turning each boundary into a fleet-wide burst of dataflow
-    /// installs, oracle round trips and persist writes.
+    /// Seeded from the full environment id, so it survives restarts but differs
+    /// between environments in the same organization. Without it every
+    /// environment would sweep on the same absolute grid, turning each boundary
+    /// into a fleet-wide burst of dataflow installs, oracle round trips and persist
+    /// writes.
     fn hydration_history_schedule_offset(&self, interval_ms: EpochMillis) -> EpochMillis {
-        const SEED_LEN: usize = 32;
-        let mut seed = [0; SEED_LEN];
-        for (i, byte) in self
-            .catalog()
-            .state()
-            .config()
-            .environment_id
-            .organization_id()
-            .as_bytes()
-            .into_iter()
-            .take(SEED_LEN)
-            .enumerate()
-        {
-            seed[i] = *byte;
-        }
-        // `random_range` panics on an empty range, and `interval_ms` is at least 1.
-        rngs::SmallRng::from_seed(seed).random_range(0..interval_ms)
+        let environment_id = self.catalog().state().config().environment_id.to_string();
+        environment_schedule_offset(&environment_id, interval_ms)
     }
 
     /// Runs one sweep: collect from the next replica, then apply retention.
@@ -590,6 +585,17 @@ mod tests {
             next_fire_delay(60_000, interval, 0),
             Duration::from_millis(interval)
         );
+
+        // Region and ordinal are part of the seed, not just the organization.
+        let one = environment_schedule_offset(
+            "aws-us-east-1-00000000-0000-0000-0000-000000000000-0",
+            interval,
+        );
+        let two = environment_schedule_offset(
+            "aws-us-west-1-00000000-0000-0000-0000-000000000000-1",
+            interval,
+        );
+        assert_ne!(one, two);
     }
 
     /// A materialized view's finish is only durable on the sink's active worker, so
