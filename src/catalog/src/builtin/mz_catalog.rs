@@ -3455,7 +3455,7 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
             ("oid", "A PostgreSQL-compatible OID for the object."),
             ("schema_id", "The ID of the schema to which the object belongs. Corresponds to `mz_schemas.id`."),
             ("name", "The name of the object."),
-            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `index`, `connection`, `secret`, `type`, or `function`."),
+            ("type", "The type of the object: one of `table`, `source`, `view`, `materialized-view`, `sink`, `metric-sink`, `index`, `connection`, `secret`, `type`, or `function`."),
             ("owner_id", "The role ID of the owner of the object. Corresponds to `mz_roles.id`."),
             ("cluster_id", "The ID of the cluster maintaining the source, materialized view, index, or sink. Corresponds to `mz_clusters.id`. `NULL` for other object types."),
             ("privileges", "The privileges belonging to the object."),
@@ -3464,6 +3464,8 @@ pub static MZ_OBJECTS: LazyLock<BuiltinView> = LazyLock::new(|| {
         "SELECT id, oid, schema_id, name, type, owner_id, cluster_id, privileges FROM mz_catalog.mz_relations
 UNION ALL
     SELECT id, oid, schema_id, name, 'sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_catalog.mz_sinks
+UNION ALL
+    SELECT id, oid, schema_id, name, 'metric-sink', owner_id, cluster_id, NULL::mz_catalog.mz_aclitem[] FROM mz_internal.mz_metric_sinks
 UNION ALL
     SELECT mz_indexes.id, mz_indexes.oid, mz_relations.schema_id, mz_indexes.name, 'index', mz_indexes.owner_id, mz_indexes.cluster_id, NULL::mz_catalog.mz_aclitem[]
     FROM mz_catalog.mz_indexes

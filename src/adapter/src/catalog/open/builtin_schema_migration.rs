@@ -391,11 +391,17 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_audit_events",
         ),
-        // Required because we added the `mz_object_graph_edges_ind` builtin index.
+        // Required because we added the `mz_metric_sinks_ind` builtin index.
         // make_mz_indexes inlines the builtin-index set as VALUES, so any add or
-        // remove changes its SQL fingerprint and requires an explicit replacement.
+        // remove changes its SQL fingerprint and requires an explicit
+        // replacement. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships. The addition
+        // is unshipped, so this step supersedes the earlier `26.39.0-dev.0`
+        // `mz_indexes` step (which covered `mz_object_graph_edges_ind`): a
+        // replacement recreates `mz_indexes` from its current definition, so a
+        // single step at the current dev version covers every earlier change too.
         MigrationStep::replacement(
-            "26.39.0-dev.0",
+            "26.40.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_indexes",

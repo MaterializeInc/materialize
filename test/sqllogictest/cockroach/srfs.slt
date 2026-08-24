@@ -1467,6 +1467,7 @@ mz_message_counts_sent_raw  3
 mz_message_counts_sent_raw  3
 mz_message_counts_sent_raw  3
 mz_message_counts_sent_raw  3
+mz_metric_sinks  1
 mz_notices  1
 mz_object_arrangement_size_history  2
 mz_object_arrangement_size_history  4
