@@ -99,6 +99,32 @@ also be necessary to support increased memory usage during the process. For more
 information, see [Use a larger cluster for upsert source
 snapshotting](/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting).
 
+## Is the upstream database overloaded?
+
+Snapshotting puts significant load on the upstream database (see [Impact on
+upstream system](/concepts/snapshotting/#impact-on-upstream-system)).
+
+Check the upstream database when a snapshot progresses more slowly than the
+data volume suggests, when applications sharing the database slow down while
+it runs, or when the source reports upstream connection errors or timeouts.
+The relevant metrics are in your cloud provider's monitoring console, or in
+OS tools like `iostat` and the database's activity views for self-hosted
+databases. Look for:
+
+- **CPU** pinned at the instance's limit for the duration of the snapshot.
+- **Read IOPS or throughput** flat at a provisioned cap while disk queue
+  depth and read latency climb.
+- **Network throughput** at the instance type's cap.
+- **Memory** pressure, or a falling cache hit rate as large scans evict the
+  normal workload's working set.
+- **Connections** near the database's limit. Snapshotting opens connections
+  in proportion to the source cluster's workers.
+
+If the database is overloaded, snapshot during off-peak hours, ingest from a
+read replica, use a smaller source cluster to spread the load over a longer
+window, [limit the volume of data](/ingest-data/#limit-the-volume-of-data)
+you sync, or provision more IOPS, throughput, or instance capacity.
+
 ## Adding a new subsource to an existing source blocks replication. Should I just create a new source instead?
 
 It depends. Materialize provides transactional guarantees for subsource of the

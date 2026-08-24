@@ -60,6 +60,10 @@ we recommend:
   the steady-state resource needs of your upsert source(s). See [Best practices:
   Upsert sources](#upsert-sources).
 
+### Parallelism
+
+{{% include-headless "/headless/ingestion/snapshotting-parallelism" %}}
+
 ### Monitoring progress
 
 While snapshotting is taking place, you can monitor the progress of the
