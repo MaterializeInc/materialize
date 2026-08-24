@@ -989,10 +989,9 @@ impl<'a> ActiveComputeState<'a> {
                 None => hydration_frontier.clone_from(&new_frontier),
             }
 
-            // Evaluate the lifecycle predicates here, while both frontiers are still in hand.
+            // Evaluate the write predicate here, while the write frontier is still in hand.
             // `new_frontier` is folded into the output frontier below, which loses the write
             // frontier this one is about.
-            let hydrated = PartialOrder::less_than(&collection.as_of, &hydration_frontier);
             let written = PartialOrder::less_than(&collection.as_of, &new_frontier);
 
             // Collect the output frontier and check for progress.
@@ -1041,7 +1040,7 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_output_frontier(ReportedFrontier::Reported(frontier.clone()));
             }
 
-            collection.observe_hydration(hydrated);
+            collection.observe_hydration(&hydration_frontier);
             collection.observe_writes(written);
 
             let response = FrontiersResponse {
@@ -1257,12 +1256,11 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                // Only a batch upper measures progress. `DroppedAt` reports the empty
-                // antichain, which is the maximum of the order, so a subscribe cancelled while
-                // still hydrating would otherwise read as hydrated at the moment it is dropped.
-                let hydrated = matches!(response, SubscribeResponse::Batch(_))
-                    && PartialOrder::less_than(&collection.as_of, &new_frontier);
-                collection.observe_hydration(hydrated);
+                // A subscribe's batch upper is its dataflow progress. Both `DroppedAt` and the
+                // empty-upper batch that signals completion carry the empty antichain, which
+                // `observe_hydration` rejects, so neither a cancelled nor a completed subscribe
+                // reports hydration it never reached.
+                collection.observe_hydration(&new_frontier);
                 collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
             } else {
                 // Presumably tracking state for this subscribe was already dropped by
@@ -2187,14 +2185,23 @@ impl CollectionState {
         }
     }
 
-    /// Observe whether this collection's dataflow has progressed past its as-of, and log the
-    /// `hydrated` stage the first time it has.
+    /// Observe this collection's dataflow progress and log the `hydrated` stage the first time
+    /// that progress has passed the as-of.
     ///
-    /// The caller decides which frontier measures dataflow progress. See the comment at the call
-    /// site in `report_frontiers`. An empty as-of never hydrates, which is consistent with no
-    /// dataflow being created for one.
-    fn observe_hydration(&mut self, hydrated: bool) {
-        if hydrated {
+    /// `progress` must measure the dataflow's own computation rather than the durability of its
+    /// output. See the comment where it is collected in `report_frontiers`.
+    ///
+    /// NOTE: an empty `progress` reports completion, not hydration. The empty antichain is the
+    /// maximum of the order, so comparing against it would report hydration for every dataflow
+    /// that shuts down, including one dropped or bounded before it computed anything: a
+    /// `SUBSCRIBE ... UP TO` whose bound equals its as-of emits no rows and still signals
+    /// completion with an empty batch upper. An empty as-of never hydrates either, which is
+    /// consistent with no dataflow being created for one.
+    fn observe_hydration(&mut self, progress: &Antichain<Timestamp>) {
+        if progress.is_empty() {
+            return;
+        }
+        if PartialOrder::less_than(&self.as_of, progress) {
             self.log_stage(LifecycleStage::Hydrated);
         }
     }
