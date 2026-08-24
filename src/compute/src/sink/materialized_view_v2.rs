@@ -94,8 +94,7 @@ pub(super) fn persist_sink<'s>(
     read_only_rx: watch::Receiver<bool>,
 ) -> Rc<dyn Any> {
     let scope = ok_collection.scope();
-    let owns_sink_frontier =
-        scope.index() == super::materialized_view::frontier_owner(sink_id, scope.peers());
+    let owns_sink_frontier = scope.index() == crate::sink::frontier_owner(sink_id, scope.peers());
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
     // Read back the persist shard.
@@ -137,8 +136,7 @@ pub(super) fn persist_sink<'s>(
 
     // Report sink frontier updates to the `ComputeState`.
     let collection = compute_state.expect_collection_mut(sink_id);
-    collection.sink_write_frontier = Some(sink_frontier);
-    collection.owns_sink_frontier = owns_sink_frontier;
+    collection.set_sink_write_frontier(sink_frontier, owns_sink_frontier);
 
     Rc::new(persist_token)
 }
@@ -168,8 +166,7 @@ mod mint {
         let worker_count = scope.peers();
 
         // Determine the active worker for the mint operator.
-        let active_worker_id =
-            crate::sink::materialized_view::frontier_owner(sink_id, scope.peers());
+        let active_worker_id = crate::sink::frontier_owner(sink_id, scope.peers());
 
         let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
         let shared_frontier = Rc::clone(&sink_frontier);

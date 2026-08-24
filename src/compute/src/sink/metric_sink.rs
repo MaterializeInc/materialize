@@ -72,6 +72,11 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // Routing by metric key instead would spread the fold across workers, but each process
         // has its own registry, so one metric family could then be split across processes' scrape
         // outputs. Partition-by-key is a possible future refinement.
+        // NOTE: byte-identical to `crate::sink::frontier_owner`, and deliberately not a call to
+        // it. That elects the one worker whose copy of a persist sink's shared frontier carries
+        // write progress. This elects the worker that folds metrics into the registry, and a
+        // metric sink's shared frontier is written by *every* worker below, before the early
+        // return. Unifying the two would couple independent elections through one definition.
         let active_worker_id = usize::cast_from(sink_id.hashed()) % scope.peers();
 
         let ok_stream = sinked_collection
@@ -185,8 +190,11 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
         // Report frontier updates to the `ComputeState`. A metric sink writes to the metrics
         // registry rather than to a collection, so its "write" frontier is the input frontier it
         // has folded through.
+        // Not owned: every worker writes this frontier, so no single copy carries progress,
+        // and it is an input frontier rather than a persist upper. A metric sink therefore reports
+        // no write lifecycle stages.
         let collection = compute_state.expect_collection_mut(sink_id);
-        collection.sink_write_frontier = Some(sink_frontier);
+        collection.set_sink_write_frontier(sink_frontier, false);
 
         Some(Rc::new(drop_handle))
     }
