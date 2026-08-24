@@ -177,7 +177,9 @@ impl ComputeMetrics {
             ), role)),
             index_peek_walks_total: registry.register(with_role(metric!(
                 name: "mz_index_peek_walks_total",
-                help: "The total number of fast-path index peek walks, by the substrate that ran them.",
+                help: "The total number of fast-path index peek walks, by the substrate that ran \
+                       them: inline, offload, or capped (wanted the offload, ran inline because \
+                       the worker was at its in-flight cap).",
                 var_labels: ["worker_id", "substrate"],
             ), role)),
             arrangement_maintenance_seconds_total: registry.register(with_role(metric!(
@@ -324,6 +326,9 @@ impl ComputeMetrics {
         let index_peek_walks_offload_total = self
             .index_peek_walks_total
             .with_label_values(&[&worker, "offload"]);
+        let index_peek_walks_capped_total = self
+            .index_peek_walks_total
+            .with_label_values(&[&worker, "capped"]);
         let index_peek_total_seconds = self.index_peek_total_seconds.clone();
         let index_peek_seek_fulfillment_seconds = self.index_peek_seek_fulfillment_seconds.clone();
         let index_peek_error_scan_seconds = self.index_peek_error_scan_seconds.clone();
@@ -355,6 +360,7 @@ impl ComputeMetrics {
             handle_command_duration_seconds,
             index_peek_walks_inline_total,
             index_peek_walks_offload_total,
+            index_peek_walks_capped_total,
             index_peek_total_seconds,
             index_peek_seek_fulfillment_seconds,
             index_peek_error_scan_seconds,
@@ -394,15 +400,25 @@ pub struct WorkerMetrics {
     pub(crate) stashed_peek_seconds: Histogram,
     /// Histogram of command handling durations.
     pub(crate) handle_command_duration_seconds: CommandMetrics<Histogram>,
-    /// Fast-path index peek walks run inline on this worker.
+    /// Fast-path index peek walks run inline on this worker because the offload is off.
+    ///
+    /// The three walk counters partition every fast-path index peek walk, so their sum is the
+    /// total and each one alone is a rate of the whole.
     pub(crate) index_peek_walks_inline_total: IntCounter,
     /// Fast-path index peek walks this worker dispatched to a blocking task.
     ///
     /// Zero while `enable_index_peek_offload` is off. With it on, a peek the stash could take is
     /// offloaded too and diverts from the walking thread, so a flat counter does mean the flag did
-    /// not reach this worker. NOTE: a walk declined because the in-flight cap is reached counts as
-    /// `inline`, so cap saturation is not distinguishable from the flag being off.
+    /// not reach this worker.
     pub(crate) index_peek_walks_offload_total: IntCounter,
+    /// Fast-path index peek walks that wanted to offload but ran inline at the in-flight cap.
+    ///
+    /// NOTE: cap saturation is self-reinforcing. Slots return when walks finish, so a worker whose
+    /// walks run long accumulates in-flight walks, reaches the cap, and falls back to the inline
+    /// walk that blocks its step loop, which makes it accumulate faster still. A replica where
+    /// this climbs while `offload` flattens is losing the offload exactly where it was needed, and
+    /// `index_peek_offload_max_inflight` is the knob, not the flag.
+    pub(crate) index_peek_walks_capped_total: IntCounter,
     /// Histogram of total index peek durations.
     pub(crate) index_peek_total_seconds: Histogram,
     /// Histogram of index peek seek_fulfillment durations.

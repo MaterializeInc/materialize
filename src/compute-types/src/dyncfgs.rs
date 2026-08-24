@@ -606,9 +606,20 @@ pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
 /// How many offloaded index-peek walks one worker may have in flight before it falls back to
 /// walking inline.
 ///
-/// Each in-flight walk pins the batches its snapshot covers and holds the trace back from
-/// compacting past the read, so unbounded concurrency trades memory for latency. Serving inline
-/// bounds that implicitly at one walk per worker; this is the explicit form of the same bound.
+/// Each in-flight walk retains the batches its snapshot covers, so unbounded concurrency trades
+/// memory for latency. It does not hold the trace back from compacting: the walk owns `Arc`
+/// batches and the dispatching path drops its trace handle before the walk starts. Serving inline
+/// bounds the retained set implicitly at one walk per worker, and this is the explicit form of
+/// that bound.
+///
+/// Counted per worker, so a replica retains up to `workers * this` snapshots at once and occupies
+/// that many blocking-pool threads. Size it against the replica's worker count, not against the
+/// replica.
+///
+/// NOTE: a walk that diverts to the peek response stash holds its slot and its blocking thread
+/// across the persist upload, not just the cursor walk, so under a stash-heavy workload slots turn
+/// over on network latency rather than on walk cost. `mz_index_peek_walks_total{substrate="capped"}`
+/// is what shows the cap being reached.
 pub const INDEX_PEEK_OFFLOAD_MAX_INFLIGHT: Config<usize> = Config::new(
     "index_peek_offload_max_inflight",
     16,

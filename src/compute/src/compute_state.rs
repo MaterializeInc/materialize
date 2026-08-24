@@ -1043,32 +1043,27 @@ impl<'a> ActiveComputeState<'a> {
         }
     }
 
-    /// Whether this worker should walk `peek`'s cursor on a blocking task rather than inline.
+    /// Decides where this worker walks the next fast-path index peek, claiming a slot of the
+    /// in-flight budget if the walk is to be offloaded.
     ///
-    /// Declines when too many walks are already in flight, since each pins its batches and holds
-    /// back compaction, and a walk that diverts to the stash holds them for the upload as well.
-    /// Falls back to the inline walk, which is always correct.
-    fn should_offload_peek(&self) -> bool {
+    /// Declines at the cap because each in-flight walk retains the batches its cursor covers, and
+    /// a walk that diverts to the stash retains them for the upload as well. The inline walk is
+    /// always correct, so declining costs latency and nothing else.
+    ///
+    /// Checking and claiming are one step so the count cannot drift from the number of live
+    /// guards. Only the worker that owns this counter ever touches it, which is what makes the
+    /// unsynchronized check-then-claim sound.
+    fn offload_placement(&self) -> WalkPlacement {
         if !ENABLE_INDEX_PEEK_OFFLOAD.get(&self.compute_state.worker_config) {
-            return false;
+            return WalkPlacement::Inline;
         }
         let max_inflight = INDEX_PEEK_OFFLOAD_MAX_INFLIGHT.get(&self.compute_state.worker_config);
-        self.compute_state
-            .in_flight_offloaded_peeks
-            .load(atomic::Ordering::SeqCst)
-            < max_inflight
-    }
-
-    /// Claims a slot of the offload's in-flight budget, or `None` at the cap.
-    ///
-    /// Checking and claiming are one step so the count cannot drift from the number of live guards.
-    fn acquire_offload_slot(&self) -> Option<InFlightOffload> {
-        if !self.should_offload_peek() {
-            return None;
-        }
         let counter = Arc::clone(&self.compute_state.in_flight_offloaded_peeks);
+        if counter.load(atomic::Ordering::SeqCst) >= max_inflight {
+            return WalkPlacement::Capped;
+        }
         counter.fetch_add(1, atomic::Ordering::SeqCst);
-        Some(InFlightOffload(counter))
+        WalkPlacement::Offloaded(InFlightOffload(counter))
     }
 
     /// The stash configuration an offloaded walk needs, or `None` when the stash cannot take this
@@ -1121,7 +1116,8 @@ impl<'a> ActiveComputeState<'a> {
 
                 let peek_stash_usable = peek_stash_enabled && peek_stash_eligible;
 
-                if let Some(in_flight) = self.acquire_offload_slot() {
+                let placement = self.offload_placement();
+                if let WalkPlacement::Offloaded(in_flight) = placement {
                     let stash = self.offload_stash(peek_stash_usable, peek_stash_threshold_bytes);
                     match peek.snapshot_for_offload(upper, stash.is_some()) {
                         OffloadSnapshot::NotReady => None,
@@ -1156,10 +1152,20 @@ impl<'a> ActiveComputeState<'a> {
                         }
                     }
                 } else {
-                    self.compute_state
-                        .metrics
-                        .index_peek_walks_inline_total
-                        .inc();
+                    // The walk runs here either way, but which counter it lands in is what
+                    // separates "the offload is off" from "the offload gave up".
+                    match placement {
+                        WalkPlacement::Capped => self
+                            .compute_state
+                            .metrics
+                            .index_peek_walks_capped_total
+                            .inc(),
+                        _ => self
+                            .compute_state
+                            .metrics
+                            .index_peek_walks_inline_total
+                            .inc(),
+                    }
                     let metrics = IndexPeekMetrics {
                         seek_fulfillment_seconds: &self
                             .compute_state
@@ -1604,6 +1610,22 @@ impl PendingPeek {
 /// A started `spawn_blocking` closure cannot be aborted, so dropping this does not stop the walk. It
 /// only returns the slot, which is what keeps the budget honest across cancellation and
 /// reconciliation.
+/// Where a fast-path index peek's cursor walk runs, and why.
+///
+/// The two declining variants both walk inline. They are distinct because they need different
+/// responses: `Inline` is the configured state, `Capped` is the offload failing to engage under
+/// load, and a counter that merged them could not tell one from the other.
+enum WalkPlacement {
+    /// `enable_index_peek_offload` is off, so the walk runs on the serving worker.
+    Inline,
+    /// The offload is on, but this worker is at `index_peek_offload_max_inflight`, so the walk
+    /// runs on the serving worker anyway.
+    Capped,
+    /// A slot in the in-flight budget is claimed and held by the guard; the walk runs on a
+    /// blocking task.
+    Offloaded(InFlightOffload),
+}
+
 pub struct InFlightOffload(Arc<AtomicUsize>);
 
 impl Drop for InFlightOffload {
