@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ from materialize.mzcompose.composition import (
 )
 from materialize.mzcompose.service import Service
 from materialize.mzcompose.services.materialized import Materialized
+from materialize.mzcompose.services.mysql import MySql
 from materialize.mzcompose.services.postgres import Postgres
 from materialize.mzcompose.services.redpanda import Redpanda
 
@@ -55,6 +57,9 @@ SERVICES = [
     # Kafka broker for the sinks workflow. Only started by workflows that
     # exercise sinks; the others never bring it up.
     Redpanda(),
+    # MySQL for the source-references-mysql workflow. Only started by workflows
+    # that exercise MySQL sources; the others never bring it up.
+    MySql(),
     # mz-deploy runs as a prebuilt mzbuild image (see src/mz-deploy/ci) rather
     # than a host `cargo build`, so CI doesn't recompile it on every run. The
     # projects directory is mounted at /projects; the binary reaches the
@@ -2687,3 +2692,126 @@ def workflow_apply_all_role_ordering(
     assert len(rows) == 1, f"expected role 'reader' to exist, got {rows}"
     rows = c.sql_query("SELECT name FROM mz_clusters WHERE name = 'reporting'")
     assert len(rows) == 1, f"expected cluster 'reporting' to exist, got {rows}"
+
+
+def workflow_source_references(c: Composition, parser: WorkflowArgumentParser) -> None:
+    """`apply tables` checks every `(REFERENCE ...)` against what its source can
+    read, and refreshes the source's references first so a table added upstream
+    after the source was created is still accepted."""
+    setup_base(c)
+
+    # v1 creates the source plus one table whose reference is valid.
+    result = run_mz_deploy(c, "source-references/v1", "apply")
+    assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+
+    with c.test_case("reject-unknown-reference"):
+        # v2 adds a table naming an upstream object that does not exist. Both
+        # the dry run and the real apply must refuse it.
+        for args in (["apply", "--dry-run"], ["apply"]):
+            result = run_mz_deploy(c, "source-references/v2", *args, check=False)
+            assert result.returncode != 0, f"{args} unexpectedly succeeded"
+            for expected in ("does not expose", "app.ingest.widgets", "public.widgets"):
+                assert (
+                    expected in result.stderr
+                ), f"{args} error missing {expected!r}:\n{result.stderr}"
+            # Nothing upstream is spelled anything like `widgets`, so the error
+            # must not reach for an unrelated name.
+            assert (
+                "did you mean" not in result.stderr
+            ), f"{args} suggested an unrelated reference:\n{result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT name FROM mz_tables WHERE name = 'widgets'", database="app"
+        )
+        assert len(rows) == 0, f"widgets must not have been created, got {rows}"
+
+    with c.test_case("accept-reference-added-upstream"):
+        # A table added upstream after the source was created is absent from the
+        # source's recorded references until they are refreshed. Applying it must
+        # still work.
+        c.exec(
+            "postgres",
+            "psql",
+            "-U",
+            "postgres",
+            "-c",
+            "CREATE TABLE gadgets (gadget_id INT PRIMARY KEY, name TEXT); "
+            "ALTER TABLE gadgets REPLICA IDENTITY FULL",
+        )
+
+        result = run_mz_deploy(c, "source-references/v3", "apply")
+        assert result.returncode == 0, f"apply v3 failed: {result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT name FROM mz_tables WHERE name = 'gadgets'", database="app"
+        )
+        assert len(rows) == 1, f"expected table 'gadgets', got {rows}"
+
+    with c.test_case("suggest-misspelled-reference"):
+        # v4 asks for `public.gadget`, one character off the `public.gadgets`
+        # the source does expose. The error has to name it.
+        result = run_mz_deploy(c, "source-references/v4", "apply", check=False)
+        assert result.returncode != 0, "apply v4 unexpectedly succeeded"
+        for expected in (
+            "app.ingest.gadget",
+            "did you mean: public.gadgets?",
+            "mz_internal.mz_source_references",
+        ):
+            assert (
+                expected in result.stderr
+            ), f"error missing {expected!r}:\n{result.stderr}"
+
+
+def workflow_source_references_mysql(
+    c: Composition, parser: WorkflowArgumentParser
+) -> None:
+    """The source-reference check leaves MySQL's system schemas to the server.
+
+    `mz_source_references` never lists a table in `mysql`, `sys`,
+    `performance_schema`, or `information_schema`, because both `CREATE SOURCE`
+    and `ALTER SOURCE ... REFRESH REFERENCES` retrieve MySQL tables with system
+    schemas excluded. Creating a table from such a reference does resolve it, so
+    the check must skip those references rather than call them missing, while
+    still checking every other reference on the same source."""
+    setup_base(c)
+    c.up("mysql")
+
+    def mysql(sql: str) -> None:
+        c.exec(
+            "mysql",
+            "bash",
+            "-c",
+            f"export MYSQL_PWD={MySql.DEFAULT_ROOT_PASSWORD} && mysql -u root -e {shlex.quote(sql)}",
+        )
+
+    mysql(
+        "CREATE DATABASE inventory; "
+        "CREATE TABLE inventory.items (item_id INT PRIMARY KEY, name TEXT); "
+        "INSERT INTO inventory.items VALUES (1, 'widget'); "
+        "CREATE TABLE mysql.t_in_mysql (f1 INT); "
+        "INSERT INTO mysql.t_in_mysql VALUES (1)"
+    )
+
+    result = run_mz_deploy(c, "source-references-mysql/v1", "apply")
+    assert result.returncode == 0, f"apply v1 failed: {result.stderr}"
+
+    with c.test_case("accept-system-schema-reference"):
+        # `mysql.t_in_mysql` is readable but never recorded, so the check has to
+        # leave it alone.
+        result = run_mz_deploy(c, "source-references-mysql/v2", "apply")
+        assert result.returncode == 0, f"apply v2 failed: {result.stderr}"
+
+        rows = c.sql_query(
+            "SELECT name FROM mz_tables WHERE name = 't_in_mysql'", database="app"
+        )
+        assert len(rows) == 1, f"expected table 't_in_mysql', got {rows}"
+
+    with c.test_case("reject-unknown-reference-mysql"):
+        # Skipping system schemas must not stop the check from catching a
+        # reference the source genuinely cannot read.
+        result = run_mz_deploy(c, "source-references-mysql/v3", "apply", check=False)
+        assert result.returncode != 0, "apply v3 unexpectedly succeeded"
+        for expected in ("does not expose", "app.ingest.absent", "inventory.absent"):
+            assert (
+                expected in result.stderr
+            ), f"error missing {expected!r}:\n{result.stderr}"

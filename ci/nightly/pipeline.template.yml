@@ -2893,7 +2893,7 @@ steps:
                run: rotate-keys-race
 
   - id: mz-deploy
-    topics: [kafka, postgres]
+    topics: [kafka, mysql, postgres]
     label: "mz-deploy"
     depends_on: build-x86_64
     timeout_in_minutes: 30
