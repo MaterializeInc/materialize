@@ -15,6 +15,7 @@ import {
   PopoverContent,
   PopoverTrigger,
   Skeleton,
+  SystemStyleObject,
   Table,
   Tbody,
   Td,
@@ -148,93 +149,140 @@ const ColumnHeader = <TData,>({
   );
 };
 
-// Caret width (4) + caret/label gap (2), so an indented child row's label
-// lines up just past its parent row's caret.
-const CHILD_ROW_INDENT = 6;
+// The caret column exists only to hold the toggle, so it is sized to the button.
+// Child rows leave it empty so that data in the first columns is aligned.
+const CARET_SIZE = 8;
+const CARET_COLUMN_WIDTH = CARET_SIZE;
 
-const GroupRowCaret = ({ isOpen }: { isOpen: boolean }) => (
-  <ChevronRightIcon
-    aria-hidden="true"
-    flexShrink={0}
-    marginRight={2}
-    transform={isOpen ? "rotate(90deg)" : undefined}
-    transition="transform 0.1s"
-  />
+// Fallback caret name when the table supplies no `expandLabel`.
+const DEFAULT_EXPAND_LABEL = "Display child rows";
+
+const ParentRowCaret = ({
+  isOpen,
+  label,
+  onToggle,
+}: {
+  isOpen: boolean;
+  label: string;
+  onToggle: () => void;
+}) => (
+  <IconButton
+    aria-label={label}
+    aria-expanded={isOpen}
+    variant="ghost"
+    w={CARET_SIZE}
+    h={CARET_SIZE}
+    minW={CARET_SIZE}
+    p={0}
+    onClick={(event) => {
+      // The enclosing row toggles expansion as well. Without this the row's
+      // handler fires next and immediately undoes the caret's toggle.
+      event.stopPropagation();
+      onToggle();
+    }}
+  >
+    <ChevronRightIcon
+      aria-hidden="true"
+      flexShrink={0}
+      transform={isOpen ? "rotate(90deg)" : undefined}
+      transition="transform 0.1s"
+    />
+  </IconButton>
 );
 
 const BodyRow = <TData,>({
   row,
   onRowClick,
   rowSx,
+  getRowClassName,
   rowTestId,
+  expandLabel,
+  isGroupTable,
 }: {
   row: Row<TData>;
   onRowClick?: (row: TData) => void;
   rowSx?: UniversalTableProps<TData>["rowSx"];
+  // callers can pass in a callback that returns a class name for each row.
+  // This enables style attribute-level overrides of the defaults.
+  getRowClassName?: UniversalTableProps<TData>["getRowClassName"];
   rowTestId?: UniversalTableProps<TData>["rowTestId"];
+  expandLabel?: UniversalTableProps<TData>["expandLabel"];
+  // True when the table defines `getSubRows`. Such tables carry a leading
+  // caret column, kept empty on rows that cannot expand so every row lines up.
+  isGroupTable?: boolean;
 }) => {
+  const { colors, space } = useTheme<MaterializeTheme>();
   // NOTE: an expandable row is assumed to be a group heading from
   // getSubRows. A row-detail expander via getRowCanExpand on flat data
   // would need its own treatment.
-  const isGroupRow = row.getCanExpand();
-  const needsIndent = isGroupRow || row.depth > 0;
-  const handleClick = isGroupRow
+  const isParentRow = row.getCanExpand();
+  const handleClick = isParentRow
     ? row.getToggleExpandedHandler()
     : onRowClick
       ? () => onRowClick(row.original)
       : undefined;
-  const groupRowProps = isGroupRow
+
+  // Ledger look: compact borderless rows, each account group opened by
+  // a taller top-bordered row, a bordered total row closing the table.
+  const defaultRowSx: SystemStyleObject = isGroupTable
     ? {
-        "aria-expanded": row.getIsExpanded(),
-        tabIndex: 0,
-        onKeyDown: (e: React.KeyboardEvent) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            row.toggleExpanded();
-          }
+        td: {
+          borderBottomWidth: 0,
+          height: "auto",
+          paddingBottom: space[3],
+          verticalAlign: "top",
+        },
+        "&[data-parent-row] td": {
+          height: "auto",
+          borderTopWidth: "1px",
+          borderTopStyle: "solid",
+          borderTopColor: colors.border.secondary,
+          paddingTop: space[3],
+          textStyle: "heading-xs",
+          verticalAlign: "middle",
+        },
+        // hide top border of first row because header has a bottom border
+        "&[data-parent-row]:first-child td": {
+          borderTopWidth: "0",
         },
       }
-    : undefined;
+    : {};
 
   return (
     <Tr
       onClick={handleClick}
+      // Chakra appends its own generated class, so `rowSx` selectors of the
+      // form `&.my-class` match on the compound of the two.
+      className={getRowClassName?.(row)}
       data-testid={rowTestId?.(row)}
-      {...groupRowProps}
+      // A styling hook for `rowSx` selectors that need to target parent rows.
+      data-parent-row={isParentRow ? "" : undefined}
       sx={{
         cursor: handleClick ? "pointer" : undefined,
-        ...(isGroupRow && { td: { textStyle: "heading-xs" } }),
+        ...defaultRowSx,
         ...rowSx,
       }}
     >
-      {row.getVisibleCells().map((cell, cellIndex) => {
-        const content = flexRender(
-          cell.column.columnDef.cell,
-          cell.getContext(),
-        );
-        return (
-          <Td
-            key={cell.id}
-            textAlign={
-              cell.column.columnDef.meta?.isNumeric ? "end" : undefined
-            }
-            {...cell.column.columnDef.meta?.cellProps}
-          >
-            {cellIndex === 0 && needsIndent ? (
-              <Box
-                display="flex"
-                alignItems="center"
-                paddingLeft={row.depth * CHILD_ROW_INDENT}
-              >
-                {isGroupRow && <GroupRowCaret isOpen={row.getIsExpanded()} />}
-                {content}
-              </Box>
-            ) : (
-              content
-            )}
-          </Td>
-        );
-      })}
+      {isGroupTable && (
+        <Td width={CARET_COLUMN_WIDTH}>
+          {isParentRow && (
+            <ParentRowCaret
+              isOpen={row.getIsExpanded()}
+              label={expandLabel?.(row) ?? DEFAULT_EXPAND_LABEL}
+              onToggle={row.getToggleExpandedHandler()}
+            />
+          )}
+        </Td>
+      )}
+      {row.getVisibleCells().map((cell) => (
+        <Td
+          key={cell.id}
+          textAlign={cell.column.columnDef.meta?.isNumeric ? "end" : undefined}
+          {...cell.column.columnDef.meta?.cellProps}
+        >
+          {flexRender(cell.column.columnDef.cell, cell.getContext())}
+        </Td>
+      ))}
     </Tr>
   );
 };
@@ -266,14 +314,17 @@ export const UniversalTable = <TData,>({
   isLoading = false,
   skeletonRowCount = SKELETON_ROW_COUNT,
   rowSx,
+  getRowClassName,
   rowTestId,
+  expandLabel,
   footerSx,
   footerTestId,
   "data-testid": testId,
 }: UniversalTableProps<TData>) => {
   const headerGroups = table.getHeaderGroups();
   const rows = table.getRowModel().rows;
-  const columnCount = table.getAllColumns().length;
+  const isGroupTable = Boolean(table.options.getSubRows);
+  const columnCount = table.getAllColumns().length + (isGroupTable ? 1 : 0);
   const hasFooter = table
     .getAllLeafColumns()
     .some((column) => column.columnDef.footer);
@@ -283,6 +334,7 @@ export const UniversalTable = <TData,>({
       <Thead>
         {headerGroups.map((headerGroup) => (
           <Tr key={headerGroup.id}>
+            {isGroupTable && <Th width={CARET_COLUMN_WIDTH} />}
             {headerGroup.headers.map((header) => (
               <ColumnHeader key={header.id} header={header} />
             ))}
@@ -299,7 +351,10 @@ export const UniversalTable = <TData,>({
               row={row}
               onRowClick={onRowClick}
               rowSx={rowSx}
+              getRowClassName={getRowClassName}
               rowTestId={rowTestId}
+              expandLabel={expandLabel}
+              isGroupTable={isGroupTable}
             />
           ))
         )}
@@ -308,6 +363,7 @@ export const UniversalTable = <TData,>({
         <Tfoot>
           {table.getFooterGroups().map((footerGroup) => (
             <Tr key={footerGroup.id} sx={footerSx} data-testid={footerTestId}>
+              {isGroupTable && <Td width={CARET_COLUMN_WIDTH} />}
               {footerGroup.headers.map((header) => (
                 <Td
                   key={header.id}

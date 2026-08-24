@@ -56,9 +56,21 @@ const columns = [
   }),
 ];
 
-const BasicTable = ({ data = testData }: { data?: TestCluster[] }) => {
+const BasicTable = ({
+  data = testData,
+  getRowClassName,
+}: {
+  data?: TestCluster[];
+  getRowClassName?: (row: Row<TestCluster>) => string | undefined;
+}) => {
   const table = useUniversalTable({ data, columns });
-  return <UniversalTable table={table} data-testid="test-table" />;
+  return (
+    <UniversalTable
+      table={table}
+      data-testid="test-table"
+      getRowClassName={getRowClassName}
+    />
+  );
 };
 
 const SortableTable = ({
@@ -166,6 +178,20 @@ interface TestAccount {
   clusters?: TestAccount[];
 }
 
+/**
+ * The caret's fallback accessible name, used when the table passes no
+ * `expandLabel`. Shared by every group row, so lookups must be scoped to a
+ * single row with `within`.
+ */
+const CARET_LABEL = "Display child rows";
+
+/** The expand caret inside the group row labelled `groupName`. */
+const caretFor = (groupName: string) => {
+  const groupRow = screen.getByText(groupName).closest("tr");
+  if (!groupRow) throw new Error(`no row found for "${groupName}"`);
+  return within(groupRow).getByRole("button", { name: CARET_LABEL });
+};
+
 const groupedData: TestAccount[] = [
   {
     name: "account-a",
@@ -199,11 +225,13 @@ const GroupedTable = ({
   onRowClick,
   pageSize,
   rowTestId,
+  expandLabel,
 }: {
   initialExpanded?: true;
   onRowClick?: (row: TestAccount) => void;
   pageSize?: number;
   rowTestId?: (row: Row<TestAccount>) => string | undefined;
+  expandLabel?: (row: Row<TestAccount>) => string | undefined;
 }) => {
   const table = useUniversalTable({
     data: groupedData,
@@ -223,6 +251,7 @@ const GroupedTable = ({
         data-testid="test-table"
         onRowClick={onRowClick}
         rowTestId={rowTestId}
+        expandLabel={expandLabel}
       />
       <TablePagination table={table} itemLabel="accounts" />
     </div>
@@ -245,6 +274,24 @@ describe("UniversalTable", () => {
       expect(screen.getByText("analytics")).toBeInTheDocument();
       expect(screen.getByText("default")).toBeInTheDocument();
       expect(screen.getByText("prod")).toBeInTheDocument();
+    });
+
+    it("applies getRowClassName to the rows it matches", async () => {
+      // `prod` is the only row with a null size.
+      await renderComponent(
+        <BasicTable
+          getRowClassName={(row) =>
+            row.original.size === null ? "no-size" : undefined
+          }
+        />,
+      );
+
+      const rowFor = (name: string) => screen.getByText(name).closest("tr");
+      expect(rowFor("prod")).toHaveClass("no-size");
+      expect(rowFor("analytics")).not.toHaveClass("no-size");
+      // Chakra's own generated class has to survive alongside it, or `&.`
+      // selectors in `rowSx` would not match.
+      expect(rowFor("prod")?.className).toMatch(/\bcss-/);
     });
   });
 
@@ -447,16 +494,58 @@ describe("UniversalTable", () => {
     });
   });
 
+  describe("Caret column", () => {
+    // The caret sits in its own leading column so that a child row's cells line
+    // up with its parent's instead of being pushed over by indentation.
+    const cellTextsOfRow = (label: string) => {
+      const row = screen.getByText(label).closest("tr");
+      if (!row) throw new Error(`no row for "${label}"`);
+      return within(row)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent);
+    };
+
+    it("is absent from tables without getSubRows", async () => {
+      await renderComponent(<BasicTable />);
+
+      // Three columns declared, three header cells rendered.
+      expect(screen.getAllByRole("columnheader")).toHaveLength(columns.length);
+      expect(cellTextsOfRow("analytics")).toHaveLength(columns.length);
+    });
+
+    it("adds one leading column to grouped tables", async () => {
+      await renderComponent(<GroupedTable initialExpanded />);
+
+      expect(screen.getAllByRole("columnheader")).toHaveLength(
+        groupColumns.length + 1,
+      );
+    });
+
+    it("holds the caret on group rows and stays empty on child rows", async () => {
+      await renderComponent(<GroupedTable initialExpanded />);
+
+      const groupCells = cellTextsOfRow("account-a");
+      const childCells = cellTextsOfRow("cluster-a1");
+
+      // Same cell count, so every column aligns across the two tiers.
+      expect(childCells).toHaveLength(groupCells.length);
+      // The caret is a button, contributing no text of its own.
+      expect(childCells[0]).toBe("");
+      expect(
+        within(
+          screen.getByText("account-a").closest("tr") as HTMLElement,
+        ).getAllByRole("cell")[0],
+      ).toContainElement(caretFor("account-a"));
+    });
+  });
+
   describe("Group Rows", () => {
     it("renders groups collapsed by default", async () => {
       await renderComponent(<GroupedTable />);
 
       expect(screen.getByText("account-a")).toBeInTheDocument();
       expect(screen.queryByText("cluster-a1")).not.toBeInTheDocument();
-      expect(screen.getByText("account-a").closest("tr")).toHaveAttribute(
-        "aria-expanded",
-        "false",
-      );
+      expect(caretFor("account-a")).toHaveAttribute("aria-expanded", "false");
     });
 
     it("expands all groups with initialExpanded", async () => {
@@ -473,12 +562,22 @@ describe("UniversalTable", () => {
       await user.click(screen.getByText("account-a"));
       expect(screen.getByText("cluster-a1")).toBeInTheDocument();
       expect(screen.getByText("cluster-a2")).toBeInTheDocument();
-      expect(screen.getByText("account-a").closest("tr")).toHaveAttribute(
-        "aria-expanded",
-        "true",
-      );
+      expect(caretFor("account-a")).toHaveAttribute("aria-expanded", "true");
 
       await user.click(screen.getByText("account-a"));
+      expect(screen.queryByText("cluster-a1")).not.toBeInTheDocument();
+    });
+
+    // The caret and the row it sits in both toggle expansion. The caret must
+    // stop the click from reaching the row, or the two cancel out.
+    it("toggles children on caret click", async () => {
+      const user = userEvent.setup();
+      await renderComponent(<GroupedTable />);
+
+      await user.click(caretFor("account-a"));
+      expect(screen.getByText("cluster-a1")).toBeInTheDocument();
+
+      await user.click(caretFor("account-a"));
       expect(screen.queryByText("cluster-a1")).not.toBeInTheDocument();
     });
 
@@ -486,12 +585,65 @@ describe("UniversalTable", () => {
       const user = userEvent.setup();
       await renderComponent(<GroupedTable />);
 
-      const groupRow = screen.getByText("account-a").closest("tr");
-      if (!groupRow) throw new Error("group row not found");
-      groupRow.focus();
+      caretFor("account-a").focus();
       await user.keyboard("{Enter}");
 
       expect(screen.getByText("cluster-a1")).toBeInTheDocument();
+    });
+
+    it("reaches every caret by tabbing", async () => {
+      const user = userEvent.setup();
+      await renderComponent(<GroupedTable />);
+
+      // The search box sits ahead of the table, so the carets follow it in
+      // document order, one tab stop per group row.
+      await user.tab();
+      expect(screen.getByLabelText("Search accounts...")).toHaveFocus();
+
+      await user.tab();
+      expect(caretFor("account-a")).toHaveFocus();
+
+      await user.tab();
+      expect(caretFor("account-b")).toHaveFocus();
+
+      await user.tab();
+      expect(caretFor("account-c")).toHaveFocus();
+    });
+
+    it("toggles the focused caret with Enter", async () => {
+      const user = userEvent.setup();
+      await renderComponent(<GroupedTable />);
+
+      await user.tab();
+      await user.tab();
+      expect(caretFor("account-a")).toHaveFocus();
+
+      await user.keyboard("{Enter}");
+      expect(caretFor("account-a")).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("cluster-a1")).toBeInTheDocument();
+
+      // Expanding inserts child rows, and the caret must survive that rerender
+      // as the focused element for a second Enter to reach it.
+      expect(caretFor("account-a")).toHaveFocus();
+
+      await user.keyboard("{Enter}");
+      expect(caretFor("account-a")).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText("cluster-a1")).not.toBeInTheDocument();
+    });
+
+    it("names each caret with expandLabel", async () => {
+      await renderComponent(
+        <GroupedTable
+          expandLabel={(row) => `Show clusters of ${row.original.name}`}
+        />,
+      );
+
+      expect(
+        screen.getByRole("button", { name: "Show clusters of account-a" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: CARET_LABEL }),
+      ).not.toBeInTheDocument();
     });
 
     it("fires onRowClick for child rows but not group rows", async () => {
