@@ -44,10 +44,12 @@
 //! resident fence metadata so a probe set faults only the chunk bodies it
 //! actually touches.
 
+#[cfg(test)]
+use std::cell::Cell;
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use columnar::bytes::indexed;
 use columnar::{Borrow, BorrowedOf, Columnar, Container as _, FromBytes, Index, Len, Push as _};
@@ -55,7 +57,7 @@ use differential_dataflow::difference::Semigroup;
 use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::chunk::Chunk;
 use mz_ore::cast::CastFrom;
-use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, Pool};
+use mz_ore::pool::{ChunkHandle, ChunkHints, ExtentCodec, IDENTITY_CODEC, Pool};
 use timely::Accountable;
 use timely::container::{ContainerBuilder, PushInto};
 use timely::dataflow::channels::ContainerBytes;
@@ -77,6 +79,12 @@ thread_local! {
     /// enable flag and pool. Lets tests and benches spill through a private
     /// pool without touching process-global state.
     static SPILL_OVERRIDE: RefCell<Option<Pool>> = const { RefCell::new(None) };
+
+    /// A thread-scoped depth-floor override, taking precedence over the
+    /// global value. Lets tests pin the floor without racing concurrently
+    /// running tests on the process-global state.
+    #[cfg(test)]
+    static COMPRESS_MIN_DEPTH_OVERRIDE: Cell<Option<u8>> = const { Cell::new(None) };
 
     /// Reusable staging for call-scoped reads of spilled bodies.
     static READ_SCRATCH: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
@@ -111,6 +119,62 @@ pub fn set_storage_spill_enabled(enabled: bool) {
 /// restores the global resolution.
 pub fn set_spill_override(pool: Option<Pool>) {
     SPILL_OVERRIDE.with(|cell| *cell.borrow_mut() = pool);
+}
+
+/// The youngest generational depth whose spilled bodies are compressed. See
+/// [`set_compress_min_depth`].
+static COMPRESS_MIN_DEPTH: AtomicU8 = AtomicU8::new(DEFAULT_COMPRESS_MIN_DEPTH);
+
+/// Set the youngest generational depth whose spilled bodies are compressed.
+///
+/// A chunk at depth `d` is rewritten (merged, extracted, advanced) with
+/// frequency proportional to `2^-d` under geometric merging, so compressing
+/// a shallow chunk buys a short stay in the pool at the cost of a guaranteed
+/// near-term codec round-trip: the body is encoded only to be read back and
+/// decoded by the next rewrite. Generations below the floor spill under the
+/// identity codec instead: still budgeted and swap-backed like every extent,
+/// but encode and decode are copies. The floor never exempts a body from the
+/// pool, so it cannot grow unbudgeted resident state.
+///
+/// The floor cannot strand a long-lived body uncompressed: a chunk that a
+/// merge carries forward untouched also ages a generation, and its body is
+/// re-spilled under the compressing codec when it crosses the floor. Without
+/// that, key-disjoint input (a monotonically increasing key) would hold its
+/// entire spilled backlog identity-coded for the backlog's lifetime.
+///
+/// `0` compresses every spilled body. Consulted at every commit, so changes
+/// apply to running dataflows.
+pub fn set_compress_min_depth(depth: u8) {
+    COMPRESS_MIN_DEPTH.store(depth, Ordering::Relaxed);
+}
+
+/// Set or unset a thread-scoped depth-floor override, taking precedence over
+/// [`set_compress_min_depth`]. Tests run concurrently and must not race on
+/// the process-global floor.
+#[cfg(test)]
+pub fn set_compress_min_depth_override(depth: Option<u8>) {
+    COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.set(depth));
+}
+
+/// The depth floor in effect for this thread's commits.
+fn compress_min_depth() -> u8 {
+    #[cfg(test)]
+    if let Some(depth) = COMPRESS_MIN_DEPTH_OVERRIDE.with(|cell| cell.get()) {
+        return depth;
+    }
+    COMPRESS_MIN_DEPTH.load(Ordering::Relaxed)
+}
+
+/// The codec a body at `depth` stores under, identity below the compression
+/// floor and lz4 at and past it, paired with whether that codec compresses.
+/// One read of the floor, so the pair cannot disagree with itself when the
+/// floor moves under a concurrent commit.
+fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
+    if depth < compress_min_depth() {
+        (&IDENTITY_CODEC, false)
+    } else {
+        (&LZ4_CODEC, true)
+    }
 }
 
 /// The pool committed chunks spill to, if any.
@@ -161,6 +225,16 @@ const COMMIT_BYTES: usize = 2 << 20;
 /// unbudgeted heap, and no accounting here would catch it.
 const SPILL_MIN_BYTES: usize = 64 << 10;
 
+/// The default compression depth floor: fresh (depth 0) bodies spill
+/// uncompressed.
+///
+/// A fresh chunk is consumed by its first merge with certainty, so
+/// compressing it can never save pool bytes for longer than one merge
+/// cadence and always costs a full encode plus decode. Depth 1 and beyond
+/// have survived a merge and wait geometrically longer for the next, so
+/// their compression amortizes.
+const DEFAULT_COMPRESS_MIN_DEPTH: u8 = 1;
+
 /// Whether a column is big enough to commit on its own. A monotone
 /// threshold, so settle's carry, which grows by whole chunks, cannot step
 /// over it.
@@ -193,33 +267,45 @@ pub struct SpilledBody<D: Columnar> {
     /// container rather than two singletons, so the leaf allocations are not
     /// duplicated per fence.
     fences: D::Container,
-    /// The chunk's generational depth, mirrored into the pool's
-    /// [`ChunkHints`] at spill time.
-    depth: u8,
+    /// Whether the body was inserted under the compressing codec. The pool
+    /// stores the codec itself and reads decode through it, so this is the
+    /// only handle chunk code has on what a body is stored as, and it is
+    /// what `survive_merge` consults to decide a body wants migrating.
+    /// Deriving that from depth instead would tie it to a single transition
+    /// and miss every path that skips it.
+    compressed: bool,
     /// The pool chunk holding the serialized column.
     handle: ChunkHandle,
 }
 
 /// A sorted, consolidated run of `(D, T, R)` updates, resident or spilled.
 ///
-/// Every chunk carries a generational depth, fixed at creation: fresh chunks
-/// are depth 0, a merge output is one generation past its deepest input
-/// (saturating at `u8::MAX`, where remerged long-lived chunks stay), and
-/// rewrites within a generation (extract, advance, settle coalescing)
-/// preserve depth. At spill time the depth becomes the pool's [`ChunkHints`],
-/// so repeatedly merged (older, colder) data lands in deeper eviction bands.
+/// Every chunk carries a generational depth counting the merge cadences it
+/// has lived through: fresh chunks are depth 0, a merge output is one
+/// generation past its deepest input (saturating at `u8::MAX`, where
+/// remerged long-lived chunks stay), a chunk a merge carries forward
+/// untouched also gains a generation (see `survive_merge`), and rewrites
+/// within a generation (extract, advance, settle coalescing) preserve
+/// depth.
+///
+/// Depth belongs to the chunk, not to the body: a body outlives the chunks
+/// that share it, and aging must not depend on whether a caller happens to
+/// hold the only reference. At spill time the depth becomes the pool's
+/// [`ChunkHints`], so repeatedly merged (older, colder) data lands in deeper
+/// eviction bands. Hints are fixed at insert, so a chunk aged without a
+/// re-spill keeps the band it spilled into.
 pub enum ColumnChunk<D: Columnar, T: Columnar, R: Columnar> {
     /// Body on the heap, shared via `Rc`, with its generational depth.
     Resident(Rc<Column<(D, T, R)>>, u8),
-    /// Body in the pool. See [`SpilledBody`].
-    Spilled(Rc<SpilledBody<D>>),
+    /// Body in the pool, with its generational depth. See [`SpilledBody`].
+    Spilled(Rc<SpilledBody<D>>, u8),
 }
 
 impl<D: Columnar, T: Columnar, R: Columnar> Clone for ColumnChunk<D, T, R> {
     fn clone(&self) -> Self {
         match self {
             ColumnChunk::Resident(col, depth) => ColumnChunk::Resident(Rc::clone(col), *depth),
-            ColumnChunk::Spilled(body) => ColumnChunk::Spilled(Rc::clone(body)),
+            ColumnChunk::Spilled(body, depth) => ColumnChunk::Spilled(Rc::clone(body), *depth),
         }
     }
 }
@@ -251,7 +337,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
             ColumnChunk::Resident(col, _) => {
                 Rc::try_unwrap(col).unwrap_or_else(|shared| copy_column(&shared))
             }
-            ColumnChunk::Spilled(body) => {
+            ColumnChunk::Spilled(body, _) => {
                 let mut words = Vec::new();
                 body.handle.read_into(&mut words);
                 Column::Align(words)
@@ -261,22 +347,21 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
 
     /// True when the body lives in the pool.
     pub fn is_spilled(&self) -> bool {
-        matches!(self, ColumnChunk::Spilled(_))
+        matches!(self, ColumnChunk::Spilled(_, _))
     }
 
     /// The number of updates, from resident state only.
     fn records(&self) -> usize {
         match self {
             ColumnChunk::Resident(col, _) => col.borrow().len(),
-            ColumnChunk::Spilled(body) => body.records,
+            ColumnChunk::Spilled(body, _) => body.records,
         }
     }
 
     /// The generational depth, from resident state only.
     fn depth(&self) -> u8 {
         match self {
-            ColumnChunk::Resident(_, depth) => *depth,
-            ColumnChunk::Spilled(body) => body.depth,
+            ColumnChunk::Resident(_, depth) | ColumnChunk::Spilled(_, depth) => *depth,
         }
     }
 
@@ -287,7 +372,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
                 let data = col.borrow().0;
                 (data.get(0), data.get(data.len() - 1))
             }
-            ColumnChunk::Spilled(body) => {
+            ColumnChunk::Spilled(body, _) => {
                 let fences = body.fences.borrow();
                 (fences.get(0), fences.get(1))
             }
@@ -309,20 +394,70 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
 
     /// Spill a non-empty column into `pool` unconditionally, capturing the
     /// resident fence metadata.
+    ///
+    /// Generations below the compression depth floor store under the
+    /// identity codec: rewritten too soon for compression to amortize, they
+    /// stay budgeted and swap-backed while encode and decode reduce to
+    /// copies.
     fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self {
+        let (codec, compressed) = codec_for_depth(depth);
         let len_bytes = column.length_in_bytes();
         let view = column.borrow();
         let records = view.len();
         let mut fences = D::Container::default();
         fences.push(view.0.get(0));
         fences.push(view.0.get(records - 1));
-        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth });
-        ColumnChunk::Spilled(Rc::new(SpilledBody {
-            records,
-            fences,
+        let handle = spill_column(column, pool, len_bytes, ChunkHints { depth }, codec);
+        ColumnChunk::Spilled(
+            Rc::new(SpilledBody {
+                records,
+                fences,
+                compressed,
+                handle,
+            }),
             depth,
-            handle,
-        }))
+        )
+    }
+
+    /// Age a chunk that a merge carried forward untouched by one generation.
+    ///
+    /// Depth counts merge cadences lived through, not rewrites, so a
+    /// pass-through survivor ages like a merged chunk. The bump itself is
+    /// always free: depth rides on the chunk, so it does not care whether the
+    /// body is shared.
+    ///
+    /// An identity-coded body at or past the floor wants migrating, so a
+    /// sole owner re-spills it compressed: surviving a merge disproves the
+    /// imminent-rewrite premise that exempted it, and without the re-spill
+    /// key-disjoint input would keep its whole spilled backlog
+    /// identity-coded for as long as it lived. The test is the body's stored
+    /// codec against the floor, not a depth transition, so a migration that
+    /// cannot happen now is retried at the next survival rather than
+    /// consumed: skipping it while the body is shared or while no pool is
+    /// installed, or lowering the floor long after a body spilled, all
+    /// converge on a compressed body instead of stranding one.
+    ///
+    /// A shared body is skipped because re-spilling this reference cannot
+    /// change what the other holder stores, and the compaction merger that
+    /// shares bodies rewrites its clones immediately.
+    fn survive_merge(self) -> Self {
+        let depth = self.depth().saturating_add(1);
+        match self {
+            ColumnChunk::Resident(col, _) => ColumnChunk::Resident(col, depth),
+            ColumnChunk::Spilled(body, was) => {
+                let migrate = !body.compressed && depth >= compress_min_depth();
+                if !migrate || Rc::strong_count(&body) > 1 {
+                    return ColumnChunk::Spilled(body, depth);
+                }
+                match spill_pool() {
+                    Some(pool) => {
+                        let column = ColumnChunk::Spilled(body, was).into_column();
+                        Self::spill_body(column, &pool, depth)
+                    }
+                    None => ColumnChunk::Spilled(body, depth),
+                }
+            }
+        }
     }
 }
 
@@ -379,13 +514,14 @@ fn spill_column<C: Columnar>(
     pool: &Pool,
     len_bytes: usize,
     hints: ChunkHints,
+    codec: &'static dyn ExtentCodec,
 ) -> ChunkHandle {
     mz_ore::soft_assert_eq_no_log!(len_bytes % 8, 0);
     match column {
-        Column::Align(words) => pool.insert_with(words.len(), hints, &LZ4_CODEC, |dst| {
-            dst.copy_from_slice(&words)
-        }),
-        other => pool.insert_with(len_bytes / 8, hints, &LZ4_CODEC, |dst| {
+        Column::Align(words) => {
+            pool.insert_with(words.len(), hints, codec, |dst| dst.copy_from_slice(&words))
+        }
+        other => pool.insert_with(len_bytes / 8, hints, codec, |dst| {
             let bytes: &mut [u8] = bytemuck::cast_slice_mut(dst);
             let mut cursor = std::io::Cursor::new(bytes);
             other.into_bytes(&mut cursor);
@@ -431,12 +567,14 @@ where
 
     /// [`Column::merge_from`] does the work: gallop bulk-copies for disjoint
     /// runs, semigroup consolidation on equal `(data, time)`, output cut at
-    /// the ship threshold. A survivor pushed back untouched keeps its
-    /// original form, in particular a spilled body is neither rebuilt nor
-    /// re-spilled.
+    /// the ship threshold.
     ///
     /// Fronts whose data ranges are disjoint never load at all: the resident
-    /// fence entries decide, and the lower front moves to the output verbatim.
+    /// fence entries decide, and the lower front moves to the output whole.
+    /// Chunks the merge carries forward untouched (that fast path, and a
+    /// survivor `merge_from` never consumed) age one generation through
+    /// `survive_merge`, which re-spills a body only at the compression-floor
+    /// crossing and otherwise leaves it untouched.
     fn merge(in1: &mut VecDeque<Self>, in2: &mut VecDeque<Self>, out: &mut VecDeque<Self>) {
         // Disjoint fast path: when one front lies strictly below the other's
         // first data item (equal boundary data could still interleave on
@@ -453,11 +591,13 @@ where
         let a_low = rr::<D>(a_last) < rr::<D>(b_first);
         let b_low = rr::<D>(b_last) < rr::<D>(a_first);
         if a_low {
-            out.push_back(in1.pop_front().expect("front observed above"));
+            let chunk = in1.pop_front().expect("front observed above");
+            out.push_back(chunk.survive_merge());
             return;
         }
         if b_low {
-            out.push_back(in2.pop_front().expect("front observed above"));
+            let chunk = in2.pop_front().expect("front observed above");
+            out.push_back(chunk.survive_merge());
             return;
         }
 
@@ -468,11 +608,11 @@ where
         let depths = [a.depth(), b.depth()];
         let out_depth = depths[0].max(depths[1]).saturating_add(1);
         let mut spill_a = match &a {
-            ColumnChunk::Spilled(body) => Some(Rc::clone(body)),
+            ColumnChunk::Spilled(body, _) => Some(Rc::clone(body)),
             ColumnChunk::Resident(_, _) => None,
         };
         let mut spill_b = match &b {
-            ColumnChunk::Spilled(body) => Some(Rc::clone(body)),
+            ColumnChunk::Spilled(body, _) => Some(Rc::clone(body)),
             ColumnChunk::Resident(_, _) => None,
         };
         let mut cols = [a.into_column(), b.into_column()];
@@ -497,13 +637,13 @@ where
         ] {
             let len = col.borrow().len();
             if pos == 0 && len > 0 {
-                // Untouched survivor: restore it as it was, spilled bodies
-                // included (the loaded copy is dropped).
+                // Untouched survivor: restore it as it was (the loaded copy
+                // is dropped), aged one generation by its survival.
                 let chunk = match spilled.take() {
-                    Some(body) => ColumnChunk::Spilled(body),
+                    Some(body) => ColumnChunk::Spilled(body, depth),
                     None => ColumnChunk::Resident(Rc::new(std::mem::take(col)), depth),
                 };
-                queue.push_front(chunk);
+                queue.push_front(chunk.survive_merge());
             } else if pos < len {
                 let view = col.borrow();
                 let mut rest = <(D, T, R) as Columnar>::Container::default();
@@ -697,7 +837,7 @@ where
         let mut carry: Option<(Column<(D, T, R)>, u8)> = None;
         while let Some(chunk) = input.pop_front() {
             let (rc, depth) = match chunk {
-                spilled @ ColumnChunk::Spilled(_) => {
+                spilled @ ColumnChunk::Spilled(_, _) => {
                     if let Some((col, depth)) = carry.take() {
                         out.push_back(ColumnChunk::commit(col, depth));
                     }
@@ -835,7 +975,7 @@ where
             ColumnChunk::Resident(col, _) => {
                 extract_view_into::<K, V, T, R>(col.borrow(), probes, probe_index, staging);
             }
-            ColumnChunk::Spilled(body) => with_scratch(|scratch| {
+            ColumnChunk::Spilled(body, _) => with_scratch(|scratch| {
                 // NOTE: deliberately the non-admitting read. One probe set
                 // touching a chunk is weak evidence it will be touched again,
                 // and probing a spilled trace must not accrete it back into
@@ -854,7 +994,7 @@ where
                 let view = col.borrow();
                 staging.extend_from_self(view, 0..view.len());
             }
-            ColumnChunk::Spilled(body) => with_scratch(|scratch| {
+            ColumnChunk::Spilled(body, _) => with_scratch(|scratch| {
                 body.handle.read_into(scratch);
                 let view = borrow_words::<((K, V), T, R)>(scratch);
                 staging.extend_from_self(view, 0..view.len());
@@ -1116,6 +1256,16 @@ mod tests {
             .into_iter()
             .map(|chunk| force_spill(chunk, pool))
             .collect()
+    }
+
+    /// Whether a spilled chunk's body is stored compressed. Deliberately
+    /// does not retain the body: an `Rc` held across a `survive_merge` would
+    /// itself make the body shared and suppress the migration under test.
+    fn body_compressed(chunk: &TestChunk) -> bool {
+        match chunk {
+            ColumnChunk::Spilled(body, _) => body.compressed,
+            ColumnChunk::Resident(_, _) => panic!("chunk must be spilled"),
+        }
     }
 
     /// Spill one chunk through `pool`, bypassing the size threshold and
@@ -1550,7 +1700,7 @@ mod tests {
 
     /// Merge output is one generation past its deepest input, a survivor
     /// rewritten from its remainder keeps its own depth, and a chunk passed
-    /// through the disjoint fast path keeps its depth.
+    /// through the disjoint fast path ages by its survival.
     #[mz_ore::test]
     fn merge_derives_generational_depth() {
         let low: Vec<Tuple> = (0..100u64).map(|i| ((i, 0), 0, 1i64)).collect();
@@ -1570,14 +1720,16 @@ mod tests {
         assert_eq!(in2.len(), 1);
         assert_eq!(in2[0].depth(), 0, "rewritten survivor keeps its depth");
 
-        // A disjoint merge moves the lower front to the output unchanged.
+        // A disjoint merge moves the lower front to the output with its data
+        // unchanged, one generation older for having outlived the merge.
         let mut in1 = VecDeque::from([ColumnChunk::Resident(Rc::new(build_column(&low)), 3)]);
         let far: Vec<Tuple> = (1000..1100u64).map(|i| ((i, 0), 0, 1i64)).collect();
         let mut in2 = VecDeque::from([ColumnChunk::from_column(build_column(&far))]);
         let mut out = VecDeque::new();
         TestChunk::merge(&mut in1, &mut in2, &mut out);
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].depth(), 3, "pass-through keeps its depth");
+        assert_eq!(out[0].depth(), 4, "pass-through ages a generation");
+        assert_eq!(collect_chunks(out), low);
     }
 
     /// Advance output and carry keep the deepest input depth, since
@@ -1701,6 +1853,226 @@ mod tests {
         set_spill_override(None);
     }
 
+    /// The compression depth floor picks the codec, not whether a body
+    /// spills: shallow generations store at identity, the floor and deeper
+    /// at lz4, and every depth spills and round-trips.
+    #[mz_ore::test]
+    fn spill_codec_depth_floor() {
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(2));
+        // Codec identity via Debug: ZST statics and dyn vtables make
+        // pointer comparison unreliable. The flag must agree with the codec,
+        // since it is what decides whether a body wants migrating.
+        let codec_name = |depth: u8| {
+            let (codec, compressed) = codec_for_depth(depth);
+            let name = format!("{:?}", codec);
+            assert_eq!(compressed, name == "Lz4Codec", "flag tracks the codec");
+            name
+        };
+        assert_eq!(codec_name(0), "IdentityCodec");
+        assert_eq!(codec_name(1), "IdentityCodec");
+        assert_eq!(codec_name(2), "Lz4Codec");
+        assert_eq!(codec_name(u8::MAX), "Lz4Codec");
+
+        let data: Vec<Tuple> = (0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect();
+        let data = consolidate(data);
+        let column = build_column(&data);
+        for depth in [0u8, 1, 2, 3] {
+            let chunk = TestChunk::commit(column.clone(), depth);
+            assert!(chunk.is_spilled(), "depth {depth} must spill");
+            assert_eq!(collect_column(&chunk.into_column()), data);
+        }
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+
+        // The default floor stores only fresh (depth 0) bodies at identity.
+        set_compress_min_depth_override(Some(DEFAULT_COMPRESS_MIN_DEPTH));
+        assert_eq!(codec_name(0), "IdentityCodec");
+        assert_eq!(codec_name(1), "Lz4Codec");
+        set_compress_min_depth_override(None);
+    }
+
+    /// A chunk a merge carries forward untouched ages a generation, and a
+    /// spilled body crossing the compression floor by doing so is re-spilled
+    /// under the compressing codec. Key-disjoint input takes that path on
+    /// every merge, so without the crossing its backlog would stay
+    /// identity-coded for as long as it lived.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn merge_survivor_crosses_compression_floor() {
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(1));
+
+        let low = consolidate((0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+        let far = consolidate((100_000..120_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+        let fresh_far = || VecDeque::from([TestChunk::commit(build_column(&far), 0)]);
+
+        // Fresh spilled chunks sit below the floor, so both store identity
+        // coded, and their data ranges are disjoint.
+        let mut in1 = VecDeque::from([TestChunk::commit(build_column(&low), 0)]);
+        let mut in2 = fresh_far();
+        assert!(in1[0].is_spilled() && in2[0].is_spilled());
+        assert!(
+            !body_compressed(&in1[0]),
+            "a fresh body below the floor is identity coded"
+        );
+
+        let mut out = VecDeque::new();
+        TestChunk::merge(&mut in1, &mut in2, &mut out);
+        assert_eq!(out.len(), 1);
+        let survived = out.pop_front().expect("the lower front passes through");
+        assert_eq!(survived.depth(), 1, "survival ages across the floor");
+        assert!(
+            survived.is_spilled(),
+            "the crossing re-spills, it does not evict"
+        );
+        assert!(
+            body_compressed(&survived),
+            "the survivor is re-spilled under the compressing codec"
+        );
+
+        // Past the floor the next survival is a metadata-only bump: the body
+        // is already compressed and stays where it is.
+        let mut in1 = VecDeque::from([survived]);
+        let mut in2 = fresh_far();
+        let mut out = VecDeque::new();
+        TestChunk::merge(&mut in1, &mut in2, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].depth(), 2, "an aged survivor keeps aging");
+        assert!(out[0].is_spilled());
+        assert_eq!(
+            collect_chunks(out),
+            low,
+            "the body reads back intact across both survivals"
+        );
+
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+    }
+
+    /// Aging does not depend on holding the only reference to a body. The
+    /// trace's compaction merger feeds `merge` clones of a source batch's
+    /// chunks and keeps the batch alive throughout, so a shared body must
+    /// still age. It must not be re-spilled: the other holder goes on
+    /// storing the original whatever this reference does, and the merger
+    /// rewrites its clone immediately.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn merge_survivor_ages_while_shared() {
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(1));
+
+        let low = consolidate((0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+        let far = consolidate((100_000..120_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+
+        // The source batch's chunk, held for the whole merge as the spine
+        // holds it.
+        let source = TestChunk::commit(build_column(&low), 0);
+        let ColumnChunk::Spilled(source_body, 0) = &source else {
+            panic!("a fresh commit above the spill floor is spilled at depth 0");
+        };
+        let source_body = Rc::clone(source_body);
+
+        let mut in1 = VecDeque::from([source.clone()]);
+        let mut in2 = VecDeque::from([TestChunk::commit(build_column(&far), 0)]);
+        let mut out = VecDeque::new();
+        TestChunk::merge(&mut in1, &mut in2, &mut out);
+
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].depth(), 1, "a shared body ages all the same");
+        let ColumnChunk::Spilled(survived_body, _) = &out[0] else {
+            panic!("the survivor stays spilled");
+        };
+        assert!(
+            Rc::ptr_eq(&source_body, survived_body),
+            "a shared body is aged in place, not re-spilled"
+        );
+        assert_eq!(source.depth(), 0, "the other holder is left as it was");
+
+        // Past the floor, where no re-spill is in question, a shared body
+        // goes on aging rather than pinning at the crossing depth.
+        let mut in1 = VecDeque::from([out.pop_front().expect("survivor observed above")]);
+        let mut in2 = VecDeque::from([TestChunk::commit(build_column(&far), 0)]);
+        let mut out = VecDeque::new();
+        TestChunk::merge(&mut in1, &mut in2, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].depth(), 2, "aging past the floor is not pinned");
+        assert_eq!(collect_chunks(out), low);
+
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+    }
+
+    /// A migration that cannot happen when a body first qualifies is retried
+    /// at the next survival, never consumed. Each case leaves an
+    /// identity-coded body at or past the floor, which would be stranded
+    /// uncompressed for the rest of its life if the test were a depth
+    /// transition rather than the body's stored codec.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn survive_merge_retries_missed_migrations() {
+        let low = consolidate((0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+        let far = consolidate((100_000..120_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+
+        // Age a chunk one generation through a disjoint merge, which passes
+        // the lower front through `survive_merge`.
+        let survive = |chunk: TestChunk| {
+            let mut in1 = VecDeque::from([chunk]);
+            let mut in2 = VecDeque::from([TestChunk::commit(build_column(&far), 0)]);
+            let mut out = VecDeque::new();
+            TestChunk::merge(&mut in1, &mut in2, &mut out);
+            out.pop_front().expect("the lower front passes through")
+        };
+
+        // No pool installed when the body qualifies: spilling can be toggled
+        // off at runtime while existing handles stay valid.
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(1));
+        let chunk = TestChunk::commit(build_column(&low), 0);
+        assert!(!body_compressed(&chunk));
+        set_spill_override(None);
+        let chunk = survive(chunk);
+        assert_eq!(chunk.depth(), 1, "aging does not need a pool");
+        assert!(!body_compressed(&chunk), "no pool, no migration");
+        set_spill_override(Some(test_pool()));
+        let chunk = survive(chunk);
+        assert!(
+            body_compressed(&chunk),
+            "the migration retries once a pool is back"
+        );
+
+        // Shared when the body qualifies: the compaction merger holds the
+        // source batch while merging clones of its chunks.
+        let chunk = TestChunk::commit(build_column(&low), 0);
+        let held = chunk.clone();
+        let chunk = survive(chunk);
+        assert!(!body_compressed(&chunk), "shared, so not migrated");
+        drop(held);
+        let chunk = survive(chunk);
+        assert!(
+            body_compressed(&chunk),
+            "the migration retries once the body is unshared"
+        );
+
+        // The floor lowered long after the body spilled, which is what an
+        // operator reaches for under pool pressure. Nothing here is a
+        // transition: the body is already several generations past the new
+        // floor when it moves.
+        set_compress_min_depth_override(Some(8));
+        let chunk = TestChunk::commit(build_column(&low), 3);
+        assert!(!body_compressed(&chunk));
+        set_compress_min_depth_override(Some(1));
+        let chunk = survive(chunk);
+        assert_eq!(chunk.depth(), 4);
+        assert!(
+            body_compressed(&chunk),
+            "lowering the floor migrates bodies already past it"
+        );
+
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+    }
+
     /// The compute and storage spill gates compose as an OR: either gate
     /// routes commits to the installed pool, and each setter writes only its
     /// own gate.
@@ -1732,6 +2104,7 @@ mod tests {
         assert!(commit(&col), "the compute gate alone spills");
         set_compute_spill_enabled(false);
         assert!(!commit(&col), "both gates off again");
+        set_compress_min_depth_override(None);
     }
 
     /// Re-spilling an already-serialized body exercises the `Column::Align`
