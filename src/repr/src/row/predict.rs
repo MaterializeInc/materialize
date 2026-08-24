@@ -86,17 +86,40 @@ fn extend<const N: usize>(data: &[u8], at: usize, len: usize, fill: u8) -> [u8; 
     raw
 }
 
-/// The byte count of a variable-length integer whose group starts at `base`, or `None` if `tag` is
-/// not in that group.
+/// The byte count of a variable-length integer whose family starts at `base`, or `None` if `tag`
+/// is not in that family.
 ///
 /// `push_datum` writes `base + n` for a value needing `n` bytes, so the count is arithmetic on the
-/// tag. `width` is the widest encoding the group has in BYTES, so two for a 16-bit group, four for
-/// a 32-bit one and eight for a 64-bit one. Passing the number of tags in the group instead would
-/// accept the first tag of the next group, whose length then overruns the array `extend` fills.
+/// tag. `N` is the width of the integer the family encodes, which is also the widest encoding the
+/// family has, so `base + N` is its last tag. Accepting a wider `delta` would claim the first tag
+/// of the next family and then read a body longer than the family's integer.
 #[inline(always)]
-fn varint_len(tag: u8, base: u8, width: u8) -> Option<usize> {
-    let delta = tag.wrapping_sub(base);
-    (delta <= width).then(|| usize::from(delta))
+fn varint_len<const N: usize>(tag: u8, base: u8) -> Option<usize> {
+    let delta = usize::from(tag.wrapping_sub(base));
+    (delta <= N).then_some(delta)
+}
+
+/// The `N` little-endian bytes of the variable-length integer at `at`, and the next offset.
+///
+/// Returns `None` if `tag` is not in the family starting at `base`. `fill` extends the encoded
+/// bytes to `N`, so it is `255` for a family of negative values and `0` otherwise.
+///
+/// Taking the family width and the destination width as one `N` is what keeps them in agreement:
+/// the caller's `from_le_bytes` fixes `N`, so a family whose width disagrees does not compile.
+///
+/// # Panics
+///
+/// Panics unless `data[at]` is the tag of a validly encoded datum, whose body is then in bounds.
+#[inline(always)]
+fn varint<const N: usize>(
+    data: &[u8],
+    at: usize,
+    tag: u8,
+    base: u8,
+    fill: u8,
+) -> Option<([u8; N], usize)> {
+    let len = varint_len::<N>(tag, base)?;
+    Some((extend(data, at + 1, len, fill), at + 1 + len))
 }
 
 /// The length prefix of a length-prefixed datum, and the width of the prefix itself.
@@ -155,27 +178,18 @@ unsafe fn decode_one<'a>(
     }
     match class {
         DatumClass::Int64 => {
-            let (len, fill) = match (varint_len(tag, I64_POS, 8), varint_len(tag, I64_NEG, 8)) {
-                (Some(len), _) => (len, 0),
-                (_, Some(len)) => (len, 255),
-                _ => return None,
-            };
-            let i = i64::from_le_bytes(extend(data, at + 1, len, fill));
-            Some((Datum::Int64(i), at + 1 + len))
+            let (raw, next) = varint(data, at, tag, I64_POS, 0)
+                .or_else(|| varint(data, at, tag, I64_NEG, 255))?;
+            Some((Datum::Int64(i64::from_le_bytes(raw)), next))
         }
         DatumClass::Int32 => {
-            let (len, fill) = match (varint_len(tag, I32_POS, 4), varint_len(tag, I32_NEG, 4)) {
-                (Some(len), _) => (len, 0),
-                (_, Some(len)) => (len, 255),
-                _ => return None,
-            };
-            let i = i32::from_le_bytes(extend(data, at + 1, len, fill));
-            Some((Datum::Int32(i), at + 1 + len))
+            let (raw, next) = varint(data, at, tag, I32_POS, 0)
+                .or_else(|| varint(data, at, tag, I32_NEG, 255))?;
+            Some((Datum::Int32(i32::from_le_bytes(raw)), next))
         }
         DatumClass::UInt64 => {
-            let len = varint_len(tag, U64, 8)?;
-            let i = u64::from_le_bytes(extend(data, at + 1, len, 0));
-            Some((Datum::UInt64(i), at + 1 + len))
+            let (raw, next) = varint(data, at, tag, U64, 0)?;
+            Some((Datum::UInt64(u64::from_le_bytes(raw)), next))
         }
         DatumClass::Float64 => {
             if tag != F64 {
@@ -237,13 +251,13 @@ fn classify(tag: u8) -> Option<DatumClass> {
         DATE => DatumClass::Date,
         STR_TINY..=STR_HUGE => DatumClass::Str,
         BYTES_TINY..=BYTES_HUGE => DatumClass::Bytes,
-        _ if varint_len(tag, I64_POS, 8).is_some() || varint_len(tag, I64_NEG, 8).is_some() => {
+        _ if varint_len::<8>(tag, I64_POS).is_some() || varint_len::<8>(tag, I64_NEG).is_some() => {
             DatumClass::Int64
         }
-        _ if varint_len(tag, I32_POS, 4).is_some() || varint_len(tag, I32_NEG, 4).is_some() => {
+        _ if varint_len::<4>(tag, I32_POS).is_some() || varint_len::<4>(tag, I32_NEG).is_some() => {
             DatumClass::Int32
         }
-        _ if varint_len(tag, U64, 8).is_some() => DatumClass::UInt64,
+        _ if varint_len::<8>(tag, U64).is_some() => DatumClass::UInt64,
         _ => DatumClass::Other,
     };
     Some(class)
@@ -410,6 +424,105 @@ impl Prediction {
 mod tests {
     use super::*;
     use crate::Row;
+
+    /// The class [`classify`] must answer for `tag`, stated independently of it.
+    ///
+    /// Exhaustive on purpose. [`classify`] ends in a catch-all, so a `Tag` variant added to a
+    /// family it does not know would silently become [`DatumClass::Other`] and decode generally
+    /// forever. Here the same addition fails to compile, which forces the decision to be made.
+    ///
+    /// The fixed-width integer tags are [`DatumClass::Other`] because `push_datum` no longer
+    /// writes them, so predicting them would spend a compare on a tag that never arrives.
+    fn expected_class(tag: Tag) -> Option<DatumClass> {
+        use Tag::*;
+        let class = match tag {
+            // A null says nothing about the column.
+            Null => return None,
+
+            False | True => DatumClass::Bool,
+            Float64 => DatumClass::Float64,
+            Date => DatumClass::Date,
+            StringTiny | StringShort | StringLong | StringHuge => DatumClass::Str,
+            BytesTiny | BytesShort | BytesLong | BytesHuge => DatumClass::Bytes,
+
+            NonNegativeInt32_0 | NonNegativeInt32_8 | NonNegativeInt32_16 | NonNegativeInt32_24
+            | NonNegativeInt32_32 | NegativeInt32_0 | NegativeInt32_8 | NegativeInt32_16
+            | NegativeInt32_24 | NegativeInt32_32 => DatumClass::Int32,
+
+            NonNegativeInt64_0 | NonNegativeInt64_8 | NonNegativeInt64_16 | NonNegativeInt64_24
+            | NonNegativeInt64_32 | NonNegativeInt64_40 | NonNegativeInt64_48
+            | NonNegativeInt64_56 | NonNegativeInt64_64 | NegativeInt64_0 | NegativeInt64_8
+            | NegativeInt64_16 | NegativeInt64_24 | NegativeInt64_32 | NegativeInt64_40
+            | NegativeInt64_48 | NegativeInt64_56 | NegativeInt64_64 => DatumClass::Int64,
+
+            UInt64_0 | UInt64_8 | UInt64_16 | UInt64_24 | UInt64_32 | UInt64_40 | UInt64_48
+            | UInt64_56 | UInt64_64 => DatumClass::UInt64,
+
+            // No fast arm. Listed rather than caught, so a new variant lands here as an error.
+            Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 | Float32 | Time
+            | Timestamp | TimestampTz | Interval | Uuid | Array | ListTiny | ListShort
+            | ListLong | ListHuge | Dict | JsonNull | Dummy | Numeric | MzTimestamp | Range
+            | MzAclItem | AclItem | CheapTimestamp | CheapTimestampTz => DatumClass::Other,
+
+            NonNegativeInt16_0 | NonNegativeInt16_8 | NonNegativeInt16_16 | NegativeInt16_0
+            | NegativeInt16_8 | NegativeInt16_16 | UInt8_0 | UInt8_8 | UInt16_0 | UInt16_8
+            | UInt16_16 | UInt32_0 | UInt32_8 | UInt32_16 | UInt32_24 | UInt32_32 => {
+                DatumClass::Other
+            }
+        };
+        Some(class)
+    }
+
+    /// Every tag the encoder can write must get the class `expected_class` names.
+    ///
+    /// `Tag` is `#[repr(u8)]` with `TryFromPrimitive`, so scanning the byte range enumerates the
+    /// whole enum without a generator having to produce a datum of each type.
+    #[mz_ore::test]
+    fn classify_matches_every_tag() {
+        let mut seen = 0;
+        for byte in 0..=u8::MAX {
+            let Ok(tag) = Tag::try_from(byte) else {
+                continue;
+            };
+            seen += 1;
+            assert_eq!(classify(byte), expected_class(tag), "tag {tag:?} ({byte})");
+        }
+        // The scan found the enum, not an empty range.
+        assert!(seen > 90, "only {seen} tags enumerated");
+    }
+
+    /// The lengths `varint_len` computes by arithmetic must equal the ones `Tag` computes by name.
+    ///
+    /// These are the two independent statements of the same encoding: `predict` derives the body
+    /// length from the tag's distance from its family's first tag, `Tag::actual_int_length`
+    /// spells it out per variant. A family width that reached one tag too far would show up here
+    /// as a length disagreement, or as two families claiming one tag.
+    #[mz_ore::test]
+    fn varint_len_agrees_with_tag() {
+        for byte in 0..=u8::MAX {
+            let Ok(tag) = Tag::try_from(byte) else {
+                continue;
+            };
+            let claims = [
+                varint_len::<8>(byte, I64_POS),
+                varint_len::<8>(byte, I64_NEG),
+                varint_len::<4>(byte, I32_POS),
+                varint_len::<4>(byte, I32_NEG),
+                varint_len::<8>(byte, U64),
+            ];
+            assert!(
+                claims.iter().filter(|len| len.is_some()).count() <= 1,
+                "tag {tag:?} claimed by more than one family"
+            );
+            if let Some(len) = claims.into_iter().flatten().next() {
+                assert_eq!(
+                    Some(len),
+                    tag.actual_int_length(),
+                    "tag {tag:?} body length"
+                );
+            }
+        }
+    }
 
     /// The predicting decoder must match `read_datum` on any row, from any starting prediction.
     #[mz_ore::test]
