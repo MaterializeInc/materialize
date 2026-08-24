@@ -2096,14 +2096,6 @@ pub struct CollectionState {
     /// a stage it already reported. The lifecycle relation is append-only, so a repeat would show
     /// up as a duplicate row rather than being dropped.
     logged_stages: BTreeSet<LifecycleStage>,
-    /// The sink's write frontier at the moment this replica was first permitted to write, against
-    /// which `written` is measured.
-    ///
-    /// The shard's upper is a property of the shard and not of this replica, so it cannot on its
-    /// own say that *this* replica made its output durable. Latching it once and requiring the
-    /// frontier to advance past the latched value is what makes `written` an observation about
-    /// this replica: whatever another writer had already durably written is below the baseline.
-    write_baseline: Option<Antichain<Timestamp>>,
     /// Send-side to transition a dataflow from read-only mode to read-write mode.
     ///
     /// All dataflows start in read-only mode. Only after receiving a
@@ -2144,7 +2136,6 @@ impl CollectionState {
             metrics,
             owns_sink_frontier: false,
             logged_stages: BTreeSet::new(),
-            write_baseline: None,
             read_only_tx,
             read_only_rx,
         }
@@ -2263,15 +2254,21 @@ impl CollectionState {
     /// before the dataflow has computed anything, so its sink writes an empty batch for the
     /// pre-refresh window and advances the shard's upper while the dataflow is still hydrating.
     ///
-    /// NOTE: `write_frontier` is the output shard's upper, a property of the shard and not of this
-    /// replica, so it cannot on its own attribute a write. The as-of is bounded to one step below
-    /// that upper for a non-empty storage export
-    /// (`as_of_selection::apply_downstream_storage_constraints`), so comparing the two directly is
-    /// true from the moment the dataflow is installed for any shard that already holds data. That
-    /// would report `written` for a replica that has appended nothing: a scaled-out or restarted
-    /// replica, or a read-only replica the instant it is cut over, which is precisely the case
-    /// this relation exists to measure. Hence the baseline: `written` reports that the frontier
-    /// advanced beyond where it stood when this replica was first allowed to write.
+    /// NOTE: `written` promises that the output is durable through the as-of and that this replica
+    /// was permitted to write. It does *not* promise that this replica performed the write, and
+    /// cannot: `write_frontier` is the output shard's upper, which every replica's `mint` reads
+    /// back from persist, so it advances here when any replica wins the append. Replicas of a
+    /// cluster produce identical batches and race to append, so which one won is not an
+    /// operationally meaningful question, but the interval it implies is. The as-of is bounded to
+    /// one step below the upper for a non-empty storage export
+    /// (`as_of_selection::apply_downstream_storage_constraints`), so for a shard that already holds
+    /// data the predicate is true from installation and `written` lands with `hydrated` on a
+    /// restarted or scaled-out replica, and with `write_unblocked` at a cutover.
+    ///
+    /// TODO: attributing the write to this replica needs a signal from its own append path, since
+    /// no reading of the shared upper can supply one. `next_append_worker` rotates independently of
+    /// `sink::frontier_owner`, so that signal has to cross workers to reach the worker that reports
+    /// the stage.
     fn observe_writes(&mut self, write_frontier: &Antichain<Timestamp>) {
         if !self.owns_sink_frontier {
             return;
@@ -2286,17 +2283,6 @@ impl CollectionState {
             return;
         }
 
-        // Latch the baseline the first time writes are permitted, which is before hydration in
-        // the common case and at cutover for a replica that started read-only. Latching it any
-        // later would fold this replica's own early writes into the baseline, and so never report
-        // them. Latching it any earlier, before the block is lifted, would measure against an
-        // upper that the previous writer went on to advance, which is the mis-attribution the
-        // baseline exists to prevent.
-        let baseline = self
-            .write_baseline
-            .get_or_insert_with(|| write_frontier.clone());
-        let advanced = PartialOrder::less_than(baseline, write_frontier);
-
         if !self.logged_stages.contains(&LifecycleStage::Hydrated) {
             return;
         }
@@ -2310,7 +2296,7 @@ impl CollectionState {
             self.log_stage(LifecycleStage::WriteUnblocked);
         }
 
-        if advanced {
+        if PartialOrder::less_than(&self.as_of, write_frontier) {
             self.log_stage(LifecycleStage::Written);
         }
     }
