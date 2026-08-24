@@ -302,10 +302,14 @@ aws-types = "1.3.9"
 axum = { version = "0.8.9", features = ["ws"] }
 axum-extra = { version = "0.12.5", features = ["typed-header"] }
 axum-server = { version = "0.8.0", features = ["tls-rustls"] }
-azure_core = "0.21.0"
-azure_identity = "0.21.0"
-azure_storage = "0.21.0"
-azure_storage_blobs = "0.21.0"
+# The GA (1.x) Azure SDK. It transports requests over reqwest 0.13, pulled in
+# via `typespec_client_core`; see `reqwest_0_13` below.
+#
+# `hmac_rust` provides `azure_core::hmac::hmac_sha256`, which signs the Azurite
+# requests our tests make.
+azure_core = { version = "1.1.0", features = ["hmac_rust"] }
+azure_identity = "1.0.0"
+azure_storage_blob = "1.0.0"
 backtrace = "0.3.76"
 base64 = "0.22.1"
 bincode = "1.3.3"
@@ -474,6 +478,12 @@ rdkafka-sys = { version = "4.3.0", features = ["cmake-build", "libz-static", "ss
 regex = "1.12.3"
 regex-syntax = "0.8.10"
 reqwest = { version = "0.12.28", features = ["blocking", "charset", "cookies", "default-tls", "http2", "json", "native-tls-vendored", "stream"] }
+# The Azure SDK implements its `HttpClient` transport trait for reqwest 0.13
+# only, so persist's custom Azure transport client cannot be built from the
+# workspace `reqwest` above. Naming the 0.13 major explicitly keeps the two
+# uses from being confused at the call site. `rustls` puts Azure traffic on
+# rustls + aws-lc-rs, matching the SDK's own default transport.
+reqwest_0_13 = { package = "reqwest", version = "0.13.4", default-features = false, features = ["rustls", "stream"] }
 reqwest-middleware = { version = "0.4.2", features = ["json"] }
 reqwest-retry = "0.8.0"
 rlimit = "0.11.0"
