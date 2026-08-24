@@ -80,7 +80,6 @@ use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 use crate::typedefs::{ErrAgent, RowRowAgent};
 
-mod local_snapshot;
 mod peek_result_iterator;
 mod peek_stash;
 
@@ -1810,19 +1809,7 @@ pub(crate) struct IndexPeekMetrics<'a> {
 }
 
 impl IndexPeek {
-    /// Attempts to fulfill the peek and reports success.
-    ///
-    /// To produce output at `peek.timestamp`, we must be certain that
-    /// it is no longer changing. A trace guarantees that all future
-    /// changes will be greater than or equal to an element of `upper`.
-    ///
-    /// If an element of `upper` is less or equal to `peek.timestamp`,
-    /// then there can be further updates that would change the output.
-    /// If no element of `upper` is less or equal to `peek.timestamp`,
-    /// then for any time `t` less or equal to `peek.timestamp` it is
-    /// not the case that `upper` is less or equal to that timestamp,
-    /// and so the result cannot further evolve.
-    /// Takes owned, `Send` snapshots of the oks and errs traces if the peek is ready to be
+    /// Takes owned, `Send` cursors over the oks and errs traces if the peek is ready to be
     /// answered, so the walk can move to another thread.
     ///
     /// Applies the same two gates as the inline walk, in the same order: the traces must be sealed
@@ -1850,42 +1837,28 @@ impl IndexPeek {
             )));
         }
 
-        // `snapshot_local` needs a batch-aligned `as_of`, meaning one the trace has actually
-        // reached; each trace's own current upper qualifies. The empty frontier the inline walk's
-        // live cursor uses does not, since it would make the snapshot's own since-gate vacuous.
-        // Filtering down to `peek.timestamp` still happens during the walk, as it does inline.
-        let mut oks_upper = Antichain::new();
-        self.trace_bundle.oks_mut().read_upper(&mut oks_upper);
-        let mut errs_upper = Antichain::new();
-        self.trace_bundle.errs_mut().read_upper(&mut errs_upper);
-
-        let oks = local_snapshot::snapshot_local(self.trace_bundle.oks_mut(), &oks_upper);
-        let errs = local_snapshot::snapshot_local(self.trace_bundle.errs_mut(), &errs_upper);
-        let oks_stash = want_stash
-            .then(|| local_snapshot::snapshot_local(self.trace_bundle.oks_mut(), &oks_upper).ok())
-            .flatten();
-        match (oks, errs) {
-            (Ok(oks), Ok(errs)) => OffloadSnapshot::Ready {
-                oks: oks.into_cursor(),
-                errs: errs.into_cursor(),
-                oks_stash: oks_stash.map(|snapshot| snapshot.into_cursor()),
-            },
-            // The gates above already established that the traces cover this read, so a snapshot
-            // failure here would mean the trace moved between the two checks. Nothing runs on this
-            // thread in between, so this is unreachable in practice. Report rather than panic.
-            _ => {
-                soft_panic_or_log!(
-                    "index peek offload: snapshot unavailable at readiness-checked timestamp {}",
-                    self.peek.timestamp,
-                );
-                OffloadSnapshot::Response(PeekResponse::Error(format!(
-                    "Arrangement compaction frontier is beyond the time of the attempted read ({})",
-                    self.peek.timestamp,
-                )))
-            }
+        // `TraceReader::cursor` hands back the batches by value, so what it returns already owns
+        // the `Arc`s it reads and crosses to another thread as it is. The trace handles are only
+        // borrowed for the length of these calls, which is why the walk holds nothing back.
+        OffloadSnapshot::Ready {
+            oks: self.trace_bundle.oks_mut().cursor(),
+            errs: self.trace_bundle.errs_mut().cursor(),
+            oks_stash: want_stash.then(|| self.trace_bundle.oks_mut().cursor()),
         }
     }
 
+    /// Attempts to fulfill the peek and reports success.
+    ///
+    /// To produce output at `peek.timestamp`, we must be certain that
+    /// it is no longer changing. A trace guarantees that all future
+    /// changes will be greater than or equal to an element of `upper`.
+    ///
+    /// If an element of `upper` is less or equal to `peek.timestamp`,
+    /// then there can be further updates that would change the output.
+    /// If no element of `upper` is less or equal to `peek.timestamp`,
+    /// then for any time `t` less or equal to `peek.timestamp` it is
+    /// not the case that `upper` is less or equal to that timestamp,
+    /// and so the result cannot further evolve.
     fn seek_fulfillment(
         &mut self,
         upper: &mut Antichain<Timestamp>,

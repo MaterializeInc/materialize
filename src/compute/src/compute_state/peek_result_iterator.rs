@@ -354,3 +354,17 @@ where
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use mz_repr::{Diff, Timestamp};
+    use static_assertions::assert_impl_all;
+
+    use crate::typedefs::RowRowSpine;
+
+    // `TraceReader::cursor` returns its batches by value, and since #38396 those batches are
+    // `Arc`-backed, so an iterator built over them owns everything it reads. That is what lets a
+    // peek's walk run on a thread other than the worker that owns the trace, and it is a property
+    // of the cursor rather than of any wrapper, so assert it directly.
+    assert_impl_all!(super::PeekResultIterator<RowRowSpine<Timestamp, Diff>>: Send);
+}
