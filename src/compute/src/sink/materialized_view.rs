@@ -259,7 +259,7 @@ where
     }
 
     let scope = ok_collection.scope();
-    let owns_sink_frontier = scope.index() == frontier_owner(sink_id, scope.peers());
+    let owns_sink_frontier = scope.index() == crate::sink::frontier_owner(sink_id, scope.peers());
     let desired = OkErr::new(ok_collection.inner, err_collection.inner);
 
     // Read back the persist shard.
@@ -296,8 +296,7 @@ where
 
     // Report sink frontier updates to the `ComputeState`.
     let collection = compute_state.expect_collection_mut(sink_id);
-    collection.sink_write_frontier = Some(sink_frontier);
-    collection.owns_sink_frontier = owns_sink_frontier;
+    collection.set_sink_write_frontier(sink_frontier, owns_sink_frontier);
 
     Rc::new((persist_token, mint_token, write_token, append_token))
 }
@@ -473,16 +472,6 @@ impl std::fmt::Debug for BatchDescription {
     }
 }
 
-/// The worker that maintains a sink's shared write frontier.
-///
-/// The `mint` operator tracks the output shard's upper on this worker alone and clears the shared
-/// frontier on all the others, so only this worker's copy carries write progress. Anything that
-/// reads the shared frontier as a measure of writing, rather than as an input to the
-/// controller-visible meet, must agree with this election.
-pub(super) fn frontier_owner(sink_id: GlobalId, peers: usize) -> usize {
-    usize::cast_from(sink_id.hashed()) % peers
-}
-
 /// Construct a name for the given sub-operator.
 pub(super) fn operator_name(sink_id: GlobalId, sub_operator: &str) -> String {
     format!("mv_sink({sink_id})::{sub_operator}")
@@ -517,7 +506,7 @@ mod mint {
         let worker_count = scope.peers();
 
         // Determine the active worker for the mint operator.
-        let active_worker_id = super::frontier_owner(sink_id, scope.peers());
+        let active_worker_id = crate::sink::frontier_owner(sink_id, scope.peers());
 
         let sink_frontier = Rc::new(RefCell::new(Antichain::from_elem(Timestamp::MIN)));
         let shared_frontier = Rc::clone(&sink_frontier);

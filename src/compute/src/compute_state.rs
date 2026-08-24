@@ -2059,7 +2059,9 @@ pub struct CollectionState {
     /// write lifecycle stages are logged by that worker alone, which also makes them a single
     /// observation per export rather than one per worker. False for collections whose output
     /// frontier is not a persist upper at all, such as indexes and metric sinks.
-    pub owns_sink_frontier: bool,
+    ///
+    /// Set through [`Self::set_sink_write_frontier`] together with the frontier it describes.
+    owns_sink_frontier: bool,
     /// Which lifecycle stages have been logged for this collection.
     ///
     /// Stages are only ever added, never removed. Reconciliation resets the reported frontiers of
@@ -2281,6 +2283,21 @@ impl CollectionState {
         if advanced {
             self.log_stage(LifecycleStage::Written);
         }
+    }
+
+    /// Record the shared frontier a sink publishes its write progress through.
+    ///
+    /// `owned` must say whether *this* worker's copy of the frontier carries that progress, which
+    /// for a persist sink means this worker is [`crate::sink::frontier_owner`]. Setting it wrongly
+    /// is not a missed optimization: a non-owning worker's copy is cleared to the empty antichain,
+    /// which is the maximum of the order and so reports having written everything immediately.
+    pub(crate) fn set_sink_write_frontier(
+        &mut self,
+        frontier: Rc<RefCell<Antichain<Timestamp>>>,
+        owned: bool,
+    ) {
+        self.sink_write_frontier = Some(frontier);
+        self.owns_sink_frontier = owned;
     }
 
     /// Allow writes for this collection.
