@@ -2,7 +2,8 @@
 
 Reads network policy definitions from the `network-policies/` directory and converges
 the live Materialize state to match. Creates missing network policies and alters
-ones whose rules have changed. Grants and comments are applied idempotently.
+ones whose rules have changed. Grants and comments are reconciled against
+the database.
 
 ## Usage
 
@@ -14,8 +15,10 @@ ones whose rules have changed. Grants and comments are applied idempotently.
 2. For each network policy definition:
    - If the policy does not exist, creates it.
    - If the policy exists, alters it to converge rules.
-   - Applies associated `GRANT` statements.
-   - Applies associated `COMMENT` statements.
+   - Reconciles grants: grants what is missing, revokes what the
+     project no longer declares.
+   - Reconciles comments: sets what differs, clears what the project no
+     longer declares.
 3. Reports status per policy:
    - `+` created
    - `~` altered (converging rules)

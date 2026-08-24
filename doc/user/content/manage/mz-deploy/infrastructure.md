@@ -41,7 +41,7 @@ mz-deploy apply secrets
 CREATE CLUSTER orders (SIZE = '25cc');
 ```
 
-`apply` creates missing clusters and alters drifted configuration. Grants and comments are applied idempotently.
+`apply` creates missing clusters and alters drifted configuration. Grants, comments, and default privileges are reconciled against the database, so `apply` issues only the statements needed to match the project. Your project files are the source of truth: a grant or comment you remove from a file is removed from the database on the next `apply`, including one added by hand outside the project.
 
 ## Roles
 

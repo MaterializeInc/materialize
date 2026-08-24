@@ -14,13 +14,19 @@ comments are applied for newly created sources.
 2. Collects all `CREATE SOURCE` objects from the plan.
 3. Queries the database to determine which sources already exist.
 4. Creates missing schemas if needed.
-5. For each source that does not exist:
-   - Executes the `CREATE SOURCE` statement.
-   - Applies associated `GRANT` and `COMMENT` statements.
-6. Reconciles grants on sources that already exist.
+5. For each source that does not exist, executes the `CREATE SOURCE`
+   statement.
+6. Reconciles grants and comments on every source, whether it was just
+   created or already existed.
 
 The command is **idempotent** — running it multiple times produces the
 same result. Sources that already exist are never modified or recreated.
+
+Grants and comments are reconciled, not replayed: `apply sources` reads
+what the database holds and issues only the `GRANT`, `REVOKE`, and
+`COMMENT ON` statements needed to match the project. A grant or comment
+removed from a project file is removed from the database, including one
+added by hand outside the project.
 
 ## Dependencies
 

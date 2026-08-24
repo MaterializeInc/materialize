@@ -18,7 +18,10 @@ at execution time.
    - Resolves client-side provider functions (e.g. `env_var`).
    - Executes `CREATE SECRET IF NOT EXISTS` (idempotent create).
    - Executes `ALTER SECRET` to update the value to match the file.
-   - Applies any associated `GRANT` and `COMMENT` statements.
+   - Reconciles grants: grants what is missing, revokes what the
+     project no longer declares.
+   - Reconciles comments: sets what differs, clears what the project no
+     longer declares.
 
 The command is **idempotent** — running it multiple times produces the
 same result, always converging to the values defined in the project.

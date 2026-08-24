@@ -19,8 +19,10 @@ aren't unnecessarily reset.
    - If the connection does not exist, creates it.
    - If the connection exists, alters only the options that differ from
      the project file.
-   - Applies associated `GRANT` statements.
-   - Applies associated `COMMENT` statements.
+   - Reconciles grants: grants what is missing, revokes what the
+     project no longer declares.
+   - Reconciles comments: sets what differs, clears what the project no
+     longer declares.
 6. Reports status per connection:
    - `+` created
    - `~` altered (drift detected)

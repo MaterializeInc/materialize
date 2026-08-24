@@ -16,7 +16,7 @@ When run without a subcommand (`mz-deploy apply`):
 1. Applies cluster definitions from `clusters/` — creates missing,
    alters drifted configuration.
 2. Applies role definitions from `roles/` — creates missing, applies
-   ALTER, GRANT, COMMENT statements.
+   ALTER statements, reconciles membership and comments.
 3. Applies network policy definitions from `network-policies/` — creates
    missing, alters drifted rules.
 4. Applies secrets — creates missing, updates values (skip with
@@ -26,7 +26,12 @@ When run without a subcommand (`mz-deploy apply`):
 7. Applies tables — creates missing tables (idempotent).
 
 Each step is idempotent — running `apply` multiple times converges
-to the same state.
+to the same state. Grants and comments are reconciled rather than
+replayed: `apply` reads what the database holds and issues only the
+statements needed to match the project, so a converged project produces
+an empty plan. Your project files are the source of truth, so a grant or
+comment removed from a file is removed from the database, including one
+added by hand outside the project.
 
 When run with a subcommand (`mz-deploy apply clusters`), only that
 type is applied.
