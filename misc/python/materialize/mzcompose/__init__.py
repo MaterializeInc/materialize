@@ -299,6 +299,11 @@ def get_variable_system_parameters(
             ["true", "false"],
         ),
         VariableSystemParameter(
+            "enable_index_peek_offload",
+            "true",
+            ["true", "false"],
+        ),
+        VariableSystemParameter(
             "enable_union_cancellation_after_relation_cse",
             "true",
             ["true", "false"],
@@ -590,6 +595,7 @@ def get_default_system_parameters(
 # all. Only add it in UNINTERESTING_SYSTEM_PARAMETERS if none of the above
 # apply.
 UNINTERESTING_SYSTEM_PARAMETERS = [
+    "index_peek_offload_max_inflight",
     "enable_compute_half_join2",
     "enable_mz_join_core",
     "linear_join_yielding",
