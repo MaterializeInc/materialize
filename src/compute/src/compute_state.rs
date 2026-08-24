@@ -740,9 +740,33 @@ impl<'a> ActiveComputeState<'a> {
         // computation of a dataflow will only start once all its exported collections have been
         // scheduled.
         let suspension_token = self.compute_state.suspended_collections.remove(&id);
+        // Only the last token release actually unsuspends the dataflow, and the signal holds no
+        // strong reference of its own, so this is the whole outstanding count.
+        let unsuspended = suspension_token
+            .as_ref()
+            .is_some_and(|token| Rc::strong_count(token) == 1);
         drop(suspension_token);
 
-        if let Some(collection) = self.compute_state.collections.get(&id) {
+        if !unsuspended {
+            return;
+        }
+
+        // Report the start for every export of the dataflow, not just the one this command named.
+        // Computation begins for all of them at this instant, so crediting each export from its
+        // own `Schedule` would date the earlier ones to before their dataflow was running and
+        // overstate the compute time between `started` and `hydrated`.
+        let Some(dataflow_index) = self
+            .compute_state
+            .collections
+            .get(&id)
+            .map(|c| Rc::clone(&c.dataflow_index))
+        else {
+            return;
+        };
+        for collection in self.compute_state.collections.values() {
+            if !Rc::ptr_eq(&collection.dataflow_index, &dataflow_index) {
+                continue;
+            }
             if let Some(logging) = &collection.logging {
                 logging.set_hydration_start();
             }
