@@ -3284,6 +3284,7 @@ class FlipFlagsAction(Action):
             "with_0dt_caught_up_check_cutoff",
             "with_0dt_caught_up_check_stability_period",
             "enable_0dt_caught_up_stability_check",
+            "enable_0dt_hydrate_migrated_builtin_mvs",
             "enable_statement_lifecycle_logging",
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",

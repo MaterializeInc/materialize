@@ -750,6 +750,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "with_0dt_caught_up_check_cutoff",
     "enable_0dt_caught_up_replica_status_check",
     "enable_0dt_caught_up_stability_check",
+    "enable_0dt_hydrate_migrated_builtin_mvs",
     "plan_insights_notice_fast_path_clusters_optimize_duration",
     "enable_expression_cache",
     "mz_metrics_lgalloc_map_refresh_interval",
