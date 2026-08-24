@@ -12,7 +12,12 @@ import React from "react";
 
 import { MaterializeTheme } from "~/theme";
 
-import { LabeledCommandBox } from "./connectComponents";
+import {
+  ConnectStep,
+  CreateAppPasswordRow,
+  IdTokenRow,
+  LabeledCommandBox,
+} from "./connectComponents";
 import { buildPsqlCommand, ConnectContext } from "./connectOptions";
 
 export interface ConnectTerminalPanelProps {
@@ -34,17 +39,21 @@ export const ConnectTerminalPanel = ({ ctx }: ConnectTerminalPanelProps) => {
   );
 
   return (
-    <VStack alignItems="stretch" spacing="3">
-      <LabeledCommandBox
-        label="Run this in your terminal:"
-        contents={command}
-      />
-      {ctx.idToken && (
-        <Text fontSize="sm" color={colors.foreground.secondary}>
-          When prompted for a password, paste the ID token from the External
-          tools tab.
-        </Text>
-      )}
+    <VStack alignItems="stretch" spacing="0">
+      <ConnectStep stepNumber={1} title="Run this in your terminal">
+        <LabeledCommandBox contents={command} />
+      </ConnectStep>
+      <ConnectStep stepNumber={2} title="Enter your password" isLast>
+        {ctx.canCreateAppPassword ? (
+          <CreateAppPasswordRow />
+        ) : ctx.idToken ? (
+          <IdTokenRow idToken={ctx.idToken} />
+        ) : (
+          <Text fontSize="sm" color={colors.foreground.secondary}>
+            When prompted, enter the password you sign in with.
+          </Text>
+        )}
+      </ConnectStep>
     </VStack>
   );
 };
