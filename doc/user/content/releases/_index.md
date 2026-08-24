@@ -654,6 +654,13 @@ For more information, see [Syntax: CREATE SINK... INTO ICEBERG](/sql/create-sink
 - Fixed a crash caused by duplicate statement execution logging that could bring down the entire environment.
 - Fixed array values failing to write to Iceberg sinks due to the array dimension being stored as a narrower integer type than Iceberg requires.
 
+## v26.28.1
+*Released to Materialize Cloud: 2026-06-17* <br>
+*Released to Materialize Self-Managed: 2026-06-18* <br>
+
+### Bug Fixes {#v26.28.1-bug-fixes}
+- Fixed Avro-formatted sources failing to decode records after a nullable column's type was promoted to a wider numeric type (e.g., `int` to `double`).
+
 ## v26.28.0
 *Released to Materialize Cloud: 2026-06-11* <br>
 *Released to Materialize Self-Managed: 2026-06-12* <br>

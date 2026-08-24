@@ -65,6 +65,11 @@ rows:
     environmentd version: v26.29
     Release date: "2026-06-19"
     Notes: "See [v26.29 release notes](/releases/#v26290)"
+  - Materialize Operator: v26.28.1
+    orchestratord version: v26.28.1
+    environmentd version: v26.28.1
+    Release date: "2026-06-18"
+    Notes: "See [v26.28.1 release notes](/releases/#v26281)"
   - Materialize Operator: v26.28
     orchestratord version: v26.28
     environmentd version: v26.28
