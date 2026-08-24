@@ -720,7 +720,7 @@ schema change to this table in a future release may clear its contents.
 <!-- RELATION_SPEC mz_internal.mz_object_hydration_history -->
 | Field          | Type                         | Meaning                                                                                                                  |
 | -------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `object_id`    | [`text`]                     | The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view, which may no longer exist. |
+| `object_id`    | [`text`]                     | The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve. |
 | `cluster_id`   | [`text`]                     | The ID of the object's cluster.                                                                                          |
 | `replica_id`   | [`text`]                     | The ID of the cluster replica. May name a replica that no longer exists.                                                 |
 | `installed_at` | [`timestamp with time zone`] | When the object's dataflow was installed on the replica.                                                                 |
