@@ -136,14 +136,17 @@ async fn configure_role(
         .await
         .map_err(CliError::Connection)?;
 
+    // Member names are identifiers, so they are compared and emitted exactly.
+    // The parser has already folded unquoted names to the casing the catalog
+    // stores, and a role created as `"Reader"` cannot be reached as `reader`.
     let desired_members: BTreeSet<String> = def
         .grants
         .iter()
-        .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_lowercase()))
+        .flat_map(|g| g.member_names.iter().map(|m| m.as_str().to_string()))
         .collect();
 
     for member in &current_members {
-        if !desired_members.contains(&member.to_lowercase()) {
+        if !desired_members.contains(member) {
             let sql = format!(
                 "REVOKE {} FROM {}",
                 quote_identifier(role_name),

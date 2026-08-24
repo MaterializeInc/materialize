@@ -10,8 +10,7 @@
 //! Shared helpers for apply commands that reconcile grants/comments on database objects.
 
 use crate::cli::CliError;
-use crate::cli::commands::grants;
-use crate::cli::commands::reconcile::{ObjectKind, ReconcileTarget};
+use crate::cli::commands::reconcile::{self, ObjectKind, ReconcileTarget};
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::Client;
 use crate::project::ir::compiled;
@@ -25,7 +24,7 @@ pub async fn reconcile_grants_and_comments(
     typed_obj: &compiled::DatabaseObject,
     kind: ObjectKind,
 ) -> Result<(), CliError> {
-    grants::reconcile(
+    reconcile::grants(
         client,
         executor,
         &ReconcileTarget::item(kind, obj_id),

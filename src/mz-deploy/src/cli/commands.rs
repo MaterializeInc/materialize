@@ -65,6 +65,7 @@ pub mod clean;
 pub mod clusters;
 pub mod compile;
 pub mod debug;
+pub mod default_privileges;
 pub mod delete;
 pub mod describe;
 pub mod dev;

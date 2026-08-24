@@ -870,15 +870,19 @@ async fn get_named_object_grants(
             WHERE name = $1
         )
         SELECT
-            grantee.name AS grantee,
+            CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
             p.privilege_type
         FROM privilege AS p
         -- Resolve grantee role IDs to human-readable names.
-        JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        LEFT JOIN mz_roles AS grantee ON p.grantee = grantee.id
         -- Exclude system roles that are not user-manageable.
-        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        WHERE (
+            p.grantee = 'p'
+            OR grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
           -- Owners implicitly have all privileges; don't surface those as explicit grants.
           AND p.grantee != p.owner_id
+        ORDER BY grantee, p.privilege_type
         "#,
         catalog_table
     );
@@ -933,12 +937,16 @@ pub(super) async fn get_database_object_grants(
             WHERE d.name = $1 AND s.name = $2 AND t.name = $3
         )
         SELECT
-            grantee.name AS grantee,
+            CASE WHEN p.grantee = 'p' THEN 'public' ELSE grantee.name END AS grantee,
             p.privilege_type
         FROM privilege AS p
-        JOIN mz_roles AS grantee ON p.grantee = grantee.id
-        WHERE grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        LEFT JOIN mz_roles AS grantee ON p.grantee = grantee.id
+        WHERE (
+            p.grantee = 'p'
+            OR grantee.name NOT IN ('none', 'mz_system', 'mz_support')
+        )
           AND p.grantee != p.owner_id
+        ORDER BY grantee, p.privilege_type
         "#,
         catalog_table
     );
@@ -970,7 +978,7 @@ async fn get_default_privilege_grants_for_named_object(
         -- Query default privileges from ALTER DEFAULT PRIVILEGES rules.
         -- These are auto-applied grants that should be protected from revocation.
         SELECT
-            grantee_role.name AS grantee,
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
             dp_priv.privilege_type
         FROM mz_default_privileges dp
         -- Expand the privilege bitmap into individual privilege type strings.
@@ -978,7 +986,7 @@ async fn get_default_privilege_grants_for_named_object(
             mz_internal.mz_format_privileges(dp.privileges)
         ) AS dp_priv(privilege_type)
         JOIN {} obj ON obj.name = $1
-        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
         WHERE dp.object_type = $2
           -- Match rules targeting the object's owner, or PUBLIC ('p') rules
           -- that apply to all owners.
@@ -987,7 +995,10 @@ async fn get_default_privilege_grants_for_named_object(
           -- so only global default privileges (both NULL) apply.
           AND dp.database_id IS NULL
           AND dp.schema_id IS NULL
-          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND (
+              dp.grantee = 'p'
+              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          )
         "#,
         catalog_table
     );
@@ -1016,7 +1027,13 @@ pub(super) async fn get_default_privilege_grants_for_network_policy(
     client: &Client,
     name: &str,
 ) -> Result<Vec<ObjectGrant>, ConnectionError> {
-    get_default_privilege_grants_for_named_object(client, "mz_network_policies", name, "type").await
+    get_default_privilege_grants_for_named_object(
+        client,
+        "mz_network_policies",
+        name,
+        "network policy",
+    )
+    .await
 }
 
 /// Get default privilege grants for a database object (table, source, secret, connection).
@@ -1037,7 +1054,7 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
         -- Query default privileges from ALTER DEFAULT PRIVILEGES rules
         -- for a schema-qualified database object.
         SELECT
-            grantee_role.name AS grantee,
+            CASE WHEN dp.grantee = 'p' THEN 'public' ELSE grantee_role.name END AS grantee,
             dp_priv.privilege_type
         FROM mz_default_privileges dp
         -- Expand the privilege bitmap into individual privilege type strings.
@@ -1048,7 +1065,7 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
         JOIN {} obj ON obj.name = $3
         JOIN mz_schemas s ON obj.schema_id = s.id
         JOIN mz_databases d ON s.database_id = d.id
-        JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
+        LEFT JOIN mz_roles AS grantee_role ON dp.grantee = grantee_role.id
         WHERE d.name = $1 AND s.name = $2
           AND dp.object_type = $4
           -- Match rules targeting the object's owner, or PUBLIC ('p') rules.
@@ -1058,7 +1075,10 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
           AND (dp.database_id IS NULL OR dp.database_id = d.id)
           -- Same for schema: global or scoped to this specific schema.
           AND (dp.schema_id IS NULL OR dp.schema_id = s.id)
-          AND grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          AND (
+              dp.grantee = 'p'
+              OR grantee_role.name NOT IN ('none', 'mz_system', 'mz_support')
+          )
         "#,
         catalog_table
     );
