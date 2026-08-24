@@ -256,7 +256,20 @@ stage there would attribute another writer's progress to this replica and put
 `written` ahead of `write_unblocked`. What `written` promises is therefore that the
 output is durable at the as-of and that this replica was permitted to write, not
 that this replica performed the write. On a restarted or scaled-out replica the
-output was already durable, and `written` lands with `hydrated`.
+output was already durable, so `written` lands with `hydrated`, and on a replica cut
+over out of read-only mode it lands with `write_unblocked`. Neither interval measures
+anything in those cases, and a reader has to know that.
+
+Nor can it be tightened from this frontier. Every replica's `mint` reads the shard's
+upper back from persist into its own shared frontier, so the frontier advances on every
+replica when any one of them wins the append. The obvious tightening, latching the
+frontier when writes are first permitted and requiring it to advance past that, does
+not deliver attribution either: it is subject to the same concurrent advance, and
+`mint` initializes the shared frontier to a placeholder that the real upper replaces
+only once the read-back stream has run, so a latch taken from the first observation
+captures the placeholder. Replicas of a cluster produce identical batches and race to
+append, so which one won is not an operationally meaningful question, and the stage is
+left as a statement about the output rather than about the writer.
 
 **`write_blocked` is logged on entry, not on exit.** Carrying the cause on
 `write_unblocked` reads more naturally, but then the cause is only observable once
@@ -687,6 +700,16 @@ existing assertions in `test/testdrive/hydration-status.td` and the blue-green
 tests are the contract and should be left alone rather than adjusted to fit.
 
 ## Follow-up work
+
+### Attributing `written` to the replica that wrote
+
+`written` says the output is durable and this replica was permitted to write, not that
+this replica wrote, for the reason given above. Attribution needs a signal from the
+replica's own successful append rather than a reading of the shared upper, and that
+signal has to cross workers: `next_append_worker` rotates independently of
+`sink::frontier_owner`, so the worker that appends is generally not the worker that
+reports the stage. Whether the distinction is worth that machinery is the open
+question, since the batches the replicas race to append are identical.
 
 ### `mz_compute_hydration_timestamps`, the per-replica relation
 
