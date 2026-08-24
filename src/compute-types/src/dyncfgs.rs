@@ -95,8 +95,10 @@ pub const ENABLE_COLUMN_PAGED_BATCHER_SPILL: Config<bool> = Config::new(
 /// identity codec: fully budgeted and swap-backed, with encode and decode
 /// reduced to copies. The default exempts only fresh (depth 0) chunks. A
 /// chunk that outlives a merge untouched ages a generation regardless, and
-/// its body is re-spilled compressed when it crosses the floor, so
-/// key-disjoint input cannot hold its backlog uncompressed indefinitely.
+/// an identity-coded body at or past the floor is re-spilled compressed at
+/// its next survival, so key-disjoint input cannot hold its backlog
+/// uncompressed indefinitely. Lowering this at runtime therefore migrates
+/// bodies that already spilled, rather than applying only to new ones.
 /// `0` compresses every spilled body.
 pub const COLUMN_CHUNK_COMPRESS_MIN_DEPTH: Config<u32> = Config::new(
     "column_chunk_compress_min_depth",

@@ -165,13 +165,15 @@ fn compress_min_depth() -> u8 {
     COMPRESS_MIN_DEPTH.load(Ordering::Relaxed)
 }
 
-/// The codec a body at `depth` stores under: identity below the compression
-/// floor, lz4 at and past it.
-fn codec_for_depth(depth: u8) -> &'static dyn ExtentCodec {
+/// The codec a body at `depth` stores under, identity below the compression
+/// floor and lz4 at and past it, paired with whether that codec compresses.
+/// One read of the floor, so the pair cannot disagree with itself when the
+/// floor moves under a concurrent commit.
+fn codec_for_depth(depth: u8) -> (&'static dyn ExtentCodec, bool) {
     if depth < compress_min_depth() {
-        &IDENTITY_CODEC
+        (&IDENTITY_CODEC, false)
     } else {
-        &LZ4_CODEC
+        (&LZ4_CODEC, true)
     }
 }
 
@@ -265,6 +267,13 @@ pub struct SpilledBody<D: Columnar> {
     /// container rather than two singletons, so the leaf allocations are not
     /// duplicated per fence.
     fences: D::Container,
+    /// Whether the body was inserted under the compressing codec. The pool
+    /// stores the codec itself and reads decode through it, so this is the
+    /// only handle chunk code has on what a body is stored as, and it is
+    /// what `survive_merge` consults to decide a body wants migrating.
+    /// Deriving that from depth instead would tie it to a single transition
+    /// and miss every path that skips it.
+    compressed: bool,
     /// The pool chunk holding the serialized column.
     handle: ChunkHandle,
 }
@@ -391,7 +400,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// stay budgeted and swap-backed while encode and decode reduce to
     /// copies.
     fn spill_body(column: Column<(D, T, R)>, pool: &Pool, depth: u8) -> Self {
-        let codec = codec_for_depth(depth);
+        let (codec, compressed) = codec_for_depth(depth);
         let len_bytes = column.length_in_bytes();
         let view = column.borrow();
         let records = view.len();
@@ -403,6 +412,7 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
             Rc::new(SpilledBody {
                 records,
                 fences,
+                compressed,
                 handle,
             }),
             depth,
@@ -416,22 +426,27 @@ impl<D: Columnar, T: Columnar, R: Columnar> ColumnChunk<D, T, R> {
     /// always free: depth rides on the chunk, so it does not care whether the
     /// body is shared.
     ///
-    /// A sole owner whose bump crosses the compression floor re-spills, so
-    /// the body stores compressed from here on: surviving a merge disproves
-    /// the imminent-rewrite premise that exempted it, and without the
-    /// re-spill key-disjoint input would keep its whole spilled backlog
-    /// identity-coded for as long as it lived. A shared body is left alone,
-    /// since re-spilling this reference cannot change what the other holder
-    /// stores, and the compaction merger that shares bodies rewrites its
-    /// clones immediately. With no pool available the chunk passes through
-    /// unchanged and the crossing retries at the next survival.
+    /// An identity-coded body at or past the floor wants migrating, so a
+    /// sole owner re-spills it compressed: surviving a merge disproves the
+    /// imminent-rewrite premise that exempted it, and without the re-spill
+    /// key-disjoint input would keep its whole spilled backlog
+    /// identity-coded for as long as it lived. The test is the body's stored
+    /// codec against the floor, not a depth transition, so a migration that
+    /// cannot happen now is retried at the next survival rather than
+    /// consumed: skipping it while the body is shared or while no pool is
+    /// installed, or lowering the floor long after a body spilled, all
+    /// converge on a compressed body instead of stranding one.
+    ///
+    /// A shared body is skipped because re-spilling this reference cannot
+    /// change what the other holder stores, and the compaction merger that
+    /// shares bodies rewrites its clones immediately.
     fn survive_merge(self) -> Self {
         let depth = self.depth().saturating_add(1);
         match self {
             ColumnChunk::Resident(col, _) => ColumnChunk::Resident(col, depth),
             ColumnChunk::Spilled(body, was) => {
-                let crossing = was < compress_min_depth() && depth >= compress_min_depth();
-                if !crossing || Rc::strong_count(&body) > 1 {
+                let migrate = !body.compressed && depth >= compress_min_depth();
+                if !migrate || Rc::strong_count(&body) > 1 {
                     return ColumnChunk::Spilled(body, depth);
                 }
                 match spill_pool() {
@@ -1243,6 +1258,16 @@ mod tests {
             .collect()
     }
 
+    /// Whether a spilled chunk's body is stored compressed. Deliberately
+    /// does not retain the body: an `Rc` held across a `survive_merge` would
+    /// itself make the body shared and suppress the migration under test.
+    fn body_compressed(chunk: &TestChunk) -> bool {
+        match chunk {
+            ColumnChunk::Spilled(body, _) => body.compressed,
+            ColumnChunk::Resident(_, _) => panic!("chunk must be spilled"),
+        }
+    }
+
     /// Spill one chunk through `pool`, bypassing the size threshold and
     /// keeping the chunk's depth.
     fn force_spill(chunk: TestChunk, pool: &Pool) -> TestChunk {
@@ -1836,8 +1861,14 @@ mod tests {
         set_spill_override(Some(test_pool()));
         set_compress_min_depth_override(Some(2));
         // Codec identity via Debug: ZST statics and dyn vtables make
-        // pointer comparison unreliable.
-        let codec_name = |depth: u8| format!("{:?}", codec_for_depth(depth));
+        // pointer comparison unreliable. The flag must agree with the codec,
+        // since it is what decides whether a body wants migrating.
+        let codec_name = |depth: u8| {
+            let (codec, compressed) = codec_for_depth(depth);
+            let name = format!("{:?}", codec);
+            assert_eq!(compressed, name == "Lz4Codec", "flag tracks the codec");
+            name
+        };
         assert_eq!(codec_name(0), "IdentityCodec");
         assert_eq!(codec_name(1), "IdentityCodec");
         assert_eq!(codec_name(2), "Lz4Codec");
@@ -1881,6 +1912,10 @@ mod tests {
         let mut in1 = VecDeque::from([TestChunk::commit(build_column(&low), 0)]);
         let mut in2 = fresh_far();
         assert!(in1[0].is_spilled() && in2[0].is_spilled());
+        assert!(
+            !body_compressed(&in1[0]),
+            "a fresh body below the floor is identity coded"
+        );
 
         let mut out = VecDeque::new();
         TestChunk::merge(&mut in1, &mut in2, &mut out);
@@ -1890,6 +1925,10 @@ mod tests {
         assert!(
             survived.is_spilled(),
             "the crossing re-spills, it does not evict"
+        );
+        assert!(
+            body_compressed(&survived),
+            "the survivor is re-spilled under the compressing codec"
         );
 
         // Past the floor the next survival is a metadata-only bump: the body
@@ -1959,6 +1998,76 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].depth(), 2, "aging past the floor is not pinned");
         assert_eq!(collect_chunks(out), low);
+
+        set_spill_override(None);
+        set_compress_min_depth_override(None);
+    }
+
+    /// A migration that cannot happen when a body first qualifies is retried
+    /// at the next survival, never consumed. Each case leaves an
+    /// identity-coded body at or past the floor, which would be stranded
+    /// uncompressed for the rest of its life if the test were a depth
+    /// transition rather than the body's stored codec.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // too slow
+    fn survive_merge_retries_missed_migrations() {
+        let low = consolidate((0..20_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+        let far = consolidate((100_000..120_000u64).map(|i| ((i, 0), 0, 1i64)).collect());
+
+        // Age a chunk one generation through a disjoint merge, which passes
+        // the lower front through `survive_merge`.
+        let survive = |chunk: TestChunk| {
+            let mut in1 = VecDeque::from([chunk]);
+            let mut in2 = VecDeque::from([TestChunk::commit(build_column(&far), 0)]);
+            let mut out = VecDeque::new();
+            TestChunk::merge(&mut in1, &mut in2, &mut out);
+            out.pop_front().expect("the lower front passes through")
+        };
+
+        // No pool installed when the body qualifies: spilling can be toggled
+        // off at runtime while existing handles stay valid.
+        set_spill_override(Some(test_pool()));
+        set_compress_min_depth_override(Some(1));
+        let chunk = TestChunk::commit(build_column(&low), 0);
+        assert!(!body_compressed(&chunk));
+        set_spill_override(None);
+        let chunk = survive(chunk);
+        assert_eq!(chunk.depth(), 1, "aging does not need a pool");
+        assert!(!body_compressed(&chunk), "no pool, no migration");
+        set_spill_override(Some(test_pool()));
+        let chunk = survive(chunk);
+        assert!(
+            body_compressed(&chunk),
+            "the migration retries once a pool is back"
+        );
+
+        // Shared when the body qualifies: the compaction merger holds the
+        // source batch while merging clones of its chunks.
+        let chunk = TestChunk::commit(build_column(&low), 0);
+        let held = chunk.clone();
+        let chunk = survive(chunk);
+        assert!(!body_compressed(&chunk), "shared, so not migrated");
+        drop(held);
+        let chunk = survive(chunk);
+        assert!(
+            body_compressed(&chunk),
+            "the migration retries once the body is unshared"
+        );
+
+        // The floor lowered long after the body spilled, which is what an
+        // operator reaches for under pool pressure. Nothing here is a
+        // transition: the body is already several generations past the new
+        // floor when it moves.
+        set_compress_min_depth_override(Some(8));
+        let chunk = TestChunk::commit(build_column(&low), 3);
+        assert!(!body_compressed(&chunk));
+        set_compress_min_depth_override(Some(1));
+        let chunk = survive(chunk);
+        assert_eq!(chunk.depth(), 4);
+        assert!(
+            body_compressed(&chunk),
+            "lowering the floor migrates bodies already past it"
+        );
 
         set_spill_override(None);
         set_compress_min_depth_override(None);
