@@ -219,9 +219,10 @@ Sweeps never overlap and each visits one replica, which bounds compute load and
 keeps the collector from contending with itself in the serialized timestamped-write
 path. Fires align to interval boundaries and each sleep is capped, so lowering a
 long interval takes effect within the cap rather than after the old interval
-elapses. The grid is offset by an amount seeded from the organization id, since the
-interval is one fleet-wide setting and an unshifted grid would have every
-environment sweep at the same instant.
+elapses. The grid is offset by an amount seeded from the full environment id, since
+the interval is one fleet-wide setting and an unshifted grid would have every
+environment sweep at the same instant. Using the full id also separates regions and
+ordinals belonging to one organization.
 
 **Background mutations take no OCC write permit.** The permits are one semaphore
 shared by every read-then-write in the process, not one per table. A session's wait
