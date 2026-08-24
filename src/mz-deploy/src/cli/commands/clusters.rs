@@ -136,19 +136,14 @@ async fn plan_cluster(
         }
     };
 
-    // Reconcile grants
-    reconcile::grants(
+    reconcile::grants_and_comments(
         client,
         executor,
         &ReconcileTarget::named(ObjectKind::Cluster, cluster_name),
         &def.grants,
+        &def.comments,
     )
     .await?;
-
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
 
     Ok(ObjectResult {
         object: cluster_name.clone(),

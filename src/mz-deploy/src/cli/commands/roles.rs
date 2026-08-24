@@ -10,6 +10,7 @@
 //! Roles apply command - converge live role state to match definitions.
 
 use crate::cli::CliError;
+use crate::cli::commands::reconcile::{self, ObjectKind, ReconcileTarget};
 use crate::cli::executor::{
     ApplyPlan, ApplyResult, DeploymentExecutor, ObjectAction, ObjectResult, connect_apply_client,
 };
@@ -124,10 +125,13 @@ async fn configure_role(
         executor.execute_sql(grant).await?;
     }
 
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
+    reconcile::comments(
+        client,
+        executor,
+        &ReconcileTarget::named(ObjectKind::Role, role_name),
+        &def.comments,
+    )
+    .await?;
 
     // Revoke stale grants
     let current_members = client

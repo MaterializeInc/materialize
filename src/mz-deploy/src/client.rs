@@ -143,6 +143,6 @@ pub use introspection::DependentSink;
 pub use models::{
     ApplyState, Cluster, ClusterConfig, ClusterReplica, ConflictRecord, DefaultPrivilege,
     DeploymentDetails, DeploymentHistoryEntry, DeploymentKind, DeploymentMetadata, DeploymentMode,
-    DeploymentObjectRecord, ObjectGrant, PendingStatement, ProductionClusterRecord,
+    DeploymentObjectRecord, ObjectComment, ObjectGrant, PendingStatement, ProductionClusterRecord,
     ReplacementMvRecord, SchemaDeploymentRecord, StagingDeployment,
 };

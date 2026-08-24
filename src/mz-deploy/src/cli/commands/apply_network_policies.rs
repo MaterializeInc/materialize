@@ -97,19 +97,14 @@ async fn plan_network_policy(
         ObjectAction::Created
     };
 
-    // Reconcile grants
-    reconcile::grants(
+    reconcile::grants_and_comments(
         client,
         executor,
         &ReconcileTarget::named(ObjectKind::NetworkPolicy, policy_name),
         &def.grants,
+        &def.comments,
     )
     .await?;
-
-    // Execute COMMENT statements
-    for comment in &def.comments {
-        executor.execute_sql(comment).await?;
-    }
 
     Ok(ObjectResult {
         object: policy_name.clone(),

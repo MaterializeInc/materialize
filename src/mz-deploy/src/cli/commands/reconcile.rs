@@ -10,12 +10,14 @@
 //! Shared object metadata for catalog reconciliation.
 
 use mz_sql_parser::ast::{
-    GrantPrivilegesStatement, GrantTargetAllSpecification, GrantTargetSpecification,
-    GrantTargetSpecificationInner, Ident, ObjectType, Privilege, Raw, UnresolvedDatabaseName,
-    UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName,
+    ColumnName, CommentObjectType, CommentStatement, GrantPrivilegesStatement,
+    GrantTargetAllSpecification, GrantTargetSpecification, GrantTargetSpecificationInner, Ident,
+    ObjectType, Privilege, Raw, RawClusterName, RawItemName, RawNetworkPolicyName,
+    UnresolvedDatabaseName, UnresolvedItemName, UnresolvedObjectName, UnresolvedSchemaName,
 };
 
 use crate::cli::CliError;
+use crate::cli::commands::comments::{self, CommentTarget};
 use crate::cli::commands::grants as grant_reconciliation;
 use crate::cli::executor::DeploymentExecutor;
 use crate::client::Client;
@@ -30,6 +32,7 @@ pub enum ObjectKind {
     Connection,
     Cluster,
     NetworkPolicy,
+    Role,
     Database,
     Schema,
 }
@@ -44,6 +47,7 @@ impl ObjectKind {
             Self::Connection => "mz_connections",
             Self::Cluster => "mz_clusters",
             Self::NetworkPolicy => "mz_network_policies",
+            Self::Role => "mz_roles",
             Self::Database => "mz_databases",
             Self::Schema => "mz_schemas",
         }
@@ -59,6 +63,7 @@ impl ObjectKind {
             Self::NetworkPolicy => Some("network policy"),
             Self::Database => Some("database"),
             Self::Schema => Some("schema"),
+            Self::Role => None,
         }
     }
 
@@ -74,19 +79,21 @@ impl ObjectKind {
             Self::Source => &[Privilege::SELECT],
             Self::Secret | Self::Connection | Self::NetworkPolicy => &[Privilege::USAGE],
             Self::Cluster | Self::Database | Self::Schema => &[Privilege::USAGE, Privilege::CREATE],
+            Self::Role => &[],
         }
     }
 
     /// The object type used by `GRANT` and `REVOKE`.
-    fn grant_type(self) -> ObjectType {
+    fn grant_type(self) -> Option<ObjectType> {
         match self {
-            Self::Table | Self::Source => ObjectType::Table,
-            Self::Secret => ObjectType::Secret,
-            Self::Connection => ObjectType::Connection,
-            Self::Cluster => ObjectType::Cluster,
-            Self::NetworkPolicy => ObjectType::NetworkPolicy,
-            Self::Database => ObjectType::Database,
-            Self::Schema => ObjectType::Schema,
+            Self::Table | Self::Source => Some(ObjectType::Table),
+            Self::Secret => Some(ObjectType::Secret),
+            Self::Connection => Some(ObjectType::Connection),
+            Self::Cluster => Some(ObjectType::Cluster),
+            Self::NetworkPolicy => Some(ObjectType::NetworkPolicy),
+            Self::Database => Some(ObjectType::Database),
+            Self::Schema => Some(ObjectType::Schema),
+            Self::Role => None,
         }
     }
 
@@ -99,6 +106,7 @@ impl ObjectKind {
             Self::Connection => "connection",
             Self::Cluster => "cluster",
             Self::NetworkPolicy => "network policy",
+            Self::Role => "role",
             Self::Database => "database",
             Self::Schema => "schema",
         }
@@ -129,7 +137,10 @@ impl<'a> ReconcileTarget<'a> {
     pub fn named(kind: ObjectKind, name: &'a str) -> Self {
         debug_assert!(matches!(
             kind,
-            ObjectKind::Cluster | ObjectKind::NetworkPolicy | ObjectKind::Database
+            ObjectKind::Cluster
+                | ObjectKind::NetworkPolicy
+                | ObjectKind::Role
+                | ObjectKind::Database
         ));
         Self::Named { kind, name }
     }
@@ -158,6 +169,7 @@ impl<'a> ReconcileTarget<'a> {
 
     /// The SQL target for a `GRANT` or `REVOKE` statement.
     pub fn grant_target(&self) -> Option<GrantTargetSpecification<Raw>> {
+        let object_type = self.kind().grant_type()?;
         let name = match self {
             Self::Item { id, .. } => {
                 let item_name = UnresolvedItemName::qualified(&[
@@ -187,10 +199,14 @@ impl<'a> ReconcileTarget<'a> {
                     Ident::new_unchecked(*schema),
                 ]))
             }
+            Self::Named {
+                kind: ObjectKind::Role,
+                ..
+            } => return None,
             Self::Named { kind, .. } => unreachable!("invalid named {} target", kind.label()),
         };
         Some(GrantTargetSpecification::Object {
-            object_type: self.kind().grant_type(),
+            object_type,
             object_spec_inner: GrantTargetSpecificationInner::Objects { names: vec![name] },
         })
     }
@@ -212,6 +228,87 @@ impl<'a> ReconcileTarget<'a> {
             }),
             _ => None,
         }
+    }
+
+    /// Build a statement that sets or clears one comment target.
+    pub fn comment_statement(
+        &self,
+        target: &CommentTarget,
+        comment: Option<String>,
+    ) -> CommentStatement<Raw> {
+        let object = match target {
+            CommentTarget::Column(column) => {
+                let Self::Item { id, .. } = self else {
+                    unreachable!("a {} cannot carry a column comment", self.kind().label());
+                };
+                CommentObjectType::Column {
+                    name: ColumnName {
+                        relation: item_name(id),
+                        column: Ident::new_unchecked(column),
+                    },
+                }
+            }
+            CommentTarget::Object => match self {
+                Self::Item {
+                    kind: ObjectKind::Table,
+                    id,
+                } => CommentObjectType::Table {
+                    name: item_name(id),
+                },
+                Self::Item {
+                    kind: ObjectKind::Source,
+                    id,
+                } => CommentObjectType::Source {
+                    name: item_name(id),
+                },
+                Self::Item {
+                    kind: ObjectKind::Secret,
+                    id,
+                } => CommentObjectType::Secret {
+                    name: item_name(id),
+                },
+                Self::Item {
+                    kind: ObjectKind::Connection,
+                    id,
+                } => CommentObjectType::Connection {
+                    name: item_name(id),
+                },
+                Self::Named {
+                    kind: ObjectKind::Cluster,
+                    name,
+                } => CommentObjectType::Cluster {
+                    name: RawClusterName::Unresolved(Ident::new_unchecked(*name)),
+                },
+                Self::Named {
+                    kind: ObjectKind::Role,
+                    name,
+                } => CommentObjectType::Role {
+                    name: Ident::new_unchecked(*name),
+                },
+                Self::Named {
+                    kind: ObjectKind::NetworkPolicy,
+                    name,
+                } => CommentObjectType::NetworkPolicy {
+                    name: RawNetworkPolicyName::Unresolved(Ident::new_unchecked(*name)),
+                },
+                Self::Named {
+                    kind: ObjectKind::Database,
+                    name,
+                } => CommentObjectType::Database {
+                    name: UnresolvedDatabaseName(Ident::new_unchecked(*name)),
+                },
+                Self::Schema { database, schema } => CommentObjectType::Schema {
+                    name: UnresolvedSchemaName(vec![
+                        Ident::new_unchecked(*database),
+                        Ident::new_unchecked(*schema),
+                    ]),
+                },
+                Self::Item { kind, .. } | Self::Named { kind, .. } => {
+                    unreachable!("invalid {} target identity", kind.label())
+                }
+            },
+        };
+        CommentStatement { object, comment }
     }
 }
 
@@ -281,4 +378,54 @@ pub async fn grants(
         }
     };
     grant_reconciliation::reconcile(executor, target, desired, &current, &default_privileges).await
+}
+
+/// Read and reconcile comments for one object.
+pub async fn comments(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    target: &ReconcileTarget<'_>,
+    desired: &[CommentStatement<Raw>],
+) -> Result<(), CliError> {
+    let introspection = client.introspection();
+    let current = match target {
+        ReconcileTarget::Item { kind, id } => introspection
+            .get_database_object_comments(
+                kind.catalog_table(),
+                id.expect_database(),
+                id.schema(),
+                id.object(),
+            )
+            .await
+            .map_err(CliError::Connection)?,
+        ReconcileTarget::Named { kind, name } => introspection
+            .get_named_object_comments(kind.catalog_table(), name)
+            .await
+            .map_err(CliError::Connection)?,
+        ReconcileTarget::Schema { database, schema } => introspection
+            .get_schema_comments(database, schema)
+            .await
+            .map_err(CliError::Connection)?,
+    };
+    comments::reconcile(executor, target, desired, &current).await
+}
+
+/// Reconcile grants and comments for one grant-bearing object.
+pub async fn grants_and_comments(
+    client: &Client,
+    executor: &DeploymentExecutor<'_>,
+    target: &ReconcileTarget<'_>,
+    desired_grants: &[GrantPrivilegesStatement<Raw>],
+    desired_comments: &[CommentStatement<Raw>],
+) -> Result<(), CliError> {
+    grants(client, executor, target, desired_grants).await?;
+    comments(client, executor, target, desired_comments).await
+}
+
+fn item_name(id: &ObjectId) -> RawItemName {
+    RawItemName::Name(UnresolvedItemName::qualified(&[
+        Ident::new_unchecked(id.expect_database()),
+        Ident::new_unchecked(id.schema()),
+        Ident::new_unchecked(id.object()),
+    ]))
 }

@@ -125,6 +125,15 @@ pub struct ObjectGrant {
     pub privilege_type: String,
 }
 
+/// A comment stored on an object or one of its columns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ObjectComment {
+    /// The column name, or `None` for a comment on the object itself.
+    pub column: Option<String>,
+    /// The stored comment text.
+    pub comment: String,
+}
+
 /// One `mz_default_privileges` row, keyed by everything that identifies it
 /// within a single database or schema scope.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

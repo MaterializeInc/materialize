@@ -16,7 +16,7 @@ use crate::client::Client;
 use crate::project::ir::compiled;
 use crate::project::ir::object_id::ObjectId;
 
-/// Reconcile grants and execute comment statements for one database object.
+/// Reconcile grants and comments for one database object.
 pub async fn reconcile_grants_and_comments(
     client: &Client,
     executor: &DeploymentExecutor<'_>,
@@ -24,15 +24,12 @@ pub async fn reconcile_grants_and_comments(
     typed_obj: &compiled::DatabaseObject,
     kind: ObjectKind,
 ) -> Result<(), CliError> {
-    reconcile::grants(
+    reconcile::grants_and_comments(
         client,
         executor,
         &ReconcileTarget::item(kind, obj_id),
         &typed_obj.grants,
+        &typed_obj.comments,
     )
-    .await?;
-    for comment in &typed_obj.comments {
-        executor.execute_sql(comment).await?;
-    }
-    Ok(())
+    .await
 }

@@ -16,7 +16,7 @@
 
 use crate::client::connection::{Client, IntrospectionClient};
 use crate::client::errors::ConnectionError;
-use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectGrant};
+use crate::client::models::{Cluster, ClusterConfig, ClusterReplica, ObjectComment, ObjectGrant};
 use crate::client::sql_placeholders;
 use crate::client::staging_suffix_like_pattern;
 use crate::client::{parse_create_cluster, quote_identifier};
@@ -1096,6 +1096,90 @@ pub(super) async fn get_default_privilege_grants_for_database_object(
         .collect())
 }
 
+/// Get the comments on a database object, including comments on its columns.
+pub(super) async fn get_database_object_comments(
+    client: &Client,
+    catalog_table: &str,
+    database: &str,
+    schema: &str,
+    name: &str,
+) -> Result<Vec<ObjectComment>, ConnectionError> {
+    let query = format!(
+        r#"
+        SELECT
+            col.name AS column_name,
+            c.comment
+        FROM mz_internal.mz_comments c
+        JOIN {} t ON c.id = t.id
+        JOIN mz_schemas s ON t.schema_id = s.id
+        JOIN mz_databases d ON s.database_id = d.id
+        LEFT JOIN mz_columns col
+            ON col.id = c.id AND col.position::int4 = c.object_sub_id
+        WHERE d.name = $1 AND s.name = $2 AND t.name = $3
+        "#,
+        catalog_table
+    );
+
+    let rows = client.query(&query, &[&database, &schema, &name]).await?;
+    Ok(rows
+        .iter()
+        .map(|row| ObjectComment {
+            column: row.get("column_name"),
+            comment: row.get("comment"),
+        })
+        .collect())
+}
+
+/// Get the comment on a globally named object.
+pub(super) async fn get_named_object_comments(
+    client: &Client,
+    catalog_table: &str,
+    name: &str,
+) -> Result<Vec<ObjectComment>, ConnectionError> {
+    let query = format!(
+        r#"
+        SELECT c.comment
+        FROM mz_internal.mz_comments c
+        JOIN {} o ON c.id = o.id
+        WHERE o.name = $1 AND c.object_sub_id IS NULL
+        "#,
+        catalog_table
+    );
+
+    let rows = client.query(&query, &[&name]).await?;
+    Ok(rows
+        .iter()
+        .map(|row| ObjectComment {
+            column: None,
+            comment: row.get("comment"),
+        })
+        .collect())
+}
+
+/// Get the comment on a schema.
+pub(super) async fn get_schema_comments(
+    client: &Client,
+    database: &str,
+    schema: &str,
+) -> Result<Vec<ObjectComment>, ConnectionError> {
+    let query = r#"
+        SELECT c.comment
+        FROM mz_internal.mz_comments c
+        JOIN mz_schemas s ON c.id = s.id
+        JOIN mz_databases d ON s.database_id = d.id
+        WHERE d.name = $1 AND s.name = $2 AND c.object_sub_id IS NULL
+        "#;
+
+    let rows = client.query(query, &[&database, &schema]).await?;
+    Ok(rows
+        .iter()
+        .map(|row| ObjectComment {
+            column: None,
+            comment: row.get("comment"),
+        })
+        .collect())
+}
+
 /// Get the `CREATE CONNECTION` SQL for an existing connection.
 ///
 /// Uses `SHOW CREATE CONNECTION` which returns the canonical, non-redacted SQL
@@ -1356,6 +1440,35 @@ impl IntrospectionClient<'_> {
         name: &str,
     ) -> Result<Vec<ObjectGrant>, ConnectionError> {
         get_database_object_grants(self.client, catalog_table, database, schema, name).await
+    }
+
+    /// Get comments on a database object, including its columns.
+    pub async fn get_database_object_comments(
+        &self,
+        catalog_table: &str,
+        database: &str,
+        schema: &str,
+        name: &str,
+    ) -> Result<Vec<ObjectComment>, ConnectionError> {
+        get_database_object_comments(self.client, catalog_table, database, schema, name).await
+    }
+
+    /// Get the comment on a globally named object.
+    pub async fn get_named_object_comments(
+        &self,
+        catalog_table: &str,
+        name: &str,
+    ) -> Result<Vec<ObjectComment>, ConnectionError> {
+        get_named_object_comments(self.client, catalog_table, name).await
+    }
+
+    /// Get the comment on a schema.
+    pub async fn get_schema_comments(
+        &self,
+        database: &str,
+        schema: &str,
+    ) -> Result<Vec<ObjectComment>, ConnectionError> {
+        get_schema_comments(self.client, database, schema).await
     }
 
     /// Get the `CREATE CONNECTION` SQL for an existing connection.

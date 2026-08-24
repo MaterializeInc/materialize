@@ -63,6 +63,7 @@ pub mod apply_sources;
 pub mod apply_tables;
 pub mod clean;
 pub mod clusters;
+pub mod comments;
 pub mod compile;
 pub mod debug;
 pub mod default_privileges;
