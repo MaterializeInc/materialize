@@ -115,21 +115,37 @@ impl ConfigFile {
         Ok(())
     }
 
-    /// Errors unless the configuration file can be written.
+    /// Errors unless the configuration file can be written, creating the file
+    /// and its parent directory if they are missing.
     ///
     /// Commands that cause external side effects before mutating the
     /// configuration, such as creating an app password or writing to the
     /// keychain, must call this beforehand. Otherwise an unwritable
     /// configuration file fails the command only after those side effects have
     /// happened, leaving them unrecorded.
+    ///
+    /// Creating what is missing is what makes the check conclusive: whether a
+    /// missing file can be written depends on the parent hierarchy, which no
+    /// amount of probing establishes as reliably as performing the creation
+    /// that the later write needs anyway.
     pub async fn ensure_writable(&self) -> Result<(), Error> {
-        match fs::OpenOptions::new().write(true).open(&self.path).await {
-            Ok(_) => Ok(()),
-            // A missing file is created by the write itself, along with its
-            // parent directory.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(Error::ConfigFileNotWritable(self.path.clone(), e)),
-        }
+        let result = async {
+            if let Some(parent) = self.path.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+            fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(&self.path)
+                .await?;
+
+            Ok::<(), std::io::Error>(())
+        };
+
+        result
+            .await
+            .map_err(|e| Error::ConfigFileNotWritable(self.path.clone(), e))
     }
 
     /// Loads a profile from the configuration file.
@@ -562,6 +578,31 @@ mod tests {
         std::fs::OpenOptions::new().write(true).open(path).is_err()
     }
 
+    /// Makes `path` read-only and returns whether the file system enforces
+    /// that for this process, which is not the case when running as root.
+    fn make_read_only(path: &PathBuf) -> bool {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(path, permissions).unwrap();
+
+        if path.is_dir() {
+            let probe = path.join("probe");
+            let enforced = std::fs::write(&probe, "").is_err();
+            let _ = std::fs::remove_file(probe);
+            enforced
+        } else {
+            permissions_are_enforced(path)
+        }
+    }
+
+    /// Restores write access so that the temporary directory can be cleaned up.
+    fn make_writable(path: &PathBuf) {
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        #[allow(clippy::permissions_set_readonly_false)]
+        permissions.set_readonly(false);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `mkdir`
     async fn test_load_missing_file() {
@@ -582,16 +623,34 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("mz.toml");
         std::fs::write(&path, "profile = \"default\"\n").unwrap();
-        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
-        permissions.set_readonly(true);
-        std::fs::set_permissions(&path, permissions).unwrap();
+        let enforced = make_read_only(&path);
 
         let config = ConfigFile::load(path.clone()).await.unwrap();
 
         assert_eq!(config.profile(), "default");
-        if permissions_are_enforced(&path) {
+        if enforced {
             assert!(config.ensure_writable().await.is_err());
         }
+
+        make_writable(&path);
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `mkdir`
+    async fn test_missing_file_in_read_only_directory() {
+        let dir = TempDir::new().unwrap();
+        let parent = dir.path().join("materialize");
+        std::fs::create_dir(&parent).unwrap();
+        let enforced = make_read_only(&parent);
+
+        let config = ConfigFile::load(parent.join("mz.toml")).await.unwrap();
+
+        // A missing file is only writable if its parent hierarchy accepts it.
+        if enforced {
+            assert!(config.ensure_writable().await.is_err());
+        }
+
+        make_writable(&parent);
     }
 
     #[mz_ore::test(tokio::test)]
@@ -601,8 +660,10 @@ mod tests {
         let path = dir.path().join("materialize").join("mz.toml");
 
         let config = ConfigFile::load(path.clone()).await.unwrap();
-        // A missing file is writable, because the write creates it.
         config.ensure_writable().await.unwrap();
+        // The writability check creates what the later write needs.
+        assert!(path.exists());
+
         config.set_param("profile", Some("default")).await.unwrap();
 
         assert_eq!(ConfigFile::load(path).await.unwrap().profile(), "default");
