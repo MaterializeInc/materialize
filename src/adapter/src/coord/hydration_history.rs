@@ -20,7 +20,7 @@
 //!
 //! Collection is sampling, not an event log. An episode whose live row is
 //! retracted before its replica's turn in the sweep (a dropped object, or a
-//! replica process that restarts first) is not recorded, and cannot be, because
+//! replica that restarts first) is not recorded, and cannot be, because
 //! the only evidence is gone. See the design doc for why that is accepted here.
 
 use std::collections::BTreeMap;
@@ -297,11 +297,17 @@ fn next_replica(
 /// is therefore the only way to get a finish that means the same thing for every
 /// object, and it is the rule `mz_compute_hydration_times` already applies.
 ///
-/// Completeness needs no worker count. The log carries a row per
+/// Completeness needs no configured worker count. The log carries a row per
 /// `(export_id, worker_id)` from installation with a null `hydrated_at`, so
-/// `count(*) = count(hydrated_at)` says every worker that has the dataflow has
-/// finished. An object still hydrating is skipped rather than recorded with a
-/// finish that precedes its write, and a later sweep picks it up.
+/// `count(*) = count(hydrated_at)` says every row visible at the OCC read
+/// timestamp has finished. Per-process logging clocks also determine Differential
+/// update timestamps, so a worker whose clock is ahead can be absent at that
+/// timestamp. A visible unfinished object is skipped and picked up by a later
+/// sweep.
+///
+/// The collector deliberately accepts this sampling race rather than depending on
+/// `ReplicaLocation::workers()`. A durable finish can therefore precede the latest
+/// worker's finish. A whole-replica restart resets the collection as a unit.
 ///
 /// The interval spans workers, so it carries whatever skew there is between the
 /// process clocks that stamped its ends. Each process anchors its logging clock at
