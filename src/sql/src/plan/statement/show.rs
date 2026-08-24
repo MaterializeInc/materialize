@@ -672,17 +672,21 @@ fn show_metric_sinks<'a>(
     scx.require_feature_flag(&ENABLE_METRIC_SINK)?;
     let schema_spec = scx.resolve_optional_schema(&from)?;
 
-    let mut where_clause = format!("sinks.schema_id = '{schema_spec}'");
+    let mut where_clause = format!("metric_sinks.schema_id = '{schema_spec}'");
     if let Some(cluster) = in_cluster {
-        write!(where_clause, " AND sinks.cluster_id = '{}'", cluster.id)
-            .expect("write on string cannot fail");
+        write!(
+            where_clause,
+            " AND metric_sinks.cluster_id = '{}'",
+            cluster.id
+        )
+        .expect("write on string cannot fail");
     }
 
     let query = format!(
-        "SELECT sinks.name, objs.name AS \"from\", clusters.name AS cluster
-        FROM mz_internal.mz_metric_sinks AS sinks
-        JOIN mz_catalog.mz_objects AS objs ON objs.id = sinks.from_id
-        JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = sinks.cluster_id
+        "SELECT metric_sinks.name, objs.name AS relation, clusters.name AS cluster
+        FROM mz_internal.mz_metric_sinks AS metric_sinks
+        JOIN mz_catalog.mz_objects AS objs ON objs.id = metric_sinks.from_id
+        JOIN mz_catalog.mz_clusters AS clusters ON clusters.id = metric_sinks.cluster_id
         WHERE {where_clause}"
     );
     ShowSelect::new(
@@ -690,8 +694,7 @@ fn show_metric_sinks<'a>(
         query,
         filter,
         None,
-        // `from` is a reserved keyword, so the projection has to quote it.
-        Some(&["name", "\"from\"", "cluster"]),
+        Some(&["name", "relation", "cluster"]),
     )
 }
 
