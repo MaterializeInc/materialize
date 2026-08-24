@@ -129,12 +129,21 @@ aggregate gives one meaning for every object, and it is what
 `mz_compute_hydration_times` already does, so the durable history and the live
 signal agree.
 
-Completeness needs no worker count: the log carries a row per
-`(export_id, worker_id)` from installation with a null `hydrated_at`, so
-`count(*) = count(hydrated_at)` means every worker has finished. An object still
-hydrating is skipped and picked up by a later sweep. The cutoff and the anti-join
-apply to the aggregate's output, since as `WHERE` clauses either one would drop the
-unfinished rows and make that check trivially true.
+Completeness uses no separately configured worker count. The replica owns this
+introspection collection and recreates it as a unit on restart, so a snapshot cannot
+combine rows from before and after a restart. Installation adds one row per
+`(export_id, worker_id)` with a null `hydrated_at`, and
+`count(*) = count(hydrated_at)` means every row visible at the read timestamp has
+finished. An object still hydrating is skipped and picked up by a later sweep. The
+cutoff and the anti-join apply to the aggregate's output, since as `WHERE` clauses
+either one would drop visible unfinished rows and make that check trivially true.
+
+Each process's logging clock also determines the logical timestamps of its updates.
+A process whose clock is ahead can therefore place its row beyond the read timestamp
+while the other rows are complete below it. The collector deliberately accepts this
+sampling race rather than depending on replica configuration for an expected worker
+count. In that case the durable finish can precede the latest worker's finish. This
+is separate from restart behavior, which discards the replica collection as a unit.
 
 Compute is adding an append-only lifecycle log for the same stages, currently
 proposed in #38403: one row per export, worker and event, with a reason and the
