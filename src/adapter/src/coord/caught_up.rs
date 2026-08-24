@@ -272,10 +272,11 @@ impl Coordinator {
         // set. `mz_cluster_replica_frontiers` is a controller-managed builtin
         // written with ±1 diffs, so it satisfies that invariant.
         //
-        // NOTE: these are the leader's frontiers only because we read the leader's shard. A
-        // release that `Replacement`-migrates `mz_cluster_replica_frontiers` itself, or a test
-        // forcing replacement across all builtins, hands us a shard we write ourselves, and the
-        // lag check below then compares this deployment against itself.
+        // NOTE: these are the leader's frontiers only because we read the leader's shard.
+        // `validate_migration_steps` forbids migrating `mz_cluster_replica_frontiers` for this
+        // reason, so a declared migration can't reach here. A test forcing replacement across all
+        // builtins bypasses that guard, hands us a shard we write ourselves, and the lag check
+        // below then compares this deployment against itself.
         let live_frontiers = self
             .controller
             .storage_collections

@@ -100,6 +100,7 @@ pub const ENABLE_0DT_HYDRATE_MIGRATED_BUILTIN_MVS: Config<bool> = Config::new(
      leader frontier must be hydrated either way. Only takes effect when the leader is new enough \
      for the write to make progress, and is read once at startup, so changing it means setting it \
      on the leader and restarting the new deployment.",
+    ParameterScope::Environment,
 );
 
 /// Enable logging of statement lifecycle events in mz_internal.mz_statement_lifecycle_history.
