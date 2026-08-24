@@ -1523,7 +1523,9 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
                     JOIN mz_catalog.mz_materialized_views AS mv ON mv.id = g.id
                     WHERE mv.name = 'hydration_history_mv'
                     """)
-                latest_worker_finish, worker_zero_finish = cursor.fetchone()
+                row = cursor.fetchone()
+                assert row is not None
+                latest_worker_finish, worker_zero_finish = row
             finally:
                 cursor.execute("RESET cluster_replica")
                 cursor.execute("RESET cluster")
