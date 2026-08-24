@@ -781,7 +781,9 @@ impl AdapterError {
             ),
             AdapterError::AlterClusterReplicationFactorWhileReconfiguring => Some(
                 "Cancel the reconfiguration by altering the cluster back to its current \
-                configuration, or wait for it to settle, then change the replication factor."
+                configuration, which takes effect immediately, or wait for it to settle, \
+                optionally forcing it with WITH (WAIT FOR '0s'). Then change the \
+                replication factor."
                     .to_string(),
             ),
             AdapterError::AlterClusterScheduleWhileReconfiguring => Some(

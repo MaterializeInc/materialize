@@ -19,9 +19,7 @@ use mz_catalog::memory::objects::{
     Cluster, ClusterConfig, ClusterVariant, ClusterVariantManaged, DataSourceDesc,
     ManagedReplicaConfigShape, ReconfigurationState, ReconfigurationStatus, ReconfigurationTarget,
 };
-use mz_cluster_controller::ctx::{AvailabilityZones, CreateReason, Decision, ReplicaShape};
-use mz_cluster_controller::reconcile_replicas;
-use mz_cluster_controller::strategy::DesiredReplica;
+use mz_cluster_controller::ctx::{AvailabilityZones, ReplicaShape};
 use mz_compute_types::config::ComputeReplicaConfig;
 use mz_controller::clusters::{
     ManagedReplicaLocation, ReplicaConfig, ReplicaLocation, ReplicaLogging,
@@ -339,24 +337,14 @@ impl Coordinator {
 
         // A shape-changing `ALTER` reshapes into a durable `reconfiguration`
         // record (starting, retargeting, or cancelling one) that the controller
-        // converges on, unless the statement asks for the cut-over to happen
-        // right now, which routes to the direct path below instead. Everything
-        // else falls through to the realized-config update below without
-        // touching the record, in flight or not.
+        // converges on. Everything else falls through to the realized-config
+        // update below without touching the record, in flight or not.
         //
         // With a record in flight the statement decides: an `ALTER` back to the
         // realized shape is value-identical yet must reach the reshape path to
         // cancel. With nothing in flight the values decide: a shape option set
         // to its current value reconfigures nothing, and reshaping it anyway
         // would write a spurious pre-cancelled record.
-        //
-        // The target the cut-over must materialize: the shape and factor the
-        // statement asks for, folded onto any in-flight record's target,
-        // exactly as the reshape path computes it. Applied to `new_config`
-        // below, once the borrow taken here is released. With nothing in
-        // flight the fold returns the statement's shape unchanged, so applying
-        // it is the identity.
-        let mut cut_over_target = None;
         if let (Managed(old_managed), Managed(new_managed)) = (&config.variant, &new_config.variant)
         {
             let needs_record = if reconfiguration_in_flight {
@@ -389,42 +377,23 @@ impl Coordinator {
                 return Err(AdapterError::AlterClusterWaitOnScheduledCluster);
             }
             if needs_record && !scheduled_direct {
-                if requests_immediate_cut_over(strategy) {
-                    let in_flight = old_managed
-                        .reconfiguration
-                        .as_ref()
-                        .filter(|record| record.is_in_progress());
-                    cut_over_target = Some(alter_reconfiguration_target(
-                        new_managed,
+                let result = self
+                    .reshape_alter_cluster_managed(
+                        session,
+                        cluster_id,
+                        new_config.clone(),
                         options,
-                        in_flight.map(|record| &record.target),
-                    ));
-                } else {
-                    let result = self
-                        .reshape_alter_cluster_managed(
-                            session,
-                            cluster_id,
-                            new_config.clone(),
-                            options,
-                            strategy,
-                            validity,
-                        )
-                        .await;
-                    if result.is_ok() {
-                        if let Some(notice) = single_replica_sources_notice {
-                            session.add_notice(notice);
-                        }
+                        strategy,
+                        validity,
+                    )
+                    .await;
+                if result.is_ok() {
+                    if let Some(notice) = single_replica_sources_notice {
+                        session.add_notice(notice);
                     }
-                    return result;
                 }
+                return result;
             }
-        }
-        let cut_over = cut_over_target.is_some();
-        if let Some(target) = cut_over_target {
-            let Managed(target_managed) = &mut new_config.variant else {
-                unreachable!("a cut-over target is produced only for a managed config");
-            };
-            target_managed.apply_reconfiguration_target(target);
         }
 
         match (&config.variant, &new_config.variant) {
@@ -433,7 +402,6 @@ impl Coordinator {
                     session,
                     cluster_id,
                     new_config.clone(),
-                    cut_over,
                 )
                 .await?;
                 if let Some(notice) = single_replica_sources_notice {
@@ -479,10 +447,16 @@ impl Coordinator {
     }
 
     /// Validates that a reconfiguration to `target` fits the resource budget.
+    ///
+    /// `cuts_over_on_first_tick` (see [`cuts_over_on_first_tick`]) says whether
+    /// the realized and target replica sets ever coexist, which is what decides
+    /// the transient peak this models: their sum when they overlap, the larger
+    /// of the two when they do not.
     fn validate_reconfiguration_resource_limits(
         &self,
         cluster_id: ClusterId,
         target: &ReconfigurationTarget,
+        cuts_over_on_first_tick: bool,
     ) -> Result<(), AdapterError> {
         // System clusters are exempt from `max_replicas_per_cluster` and from
         // credit accounting everywhere else (see the `is_user` guards in
@@ -505,34 +479,55 @@ impl Coordinator {
             return Ok(());
         }
 
-        // Both checks below model the transient peak: the controller runs the
-        // realized and target sets side by side until cut-over, so this cluster's
-        // peak contribution is both shapes at once, computed from config as
-        // realized plus target. That slightly over-counts a same-shape overlap,
-        // where existing replicas double as target replicas. We accept the
-        // over-count: rejecting here is strictly better than the asynchronous
-        // abort the controller falls back to when a limit shrinks or the
-        // environment grows after the record is written.
+        // Both checks below model the transient peak this cluster contributes.
+        // The controller normally runs the realized and target sets side by side
+        // until cut-over, so the peak is both shapes at once, computed from
+        // config as realized plus target. That slightly over-counts a same-shape
+        // overlap, where existing replicas double as target replicas. We accept
+        // the over-count: rejecting here is strictly better than the
+        // asynchronous abort the controller falls back to when a limit shrinks or
+        // the environment grows after the record is written.
+        //
+        // A record that cuts over on the controller's first tick never has the
+        // two sets coexist, so its peak is the larger of them rather than their
+        // sum. Modelling the sum there would reject a reshape that provably
+        // fits, which is the whole point of asking for the cut-over up front:
+        // resizing without paying for the overlap.
 
-        // Per-cluster replica count: the peak is `realized_rf + target_rf`,
-        // deterministic from the cluster's own config. `validate_resource_limit`
-        // returns early on an rf-0 target.
+        // Per-cluster replica count, deterministic from the cluster's own
+        // config. Expressed as the increase over the realized factor, so
+        // `validate_resource_limit`'s early return on a non-positive increase
+        // covers both an rf-0 target and a first-tick cut-over that does not
+        // grow the set.
+        let replica_increase = if cuts_over_on_first_tick {
+            i64::from(target.replication_factor) - i64::from(realized.replication_factor)
+        } else {
+            i64::from(target.replication_factor)
+        };
         self.validate_resource_limit(
             usize::cast_from(realized.replication_factor),
-            i64::from(target.replication_factor),
+            replica_increase,
             SystemVars::max_replicas_per_cluster,
             "cluster replica",
             MAX_REPLICAS_PER_CLUSTER.name(),
         )?;
 
-        // Global credit rate: the peak is `credit(realized) + credit(target)`.
-        self.validate_reconfiguration_credit_peak(cluster_id, realized, target)?;
+        // Global credit rate.
+        self.validate_reconfiguration_credit_peak(
+            cluster_id,
+            realized,
+            target,
+            cuts_over_on_first_tick,
+        )?;
 
         Ok(())
     }
 
-    /// Validates that the transient credit-rate peak of a reconfiguration, the
-    /// realized plus the target shape, fits the environment-wide budget.
+    /// Validates that the transient credit-rate peak of a reconfiguration fits
+    /// the environment-wide budget.
+    ///
+    /// The peak is the realized plus the target shape, or the larger of the two
+    /// when `cuts_over_on_first_tick` says the sets never coexist.
     ///
     /// The base is the live consumption of every other cluster. It excludes
     /// this cluster's own replicas so a re-target of an in-flight record does
@@ -543,6 +538,7 @@ impl Coordinator {
         cluster_id: ClusterId,
         realized: &ClusterVariantManaged,
         target: &ReconfigurationTarget,
+        cuts_over_on_first_tick: bool,
     ) -> Result<(), AdapterError> {
         let shape_credit = |size: &str, replication_factor: u32| -> Numeric {
             let per_replica = self
@@ -556,8 +552,17 @@ impl Coordinator {
                 .unwrap_or_else(Numeric::zero);
             per_replica * Numeric::from(replication_factor)
         };
-        let mut peak_credit = shape_credit(&target.size, target.replication_factor);
-        peak_credit += shape_credit(&realized.size, realized.replication_factor);
+        let target_credit = shape_credit(&target.size, target.replication_factor);
+        let realized_credit = shape_credit(&realized.size, realized.replication_factor);
+        let peak_credit = if cuts_over_on_first_tick {
+            if target_credit > realized_credit {
+                target_credit
+            } else {
+                realized_credit
+            }
+        } else {
+            target_credit + realized_credit
+        };
         self.validate_resource_limit_numeric(
             self.current_credit_consumption_rate(Some(cluster_id)),
             peak_credit,
@@ -645,7 +650,11 @@ impl Coordinator {
         // Validate the reconfiguration's resource footprint up front, so a
         // reshape that cannot fit errors at `ALTER` time rather than writing a
         // record the controller aborts asynchronously.
-        self.validate_reconfiguration_resource_limits(cluster_id, &target)?;
+        self.validate_reconfiguration_resource_limits(
+            cluster_id,
+            &target,
+            cuts_over_on_first_tick(strategy),
+        )?;
 
         // Resolve the deadline and the on-timeout action, both written relative
         // to the current time so they survive session disconnect and restart.
@@ -1633,26 +1642,12 @@ impl Coordinator {
 
     /// Applies a managed→managed `ALTER CLUSTER`.
     ///
-    /// By default this is a config-only write: the cluster controller owns the
-    /// replica set and reconciles it to the new realized config on its next
-    /// tick. Emitting creates and drops here as well would fight it, since it
-    /// derives replica names from the observed set, so an adapter create by
-    /// canonical `rN` can collide with a controller-chosen name and an adapter
-    /// drop by canonical `rN` can miss a churned one.
-    ///
-    /// `cut_over` is the direct path an explicitly zero-timeout commit `WAIT`
-    /// requests (see [`requests_immediate_cut_over`]): the observed owned
-    /// replica set is converged onto the target shape and factor (replicas
-    /// that already match are kept, up to the factor), and any carried
-    /// reconfiguration record is settled to a terminal status (see
-    /// [`retire_carried_reconfiguration`]), all in this one catalog
-    /// transaction with no controller involvement. It
-    /// is the one reshape that still works when the controller itself is the
-    /// problem, and it simultaneously unsticks a reconfiguration nothing else
-    /// would retire. Requesting it under a live controller stays safe: the
-    /// config write invalidates any in-flight tick's compare-and-append
-    /// witness, so a stale controller batch is rejected like it would be for
-    /// any user DDL landing mid-tick.
+    /// This is a config-only write: the cluster controller owns the replica set
+    /// and reconciles it to the new realized config on its next tick. Emitting
+    /// creates and drops here as well would fight it, since it derives replica
+    /// names from the observed set, so an adapter create by canonical `rN` can
+    /// collide with a controller-chosen name and an adapter drop by canonical
+    /// `rN` can miss a churned one.
     ///
     /// # Panics
     ///
@@ -1663,13 +1658,9 @@ impl Coordinator {
         session: &Session,
         cluster_id: ClusterId,
         new_config: ClusterConfig,
-        cut_over: bool,
     ) -> Result<(), AdapterError> {
         let cluster = self.catalog.get_cluster(cluster_id);
         let name = cluster.name().to_string();
-        let owner_id = cluster.owner_id();
-
-        let mut ops = vec![];
 
         let ClusterVariant::Managed(ClusterVariantManaged {
             size,
@@ -1686,14 +1677,6 @@ impl Coordinator {
         else {
             panic!("expected existing managed cluster config");
         };
-        // Clone the existing managed config out of the cluster so the immutable
-        // catalog borrow can be released before the out-of-band replica id
-        // allocation below, which needs mutable access to self.
-        let size = size.clone();
-        let availability_zones = availability_zones.clone();
-        let logging = logging.clone();
-        let arrangement_compression = *arrangement_compression;
-        let replication_factor = *replication_factor;
         let ClusterVariant::Managed(new_managed) = &new_config.variant else {
             panic!("expected new managed cluster config");
         };
@@ -1701,8 +1684,8 @@ impl Coordinator {
             size: new_size,
             replication_factor: new_replication_factor,
             availability_zones: new_availability_zones,
-            logging: new_logging,
-            arrangement_compression: new_arrangement_compression,
+            logging: _,
+            arrangement_compression: _,
             optimizer_feature_overrides: _,
             schedule: _,
             auto_scaling_strategy: new_auto_scaling_strategy,
@@ -1749,15 +1732,18 @@ impl Coordinator {
             }
         }
 
-        // Eagerly validate the `max_replicas_per_cluster` limit.
-        // `catalog_transact` will do this validation too, but allocating
-        // replica IDs is expensive enough that we need to do this validation
-        // before allocating replica IDs. See database-issues#6046.
-        if *new_replication_factor > replication_factor {
+        // Validate the `max_replicas_per_cluster` limit for a raised replication
+        // factor. This is the only place it is enforced on this path:
+        // `Op::UpdateClusterConfig` contributes nothing to `catalog_transact`'s
+        // replica accounting, because the controller materializes the replicas
+        // on a later tick rather than this transaction emitting creates. Without
+        // the check the ALTER would succeed and the controller would then fail
+        // its own create transaction on every tick. See database-issues#6046.
+        if new_replication_factor > replication_factor {
             if cluster_id.is_user() {
                 self.validate_resource_limit(
-                    usize::cast_from(replication_factor),
-                    i64::from(*new_replication_factor) - i64::from(replication_factor),
+                    usize::cast_from(*replication_factor),
+                    i64::from(*new_replication_factor) - i64::from(*replication_factor),
                     SystemVars::max_replicas_per_cluster,
                     "cluster replica",
                     MAX_REPLICAS_PER_CLUSTER.name(),
@@ -1767,10 +1753,10 @@ impl Coordinator {
 
         let config_changed = new_managed.replica_config_shape()
             != ManagedReplicaConfigShape::new(
-                &size,
-                &availability_zones,
-                &logging,
-                arrangement_compression,
+                size,
+                availability_zones,
+                logging,
+                *arrangement_compression,
             );
         // The controller creates replicas from the realized config without
         // re-validating availability zones, so an invalid pool written here
@@ -1779,151 +1765,16 @@ impl Coordinator {
             self.ensure_valid_azs(new_availability_zones.iter())?;
         }
 
-        // Decide the cut-over's creates and drops with the controller's own
-        // reconcile kernel, against the cluster as it is observed right now.
-        // Running it here rather than a tick later is the whole point of the
-        // cut-over, but *what* it converges on must not differ, or the same
-        // reshape would churn the replica set differently depending on which
-        // path ran it. In particular a replica that already has the target shape
-        // is kept rather than bounced.
-        let decisions = if cut_over {
-            let target_shape = ReplicaShape {
-                size: new_size.clone(),
-                availability_zones: AvailabilityZones(new_availability_zones.clone()),
-                logging: new_logging.clone(),
-                arrangement_compression: *new_arrangement_compression,
-            };
-            let desired = vec![
-                DesiredReplica {
-                    shape: target_shape,
-                    reason: CreateReason::Baseline,
-                };
-                usize::cast_from(*new_replication_factor)
-            ];
-            let state = self
-                .observe_cluster_state(cluster_id)
-                .expect("managed cluster observed above");
-            reconcile_replicas(&state, &[desired])
-        } else {
-            Vec::new()
-        };
-
-        // One id per create, allocated out-of-band before the transaction like
-        // every other create path. A config-only alter creates nothing, so it
-        // allocates nothing: allocating would burn the ids durably and throw
-        // them away, and it would pay an oracle round-trip for no reason.
-        let creates = decisions
-            .iter()
-            .filter(|d| matches!(d, Decision::CreateReplica { .. }))
-            .count();
-        let mut new_replica_ids = if creates > 0 {
-            let id_ts = self.get_catalog_write_ts().await;
-            let ids = self
-                .catalog()
-                .allocate_replica_ids(cluster_id, u64::cast_from(creates), id_ts)
-                .await?;
-            ids.into_iter()
-        } else {
-            Vec::<ReplicaId>::new().into_iter()
-        };
-
-        // Collect an eval context for each replica the cut-over creates, so the
-        // alter transaction folds the replicas' replica-scoped overrides the same
-        // way the create paths do. ALTER CLUSTER SET (SIZE ...) to a different
-        // size family flips size-family-keyed render-frozen flags, so the
-        // override must reach the controller before the created replica renders.
-        // Only the replica scope is folded. The cluster already exists and its
-        // cluster-scoped overrides are unaffected by this alter.
-        let cluster_ctx = ClusterScopeContext {
-            id: cluster_id.to_string(),
-            name: name.clone(),
-            is_builtin: cluster_id.is_system(),
-        };
-        let mut replica_ctxs = Vec::new();
-        let mut drops = Vec::new();
-
-        for decision in decisions {
-            match decision {
-                Decision::CreateReplica {
-                    name: replica_name,
-                    shape,
-                    ..
-                } => {
-                    let replica_id = new_replica_ids
-                        .next()
-                        .expect("one pre-allocated id per create");
-                    let size_family = self.create_managed_cluster_replica_op(
-                        cluster_id,
-                        replica_id,
-                        replica_name.clone(),
-                        &shape,
-                        &mut ops,
-                        owner_id,
-                        ReplicaCreateDropReason::Manual,
-                    )?;
-                    replica_ctxs.push(ReplicaEvalContext {
-                        cluster_id,
-                        replica_id,
-                        cluster: cluster_ctx.clone(),
-                        replica: ReplicaScopeContext {
-                            id: replica_id.to_string(),
-                            name: replica_name,
-                            is_builtin: cluster_id.is_system(),
-                            size: shape.size.clone(),
-                            size_family,
-                            cluster_id: cluster_id.to_string(),
-                            cluster_name: cluster_ctx.name.clone(),
-                        },
-                    });
-                }
-                Decision::DropReplica { replica_id, .. } => {
-                    drops.push(catalog::DropObjectInfo::ClusterReplica((
-                        cluster_id,
-                        replica_id,
-                        ReplicaCreateDropReason::Manual,
-                    )));
-                }
-                // The kernel's replica diff emits creates and drops only. The
-                // durable state write is this function's own business.
-                Decision::UpdateClusterState { .. } => {
-                    return Err(AdapterError::Internal(
-                        "the replica reconcile kernel does not write cluster state".into(),
-                    ));
-                }
-            }
-        }
-        if !drops.is_empty() {
-            ops.push(catalog::Op::DropObjects(drops));
-        }
-
         // A record still in progress belongs to a live, converging
         // reconfiguration a config-only write did not touch, so carry it through
-        // untouched. The cut-over, in contrast, has just transacted the reshape
-        // itself, so it retires the record: leaving it in progress would have
-        // the controller keep converging on a target this write superseded.
-        let mut new_config = new_config;
-        let reconfiguration_audit = if cut_over {
-            retire_carried_reconfiguration(&mut new_config)
-        } else {
-            None
-        };
-        ops.push(catalog::Op::UpdateClusterConfig {
+        // untouched. Hence no declared audit intent.
+        let ops = vec![catalog::Op::UpdateClusterConfig {
             id: cluster_id,
-            name: name.clone(),
+            name,
             config: new_config,
-            reconfiguration_audit,
+            reconfiguration_audit: None,
             burst_audit: None,
-        });
-
-        // Fold the recreated replicas' replica-scoped overrides into the same
-        // transaction, so the committed diff drives the replica-scoped controller
-        // push before create_replica. Render-frozen flags (chosen at
-        // arrangement-build time) require the override to land before the replica
-        // renders. A config-only alter recreates no replicas, so this is empty
-        // and folds nothing.
-        if let Some(scoped_op) = self.scoped_overrides_create_op(&[], &replica_ctxs) {
-            ops.push(scoped_op);
-        }
+        }];
 
         self.catalog_transact(Some(session), ops).await?;
         Ok(())
@@ -2251,53 +2102,21 @@ struct ReconfigurationDimensionsUnchanged {
     arrangement_compression: bool,
 }
 
-/// Drives an in-progress reconfiguration record carried by a synchronous
-/// cut-over to a terminal status, returning the audit intent to declare with the
-/// write.
+/// Whether the record an `ALTER` with this `WITH (WAIT ...)` clause writes cuts
+/// over on the controller's first tick, so the realized and target replica sets
+/// never coexist.
 ///
-/// The cut-over reshapes the replica set itself, so it settles the record rather
-/// than leaving the controller converging on a target this write superseded.
-/// Which terminal status is the honest one depends on where the cut-over landed:
-/// on the record's own target it *is* the finalization the record was waiting
-/// for, and it is `forced` because it did not wait for hydration. Anywhere else
-/// the record's target was abandoned, which is a cancel.
-fn retire_carried_reconfiguration(config: &mut ClusterConfig) -> Option<ReconfigurationAudit> {
-    let ClusterVariant::Managed(managed) = &mut config.variant else {
-        return None;
-    };
-    // `matches_realized_config` compares against the config being written, which
-    // for a cut-over is the shape it just materialized.
-    let reached_target = managed
-        .reconfiguration
-        .as_ref()
-        .is_some_and(|record| record.target.matches_realized_config(managed));
-    let record = managed.reconfiguration.as_mut()?;
-    if !record.is_in_progress() {
-        return None;
-    }
-    if reached_target {
-        record.status = ReconfigurationStatus::Finalized;
-        Some(ReconfigurationAudit::Finalized { forced: true })
-    } else {
-        record.status = ReconfigurationStatus::Cancelled;
-        Some(ReconfigurationAudit::Cancelled)
-    }
-}
-
-/// Whether a `WITH (WAIT ...)` clause asks for the cut-over to happen now and to
-/// be committed rather than rolled back: `WAIT FOR '0s'` (which is sugar for
-/// `ON TIMEOUT COMMIT`), or an explicit
-/// `WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT 'COMMIT')`.
+/// True for a zero timeout that commits: `WAIT FOR '0s'` (sugar for `ON TIMEOUT
+/// COMMIT`) or an explicit `WAIT UNTIL READY (TIMEOUT '0s', ON TIMEOUT
+/// 'COMMIT')`. Such a record's deadline has already elapsed when it is written,
+/// so the tick's first phase advances the realized config to the target before
+/// its second phase desires any replica. The reshape's transient peak is then
+/// the larger of the two sets rather than their sum, which is what
+/// [`Coordinator::validate_reconfiguration_resource_limits`] models it with.
 ///
-/// Such a statement has already said "cut over now, hydrated or not", so the
-/// reshape takes the direct path
-/// ([`Coordinator::sequence_alter_cluster_managed_to_managed`]'s `cut_over`)
-/// instead of writing a record whose deadline has already passed. Same outcome,
-/// one controller tick sooner, and it works even when the controller does not.
-///
-/// A zero timeout that rolls back is *not* this: it asks for the reconfiguration
-/// to be abandoned at once, which is the record path's job.
-fn requests_immediate_cut_over(strategy: &AlterClusterPlanStrategy) -> bool {
+/// This is a statement about resource footprint only. Every shape-changing
+/// `ALTER` takes the same route, writing a record the controller converges on.
+fn cuts_over_on_first_tick(strategy: &AlterClusterPlanStrategy) -> bool {
     match strategy {
         AlterClusterPlanStrategy::None => false,
         AlterClusterPlanStrategy::For(timeout) => timeout.is_zero(),
@@ -2350,10 +2169,6 @@ fn alter_changes_replica_shape(options: &PlanClusterOption) -> bool {
 /// dimensions the statement explicitly set to diverge. Without it, an `ALTER`
 /// that mentions one dimension would silently revert the transition along every
 /// dimension it did not mention.
-///
-/// Both paths that act on a shape-changing `ALTER` share this: the reshape that
-/// writes the record, and the synchronous cut-over that transacts the reshape
-/// itself. They must agree on what "the target" means for a given statement.
 fn alter_reconfiguration_target(
     new_managed: &ClusterVariantManaged,
     options: &PlanClusterOption,
@@ -2427,11 +2242,10 @@ fn alter_reconfiguration_target(
 /// AZ-only) from silently reverting the in-flight transition along every dimension
 /// it did not mention.
 ///
-/// Replication factor folds the same way, but only matters for the
-/// nothing-in-flight case: a change to it while a reconfiguration is in
-/// flight is refused before an `ALTER` reaches here, so
-/// `unchanged.replication_factor` is always `true` when `in_flight` is
-/// `Some`.
+/// Replication factor folds the same way, though the fold is vacuous for it in
+/// practice: `sequence_alter_cluster_stage` refuses a replication-factor change
+/// while a reconfiguration is in flight, so `unchanged.replication_factor` is
+/// always `true` under an `in_flight` target.
 fn fold_reconfiguration_target(
     in_flight: Option<&ReconfigurationTarget>,
     new_target: ReconfigurationTarget,
@@ -2528,9 +2342,12 @@ mod tests {
 
     #[mz_ore::test]
     fn fold_rf_only_keeps_in_flight_shape() {
-        // A 200cc size change is in flight. A later rf-only ALTER must NOT revert
-        // the in-flight size/AZ/logging back to the realized (100cc) values that
+        // A 200cc size change is in flight. An rf-only fold must NOT revert the
+        // in-flight size/AZ/logging back to the realized (100cc) values that
         // `new_target` carries for the dimensions the ALTER left unchanged.
+        // Unreachable from the `ALTER` path (a replication-factor change while a
+        // reconfiguration is in flight is refused), pinned as a property of the
+        // pure function.
         let in_flight = target("200cc", 1, &["az2"], true);
         // new_target reflects realized 100cc/az1 for every dimension but rf, which
         // the ALTER set to 5.
@@ -2551,6 +2368,9 @@ mod tests {
     #[mz_ore::test]
     fn fold_with_all_set_overwrites_every_dimension() {
         // Every dimension explicitly set: the fold takes all of new_target.
+        // Setting the replication factor over an in-flight target is unreachable
+        // from the `ALTER` path (that change is refused while a reconfiguration
+        // is in flight), pinned as a property of the pure function.
         let in_flight = target("200cc", 1, &["az2"], true);
         let new = target("400cc", 9, &["az9"], false);
         let folded = fold_reconfiguration_target(Some(&in_flight), new.clone(), all_changed());
@@ -2595,5 +2415,48 @@ mod tests {
                 interval: Some(Duration::from_secs(5)),
             }
         );
+    }
+
+    #[mz_ore::test]
+    fn cuts_over_on_first_tick_only_for_a_zero_timeout_commit() {
+        let zero = Duration::ZERO;
+        let nonzero = Duration::from_millis(1);
+
+        assert!(cuts_over_on_first_tick(&AlterClusterPlanStrategy::For(
+            zero
+        )));
+        assert!(cuts_over_on_first_tick(
+            &AlterClusterPlanStrategy::UntilReady {
+                timeout: zero,
+                on_timeout: Some(OnTimeoutAction::Commit),
+            }
+        ));
+
+        // No `WAIT` at all, or any non-zero timeout: the deadline is in the
+        // future, so the controller provisions the overlap set and waits.
+        assert!(!cuts_over_on_first_tick(&AlterClusterPlanStrategy::None));
+        assert!(!cuts_over_on_first_tick(&AlterClusterPlanStrategy::For(
+            nonzero
+        )));
+        assert!(!cuts_over_on_first_tick(
+            &AlterClusterPlanStrategy::UntilReady {
+                timeout: nonzero,
+                on_timeout: Some(OnTimeoutAction::Commit),
+            }
+        ));
+        // A zero timeout that does not commit abandons the target instead of
+        // cutting over to it. It is not modelled as a cut-over.
+        assert!(!cuts_over_on_first_tick(
+            &AlterClusterPlanStrategy::UntilReady {
+                timeout: zero,
+                on_timeout: Some(OnTimeoutAction::Rollback),
+            }
+        ));
+        assert!(!cuts_over_on_first_tick(
+            &AlterClusterPlanStrategy::UntilReady {
+                timeout: zero,
+                on_timeout: None,
+            }
+        ));
     }
 }

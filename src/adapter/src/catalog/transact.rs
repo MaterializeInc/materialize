@@ -242,11 +242,6 @@ pub enum Op {
         /// this write, alongside the record carried in `config`.
         burst_audit: Option<BurstAudit>,
     },
-    UpdateClusterReplicaConfig {
-        cluster_id: ClusterId,
-        replica_id: ReplicaId,
-        config: ReplicaConfig,
-    },
     UpdateItem {
         id: CatalogItemId,
         name: QualifiedItemName,
@@ -2927,24 +2922,6 @@ impl Catalog {
                         EventDetails::ClusterHydrationBurstV1(details),
                     )?;
                 }
-            }
-            Op::UpdateClusterReplicaConfig {
-                replica_id,
-                cluster_id,
-                config,
-            } => {
-                let replica = state.get_cluster_replica(cluster_id, replica_id).to_owned();
-                info!("update replica {}", replica.name);
-                tx.update_cluster_replica(
-                    replica_id,
-                    mz_catalog::durable::ClusterReplica {
-                        cluster_id,
-                        replica_id,
-                        name: replica.name.clone(),
-                        config: config.clone().into(),
-                        owner_id: replica.owner_id,
-                    },
-                )?;
             }
             Op::UpdateItem { id, name, to_item } => {
                 // A non-temporary item must not depend on a temporary one.

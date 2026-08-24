@@ -378,11 +378,11 @@ pub struct ClusterVariantManaged {
 /// factor of N they are named `r1` through `rN`.
 ///
 /// The catalog-open reconciler that materializes builtin replicas converges on
-/// this rule, and so does the one `ALTER CLUSTER` path that still creates
-/// replicas itself (the synchronous cut-over). The cluster controller
-/// deliberately does not: its `ReplicaNameGen` picks names that avoid the
-/// observed set, which is why the cut-over drops by observed id rather than by
-/// derived name.
+/// this rule, `CREATE CLUSTER` names its replicas by it, and the
+/// unmanaged-to-managed conversion validates the existing names against it. The
+/// cluster controller deliberately does not: its `ReplicaNameGen` picks names
+/// that avoid the observed set, which is why it drops by observed id rather
+/// than by derived name.
 pub fn managed_cluster_replica_name(index: u32) -> String {
     format!("r{}", index + 1)
 }
