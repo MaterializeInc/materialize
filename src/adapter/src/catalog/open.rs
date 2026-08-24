@@ -61,6 +61,7 @@ use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, SYSTEM_USER};
 use mz_sql::session::vars::{SessionVars, SystemVars, VarError, VarInput};
 use mz_storage_client::controller::{StorageMetadata, StorageTxn};
 use mz_storage_client::storage_collections::StorageCollections;
+use semver::Version;
 use tracing::{Instrument, info, warn};
 use uuid::Uuid;
 
@@ -73,14 +74,26 @@ use crate::catalog::{BuiltinTableUpdate, Catalog, CatalogState, Config, is_reser
 pub struct InitializeStateResult {
     /// An initialized [`CatalogState`].
     pub state: CatalogState,
-    /// A set of new shards that may need to be initialized (only used by 0dt migration).
+    /// Items whose builtin schema migration allocated a fresh, self-owned persist shard. Only used
+    /// by 0dt migration.
+    ///
+    /// `Replacement`-migrated items only: derived by filtering to items with a global id in
+    /// `MigrationRunResult::new_shards`, which only `migrate_replace` populates. `Evolution`
+    /// migrates in place and reuses the leader's shard, so it never lands here. Read-only write
+    /// paths depend on that: force-writing a shard while read-only is safe only because we
+    /// exclusively own it (see `ComputeController::allow_writes_in_read_only`).
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtin_collections: BTreeSet<GlobalId>,
     /// A list of builtin table updates corresponding to the initialized state.
     pub builtin_table_updates: Vec<BuiltinTableUpdate>,
-    /// The version of the catalog that existed before initializing the catalog.
-    pub last_seen_version: String,
+    /// The version of the binary that last committed catalog migrations, or `None` for a newly
+    /// initialized catalog.
+    ///
+    /// While this environment is read-only during a 0dt deployment, this is the version of the
+    /// leader environment: the read-only catalog transaction is a savepoint, so our own bump of
+    /// the setting never lands.
+    pub last_seen_version: Option<Version>,
     /// A handle to the expression cache if it's enabled.
     pub expr_cache_handle: Option<ExpressionCacheHandle>,
     /// The global expressions that were cached in `expr_cache_handle`.
@@ -92,7 +105,10 @@ pub struct InitializeStateResult {
 pub struct OpenCatalogResult {
     /// An opened [`Catalog`].
     pub catalog: Catalog,
-    /// A set of new shards that may need to be initialized.
+    /// See [`InitializeStateResult::last_seen_version`].
+    pub last_seen_version: Option<Version>,
+    /// See [`InitializeStateResult::migrated_storage_collections_0dt`]; `Replacement`-migrated
+    /// items only.
     pub migrated_storage_collections_0dt: BTreeSet<CatalogItemId>,
     /// A set of new builtin items.
     pub new_builtin_collections: BTreeSet<GlobalId>,
@@ -430,8 +446,7 @@ impl Catalog {
             .await;
         builtin_table_updates.extend(builtin_table_update);
 
-        let last_seen_version =
-            get_migration_version(&txn).map_or_else(|| "new".into(), |v| v.to_string());
+        let last_seen_version = get_migration_version(&txn);
 
         let mz_authentication_mock_nonce =
             txn.get_authentication_mock_nonce().ok_or_else(|| {
@@ -453,7 +468,9 @@ impl Catalog {
             .await
             .map_err(|e| {
                 Error::new(ErrorKind::FailedCatalogMigration {
-                    last_seen_version: last_seen_version.clone(),
+                    last_seen_version: last_seen_version
+                        .as_ref()
+                        .map_or_else(|| "new".to_string(), |v| v.to_string()),
                     this_version: config.build_info.version,
                     cause: e.to_string(),
                 })
@@ -566,7 +583,7 @@ impl Catalog {
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
                 mut builtin_table_updates,
-                last_seen_version: _,
+                last_seen_version,
                 expr_cache_handle,
                 cached_global_exprs,
                 uncached_local_exprs,
@@ -624,6 +641,7 @@ impl Catalog {
 
             Ok(OpenCatalogResult {
                 catalog,
+                last_seen_version,
                 migrated_storage_collections_0dt,
                 new_builtin_collections,
                 builtin_table_updates,
