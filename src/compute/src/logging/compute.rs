@@ -1767,8 +1767,8 @@ impl CollectionLogging {
 
     /// Record that the collection reached a stage of its lifecycle.
     ///
-    /// Callers must not report a stage twice, since the lifecycle relation is append-only and the
-    /// demux does not deduplicate.
+    /// A stage already reported for this export is ignored by the demux, so a caller that cannot
+    /// cheaply tell whether it has reported one does not have to track it.
     pub fn log_lifecycle(&self, stage: LifecycleStage) {
         self.logger.log(&ComputeEvent::Lifecycle(Lifecycle {
             export_id: self.export_id,

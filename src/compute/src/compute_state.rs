@@ -763,6 +763,19 @@ impl<'a> ActiveComputeState<'a> {
         else {
             return;
         };
+        // Two strong references, this collection's and the clone above, mean this is the
+        // dataflow's only export and there is nothing to scan for. `Schedule` arrives once per
+        // dataflow, so without this the sweep is quadratic in the number of collections, on the
+        // timely worker thread, exactly while start-up latency matters.
+        if Rc::strong_count(&dataflow_index) == 2 {
+            if let Some(collection) = self.compute_state.collections.get(&id) {
+                if let Some(logging) = &collection.logging {
+                    logging.set_hydration_start();
+                }
+            }
+            return;
+        }
+
         for collection in self.compute_state.collections.values() {
             if !Rc::ptr_eq(&collection.dataflow_index, &dataflow_index) {
                 continue;
@@ -842,6 +855,12 @@ impl<'a> ActiveComputeState<'a> {
         // If this collection is an index, remove its trace.
         self.compute_state.traces.remove(&id);
         // If the collection is unscheduled, remove it from the list of waiting collections.
+        //
+        // NOTE: this can be the release that unsuspends the dataflow, when a multi-export
+        // dataflow's remaining exports are dropped before being scheduled. No hydration start is
+        // reported for that, unlike in `handle_schedule`, so the surviving exports would charge
+        // their queueing time to hydration. Unreachable while every dataflow reaching a replica
+        // has exactly one export, which `SequentialHydration::absorb_command` requires.
         self.compute_state.suspended_collections.remove(&id);
 
         // Drop the dataflow, if all its exports have been dropped.
@@ -2060,7 +2079,7 @@ pub struct CollectionState {
     /// Frontier of sink writes.
     ///
     /// Only `Some` if the collection is a sink and *not* a subscribe.
-    pub sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
+    sink_write_frontier: Option<Rc<RefCell<Antichain<Timestamp>>>>,
     /// Frontier probes for every input to the collection.
     pub input_probes: BTreeMap<GlobalId, probe::Handle<Timestamp>>,
     /// A probe reporting the frontier of times through which all collection outputs have been
