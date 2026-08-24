@@ -62,6 +62,17 @@ true true true
   WHERE i.name = 'idx'
 true
 
+# Every event carries the id of the dataflow maintaining the export, which has to be
+# the dataflow `mz_compute_exports_per_worker` reports for that same export and worker.
+
+> SELECT DISTINCT l.dataflow_id = e.dataflow_id
+  FROM mz_introspection.mz_compute_lifecycle_events_per_worker l
+  JOIN mz_introspection.mz_compute_exports_per_worker e
+    ON (e.export_id = l.export_id AND e.worker_id = l.worker_id)
+  JOIN mz_indexes i ON (i.id = l.export_id)
+  WHERE i.name = 'idx'
+true
+
 # A materialized view writes, so it reaches `written`. The write stages are
 # observed by the single worker that maintains the sink frontier, so they are
 # reported once per object rather than once per worker.

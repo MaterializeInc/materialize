@@ -377,20 +377,31 @@ pub static MZ_COMPUTE_LIFECYCLE_EVENTS_PER_WORKER: LazyLock<BuiltinLog> =
                           worker, so counting the `installed` events for an export gives the \
                           number of workers reporting on it. Compare a per-worker stage's count \
                           against that to tell whether every worker has reached it, rather than \
-                          against the cluster's configured worker count.",
+                          against the cluster's configured worker count. Each row also carries \
+                          the id of the dataflow maintaining the export. A dataflow can maintain \
+                          more than one export, and `installed` and `started` describe the \
+                          dataflow rather than the export, so those events share an instant \
+                          across a dataflow's exports rather than being independent facts.",
             links: &const {
-                [OntologyLink {
-                    name: "lifecycle_event_of",
-                    target: "compute_export_per_worker",
-                    properties: LinkProperties::MapsTo {
-                        source_column: "export_id",
-                        target_column: "export_id",
-                        via: None,
-                        from_type: Some(SemanticType::GlobalId),
-                        to_type: Some(SemanticType::GlobalId),
-                        note: None,
+                [
+                    OntologyLink {
+                        name: "lifecycle_event_of",
+                        target: "compute_export_per_worker",
+                        properties: LinkProperties::MapsTo {
+                            source_column: "export_id",
+                            target_column: "export_id",
+                            via: None,
+                            from_type: Some(SemanticType::GlobalId),
+                            to_type: Some(SemanticType::GlobalId),
+                            note: None,
+                        },
                     },
-                }]
+                    OntologyLink {
+                        name: "lifecycle_event_in_dataflow",
+                        target: "dataflow_global_id_per_worker",
+                        properties: LinkProperties::fk("dataflow_id", "id", Cardinality::ManyToOne),
+                    },
+                ]
             },
             column_semantic_types: &[("export_id", SemanticType::GlobalId)],
         }),

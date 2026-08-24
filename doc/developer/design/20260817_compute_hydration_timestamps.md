@@ -184,6 +184,7 @@ One append-only log relation, per replica, in memory:
 ```
 export_id    text        not null
 worker_id    uint8       not null
+dataflow_id  uint8       not null
 event        text        not null
 occurred_at  timestamptz not null
 reason       text        nullable
@@ -213,6 +214,26 @@ writing: `mint` clears it on every non-elected worker, where it is then the empt
 antichain and would report having written everything immediately. The election has
 one definition, `sink::materialized_view::frontier_owner`, called both by `mint`
 and by the code that records ownership.
+
+**`dataflow_id`, and why the relation is keyed by export.** The stages do not all
+describe the same object. `hydrated` and the write stages are properties of one export:
+hydration reads that export's own progress, and the write stages read its sink.
+`installed` and `started` describe the dataflow, which can maintain more than one
+export, and `started` is the instant that dataflow was unsuspended, shared by every
+export it maintains.
+
+Splitting the relation along that seam would be honest about where each fact lives and
+worse to use. The identifier a consumer has is the export id, which is what
+`mz_objects.id` holds; dataflow ids are per worker and internal to a replica. A
+dataflow-grain relation could not hold hydration or the write stages at all, so the
+split would produce two relations rather than one, and the most basic question would
+join through the export-to-dataflow map to answer.
+
+Export grain with `dataflow_id` as a column keeps every row answerable by export id
+while making the shared events recognizable as shared: `SELECT DISTINCT dataflow_id,
+event, occurred_at` recovers the dataflow-level facts, and the redundancy is visible
+rather than implied. The column also means the relation carries the export-to-dataflow
+mapping that `mz_compute_exports_per_worker` holds, for eight bytes a row.
 
 **`installed` is the denominator.** A consumer asking whether every worker has reached
 a stage cannot count rows and compare against a worker count it does not have, and it

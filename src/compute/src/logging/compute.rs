@@ -749,6 +749,7 @@ impl DemuxState {
     fn pack_lifecycle_update(
         &mut self,
         export_id: GlobalId,
+        dataflow_index: usize,
         stage: LifecycleStage,
         occurred_at: Duration,
         details: Datum<'_>,
@@ -757,6 +758,7 @@ impl DemuxState {
         self.lifecycle_packer.pack_slice(&[
             make_string_datum(export_id, &mut self.scratch_string_a),
             Datum::UInt64(u64::cast_from(self.worker_id)),
+            Datum::UInt64(u64::cast_from(dataflow_index)),
             Datum::String(event),
             epoch_offset_datum(occurred_at),
             reason.map_or(Datum::Null, Datum::String),
@@ -1303,7 +1305,12 @@ impl DemuxHandler<'_, '_, '_> {
     ) {
         let ts = self.ts();
 
-        let Some(as_of) = self.state.exports.get(&export_id).map(|e| e.as_of) else {
+        let Some((as_of, dataflow_index)) = self
+            .state
+            .exports
+            .get(&export_id)
+            .map(|e| (e.as_of, e.dataflow_index))
+        else {
             error!(%export_id, ?stage, "lifecycle event for unknown export");
             return;
         };
@@ -1312,6 +1319,7 @@ impl DemuxHandler<'_, '_, '_> {
         let update = {
             let (key, value) = self.state.pack_lifecycle_update(
                 export_id,
+                dataflow_index,
                 stage,
                 occurred_at,
                 details.unpack_first(),
