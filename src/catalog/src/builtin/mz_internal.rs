@@ -5173,7 +5173,7 @@ pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|
     column_comments: BTreeMap::from_iter([
         (
             "object_id",
-            "The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view, which may no longer exist.",
+            "The ID of the object's dataflow, as reported by the replica. Join `mz_internal.mz_object_global_ids` to reach the index or materialized view while that mapping exists. Dropping the dataflow retracts the mapping, so historical IDs may no longer resolve.",
         ),
         ("cluster_id", "The ID of the object's cluster."),
         (
