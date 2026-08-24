@@ -5229,7 +5229,7 @@ pub static MZ_OBJECT_HYDRATION_HISTORY: LazyLock<BuiltinTable> = LazyLock::new(|
                         "replica_id",
                         "id",
                         Cardinality::ManyToOne,
-                        mz_repr::SemanticType::CatalogItemId,
+                        mz_repr::SemanticType::ReplicaId,
                     ),
                 },
             ]
