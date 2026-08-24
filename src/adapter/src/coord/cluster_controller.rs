@@ -371,10 +371,6 @@ impl Coordinator {
 
     /// Build the controller's view of one managed cluster from the catalog.
     /// Returns `None` for a missing or unmanaged cluster.
-    ///
-    /// Also used by the ALTER sequencer's synchronous cut-over, which runs the
-    /// controller's reconcile kernel against this same view so both paths
-    /// converge on the same replica set.
     pub(crate) fn observe_cluster_state(&self, cluster_id: ClusterId) -> Option<ClusterState> {
         let cluster = self.catalog().try_get_cluster(cluster_id)?;
         let ClusterVariant::Managed(managed) = &cluster.config.variant else {
@@ -871,9 +867,8 @@ impl Coordinator {
         })
     }
 
-    /// Build an [`Op::CreateClusterReplica`] for a desired replica `shape` on
-    /// `cluster_id` with the pre-allocated `replica_id`, attributed to `reason`.
-    /// Returns `Ok(None)` if the cluster is gone or unmanaged.
+    /// Builds a replica create op, or `Ok(None)` if the cluster is gone or
+    /// unmanaged.
     fn build_create_replica_op(
         &self,
         cluster_id: ClusterId,
@@ -920,14 +915,16 @@ impl Coordinator {
             },
         };
 
-        Ok(Some(Op::CreateClusterReplica {
+        let op = Op::CreateClusterReplica {
             cluster_id,
             replica_id,
             name,
             config,
             owner_id,
             reason,
-        }))
+        };
+
+        Ok(Some(op))
     }
 }
 

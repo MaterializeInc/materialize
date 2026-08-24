@@ -254,7 +254,7 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_with_ddl_transaction<F>(
         &mut self,
         ctx: &mut ExecuteContext,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
         side_effect: F,
     ) -> Result<(), AdapterError>
     where
@@ -321,6 +321,21 @@ impl Coordinator {
         let prep_start = Instant::now();
         let mut combined_ops = txn_ops_clone;
         combined_ops.extend(ops.iter().cloned());
+        let creates_scoped_object = ops.iter().any(|op| {
+            matches!(
+                op,
+                catalog::Op::CreateCluster { .. } | catalog::Op::CreateClusterReplica { .. }
+            )
+        });
+        if creates_scoped_object {
+            // Include accumulated creates when deriving contexts. A replica can
+            // be created in a later DDL statement than its still-uncommitted
+            // cluster, which is absent from the coordinator's live catalog.
+            if let Some(scoped_op) = self.scoped_overrides_create_op(&combined_ops) {
+                ops.push(scoped_op.clone());
+                combined_ops.push(scoped_op);
+            }
+        }
         let conn_id = ctx.session().conn_id().clone();
         let validate_res = self.validate_resource_limits(&combined_ops, &conn_id);
         phase_seconds
@@ -384,10 +399,14 @@ impl Coordinator {
     pub(crate) async fn catalog_transact_inner(
         &mut self,
         conn_id: Option<&ConnectionId>,
-        ops: Vec<catalog::Op>,
+        mut ops: Vec<catalog::Op>,
     ) -> Result<(BuiltinTableAppendNotify, Vec<ParsedStateUpdate>), AdapterError> {
         if self.controller.read_only() {
             return Err(AdapterError::ReadOnly);
+        }
+
+        if let Some(scoped_op) = self.scoped_overrides_create_op(&ops) {
+            ops.push(scoped_op);
         }
 
         event!(Level::TRACE, ops = format!("{:?}", ops));
@@ -1388,7 +1407,6 @@ impl Coordinator {
                 | Op::UpdateOwner { .. }
                 | Op::RevokeRole { .. }
                 | Op::UpdateClusterConfig { .. }
-                | Op::UpdateClusterReplicaConfig { .. }
                 | Op::UpdateSourceReferences { .. }
                 | Op::UpdateSystemConfiguration { .. }
                 | Op::ResetSystemConfiguration { .. }

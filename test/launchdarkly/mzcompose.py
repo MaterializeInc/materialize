@@ -533,6 +533,21 @@ def run_scoped_feature_flag_cases(
                     ]
                 )
             )
+
+            # Controller-created replicas use the same create-time fold. Record
+            # the initial replica, force a shape change, then require the new
+            # replica's row before the periodic sync can run.
+            c.testdrive(
+                "\n".join(
+                    [
+                        "$ set-from-sql var=ld_sync_replica_id",
+                        "SELECT cr.id::text FROM mz_cluster_replicas cr JOIN mz_clusters c ON c.id = cr.cluster_id WHERE c.name = 'ld_sync'",
+                        "> ALTER CLUSTER ld_sync SET (INTROSPECTION DEBUGGING = TRUE)",
+                        f"> SELECT cr.id::text <> '${{ld_sync_replica_id}}', p.value FROM mz_internal.mz_replica_system_parameters p JOIN mz_cluster_replicas cr ON cr.id = p.replica_id JOIN mz_clusters c ON c.id = cr.cluster_id WHERE p.name = '{LGALLOC_PARAM}' AND c.name = 'ld_sync' AND cr.id::text <> '${{ld_sync_replica_id}}'",
+                        "true false",
+                    ]
+                )
+            )
             c.stop("materialized")
     finally:
         for flag in (

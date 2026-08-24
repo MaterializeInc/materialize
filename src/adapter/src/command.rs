@@ -189,11 +189,11 @@ pub enum Command {
     },
 
     /// Install (or replace) the shared system-parameter frontend on the
-    /// coordinator, so the create-cluster / create-replica paths can resolve a
-    /// new object's scoped overrides synchronously, before the controller
-    /// installs it or its first dataflow is planned, rather than waiting for
-    /// the next sync tick. Sent by the sync loop whenever it (re)initializes the
-    /// frontend. See the scoped feature flags design.
+    /// coordinator, so catalog transactions can resolve a new object's scoped
+    /// overrides before its replica is provisioned or its first dataflow is
+    /// planned, rather than waiting for the next sync tick. Sent by the sync loop
+    /// whenever it (re)initializes the frontend. See the scoped feature flags
+    /// design.
     InstallScopedSystemParameterFrontend {
         frontend: Arc<SystemParameterFrontend>,
     },
