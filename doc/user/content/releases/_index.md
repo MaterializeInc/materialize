@@ -20,16 +20,8 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.38.2
-*Released to Materialize Self-Managed: 2026-08-25* <br>
-
-### Agent Skills {#v26.38.2-agent-skills}
-- **materialize-debug-freshness**: New skill that diagnoses why an object is behind wall-clock time, sweeping source and sink status, attributing lag hop by hop through `mz_materialization_lag`, and — once hydration is confirmed — ranking the dataflows on a replica and then that dataflow's operators back to the query clause responsible.
-
-### Bug Fixes {#v26.38.2-bug-fixes}
-- Fixed slow catalog queries immediately after a zero-downtime upgrade that migrated builtin materialized views: the migrated views and everything downstream of them used to hydrate all at once at cut-over, spiking CPU on `mz_catalog_server`, and now hydrate before cut-over instead.
-
-## v26.38.0
 *Released to Materialize Cloud: 2026-08-19* <br>
+*Released to Materialize Self-Managed: 2026-08-25* <br>
 
 ### Dictionary compression {#v26.38-dictionary-compression}
 
@@ -57,7 +49,7 @@ For more information, see:
 - [`CREATE CLUSTER`: Dictionary compression](/sql/create-cluster/#dictionary-compression)
 - [`ALTER CLUSTER`: Dictionary compression](/sql/alter-cluster/#dictionary-compression)
 
-<!--
+
 ### Integrate with your observability stack {#v26.38-self-managed-observability}
 
 <red>*Materialize Self-Managed only*</red>
@@ -88,7 +80,6 @@ For more information, see:
 - [Monitoring Self-Managed Materialize](/manage/monitor/self-managed/)
 - [How logs and metrics are stored and delivered](/manage/monitor/self-managed/storage/)
 - [Alerting](/manage/monitor/self-managed/alerting/)
--->
 
 ### Improvements {#v26.38-improvements}
 - **Notice for single-replica sources on multi-replica clusters**: Materialize now warns when a command leaves a cluster holding more than one replica alongside PostgreSQL, MySQL, or SQL Server sources, which always run on a single replica, since the extra replicas make those sources neither more fault tolerant nor faster to ingest.
