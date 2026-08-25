@@ -33,6 +33,8 @@ use tracing::{debug, warn};
 use crate::compute_state::PeekRowIterationConfig;
 use crate::compute_state::peek_metrics::PeekWalkMetrics;
 use crate::compute_state::peek_scan::{IndexPeekScan, RowBatch, ScanOutcome};
+use uuid::Uuid;
+
 use crate::compute_state::peek_stash::{StashTarget, StashUpload, UploadDemand};
 
 /// The bound on how many promoted peek walks run at once.
@@ -193,7 +195,7 @@ impl OffloadedPeek {
                 queued.admitted();
 
                 let Some(response) = Self::walk(
-                    permit, scan, stash, &config, &metrics, &order_by, &result_tx,
+                    permit, peek_uuid, scan, stash, &config, &metrics, &order_by, &result_tx,
                 )
                 .await
                 else {
@@ -240,6 +242,7 @@ impl OffloadedPeek {
     /// only once the scan holding them is gone.
     async fn walk(
         _permit: OwnedSemaphorePermit,
+        peek_uuid: Uuid,
         mut scan: IndexPeekScan,
         stash: Option<StashTarget>,
         config: &OffloadConfig,
@@ -280,7 +283,7 @@ impl OffloadedPeek {
                     metrics.observe_ok_phase(&phases);
                     return Some(match upload {
                         None => metrics.rows_response(rows, order_by),
-                        Some(upload) => stashed_answer(upload, rows).await,
+                        Some(upload) => stashed_answer(peek_uuid, upload, rows).await,
                     });
                 }
                 // NOTE: a walk that fails after it has written to the stash abandons the upload,
@@ -305,6 +308,7 @@ impl OffloadedPeek {
                             match stash.open(config.batch_max_runs.get()).await {
                                 Ok(opened) => upload = Some(opened),
                                 Err(error) => {
+                                    warn!(%peek_uuid, %error, "peek stash failed to open a shard");
                                     return Some(PeekResponse::Error(PeekError::unstructured(
                                         error,
                                     )));
@@ -324,7 +328,9 @@ impl OffloadedPeek {
                                 // and only the phases that precede it are complete enough to.
                                 metrics.observe_error_phase(&scan.phases());
                                 let open = upload.take().expect("opened above");
-                                return Some(stashed_answer(open, RowBatch::new()).await);
+                                return Some(
+                                    stashed_answer(peek_uuid, open, RowBatch::new()).await,
+                                );
                             }
                             // NOTE: the upload is abandoned here, which leaves the parts already
                             // written in blob storage, the same way a cancellation does.
@@ -332,7 +338,7 @@ impl OffloadedPeek {
                                 // Persist rejects a batch it was handed wrongly, so this is a
                                 // defect in the upload rather than a blip, and the query's error
                                 // is the only other place it shows.
-                                warn!(%error, "peek stash rejected a batch");
+                                warn!(%peek_uuid, %error, "peek stash rejected a batch");
                                 return Some(PeekResponse::Error(PeekError::unstructured(error)));
                             }
                         }
@@ -347,7 +353,11 @@ impl OffloadedPeek {
 
 /// The answer a peek whose rows reached the stash gets, over `inline_rows`, the rows the walk was
 /// still holding when it ended.
-async fn stashed_answer(upload: StashUpload, inline_rows: RowBatch) -> PeekResponse {
+async fn stashed_answer(
+    peek_uuid: Uuid,
+    upload: StashUpload,
+    inline_rows: RowBatch,
+) -> PeekResponse {
     match upload.finish(inline_rows).await {
         Ok(response) => response,
         // NOTE: the upload is abandoned here, which leaves the parts already written in blob
@@ -355,7 +365,7 @@ async fn stashed_answer(upload: StashUpload, inline_rows: RowBatch) -> PeekRespo
         Err(error) => {
             // Persist rejects a batch it was handed wrongly, so this is a defect in the upload
             // rather than a blip, and the query's error is the only other place it shows.
-            warn!(%error, "peek stash failed to finish a batch");
+            warn!(%peek_uuid, %error, "peek stash failed to finish a batch");
             PeekResponse::Error(PeekError::unstructured(error))
         }
     }
@@ -867,6 +877,7 @@ mod tests {
         let walk = mz_ore::task::spawn(|| "peek_offload_test::walk", async move {
             OffloadedPeek::walk(
                 permit,
+                Uuid::nil(),
                 scan,
                 None,
                 &config,
