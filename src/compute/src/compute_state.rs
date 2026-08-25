@@ -82,7 +82,7 @@ mod peek_result_iterator;
 mod peek_scan;
 mod peek_stash;
 
-use self::peek_budget::{InlineBudget, InlineBudgetConfig};
+use self::peek_budget::InlineBudget;
 use self::peek_metrics::IndexPeekMetrics;
 use self::peek_metrics::PeekWalkMetrics;
 pub(crate) use self::peek_offload::PeekPermits;
@@ -292,17 +292,13 @@ pub struct ComputeState {
     /// the inline driver reads it on every activation of every pending peek.
     peek_walk_metrics: PeekWalkMetrics,
 
-    /// The parameters [`ComputeState::peek_budget`] is refilled from.
+    /// What this activation may spend walking index peeks on the worker, and what is left of it.
     ///
-    /// Held rather than looked up, because a refill happens on every activation of the worker.
-    peek_budget_config: InlineBudgetConfig,
-
-    /// What is left of what this activation may spend walking index peeks on the worker.
-    ///
-    /// Refilled at the top of every activation, before the pending peeks are looked at, because a
-    /// peek that arrives outside a sweep is granted out of this budget too. A peek that arrives
-    /// while others are pending draws from what the last sweep left, so a batch of arriving peeks
-    /// costs at most one more aggregate rather than one inline budget per peek in the batch.
+    /// The activation is begun at the top of every sweep and armed from the parameters by the
+    /// first peek that asks for a slice, which is not always a peek the sweep visits: a peek
+    /// arriving between two sweeps is granted its first slice where it arrives. Such a peek draws
+    /// from what the last sweep left, so a batch of arriving peeks costs at most one more
+    /// aggregate rather than one inline budget per peek in the batch.
     peek_budget: InlineBudget,
 
     /// The pending peek a sweep stopped at for want of budget, and where the next sweep starts.
@@ -356,7 +352,7 @@ impl ComputeState {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
         let peek_walk_metrics = PeekWalkMetrics::new(&metrics);
-        let peek_budget_config = InlineBudgetConfig::new(&worker_config);
+        let peek_budget = InlineBudget::new(&worker_config);
 
         Self {
             collections: Default::default(),
@@ -379,9 +375,7 @@ impl ComputeState {
             workers_per_process,
             peek_permits,
             peek_walk_metrics,
-            peek_budget_config,
-            // The offload is off until a configuration arrives, and this is what off means.
-            peek_budget: InlineBudget::Unbounded,
+            peek_budget,
             peek_resume_at: None,
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
@@ -1222,8 +1216,16 @@ impl<'a> ActiveComputeState<'a> {
     /// that is granted none of it is left pending untouched, to be served first on the next
     /// activation.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
+        // Asked for ahead of the match rather than in a guard on its arms, because the grant is
+        // what arms this activation's budget. Only an index peek draws on that budget, so a peek
+        // of any other kind must not arm it.
+        let granted = match &peek {
+            PendingPeek::Index(_) => self.compute_state.peek_budget.grant(),
+            _ => None,
+        };
+
         let response = match &mut peek {
-            PendingPeek::Index(peek) if self.compute_state.peek_budget.grant().is_none() => {
+            PendingPeek::Index(peek) if granted.is_none() => {
                 // This activation has spent what it may on peeks. Nothing about the peek has
                 // changed, because a scan is opened by the slice that walks it, so passing it over
                 // costs the peek an activation and nothing else.
@@ -1234,11 +1236,7 @@ impl<'a> ActiveComputeState<'a> {
             }
             PendingPeek::Index(peek) => {
                 let start = Instant::now();
-                let granted = self
-                    .compute_state
-                    .peek_budget
-                    .grant()
-                    .expect("guarded by the preceding arm");
+                let granted = granted.expect("guarded by the preceding arm");
 
                 let row_iteration_limit =
                     peek_row_iteration_limit(&self.compute_state.worker_config);
@@ -1463,13 +1461,13 @@ impl<'a> ActiveComputeState<'a> {
 
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
-        // Refilled ahead of the early return below, because `handle_peek` grants an arriving peek
-        // out of this budget and no sweep runs on that path. A replica whose index peeks all
-        // answer inline never leaves one pending, so a refill that ran only where the sweep finds
-        // work would leave the budget at what the constructor set and nothing would ever be
-        // offloaded. The refill reads the parameters through handles and allocates nothing, which
-        // is what keeps it above the return.
-        self.compute_state.peek_budget = self.compute_state.peek_budget_config.for_activation();
+        // Begun ahead of the early return below, because the aggregate bounds an activation and
+        // this is the only place an activation begins. A replica whose index peeks all answer
+        // inline leaves none of them pending, so a sweep that began an activation only where it
+        // found work would let the aggregate drain across the arrivals such a replica serves and
+        // then pass every later arrival over. Beginning one costs a write of `None`, which is what
+        // keeps it above the return.
+        self.compute_state.peek_budget.start_activation();
 
         // What follows runs on every iteration of the worker loop, tens of thousands of times a
         // second on a busy worker, and the overwhelming majority of those find no pending peek.
@@ -2614,10 +2612,11 @@ mod peek_sweep_tests {
             None,
             "the peek must answer in one slice for what it charged to be the cost of a whole walk"
         );
-        let cost = match harness.state.peek_budget {
-            InlineBudget::Bounded { remaining, .. } => WIDE_AGGREGATE - remaining,
-            InlineBudget::Unbounded => panic!("the offload is on, so the budget is bounded"),
-        };
+        let remaining =
+            harness.state.peek_budget.remaining().expect(
+                "the offload is on and the sweep granted a slice, so the budget is bounded",
+            );
+        let cost = WIDE_AGGREGATE - remaining;
         // A driver that charged the fuel it granted rather than the fuel it spent would report a
         // cost equal to the grant, and a test sizing its aggregate from that measurement would
         // then agree with itself at the wrong number. A walk visits one position per key plus what
@@ -2631,21 +2630,65 @@ mod peek_sweep_tests {
         cost
     }
 
-    /// An activation that finds nothing pending still arms the budget, which is what a peek
-    /// arriving before the next sweep is granted out of.
+    /// A peek that arrives before any sweep has run is granted a bounded slice, so a walk that
+    /// outruns it leaves the worker.
+    ///
+    /// The commands a worker has queued are drained in full before it sweeps its pending peeks,
+    /// and `handle_peek` runs a peek's first slice as the peek arrives. On a fresh replica that
+    /// drain is the controller's whole history: the `CreateInstance` that builds this state, the
+    /// `UpdateConfiguration` that turns the offload on, and then every peek the controller
+    /// re-sends. A budget armed only where an activation begins would grant each of those peeks
+    /// unbounded fuel, and unbounded fuel never suspends, so each would walk to its answer on a
+    /// worker that is hydrating and holding the largest backlog it will ever hold.
+    #[mz_ore::test(tokio::test)]
+    async fn a_peek_arriving_before_any_sweep_is_granted_a_bounded_slice() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+
+        let mut harness = at_production_defaults();
+        harness
+            .state
+            .traces
+            .set(TARGET_ID, trace_bundle(&keys, cancelling_errors(0)));
+
+        harness
+            .active()
+            .handle_peek(index_peek_with_uuid(PEEK_A, None));
+
+        assert_eq!(
+            harness.pending(PEEK_A),
+            Some("offloaded"),
+            "a peek arriving before any sweep outran a bounded slice and was promoted"
+        );
+        assert_eq!(
+            harness.drain().await,
+            vec![(PEEK_A, whole_index_answer(&keys))]
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 1),
+            "the promoted driver ended the walk, so no slice of it ran on the worker"
+        );
+    }
+
+    /// An activation that finds nothing pending still begins one, which is what refills the
+    /// aggregate the peeks arriving before the next sweep are granted out of.
     ///
     /// A replica whose index peeks all answer inline leaves none of them pending, so no sweep of
-    /// its ever visits a peek. Were the budget armed only where the sweep finds work, every peek
-    /// on such a replica would be granted the unbounded fuel the state is constructed with, and
-    /// unbounded fuel cannot suspend, so nothing would be offloaded however the parameters are
-    /// set. That is the case the offload exists for: one expensive lookup among cheap ones.
+    /// its ever visits a peek. Were an activation begun only where the sweep finds work, the
+    /// aggregate would drain across the arrivals such a replica serves and then pass every later
+    /// arrival over, deferring peeks the worker had the budget to answer.
     #[mz_ore::test(tokio::test)]
-    async fn an_idle_activation_arms_the_budget() {
+    async fn an_idle_activation_refills_the_aggregate() {
         let mut harness = Harness::new(|updates| {
             updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
             updates.add(&INDEX_PEEK_INLINE_BUDGET, INLINE_BUDGET);
         });
         assert!(harness.state.pending_peeks.is_empty());
+
+        // Spend the aggregate, as the peeks an activation serves do.
+        assert_eq!(harness.state.peek_budget.grant(), Some(INLINE_BUDGET));
+        harness.state.peek_budget.charge(usize::MAX);
+        assert_eq!(harness.state.peek_budget.grant(), None);
 
         harness.sweep();
 

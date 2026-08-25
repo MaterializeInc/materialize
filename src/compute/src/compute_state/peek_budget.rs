@@ -12,19 +12,19 @@ use mz_dyncfg::{ConfigSet, ConfigValHandle};
 
 /// The parameters an [`InlineBudget`] is read from, each as a handle rather than as a value.
 ///
-/// A budget is built on every activation of the worker, so reading the parameters by name would put
-/// three lookups against the whole configuration set on the worker's loop. Handles give the property
-/// the parameters are documented with at a fraction of that cost: a configuration change reaches the
+/// An activation's fuel is read afresh, so reading the parameters by name would put three lookups
+/// against the whole configuration set on the worker's loop. Handles give the property the
+/// parameters are documented with at a fraction of that cost: a configuration change reaches the
 /// next activation, and so the walks it grants a slice to, without discarding the positions earlier
 /// sweeps walked.
-pub(super) struct InlineBudgetConfig {
+struct InlineBudgetConfig {
     enabled: ConfigValHandle<bool>,
     per_peek: ConfigValHandle<usize>,
     aggregate: ConfigValHandle<usize>,
 }
 
 impl InlineBudgetConfig {
-    pub(super) fn new(config: &ConfigSet) -> Self {
+    fn new(config: &ConfigSet) -> Self {
         Self {
             enabled: ENABLE_INDEX_PEEK_OFFLOAD.handle(config),
             per_peek: INDEX_PEEK_INLINE_BUDGET.handle(config),
@@ -32,16 +32,13 @@ impl InlineBudgetConfig {
         }
     }
 
-    /// Reads the budget in effect now.
-    ///
-    /// Read once per activation rather than held, so a configuration change reaches the next
-    /// activation without disturbing the one under way.
-    pub(super) fn for_activation(&self) -> InlineBudget {
+    /// Reads the parameters in effect now into the fuel of one activation.
+    fn arm(&self) -> ActivationBudget {
         if !self.enabled.get() {
-            return InlineBudget::Unbounded;
+            return ActivationBudget::Unbounded;
         }
 
-        InlineBudget::Bounded {
+        ActivationBudget::Bounded {
             // A per-peek budget of zero would suspend every scan before it walked a position, and
             // a suspension that holds no full batch is a promotion, so every point lookup would
             // cost a task, a permit, and a trace bundle clone while walking nothing. The aggregate
@@ -72,7 +69,7 @@ impl InlineBudgetConfig {
 /// Both are counted in cursor positions visited rather than rows returned, matching the unit the
 /// scan charges: a selective filter steps the cursor without returning anything, so a row-counted
 /// budget is one such a peek never spends.
-pub(super) enum InlineBudget {
+enum ActivationBudget {
     /// Every peek walks to completion where it started, and nothing is promoted or passed over.
     ///
     /// This is what the kill switch restores, and it has to be what the worker did before the
@@ -86,7 +83,46 @@ pub(super) enum InlineBudget {
     Bounded { per_peek: usize, remaining: usize },
 }
 
+/// The fuel of the activation under way, armed from the parameters by the first peek that asks for
+/// a slice of it.
+///
+/// Arming is by demand rather than by a caller refilling ahead of one, because the callers that
+/// grant a slice are not only the sweep. Commands are drained in full before any sweep runs, and a
+/// peek arriving on that path is granted its first slice as it arrives, so a budget that only a
+/// sweep armed would hand every peek of a reconnecting controller's re-sent backlog an unbounded
+/// slice. Arming at the grant leaves one place that can be wrong and makes a future caller of
+/// [`InlineBudget::grant`] bounded by construction.
+///
+/// Arming cannot happen where the state is built either. `CreateInstance` is followed by the
+/// `UpdateConfiguration` that carries the parameters, so a budget armed in the constructor would
+/// snapshot the code defaults and hold them for the life of the activation.
+pub(super) struct InlineBudget {
+    config: InlineBudgetConfig,
+    /// The fuel of the activation under way, or `None` while no peek has asked for a slice since
+    /// the activation began.
+    activation: Option<ActivationBudget>,
+}
+
 impl InlineBudget {
+    /// A budget reading `config`, whose first grant arms the first activation.
+    pub(super) fn new(config: &ConfigSet) -> Self {
+        Self {
+            config: InlineBudgetConfig::new(config),
+            activation: None,
+        }
+    }
+
+    /// Begins an activation, discarding what the previous one left.
+    ///
+    /// This is what keeps the aggregate a bound per activation rather than per process. Arming is
+    /// lazy, so nothing else ever refills the fuel: a budget armed once and never begun again
+    /// would let the first activation's aggregate bound every peek the replica goes on to serve.
+    /// The parameters are read at the grant that follows rather than here, so a configuration
+    /// change reaches this activation without disturbing the one it interrupted.
+    pub(super) fn start_activation(&mut self) {
+        self.activation = None;
+    }
+
     /// The fuel one peek's slice may spend, or `None` when this activation has none left to give.
     ///
     /// A peek is granted its whole per-peek budget or nothing at all, so promotion keeps meaning
@@ -97,10 +133,11 @@ impl InlineBudget {
     /// A peek granted nothing is passed over rather than stepped with an empty budget. A scan
     /// stepped with no fuel suspends without walking anything, which would promote a peek that
     /// never had its inline turn.
-    pub(super) fn grant(&self) -> Option<usize> {
-        match self {
-            Self::Unbounded => Some(usize::MAX),
-            Self::Bounded {
+    pub(super) fn grant(&mut self) -> Option<usize> {
+        let Self { config, activation } = self;
+        match activation.get_or_insert_with(|| config.arm()) {
+            ActivationBudget::Unbounded => Some(usize::MAX),
+            ActivationBudget::Bounded {
                 per_peek,
                 remaining,
             } => (*remaining > 0).then_some(*per_peek),
@@ -108,10 +145,25 @@ impl InlineBudget {
     }
 
     /// Charges the activation for the positions a slice walked.
+    ///
+    /// A charge without a grant ahead of it is nothing to charge for, because a slice is only ever
+    /// walked out of fuel this granted.
     pub(super) fn charge(&mut self, spent: usize) {
-        match self {
-            Self::Unbounded => {}
-            Self::Bounded { remaining, .. } => *remaining = remaining.saturating_sub(spent),
+        match &mut self.activation {
+            Some(ActivationBudget::Bounded { remaining, .. }) => {
+                *remaining = remaining.saturating_sub(spent)
+            }
+            Some(ActivationBudget::Unbounded) | None => {}
+        }
+    }
+
+    /// What is left of this activation's aggregate, or `None` when the activation is unarmed or
+    /// unbounded.
+    #[cfg(test)]
+    pub(super) fn remaining(&self) -> Option<usize> {
+        match &self.activation {
+            Some(ActivationBudget::Bounded { remaining, .. }) => Some(*remaining),
+            Some(ActivationBudget::Unbounded) | None => None,
         }
     }
 }
@@ -122,13 +174,58 @@ mod tests {
 
     use super::*;
 
+    /// The configuration the budget tests read, with the offload on, a per-peek budget of
+    /// `per_peek` and an aggregate of `aggregate`.
+    fn config(per_peek: usize, aggregate: usize) -> ConfigSet {
+        let config = mz_dyncfgs::all_dyncfgs();
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+        updates.add(&INDEX_PEEK_INLINE_BUDGET, per_peek);
+        updates.add(&INDEX_PEEK_ACTIVATION_BUDGET, aggregate);
+        updates.apply(&config);
+        config
+    }
+
+    /// A budget that no activation has begun still grants a bounded slice, because the grant is
+    /// what arms it.
+    ///
+    /// The worker drains the commands it has queued before it sweeps its pending peeks, and a peek
+    /// arriving on that path is granted a slice as it arrives. A budget armed only where an
+    /// activation begins would grant that peek the unbounded fuel of a budget that had never been
+    /// read, and unbounded fuel never suspends, so the peek would walk to its answer on the worker
+    /// however the parameters are set.
+    #[mz_ore::test]
+    fn the_first_grant_arms_the_budget() {
+        let config = config(100, 250);
+        let mut budget = InlineBudget::new(&config);
+
+        assert_eq!(budget.grant(), Some(100));
+    }
+
+    /// Beginning an activation refills the aggregate, which is what makes it a bound on one
+    /// activation rather than on the process.
+    #[mz_ore::test]
+    fn beginning_an_activation_refills_the_aggregate() {
+        let config = config(100, 250);
+        let mut budget = InlineBudget::new(&config);
+
+        assert_eq!(budget.grant(), Some(100));
+        budget.charge(250);
+        assert_eq!(budget.grant(), None);
+
+        budget.start_activation();
+
+        assert_eq!(budget.grant(), Some(100));
+        assert_eq!(budget.remaining(), Some(250));
+    }
+
     /// With the offload off, every peek is granted unbounded fuel however much the peeks before it
     /// spent, which is what makes the kill switch restore the worker's old behaviour rather than
     /// approximate it.
     #[mz_ore::test]
     fn the_kill_switch_grants_every_peek_an_unbounded_slice() {
         let config = mz_dyncfgs::all_dyncfgs();
-        let mut budget = InlineBudgetConfig::new(&config).for_activation();
+        let mut budget = InlineBudget::new(&config);
 
         for _ in 0..3 {
             assert_eq!(budget.grant(), Some(usize::MAX));
@@ -140,14 +237,8 @@ mod tests {
     /// peeks keep getting turns and expensive ones drain it.
     #[mz_ore::test]
     fn the_aggregate_is_spent_by_what_the_peeks_walk() {
-        let config = mz_dyncfgs::all_dyncfgs();
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
-        updates.add(&INDEX_PEEK_INLINE_BUDGET, 100);
-        updates.add(&INDEX_PEEK_ACTIVATION_BUDGET, 250);
-        updates.apply(&config);
-
-        let mut budget = InlineBudgetConfig::new(&config).for_activation();
+        let config = config(100, 250);
+        let mut budget = InlineBudget::new(&config);
 
         // Point-lookup-sized slices barely touch the aggregate.
         for _ in 0..10 {
@@ -166,24 +257,26 @@ mod tests {
         assert_eq!(budget.grant(), None);
     }
 
-    /// A configuration change reaches the sweep that follows it through the handles the budget
-    /// holds, which is what keeps a parameter change from waiting on a restart.
+    /// A configuration change reaches the activation that follows it through the handles the
+    /// budget holds, which is what keeps a parameter change from waiting on a restart. The
+    /// activation under way when the change lands keeps the fuel it was armed with.
     #[mz_ore::test]
     fn a_parameter_change_reaches_the_next_activation() {
         let config = mz_dyncfgs::all_dyncfgs();
-        let budget_config = InlineBudgetConfig::new(&config);
+        let mut budget = InlineBudget::new(&config);
 
-        assert!(matches!(
-            budget_config.for_activation(),
-            InlineBudget::Unbounded
-        ));
+        assert_eq!(budget.grant(), Some(usize::MAX));
 
         let mut updates = ConfigUpdates::default();
         updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
         updates.add(&INDEX_PEEK_INLINE_BUDGET, 100);
         updates.apply(&config);
 
-        assert_eq!(budget_config.for_activation().grant(), Some(100));
+        assert_eq!(budget.grant(), Some(usize::MAX));
+
+        budget.start_activation();
+
+        assert_eq!(budget.grant(), Some(100));
     }
 
     /// A per-peek budget of zero still walks one position. Without that, every peek would be
@@ -191,13 +284,8 @@ mod tests {
     /// worker would have answered outright.
     #[mz_ore::test]
     fn a_zero_per_peek_budget_still_walks_one_position() {
-        let config = mz_dyncfgs::all_dyncfgs();
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
-        updates.add(&INDEX_PEEK_INLINE_BUDGET, 0);
-        updates.apply(&config);
-
-        let budget = InlineBudgetConfig::new(&config).for_activation();
+        let config = config(0, *INDEX_PEEK_ACTIVATION_BUDGET.default());
+        let mut budget = InlineBudget::new(&config);
 
         assert_eq!(budget.grant(), Some(1));
     }
@@ -206,14 +294,8 @@ mod tests {
     /// be passed over on every activation and none would ever be answered.
     #[mz_ore::test]
     fn a_zero_aggregate_still_serves_one_peek() {
-        let config = mz_dyncfgs::all_dyncfgs();
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
-        updates.add(&INDEX_PEEK_INLINE_BUDGET, 100);
-        updates.add(&INDEX_PEEK_ACTIVATION_BUDGET, 0);
-        updates.apply(&config);
-
-        let mut budget = InlineBudgetConfig::new(&config).for_activation();
+        let config = config(100, 0);
+        let mut budget = InlineBudget::new(&config);
 
         assert_eq!(budget.grant(), Some(100));
         budget.charge(100);
@@ -224,14 +306,8 @@ mod tests {
     /// that, no peek would ever be granted a slice and every peek would hang.
     #[mz_ore::test]
     fn an_inline_budget_above_the_aggregate_still_serves_one_peek() {
-        let config = mz_dyncfgs::all_dyncfgs();
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
-        updates.add(&INDEX_PEEK_INLINE_BUDGET, 1_000_000_000);
-        updates.add(&INDEX_PEEK_ACTIVATION_BUDGET, 1);
-        updates.apply(&config);
-
-        let mut budget = InlineBudgetConfig::new(&config).for_activation();
+        let config = config(1_000_000_000, 1);
+        let mut budget = InlineBudget::new(&config);
 
         assert_eq!(budget.grant(), Some(1_000_000_000));
         budget.charge(1_000_000_000);
