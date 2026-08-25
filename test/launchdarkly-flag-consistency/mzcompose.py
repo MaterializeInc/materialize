@@ -461,6 +461,7 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     constraint_based_timestamp_selection
     enable_0dt_deployment
     enable_aws_msk_iam_auth
+    enable_compute_temporal_bucketing
     enable_consolidate_after_union_negate
     enable_continual_task_builtins
     enable_continual_task_transform
@@ -533,7 +534,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     "enable_cast_elimination",
     "enable_compute_correction_v2",
     "enable_compute_error_distinct",
-    "enable_compute_temporal_bucketing",
     "enable_new_outer_join_lowering",
     "enable_upsert_v2",
     "enable_variadic_left_join_lowering",

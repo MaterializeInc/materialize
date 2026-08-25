@@ -26,7 +26,7 @@ use differential_dataflow::trace::implementations::BatchContainer;
 use differential_dataflow::trace::{Builder, Cursor, Navigable, Trace};
 use differential_dataflow::{Data, VecCollection};
 use itertools::Itertools;
-use mz_compute_types::dyncfgs::{ENABLE_COMPUTE_TEMPORAL_BUCKETING, TEMPORAL_BUCKETING_SUMMARY};
+use mz_compute_types::dyncfgs::TEMPORAL_BUCKETING_SUMMARY;
 use mz_compute_types::plan::ArrangementStrategy;
 use mz_compute_types::plan::reduce::{
     AccumulablePlan, BasicPlan, BucketedPlan, HierarchicalPlan, KeyValPlan, LirAggregateExpr,
@@ -167,8 +167,7 @@ impl<'scope, T: RenderTimestamp> Context<'scope, T> {
             let key_val_collection = if matches!(
                 temporal_bucketing_strategy,
                 ArrangementStrategy::TemporalBucketing
-            ) && ENABLE_COMPUTE_TEMPORAL_BUCKETING.get(&self.config_set)
-            {
+            ) {
                 let summary: mz_repr::Timestamp = TEMPORAL_BUCKETING_SUMMARY
                     .get(&self.config_set)
                     .try_into()

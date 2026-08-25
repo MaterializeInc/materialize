@@ -125,7 +125,6 @@ def get_minimal_system_parameters(
         "enable_statement_lifecycle_logging": "true",
         "enable_storage_introspection_logs": "true",
         "enable_compute_error_distinct": "true",
-        "enable_compute_temporal_bucketing": "true",
         "enable_union_cancellation_after_relation_cse": "true",
         "enable_variadic_left_join_lowering": "true",
         "enable_worker_core_affinity": "true",
@@ -146,6 +145,11 @@ def get_minimal_system_parameters(
         config["enable_columnar_lgalloc"] = "false"
     if version < MzVersion.parse_mz("v26.25.0-dev"):
         config["enable_multi_replica_sources"] = "true"
+    # Temporal bucketing runs unconditionally from v26.40 on. Older binaries
+    # still read the flag and default it off, so pin it on for them to keep
+    # mixed-version runs exercising the same path as current versions.
+    if version < MzVersion.parse_mz("v26.40.0-dev"):
+        config["enable_compute_temporal_bucketing"] = "true"
 
     if sanitizer_enabled():
         config["with_0dt_deployment_max_wait"] = "18000s"
