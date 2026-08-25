@@ -366,8 +366,9 @@ where
         let outcome = scan.step(self.peek_timestamp, self.target_id, fuel);
         self.error_scan_time = scan.scan_time;
 
-        // Both terminal outcomes drop the walk, so that a peek pins error batches only while it
-        // is reading them.
+        // Both terminal outcomes drop the walk over the error trace, so that a peek pins error
+        // batches only while it is reading them. The ok batches are a separate matter: the scan
+        // pins those from construction, because it opens that cursor there.
         match outcome {
             ErrorScanStep::Clean { rows_iterated } => {
                 // The rows the error walk examined count against the peek's limit, so the ok walk
