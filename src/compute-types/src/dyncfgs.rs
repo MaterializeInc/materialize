@@ -863,4 +863,30 @@ mod tests {
         // Were they finer, promotion would buy a walk more interruptions than it had inline.
         assert!(*INDEX_PEEK_YIELD_GRANULARITY.default() > *INDEX_PEEK_INLINE_BUDGET.default());
     }
+
+    /// A peek is broadcast to every replica of a cluster and the first answer wins, so a parameter
+    /// deciding whether a walk is promoted must resolve to one value for all of them. Letting one
+    /// diverge would answer the same peek by the inline path on one replica and the promoted path
+    /// on another, which turns any inequivalence between the two paths into results that depend on
+    /// which replica replied. The yield granularity selects no path and changes no output, so it is
+    /// the one parameter here a replica may resolve for itself.
+    #[mz_ore::test]
+    fn index_peek_offload_parameter_scopes() {
+        assert_eq!(
+            ENABLE_INDEX_PEEK_OFFLOAD.scope(),
+            ParameterScope::Environment
+        );
+        assert_eq!(
+            INDEX_PEEK_INLINE_BUDGET.scope(),
+            ParameterScope::Environment
+        );
+        assert_eq!(
+            INDEX_PEEK_ACTIVATION_BUDGET.scope(),
+            ParameterScope::Environment
+        );
+        assert_eq!(
+            INDEX_PEEK_YIELD_GRANULARITY.scope(),
+            ParameterScope::Replica
+        );
+    }
 }
