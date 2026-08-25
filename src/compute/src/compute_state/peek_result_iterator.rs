@@ -263,8 +263,10 @@ pub enum Step {
     Row(Result<(Row, NonZeroI64), PeekError>),
     /// The cursor is exhausted. Further steps also return `Done`.
     Done,
-    /// The fuel ran out before a row was found. The cursor sits at the next
-    /// position to attempt, so stepping again resumes exactly there.
+    /// The fuel ran out before a row was found. The iterator resumes exactly where it
+    /// stopped. The cursor itself may sit on an arbitrary intermediate key if a literal
+    /// seek was suspended, because resumption is driven by `Literals::range` rather than
+    /// by cursor position.
     OutOfFuel,
 }
 
@@ -389,12 +391,18 @@ where
         key_item.extend_datums(&arena, &mut borrow, None);
         row_item.extend_datums(&arena, &mut borrow, None);
 
-        if let Some(literals) = &mut self.literals
-            && let Some(literal) = literals.peek()
-        {
+        if let Some(literals) = &mut self.literals {
             // The peek was created from an IndexedFilter join. We have to add those columns
             // here that the join would add in a dataflow.
-            maybe_literal = literal;
+            //
+            // `step` only reaches row extraction once any pending literal seek has completed
+            // and the literals are not exhausted, so the cursor is always positioned on a
+            // matching literal at this point. Treating a `None` here as "no literal to add"
+            // would silently produce a datum vec one column short, which the MFP evaluation
+            // below would then apply to the wrong arity.
+            maybe_literal = literals
+                .peek()
+                .expect("literal position must be at a matching literal during row extraction");
             maybe_literal.extend_datums(&arena, &mut borrow, None);
         }
         if let Some(result) = self
@@ -541,14 +549,19 @@ mod tests {
         // seeks as there are literals. A resume that restarted the walk, or one that skipped
         // the literal it suspended on, would not add up.
         let mut seeks = 5;
-        loop {
+        let mut completed = false;
+        // Bounded so that a regression which restarts the walk from literal 0 on each resume
+        // fails the test instead of hanging it.
+        for _ in 0..100 {
             let mut fuel = 5;
             let outcome = subject.seek_next_literal_key(&mut cursor, &storage, &mut fuel);
             seeks += 5 - fuel;
             if let SeekOutcome::Complete = outcome {
+                completed = true;
                 break;
             }
         }
+        assert!(completed, "seek did not complete within 100 resumptions");
         assert_eq!(seeks, literal_count);
         assert_eq!(subject.peek(), Some(&matching));
         assert!(!subject.is_exhausted());
