@@ -2340,11 +2340,13 @@ impl CollectionState {
 /// Tests of the sweep that drives the pending index peeks.
 ///
 /// Built over a live [`ComputeState`] and a real timely worker rather than over the budget alone,
-/// because what the sweep is pinned on here is where it arms the budget relative to the return it
-/// takes when nothing is pending.
+/// because what these pin is where a peek's walk runs, which is decided by the sweep and observed
+/// through the metrics a driver leaves behind.
 #[cfg(test)]
 mod peek_sweep_tests {
-    use mz_compute_types::dyncfgs::{ENABLE_INDEX_PEEK_OFFLOAD, INDEX_PEEK_INLINE_BUDGET};
+    use mz_compute_types::dyncfgs::{
+        ENABLE_INDEX_PEEK_OFFLOAD, INDEX_PEEK_ACTIVATION_BUDGET, INDEX_PEEK_INLINE_BUDGET,
+    };
     use mz_dyncfg::ConfigUpdates;
     use mz_persist_client::cache::PersistClientCache;
     use mz_secrets::InMemorySecretsController;
@@ -2356,60 +2358,262 @@ mod peek_sweep_tests {
     use crate::metrics::ComputeMetrics;
     use crate::server::ComputeRuntimeRole;
 
+    use super::index_peek_tests::{
+        TARGET_ID, cancelling_errors, index_peek_with_uuid, rows_answer, trace_bundle, wide_ok_rows,
+    };
     use super::*;
 
-    /// The per-peek budget these tests configure. Distinct from both the unbounded grant and the
-    /// parameter's default, so that an assertion on it says the configured value was read.
+    /// The per-peek budget the budget-arming tests configure. Distinct from both the unbounded
+    /// grant and the parameter's default, so that an assertion on it says the configured value was
+    /// read.
     const INLINE_BUDGET: usize = 12_345;
 
-    /// A compute state as `CreateInstance` leaves one, with the offload configured on.
-    fn compute_state_with_offload_on() -> ComputeState {
-        let metrics_registry = MetricsRegistry::new();
-        let metrics = ComputeMetrics::register_with(&metrics_registry, ComputeRuntimeRole::Solo)
-            .for_worker(0);
-        let context = ComputeInstanceContext {
-            scratch_directory: None,
-            worker_core_affinity: false,
-            connection_context: ConnectionContext::for_tests(Arc::new(
-                InMemorySecretsController::new(),
-            )),
-        };
+    /// How many keys the index the placement-policy tests peek holds.
+    ///
+    /// More positions than the production inline budget, so a walk of the whole index cannot
+    /// finish on the worker while a walk that seeks to one key finishes there comfortably. The two
+    /// halves of the policy are the same index at the same budget, differing only in what the peek
+    /// asks for.
+    const WIDE_INDEX_KEYS: u64 = 2_000;
 
-        let state = ComputeState::new(
-            Arc::new(PersistClientCache::new_no_metrics()),
-            TxnsContext::default(),
-            metrics,
-            Arc::new(TracingHandle::disabled()),
-            context,
-            metrics_registry,
-            1,
-            Arc::new(PeekPermits::new(1)),
-            None,
-        );
+    /// How many keys the index the budget tests peek holds. Small, because what those tests turn
+    /// on is how many peeks got a turn rather than how far each one walked.
+    const SMALL_INDEX_KEYS: u64 = 6;
 
-        // The worker applies these through `UpdateConfiguration`, which reaches the budget through
-        // the handles it holds rather than through any state the command touches.
-        let mut updates = ConfigUpdates::default();
-        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
-        updates.add(&INDEX_PEEK_INLINE_BUDGET, INLINE_BUDGET);
-        updates.apply(&state.worker_config);
+    /// How many activations a test drives before it declares a peek stuck.
+    ///
+    /// A promoted walk over these traces needs one slice, and a peek passed over for want of
+    /// budget needs one activation per peek ahead of it, so a sweep that makes progress finishes
+    /// far inside this bound and one that does not fails rather than hanging the suite.
+    const SWEEP_BOUND: usize = 200;
 
-        state
+    /// Peek uuids, named in the order they sort, because which peek a sweep serves first turns on
+    /// that order.
+    const PEEK_A: Uuid = Uuid::from_u128(1);
+    const PEEK_B: Uuid = Uuid::from_u128(2);
+    const PEEK_C: Uuid = Uuid::from_u128(3);
+    const PEEK_D: Uuid = Uuid::from_u128(4);
+
+    /// The compute state, the timely worker, and the response channel one activation runs against,
+    /// held together across activations.
+    ///
+    /// A promoted walk outlives the sweep that promoted it, so the worker whose activator it wakes,
+    /// the responses it eventually produces, and the state it stays pending in all have to survive
+    /// the call that started it.
+    struct Harness {
+        state: ComputeState,
+        timely_worker: TimelyWorker,
+        response_tx: ResponseSender,
+        responses: mpsc::UnboundedReceiver<(ComputeResponse, Uuid)>,
     }
 
-    /// Runs one sweep over `state`, as an activation of the worker does.
-    fn sweep(state: &mut ComputeState) {
-        let allocator = Allocator::Thread(Default::default());
-        let mut timely_worker = TimelyWorker::new(WorkerConfig::default(), allocator, None);
-        let (response_tx, _response_rx) = mpsc::unbounded_channel();
-        let mut response_tx = ResponseSender::new(response_tx, 0);
+    impl Harness {
+        /// A harness as `CreateInstance` leaves one, with `configure` applied to the worker
+        /// configuration as `UpdateConfiguration` applies a change.
+        fn new(configure: impl FnOnce(&mut ConfigUpdates)) -> Self {
+            let metrics_registry = MetricsRegistry::new();
+            let metrics =
+                ComputeMetrics::register_with(&metrics_registry, ComputeRuntimeRole::Solo)
+                    .for_worker(0);
+            let context = ComputeInstanceContext {
+                scratch_directory: None,
+                worker_core_affinity: false,
+                connection_context: ConnectionContext::for_tests(Arc::new(
+                    InMemorySecretsController::new(),
+                )),
+            };
 
-        ActiveComputeState {
-            timely_worker: &mut timely_worker,
-            compute_state: state,
-            response_tx: &mut response_tx,
+            let state = ComputeState::new(
+                Arc::new(PersistClientCache::new_no_metrics()),
+                TxnsContext::default(),
+                metrics,
+                Arc::new(TracingHandle::disabled()),
+                context,
+                metrics_registry,
+                1,
+                Arc::new(PeekPermits::new(1)),
+                None,
+            );
+
+            // The worker applies these through `UpdateConfiguration`, which reaches the budget
+            // through the handles it holds rather than through any state the command touches.
+            let mut updates = ConfigUpdates::default();
+            configure(&mut updates);
+            updates.apply(&state.worker_config);
+
+            // The worker is given a timer, because a worker without one reports work waiting
+            // whatever its activations hold, which would make `Harness::park_for` vacuous.
+            let timely_worker = TimelyWorker::new(
+                WorkerConfig::default(),
+                Allocator::Thread(Default::default()),
+                Some(Instant::now()),
+            );
+
+            let (response_tx, responses) = mpsc::unbounded_channel();
+            let mut response_tx = ResponseSender::new(response_tx, 0);
+            response_tx.set_nonce(Uuid::nil());
+
+            Self {
+                state,
+                timely_worker,
+                response_tx,
+                responses,
+            }
         }
-        .process_peeks();
+
+        fn active(&mut self) -> ActiveComputeState<'_> {
+            ActiveComputeState {
+                timely_worker: &mut self.timely_worker,
+                compute_state: &mut self.state,
+                response_tx: &mut self.response_tx,
+            }
+        }
+
+        /// Runs one sweep over the pending peeks, as an activation of the worker does.
+        fn sweep(&mut self) {
+            self.active().process_peeks();
+        }
+
+        /// Makes `peek` pending over `bundle`, as a peek whose frontiers were not yet ready is
+        /// left pending.
+        fn add_pending(&mut self, peek: Peek, bundle: TraceBundle) {
+            let pending = PendingPeek::index(peek, bundle);
+            let uuid = pending.peek().uuid;
+            let replaced = self.state.pending_peeks.insert(uuid, pending);
+            assert!(replaced.is_none(), "each pending peek needs its own uuid");
+        }
+
+        /// Which kind of pending peek `uuid` names, or `None` when no peek is pending under it.
+        ///
+        /// Named rather than matched, so that a test says which driver holds the peek and a
+        /// failure says which one holds it instead.
+        fn pending(&self, uuid: Uuid) -> Option<&'static str> {
+            self.state.pending_peeks.get(&uuid).map(|peek| match peek {
+                PendingPeek::Index(_) => "index",
+                PendingPeek::Persist(_) => "persist",
+                PendingPeek::Stash(_) => "stash",
+                PendingPeek::Offloaded(_) => "offloaded",
+            })
+        }
+
+        /// The uuids of the peeks still pending, in the order the sweep takes them.
+        fn pending_uuids(&self) -> Vec<Uuid> {
+            self.state.pending_peeks.keys().copied().collect()
+        }
+
+        /// The peek responses sent since this was last called, in the order they were sent.
+        fn peek_responses(&mut self) -> Vec<(Uuid, PeekResponse)> {
+            let mut responses = Vec::new();
+            while let Ok((response, _nonce)) = self.responses.try_recv() {
+                match response {
+                    ComputeResponse::PeekResponse(uuid, response, _otel_ctx) => {
+                        responses.push((uuid, response))
+                    }
+                    other => panic!("a peek sweep sent {other:?}"),
+                }
+            }
+            responses
+        }
+
+        /// The walks each substrate has driven to an outcome, as `(inline, offloaded)`.
+        fn walks(&self) -> (u64, u64) {
+            (
+                self.state.metrics.index_peek_walks_inline.get(),
+                self.state.metrics.index_peek_walks_offloaded.get(),
+            )
+        }
+
+        /// How long the worker would park before its next activation, as `step_or_park` reads it.
+        ///
+        /// `None` is an indefinite park, which is what a worker with no dataflow and no pending
+        /// activation does.
+        fn park_for(&self) -> Option<Duration> {
+            let activations = self.timely_worker.activations();
+            let mut activations = activations.borrow_mut();
+            activations.advance();
+            activations.empty_for()
+        }
+
+        /// Runs activations until nothing is pending, and reports the responses they produced.
+        ///
+        /// Bounded, so a peek that never answers fails here rather than hanging the suite. The
+        /// yield between activations is what lets a promoted walk's task run, which on a
+        /// single-threaded runtime happens nowhere else.
+        async fn drain(&mut self) -> Vec<(Uuid, PeekResponse)> {
+            let mut responses = Vec::new();
+            for _ in 0..SWEEP_BOUND {
+                self.sweep();
+                responses.extend(self.peek_responses());
+                if self.state.pending_peeks.is_empty() {
+                    return responses;
+                }
+                tokio::task::yield_now().await;
+            }
+            panic!("peeks were still pending after {SWEEP_BOUND} activations");
+        }
+    }
+
+    /// A harness with the offload on and every budget at its production default, which is the
+    /// configuration the placement policy is sized for.
+    fn at_production_defaults() -> Harness {
+        Harness::new(|updates| {
+            updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+        })
+    }
+
+    /// A harness with the offload on and the per-activation aggregate set to `aggregate`.
+    fn with_activation_budget(aggregate: usize) -> Harness {
+        Harness::new(move |updates| {
+            updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+            updates.add(&INDEX_PEEK_ACTIVATION_BUDGET, aggregate);
+        })
+    }
+
+    /// The answer a peek of the whole index holding `keys` gives.
+    ///
+    /// Both the promoted walk and the inline walk are compared against this rather than against
+    /// each other, so each test states the answer it expects instead of two runs agreeing on
+    /// whatever they produced.
+    fn whole_index_answer(keys: &[Row]) -> PeekResponse {
+        rows_answer(keys.iter().cloned())
+    }
+
+    /// The positions one peek of the index holding `keys` spends, measured by letting a sweep
+    /// spend an aggregate wide enough that nothing bounds it and reading what it charged.
+    ///
+    /// Measured rather than assumed, so that a test which configures the aggregate in multiples of
+    /// a walk states its budget in the unit the code charges. A constant here would let a change
+    /// to what a walk costs turn the test into one that asserts nothing.
+    fn walk_cost(keys: &[Row]) -> usize {
+        const WIDE_AGGREGATE: usize = 1_000_000;
+
+        let mut harness = with_activation_budget(WIDE_AGGREGATE);
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(keys, cancelling_errors(0)),
+        );
+        harness.sweep();
+
+        assert_eq!(
+            harness.pending(PEEK_A),
+            None,
+            "the peek must answer in one slice for what it charged to be the cost of a whole walk"
+        );
+        let cost = match harness.state.peek_budget {
+            InlineBudget::Bounded { remaining, .. } => WIDE_AGGREGATE - remaining,
+            InlineBudget::Unbounded => panic!("the offload is on, so the budget is bounded"),
+        };
+        // A driver that charged the fuel it granted rather than the fuel it spent would report a
+        // cost equal to the grant, and a test sizing its aggregate from that measurement would
+        // then agree with itself at the wrong number. A walk visits one position per key plus what
+        // the error walk spends reaching the end of an empty trace, which is nothing like the
+        // per-peek budget the walk was granted.
+        assert!(
+            (keys.len()..*INDEX_PEEK_INLINE_BUDGET.default()).contains(&cost),
+            "a walk of {} keys charged {cost} positions, which is not what such a walk visits",
+            keys.len()
+        );
+        cost
     }
 
     /// An activation that finds nothing pending still arms the budget, which is what a peek
@@ -2422,12 +2626,15 @@ mod peek_sweep_tests {
     /// set. That is the case the offload exists for: one expensive lookup among cheap ones.
     #[mz_ore::test(tokio::test)]
     async fn an_idle_activation_arms_the_budget() {
-        let mut state = compute_state_with_offload_on();
-        assert!(state.pending_peeks.is_empty());
+        let mut harness = Harness::new(|updates| {
+            updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+            updates.add(&INDEX_PEEK_INLINE_BUDGET, INLINE_BUDGET);
+        });
+        assert!(harness.state.pending_peeks.is_empty());
 
-        sweep(&mut state);
+        harness.sweep();
 
-        assert_eq!(state.peek_budget.grant(), Some(INLINE_BUDGET));
+        assert_eq!(harness.state.peek_budget.grant(), Some(INLINE_BUDGET));
     }
 
     /// An activation that finds nothing pending drops the resume point, which nothing else
@@ -2439,13 +2646,393 @@ mod peek_sweep_tests {
     /// the replica ever serves.
     #[mz_ore::test(tokio::test)]
     async fn an_idle_activation_drops_the_resume_point() {
-        let mut state = compute_state_with_offload_on();
-        state.peek_resume_at = Some(Uuid::from_u128(1));
-        assert!(state.pending_peeks.is_empty());
+        let mut harness = Harness::new(|updates| {
+            updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+            updates.add(&INDEX_PEEK_INLINE_BUDGET, INLINE_BUDGET);
+        });
+        harness.state.peek_resume_at = Some(PEEK_A);
+        assert!(harness.state.pending_peeks.is_empty());
 
-        sweep(&mut state);
+        harness.sweep();
 
-        assert_eq!(state.peek_resume_at, None);
+        assert_eq!(harness.state.peek_resume_at, None);
+    }
+
+    /// A peek whose walk outruns the production inline budget leaves the worker, and the driver
+    /// that finished the walk counts it as offloaded.
+    ///
+    /// This is what says a peek is promoted at all. The rows a promoted walk answers with are the
+    /// rows an inline walk answers with, so a suite comparing only answers would pass with the
+    /// whole mechanism inert.
+    #[mz_ore::test(tokio::test)]
+    async fn a_scan_that_outruns_the_production_budget_is_promoted() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+        assert!(
+            u64::cast_from(*INDEX_PEEK_INLINE_BUDGET.default()) < WIDE_INDEX_KEYS,
+            "the index must hold more positions than the production budget lets a peek walk inline"
+        );
+
+        let mut harness = at_production_defaults();
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.pending(PEEK_A),
+            Some("offloaded"),
+            "a walk that outran its inline budget belongs to the promoted driver"
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 0),
+            "promotion is not a terminal outcome, so neither driver has counted the walk yet"
+        );
+
+        assert_eq!(
+            harness.drain().await,
+            vec![(PEEK_A, whole_index_answer(&keys))]
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 1),
+            "the promoted driver ended the walk and counted it"
+        );
+    }
+
+    /// A point lookup at the production inline budget is answered on the worker, over the very
+    /// index whose full walk is promoted.
+    ///
+    /// This is the half of the placement policy that a layer promoting everything would still
+    /// pass every equivalence test while destroying. The budget is sized for point lookups and
+    /// nothing else, and what makes that true is measured here rather than argued.
+    #[mz_ore::test(tokio::test)]
+    async fn a_point_lookup_at_the_production_budget_stays_inline() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+        let literal = keys[7].clone();
+
+        let mut harness = at_production_defaults();
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, Some(vec![literal.clone()])),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_A, rows_answer([literal]))]
+        );
+        assert_eq!(
+            harness.pending(PEEK_A),
+            None,
+            "a peek answered inline leaves nothing pending"
+        );
+        assert_eq!(
+            harness.walks(),
+            (1, 0),
+            "a point lookup finishes inside the inline budget and is never promoted"
+        );
+    }
+
+    /// With the kill switch off, the peek that the production budget promotes instead walks to its
+    /// answer on the worker, and that answer is the one the promoted walk gives.
+    ///
+    /// Both this and the promoted run are compared against [`whole_index_answer`], so the
+    /// equivalence promotion owes is stated rather than inferred from two runs agreeing.
+    #[mz_ore::test(tokio::test)]
+    async fn the_kill_switch_answers_the_same_scan_inline() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+
+        // No configuration at all, which is the kill switch in the position production ships it.
+        let mut harness = Harness::new(|_updates| ());
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_A, whole_index_answer(&keys))]
+        );
+        assert_eq!(
+            harness.pending(PEEK_A),
+            None,
+            "an unbounded slice walks to the answer without suspending"
+        );
+        assert_eq!(
+            harness.walks(),
+            (1, 0),
+            "the kill switch promotes nothing, however far a peek walks"
+        );
+    }
+
+    /// One activation serves what the per-activation aggregate allows and passes the rest over,
+    /// however many peeks are pending.
+    ///
+    /// The sweep visits every pending peek, so a per-peek budget with no aggregate would let a
+    /// burst of N peeks cost N inline budgets in one pass, unbounded in N.
+    #[mz_ore::test(tokio::test)]
+    async fn the_activation_budget_bounds_a_burst() {
+        let keys = wide_ok_rows(SMALL_INDEX_KEYS);
+
+        let mut harness = with_activation_budget(1);
+        for uuid in [PEEK_A, PEEK_B, PEEK_C, PEEK_D] {
+            harness.add_pending(
+                index_peek_with_uuid(uuid, None),
+                trace_bundle(&keys, cancelling_errors(0)),
+            );
+        }
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_A, whole_index_answer(&keys))],
+            "an aggregate of one position serves one peek per activation"
+        );
+        assert_eq!(
+            harness.pending_uuids(),
+            vec![PEEK_B, PEEK_C, PEEK_D],
+            "the peeks that got no turn are left untouched"
+        );
+        assert_eq!(harness.state.peek_resume_at, Some(PEEK_B));
+
+        // The burst drains rather than wedging, one peek per activation.
+        assert_eq!(
+            harness.drain().await,
+            vec![
+                (PEEK_B, whole_index_answer(&keys)),
+                (PEEK_C, whole_index_answer(&keys)),
+                (PEEK_D, whole_index_answer(&keys)),
+            ]
+        );
+    }
+
+    /// The aggregate is charged what a slice walked rather than what it was granted, so an
+    /// activation serves as many peeks as their walks fit into.
+    ///
+    /// Charging the grant instead would spend the whole aggregate on the first peek whatever it
+    /// walked, which is the difference between an activation serving a burst of point lookups and
+    /// serving one of them. Comparing this run against an unbudgeted one would not catch it, since
+    /// both would answer the same rows; the assertion is against the budget this test supplied.
+    #[mz_ore::test(tokio::test)]
+    async fn the_aggregate_is_charged_what_the_slices_walked() {
+        let keys = wide_ok_rows(SMALL_INDEX_KEYS);
+        let cost = walk_cost(&keys);
+
+        // Room for two walks of this index and no more. The per-peek budget is left at its
+        // production default, which is far above one walk, so nothing here is promoted and what
+        // decides how many peeks got a turn is the aggregate alone.
+        let mut harness = with_activation_budget(2 * cost);
+        for uuid in [PEEK_A, PEEK_B, PEEK_C, PEEK_D] {
+            harness.add_pending(
+                index_peek_with_uuid(uuid, None),
+                trace_bundle(&keys, cancelling_errors(0)),
+            );
+        }
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![
+                (PEEK_A, whole_index_answer(&keys)),
+                (PEEK_B, whole_index_answer(&keys)),
+            ],
+            "an aggregate of two walks serves two peeks and passes the rest over"
+        );
+        assert_eq!(harness.pending_uuids(), vec![PEEK_C, PEEK_D]);
+        assert_eq!(harness.walks(), (2, 0), "neither served peek was promoted");
+    }
+
+    /// A peek passed over for want of budget is served before a peek that arrived after it, even
+    /// one whose uuid sorts ahead of it.
+    ///
+    /// The pending peeks are a map keyed by uuid, so a sweep taking them in map order alone would
+    /// let a newly arrived peek take the turn of one that has already waited an activation, and it
+    /// would do so again on every activation.
+    #[mz_ore::test(tokio::test)]
+    async fn a_passed_over_peek_is_served_before_one_that_arrived_later() {
+        let keys = wide_ok_rows(SMALL_INDEX_KEYS);
+        let answer = whole_index_answer(&keys);
+
+        let mut harness = with_activation_budget(1);
+        for uuid in [PEEK_B, PEEK_C] {
+            harness.add_pending(
+                index_peek_with_uuid(uuid, None),
+                trace_bundle(&keys, cancelling_errors(0)),
+            );
+        }
+
+        harness.sweep();
+
+        assert_eq!(harness.peek_responses(), vec![(PEEK_B, answer.clone())]);
+        assert_eq!(harness.state.peek_resume_at, Some(PEEK_C));
+
+        // A peek arrives whose uuid sorts ahead of the one that was passed over.
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_C, answer)],
+            "the peek that waited an activation takes the next turn"
+        );
+    }
+
+    /// A peek deferred as it arrives leaves an activation behind, so a worker with nothing else to
+    /// do does not park on it.
+    ///
+    /// `handle_peek` runs a peek's first slice as the peek arrives, and a peek that finds the
+    /// activation's budget spent is left pending there with no sweep to follow. `run_client` parks
+    /// after its maintenance tick, indefinitely at a zero maintenance interval, and nothing else
+    /// would wake it: the peeks that spent the budget were answered or promoted, and neither
+    /// leaves an activation behind.
+    #[mz_ore::test(tokio::test)]
+    async fn a_peek_deferred_as_it_arrives_leaves_an_activation_behind() {
+        let keys = wide_ok_rows(SMALL_INDEX_KEYS);
+
+        let mut harness = with_activation_budget(1);
+        harness
+            .state
+            .traces
+            .set(TARGET_ID, trace_bundle(&keys, cancelling_errors(0)));
+
+        // One peek spends this activation's whole aggregate.
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+        harness.sweep();
+        assert_eq!(
+            harness.pending(PEEK_A),
+            None,
+            "the first peek answered and spent the aggregate"
+        );
+        assert_eq!(
+            harness.park_for(),
+            None,
+            "with nothing deferred the worker has nothing to wake for"
+        );
+
+        harness
+            .active()
+            .handle_peek(index_peek_with_uuid(PEEK_B, None));
+
+        assert_eq!(
+            harness.state.peek_resume_at,
+            Some(PEEK_B),
+            "the arriving peek found no budget and was deferred"
+        );
+        assert_eq!(
+            harness.park_for(),
+            Some(Duration::ZERO),
+            "a peek deferred outside a sweep leaves the worker something to wake for"
+        );
+    }
+
+    /// Cancelling a promoted peek answers it once, as cancelled, and the walk it left behind
+    /// answers nothing of its own.
+    ///
+    /// The walk holds the sending end of a channel whose receiver goes with the pending peek that
+    /// was removed, so a walk that reached an outcome after the cancellation has nowhere to put
+    /// it. Later activations must not produce a second response for the same peek.
+    #[mz_ore::test(tokio::test)]
+    async fn a_cancelled_promoted_peek_is_answered_once() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+
+        let mut harness = at_production_defaults();
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+
+        harness.sweep();
+        assert_eq!(harness.pending(PEEK_A), Some("offloaded"));
+
+        harness.active().handle_cancel_peek(PEEK_A);
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_A, PeekResponse::Canceled)]
+        );
+        assert_eq!(harness.pending(PEEK_A), None);
+
+        for _ in 0..SWEEP_BOUND {
+            tokio::task::yield_now().await;
+            harness.sweep();
+        }
+        assert_eq!(
+            harness.peek_responses(),
+            vec![],
+            "a cancelled peek is answered once and never again"
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 0),
+            "a cancelled walk reaches no outcome and counts on neither substrate"
+        );
+    }
+
+    /// A promoted walk that hands back reaches the worker, which answers the peek rather than
+    /// leaving it pending on a walk that has stopped.
+    ///
+    /// The stash location is cleared between the promotion and the hand-back, so that the hand-back
+    /// takes the arm with nowhere to write the rows. That is the arm a replica configured without
+    /// a stash location takes, and reaching it any other way means driving a real upload to
+    /// persist, which the peek stash owns rather than this driver.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_hand_back_answers_when_there_is_nowhere_to_write() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+        let row_size = keys[0].byte_len() + size_of::<NonZeroUsize>();
+        // Above what the inline slice can accumulate within the production budget and below what
+        // the whole index holds, so the walk crosses the threshold after it has been promoted.
+        let threshold = 1_500 * row_size;
+        assert!(
+            *INDEX_PEEK_INLINE_BUDGET.default() * row_size < threshold,
+            "the inline slice must promote a scan that still has room"
+        );
+
+        let mut harness = Harness::new(move |updates| {
+            updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+            updates.add(&ENABLE_PEEK_RESPONSE_STASH, true);
+            updates.add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES, threshold);
+        });
+        harness.state.peek_stash_persist_location = Some(PersistLocation::new_in_mem());
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+
+        harness.sweep();
+        assert_eq!(harness.pending(PEEK_A), Some("offloaded"));
+
+        harness.state.peek_stash_persist_location = None;
+
+        assert_eq!(
+            harness.drain().await,
+            vec![(
+                PEEK_A,
+                PeekResponse::Error(PeekError::unstructured(
+                    "peek result is too large to answer inline and this replica has no peek stash \
+                     location"
+                ))
+            )]
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 1),
+            "a hand-back is a terminal outcome of the promoted walk"
+        );
     }
 }
 
@@ -2581,6 +3168,14 @@ pub(crate) mod index_peek_tests {
             map_filter_project,
             otel_ctx: OpenTelemetryContext::empty(),
         }
+    }
+
+    /// A peek of [`TARGET_ID`] carrying `uuid`, so that a test with several pending peeks can say
+    /// which one a response answered.
+    pub(crate) fn index_peek_with_uuid(uuid: Uuid, literal_constraints: Option<Vec<Row>>) -> Peek {
+        let mut peek = index_peek(trivial_finishing(), literal_constraints);
+        peek.uuid = uuid;
+        peek
     }
 
     /// The keys of an index holding `count` distinct rows, in the order the ok walk visits them.

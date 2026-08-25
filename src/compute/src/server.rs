@@ -287,7 +287,7 @@ impl ResponseSender {
     }
 
     /// Set the cluster protocol nonce.
-    fn set_nonce(&mut self, nonce: Uuid) {
+    pub(crate) fn set_nonce(&mut self, nonce: Uuid) {
         self.nonce = Some(nonce);
     }
 
