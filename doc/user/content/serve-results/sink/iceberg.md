@@ -25,7 +25,13 @@ Follow the guide for the platform hosting your Iceberg tables:
 - [AWS S3 Tables](/serve-results/sink/iceberg-aws/)
 - [GCP BigLake](/serve-results/sink/iceberg-gcp/) {{< private-preview-inline />}}
 
-For guidance on reading the resulting tables from a specific query engine, see:
+A sink created with `MODE APPEND` writes a changelog rather than current state,
+so consuming it means reconstructing current state from the `_mz_diff` column:
+
+{{% include-headless "/headless/iceberg-sinks/append-mode-current-state" %}}
+
+For the query to do this in a specific engine's dialect, along with the setup
+that engine requires, see:
 
 - [Snowflake on AWS S3 Tables](/serve-results/sink/iceberg-aws-snowflake/)
 

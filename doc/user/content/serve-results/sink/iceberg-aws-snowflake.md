@@ -233,30 +233,63 @@ Each table your sink writes to should appear with `iceberg_table_type` set to
 
 ## Step 5. Reconstruct current state in Snowflake
 
-In append mode, the Iceberg table is a changelog rather than a snapshot of
-current state. Every change is a data row, where `_mz_diff` is `+1` for an
-insertion and `-1` for a deletion, and an update appears as both. To recover the
-current rows, group by all columns and keep the groups whose `_mz_diff` values
-sum to a positive number:
+{{% include-headless "/headless/iceberg-sinks/append-mode-current-state" %}}
+
+In Snowflake, quote the column and table names as lowercase. Snowflake resolves
+unquoted identifiers as uppercase, which will not match the identifiers
+Materialize created.
+
+{{< tabs >}}
+{{< tab "Consolidate by diff">}}
+
+Group by every column, and keep the groups whose `_mz_diff` values sum to a
+positive number:
 
 ```sql
 SELECT "id", "name", "qty"
   FROM mz_iceberg."<namespace>"."<table>"
- GROUP BY "id", "name", "qty"
+ GROUP BY "id", "name", "qty", "price", "updated_at"
 HAVING SUM("_mz_diff") > 0;
 ```
 
-An update contributes `-1` for the old version of the row and `+1` for the new
-one, so only the surviving version sums positive.
+Every column of the table must appear in the `GROUP BY` clause, including the
+columns you do not select. Grouping on a subset would merge rows that differ in
+the omitted columns and produce incorrect results.
 
-{{< note >}}
-Quote column and table names as lowercase. Materialize creates Iceberg
-identifiers in lowercase, and Snowflake resolves unquoted identifiers as
-uppercase, which will not match.
-{{< /note >}}
+{{< /tab >}}
 
-To verify the pipeline end to end, compare this result against the same query in
-Materialize. Compare values rather than row counts alone: a table that has
+{{< tab "Latest version per key">}}
+
+Rank the rows within each key, then keep the top-ranked row for each key where
+`_mz_diff` is `+1`, replacing `"id"` with the unique key of your relation:
+
+```sql
+SELECT "id", "name", "qty"
+  FROM (
+    SELECT "id", "name", "qty", "_mz_diff",
+           ROW_NUMBER() OVER (
+             PARTITION BY "id"
+             ORDER BY "_mz_timestamp" DESC, "_mz_diff" DESC) AS rn
+      FROM mz_iceberg."<namespace>"."<table>"
+  )
+ WHERE rn = 1 AND "_mz_diff" = 1;
+```
+
+Ordering by `"_mz_timestamp" DESC, "_mz_diff" DESC` selects the new version of
+an updated row, and the `"_mz_diff" = 1` filter removes keys whose most recent
+change was a deletion.
+
+{{< /tab >}}
+
+{{< /tabs >}}
+
+To define current state once and query it by name, wrap either query in a view.
+See [Query cost of the changelog in
+Snowflake](#query-cost-of-the-changelog-in-snowflake) for how to bound the cost
+of doing so as the changelog grows.
+
+To verify the pipeline end to end, compare the result against the same relation
+in Materialize. Compare values rather than row counts alone: a table that has
 stopped refreshing can hold a plausible number of rows whose values are stale.
 
 ## Considerations
