@@ -1054,17 +1054,17 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
-  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_count
-  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_sum
-  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds_bucket

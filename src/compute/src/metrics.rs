@@ -237,7 +237,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_row_iteration_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_iteration_seconds",
-                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.",
+                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_rows: registry.register(with_role(metric!(
