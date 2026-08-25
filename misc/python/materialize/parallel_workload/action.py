@@ -3003,14 +3003,20 @@ class FlipFlagsAction(Action):
             "1",
             "1000000000",
         ]
+        # The production default, a value that lets one activation serve a
+        # single position across all peeks, and one that lifts the aggregate
+        # so every pending peek spends its full inline budget in one pass.
         self.flags_with_values["compute_index_peek_activation_budget"] = [
-            "1024",
             "8192",
+            "1",
             "1000000000",
         ]
+        # The production default, a value that yields after every position,
+        # and one that never yields within a walk.
         self.flags_with_values["compute_index_peek_yield_granularity"] = [
-            "1",
             "10000",
+            "1",
+            "1000000000",
         ]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"

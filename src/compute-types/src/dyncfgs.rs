@@ -640,14 +640,19 @@ pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
 /// [`INDEX_PEEK_INLINE_BUDGET`] is promoted and finishes away from the worker.
 ///
 /// The kill switch for the whole mechanism, and off by default so production placement is
-/// unchanged until the path earns trust. Replica-scoped, like the budgets it gates: promotion decides where a walk runs on the replica
-/// that serves the peek and changes nothing a client can observe, so replicas may disagree and one
-/// replica can be reverted without touching the environment.
+/// unchanged until the path earns trust.
+///
+/// Environment-scoped because it selects between two execution paths whose output-equivalence is
+/// an assumption rather than a guarantee. A peek is broadcast to every replica of its cluster and
+/// the first answer wins, so a value that differs by replica means the same peek walks inline on
+/// one replica and promoted on another. Where the two paths do agree, one value everywhere costs
+/// nothing. Where they do not, per-replica divergence turns a single defect into query results
+/// that differ by which replica answered first.
 pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
     "enable_compute_index_peek_offload",
     false,
     "Whether a fast-path index peek may move its walk off the timely worker.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// How far one peek may walk on the worker before it is promoted, in consumed cursor positions.
@@ -669,11 +674,17 @@ pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
 ///
 /// Read through a handle rather than captured once, so a change reaches peeks already in flight
 /// without discarding the positions they have walked.
+///
+/// Environment-scoped because the threshold decides which peeks leave the worker. A value that
+/// differs by replica selects a different execution path for the same peek exactly as
+/// [`ENABLE_INDEX_PEEK_OFFLOAD`] does, gated by a count instead of by a boolean, and a peek is
+/// broadcast to every replica of its cluster. Divergence is unsafe for that reason, not because
+/// the number itself is delicate.
 pub const INDEX_PEEK_INLINE_BUDGET: Config<usize> = Config::new(
     "compute_index_peek_inline_budget",
     1024,
     "How far one index peek may walk on the timely worker, in consumed cursor positions, before it is offloaded.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// What all peeks together may spend in one worker activation, in consumed cursor positions.
@@ -688,11 +699,16 @@ pub const INDEX_PEEK_INLINE_BUDGET: Config<usize> = Config::new(
 ///
 /// Counted in the same unit as [`INDEX_PEEK_INLINE_BUDGET`], for the same reasons, and likewise
 /// read through a handle.
+///
+/// Environment-scoped on the same grounds as [`INDEX_PEEK_INLINE_BUDGET`]. The aggregate decides
+/// which peeks get a turn in an activation and therefore which ones are promoted, so a value that
+/// differs by replica routes the same broadcast peek down different execution paths depending on
+/// which replica served it.
 pub const INDEX_PEEK_ACTIVATION_BUDGET: Config<usize> = Config::new(
     "compute_index_peek_activation_budget",
     8 * 1024,
     "What all index peeks together may spend in one timely worker activation, in consumed cursor positions.",
-    ParameterScope::Replica,
+    ParameterScope::Environment,
 );
 
 /// How often a promoted scan checks for cancellation and yields, in consumed cursor positions.
@@ -704,6 +720,12 @@ pub const INDEX_PEEK_ACTIVATION_BUDGET: Config<usize> = Config::new(
 ///
 /// Counted in the same unit as [`INDEX_PEEK_INLINE_BUDGET`], for the same reasons, and likewise
 /// read through a handle.
+///
+/// Replica-scoped, unlike the switch and the two budgets. It selects no execution path and changes
+/// no result. It only sets how often a walk that is already promoted yields and rechecks
+/// cancellation, which is the timing of the replica process's own execution. Divergence is safe
+/// for that reason, and useful: a replica whose promoted walks starve its other work can be
+/// retuned on its own.
 pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
     "compute_index_peek_yield_granularity",
     10000,
@@ -836,5 +858,9 @@ mod tests {
         assert_eq!(*INDEX_PEEK_YIELD_GRANULARITY.default(), 10000);
         // The aggregate must admit at least one full inline slice, else no peek can finish inline.
         assert!(*INDEX_PEEK_ACTIVATION_BUDGET.default() >= *INDEX_PEEK_INLINE_BUDGET.default());
+        // A promoted walk is off the worker's critical path, so its slices answer to cancellation
+        // latency rather than to the worker's availability and are coarser than an inline slice.
+        // Were they finer, promotion would buy a walk more interruptions than it had inline.
+        assert!(*INDEX_PEEK_YIELD_GRANULARITY.default() > *INDEX_PEEK_INLINE_BUDGET.default());
     }
 }
