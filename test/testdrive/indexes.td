@@ -341,6 +341,7 @@ mz_message_batch_counts_received_raw_s2_primary_idx         mz_message_batch_cou
 mz_message_batch_counts_sent_raw_s2_primary_idx             mz_message_batch_counts_sent_raw             mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
 mz_message_counts_received_raw_s2_primary_idx               mz_message_counts_received_raw               mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
 mz_message_counts_sent_raw_s2_primary_idx                   mz_message_counts_sent_raw                   mz_catalog_server    {channel_id,from_worker_id,to_worker_id}    ""
+mz_metric_sinks_ind                                         mz_metric_sinks                              mz_catalog_server    {id}                                        ""
 mz_object_arrangement_size_history_object_ind               mz_object_arrangement_size_history           mz_catalog_server    {object_id}                                 ""
 mz_object_arrangement_size_history_ts_ind                   mz_object_arrangement_size_history           mz_catalog_server    {collection_timestamp}                      ""
 mz_object_arrangement_sizes_ind                             mz_object_arrangement_sizes                  mz_catalog_server    {replica_id}                                ""

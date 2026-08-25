@@ -716,6 +716,12 @@ The view is defined as the transitive closure of [`mz_object_dependencies`](#mz_
 | `object_id`             | [`text`]     | The ID of the dependent object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects).                          |
 | `referenced_object_id`  | [`text`]     | The ID of the (possibly transitively) referenced object. Corresponds to [`mz_objects.id`](../mz_catalog/#mz_objects). |
 
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_metric_sinks -->
+<!-- TODO(metric-sink): promote to a documented RELATION_SPEC once
+     `enable_metric_sink` defaults on. The relation already ships full
+     per-column comments, so this "undocumented" marker is only correct while
+     the feature is gated off. -->
+
 ## `mz_notices`
 
 {{< public-preview />}}

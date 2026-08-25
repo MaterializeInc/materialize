@@ -53,6 +53,7 @@ use mz_ore::cast::CastFrom;
 use mz_ore::metrics::MetricsRegistry;
 use mz_ore::now::NowFn;
 use mz_ore::soft_assert_or_log;
+use mz_ore::soft_panic_or_log;
 use mz_ore::tracing::OpenTelemetryContext;
 use mz_persist_types::PersistLocation;
 use mz_repr::{GlobalId, RelationDesc, Row, Timestamp};
@@ -212,6 +213,12 @@ pub struct ComputeController {
     /// Updated through `ComputeController::update_configuration` calls and shared with all
     /// subcomponents of the compute controller.
     dyncfg: Arc<ConfigSet>,
+    /// The replica-local scoped overrides of [`Self::dyncfg`], by replica.
+    ///
+    /// Sparse, and kept here in addition to on the `Instance`s because replica
+    /// configuration that the controller resolves once, at replica creation,
+    /// must be read through the new replica's overrides.
+    replica_dyncfg_overrides: BTreeMap<ReplicaId, ConfigUpdates>,
 
     /// Receiver for responses produced by `Instance`s.
     response_rx: mpsc::UnboundedReceiver<ComputeControllerResponse>,
@@ -307,6 +314,7 @@ impl ComputeController {
             now,
             wallclock_lag,
             dyncfg: Arc::new(mz_dyncfgs::all_dyncfgs()),
+            replica_dyncfg_overrides: BTreeMap::new(),
             response_rx,
             response_tx,
             introspection_rx: Some(introspection_rx),
@@ -471,6 +479,7 @@ impl ComputeController {
             now: _,
             wallclock_lag: _,
             dyncfg: _,
+            replica_dyncfg_overrides: _,
             response_rx: _,
             response_tx: _,
             introspection_rx: _,
@@ -641,16 +650,22 @@ impl ComputeController {
 
     /// Replaces the per-replica dyncfg overrides for the given instances.
     ///
-    /// This only stores the overrides; callers should follow with a
-    /// configuration push (e.g. [`Self::update_configuration`]) so existing
-    /// replicas observe the new values. Instances absent from `overrides` have
-    /// their overrides cleared, so a replica that no longer has an override
-    /// reverts to the environment-wide configuration. Used by the scoped
-    /// feature flags (replica-local) layer.
+    /// This only stores the overrides, here and on the instances; callers
+    /// should follow with a configuration push (e.g.
+    /// [`Self::update_configuration`]) so existing replicas observe the new
+    /// values. Instances absent from `overrides` have their overrides cleared,
+    /// so a replica that no longer has an override reverts to the
+    /// environment-wide configuration. Used by the scoped feature flags
+    /// (replica-local) layer.
     pub fn update_replica_dyncfg_overrides(
         &mut self,
         mut overrides: BTreeMap<ComputeInstanceId, BTreeMap<ReplicaId, ConfigUpdates>>,
     ) {
+        self.replica_dyncfg_overrides = overrides
+            .values()
+            .flat_map(|replicas| replicas.iter())
+            .map(|(replica_id, updates)| (*replica_id, updates.clone()))
+            .collect();
         for (id, instance) in self.instances.iter_mut() {
             let instance_overrides = overrides.remove(id).unwrap_or_default();
             instance.call(move |i| i.update_replica_dyncfg_overrides(instance_overrides));
@@ -719,7 +734,17 @@ impl ComputeController {
             None => (false, Duration::from_secs(1)),
         };
 
-        let expiration_offset = COMPUTE_REPLICA_EXPIRATION_OFFSET.get(&self.dyncfg);
+        // Both configs below are `ParameterScope::Replica` and are resolved
+        // here, once, for the replica being created. Reading them through the
+        // new replica's scoped overrides is what makes those declarations
+        // effective: the values are frozen into `ReplicaConfig` and never
+        // re-read from the environment-wide set. The overrides for a replica
+        // created by DDL are committed in the same transaction that creates it,
+        // so they are already installed by the time we get here.
+        let overrides = self.replica_dyncfg_overrides.get(&replica_id);
+
+        let expiration_offset =
+            COMPUTE_REPLICA_EXPIRATION_OFFSET.get_with_overrides(&self.dyncfg, overrides);
 
         // Capture dictionary compression once, at replica creation, and hold it fixed for the
         // replica's lifetime (see `InstanceConfig::arrangement_dictionary_compression`). This is
@@ -728,7 +753,7 @@ impl ComputeController {
         // while the flag is enabled, so turning the flag off disables compression on new or
         // restarted replicas regardless of their configuration.
         let arrangement_dictionary_compression = ENABLE_ARRANGEMENT_DICTIONARY_COMPRESSION_ALPHA
-            .get(&self.dyncfg)
+            .get_with_overrides(&self.dyncfg, overrides)
             && config.arrangement_compression;
 
         let replica_config = ReplicaConfig {
@@ -772,6 +797,12 @@ impl ComputeController {
 
         instance.replicas.remove(&replica_id);
 
+        // The coordinator only re-pushes the override map when the scoped
+        // configuration itself changes, so a dropped replica's entry would
+        // otherwise be retained until the next such change.
+        self.replica_dyncfg_overrides.remove(&replica_id);
+
+        let instance = self.instance_mut(instance_id).expect("validated");
         instance.call(move |i| i.remove_replica(replica_id).expect("validated"));
 
         Ok(())
@@ -1147,6 +1178,61 @@ impl ComputeController {
             return Ok(());
         }
 
+        self.allow_writes_inner(instance_id, collection_id)
+    }
+
+    /// Like [`Self::allow_writes`], but takes effect even in read-only mode.
+    ///
+    /// The caller must guarantee that no leader environment writes the collection's output shard.
+    /// In a 0dt deployment that means a shard this environment created for itself, the replacement
+    /// shard of a `Replacement`-migrated builtin collection, never one the leader is still serving
+    /// from. `Evolution` migrates in place and reuses the leader's shard, so it must not reach this
+    /// path. Violating the guarantee races two writers on one shard.
+    ///
+    /// NOTE: ownership is exclusive per (build version, deploy generation), not per process: the
+    /// migration shard entry naming the shard is keyed by that pair and a read-only catalog open is
+    /// a savepoint, so two read-only processes of one generation both write it. Same shape as a
+    /// multi-replica materialized view, which the self-correcting persist sink tolerates (see the
+    /// `mz_compute::sink::materialized_view` module docs).
+    ///
+    /// This is the compute-side counterpart to the storage controller's `force_writable` handling
+    /// of migrated storage collections. Migrated builtin tables are storage collections that
+    /// storage force-writes read-only; migrated builtin MVs are compute collections that only this
+    /// path can force-write. Both rest on the same guarantee (this environment exclusively owns the
+    /// replacement shard) but run on separate write paths, so each needs its own bypass.
+    ///
+    /// NOTE: the replica-side handler enables persist compaction process-wide on the clusterd
+    /// (`ComputeState::handle_allow_writes`), which this path is the first to trigger inside a
+    /// read-only deployment.
+    pub fn allow_writes_in_read_only(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
+        // Every builtin eligible for this bypass has a system id, so a non-system id means the
+        // caller's `Replacement`-only invariant broke. No-op rather than risk writing a shard the
+        // leader still serves. The collection then sits in the caught-up gate on an unwritten
+        // shard and blocks promotion, which is the loud, safe direction to fail.
+        //
+        // Storage asserts the same invariant hard, in
+        // `StorageController::register_introspection_collection`. The asymmetry is deliberate: a
+        // soft panic keeps a caller bug visible in CI and Sentry without downing production.
+        if self.read_only && !collection_id.is_system() {
+            soft_panic_or_log!(
+                "allow_writes_in_read_only called for non-system collection {collection_id}; \
+                 falling back to read-only no-op"
+            );
+            return Ok(());
+        }
+
+        self.allow_writes_inner(instance_id, collection_id)
+    }
+
+    fn allow_writes_inner(
+        &mut self,
+        instance_id: ComputeInstanceId,
+        collection_id: GlobalId,
+    ) -> Result<(), CollectionUpdateError> {
         let instance = self.instance_mut(instance_id)?;
 
         // Validation

@@ -579,6 +579,11 @@ generate_extracted_config!(
         EnableFixedCorrelatedCteLowering,
         Option<bool>,
         Default(None)
+    ),
+    (
+        EnableUnionCancellationAfterRelationCse,
+        Option<bool>,
+        Default(None)
     )
 );
 
@@ -631,6 +636,8 @@ impl TryFrom<ExplainPlanOptionExtracted> for ExplainConfig {
                 enable_join_prioritize_arranged: v.enable_join_prioritize_arranged,
                 enable_projection_pushdown_after_relation_cse: v
                     .enable_projection_pushdown_after_relation_cse,
+                enable_union_cancellation_after_relation_cse: v
+                    .enable_union_cancellation_after_relation_cse,
                 enable_less_reduce_in_eqprop: Default::default(),
                 enable_dequadratic_eqprop_map: Default::default(),
                 enable_eq_classes_withholding_errors: Default::default(),

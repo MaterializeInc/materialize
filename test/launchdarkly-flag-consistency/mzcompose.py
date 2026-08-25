@@ -239,7 +239,6 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_background_alter_cluster
     enable_statement_arrival_logging
     enable_binary_date_bin
-    enable_bounded_staleness_isolation
     enable_coalesce_case_transform
     enable_compute_half_join2
     enable_compute_render_fueled_as_specific_collection
@@ -284,6 +283,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_simplify_from_less_existence
     enable_simplify_quantified_comparisons
     enable_time_at_time_zone
+    enable_union_cancellation_after_relation_cse
     enable_unlimited_retain_history
     enable_will_distinct_propagation
     enable_with_ordinality_legacy_fallback

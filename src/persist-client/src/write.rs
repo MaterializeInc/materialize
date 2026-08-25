@@ -18,7 +18,7 @@ use differential_dataflow::lattice::Lattice;
 use differential_dataflow::trace::Description;
 use futures::StreamExt;
 use futures::stream::FuturesUnordered;
-use mz_dyncfg::Config;
+use mz_dyncfg::{Config, ParameterScope};
 use mz_ore::task::RuntimeExt;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_persist::location::Blob;
@@ -58,6 +58,7 @@ pub(crate) const COMBINE_INLINE_WRITES: Config<bool> = Config::new(
     "persist_write_combine_inline_writes",
     true,
     "If set, re-encode inline writes if they don't fit into the batch metadata limits.",
+    ParameterScope::Environment,
 );
 
 pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
@@ -65,6 +66,7 @@ pub(crate) const VALIDATE_PART_BOUNDS_ON_WRITE: Config<bool> = Config::new(
     false,
     "Validate the part lower <= the batch lower and the part upper <= batch upper,\
     for the batch being appended.",
+    ParameterScope::Environment,
 );
 
 /// An opaque identifier for a writer of a persist durable TVC (aka shard).

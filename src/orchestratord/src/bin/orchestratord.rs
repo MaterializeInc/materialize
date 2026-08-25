@@ -213,8 +213,17 @@ pub struct Args {
     enable_security_context: bool,
     #[clap(long)]
     enable_internal_statement_logging: bool,
-    #[clap(long, default_value = "false")]
-    disable_statement_logging: bool,
+    /// Overrides environmentd's default `statement_logging_max_sample_rate`. A
+    /// rate of 0 disables statement logging entirely. Leave unset to keep
+    /// environmentd's own default.
+    #[clap(long, value_parser = parse_sample_rate)]
+    statement_logging_max_sample_rate: Option<f64>,
+    /// Overrides environmentd's default `statement_logging_target_data_rate`,
+    /// in bytes per second. Unlike the sample rate, this caps the sustained
+    /// volume statement logging writes. Leave unset to keep environmentd's own
+    /// default.
+    #[clap(long, value_parser = parse_data_rate)]
+    statement_logging_target_data_rate: Option<usize>,
 
     #[clap(long)]
     orchestratord_pod_selector_labels: Vec<KeyValueArg<String, String>>,
@@ -340,6 +349,28 @@ fn parse_resources(s: &str) -> anyhow::Result<ResourceRequirements> {
 
 fn parse_crd_columns(val: &str) -> Result<Vec<CustomResourceColumnDefinition>, serde_json::Error> {
     serde_json::from_str(val)
+}
+
+/// Rejects rates environmentd's `NUMERIC_BOUNDED_0_1_INCLUSIVE` constraint
+/// would reject, which it does by refusing to open its catalog. Validating here
+/// surfaces the mistake where the rate was configured.
+fn parse_sample_rate(s: &str) -> anyhow::Result<f64> {
+    let rate: f64 = s.parse()?;
+    if !(0.0..=1.0).contains(&rate) {
+        anyhow::bail!("sample rate must be between 0 and 1, got {rate}");
+    }
+    Ok(rate)
+}
+
+/// Rejects a rate of 0. The token bucket starts empty and refills at this rate,
+/// so 0 throttles every statement forever rather than disabling logging
+/// legibly. Use the sample rate to opt out instead.
+fn parse_data_rate(s: &str) -> anyhow::Result<usize> {
+    let rate: usize = s.parse()?;
+    if rate == 0 {
+        anyhow::bail!("target data rate must be greater than 0");
+    }
+    Ok(rate)
 }
 
 #[tokio::main]
@@ -628,7 +659,8 @@ async fn run(args: Args) -> Result<(), anyhow::Error> {
             scheduler_name: args.scheduler_name.clone(),
             enable_security_context: args.enable_security_context,
             enable_internal_statement_logging: args.enable_internal_statement_logging,
-            disable_statement_logging: args.disable_statement_logging,
+            statement_logging_max_sample_rate: args.statement_logging_max_sample_rate,
+            statement_logging_target_data_rate: args.statement_logging_target_data_rate,
             orchestratord_pod_selector_labels: args.orchestratord_pod_selector_labels,
             environmentd_node_selector: args.environmentd_node_selector,
             environmentd_affinity: args.environmentd_affinity,

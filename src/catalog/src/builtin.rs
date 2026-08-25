@@ -836,6 +836,16 @@ pub static MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION: LazyLock<SystemObject
         object_type: CatalogItemType::Table,
         object_name: MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY.name.to_string(),
     });
+
+/// Identifies [`MZ_CLUSTER_REPLICA_FRONTIERS`] for the schema-migration guard in
+/// `builtin_schema_migration.rs`, which forbids migrating this source because the 0dt
+/// caught-up gate reads the leader's shard for it to learn the live frontiers.
+pub static MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION: LazyLock<SystemObjectDescription> =
+    LazyLock::new(|| SystemObjectDescription {
+        schema_name: MZ_CLUSTER_REPLICA_FRONTIERS.schema.to_string(),
+        object_type: CatalogItemType::Source,
+        object_name: MZ_CLUSTER_REPLICA_FRONTIERS.name.to_string(),
+    });
 pub const MZ_SYSTEM_ROLE: BuiltinRole = BuiltinRole {
     id: MZ_SYSTEM_ROLE_ID,
     name: SYSTEM_USER_NAME,
@@ -1172,6 +1182,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_SYSTEM_PRIVILEGES),
         Builtin::MaterializedView(&MZ_COMMENTS),
         Builtin::Table(&MZ_WEBHOOKS_SOURCES),
+        Builtin::MaterializedView(&MZ_METRIC_SINKS),
         Builtin::Table(&MZ_HISTORY_RETENTION_STRATEGIES),
         Builtin::MaterializedView(&MZ_MATERIALIZED_VIEWS),
         Builtin::Table(&MZ_MATERIALIZED_VIEW_REFRESH_STRATEGIES),
@@ -1419,6 +1430,7 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::Index(&MZ_ROLES_IND),
         Builtin::Index(&MZ_SOURCES_IND),
         Builtin::Index(&MZ_SINKS_IND),
+        Builtin::Index(&MZ_METRIC_SINKS_IND),
         Builtin::Index(&MZ_MATERIALIZED_VIEWS_IND),
         Builtin::Index(&MZ_SOURCE_STATUSES_IND),
         Builtin::Index(&MZ_SOURCE_STATUS_HISTORY_IND),

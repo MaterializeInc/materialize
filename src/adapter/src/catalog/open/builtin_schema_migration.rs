@@ -37,8 +37,9 @@ use futures::future::BoxFuture;
 use mz_build_info::{BuildInfo, DUMMY_BUILD_INFO};
 use mz_catalog::builtin::{
     BUILTIN_LOOKUP, Builtin, Fingerprint, MZ_CATALOG_RAW, MZ_CATALOG_RAW_DESCRIPTION,
-    MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION, MZ_STORAGE_USAGE_BY_SHARD,
-    MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION, RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
+    MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, MZ_OBJECT_ARRANGEMENT_SIZE_HISTORY_DESCRIPTION,
+    MZ_STORAGE_USAGE_BY_SHARD, MZ_STORAGE_USAGE_BY_SHARD_DESCRIPTION,
+    RUNTIME_ALTERABLE_FINGERPRINT_SENTINEL,
 };
 use mz_catalog::config::BuiltinItemMigrationConfig;
 use mz_catalog::durable::objects::SystemObjectUniqueIdentifier;
@@ -390,11 +391,17 @@ static MIGRATIONS: LazyLock<Vec<MigrationStep>> = LazyLock::new(|| {
             MZ_CATALOG_SCHEMA,
             "mz_audit_events",
         ),
-        // Required because we added the `mz_object_graph_edges_ind` builtin index.
+        // Required because we added the `mz_metric_sinks_ind` builtin index.
         // make_mz_indexes inlines the builtin-index set as VALUES, so any add or
-        // remove changes its SQL fingerprint and requires an explicit replacement.
+        // remove changes its SQL fingerprint and requires an explicit
+        // replacement. See the NOTE above: this version must stay at the
+        // workspace's current dev version until the change ships. The addition
+        // is unshipped, so this step supersedes the earlier `26.39.0-dev.0`
+        // `mz_indexes` step (which covered `mz_object_graph_edges_ind`): a
+        // replacement recreates `mz_indexes` from its current definition, so a
+        // single step at the current dev version covers every earlier change too.
         MigrationStep::replacement(
-            "26.39.0-dev.0",
+            "26.40.0-dev.0",
             CatalogItemType::MaterializedView,
             MZ_CATALOG_SCHEMA,
             "mz_indexes",
@@ -756,6 +763,15 @@ impl Migration {
             assert_ne!(
                 &*MZ_CATALOG_RAW_DESCRIPTION, object,
                 "mz_catalog_raw cannot be migrated"
+            );
+
+            // The 0dt caught-up gate reads the leader's `mz_cluster_replica_frontiers` shard for
+            // the live frontiers it checks every collection against. Migrating it via `Replacement`
+            // hands us a fresh shard we write ourselves, so the gate would compare us against
+            // ourselves instead of against the leader.
+            assert_ne!(
+                &*MZ_CLUSTER_REPLICA_FRONTIERS_DESCRIPTION, object,
+                "mz_cluster_replica_frontiers cannot be migrated or else the 0dt caught-up gate loses its live-frontier reference"
             );
 
             let Some(object_info) = self.system_objects.get(object) else {

@@ -16,6 +16,8 @@
 //! [`Error`](`enum@Error`) is a custom error type containing multiple variants
 //! for erros produced by the self crate, internal crates and external crates.
 
+use std::path::PathBuf;
+
 use hyper::header::{InvalidHeaderValue, ToStrError};
 use thiserror::Error;
 use url::ParseError;
@@ -88,6 +90,9 @@ pub enum Error {
     /// I/O Error
     #[error(transparent)]
     IOError(#[from] std::io::Error),
+    /// Error raised when the configuration file exists but cannot be written.
+    #[error("Error: The configuration file {0} is not writable: {1}")]
+    ConfigFileNotWritable(PathBuf, #[source] std::io::Error),
     /// I/O Error
     #[error(transparent)]
     CSVParseError(#[from] csv::Error),

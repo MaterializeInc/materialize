@@ -1294,6 +1294,11 @@ impl Instance {
     pub fn remove_replica(&mut self, id: ReplicaId) -> Result<(), ReplicaMissing> {
         let replica = self.replicas.remove(&id).ok_or(ReplicaMissing(id))?;
 
+        // The coordinator only re-pushes the override map when the scoped configuration itself
+        // changes, so a dropped replica's entry would otherwise be retained until the next such
+        // change.
+        self.replica_dyncfg_overrides.remove(&id);
+
         // Before dropping the replica state (and the contained input read holds), log read holds
         // that are the last line of defense against compaction of a dataflow's storage inputs. If
         // the corresponding global read hold has already been released, dropping the per-replica

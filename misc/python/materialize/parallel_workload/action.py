@@ -2679,15 +2679,10 @@ class BoundedStalenessReadAction(Action):
     restored afterwards, since bounded staleness is read-only and would break
     writes."""
 
-    def applicable(self, exe: Executor) -> bool:
-        return exe.db.flags.get("enable_bounded_staleness_isolation", "FALSE") == "TRUE"
-
     def errors_to_ignore(self, exe: Executor) -> list[str]:
         result = super().errors_to_ignore(exe)
         result.extend(
             [
-                # The flag was flipped off between applicable() and run().
-                "is not available",
                 # The freshness bound could not be met. Bounded staleness
                 # never blocks, it errors instead.
                 "not been materialized",
@@ -2988,9 +2983,6 @@ class FlipFlagsAction(Action):
         )
         self.flags_with_values["enable_compute_error_distinct"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_alter_table_add_column"] = BOOLEAN_FLAG_VALUES
-        self.flags_with_values["enable_bounded_staleness_isolation"] = (
-            BOOLEAN_FLAG_VALUES
-        )
         self.flags_with_values["enable_arrangement_dictionary_compression_alpha"] = (
             BOOLEAN_FLAG_VALUES
         )
@@ -3015,6 +3007,9 @@ class FlipFlagsAction(Action):
             "false",
         ]
         self.flags_with_values["enable_case_literal_transform"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_union_cancellation_after_relation_cse"] = (
+            BOOLEAN_FLAG_VALUES
+        )
         self.flags_with_values["enable_cast_elimination"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_fixed_correlated_cte_lowering"] = (
             BOOLEAN_FLAG_VALUES
@@ -3060,6 +3055,11 @@ class FlipFlagsAction(Action):
             "0.02",
         ]
         self.flags_with_values["enable_upsert_paged_spill"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["column_chunk_compress_min_depth"] = [
+            "0",  # compress every spilled body
+            "1",  # the default: fresh chunks store uncompressed
+            "4",  # exempt several young generations
+        ]
         # 0 forces the estimated-size path for every table, the default forces
         # the exact COUNT(*) path for workload-sized tables.
         self.flags_with_values["mysql_source_snapshot_exact_count_max_rows"] = [
@@ -3289,6 +3289,7 @@ class FlipFlagsAction(Action):
             "with_0dt_caught_up_check_cutoff",
             "with_0dt_caught_up_check_stability_period",
             "enable_0dt_caught_up_stability_check",
+            "enable_0dt_hydrate_migrated_builtin_mvs",
             "enable_statement_lifecycle_logging",
             "enable_introspection_subscribes",
             "plan_insights_notice_fast_path_clusters_optimize_duration",

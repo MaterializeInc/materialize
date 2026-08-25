@@ -11,13 +11,14 @@
 
 use std::time::Duration;
 
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 
 /// How frequently to refresh lgalloc map stats.
 pub(crate) const MZ_METRICS_LGALLOC_MAP_REFRESH_INTERVAL: Config<Duration> = Config::new(
     "mz_metrics_lgalloc_map_refresh_interval",
     Duration::from_secs(0),
     "How frequently to refresh lgalloc stats. A zero duration disables refreshing.",
+    ParameterScope::Replica,
 );
 
 /// How frequently to refresh lgalloc stats.
@@ -25,6 +26,7 @@ pub(crate) const MZ_METRICS_LGALLOC_REFRESH_INTERVAL: Config<Duration> = Config:
     "mz_metrics_lgalloc_refresh_interval",
     Duration::from_secs(30),
     "How frequently to refresh lgalloc stats. A zero duration disables refreshing.",
+    ParameterScope::Replica,
 );
 
 /// How frequently to refresh lgalloc stats.
@@ -32,6 +34,7 @@ pub(crate) const MZ_METRICS_RUSAGE_REFRESH_INTERVAL: Config<Duration> = Config::
     "mz_metrics_rusage_refresh_interval",
     Duration::from_secs(30),
     "How frequently to refresh rusage stats. A zero duration disables refreshing.",
+    ParameterScope::Replica,
 );
 
 /// Adds the full set of all storage `Config`s.
