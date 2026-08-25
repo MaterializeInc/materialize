@@ -221,7 +221,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_total_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_total_seconds",
-                help: "Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.",
+                help: "Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek polled repeatedly or walked in several slices contributes several observations. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. Excluding peeks that use the peek response stash.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_seek_fulfillment_seconds: registry.register(with_role(metric!(
@@ -231,17 +231,17 @@ impl ComputeMetrics {
             ), role)),
             index_peek_error_scan_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_error_scan_seconds",
-                help: "Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.",
+                help: "Time scanning the error trace for errors. Sums the time of the calls the scan was sliced into, so it excludes the gaps between them. A walk that was offloaded mixes timely worker time with the offloaded task's, because the slices before the promotion ran on the worker. Only scans that find no error are observed.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_cursor_setup_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_cursor_setup_seconds",
-                help: "Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.",
+                help: "Time opening the trace cursor and sorting the literal constraints. A walk that was offloaded mixes timely worker time with the offloaded task's, because the slices before the promotion ran on the worker. Excludes seeking the cursor to the literals, which is part of row iteration.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_iteration_seconds",
-                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the worker time of the calls the walk was sliced into, so it excludes the gaps between them.",
+                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP. Sums the time of the calls the walk was sliced into, so it excludes the gaps between them. A walk that was offloaded mixes timely worker time with the offloaded task's, because the slices before the promotion ran on the worker.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_rows: registry.register(with_role(metric!(
@@ -251,7 +251,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_result_sort_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_result_sort_seconds",
-                help: "Time sorting intermediate results during peek collection.",
+                help: "Time sorting intermediate results during peek collection. A walk that was offloaded mixes timely worker time with the offloaded task's, because the slices before the promotion ran on the worker.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_result_sort_rows: registry.register(with_role(metric!(
@@ -271,7 +271,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_walks_total: registry.register(with_role(metric!(
                 name: "mz_index_peek_walks_total",
-                help: "The number of index peek walks, by the substrate they ran on: `inline` on the timely worker, `offloaded` away from it. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.",
+                help: "The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it. A cancelled walk reaches no outcome and is counted on neither. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.",
                 var_labels: ["substrate"],
             ), role)),
             index_peek_permit_queue_depth: registry.register(with_role(metric!(
