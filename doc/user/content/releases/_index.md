@@ -20,7 +20,6 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.38.2
-*Released to Materialize Cloud: 2026-08-24* <br>
 *Released to Materialize Self-Managed: 2026-08-25* <br>
 
 ### Agent Skills {#v26.38.2-agent-skills}
