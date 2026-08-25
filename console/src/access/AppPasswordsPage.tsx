@@ -55,7 +55,6 @@ import { hasTenantApiTokenPermissions } from "~/api/auth";
 import { ApiToken } from "~/api/frontegg/types";
 import Alert from "~/components/Alert";
 import { AppErrorBoundary } from "~/components/AppErrorBoundary";
-import ConnectDrawer from "~/components/connect/ConnectDrawer";
 import { SecretCopyableBox } from "~/components/copyableComponents";
 import TaggedMultiSelect from "~/components/Dropdown/TaggedComboBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
@@ -72,7 +71,6 @@ import {
   useListApiTokens,
   useTeamRoles,
 } from "~/queries/frontegg";
-import ConnectionIcon from "~/svg/ConnectionIcon";
 import { MaterializeTheme } from "~/theme";
 import { DATE_FORMAT, formatDate } from "~/utils/dateFormat";
 import { toBase64 } from "~/utils/format";
@@ -509,10 +507,7 @@ const ApiTokensTableProps = ({
                 borderBottomWidth="1px"
                 borderBottomColor={colors.border.primary}
               >
-                <HStack>
-                  <ConnectAppPasswordButton userStr={userStr} />
-                  <DeleteAppPasswordModal token={token} />
-                </HStack>
+                <DeleteAppPasswordModal token={token} />
               </Td>
             </Tr>
           );
@@ -601,30 +596,6 @@ const SecretBox = ({
         onClick={onClose}
       />
     </ChakraAlert>
-  );
-};
-
-const ConnectAppPasswordButton = ({ userStr }: { userStr: string }) => {
-  const { isOpen, onOpen, onClose } = useDisclosure();
-
-  return (
-    <>
-      <Button
-        onClick={onOpen}
-        title="Connect to Materialize"
-        size="sm"
-        colorScheme="primary"
-        variant="outline"
-        leftIcon={<ConnectionIcon />}
-      >
-        Connect
-      </Button>
-      <ConnectDrawer
-        onClose={onClose}
-        isOpen={isOpen}
-        forAppPassword={{ user: userStr }}
-      />
-    </>
   );
 };
 
