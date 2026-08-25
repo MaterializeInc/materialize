@@ -82,7 +82,7 @@ mod peek_result_iterator;
 mod peek_scan;
 mod peek_stash;
 
-use self::peek_budget::InlineBudget;
+use self::peek_budget::{InlineBudget, InlineBudgetConfig};
 use self::peek_metrics::IndexPeekMetrics;
 use self::peek_metrics::PeekWalkMetrics;
 pub(crate) use self::peek_offload::PeekPermits;
@@ -292,6 +292,12 @@ pub struct ComputeState {
     /// the inline driver reads it on every activation of every pending peek.
     peek_walk_metrics: PeekWalkMetrics,
 
+    /// The parameters [`ComputeState::peek_budget`] is refilled from.
+    ///
+    /// Held rather than looked up, because a refill happens on every sweep of the pending peeks
+    /// and a sweep runs on every activation of the worker.
+    peek_budget_config: InlineBudgetConfig,
+
     /// What is left of what this activation may spend walking index peeks on the worker.
     ///
     /// Refilled at the top of each sweep of the pending peeks. A peek that arrives between two
@@ -346,9 +352,11 @@ impl ComputeState {
         peek_permits: Arc<PeekPermits>,
         storage_log_reader: Option<crate::server::StorageTimelyLogReader>,
     ) -> Self {
+        let worker_config: Rc<ConfigSet> = mz_dyncfgs::all_dyncfgs().into();
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
         let peek_walk_metrics = PeekWalkMetrics::new(&metrics);
+        let peek_budget_config = InlineBudgetConfig::new(&worker_config);
 
         Self {
             collections: Default::default(),
@@ -366,11 +374,12 @@ impl ComputeState {
             metrics,
             tracing_handle,
             context,
-            worker_config: mz_dyncfgs::all_dyncfgs().into(),
+            worker_config,
             metrics_registry,
             workers_per_process,
             peek_permits,
             peek_walk_metrics,
+            peek_budget_config,
             // The offload is off until a configuration arrives, and this is what off means.
             peek_budget: InlineBudget::Unbounded,
             peek_resume_at: None,
@@ -1470,8 +1479,7 @@ impl<'a> ActiveComputeState<'a> {
         let mut upper = Antichain::new();
         let mut pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
 
-        self.compute_state.peek_budget =
-            InlineBudget::for_activation(&self.compute_state.worker_config);
+        self.compute_state.peek_budget = self.compute_state.peek_budget_config.for_activation();
 
         let mut order: Vec<Uuid> = pending_peeks.keys().copied().collect();
         if let Some(resume_at) = self.compute_state.peek_resume_at.take() {
