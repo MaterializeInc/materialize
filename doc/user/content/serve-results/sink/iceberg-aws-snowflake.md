@@ -8,8 +8,6 @@ menu:
     weight: 30
 ---
 
-{{< public-preview />}}
-
 Once Materialize writes to an Iceberg table on [Amazon S3
 Tables](/serve-results/sink/iceberg-aws/), Snowflake can query that table
 directly through a [catalog
