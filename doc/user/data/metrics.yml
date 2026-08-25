@@ -1095,6 +1095,12 @@ metrics:
   help: Total time processing index peeks, from process_peek entry to response. Excluding peeks that use the peek response stash.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_walks_total
+  help: 'The number of index peek walks, by the substrate they ran on: `inline` on the timely worker, `offloaded` away from it. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.'
+  labels:
+  - substrate
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_kafka_partition_offset_max
   help: High watermark offset on broker for partition
   labels:

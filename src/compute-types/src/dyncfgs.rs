@@ -633,6 +633,84 @@ pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
     ParameterScope::Environment,
 );
 
+/// Whether a fast-path index peek may move its walk off the timely worker.
+///
+/// Off, a peek walks the arrangement to completion on the worker that owns it, so an expensive
+/// peek delays every other message that worker serves. On, a peek that outruns
+/// [`INDEX_PEEK_INLINE_BUDGET`] is promoted and finishes away from the worker.
+///
+/// The kill switch for the whole mechanism, and off by default so production placement is
+/// unchanged until the path earns trust. Replica-scoped, like the budgets it gates: promotion decides where a walk runs on the replica
+/// that serves the peek and changes nothing a client can observe, so replicas may disagree and one
+/// replica can be reverted without touching the environment.
+pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
+    "enable_compute_index_peek_offload",
+    false,
+    "Whether a fast-path index peek may move its walk off the timely worker.",
+    ParameterScope::Replica,
+);
+
+/// How far one peek may walk on the worker before it is promoted, in consumed cursor positions.
+///
+/// Sized for point lookups rather than for scans. A peek that finishes within the budget never
+/// leaves the worker and pays none of the offload's cost, and a peek that exceeds it has been
+/// measured to be expensive rather than predicted to be, which is what lets a point lookup over a
+/// skewed hot key offload without being special-cased.
+///
+/// Counted in cursor positions visited, not in rows returned, because the result iterator steps
+/// the cursor without returning anything whenever the MFP rejects a row, so a selective filter
+/// over a large arrangement walks arbitrarily far while returning nothing and would never spend a
+/// row-counted budget. Wall-clock bounds are excluded for two reasons. Under memory pressure a
+/// time bound anti-correlates with progress, because one major fault consumes a whole slice, while
+/// a count bound guarantees this many positions of progress however slow each one is. And at this
+/// granularity a deadline is unreachable anyway, since the yielding machinery reads the clock only
+/// once per 1024 work units. The accepted consequence is that a single slice has no duration
+/// bound, only a position bound.
+///
+/// Read through a handle rather than captured once, so a change reaches peeks already in flight
+/// without discarding the positions they have walked.
+pub const INDEX_PEEK_INLINE_BUDGET: Config<usize> = Config::new(
+    "compute_index_peek_inline_budget",
+    1024,
+    "How far one index peek may walk on the timely worker, in consumed cursor positions, before it is offloaded.",
+    ParameterScope::Replica,
+);
+
+/// What all peeks together may spend in one worker activation, in consumed cursor positions.
+///
+/// Every activation visits every pending peek, so a per-peek inline budget with no aggregate lets
+/// N pending peeks cost N times [`INDEX_PEEK_INLINE_BUDGET`] in a single pass, unbounded in N.
+/// Peeks that do not get a turn are served first on the next activation.
+///
+/// The default is eight times the inline budget, so a burst of eight point-lookup-sized peeks is
+/// served in one activation. Raising the ratio drains a burst in fewer activations, lowering it
+/// caps how long one activation withholds the worker from everything else it serves.
+///
+/// Counted in the same unit as [`INDEX_PEEK_INLINE_BUDGET`], for the same reasons, and likewise
+/// read through a handle.
+pub const INDEX_PEEK_ACTIVATION_BUDGET: Config<usize> = Config::new(
+    "compute_index_peek_activation_budget",
+    8 * 1024,
+    "What all index peeks together may spend in one timely worker activation, in consumed cursor positions.",
+    ParameterScope::Replica,
+);
+
+/// How often a promoted scan checks for cancellation and yields, in consumed cursor positions.
+///
+/// At a plausible 100ns to 1us per position this bounds cancellation latency to single-digit
+/// milliseconds while leaving the yield overhead immaterial. Larger than
+/// [`INDEX_PEEK_INLINE_BUDGET`] because a promoted scan is off the worker's critical path, so its
+/// slices answer to cancellation latency rather than to the worker's availability.
+///
+/// Counted in the same unit as [`INDEX_PEEK_INLINE_BUDGET`], for the same reasons, and likewise
+/// read through a handle.
+pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
+    "compute_index_peek_yield_granularity",
+    10000,
+    "How often an offloaded index peek scan checks for cancellation and yields, in consumed cursor positions.",
+    ParameterScope::Replica,
+);
+
 /// The collection interval for the Prometheus metrics introspection source.
 ///
 /// Set to zero to disable scraping and retract any existing data.
@@ -720,6 +798,10 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&ENABLE_PEEK_ROW_ITERATION_LIMIT)
         .add(&PEEK_ROW_ITERATION_LIMIT)
+        .add(&ENABLE_INDEX_PEEK_OFFLOAD)
+        .add(&INDEX_PEEK_INLINE_BUDGET)
+        .add(&INDEX_PEEK_ACTIVATION_BUDGET)
+        .add(&INDEX_PEEK_YIELD_GRANULARITY)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
@@ -742,5 +824,17 @@ mod tests {
     fn peek_row_iteration_limit_defaults() {
         assert!(!*ENABLE_PEEK_ROW_ITERATION_LIMIT.default());
         assert_eq!(*PEEK_ROW_ITERATION_LIMIT.default(), 1000);
+    }
+
+    #[mz_ore::test]
+    fn index_peek_offload_defaults() {
+        // Production safety and test coverage are separate settings. The test configuration turns
+        // the offload on through `system_parameter_default`, which only works while the code
+        // default stays off.
+        assert!(!*ENABLE_INDEX_PEEK_OFFLOAD.default());
+        assert_eq!(*INDEX_PEEK_INLINE_BUDGET.default(), 1024);
+        assert_eq!(*INDEX_PEEK_YIELD_GRANULARITY.default(), 10000);
+        // The aggregate must admit at least one full inline slice, else no peek can finish inline.
+        assert!(*INDEX_PEEK_ACTIVATION_BUDGET.default() >= *INDEX_PEEK_INLINE_BUDGET.default());
     }
 }

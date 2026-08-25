@@ -21,7 +21,9 @@ use std::process::ExitCode;
 use chrono::Utc;
 use clap::ArgAction;
 use mz_adapter_types::dyncfgs::ENABLE_BACKGROUND_ALTER_CLUSTER;
-use mz_compute_types::dyncfgs::{ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT};
+use mz_compute_types::dyncfgs::{
+    ENABLE_INDEX_PEEK_OFFLOAD, ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT,
+};
 use mz_orchestrator_tracing::{StaticTracingConfig, TracingCliArgs};
 use mz_ore::cli::{self, CliConfig, KeyValueArg};
 use mz_ore::metrics::MetricsRegistry;
@@ -187,10 +189,13 @@ async fn main() -> ExitCode {
         .entry(ENABLE_BACKGROUND_ALTER_CLUSTER.name().to_string())
         .or_insert_with(|| "true".to_string());
 
-    // Keep the guard enabled in the suite without constraining normal test queries.
+    // Keep the guard enabled in the suite without constraining normal test queries, and exercise
+    // the peek offload path, which defaults off in production. The offload's budgets stay at their
+    // code defaults so the suite hits the placement decisions production makes.
     for (name, value) in [
         (ENABLE_PEEK_ROW_ITERATION_LIMIT.name(), "true"),
         (PEEK_ROW_ITERATION_LIMIT.name(), "1000000000"),
+        (ENABLE_INDEX_PEEK_OFFLOAD.name(), "true"),
     ] {
         system_parameter_defaults
             .entry(name.to_string())

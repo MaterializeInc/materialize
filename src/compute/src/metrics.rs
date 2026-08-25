@@ -72,6 +72,7 @@ pub struct ComputeMetrics {
     index_peek_result_sort_rows: Histogram,
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
+    index_peek_walks_total: raw::IntCounterVec,
 
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
@@ -265,6 +266,11 @@ impl ComputeMetrics {
                 help: "Time constructing RowCollection from peek results, including converting the row counts the scan produced.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
+            index_peek_walks_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_walks_total",
+                help: "The number of index peek walks, by the substrate they ran on: `inline` on the timely worker, `offloaded` away from it. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.",
+                var_labels: ["substrate"],
+            ), role)),
             replica_expiration_timestamp_seconds: registry.register(with_role(metric!(
                 name: "mz_dataflow_replica_expiration_timestamp_seconds",
                 help: "The replica expiration timestamp in seconds since epoch.",
@@ -320,6 +326,10 @@ impl ComputeMetrics {
         let index_peek_result_sort_rows = self.index_peek_result_sort_rows.clone();
         let index_peek_frontier_check_seconds = self.index_peek_frontier_check_seconds.clone();
         let index_peek_row_collection_seconds = self.index_peek_row_collection_seconds.clone();
+        let index_peek_walks_inline = self.index_peek_walks_total.with_label_values(&["inline"]);
+        let index_peek_walks_offloaded = self
+            .index_peek_walks_total
+            .with_label_values(&["offloaded"]);
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -349,6 +359,8 @@ impl ComputeMetrics {
             index_peek_result_sort_rows,
             index_peek_frontier_check_seconds,
             index_peek_row_collection_seconds,
+            index_peek_walks_inline,
+            index_peek_walks_offloaded,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
@@ -398,6 +410,20 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_frontier_check_seconds: Histogram,
     /// Histogram of index peek row collection construction durations.
     pub(crate) index_peek_row_collection_seconds: Histogram,
+    /// Counts index peek walks that ran on the timely worker.
+    ///
+    /// Both substrate series are resolved when the worker's metrics are built, so each reports zero
+    /// before its first walk. An absent series and a series stuck at zero read the same in a graph,
+    /// and only the latter distinguishes an offload that never engaged from one that engaged
+    /// without changing latency.
+    ///
+    /// TODO: Drop the `dead_code` allowances on both substrate counters once the peek driver
+    /// increments them.
+    #[allow(dead_code)]
+    pub(crate) index_peek_walks_inline: IntCounter,
+    /// Counts index peek walks that ran away from the timely worker.
+    #[allow(dead_code)]
+    pub(crate) index_peek_walks_offloaded: IntCounter,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.

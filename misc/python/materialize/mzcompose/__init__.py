@@ -136,6 +136,11 @@ def get_minimal_system_parameters(
         config["compute_peek_row_iteration_limit"] = "1000000000"
         config["enable_compute_peek_row_iteration_limit"] = "true"
 
+        # Exercise the peek offload path in tests while it defaults off in
+        # production. The budgets stay at their code defaults so tests make the
+        # same placement decisions production makes.
+        config["enable_compute_index_peek_offload"] = "true"
+
     if version < MzVersion.parse_mz("v0.163.0-dev"):
         config["enable_compute_active_dataflow_cancelation"] = "true"
 
@@ -763,6 +768,11 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "mz_metrics_lgalloc_refresh_interval",
     "mz_metrics_rusage_refresh_interval",
     "compute_peek_response_stash_batch_max_runs",
+    # The offload's budgets, left at their code defaults so tests exercise the
+    # placement decisions production makes. parallel-workload varies them.
+    "compute_index_peek_inline_budget",
+    "compute_index_peek_activation_budget",
+    "compute_index_peek_yield_granularity",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",
     "compute_peek_stash_num_batches",

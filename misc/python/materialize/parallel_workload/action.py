@@ -2993,6 +2993,25 @@ class FlipFlagsAction(Action):
             BOOLEAN_FLAG_VALUES
         )
         self.flags_with_values["compute_peek_row_iteration_limit"] = ["1000000000"]
+        self.flags_with_values["enable_compute_index_peek_offload"] = (
+            BOOLEAN_FLAG_VALUES
+        )
+        # The production default, a value that offloads all but the shortest
+        # peeks, and one that keeps every peek inline.
+        self.flags_with_values["compute_index_peek_inline_budget"] = [
+            "1024",
+            "1",
+            "1000000000",
+        ]
+        self.flags_with_values["compute_index_peek_activation_budget"] = [
+            "1024",
+            "8192",
+            "1000000000",
+        ]
+        self.flags_with_values["compute_index_peek_yield_granularity"] = [
+            "1",
+            "10000",
+        ]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value
