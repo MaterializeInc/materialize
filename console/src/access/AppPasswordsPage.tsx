@@ -80,6 +80,7 @@ const EXPIRES_IN_OPTIONS = {
   "30d": { label: "30 days", minutes: 30 * 24 * 60 },
   "60d": { label: "60 days", minutes: 60 * 24 * 60 },
   "90d": { label: "90 days", minutes: 90 * 24 * 60 },
+  "365d": {label: "365 days", minutes: 365 * 24 * 60},
   never: { label: "No expiration", minutes: undefined },
 } as const;
 
