@@ -3,6 +3,10 @@ columns:
   - column: object
   - column: labels
 rows:
+  - command: "[`ACKNOWLEDGE`](/sql/acknowledge)"
+    object: "Durable Subscription"
+    labels:
+      - "output"
   - command: "[`ALTER CLUSTER`](/sql/alter-cluster)"
     object: "Cluster"
     labels:
@@ -26,6 +30,11 @@ rows:
       - "privilege"
   - command: "[`ALTER DATABASE`](/sql/alter-database)"
     object: "Database"
+    labels:
+      - "object"
+      - "owner"
+  - command: "[`ALTER DURABLE SUBSCRIPTION`](/sql/alter-durable-subscription)"
+    object: "Durable Subscription"
     labels:
       - "object"
       - "owner"
@@ -126,6 +135,10 @@ rows:
     object: "Database"
     labels:
       - "object"
+  - command: "[`CREATE DURABLE SUBSCRIPTION`](/sql/create-durable-subscription)"
+    object: "Durable Subscription"
+    labels:
+      - "object"
   - command: "[`CREATE INDEX`](/sql/create-index)"
     object: "Index"
     labels:
@@ -202,6 +215,10 @@ rows:
       - "object"
   - command: "[`DROP DATABASE`](/sql/drop-database)"
     object: "Database"
+    labels:
+      - "object"
+  - command: "[`DROP DURABLE SUBSCRIPTION`](/sql/drop-durable-subscription)"
+    object: "Durable Subscription"
     labels:
       - "object"
   - command: "[`DROP INDEX`](/sql/drop-index)"
