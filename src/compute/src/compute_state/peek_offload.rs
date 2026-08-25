@@ -296,6 +296,8 @@ mod tests {
     use std::num::NonZeroUsize;
 
     use mz_dyncfg::ConfigUpdates;
+    use mz_expr::RowSetFinishing;
+    use mz_expr::row::RowCollection;
     use mz_ore::metrics::MetricsRegistry;
     use mz_repr::Row;
     use timely::WorkerConfig;
@@ -380,6 +382,36 @@ mod tests {
             Allocator::Thread(Default::default()),
             None,
         )
+    }
+
+    /// A finishing that orders the peek's one column descending, which is the reverse of the order
+    /// the trace holds its keys in.
+    ///
+    /// A peek carrying an order is never eligible for the peek stash, because `is_streamable`
+    /// requires an empty `order_by`, so a promoted walk of one answers rather than handing back.
+    fn descending_finishing() -> RowSetFinishing {
+        let mut finishing = trivial_finishing();
+        finishing.order_by = vec![ColumnOrder {
+            column: 0,
+            desc: true,
+            nulls_last: true,
+        }];
+        finishing
+    }
+
+    /// The answer a walk gives when it produces `rows` in exactly that order, each at a
+    /// multiplicity of one.
+    ///
+    /// The collection is built in the order given rather than sorted by the comparator the walk
+    /// sorts with, so the order a test expects is the test's own statement.
+    fn ordered_rows_answer(rows: impl IntoIterator<Item = Row>) -> PeekResponse {
+        let rows: Vec<Row> = rows.into_iter().collect();
+        let byte_len = rows.iter().map(|row| row.data_len()).sum();
+        let mut builder = RowCollection::builder(byte_len, rows.len());
+        for row in &rows {
+            builder.push(row.as_row_ref(), NonZeroUsize::new(1).expect("non-zero"));
+        }
+        PeekResponse::Rows(vec![builder.build()])
     }
 
     /// What a promoted walk handed back, in a form a test can compare whole.
@@ -479,6 +511,40 @@ mod tests {
             metrics.index_peek_walks_inline.get(),
             0,
             "the slice that promoted the walk reports nothing"
+        );
+    }
+
+    /// A promoted walk answers with its rows in the order the peek asked for.
+    ///
+    /// The order travels from the peek into the task, which is the only place a promoted walk can
+    /// read it: the finishing stays with the worker. A driver that dropped it would answer in the
+    /// order the trace happens to hold, which every other peek here asks for.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_walk_answers_in_the_order_the_peek_asked_for() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let peek = index_peek(descending_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(2));
+        let mut scan = open(&mut bundle, &peek, None);
+
+        let mut fuel = 2;
+        assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let mut promoted = OffloadedPeek::promote(
+            peek.clone(),
+            bundle,
+            scan,
+            &permits,
+            offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        assert_eq!(
+            hand_back(&mut promoted).await,
+            HandBack::Answered(ordered_rows_answer((0..6).rev().map(ok_row))),
         );
     }
 
