@@ -165,6 +165,16 @@ pub struct BaseListenerConfig {
     pub authenticator_kind: AuthenticatorKind,
     pub allowed_roles: AllowedRoles,
     pub enable_tls: bool,
+    /// Whether a trusted proxy (`balancerd`) fronts this listener.
+    ///
+    /// Client-supplied connection metadata (the `mz_forwarded_for` and
+    /// `mz_connection_uuid` startup parameters on pgwire, the PROXY protocol
+    /// header on HTTP) describes the client as `balancerd` saw it, and is
+    /// honored only when this is set. `balancerd` rejects clients that supply
+    /// it themselves, so nothing else can choose the address that network
+    /// policies are evaluated against.
+    #[serde(default)]
+    pub behind_trusted_proxy: bool,
 }
 pub type SqlListenerConfig = BaseListenerConfig;
 
@@ -176,6 +186,16 @@ pub struct HttpListenerConfig {
     pub authenticator_kind: AuthenticatorKind,
     pub enable_tls: bool,
     pub routes: HttpRoutesEnabled,
+    /// Whether a trusted proxy (`balancerd`) fronts this listener.
+    ///
+    /// Client-supplied connection metadata (the `mz_forwarded_for` and
+    /// `mz_connection_uuid` startup parameters on pgwire, the PROXY protocol
+    /// header on HTTP) describes the client as `balancerd` saw it, and is
+    /// honored only when this is set. `balancerd` rejects clients that supply
+    /// it themselves, so nothing else can choose the address that network
+    /// policies are evaluated against.
+    #[serde(default)]
+    pub behind_trusted_proxy: bool,
 }
 
 pub trait ListenerConfig {
@@ -310,6 +330,7 @@ impl From<v0_147_0::HttpListenerConfig> for HttpListenerConfig {
             addr: legacy.base.addr,
             authenticator_kind: legacy.base.authenticator_kind,
             enable_tls: legacy.base.enable_tls,
+            behind_trusted_proxy: legacy.base.behind_trusted_proxy,
             routes: HttpRoutesEnabled {
                 base: group(legacy.routes.base),
                 webhook: group(legacy.routes.webhook),
@@ -349,6 +370,7 @@ mod tests {
                         authenticator_kind: AuthenticatorKind::None,
                         allowed_roles: AllowedRoles::NormalAndInternal,
                         enable_tls: false,
+                        behind_trusted_proxy: false,
                     },
                     routes: v0_147_0::HttpRoutes {
                         base: true,
@@ -401,6 +423,8 @@ mod tests {
             }
         }"#;
         let config = parse(json);
+        // A config without the field must keep the safe default.
+        assert!(!config.http["external"].behind_trusted_proxy);
         let routes = config.http["external"].routes;
         assert_eq!(routes.base, RouteGroup::Enabled(AllowedRoles::Normal));
         assert_eq!(routes.internal, RouteGroup::Enabled(AllowedRoles::Internal));
@@ -489,6 +513,7 @@ mod tests {
                         authenticator_kind: AuthenticatorKind::None,
                         allowed_roles: AllowedRoles::NormalAndInternal,
                         enable_tls: false,
+                        behind_trusted_proxy: false,
                     },
                     routes: v0_147_0::HttpRoutes {
                         base: true,

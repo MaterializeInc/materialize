@@ -156,12 +156,14 @@ impl Default for TestHarness {
                         authenticator_kind: AuthenticatorKind::None,
                         allowed_roles: AllowedRoles::Normal,
                         enable_tls: false,
+                        behind_trusted_proxy: false,
                     },
                     "internal".to_owned() => SqlListenerConfig {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                         authenticator_kind: AuthenticatorKind::None,
                         allowed_roles: AllowedRoles::NormalAndInternal,
                         enable_tls: false,
+                        behind_trusted_proxy: false,
                     },
                 ],
                 http: btreemap![
@@ -169,6 +171,7 @@ impl Default for TestHarness {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                         authenticator_kind: AuthenticatorKind::None,
                         enable_tls: false,
+                        behind_trusted_proxy: false,
                         routes: HttpRoutesEnabled {
                             base: RouteGroup::Enabled(AllowedRoles::Normal),
                             webhook: RouteGroup::Enabled(AllowedRoles::Normal),
@@ -184,6 +187,7 @@ impl Default for TestHarness {
                         addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                         authenticator_kind: AuthenticatorKind::None,
                         enable_tls: false,
+                        behind_trusted_proxy: false,
                         routes: HttpRoutesEnabled {
                             base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                             webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
@@ -311,6 +315,18 @@ impl TestHarness {
         self
     }
 
+    /// Models listeners that a trusted proxy (`balancerd`) fronts, so that
+    /// forwarded connection metadata is honored.
+    pub fn behind_trusted_proxy(mut self) -> Self {
+        for (_, listener) in &mut self.listeners_config.sql {
+            listener.behind_trusted_proxy = true;
+        }
+        for (_, listener) in &mut self.listeners_config.http {
+            listener.behind_trusted_proxy = true;
+        }
+        self
+    }
+
     pub fn unsafe_mode(mut self) -> Self {
         self.unsafe_mode = true;
         self
@@ -339,12 +355,14 @@ impl TestHarness {
                     authenticator_kind: AuthenticatorKind::Frontegg,
                     allowed_roles: AllowedRoles::Normal,
                     enable_tls,
+                    behind_trusted_proxy: false,
                 },
                 "internal".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                 },
             },
             http: btreemap! {
@@ -352,6 +370,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::Frontegg,
                     enable_tls,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::Normal),
                         webhook: RouteGroup::Enabled(AllowedRoles::Normal),
@@ -367,6 +386,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
@@ -398,12 +418,14 @@ impl TestHarness {
                     authenticator_kind: AuthenticatorKind::Oidc,
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls,
+                    behind_trusted_proxy: false,
                 },
                 "internal".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                 },
             },
             http: btreemap! {
@@ -411,6 +433,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::Oidc,
                     enable_tls,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
@@ -426,6 +449,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
@@ -478,6 +502,7 @@ impl TestHarness {
                     authenticator_kind: AuthenticatorKind::Password,
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls,
+                    behind_trusted_proxy: false,
                 },
             },
             http: btreemap! {
@@ -485,6 +510,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::Password,
                     enable_tls,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
@@ -500,6 +526,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Disabled,
                         webhook: RouteGroup::Disabled,
@@ -526,6 +553,7 @@ impl TestHarness {
                     authenticator_kind: AuthenticatorKind::Sasl,
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls,
+                    behind_trusted_proxy: false,
                 },
             },
             http: btreemap! {
@@ -533,6 +561,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::Password,
                     enable_tls,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
@@ -548,6 +577,7 @@ impl TestHarness {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Disabled,
                         webhook: RouteGroup::Disabled,

@@ -303,6 +303,7 @@ impl Listener<SqlListenerConfig> {
                 active_connection_counter,
                 helm_chart_version,
                 allowed_roles: self.config.allowed_roles,
+                behind_trusted_proxy: self.config.behind_trusted_proxy,
             });
             mz_server_core::serve(ServeConfig {
                 conns: self.connection_stream,
@@ -450,6 +451,7 @@ impl Listeners {
                 internal_route_config: Arc::clone(&internal_route_config),
                 routes_enabled: listener.config.routes,
                 replica_http_locator: Arc::clone(&config.controller.replica_http_locator),
+                behind_trusted_proxy: listener.config.behind_trusted_proxy,
             };
             http_listener_handles.insert(name.clone(), listener.serve_http(http_config).await);
         }

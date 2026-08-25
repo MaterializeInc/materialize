@@ -188,6 +188,9 @@ pub struct HttpConfig {
     pub routes_enabled: HttpRoutesEnabled,
     /// Locator for cluster replica HTTP addresses, used for proxying requests.
     pub replica_http_locator: Arc<ReplicaHttpLocator>,
+    /// Whether a trusted proxy (`balancerd`) fronts this listener, and thus
+    /// whether a PROXY protocol header on the connection can be believed.
+    pub behind_trusted_proxy: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -221,6 +224,7 @@ struct HelmChartVersion(Option<String>);
 pub struct HttpServer {
     tls: Option<ReloadingSslContext>,
     router: Router,
+    behind_trusted_proxy: bool,
 }
 
 impl HttpServer {
@@ -247,6 +251,7 @@ impl HttpServer {
             internal_route_config,
             routes_enabled,
             replica_http_locator,
+            behind_trusted_proxy,
         }: HttpConfig,
     ) -> HttpServer {
         let tls_enabled = tls.is_some();
@@ -679,7 +684,11 @@ impl HttpServer {
             .merge(base_router)
             .apply_default_layers(source, metrics);
 
-        HttpServer { tls, router }
+        HttpServer {
+            tls,
+            router,
+            behind_trusted_proxy,
+        }
     }
 }
 
@@ -693,16 +702,24 @@ impl Server for HttpServer {
     ) -> ConnectionHandler {
         let router = self.router.clone();
         let tls_context = self.tls.clone();
+        let behind_trusted_proxy = self.behind_trusted_proxy;
         let mut conn = TokioIo::new(conn);
 
-        Box::pin(async {
+        Box::pin(async move {
             let direct_peer_addr = conn.inner().peer_addr().context("fetching peer addr")?;
-            let peer_addr = conn
-                .inner_mut()
-                .take_proxy_header_address()
-                .await
-                .map(|a| a.source)
-                .unwrap_or(direct_peer_addr);
+            // A PROXY protocol header is only believable when a proxy fronts
+            // this listener. Elsewhere the header bytes are left in the stream,
+            // so the request fails to parse as HTTP, which is the right outcome
+            // for a client that had no business sending one.
+            let peer_addr = if behind_trusted_proxy {
+                conn.inner_mut()
+                    .take_proxy_header_address()
+                    .await
+                    .map(|a| a.source)
+                    .unwrap_or(direct_peer_addr)
+            } else {
+                direct_peer_addr
+            };
 
             let (conn, conn_protocol) = match tls_context {
                 Some(tls_context) => {

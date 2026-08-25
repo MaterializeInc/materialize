@@ -1294,3 +1294,83 @@ fn test_pgtest_mz_frontend_occ_pipelined_dml() {
         },
     );
 }
+
+const CLIENT_IP_QUERY: &str =
+    "SELECT client_ip FROM mz_internal.mz_sessions WHERE connection_id = pg_backend_pid()";
+
+/// Runs `query` on a connection whose startup packet carries `params`, and
+/// returns the single text value it selects.
+///
+/// The whole exchange is pipelined and terminated up front so the server closes
+/// the connection, which lets the response be read and parsed in one shot.
+fn query_with_startup_params(
+    addr: std::net::SocketAddr,
+    params: Vec<(&str, &str)>,
+    query: &str,
+) -> String {
+    use postgres_protocol::message::backend::Message;
+    use postgres_protocol::message::frontend;
+
+    let mut buf = BytesMut::new();
+    frontend::startup_message(params, &mut buf).unwrap();
+    frontend::query(query, &mut buf).unwrap();
+    frontend::terminate(&mut buf);
+
+    let mut stream = TcpStream::connect(addr).unwrap();
+    stream.write_all(&buf).unwrap();
+    let mut response = vec![];
+    stream.read_to_end(&mut response).unwrap();
+
+    let mut response = BytesMut::from(&response[..]);
+    let mut values = vec![];
+    while let Some(message) = Message::parse(&mut response).unwrap() {
+        if let Message::DataRow(body) = message {
+            let buf = body.buffer().to_vec();
+            values.extend(
+                body.ranges()
+                    .map(|range| Ok(String::from_utf8(buf[range.unwrap()].to_vec()).unwrap()))
+                    .collect::<Vec<_>>()
+                    .unwrap(),
+            );
+        }
+    }
+    values.into_element()
+}
+
+// A client that reaches a listener directly must not be able to choose the
+// client IP recorded for its session, as network policies are evaluated
+// against it. Only a listener that a trusted proxy fronts may believe
+// `mz_forwarded_for`.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_forwarded_client_ip_requires_trusted_proxy() {
+    let untrusted = test_util::TestHarness::default().start_blocking();
+    assert_eq!(
+        query_with_startup_params(
+            untrusted.sql_local_addr(),
+            vec![
+                ("user", "materialize"),
+                ("mz_forwarded_for", "1.2.3.4"),
+                ("welcome_message", "off"),
+            ],
+            CLIENT_IP_QUERY,
+        ),
+        "127.0.0.1",
+    );
+
+    let trusted = test_util::TestHarness::default()
+        .behind_trusted_proxy()
+        .start_blocking();
+    assert_eq!(
+        query_with_startup_params(
+            trusted.sql_local_addr(),
+            vec![
+                ("user", "materialize"),
+                ("mz_forwarded_for", "1.2.3.4"),
+                ("welcome_message", "off"),
+            ],
+            CLIENT_IP_QUERY,
+        ),
+        "1.2.3.4",
+    );
+}

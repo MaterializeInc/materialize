@@ -1243,18 +1243,21 @@ impl<'a> RunnerInner<'a> {
                     authenticator_kind: AuthenticatorKind::None,
                     allowed_roles: AllowedRoles::Normal,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                 },
                 "internal".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     allowed_roles: AllowedRoles::Internal,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                 },
                 "password".to_owned() => SqlListenerConfig {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::Password,
                     allowed_roles: AllowedRoles::Normal,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                 },
             },
             http: btreemap![
@@ -1262,6 +1265,7 @@ impl<'a> RunnerInner<'a> {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::Normal),
                         webhook: RouteGroup::Enabled(AllowedRoles::Normal),
@@ -1277,6 +1281,7 @@ impl<'a> RunnerInner<'a> {
                     addr: SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0),
                     authenticator_kind: AuthenticatorKind::None,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                     routes: HttpRoutesEnabled {
                         base: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),
                         webhook: RouteGroup::Enabled(AllowedRoles::NormalAndInternal),

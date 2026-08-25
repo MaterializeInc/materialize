@@ -1319,6 +1319,10 @@ fn create_v0_147_0_listeners_config(
         &mz.spec.internal_certificate_spec,
     );
     let authenticator_kind = mz.spec.authenticator_kind;
+    // Only `balancerd` may set a session's client IP, and only the external
+    // listeners sit behind it. Without a `balancerd` deployment nothing between
+    // the client and `environmentd` is trusted to describe the connection.
+    let behind_trusted_proxy = config.create_balancers;
 
     let mut listeners_config = v0_147_0::ListenersConfig {
         sql: btreemap! {
@@ -1330,6 +1334,7 @@ fn create_v0_147_0_listeners_config(
                 authenticator_kind,
                 allowed_roles: AllowedRoles::Normal,
                 enable_tls: external_enable_tls,
+                behind_trusted_proxy,
             },
             "internal".to_owned() => SqlListenerConfig{
                 addr: SocketAddr::new(
@@ -1340,6 +1345,7 @@ fn create_v0_147_0_listeners_config(
                 // Should this just be Internal?
                 allowed_roles: AllowedRoles::NormalAndInternal,
                 enable_tls: false,
+                behind_trusted_proxy: false,
             },
         },
         http: btreemap! {
@@ -1359,6 +1365,7 @@ fn create_v0_147_0_listeners_config(
                     },
                     allowed_roles: AllowedRoles::Normal,
                     enable_tls: external_enable_tls,
+                    behind_trusted_proxy,
                 },
                 routes: v0_147_0::HttpRoutes{
                     base: true,
@@ -1381,6 +1388,7 @@ fn create_v0_147_0_listeners_config(
                     // Should this just be Internal?
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                 },
                 routes: v0_147_0::HttpRoutes{
                     base: true,
@@ -1427,6 +1435,7 @@ fn create_v0_147_0_listeners_config(
                     authenticator_kind: AuthenticatorKind::None,
                     allowed_roles: AllowedRoles::NormalAndInternal,
                     enable_tls: false,
+                    behind_trusted_proxy: false,
                 },
                 routes: v0_147_0::HttpRoutes {
                     base: false,

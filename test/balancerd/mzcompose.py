@@ -417,6 +417,46 @@ def create_proxy_protocol_v2_header(
     )
 
 
+def sql_over_proxy_protocol(
+    port: int, query: str, header_fragments: list[bytes], fragment_delay: float = 0.0
+) -> Any:
+    """Run `query` against environmentd's external HTTP port over a raw socket.
+
+    The PROXY protocol header in `header_fragments` precedes the TLS handshake,
+    exactly as balancerd sends it. Sending it in more than one fragment
+    exercises the server's handling of a header split across TCP segments.
+    """
+    json_data = json.dumps({"query": query})
+    request = dedent(f"""\
+        POST /api/sql HTTP/1.1\r
+        Host: 127.0.0.1:{port}\r
+        Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
+        Content-Type: application/json\r
+        Content-Length: {len(json_data.encode())}\r
+        \r
+        {json_data}""").encode()
+
+    tls = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    tls.check_hostname = False
+    tls.verify_mode = ssl.CERT_NONE
+
+    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
+        sock.connect(("127.0.0.1", port))
+        sock.settimeout(30)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        for i, fragment in enumerate(header_fragments):
+            if i > 0:
+                time.sleep(fragment_delay)
+            sock.sendall(fragment)
+        with tls.wrap_socket(sock) as tls_sock:
+            tls_sock.sendall(request)
+            response = tls_sock.recv(8192)
+
+    _, separator, body = response.partition(b"\r\n\r\n")
+    assert separator, f"expected response with header and body, found: {response!r}"
+    return json.loads(body)
+
+
 def workflow_ip_forwarding(c: Composition) -> None:
     """Test that forwarding the client IP through the balancer works over both HTTP and SQL."""
     c.up("balancerd", "frontegg-mock", "materialized")
@@ -426,8 +466,9 @@ def workflow_ip_forwarding(c: Composition) -> None:
     # and that we can use proxy_protocol when talking to
     # envd directly.
     balancer_port = c.port("balancerd", 6876)
-    # mz internal (unencrypted port)
-    materialize_port = c.port("materialized", 6878)
+    # The external port, the only one balancerd fronts and therefore the only
+    # one that honors a PROXY protocol header.
+    materialize_port = c.port("materialized", 6876)
 
     # We want to make sure the request we're making through the balancer does not use the balancers
     # ip for the sessions.
@@ -469,41 +510,15 @@ def workflow_ip_forwarding(c: Composition) -> None:
         session_ip != balancer_ip
     ), f"requests from ({session_ip}) proxied by balancer should not use balancer ip ({balancer_ip}) in session"
 
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-        sock.connect(("127.0.0.1", materialize_port))
-
-        # Pick an ip we couldn't normal connect from and trick envd into
-        # thinking we're connecting with
-        proxy_header = create_proxy_protocol_v2_header(
-            "1.1.1.1", 1111, "127.0.0.1", 1111
-        )
-        # Make an http request over the socket
-
-        json_data = {
-            "query": "select client_ip from mz_internal.mz_sessions where connection_id = pg_backend_pid();"
-        }
-        json_data = json.dumps(json_data)
-        content_length = len(json_data.encode())
-        http_sql_query_request = dedent(f"""\
-            POST /api/sql HTTP/1.1\r
-            Host: 127.0.0.1:{materialize_port}\r
-            Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
-            Content-Type: application/json\r
-            Content-Length: {content_length}\r
-            \r
-            {json_data}""")
-        sock.sendall(proxy_header + http_sql_query_request.encode())
-
-        # read and parse the response
-        body_separator = "\r\n\r\n"
-        tcp_resp = sock.recv(8192)
-        resp_split = tcp_resp.split(body_separator.encode())
-        assert (
-            len(resp_split) > 1
-        ), f"expected response with header and body, found: {resp_split}"
-        body = resp_split[1]
-        # assert that we tricked environmentd
-        assert json.loads(body)["results"][0]["rows"][0][0] == "1.1.1.1"
+    # Pick an ip we couldn't normally connect from and trick envd into
+    # thinking we're connecting with it.
+    result = sql_over_proxy_protocol(
+        materialize_port,
+        "select client_ip from mz_internal.mz_sessions where connection_id = pg_backend_pid();",
+        [create_proxy_protocol_v2_header("1.1.1.1", 1111, "127.0.0.1", 1111)],
+    )
+    # assert that we tricked environmentd
+    assert result["results"][0]["rows"][0][0] == "1.1.1.1"
 
 
 def workflow_wide_result(c: Composition) -> None:
@@ -900,43 +915,17 @@ def workflow_split_proxy_header(c: Composition) -> None:
     bytes remain in the stream and corrupt the subsequent HTTP parsing.
     """
     c.up("balancerd", "frontegg-mock", "materialized")
-    materialize_port = c.port("materialized", 6878)
 
+    # Split the 28-byte proxy header at byte 8, in the middle of the 12-byte
+    # signature.
     proxy_hdr = create_proxy_protocol_v2_header("2.2.2.2", 2222, "127.0.0.1", 2222)
-    json_data = json.dumps({"query": "SELECT 42 AS answer"})
-    content_length = len(json_data.encode())
-    http_request = dedent(f"""\
-        POST /api/sql HTTP/1.1\r
-        Host: 127.0.0.1:{materialize_port}\r
-        Authorization: Basic {OTHER_USER}:{app_password(OTHER_USER)}\r
-        Content-Type: application/json\r
-        Content-Length: {content_length}\r
-        \r
-        {json_data}""").encode()
-
-    # Split the 28-byte proxy header at byte 8 (middle of the 12-byte
-    # signature). Send the first fragment, wait for the server to peek
-    # it, then send the rest along with the HTTP request.
-    split_point = 8
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as sock:
-        sock.connect(("127.0.0.1", materialize_port))
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-
-        sock.sendall(proxy_hdr[:split_point])
-        time.sleep(0.2)
-        sock.sendall(proxy_hdr[split_point:] + http_request)
-
-        sock.settimeout(10)
-        tcp_resp = sock.recv(8192)
-        body_separator = b"\r\n\r\n"
-        resp_split = tcp_resp.split(body_separator)
-        assert (
-            len(resp_split) > 1
-        ), f"expected response with header and body, found: {resp_split}"
-        body = resp_split[1]
-        assert (
-            json.loads(body)["results"][0]["rows"][0][0] == "42"
-        ), f"unexpected response body: {body}"
+    result = sql_over_proxy_protocol(
+        c.port("materialized", 6876),
+        "SELECT 42 AS answer",
+        [proxy_hdr[:8], proxy_hdr[8:]],
+        fragment_delay=0.2,
+    )
+    assert result["results"][0]["rows"][0][0] == "42", f"unexpected response: {result}"
 
 
 def _frontegg_curl(

@@ -5,7 +5,8 @@
       "addr": "0.0.0.0:6875",
       "authenticator_kind": "Frontegg",
       "allowed_roles": "Normal",
-      "enable_tls": false
+      "enable_tls": false,
+      "behind_trusted_proxy": true
     },
     "internal": {
       "addr": "0.0.0.0:6877",
@@ -19,6 +20,7 @@
       "addr": "0.0.0.0:6876",
       "authenticator_kind": "Frontegg",
       "enable_tls": true,
+      "behind_trusted_proxy": true,
       "routes": {
         "base": {
           "enabled": true,

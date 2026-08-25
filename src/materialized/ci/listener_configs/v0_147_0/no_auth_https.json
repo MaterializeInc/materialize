@@ -4,7 +4,8 @@
       "addr": "0.0.0.0:6875",
       "authenticator_kind": "None",
       "allowed_roles": "Normal",
-      "enable_tls": false
+      "enable_tls": false,
+      "behind_trusted_proxy": true
     },
     "internal": {
       "addr": "0.0.0.0:6877",
@@ -19,6 +20,7 @@
       "authenticator_kind": "None",
       "allowed_roles": "NormalAndInternal",
       "enable_tls": true,
+      "behind_trusted_proxy": true,
       "routes": {
         "base": true,
         "webhook": true,

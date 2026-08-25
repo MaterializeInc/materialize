@@ -7356,3 +7356,63 @@ fn test_startup_only_system_var_warns() {
         "RESET ALL warned without changing anything, notices: {notices:?}"
     );
 }
+
+// A client that reaches a listener directly must not be able to choose the
+// client IP recorded for its session, as network policies are evaluated
+// against it. Only a listener that a trusted proxy fronts may believe a PROXY
+// protocol header.
+#[mz_ore::test]
+#[allow(clippy::disallowed_methods)]
+fn test_proxy_header_requires_trusted_proxy() {
+    const SPOOFED_IP: Ipv4Addr = Ipv4Addr::new(1, 2, 3, 4);
+    const CLIENT_IP_QUERY: &str =
+        "SELECT client_ip FROM mz_internal.mz_sessions WHERE connection_id = pg_backend_pid()";
+
+    /// A PROXY protocol v2 header for an IPv4 TCP connection from `source`.
+    fn proxy_v2_header(source: Ipv4Addr) -> Vec<u8> {
+        let mut header = b"\r\n\r\n\x00\r\nQUIT\n".to_vec();
+        header.extend([0x21, 0x11]); // v2 PROXY command, IPv4 over TCP
+        header.extend(12u16.to_be_bytes()); // length of the address block
+        header.extend(source.octets());
+        header.extend(Ipv4Addr::LOCALHOST.octets());
+        header.extend(1111u16.to_be_bytes()); // source port
+        header.extend(1111u16.to_be_bytes()); // destination port
+        header
+    }
+
+    fn query_behind_proxy_header(addr: std::net::SocketAddr) -> String {
+        let body = serde_json::json!({ "query": CLIENT_IP_QUERY }).to_string();
+        let request = format!(
+            "POST /api/sql HTTP/1.1\r\n\
+             Host: {addr}\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len(),
+        );
+        let mut stream = std::net::TcpStream::connect(addr).unwrap();
+        stream.write_all(&proxy_v2_header(SPOOFED_IP)).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut response = vec![];
+        std::io::Read::read_to_end(&mut stream, &mut response).unwrap();
+        String::from_utf8_lossy(&response).into_owned()
+    }
+
+    // The header bytes stay in the stream, so the request does not parse as
+    // HTTP and never reaches the session.
+    let untrusted = test_util::TestHarness::default().start_blocking();
+    let response = query_behind_proxy_header(untrusted.http_local_addr());
+    assert!(
+        !response.contains(&SPOOFED_IP.to_string()),
+        "unexpected response: {response}"
+    );
+
+    let trusted = test_util::TestHarness::default()
+        .behind_trusted_proxy()
+        .start_blocking();
+    let response = query_behind_proxy_header(trusted.http_local_addr());
+    assert!(
+        response.contains(&SPOOFED_IP.to_string()),
+        "unexpected response: {response}"
+    );
+}

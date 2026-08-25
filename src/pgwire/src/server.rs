@@ -27,7 +27,7 @@ use openssl::ssl::Ssl;
 use tokio::io::AsyncWriteExt;
 use tokio_metrics::TaskMetrics;
 use tokio_openssl::SslStream;
-use tracing::{debug, error, trace};
+use tracing::{debug, error, trace, warn};
 
 use crate::codec::FramedConn;
 use crate::metrics::{Metrics, MetricsConfig};
@@ -60,6 +60,10 @@ pub struct Config {
     pub helm_chart_version: Option<String>,
     /// Whether to allow reserved users (ie: mz_system).
     pub allowed_roles: AllowedRoles,
+    /// Whether a trusted proxy (`balancerd`) fronts this listener, and thus
+    /// whether the forwarded connection metadata in the startup parameters can
+    /// be believed.
+    pub behind_trusted_proxy: bool,
 }
 
 /// A server that communicates with clients via the pgwire protocol.
@@ -73,6 +77,7 @@ pub struct Server {
     active_connection_counter: ConnectionCounter,
     helm_chart_version: Option<String>,
     allowed_roles: AllowedRoles,
+    behind_trusted_proxy: bool,
 }
 
 #[async_trait]
@@ -108,6 +113,7 @@ impl Server {
             active_connection_counter: config.active_connection_counter,
             helm_chart_version: config.helm_chart_version,
             allowed_roles: config.allowed_roles,
+            behind_trusted_proxy: config.behind_trusted_proxy,
         }
     }
 
@@ -126,6 +132,7 @@ impl Server {
         let active_connection_counter = self.active_connection_counter.clone();
         let helm_chart_version = self.helm_chart_version.clone();
         let allowed_roles = self.allowed_roles;
+        let behind_trusted_proxy = self.behind_trusted_proxy;
 
         // TODO(guswynn): remove this redundant_closure_call
         #[allow(clippy::redundant_closure_call)]
@@ -152,11 +159,30 @@ impl Server {
                                 version,
                                 mut params,
                             }) => {
-                                // If someone (usually the balancer) forwarded a connection UUID,
+                                // These parameters describe the client as the
+                                // proxy in front of this listener saw it, so
+                                // they are only believable when such a proxy
+                                // exists. Remove them either way so they never
+                                // reach session var initialization.
+                                let (forwarded_conn_uuid, forwarded_for) = {
+                                    let conn_uuid = params.remove(CONN_UUID_KEY);
+                                    let forwarded_for = params.remove(MZ_FORWARDED_FOR_KEY);
+                                    if behind_trusted_proxy {
+                                        (conn_uuid, forwarded_for)
+                                    } else {
+                                        if conn_uuid.is_some() || forwarded_for.is_some() {
+                                            warn!(
+                                                "ignoring forwarded connection metadata: listener is not behind a trusted proxy",
+                                            );
+                                        }
+                                        (None, None)
+                                    }
+                                };
+
+                                // If the balancer forwarded a connection UUID,
                                 // then use that, otherwise generate one.
                                 let conn_uuid_handle = conn.inner_mut().uuid_handle();
-                                let conn_uuid = params
-                                    .remove(CONN_UUID_KEY)
+                                let conn_uuid = forwarded_conn_uuid
                                     .and_then(|uuid| {
                                         uuid.parse()
                                             .inspect_err(|e| {
@@ -187,7 +213,7 @@ impl Server {
                                     .peer_addr()
                                     .context("fetching peer addr")?
                                     .ip();
-                                let peer_addr= match params.remove(MZ_FORWARDED_FOR_KEY) {
+                                let peer_addr= match forwarded_for {
                                     Some(ip_str) => {
                                         match IpAddr::from_str(&ip_str) {
                                             Ok(ip) => Some(ip),
