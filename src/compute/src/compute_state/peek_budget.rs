@@ -40,11 +40,11 @@ impl InlineBudgetConfig {
 
         ActivationBudget::Bounded {
             // A per-peek budget of zero would suspend every scan before it walked a position, and
-            // a suspension that holds no full batch is a promotion, so every point lookup would
-            // cost a task, a permit, and a trace bundle clone while walking nothing. The aggregate
-            // is untouched by such a peek, so this is a waste rather than a wedge, but it is also
-            // exactly what granting a peek an empty slice is documented to avoid. One position
-            // keeps the parameter monotone down to its floor.
+            // every suspension is a promotion, so every point lookup would cost a task and a
+            // permit while walking nothing. The aggregate is untouched by such a peek, so this is
+            // a waste rather than a wedge, but it is also exactly what granting a peek an empty
+            // slice is documented to avoid. One position keeps the parameter monotone down to its
+            // floor.
             per_peek: self.per_peek.get().max(1),
             // An aggregate of zero would pass every peek over on every activation, and the
             // activation a passed-over peek asks for would arrive to find the same empty budget,
