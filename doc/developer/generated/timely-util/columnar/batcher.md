@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar/batcher.rs
-revision: f0cdedca04
+revision: 24cd10bf65
 ---
 
 # timely-util::columnar::batcher

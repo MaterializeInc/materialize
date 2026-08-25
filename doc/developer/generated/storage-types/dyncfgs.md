@@ -1,6 +1,6 @@
 ---
 source: src/storage-types/src/dyncfgs.rs
-revision: de8eac0d16
+revision: 5a4a36c4fd
 ---
 
 # storage-types::dyncfgs

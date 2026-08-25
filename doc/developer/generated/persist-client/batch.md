@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/batch.rs
-revision: 4267863081
+revision: 5a4a36c4fd
 ---
 
 # persist-client::batch
