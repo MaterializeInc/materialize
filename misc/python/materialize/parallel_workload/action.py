@@ -3012,11 +3012,21 @@ class FlipFlagsAction(Action):
             "1000000000",
         ]
         # The production default, a value that yields after every position,
-        # and one that never yields within a walk.
+        # and one that covers any walk this workload produces in a single
+        # slice.
+        #
+        # The coarse value is capped rather than set to a billion, because an
+        # offloaded slice runs on an async task that yields only at slice
+        # boundaries. A slice that spans a whole walk therefore occupies a
+        # tokio worker thread for its duration, and the permit count is not
+        # sized to leave threads over for the rest of the process's async work.
+        # A hundred thousand positions is well past any arrangement this
+        # workload builds, so it exercises the same single-slice walk while
+        # keeping one slice short enough not to stall the runtime.
         self.flags_with_values["compute_index_peek_yield_granularity"] = [
             "10000",
             "1",
-            "1000000000",
+            "100000",
         ]
         # The default, which is one permit per worker in the process, a bound
         # that serializes every promoted walk, and one that never queues.
