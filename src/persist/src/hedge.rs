@@ -53,7 +53,7 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::future::{Either, select};
-use mz_dyncfg::{Config, ConfigSet};
+use mz_dyncfg::{Config, ConfigSet, ParameterScope};
 use mz_ore::bytes::SegmentedBytes;
 use mz_ore::cast::CastLossy;
 use mz_ore::task::AbortOnDropHandle;
@@ -67,6 +67,7 @@ pub(crate) const BLOB_HEDGED_GET_ENABLED: Config<bool> = Config::new(
     false,
     "Whether to hedge slow blob gets with a second request on a separate \
     connection pool (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_HEDGED_GET_DELAY: Config<Duration> = Config::new(
@@ -74,6 +75,7 @@ pub(crate) const BLOB_HEDGED_GET_DELAY: Config<Duration> = Config::new(
     Duration::from_secs(2),
     "How long a blob get may be in flight before a hedge request is fired \
     (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_HEDGED_GET_MAX_CONCURRENT: Config<usize> = Config::new(
@@ -84,6 +86,7 @@ pub(crate) const BLOB_HEDGED_GET_MAX_CONCURRENT: Config<usize> = Config::new(
     2,
     "Maximum concurrent hedge requests per blob handle, bounding the memory \
     held by raced gets and the number of warm sockets (Materialize).",
+    ParameterScope::Environment,
 );
 
 pub(crate) const BLOB_HEDGED_GET_BUDGET_RATIO: Config<f64> = Config::new(
@@ -91,6 +94,7 @@ pub(crate) const BLOB_HEDGED_GET_BUDGET_RATIO: Config<f64> = Config::new(
     0.01,
     "Long-run bound on hedge requests as a fraction of blob gets \
     (Materialize).",
+    ParameterScope::Environment,
 );
 
 // NOTE: the warmer only runs while hedging is enabled, so `enabled` stops
@@ -101,6 +105,7 @@ pub(crate) const BLOB_HEDGED_GET_WARM_INTERVAL: Config<Duration> = Config::new(
     Duration::from_secs(20),
     "How often to issue liveness gets that keep the hedge connection pool \
     warm, 0 disables warming without disabling hedging (Materialize).",
+    ParameterScope::Environment,
 );
 
 /// The cost of one hedge in bucket tokens. Micro-token granularity keeps
