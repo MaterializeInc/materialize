@@ -79,6 +79,9 @@ use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod error_scan;
 mod peek_result_iterator;
+// Nothing constructs a scan: the peek path drives the two walks it owns separately.
+#[allow(dead_code)]
+mod peek_scan;
 mod peek_stash;
 
 use self::error_scan::{ErrorScan, ErrorScanState, ErrorScanStep};
@@ -137,6 +140,14 @@ impl PeekRowIterationTracker {
 
     fn rows_iterated(&self) -> usize {
         self.rows_iterated
+    }
+
+    /// Adds rows examined by a walk that ran before this one.
+    ///
+    /// The limit bounds a peek rather than a single walk, so a walk that continues another one
+    /// starts from the count that one reached.
+    fn add_rows_iterated(&mut self, rows_iterated: usize) {
+        self.rows_iterated = self.rows_iterated.saturating_add(rows_iterated);
     }
 
     fn track_next(&mut self) -> Result<(), PeekError> {

@@ -83,11 +83,21 @@ impl ErrorScan {
     pub(super) fn new(errs: &mut ErrsHandle) -> Self {
         let scan_start = Instant::now();
         let (cursor, storage) = errs.cursor();
+        let mut scan = Self::from_cursor(cursor, storage);
+        scan.scan_time = scan_start.elapsed();
+        scan
+    }
+
+    /// Opens a walk over an already-opened cursor.
+    pub(super) fn from_cursor(
+        cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
+        storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+    ) -> Self {
         Self {
             cursor,
             storage,
             row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
-            scan_time: scan_start.elapsed(),
+            scan_time: Duration::ZERO,
         }
     }
 
@@ -207,12 +217,9 @@ mod tests {
         let batch = ErrBuilder::<Timestamp, Diff>::seal(&mut chain, description);
         let storage = vec![batch];
         let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
-        ErrorScan {
-            cursor,
-            storage,
-            row_iteration_tracker: PeekRowIterationTracker::new(row_iteration_limit, 0),
-            scan_time: Duration::ZERO,
-        }
+        let mut scan = ErrorScan::from_cursor(cursor, storage);
+        scan.set_row_iteration_limit(row_iteration_limit);
+        scan
     }
 
     /// Updates that put `error` in the trace at a multiplicity that cancels to zero at
