@@ -27,7 +27,6 @@ import {
   ModalOverlay,
   Radio,
   RadioGroup,
-  Select,
   Stack,
   Tab,
   Table,
@@ -59,6 +58,7 @@ import { SecretCopyableBox } from "~/components/copyableComponents";
 import TaggedMultiSelect from "~/components/Dropdown/TaggedComboBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { Modal } from "~/components/Modal";
+import SimpleSelect from "~/components/SimpleSelect";
 import StatusPill from "~/components/StatusPill";
 import { User } from "~/external-library-wrappers/frontegg";
 import {
@@ -272,7 +272,11 @@ const AppPasswordsInner = (props: {
                   <FormLabel htmlFor="expiresIn" fontSize="sm">
                     Expiration
                   </FormLabel>
-                  <Select {...register("expiresIn")} id="expiresIn" size="sm">
+                  <SimpleSelect
+                    {...register("expiresIn")}
+                    id="expiresIn"
+                    width="100%"
+                  >
                     {Object.entries(EXPIRES_IN_OPTIONS).map(
                       ([value, { label }]) => (
                         <option key={value} value={value}>
@@ -280,7 +284,7 @@ const AppPasswordsInner = (props: {
                         </option>
                       ),
                     )}
-                  </Select>
+                  </SimpleSelect>
                   <FormHelperText>
                     The app password stops working once it expires. Expiration
                     cannot be changed after creation.
@@ -392,7 +396,7 @@ const ExpiresCell = ({ expires }: { expires?: string }) => {
   const { colors } = useTheme<MaterializeTheme>();
 
   if (!expires) {
-    return <Text color={colors.gray["500"]}>Never</Text>;
+    return <Text color={colors.foreground.secondary}>Never</Text>;
   }
 
   const msUntilExpiry = new Date(expires).getTime() - Date.now();
@@ -473,7 +477,7 @@ const ApiTokensTableProps = ({
                 borderBottomColor={colors.border.primary}
               >
                 {token.type === "personal" ? (
-                  <Text color={colors.gray["500"]}>{userStr}</Text>
+                  <Text color={colors.foreground.secondary}>{userStr}</Text>
                 ) : (
                   userStr
                 )}
@@ -483,7 +487,7 @@ const ApiTokensTableProps = ({
                 borderBottomColor={colors.border.primary}
               >
                 {token.type === "personal" ? (
-                  <Text color={colors.gray["500"]}>
+                  <Text color={colors.foreground.secondary}>
                     {tokenRoles.join(", ")}
                   </Text>
                 ) : (
