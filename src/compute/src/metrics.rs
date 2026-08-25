@@ -221,7 +221,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_total_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_total_seconds",
-                help: "Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek polled repeatedly or walked in several slices contributes several observations. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. Excluding peeks that use the peek response stash.",
+                help: "Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk's end either promotes it or diverts it to the peek stash. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. Excluding peeks that use the peek response stash.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_seek_fulfillment_seconds: registry.register(with_role(metric!(
@@ -271,7 +271,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_walks_total: registry.register(with_role(metric!(
                 name: "mz_index_peek_walks_total",
-                help: "The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it. A cancelled walk reaches no outcome and is counted on neither. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.",
+                help: "The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it. A walk cancelled before it reaches an outcome is counted on neither. An offloaded walk cancelled after that, while its result is on its way back to the worker, counts as `offloaded`. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.",
                 var_labels: ["substrate"],
             ), role)),
             index_peek_permit_queue_depth: registry.register(with_role(metric!(
