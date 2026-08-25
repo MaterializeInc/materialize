@@ -268,17 +268,6 @@ bucket of its own. Around 100s the buckets step by 4s, and past 128s by 8s. Four
 bits of significand precision hold every bucket to within about 6% of the values
 it contains, so the bucket count stays bounded however far the tail runs.
 
-{{< note >}}
-
-[Percentile calculation](/transform-data/patterns/percentiles/) builds the
-histogram and the distribution as two views, which lets many queries share one
-maintained result. That is not available here: `CREATE VIEW` over an
-`mz_internal` relation is rejected with `cannot create view with unstable
-dependencies`, so the bucketing and the cumulative sum have to live in the same
-query, as above.
-
-{{< /note >}}
-
 To read a percentile, take the lowest bucket whose cumulative density reaches
 it. Wrapping the distribution in one more CTE and filtering on
 `cumulative_density` returns the approximate p99 freshness:
@@ -368,32 +357,5 @@ with 4 bits of significand precision, every integer up to 32s gets a bucket
 to itself, and merging only begins above that: 32s and 33s share a bucket, then
 34s and 35s, and so on. The approximation matters for objects that fall minutes
 or hours behind, not for healthy ones.
-
-{{< /note >}}
-
-{{< note >}}
-
-An HDR histogram over wallclock lag is weighted by time, not by query volume.
-Each row in the underlying relation is one minute-binned observation, so a p99
-computed this way is the 99th percentile of *minutes*, not of reads or of
-upstream writes. An object that is fast whenever it is queried but slow
-overnight will look worse here than it does to your application, and the
-reverse is also possible.
-
-Because each object contributes at most one observation per minute, the 24-hour
-window caps the resolution of a single object's tail at roughly 1440
-observations, so a p99 rests on about 14 of them and a p999 on one. Treat high
-percentiles for one object over one day as indicative rather than precise, and
-prefer the CCDF when you only need to check a fixed SLO threshold.
-
-{{< /note >}}
-
-{{< note >}}
-
-The self-join over `histogram` produces a number of outputs quadratic in its
-input. HDR bucketing keeps the histogram to a few dozen rows even for wide lag
-distributions, so the cost is small here. Do not substitute an exact,
-one-bucket-per-value histogram without reading the warning in [Percentile
-calculation](/transform-data/patterns/percentiles/).
 
 {{< /note >}}
