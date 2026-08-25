@@ -16,9 +16,9 @@ use mz_compute_client::protocol::response::PeekError;
 
 /// The merged cursor a [`TraceReader::cursor`] hands out over all of a trace's batches: a
 /// [`CursorList`] over the per-batch cursors.
-type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
+pub(super) type TraceCursor<Tr> = CursorList<BatchCursor<Tr>>;
 /// Backing storage for a [`TraceCursor`]: the batches the cursor borrows from.
-type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
+pub(super) type TraceStorage<Tr> = Vec<<Tr as TraceReader>::Batch>;
 use mz_repr::fixed_length::ExtendDatums;
 use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena};
 use timely::order::PartialOrder;

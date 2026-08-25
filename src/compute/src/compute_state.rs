@@ -69,13 +69,14 @@ use tokio::sync::{oneshot, watch};
 use tracing::{Level, debug, error, info, span, trace, warn};
 use uuid::Uuid;
 
-use crate::arrangement::manager::{TraceBundle, TraceManager};
+use crate::arrangement::manager::{PaddedTrace, TraceBundle, TraceManager};
 use crate::logging;
 use crate::logging::compute::{CollectionLogging, ComputeEvent, PeekEvent};
 use crate::logging::initialize::LoggingTraces;
 use crate::metrics::{CollectionMetrics, WorkerMetrics};
 use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
+use crate::typedefs::ErrAgent;
 
 mod peek_result_iterator;
 mod peek_stash;
@@ -156,7 +157,15 @@ fn peek_row_iteration_limit(config: &ConfigSet) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
+    use differential_dataflow::trace::cursor::CursorList;
+    use differential_dataflow::trace::{Batcher, Builder};
     use mz_dyncfg::ConfigUpdates;
+    use mz_expr::EvalError;
+    use mz_timely_util::columnation::ColumnationStack;
+    use timely::container::PushInto;
+
+    use crate::render::errors::DataflowErrorSer;
+    use crate::typedefs::{ErrBatcher, ErrBuilder};
 
     use super::*;
 
@@ -192,6 +201,129 @@ mod tests {
             tracker.track_next(),
             Err(PeekError::RowIterationLimitExceeded { limit: 5 })
         );
+    }
+
+    /// The time at which the peeks in these tests read.
+    const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
+
+    /// A distinct error for `index`.
+    ///
+    /// The order of the serialized form does not follow `index`, so a test that cares where a
+    /// key falls in the walk sorts the errors and picks by position.
+    fn error(index: usize) -> DataflowErrorSer {
+        DataflowErrorSer::from(EvalError::Internal(format!("error {index}").into()))
+    }
+
+    /// Builds a walk over a single-batch error trace holding `updates`.
+    fn error_scan(updates: Vec<((DataflowErrorSer, ()), Timestamp, Diff)>) -> ErrorScan {
+        let mut batcher = ErrBatcher::<Timestamp, Diff>::new(None, 0);
+        let mut chunk = ColumnationStack::with_capacity(updates.len());
+        for update in updates {
+            chunk.push_into(update);
+        }
+        batcher.push_into(chunk);
+        let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
+        let batch = ErrBuilder::<Timestamp, Diff>::seal(&mut chain, description);
+        let storage = vec![batch];
+        let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
+        ErrorScan {
+            cursor,
+            storage,
+            row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
+            scan_time: Duration::ZERO,
+        }
+    }
+
+    /// Updates that put `error` in the trace at a multiplicity that cancels to zero at
+    /// [`PEEK_TIMESTAMP`].
+    ///
+    /// The two updates sit at different times so that they survive consolidation: a key whose
+    /// updates consolidate away is not in the trace at all, and the walk never sees it.
+    fn cancelling(error: &DataflowErrorSer) -> Vec<((DataflowErrorSer, ()), Timestamp, Diff)> {
+        vec![
+            ((error.clone(), ()), Timestamp::new(0), Diff::ONE),
+            ((error.clone(), ()), PEEK_TIMESTAMP, Diff::MINUS_ONE),
+        ]
+    }
+
+    /// Runs `scan` to an answer in slices of `fuel_per_step` units, and returns that answer, the
+    /// fuel the walk spent, and the number of calls it took.
+    fn run_sliced(scan: &mut ErrorScan, fuel_per_step: usize) -> (ErrorScanStep, usize, usize) {
+        let mut consumed = 0;
+        // Bounded so that a walk which restarts from the first key on each resumption fails the
+        // test instead of hanging it.
+        for calls in 1..=100 {
+            let mut fuel = fuel_per_step;
+            let outcome = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+            consumed += fuel_per_step - fuel;
+            if !matches!(outcome, ErrorScanStep::OutOfFuel) {
+                return (outcome, consumed, calls);
+            }
+        }
+        panic!("walk did not answer within 100 resumptions");
+    }
+
+    /// An error trace whose keys cancel to zero at the peek's timestamp is walked key by key
+    /// before the error behind them is found. That walk spends fuel per key, so it suspends and
+    /// resumes rather than running the trace out in one call, and slicing it changes neither the
+    /// answer nor the work it costs.
+    #[mz_ore::test]
+    fn error_scan_is_fueled_and_resumable() {
+        let mut errors: Vec<DataflowErrorSer> = (0..64).map(error).collect();
+        errors.sort();
+        let (answering, cancelled) = errors.split_last().expect("non-empty");
+
+        let mut updates: Vec<_> = cancelled.iter().flat_map(cancelling).collect();
+        updates.push(((answering.clone(), ()), Timestamp::new(0), Diff::ONE));
+        let expected = PeekResponse::Error(answering.deserialize().into());
+
+        // The walk visits every cancelling key and then the key that answers.
+        let expected_fuel = errors.len();
+
+        let mut scan = error_scan(updates.clone());
+        let mut fuel = usize::MAX;
+        let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+        assert!(matches!(&unbudgeted, ErrorScanStep::Answer(response) if response == &expected));
+        assert_eq!(usize::MAX - fuel, expected_fuel);
+
+        // One unit of fuel per call: the walk answers only if each resumption picks up where the
+        // last stopped, and the fuel it spends in total says it neither repeated nor skipped a
+        // key.
+        let mut scan = error_scan(updates);
+        let (sliced, consumed, calls) = run_sliced(&mut scan, 1);
+        assert!(matches!(&sliced, ErrorScanStep::Answer(response) if response == &expected));
+        assert_eq!(consumed, expected_fuel);
+        assert!(calls > 1, "the budget did not slice the walk");
+    }
+
+    /// A walk that finds no error hands the ok scan the number of rows it examined, and slicing
+    /// the walk neither loses nor repeats a key in that count.
+    #[mz_ore::test]
+    fn error_scan_threads_row_count_across_suspensions() {
+        let errors: Vec<DataflowErrorSer> = (0..64).map(error).collect();
+        let updates: Vec<_> = errors.iter().flat_map(cancelling).collect();
+
+        // Every key cancels, so the walk visits all of them and then the position past the last
+        // key, which is where it learns the trace is exhausted.
+        let expected_fuel = errors.len() + 1;
+
+        let mut scan = error_scan(updates.clone());
+        let mut fuel = usize::MAX;
+        let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+        assert!(matches!(
+            unbudgeted,
+            ErrorScanStep::Clean { rows_iterated } if rows_iterated == errors.len()
+        ));
+        assert_eq!(usize::MAX - fuel, expected_fuel);
+
+        let mut scan = error_scan(updates);
+        let (sliced, consumed, calls) = run_sliced(&mut scan, 3);
+        assert!(matches!(
+            sliced,
+            ErrorScanStep::Clean { rows_iterated } if rows_iterated == errors.len()
+        ));
+        assert_eq!(consumed, expected_fuel);
+        assert!(calls > 1, "the budget did not slice the walk");
     }
 }
 
@@ -1475,6 +1607,7 @@ impl PendingPeek {
             peek,
             trace_bundle,
             span: tracing::Span::current(),
+            error_scan: None,
         })
     }
 
@@ -1723,6 +1856,122 @@ pub struct IndexPeek {
     trace_bundle: TraceBundle,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
+    /// The walk over the error trace, while it is in progress.
+    ///
+    /// `None` before the walk starts and once it finishes, so that a peek that is not scanning
+    /// holds no error batches.
+    error_scan: Option<ErrorScan>,
+}
+
+/// The error trace of an index, as [`TraceBundle::errs_mut`] hands it out.
+type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
+
+/// A walk over an index peek's error trace, suspendable between cursor positions.
+///
+/// Owns the cursor, the batches it reads from, the count of rows the walk has examined, and the
+/// worker time it has spent. Each of those outlives a single [`ErrorScan::step`]: the cursor and
+/// its batches because a suspended walk resumes at the key it stopped on, the count because the
+/// row-iteration limit spans the error trace and the ok trace together, and the time because the
+/// scan's cost is the sum of its slices rather than the wall clock spanning them.
+///
+/// It owns nothing of the ok trace, of the rows a peek returns, or of their size: a peek reaches
+/// those only once this walk reports [`ErrorScanStep::Clean`].
+struct ErrorScan {
+    cursor: peek_result_iterator::TraceCursor<ErrsHandle>,
+    storage: peek_result_iterator::TraceStorage<ErrsHandle>,
+    row_iteration_tracker: PeekRowIterationTracker,
+    /// Worker time spent walking, summed over the calls the walk was sliced into.
+    scan_time: Duration,
+}
+
+/// The outcome of a fueled [`ErrorScan::step`].
+enum ErrorScanStep {
+    /// The error trace holds no error at the peek's timestamp, so the peek's answer comes from
+    /// the ok trace. `rows_iterated` is the count the walk accrued, which the ok scan continues
+    /// from.
+    Clean { rows_iterated: usize },
+    /// The peek's answer: an error the trace holds at the peek's timestamp, or a failure of the
+    /// peek itself.
+    Answer(PeekResponse),
+    /// The fuel ran out before the walk reached either. The walk resumes at the cursor position
+    /// it stopped on, and that position has not been examined yet.
+    OutOfFuel,
+}
+
+impl ErrorScan {
+    /// Opens a walk over `errs`.
+    fn new(errs: &mut ErrsHandle, row_iteration_limit: Option<usize>) -> Self {
+        let scan_start = Instant::now();
+        let (cursor, storage) = errs.cursor();
+        Self {
+            cursor,
+            storage,
+            row_iteration_tracker: PeekRowIterationTracker::new(row_iteration_limit, 0),
+            scan_time: scan_start.elapsed(),
+        }
+    }
+
+    /// Advances the walk until it has an answer for the peek, the cursor is exhausted, or `fuel`
+    /// runs out, whichever comes first. Decrements `fuel` by the number of cursor positions
+    /// visited.
+    ///
+    /// A key whose diffs cancel to zero at `peek_timestamp` yields no answer, so fuel is charged
+    /// per position rather than per answer. Otherwise a trace that has accumulated many such keys
+    /// would run to its end within a single step, which is the stall the budget exists to bound.
+    fn step(
+        &mut self,
+        peek_timestamp: Timestamp,
+        target_id: GlobalId,
+        fuel: &mut usize,
+    ) -> ErrorScanStep {
+        let step_start = Instant::now();
+
+        let outcome = loop {
+            if *fuel == 0 {
+                break ErrorScanStep::OutOfFuel;
+            }
+            *fuel -= 1;
+
+            if !self.cursor.key_valid(&self.storage) {
+                break ErrorScanStep::Clean {
+                    rows_iterated: self.row_iteration_tracker.rows_iterated(),
+                };
+            }
+
+            if let Err(error) = self.row_iteration_tracker.track_next() {
+                break ErrorScanStep::Answer(PeekResponse::Error(error));
+            }
+
+            let mut copies = Diff::ZERO;
+            self.cursor.map_times(&self.storage, |time, diff| {
+                if time.less_equal(&peek_timestamp) {
+                    copies += diff;
+                }
+            });
+            if copies.is_negative() {
+                let error = self.cursor.key(&self.storage);
+                error!(
+                    target = %target_id, diff = %copies, %error,
+                    "index peek encountered negative multiplicities in error trace",
+                );
+                break ErrorScanStep::Answer(PeekResponse::Error(PeekError::unstructured(
+                    format!(
+                        "Invalid data in source errors, \
+                        saw retractions ({}) for row that does not exist: {}",
+                        -copies, error,
+                    ),
+                )));
+            }
+            if copies.is_positive() {
+                let error = self.cursor.key(&self.storage).deserialize();
+                break ErrorScanStep::Answer(PeekResponse::Error(error.into()));
+            }
+            self.cursor.step_key(&self.storage);
+        };
+
+        self.scan_time += step_start.elapsed();
+        outcome
+    }
 }
 
 /// Histogram metrics for index peek phases.
@@ -1812,45 +2061,16 @@ impl IndexPeek {
         row_iteration_limit: Option<usize>,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
-        let error_scan_start = Instant::now();
-
         // Check if there exist any errors and, if so, return whatever one we
         // find first.
-        let mut row_iteration_tracker = PeekRowIterationTracker::new(row_iteration_limit, 0);
-        let (mut cursor, storage) = self.trace_bundle.errs_mut().cursor();
-        while cursor.key_valid(&storage) {
-            if let Err(error) = row_iteration_tracker.track_next() {
-                return PeekStatus::Ready(PeekResponse::Error(error));
-            }
-
-            let mut copies = Diff::ZERO;
-            cursor.map_times(&storage, |time, diff| {
-                if time.less_equal(&self.peek.timestamp) {
-                    copies += diff;
-                }
-            });
-            if copies.is_negative() {
-                let error = cursor.key(&storage);
-                error!(
-                    target = %self.peek.target.id(), diff = %copies, %error,
-                    "index peek encountered negative multiplicities in error trace",
-                );
-                return PeekStatus::Ready(PeekResponse::Error(PeekError::unstructured(format!(
-                    "Invalid data in source errors, \
-                    saw retractions ({}) for row that does not exist: {}",
-                    -copies, error,
-                ))));
-            }
-            if copies.is_positive() {
-                let error = cursor.key(&storage).deserialize();
-                return PeekStatus::Ready(PeekResponse::Error(error.into()));
-            }
-            cursor.step_key(&storage);
-        }
-
-        metrics
-            .error_scan_seconds
-            .observe(error_scan_start.elapsed().as_secs_f64());
+        //
+        // No caller supplies a scan budget, so the walk runs to an answer in one step.
+        let mut fuel = usize::MAX;
+        let rows_iterated = match self.step_error_scan(row_iteration_limit, metrics, &mut fuel) {
+            ErrorScanStep::Clean { rows_iterated } => rows_iterated,
+            ErrorScanStep::Answer(response) => return PeekStatus::Ready(response),
+            ErrorScanStep::OutOfFuel => unreachable!("stepped with unbounded fuel"),
+        };
 
         Self::collect_ok_finished_data(
             &self.peek,
@@ -1859,9 +2079,41 @@ impl IndexPeek {
             peek_stash_eligible,
             peek_stash_threshold_bytes,
             row_iteration_limit,
-            row_iteration_tracker.rows_iterated(),
+            rows_iterated,
             metrics,
         )
+    }
+
+    /// Advances this peek's walk over its error trace, starting it if it has not started,
+    /// charging one unit of `fuel` per cursor position.
+    ///
+    /// The walk resumes where a previous call left off, so a caller must not treat
+    /// [`ErrorScanStep::OutOfFuel`] as an end of scan.
+    fn step_error_scan(
+        &mut self,
+        row_iteration_limit: Option<usize>,
+        metrics: &IndexPeekMetrics<'_>,
+        fuel: &mut usize,
+    ) -> ErrorScanStep {
+        if self.error_scan.is_none() {
+            self.error_scan = Some(ErrorScan::new(
+                self.trace_bundle.errs_mut(),
+                row_iteration_limit,
+            ));
+        }
+        let scan = self.error_scan.as_mut().expect("scan is present");
+        let outcome = scan.step(self.peek.timestamp, self.peek.target.id(), fuel);
+
+        if let ErrorScanStep::Clean { .. } = outcome {
+            // The ok trace answers the peek from here on, so release the error batches rather
+            // than pin them for the rest of the peek.
+            let scan = self.error_scan.take().expect("scan is present");
+            metrics
+                .error_scan_seconds
+                .observe(scan.scan_time.as_secs_f64());
+        }
+
+        outcome
     }
 
     /// Collects data for a known-complete peek from the ok stream.
