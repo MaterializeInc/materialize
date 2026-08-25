@@ -1,0 +1,103 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for PER-12. Under active GC, gc_and_truncate decides whether
+# it has work from the locally cached state, but fetches the diffs it needs
+# fresh from Consensus. A GC request can carry a `seqno_since` from arbitrarily
+# far in the past, because maybe_gc caps each request at
+# `last_gc_req + persist_gc_max_versions` and a queued request can be overtaken
+# by another process. If a concurrent GC has truncated to a rollup above that
+# `seqno_since`, `fetch_live_diffs_through` returns nothing while the cached
+# rollups map still suggests there is work to do. That empty result means the
+# work is already done, not that the shard is uninitialized, so GC must skip
+# the pass rather than panic on it.
+
+# Disable inline writes so the batch parts land in Blob, where GC can see them.
+dyncfg
+persist_inline_writes_single_max_bytes 0
+persist_inline_writes_total_max_bytes 0
+persist_gc_use_active_gc true
+----
+ok
+
+write-batch output=b0 lower=0 upper=1
+k1 0 1
+----
+parts=1 len=1
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v2 [1]
+
+write-batch output=b1 lower=1 upper=2
+k2 1 1
+----
+parts=1 len=1
+
+compare-and-append input=b1 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v3 [2]
+
+write-rollup output=v3
+----
+state=v3 diffs=[v1, v4)
+
+add-rollup input=v3
+----
+v4
+
+write-batch output=b2 lower=2 upper=3
+k3 2 1
+----
+parts=1 len=1
+
+compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v5 [3]
+
+write-rollup output=v5
+----
+state=v5 diffs=[v4, v6)
+
+add-rollup input=v5
+----
+v6
+
+write-batch output=b3 lower=3 upper=4
+k4 3 1
+----
+parts=1 len=1
+
+compare-and-append input=b3 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v7 [4]
+
+write-rollup output=v7
+----
+state=v7 diffs=[v6, v8)
+
+add-rollup input=v7
+----
+v8
+
+# GC only ever truncates to the seqno of a rollup <= its own seqno_since, so this
+# stands in for a concurrent GC that ran with a seqno_since >= 7 and truncated to
+# the rollup at v7. It has not yet reached its final step of removing the now-dead
+# rollups from state, so the GC below still sees rollups at v0, v3 and v5 and
+# believes it has work to do.
+consensus-truncate to_seqno=v7
+----
+Some(7)
+
+# A GC request that was assigned earlier, for a seqno_since that the truncation
+# above has already passed. No live diff remains at or below v6, so this pass has
+# nothing to collect and must skip rather than panic.
+gc to_seqno=v6
+----
+v8 batch_parts=0 rollups=0 truncated= state_rollups=
