@@ -42,7 +42,13 @@ impl InlineBudgetConfig {
         }
 
         InlineBudget::Bounded {
-            per_peek: self.per_peek.get(),
+            // A per-peek budget of zero would suspend every scan before it walked a position, and
+            // a suspension that holds no full batch is a promotion, so every point lookup would
+            // cost a task, a permit, and a trace bundle clone while walking nothing. The aggregate
+            // is untouched by such a peek, so this is a waste rather than a wedge, but it is also
+            // exactly what granting a peek an empty slice is documented to avoid. One position
+            // keeps the parameter monotone down to its floor.
+            per_peek: self.per_peek.get().max(1),
             // An aggregate of zero would pass every peek over on every activation, and the
             // activation a passed-over peek asks for would arrive to find the same empty budget,
             // so no peek would ever be answered. One position keeps the parameter monotone down
@@ -178,6 +184,22 @@ mod tests {
         updates.apply(&config);
 
         assert_eq!(budget_config.for_activation().grant(), Some(100));
+    }
+
+    /// A per-peek budget of zero still walks one position. Without that, every peek would be
+    /// promoted having walked nothing, which spends a task and a permit on a point lookup the
+    /// worker would have answered outright.
+    #[mz_ore::test]
+    fn a_zero_per_peek_budget_still_walks_one_position() {
+        let config = mz_dyncfgs::all_dyncfgs();
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+        updates.add(&INDEX_PEEK_INLINE_BUDGET, 0);
+        updates.apply(&config);
+
+        let budget = InlineBudgetConfig::new(&config).for_activation();
+
+        assert_eq!(budget.grant(), Some(1));
     }
 
     /// An aggregate of zero still serves one peek per activation. Without that, every peek would

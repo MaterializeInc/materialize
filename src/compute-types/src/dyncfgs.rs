@@ -675,6 +675,10 @@ pub const ENABLE_INDEX_PEEK_OFFLOAD: Config<bool> = Config::new(
 /// Read through a handle rather than captured once, so a change reaches peeks already in flight
 /// without discarding the positions they have walked.
 ///
+/// Zero walks one position rather than none. A peek granted no fuel suspends before it has walked
+/// anywhere, and a suspension holding no full batch is a promotion, so zero would promote every
+/// point lookup for a walk that visited nothing.
+///
 /// Environment-scoped because the threshold decides which peeks leave the worker. A value that
 /// differs by replica selects a different execution path for the same peek exactly as
 /// [`ENABLE_INDEX_PEEK_OFFLOAD`] does, gated by a count instead of by a boolean, and a peek is
