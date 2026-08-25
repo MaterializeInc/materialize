@@ -612,6 +612,11 @@ pub struct LeasedBatchPart<T> {
     /// still present in state distinguishes a lost lease from a GC bug.
     pub(crate) reader_id: LeasedReaderId,
     pub(crate) filter_pushdown_audit: bool,
+    /// Whether the containing batch has a run that may hold updates outside
+    /// the registered desc (see `RunMeta::bounds_truncated`). A fetch filters
+    /// those updates out, but write-time part statistics count them, so
+    /// optimizations that substitute statistics for a fetch must not fire.
+    pub(crate) bounds_truncated: bool,
 }
 
 impl<T> LeasedBatchPart<T>
@@ -670,6 +675,12 @@ where
             FetchBatchFilter::Listen { .. } | FetchBatchFilter::Compaction { .. } => return,
         };
         if !OPTIMIZE_IGNORED_DATA_FETCH.get(cfg) {
+            return;
+        }
+        // A truncated batch's parts may physically hold updates outside the
+        // registered desc. A fetch filters those out, but the write-time
+        // diffs_sum counts them, so substituting it would fabricate data.
+        if self.bounds_truncated {
             return;
         }
         let (diffs_sum, _stats) = match &self.part {
