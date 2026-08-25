@@ -74,10 +74,7 @@ import {
 } from "~/queries/frontegg";
 import ConnectionIcon from "~/svg/ConnectionIcon";
 import { MaterializeTheme } from "~/theme";
-import {
-  formatDate,
-  FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-} from "~/utils/dateFormat";
+import { DATE_FORMAT, formatDate } from "~/utils/dateFormat";
 import { toBase64 } from "~/utils/format";
 import { obfuscateSecret } from "~/utils/format";
 
@@ -403,9 +400,9 @@ const ExpiresCell = ({ expires }: { expires?: string }) => {
   const msUntilExpiry = new Date(expires).getTime() - Date.now();
 
   return (
-    <HStack>
-      <Text>
-        {formatDate(new Date(expires), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}
+    <HStack flexWrap="wrap">
+      <Text whiteSpace="nowrap">
+        {formatDate(new Date(expires), DATE_FORMAT)}
       </Text>
       {msUntilExpiry <= 0 && <StatusPill status="expired" colorScheme="red" />}
       {msUntilExpiry > 0 && msUntilExpiry <= EXPIRING_SOON_MS && (
@@ -498,12 +495,9 @@ const ApiTokensTableProps = ({
               <Td
                 borderBottomWidth="1px"
                 borderBottomColor={colors.border.primary}
+                whiteSpace="nowrap"
               >
-                {" "}
-                {formatDate(
-                  new Date(token.createdAt),
-                  FRIENDLY_DATETIME_FORMAT_NO_SECONDS,
-                )}
+                {formatDate(new Date(token.createdAt), DATE_FORMAT)}
               </Td>
               <Td
                 borderBottomWidth="1px"
