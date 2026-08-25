@@ -1847,38 +1847,58 @@ impl IndexPeek {
         if scan.error_trace_clean() {
             metrics
                 .error_scan_seconds
-                .observe(scan.error_scan_time.as_secs_f64());
+                .observe(scan.error_scan_time().as_secs_f64());
             metrics
                 .cursor_setup_seconds
-                .observe(scan.cursor_setup_time.as_secs_f64());
+                .observe(scan.cursor_setup_time().as_secs_f64());
         }
 
         let rows = match outcome {
             ScanOutcome::Complete(rows) => rows,
             ScanOutcome::Failed(error) => return PeekStatus::Ready(PeekResponse::Error(error)),
-            // Unbounded fuel leaves a full batch as the only thing that can stop the scan short of
-            // an answer. The batch is taken and dropped rather than left to the scan's own drop,
-            // because discarding it is this driver's decision: the stash answers the peek from a
-            // walk of its own, so the prefix has no reader.
+            // Diversion is sound only for a scan whose error walk is over. The stash answers the
+            // peek from a walk of the ok trace alone and never reads the error trace, so a peek
+            // diverted with its error trace half-read would return rows where it must report an
+            // error. Unbounded fuel is what keeps that out of reach here, because a full batch is
+            // then the only thing that stops the scan, and only the ok walk accumulates rows. A
+            // driver that gives the scan a bounded budget makes an error-phase suspension
+            // reachable and owns resuming the scan rather than diverting it.
+            //
+            // The batch is taken and dropped rather than left to the scan's own drop, because
+            // discarding it is this driver's decision: the stash's own walk supersedes it.
             ScanOutcome::Suspended => {
                 let batch = scan.take_batch();
-                debug_assert!(batch.is_some(), "unbounded fuel stops only on a full batch");
+                if !scan.error_trace_clean() {
+                    soft_panic_or_log!(
+                        "peek on {} suspended before its error trace was read out",
+                        self.peek.target.id()
+                    );
+                    return PeekStatus::Ready(PeekResponse::Error(PeekError::unstructured(
+                        "peek suspended before its error trace was read out",
+                    )));
+                }
+                if batch.is_none() {
+                    soft_panic_or_log!(
+                        "peek on {} suspended with no batch to hand over",
+                        self.peek.target.id()
+                    );
+                }
                 return PeekStatus::UsePeekStash;
             }
         };
 
         metrics
             .row_iteration_seconds
-            .observe(scan.row_iteration_time.as_secs_f64());
+            .observe(scan.row_iteration_time().as_secs_f64());
         metrics
             .row_iteration_rows
             .observe(f64::cast_lossy(scan.rows_processed()));
         metrics
             .result_sort_seconds
-            .observe(scan.result_sort_time.as_secs_f64());
+            .observe(scan.result_sort_time().as_secs_f64());
         metrics
             .result_sort_rows
-            .observe(f64::cast_lossy(scan.rows_sorted));
+            .observe(f64::cast_lossy(scan.rows_sorted()));
 
         let row_collection_start = Instant::now();
         let rows = rows

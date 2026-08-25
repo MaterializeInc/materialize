@@ -49,6 +49,10 @@ pub(super) enum ScanOutcome {
     /// Carries nothing. The scan retains the rows it has accumulated, and a driver that can write
     /// rows collects them through [`PeekScan::take_batch`]. A driver that cannot is never handed
     /// rows it would have to drop.
+    ///
+    /// The two causes are not distinguishable without taking the rows: the only question a driver
+    /// can ask is [`PeekScan::take_batch`], which empties the scan. Both drivers the scan is built
+    /// for treat the causes alike, so no accessor separates them.
     Suspended,
     /// The walk is over. Carries the rows accumulated since the last batch was taken, which
     /// together with the batches already taken are the peek's answer.
@@ -113,16 +117,16 @@ where
     /// finishing asks for.
     comparator: Option<RowComparator>,
     /// Worker time the error walk spent, summed over the slices it was cut into.
-    pub(super) error_scan_time: Duration,
+    error_scan_time: Duration,
     /// Worker time spent opening the ok cursor.
-    pub(super) cursor_setup_time: Duration,
+    cursor_setup_time: Duration,
     /// Worker time the ok walk spent, summed over the slices it was cut into. Includes the time
     /// thinning spent sorting.
-    pub(super) row_iteration_time: Duration,
+    row_iteration_time: Duration,
     /// Worker time thinning spent sorting, summed over the times it ran.
-    pub(super) result_sort_time: Duration,
+    result_sort_time: Duration,
     /// Rows handed to a sort, summed over the times thinning ran.
-    pub(super) rows_sorted: usize,
+    rows_sorted: usize,
 }
 
 impl<Tr> PeekScan<Tr>
@@ -229,6 +233,32 @@ where
         self.oks.rows_processed()
     }
 
+    /// Worker time the error walk spent, summed over the slices it was cut into.
+    pub(super) fn error_scan_time(&self) -> Duration {
+        self.error_scan_time
+    }
+
+    /// Worker time spent opening the ok cursor.
+    pub(super) fn cursor_setup_time(&self) -> Duration {
+        self.cursor_setup_time
+    }
+
+    /// Worker time the ok walk spent, summed over the slices it was cut into. Includes the time
+    /// thinning spent sorting.
+    pub(super) fn row_iteration_time(&self) -> Duration {
+        self.row_iteration_time
+    }
+
+    /// Worker time thinning spent sorting, summed over the times it ran.
+    pub(super) fn result_sort_time(&self) -> Duration {
+        self.result_sort_time
+    }
+
+    /// Rows handed to a sort, summed over the times thinning ran.
+    pub(super) fn rows_sorted(&self) -> usize {
+        self.rows_sorted
+    }
+
     /// Whether the walk over the error trace has ended without finding an error, which is the only
     /// way the ok walk runs at all.
     ///
@@ -289,6 +319,15 @@ where
         row_iteration_limit: Option<usize>,
         fuel: &mut usize,
     ) -> ScanOutcome {
+        // A scan that already holds a full batch stays where it is until the batch is taken, so
+        // the bound on what one scan retains is a property of the scan rather than a rule each
+        // driver keeps. Without this, a driver that steps in a loop and takes batches on its own
+        // schedule would grow the prefix by a row per call, and past the stash threshold the
+        // result-size ceiling no longer bounds that growth either.
+        if self.batch_ready() {
+            return ScanOutcome::Suspended;
+        }
+
         self.oks.set_row_iteration_limit(row_iteration_limit);
 
         let row_iteration_start = Instant::now();
@@ -652,6 +691,53 @@ mod tests {
             subject.step(None, &mut fuel),
             ScanOutcome::Complete(RowBatch::new())
         );
+    }
+
+    /// A scan holding a full batch stops where it stands until the batch is taken. Stepping it
+    /// again pulls no row and grows no prefix, which is what bounds what one scan retains for a
+    /// driver that steps in a loop and takes batches on a schedule of its own.
+    #[mz_ore::test]
+    fn a_batch_ready_scan_does_not_grow_when_stepped_again() {
+        let keys = rows(0..8);
+        let mut subject = scan(ErrorPhase::Clean, &keys);
+        subject.peek_stash_eligible = true;
+        // Crossed by the third row, which leaves rows behind it in the trace.
+        subject.peek_stash_threshold_bytes = 2 * row_size();
+
+        let mut fuel = usize::MAX;
+        assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Suspended);
+        let retained = subject.results.clone();
+        let total_size = subject.total_size;
+        let rows_processed = subject.rows_processed();
+        assert_eq!(retained, expected(0..3));
+
+        // Four resumptions are enough to expose growth of a row per step, and the bound keeps a
+        // scan that walks its trace out from ending this loop on its own.
+        for _ in 0..4 {
+            let mut fuel = usize::MAX;
+            assert_eq!(
+                subject.step(None, &mut fuel),
+                ScanOutcome::Suspended,
+                "a scan holding a batch has nothing to report but the batch"
+            );
+            assert_eq!(
+                subject.results, retained,
+                "stepping a batch-ready scan must not grow its prefix"
+            );
+            assert_eq!(subject.total_size, total_size);
+            assert_eq!(
+                subject.rows_processed(),
+                rows_processed,
+                "stepping a batch-ready scan must not advance its cursor"
+            );
+            assert_eq!(fuel, usize::MAX, "a scan holding a batch spends no fuel");
+        }
+
+        // Taking the batch is what lets the walk go on.
+        assert_eq!(subject.take_batch(), Some(retained));
+        let mut fuel = usize::MAX;
+        assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Suspended);
+        assert_eq!(subject.results, expected(3..6));
     }
 
     /// A peek that cannot use the stash is never offered a batch, however large its accumulation
