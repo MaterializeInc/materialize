@@ -240,33 +240,20 @@ The query returns output like the following:
 ```none
  bucket_seconds | count_of_bucket_values | cumulative_count | cumulative_density
 ----------------+------------------------+------------------+--------------------
-              1 |                  11082 |            11082 |   0.50356704684873
-              2 |                   2368 |            13450 |  0.611169173444813
-              3 |                   1367 |            14817 | 0.6732857727086836
-              4 |                   1382 |            16199 | 0.7360839732812287
-              5 |                   1594 |            17793 | 0.8085154723497069
-              6 |                   1253 |            19046 | 0.8654519016676512
-              7 |                   1018 |            20064 | 0.9117099104830281
-              8 |                    455 |            20519 | 0.9323851501794883
-              9 |                    289 |            20808 |  0.945517335393284
-             10 |                    196 |            21004 | 0.9544235924932976
-             11 |                    124 |            21128 | 0.9600581633116736
-...
-            100 |                      9 |            21992 | 0.9993183986913254
-            104 |                      2 |            21994 | 0.9994092788658154
-            108 |                      4 |            21998 | 0.9995910392147953
-            112 |                      3 |            22001 | 0.9997273594765302
-            116 |                      2 |            22003 | 0.9998182396510201
-            120 |                      2 |            22005 | 0.9999091198255101
-            128 |                      1 |            22006 | 0.9999545599127551
-            152 |                      1 |            22007 |                  1
-(64 rows)
+              1 |                   7613 |             7613 | 0.9450099304865939
+              2 |                    366 |             7979 |  0.990441906653426
+              3 |                     32 |             8011 | 0.9944141012909633
+              4 |                     36 |             8047 | 0.9988828202581926
+              5 |                      7 |             8054 | 0.9997517378351539
+              6 |                      2 |             8056 |                  1
+(6 rows)
 ```
 
-The bucket widening is visible in the output above. Near 1s every integer gets a
-bucket of its own. Around 100s the buckets step by 4s, and past 128s by 8s. Four
-bits of significand precision hold every bucket to within about 6% of the values
-it contains, so the bucket count stays bounded however far the tail runs.
+Every bucket here is a whole number of seconds, because at this range 4 bits of
+significand precision is finer than the 1s resolution of the measurement itself.
+The buckets only start to widen further out, and 4 bits hold every one of them to
+within about 6% of the values it contains, so the bucket count stays bounded
+however far the tail runs.
 
 To read a percentile, take the lowest bucket whose cumulative density reaches
 it. Wrapping the distribution in one more CTE and filtering on
@@ -316,7 +303,7 @@ LIMIT 1;
 ```none
  approximate_p99
 -----------------
-              46
+               2
 (1 row)
 ```
 
