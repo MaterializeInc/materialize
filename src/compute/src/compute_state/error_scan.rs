@@ -23,25 +23,6 @@ use super::{PeekRowIterationTracker, peek_result_iterator};
 /// [`TraceBundle::errs_mut`](crate::arrangement::manager::TraceBundle::errs_mut) hands it out.
 pub(super) type ErrsHandle = PaddedTrace<ErrAgent<Timestamp, Diff>>;
 
-/// The state of an index peek's walk over its error trace.
-///
-/// The walk latches on the outcome that ends it. [`ErrorScanState::Clean`] and
-/// [`ErrorScanState::Answered`] record which of the two terminal outcomes occurred and hold the
-/// value needed to report it again, so a later step repeats it without walking the trace a second
-/// time and without holding a cursor. The two are separate variants because they decide different
-/// fates for the peek: a clean trace sends it on to the ok trace, an answer is its response.
-pub(super) enum ErrorScanState {
-    /// The walk has not started, and holds no cursor yet.
-    NotStarted,
-    /// The walk is under way, and resumes from the cursor position it stopped on.
-    Scanning(ErrorScan),
-    /// The walk reached the end of the trace without finding an error, having examined
-    /// `rows_iterated` rows.
-    Clean { rows_iterated: usize },
-    /// The walk found the error that answers the peek.
-    Answered(PeekError),
-}
-
 /// A walk over an index peek's error trace, suspendable between cursor positions.
 ///
 /// Owns the cursor, the batches it reads from, the count of rows the walk has examined, and the
@@ -116,12 +97,12 @@ impl ErrorScan {
     /// would run to its end within a single step, which is the stall the budget exists to bound.
     ///
     /// A terminal outcome does not latch here.
-    /// [`IndexPeek::step_error_scan`](super::IndexPeek::step_error_scan) holds the state that
-    /// latches it, so that a caller which steps again gets that outcome back without the walk
-    /// examining the position it stopped on a second time. The latch cannot live in the walk
-    /// itself: a walk that latched its own outcome could not release the `cursor` and `storage`
-    /// it is reading through, short of making both fields `Option`s that every step unwraps, and
-    /// a finished peek would go on pinning error batches it will never read again.
+    /// [`PeekScan`](super::peek_scan::PeekScan)'s error phase holds the state that latches it, so
+    /// that a caller which steps again gets that outcome back without the walk examining the
+    /// position it stopped on a second time. The latch cannot live in the walk itself: a walk that
+    /// latched its own outcome could not release the `cursor` and `storage` it is reading through,
+    /// short of making both fields `Option`s that every step unwraps, and a finished peek would go
+    /// on pinning error batches it will never read again.
     pub(super) fn step(
         &mut self,
         peek_timestamp: Timestamp,

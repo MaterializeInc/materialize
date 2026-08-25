@@ -17,9 +17,7 @@ use std::time::{Duration, Instant};
 use bytesize::ByteSize;
 use differential_dataflow::Hashable;
 use differential_dataflow::lattice::Lattice;
-use differential_dataflow::trace::cursor::BatchCursor;
-use differential_dataflow::trace::implementations::BatchContainer;
-use differential_dataflow::trace::{Cursor, Navigable, TraceReader};
+use differential_dataflow::trace::TraceReader;
 use mz_compute_client::logging::LoggingConfig;
 use mz_compute_client::protocol::command::{
     ComputeCommand, ComputeParameters, InstanceConfig, Peek, PeekTarget,
@@ -36,8 +34,8 @@ use mz_compute_types::dyncfgs::{
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
+use mz_expr::SafeMfpPlan;
 use mz_expr::row::RowCollection;
-use mz_expr::{RowComparator, SafeMfpPlan};
 use mz_ore::cast::{CastFrom, CastLossy};
 use mz_ore::collections::CollectionExt;
 use mz_ore::metrics::{MetricsRegistry, UIntGauge};
@@ -51,8 +49,7 @@ use mz_persist_client::cfg::USE_CRITICAL_SINCE_SNAPSHOT;
 use mz_persist_client::read::ReadHandle;
 use mz_persist_types::PersistLocation;
 use mz_persist_types::codec_impls::UnitSchema;
-use mz_repr::fixed_length::ExtendDatums;
-use mz_repr::{DatumVec, Diff, GlobalId, Row, RowArena, Timestamp};
+use mz_repr::{DatumVec, GlobalId, Row, RowArena, Timestamp};
 use mz_storage_operators::stats::StatsCursor;
 use mz_storage_types::StorageDiff;
 use mz_storage_types::controller::CollectionMetadata;
@@ -79,12 +76,10 @@ use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod error_scan;
 mod peek_result_iterator;
-// Nothing constructs a scan: the peek path drives the two walks it owns separately.
-#[allow(dead_code)]
 mod peek_scan;
 mod peek_stash;
 
-use self::error_scan::{ErrorScan, ErrorScanState, ErrorScanStep};
+use self::peek_scan::{PeekScan, ScanOutcome};
 
 /// Cheap handles on the dyncfgs that bound how many rows a peek may examine.
 ///
@@ -1489,7 +1484,6 @@ impl PendingPeek {
             peek,
             trace_bundle,
             span: tracing::Span::current(),
-            error_scan: ErrorScanState::NotStarted,
         })
     }
 
@@ -1738,11 +1732,6 @@ pub struct IndexPeek {
     trace_bundle: TraceBundle,
     /// The `tracing::Span` tracking this peek's operation
     span: tracing::Span,
-    /// The state of the walk over the error trace.
-    ///
-    /// Only [`ErrorScanState::Scanning`] holds a cursor, so a peek that is not walking its error
-    /// trace pins no error batches.
-    error_scan: ErrorScanState,
 }
 
 /// Histogram metrics for index peek phases.
@@ -1823,12 +1812,12 @@ impl IndexPeek {
         result
     }
 
-    /// Collects data for a known-complete peek from the ok stream.
+    /// Answers the peek by scanning the traces that fulfil it.
     ///
-    /// Call this at most once per readiness. The two phases it drives are not equally
-    /// resumable: the error walk latches its state across calls, while the ok scan rebuilds its
-    /// iterator from the start of the ok trace and accumulates into locals that are dropped when
-    /// the call returns. A second call therefore re-walks the whole ok trace.
+    /// One call drives one scan to an answer and drops it, so nothing survives the call and a
+    /// second call repeats both walks from the start. That is what the peek path asks for: it
+    /// reaches this only once the frontiers admit the read, and every outcome retires the peek
+    /// from the index-peek path, either with a response or by handing it to the stash.
     fn collect_finished_data(
         &mut self,
         max_result_size: u64,
@@ -1837,259 +1826,73 @@ impl IndexPeek {
         row_iteration_limit: Option<usize>,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
-        // Check if there exist any errors and, if so, return whatever one we
-        // find first.
-        //
-        // No caller supplies a scan budget, so the walk runs to an answer in one step.
-        let mut fuel = usize::MAX;
-        let rows_iterated = match self.step_error_scan(row_iteration_limit, metrics, &mut fuel) {
-            ErrorScanStep::Clean { rows_iterated } => rows_iterated,
-            ErrorScanStep::Answer(error) => return PeekStatus::Ready(PeekResponse::Error(error)),
-            ErrorScanStep::OutOfFuel => unreachable!("stepped with unbounded fuel"),
-        };
-
-        Self::collect_ok_finished_data(
-            &self.peek,
-            self.trace_bundle.oks_mut(),
+        let peek = &self.peek;
+        let (oks, errs) = self.trace_bundle.oks_errs_mut();
+        let mut scan = PeekScan::new(
+            peek,
+            errs,
+            oks,
             max_result_size,
             peek_stash_eligible,
             peek_stash_threshold_bytes,
-            row_iteration_limit,
-            rows_iterated,
-            metrics,
-        )
-    }
-
-    /// Advances this peek's walk over its error trace, starting it if it has not started,
-    /// charging one unit of `fuel` per cursor position.
-    ///
-    /// The walk resumes where a previous call left off, so a caller must not treat
-    /// [`ErrorScanStep::OutOfFuel`] as an end of scan.
-    ///
-    /// The outcome that ends the walk latches. Once the walk has reported
-    /// [`ErrorScanStep::Clean`] or [`ErrorScanStep::Answer`], every further call reports that same
-    /// outcome, spends no fuel, and reads no trace. An answer therefore stays an answer, and a
-    /// peek that must report an error can never be sent on to return rows instead.
-    fn step_error_scan(
-        &mut self,
-        row_iteration_limit: Option<usize>,
-        metrics: &IndexPeekMetrics<'_>,
-        fuel: &mut usize,
-    ) -> ErrorScanStep {
-        match &self.error_scan {
-            ErrorScanState::NotStarted => {
-                self.error_scan =
-                    ErrorScanState::Scanning(ErrorScan::new(self.trace_bundle.errs_mut()));
-            }
-            ErrorScanState::Scanning(_) => {}
-            ErrorScanState::Clean { rows_iterated } => {
-                return ErrorScanStep::Clean {
-                    rows_iterated: *rows_iterated,
-                };
-            }
-            ErrorScanState::Answered(error) => return ErrorScanStep::Answer(error.clone()),
-        }
-
-        let ErrorScanState::Scanning(scan) = &mut self.error_scan else {
-            unreachable!("walk is under way");
-        };
-        // The limit bounds the peek, not the call, so a walk already under way adopts the limit
-        // that is in effect now rather than the one that was in effect when it started.
-        scan.set_row_iteration_limit(row_iteration_limit);
-        let outcome = scan.step(self.peek.timestamp, self.peek.target.id(), fuel);
-        let scan_time = scan.scan_time;
-
-        // Both terminal outcomes drop the walk, so that a peek pins error batches only while it
-        // is reading them.
-        match &outcome {
-            ErrorScanStep::Clean { rows_iterated } => {
-                self.error_scan = ErrorScanState::Clean {
-                    rows_iterated: *rows_iterated,
-                };
-                // Reached at most once per peek, because the latched state answers any
-                // further call. A scan that answers with an error observes nothing.
-                metrics.error_scan_seconds.observe(scan_time.as_secs_f64());
-            }
-            ErrorScanStep::Answer(error) => {
-                self.error_scan = ErrorScanState::Answered(error.clone());
-            }
-            ErrorScanStep::OutOfFuel => {}
-        }
-
-        outcome
-    }
-
-    /// Collects data for a known-complete peek from the ok stream.
-    fn collect_ok_finished_data<Tr>(
-        peek: &Peek,
-        oks_handle: &mut Tr,
-        max_result_size: u64,
-        peek_stash_eligible: bool,
-        peek_stash_threshold_bytes: usize,
-        row_iteration_limit: Option<usize>,
-        rows_iterated: usize,
-        metrics: &IndexPeekMetrics<'_>,
-    ) -> PeekStatus
-    where
-        Tr: TraceReader<Batch: Navigable>,
-        for<'a> BatchCursor<Tr>: Cursor<
-                Key<'a>: ExtendDatums + Eq,
-                KeyContainer: BatchContainer<Owned = Row>,
-                Val<'a>: ExtendDatums,
-                TimeGat<'a>: PartialOrder<Timestamp>,
-                DiffGat<'a> = &'a Diff,
-            >,
-    {
-        let max_result_size = usize::cast_from(max_result_size);
-        let count_byte_size = size_of::<NonZeroUsize>();
-
-        // Cursor setup timing
-        let cursor_setup_start = Instant::now();
-
-        // We clone `literal_constraints` here because we don't want to move the constraints
-        // out of the peek struct, and don't want to modify in-place.
-        let mut peek_iterator = peek_result_iterator::PeekResultIterator::new(
-            peek.target.id().clone(),
-            peek.map_filter_project.clone(),
-            peek.timestamp,
-            peek.literal_constraints.clone().as_deref_mut(),
-            oks_handle,
-            row_iteration_limit,
-            rows_iterated,
         );
 
-        metrics
-            .cursor_setup_seconds
-            .observe(cursor_setup_start.elapsed().as_secs_f64());
+        // No caller supplies a budget, so nothing stops the scan short of an answer but a full
+        // batch, and this driver has nowhere to write one.
+        let mut fuel = usize::MAX;
+        let outcome = scan.step(row_iteration_limit, &mut fuel);
 
-        // Accumulated `Vec<(row, count)>` results that we are likely to return.
-        let mut results = Vec::new();
-        let mut total_size: usize = 0;
+        // Both phases that precede the ok walk are reported only for a peek that reached that
+        // walk, so a peek answered by its error trace reports neither.
+        if scan.error_trace_clean() {
+            metrics
+                .error_scan_seconds
+                .observe(scan.error_scan_time.as_secs_f64());
+            metrics
+                .cursor_setup_seconds
+                .observe(scan.cursor_setup_time.as_secs_f64());
+        }
 
-        // When set, a bound on the number of records we need to return.
-        // The requirements on the records are driven by the finishing's
-        // `order_by` field. Further limiting will happen when the results
-        // are collected, so we don't need to have exactly this many results,
-        // just at least those results that would have been returned.
-        let max_results = peek.finishing.num_rows_needed();
-
-        let comparator = RowComparator::new(peek.finishing.order_by.as_slice());
-
-        // Row iteration timing
-        let row_iteration_start = Instant::now();
-        let mut sort_time_accum = Duration::ZERO;
-        let mut rows_sorted = 0usize;
-
-        while let Some(row) = peek_iterator.next() {
-            let row: (Row, _) = match row {
-                Ok(row) => row,
-                Err(err) => return PeekStatus::Ready(PeekResponse::Error(err)),
-            };
-            let (row, copies) = row;
-            let copies: NonZeroUsize = NonZeroUsize::try_from(copies).expect("fits into usize");
-
-            total_size = total_size
-                .saturating_add(row.byte_len())
-                .saturating_add(count_byte_size);
-            if peek_stash_eligible && total_size > peek_stash_threshold_bytes {
+        let rows = match outcome {
+            ScanOutcome::Complete(rows) => rows,
+            ScanOutcome::Failed(error) => return PeekStatus::Ready(PeekResponse::Error(error)),
+            // Unbounded fuel leaves a full batch as the only thing that can stop the scan short of
+            // an answer. The batch is taken and dropped rather than left to the scan's own drop,
+            // because discarding it is this driver's decision: the stash answers the peek from a
+            // walk of its own, so the prefix has no reader.
+            ScanOutcome::Suspended => {
+                let batch = scan.take_batch();
+                debug_assert!(batch.is_some(), "unbounded fuel stops only on a full batch");
                 return PeekStatus::UsePeekStash;
             }
-            if total_size > max_result_size {
-                return PeekStatus::Ready(PeekResponse::Error(PeekError::unstructured(format!(
-                    "result exceeds max size of {}",
-                    ByteSize::b(u64::cast_from(max_result_size))
-                ))));
-            }
-
-            results.push((row, copies));
-
-            // If we hold many more than `max_results` records, we can thin down
-            // `results` using `self.finishing.ordering`.
-            if let Some(max_results) = max_results {
-                // We use a threshold twice what we intend, to amortize the work
-                // across all of the insertions. We could tighten this, but it
-                // works for the moment.
-                //
-                // `max_results` is `limit + offset`, so a `LIMIT` near
-                // `i64::MAX` makes the doubling overflow. We then hold fewer
-                // rows than the threshold no matter what, and never thin. That
-                // is the right answer: such a peek cannot accumulate that many
-                // rows anyway, the result size limit stops it long before.
-                // Wrapping instead would make the threshold tiny, and we would
-                // thin while holding almost nothing, dropping rows past the end
-                // of the buffer.
-                if max_results
-                    .checked_mul(2)
-                    .is_some_and(|threshold| results.len() >= threshold)
-                {
-                    if peek.finishing.order_by.is_empty() {
-                        results.truncate(max_results);
-                        metrics
-                            .row_iteration_seconds
-                            .observe(row_iteration_start.elapsed().as_secs_f64());
-                        metrics
-                            .row_iteration_rows
-                            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
-                        metrics
-                            .result_sort_seconds
-                            .observe(sort_time_accum.as_secs_f64());
-                        metrics
-                            .result_sort_rows
-                            .observe(f64::cast_lossy(rows_sorted));
-                        let row_collection_start = Instant::now();
-                        let collection = RowCollection::new(results, &peek.finishing.order_by);
-                        metrics
-                            .row_collection_seconds
-                            .observe(row_collection_start.elapsed().as_secs_f64());
-                        return PeekStatus::Ready(PeekResponse::Rows(vec![collection]));
-                    } else {
-                        // We can sort `results` and then truncate to `max_results`.
-                        // This has an effect similar to a priority queue, without
-                        // its interactive dequeueing properties.
-                        // TODO: Had we left these as `Vec<Datum>` we would avoid
-                        // the unpacking; we should consider doing that, although
-                        // it will require a re-pivot of the code to branch on this
-                        // inner test (as we prefer not to maintain `Vec<Datum>`
-                        // in the other case).
-                        let sort_start = Instant::now();
-                        rows_sorted = rows_sorted.saturating_add(results.len());
-                        results.sort_by(|left, right| {
-                            comparator.compare_rows(&left.0, &right.0, || left.0.cmp(&right.0))
-                        });
-                        sort_time_accum += sort_start.elapsed();
-                        let dropped = results.drain(max_results..);
-                        let dropped_size =
-                            dropped
-                                .into_iter()
-                                .fold(0, |acc: usize, (row, _count): (Row, _)| {
-                                    acc.saturating_add(
-                                        row.byte_len().saturating_add(count_byte_size),
-                                    )
-                                });
-                        total_size = total_size.saturating_sub(dropped_size);
-                    }
-                }
-            }
-        }
+        };
 
         metrics
             .row_iteration_seconds
-            .observe(row_iteration_start.elapsed().as_secs_f64());
+            .observe(scan.row_iteration_time.as_secs_f64());
         metrics
             .row_iteration_rows
-            .observe(f64::cast_lossy(peek_iterator.rows_processed()));
+            .observe(f64::cast_lossy(scan.rows_processed()));
         metrics
             .result_sort_seconds
-            .observe(sort_time_accum.as_secs_f64());
+            .observe(scan.result_sort_time.as_secs_f64());
         metrics
             .result_sort_rows
-            .observe(f64::cast_lossy(rows_sorted));
+            .observe(f64::cast_lossy(scan.rows_sorted));
 
         let row_collection_start = Instant::now();
-        let collection = RowCollection::new(results, &peek.finishing.order_by);
+        let rows = rows
+            .into_iter()
+            .map(|(row, copies)| {
+                let copies = NonZeroUsize::try_from(copies).expect("fits into usize");
+                (row, copies)
+            })
+            .collect();
+        let collection = RowCollection::new(rows, &self.peek.finishing.order_by);
         metrics
             .row_collection_seconds
             .observe(row_collection_start.elapsed().as_secs_f64());
+
         PeekStatus::Ready(PeekResponse::Rows(vec![collection]))
     }
 }

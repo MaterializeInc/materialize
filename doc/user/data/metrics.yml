@@ -1026,17 +1026,17 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_bucket
-  help: Time constructing RowCollection from peek results.
+  help: Time constructing RowCollection from peek results, including converting the row counts the scan produced.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_count
-  help: Time constructing RowCollection from peek results.
+  help: Time constructing RowCollection from peek results, including converting the row counts the scan produced.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_collection_seconds_sum
-  help: Time constructing RowCollection from peek results.
+  help: Time constructing RowCollection from peek results, including converting the row counts the scan produced.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_rows_bucket

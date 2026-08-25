@@ -262,7 +262,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_row_collection_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_collection_seconds",
-                help: "Time constructing RowCollection from peek results.",
+                help: "Time constructing RowCollection from peek results, including converting the row counts the scan produced.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             replica_expiration_timestamp_seconds: registry.register(with_role(metric!(

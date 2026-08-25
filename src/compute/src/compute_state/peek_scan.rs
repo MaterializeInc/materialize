@@ -43,7 +43,8 @@ const COUNT_BYTE_SIZE: usize = size_of::<NonZeroUsize>();
 /// The outcome of a fueled [`PeekScan::step`].
 #[derive(Debug, PartialEq)]
 pub(super) enum ScanOutcome {
-    /// The budget ran out with work left.
+    /// Stopped with work left, because the budget ran out or because the accumulated rows have
+    /// grown into a full batch.
     ///
     /// Carries nothing. The scan retains the rows it has accumulated, and a driver that can write
     /// rows collects them through [`PeekScan::take_batch`]. A driver that cannot is never handed
@@ -76,6 +77,11 @@ enum ErrorPhase {
 /// The walk suspends between any two cursor positions, and both phases spend the same budget:
 /// what the error walk leaves is what the ok walk gets, and a phase that exhausts the budget
 /// suspends the scan where it stands.
+///
+/// A scan retains at most `peek_stash_threshold_bytes` of accumulated rows, plus the row that
+/// crossed that threshold, because a scan holding a full batch suspends rather than growing its
+/// prefix. That is a property of the scan rather than of a driver, so it holds for a scan that is
+/// running and for one that is waiting to be driven again.
 pub(super) struct PeekScan<Tr>
 where
     Tr: TraceReader<Batch: Navigable>,
@@ -183,8 +189,9 @@ where
         }
     }
 
-    /// Advances the scan until it has an answer for the peek or `fuel` runs out, whichever comes
-    /// first. Decrements `fuel` by the number of cursor positions visited, in either phase.
+    /// Advances the scan until it has an answer for the peek, the accumulated rows make a full
+    /// batch, or `fuel` runs out, whichever comes first. Decrements `fuel` by the number of cursor
+    /// positions visited, in either phase.
     ///
     /// `row_iteration_limit` is the limit in effect now rather than the one in effect when the
     /// scan started, because the limit bounds the peek and applies to a walk already under way.
@@ -220,6 +227,14 @@ where
     /// The number of cursor positions the ok walk has evaluated.
     pub(super) fn rows_processed(&self) -> usize {
         self.oks.rows_processed()
+    }
+
+    /// Whether the walk over the error trace has ended without finding an error, which is the only
+    /// way the ok walk runs at all.
+    ///
+    /// False while that walk is under way, and false once it has answered the peek.
+    pub(super) fn error_trace_clean(&self) -> bool {
+        matches!(self.error_phase, ErrorPhase::Clean)
     }
 
     /// Whether the accumulated rows have grown past what this peek may answer with inline.
@@ -290,10 +305,12 @@ where
                 .total_size
                 .saturating_add(row.byte_len())
                 .saturating_add(COUNT_BYTE_SIZE);
+            let batch_ready = self.batch_ready();
+
             // Rows bound for the stash are answered by a handle rather than by themselves, so the
             // ceiling on an inline answer does not apply to a prefix that has grown past the
             // stash threshold.
-            if !self.batch_ready() && self.total_size > self.max_result_size {
+            if !batch_ready && self.total_size > self.max_result_size {
                 break ScanOutcome::Failed(PeekError::unstructured(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(self.max_result_size))
@@ -301,6 +318,14 @@ where
             }
 
             self.results.push((row, copies));
+
+            // A scan with a full batch to give away stops rather than growing its prefix, which is
+            // what bounds what one scan retains. Decided ahead of thinning, so that a row which
+            // both fills a batch and completes a thinned answer leaves the peek to the stash
+            // rather than answering it from the prefix.
+            if batch_ready {
+                break ScanOutcome::Suspended;
+            }
 
             if let Some(outcome) = self.thin() {
                 break outcome;
@@ -616,11 +641,16 @@ mod tests {
         assert_eq!(subject.total_size, 0);
         assert_eq!(subject.take_batch(), None, "the rows have been taken");
 
-        // What the scan accumulates after a batch is taken is the rest of its answer.
+        // What the scan accumulates after a batch is taken is the next part of its answer, and it
+        // stops on that batch too rather than walking the trace out.
+        let mut fuel = usize::MAX;
+        assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Suspended);
+        assert_eq!(subject.take_batch(), Some(expected(4..8)));
+
         let mut fuel = usize::MAX;
         assert_eq!(
             subject.step(None, &mut fuel),
-            ScanOutcome::Complete(expected(4..8))
+            ScanOutcome::Complete(RowBatch::new())
         );
     }
 
@@ -706,8 +736,11 @@ mod tests {
     }
 
     /// The result-size ceiling bounds an inline answer, which rows bound for the stash are not.
-    /// A prefix that crossed the stash threshold therefore grows past the ceiling rather than
-    /// failing the peek.
+    /// A scan whose batches are taken therefore walks the whole trace with a ceiling below what it
+    /// produces, rather than failing the peek.
+    ///
+    /// Driven with unbounded fuel, so every suspension is a full batch, and a scan that grew its
+    /// prefix past the threshold instead of stopping would fail on the ceiling.
     #[mz_ore::test]
     fn a_prefix_bound_for_the_stash_is_not_bound_by_the_result_size_ceiling() {
         let keys = rows(0..8);
@@ -716,10 +749,21 @@ mod tests {
         subject.peek_stash_eligible = true;
         subject.peek_stash_threshold_bytes = 2 * row_size();
 
-        let mut fuel = usize::MAX;
-        assert_eq!(
-            subject.step(None, &mut fuel),
-            ScanOutcome::Complete(expected(0..8))
-        );
+        let mut collected = RowBatch::new();
+        loop {
+            let mut fuel = usize::MAX;
+            match subject.step(None, &mut fuel) {
+                ScanOutcome::Suspended => {
+                    collected.extend(subject.take_batch().expect("a full batch"));
+                }
+                ScanOutcome::Complete(rest) => {
+                    collected.extend(rest);
+                    break;
+                }
+                ScanOutcome::Failed(error) => panic!("scan failed: {error:?}"),
+            }
+        }
+
+        assert_eq!(collected, expected(0..8));
     }
 }
