@@ -15,9 +15,7 @@ import urllib.error
 import urllib.request
 
 from materialize.mzcompose.composition import Composition, Service
-from materialize.mzcompose.helpers.iceberg import (
-    setup_polaris_for_iceberg,
-)
+from materialize.mzcompose.helpers.iceberg import setup_polaris_for_iceberg
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
@@ -43,7 +41,9 @@ SERVICES = [
 ]
 
 
-def _setup(c: Composition) -> str:
+def _setup(
+    c: Composition, vended: bool = False, static_credentials: bool = True
+) -> str:
     """Start fresh and return the S3 access key."""
     c.down(destroy_volumes=True)
     c.up(
@@ -52,7 +52,9 @@ def _setup(c: Composition) -> str:
         Service("polaris-bootstrap", idle=True),
         Service("polaris", idle=True),
     )
-    _, key = setup_polaris_for_iceberg(c)
+    _, key = setup_polaris_for_iceberg(
+        c, vended=vended, static_credentials=static_credentials
+    )
     return key
 
 
@@ -65,6 +67,25 @@ def workflow_default(c: Composition) -> None:
             c.workflow(name)
 
     c.test_parts(list(c.workflows.keys()), process)
+
+
+def workflow_vended_credentials(c: Composition) -> None:
+    """An Iceberg sink must work against a REST catalog that only hands out
+    temporary, table-scoped credentials.
+
+    The Polaris catalog is created with credential vending enabled and without
+    the long-lived S3 credentials it would otherwise return to clients, so
+    Materialize has no static credentials to fall back on. The sink can only
+    reach MinIO with what Polaris mints for it in response to the
+    `X-Iceberg-Access-Delegation: vended-credentials` request the Iceberg
+    catalog connection sends."""
+    key = _setup(c, vended=True, static_credentials=False)
+
+    c.run_testdrive_files(
+        f"--var=s3-access-key={key}",
+        "--var=aws-endpoint=minio:9000",
+        "vended-credentials.td",
+    )
 
 
 def workflow_smoke(c: Composition) -> None:

@@ -97,6 +97,10 @@ const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
 /// Overrides the OAuth2 token endpoint. Spelled `uri` because that is the property name the
 /// Iceberg REST clients agree on, even though the SQL option says `URL`.
 const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
+/// Requests catalog-vended storage credentials. `iceberg-rust` turns `header.*` catalog
+/// properties into headers on every REST request, the same way the Iceberg Java client
+/// carries this one.
+const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "header.X-Iceberg-Access-Delegation";
 
 /// A credential loader that wraps an aws-sdk-rust credentials provider for use with
 /// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
@@ -654,6 +658,29 @@ pub struct RestIcebergCatalog<C: ConnectionAccess = InlinedConnection> {
     pub auth: IcebergCatalogAuth<C>,
     /// The warehouse for REST catalogs
     pub warehouse: Option<String>,
+    /// Which form of storage-access delegation to request from the catalog, if any.
+    ///
+    /// `None` means never ask. Requesting delegation is not free of consequence: a
+    /// catalog that gates it behind privileges the principal lacks rejects the whole
+    /// request rather than falling back, so this stays opt-in per connection.
+    pub access_delegation: Option<IcebergAccessDelegation>,
+}
+
+/// The value Materialize sends in the Iceberg REST `X-Iceberg-Access-Delegation`
+/// header, naming how the catalog should grant access to table storage.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub enum IcebergAccessDelegation {
+    /// Ask the catalog to mint temporary, table-scoped storage credentials.
+    VendedCredentials,
+}
+
+impl IcebergAccessDelegation {
+    /// The header value, as spelled in the Iceberg REST specification.
+    pub fn as_header_value(&self) -> &'static str {
+        match self {
+            IcebergAccessDelegation::VendedCredentials => "vended-credentials",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -690,6 +717,7 @@ impl<R: ConnectionResolver> IntoInlineConnection<RestIcebergCatalog, R>
         RestIcebergCatalog {
             auth: self.auth.into_inline_connection(&r),
             warehouse: self.warehouse,
+            access_delegation: self.access_delegation,
         }
     }
 }
@@ -1005,11 +1033,14 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 if let Some(scope) = scope {
                     props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
                 }
+
                 (
                     OpenDalStorageFactory::S3 {
                         // When used with MinIO, Polaris returns a config with:
                         //   s3.access-key-id, s3.secret-access-key, s3.endpoint, ...
-                        // `iceberg-rust` forwards these props to `opendal`.
+                        // `iceberg-rust` forwards these props to `opendal`. When the catalog
+                        // vends instead, it returns per-table `storage-credentials` that
+                        // `iceberg-rust` wires into the same FileIO.
                         // N.B. This is not confirmed to work with other catalog & storage implementations.
                         customized_credential_load: None,
                     },
@@ -1046,6 +1077,18 @@ impl IcebergCatalogConnection<InlinedConnection> {
                 )
             }
         };
+
+        // `iceberg-rust` turns `header.*` props into headers on every REST request, so
+        // this rides along on `loadTable` and `createTable` alike. Only send it when the
+        // connection asked for delegation: catalogs that gate delegation behind
+        // privileges reject the entire request when the principal lacks them, rather
+        // than falling back to their configured storage credentials.
+        if let Some(delegation) = &rest.access_delegation {
+            props.insert(
+                REST_CATALOG_PROP_ACCESS_DELEGATION.to_string(),
+                delegation.as_header_value().to_string(),
+            );
+        }
 
         let mut catalog =
             RestCatalogBuilder::default().with_storage_factory(Arc::new(storage_factory));

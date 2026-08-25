@@ -18,7 +18,7 @@ class PolarisBootstrap(Service):
         self,
         name: str = "polaris-bootstrap",
         image: str = "apache/polaris-admin-tool",
-        tag: str = "1.2.0-incubating",
+        tag: str = "1.7.0",
         environment: list[str] = [
             "POLARIS_BOOTSTRAP_CREDENTIALS=POLARIS,root,root",
             "POLARIS_PERSISTENCE_TYPE=relational-jdbc",
@@ -50,8 +50,9 @@ class Polaris(Service):
         self,
         name: str = "polaris",
         image: str = "apache/polaris",
-        # Fails with 1.1.0-incubating
-        tag: str = "1.2.0-incubating",
+        # Fails with 1.1.0-incubating. Releases from 1.4.0 on drop the
+        # `-incubating` suffix, so keep this tag in sync with the admin tool's.
+        tag: str = "1.7.0",
         # 8181: api port, 8182: management port
         ports: list[str | int] = [8181, 8182],
         environment: list[str] = [
