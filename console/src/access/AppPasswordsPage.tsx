@@ -27,6 +27,7 @@ import {
   ModalOverlay,
   Radio,
   RadioGroup,
+  Select,
   Stack,
   Tab,
   Table,
@@ -59,6 +60,7 @@ import { SecretCopyableBox } from "~/components/copyableComponents";
 import TaggedMultiSelect from "~/components/Dropdown/TaggedComboBox";
 import { LoadingContainer } from "~/components/LoadingContainer";
 import { Modal } from "~/components/Modal";
+import StatusPill from "~/components/StatusPill";
 import { User } from "~/external-library-wrappers/frontegg";
 import {
   MainContentContainer,
@@ -78,6 +80,17 @@ import {
 } from "~/utils/dateFormat";
 import { toBase64 } from "~/utils/format";
 import { obfuscateSecret } from "~/utils/format";
+
+const EXPIRES_IN_OPTIONS = {
+  "30d": { label: "30 days", minutes: 30 * 24 * 60 },
+  "60d": { label: "60 days", minutes: 60 * 24 * 60 },
+  "90d": { label: "90 days", minutes: 90 * 24 * 60 },
+  never: { label: "No expiration", minutes: undefined },
+} as const;
+
+type ExpiresInOption = keyof typeof EXPIRES_IN_OPTIONS;
+
+const DEFAULT_EXPIRES_IN: ExpiresInOption = "90d";
 
 const AppPasswordsPage = ({ user }: { user: User }) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
@@ -139,6 +152,7 @@ const AppPasswordsInner = (props: {
     user: string;
     name: string;
     roles: { name: string; id: string }[];
+    expiresIn: ExpiresInOption;
   }>({
     mode: "onChange",
     defaultValues: {
@@ -146,6 +160,7 @@ const AppPasswordsInner = (props: {
       name: "",
       user: "",
       roles: [],
+      expiresIn: DEFAULT_EXPIRES_IN,
     },
   });
 
@@ -190,6 +205,7 @@ const AppPasswordsInner = (props: {
                 description: data.name,
                 user: data.user,
                 roleIds: data.roles.map((r) => r.id),
+                expiresInMinutes: EXPIRES_IN_OPTIONS[data.expiresIn].minutes,
               });
               reset();
               props.closeNewModal();
@@ -253,6 +269,29 @@ const AppPasswordsInner = (props: {
                   <FormHelperText>
                     Describe what you&apos;ll use the app password for, in case
                     you need to revoke it in the future.
+                  </FormHelperText>
+                </FormControl>
+                <FormControl>
+                  <FormLabel htmlFor="expiresIn" fontSize="sm">
+                    Expiration
+                  </FormLabel>
+                  <Select
+                    {...register("expiresIn")}
+                    id="expiresIn"
+                    aria-label="Expiration"
+                    size="sm"
+                  >
+                    {Object.entries(EXPIRES_IN_OPTIONS).map(
+                      ([value, { label }]) => (
+                        <option key={value} value={value}>
+                          {label}
+                        </option>
+                      ),
+                    )}
+                  </Select>
+                  <FormHelperText>
+                    The app password stops working once it expires. Expiration
+                    cannot be changed after creation.
                   </FormHelperText>
                 </FormControl>
                 {watchType == "service" && (
@@ -357,6 +396,36 @@ const AppPasswordsInner = (props: {
   );
 };
 
+const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
+
+const ExpiresCell = ({ expires }: { expires?: string }) => {
+  const { colors } = useTheme<MaterializeTheme>();
+
+  if (!expires) {
+    return <Text color={colors.gray["500"]}>Never</Text>;
+  }
+
+  const msUntilExpiry = new Date(expires).getTime() - Date.now();
+
+  return (
+    <HStack>
+      <Text>
+        {formatDate(new Date(expires), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}
+      </Text>
+      {msUntilExpiry <= 0 && (
+        <StatusPill status="expired" colorScheme="red" label="Expired" />
+      )}
+      {msUntilExpiry > 0 && msUntilExpiry <= EXPIRING_SOON_MS && (
+        <StatusPill
+          status="expiringSoon"
+          colorScheme="yellow"
+          label="Expiring soon"
+        />
+      )}
+    </HStack>
+  );
+};
+
 type ApiTokensTableProps = BoxProps & {
   tokens: ApiToken[];
   user: User;
@@ -382,6 +451,7 @@ const ApiTokensTableProps = ({
           <Th>User</Th>
           <Th>Roles</Th>
           <Th>Created at</Th>
+          <Th>Expires</Th>
           <Th />
         </Tr>
       </Thead>
@@ -450,6 +520,12 @@ const ApiTokensTableProps = ({
                 borderBottomWidth="1px"
                 borderBottomColor={colors.border.primary}
               >
+                <ExpiresCell expires={token.expires} />
+              </Td>
+              <Td
+                borderBottomWidth="1px"
+                borderBottomColor={colors.border.primary}
+              >
                 <HStack>
                   <ConnectAppPasswordButton userStr={userStr} />
                   <DeleteAppPasswordModal token={token} />
@@ -460,7 +536,7 @@ const ApiTokensTableProps = ({
         })}
         {tokens.length === 0 && (
           <Tr>
-            <Td colSpan={6}>No app passwords yet.</Td>
+            <Td colSpan={7}>No app passwords yet.</Td>
           </Tr>
         )}
       </Tbody>
