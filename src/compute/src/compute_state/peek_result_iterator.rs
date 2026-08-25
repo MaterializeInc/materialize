@@ -717,16 +717,27 @@ mod tests {
         let mut unbudgeted = iterator_without_literals(&keys, predicate());
         let mut unbudgeted_rows = Vec::new();
         let mut unbudgeted_fuel = 0;
-        loop {
+        let mut unbudgeted_completed = false;
+        // Bounded for the same reason the budgeted walk below is. A regression that leaves the
+        // cursor parked on a row it already returned never reaches `Done`, and an unbounded loop
+        // would hang the suite rather than name the walk that failed to terminate.
+        for _ in 0..100 {
             let mut fuel = usize::MAX;
             let step = unbudgeted.step(&mut fuel);
             unbudgeted_fuel += usize::MAX - fuel;
             match step {
                 Step::Row(row) => unbudgeted_rows.push(row.expect("no error")),
-                Step::Done => break,
+                Step::Done => {
+                    unbudgeted_completed = true;
+                    break;
+                }
                 Step::OutOfFuel => unreachable!("fuel is unbounded"),
             }
         }
+        assert!(
+            unbudgeted_completed,
+            "the unbudgeted walk did not reach the end of the cursor within 100 steps"
+        );
         // Every one of the 30 rows costs one unit to visit, whether accepted or rejected, plus
         // one more unit for the position where the cursor is found exhausted. A charge that
         // skipped rejected rows, or double-charged some subset of rows, would move this total
@@ -781,9 +792,17 @@ mod tests {
             })
             .collect();
 
-        let unbounded: Vec<_> = iterator(&keys, &mut constraints.clone())
-            .map(|row| row.expect("no error"))
-            .collect();
+        // Taken one row at a time under a bound rather than collected. A regression that leaves
+        // the cursor parked on a row it already returned yields rows forever, and collecting
+        // would hang the suite rather than name the walk that failed to terminate.
+        let mut unbounded_iterator = iterator(&keys, &mut constraints.clone());
+        let mut unbounded = Vec::new();
+        for _ in 0..100 {
+            match unbounded_iterator.next() {
+                Some(row) => unbounded.push(row.expect("no error")),
+                None => break,
+            }
+        }
         assert_eq!(unbounded, expected);
 
         // One unit of fuel per call: every literal seek suspends, so the scan only completes if
