@@ -482,7 +482,8 @@ mod tests {
     use differential_dataflow::trace::cursor::CursorList;
     use differential_dataflow::trace::implementations::ord_neu::OrdValBatcher;
     use differential_dataflow::trace::{Batcher, Builder, Navigable};
-    use mz_repr::{Datum, Row, Timestamp};
+    use mz_expr::MirScalarExpr;
+    use mz_repr::{Datum, ReprScalarType, Row, Timestamp};
     use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
     use timely::container::PushInto;
     use timely::progress::Antichain;
@@ -615,6 +616,152 @@ mod tests {
             row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
             exhausted: false,
         }
+    }
+
+    /// Builds an iterator over `keys` with no literal constraints, filtered by `predicate`.
+    ///
+    /// Mirrors [`iterator`], but omits the literal column so `predicate` can address the key at
+    /// column 0 directly.
+    fn iterator_without_literals(
+        keys: &[Row],
+        predicate: mz_expr::MirScalarExpr,
+    ) -> PeekResultIterator<TestTrace> {
+        let (cursor, storage) = trace(keys);
+        // The cursor's key is the only datum; there are no literals and the values are empty.
+        let map_filter_project = mz_expr::MapFilterProject::new(1)
+            .filter([predicate])
+            .into_plan()
+            .expect("valid plan")
+            .into_nontemporal()
+            .expect("non-temporal plan");
+        PeekResultIterator {
+            target_id: GlobalId::User(1),
+            cursor,
+            storage,
+            map_filter_project,
+            peek_timestamp: Timestamp::MIN,
+            row_builder: Row::default(),
+            datum_vec: DatumVec::new(),
+            literals: None,
+            rows_processed: 0,
+            row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
+            exhausted: false,
+        }
+    }
+
+    /// Fuel must be spent walking the rows a `map_filter_project` rejects, not only the rows it
+    /// returns. Otherwise a highly selective filter over a large arrangement could walk the
+    /// entire arrangement inside a single fueled step, which is exactly the unbounded work the
+    /// budget exists to prevent.
+    #[mz_ore::test]
+    fn filtered_scan_charges_fuel_for_rejected_rows() {
+        let keys: Vec<Row> = (0..10).map(row).collect();
+        let accepted = 9u8;
+        // Keeps only the last key; every earlier key is visited and rejected.
+        let predicate = MirScalarExpr::column(0).call_binary(
+            MirScalarExpr::literal(Ok(Datum::UInt8(accepted)), ReprScalarType::UInt8),
+            mz_expr::func::Gte,
+        );
+        let mut iterator = iterator_without_literals(&keys, predicate);
+
+        let mut rejected = 0;
+        let mut found = None;
+        // Bounded so that a step which spends fuel without ever surfacing the accepted row
+        // fails the test instead of hanging it.
+        for _ in 0..100 {
+            let mut fuel = 1;
+            match iterator.step(&mut fuel) {
+                Step::OutOfFuel => {
+                    assert_eq!(
+                        fuel, 0,
+                        "a one-unit slice must spend its unit on the row it visited"
+                    );
+                    rejected += 1;
+                }
+                Step::Row(row) => {
+                    found = Some(row.expect("no error"));
+                    break;
+                }
+                Step::Done => panic!("scan exhausted before reaching the accepted row"),
+            }
+        }
+        let found = found.expect("scan did not reach the accepted row within 100 steps");
+
+        // A step that charged fuel only for rows it returns would reach the accepted row on the
+        // very first call, leaving `rejected` at 0 instead of one per skipped key.
+        assert_eq!(
+            rejected, 9,
+            "fuel must be spent on the 9 rejected rows before the accepted one"
+        );
+        let expected_row = Row::pack_slice(&[Datum::UInt8(accepted)]);
+        assert_eq!(found, (expected_row, NonZeroI64::new(1).expect("non-zero")));
+    }
+
+    /// Resuming a filtered scan with fresh fuel after each `OutOfFuel` must continue from where
+    /// it stopped: it yields the same rows, in the same order, as an unbudgeted walk, and the
+    /// total fuel spent across every slice equals the fuel an unbudgeted walk spends. Matching
+    /// final rows alone would not catch a resumption that re-walks rows it already visited, or
+    /// one that drops a suspended position, since both can still land on the right answer while
+    /// doing the wrong amount of work.
+    #[mz_ore::test]
+    fn filtered_scan_is_fueled_and_resumable() {
+        let keys: Vec<Row> = (0..30).map(row).collect();
+        let threshold = 20u8;
+        let predicate = || {
+            MirScalarExpr::column(0).call_binary(
+                MirScalarExpr::literal(Ok(Datum::UInt8(threshold)), ReprScalarType::UInt8),
+                mz_expr::func::Gte,
+            )
+        };
+
+        let mut unbudgeted = iterator_without_literals(&keys, predicate());
+        let mut unbudgeted_rows = Vec::new();
+        let mut unbudgeted_fuel = 0;
+        loop {
+            let mut fuel = usize::MAX;
+            let step = unbudgeted.step(&mut fuel);
+            unbudgeted_fuel += usize::MAX - fuel;
+            match step {
+                Step::Row(row) => unbudgeted_rows.push(row.expect("no error")),
+                Step::Done => break,
+                Step::OutOfFuel => unreachable!("fuel is unbounded"),
+            }
+        }
+        // Every one of the 30 rows costs one unit to visit, whether accepted or rejected, plus
+        // one more unit for the position where the cursor is found exhausted. A charge that
+        // skipped rejected rows, or double-charged some subset of rows, would move this total
+        // even though it does not depend on how the walk is sliced into fueled steps.
+        assert_eq!(unbudgeted_fuel, keys.len() + 1);
+
+        let mut budgeted = iterator_without_literals(&keys, predicate());
+        let mut budgeted_rows = Vec::new();
+        let mut budgeted_fuel = 0;
+        let mut completed = false;
+        // Bounded so that a regression which restarts the walk on every resume fails the test
+        // instead of hanging it.
+        for _ in 0..100 {
+            let mut fuel = 4;
+            let step = budgeted.step(&mut fuel);
+            budgeted_fuel += 4 - fuel;
+            match step {
+                Step::Row(row) => budgeted_rows.push(row.expect("no error")),
+                Step::OutOfFuel => {}
+                Step::Done => {
+                    completed = true;
+                    break;
+                }
+            }
+        }
+        assert!(completed, "scan did not finish within 100 resumptions");
+
+        assert_eq!(
+            budgeted_rows, unbudgeted_rows,
+            "a fueled walk must return the same rows, in the same order, as an unbudgeted one"
+        );
+        assert_eq!(
+            budgeted_fuel, unbudgeted_fuel,
+            "slicing the walk into small fuel budgets must not repeat or skip cursor positions"
+        );
     }
 
     /// A literal-constrained scan returns the rows of the literals the trace holds, whether it
