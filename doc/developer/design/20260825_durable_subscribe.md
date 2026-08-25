@@ -376,14 +376,19 @@ That yields three modes, spanning what a resuming client can want:
   operation the materialized view sink performs against its own output shard,
   and it is readable because the hold keeps `since <= H`.
 
-* **Restart.** `ALTER DURABLE SUBSCRIPTION ... RESET`, then attach. The client
+* **Restart**, available only for an expired subscription: `WITH (RESET)`, or
+  `ALTER DURABLE SUBSCRIPTION ... RESET` then attach. The client
   lost everything and wants current state. Reconciling at an old position would
   deliver historical state plus every diff since, which is strictly more work
   than a snapshot at the current time, and `RESET` already carries the right
   meaning: consent to a gap.
 
-Three modes across two statements, with no fourth mechanism. If a client
-reconciles when it meant to restart, the waste is bounded by the deadline.
+A live subscription deliberately cannot be fast-forwarded, by either spelling of
+`RESET`, because that would discard data it is still holding history for and
+would fence a reader that has not failed. A client that loses its local state
+while its subscription is live therefore reconciles rather than restarting, and
+pays a replay bounded by the deadline. That bound is what makes refusing the
+fast-forward affordable.
 
 `WITH (PROGRESS)` is required whenever the client intends to acknowledge. A
 progress message is the only thing that establishes that a timestamp is
@@ -493,15 +498,36 @@ current frontier, preserving identity, ownership, and grants, and making the
 client's consent to a gap explicit. `RESET` on a subscription that has not
 expired is an error, since it would silently fence a live reader.
 
-Consent may also be given **in band**, on the attach itself, as `WITH (RESET IF
-EXPIRED)`, meaning "if this subscription has expired, reset it, snapshot at the
-current time, and tell me you did". Every sync engine surveyed has such a signal, under
-names like `reset-required`, `must-refetch`, and `CLEAR`, because a server-side
-consumer recovering from an outage needs to recover in its reconnect path rather
-than by issuing a privileged data-definition statement. The loud-failure property
-is preserved either way: the default attach still fails, and the reset is
-reported to the client that asked for it rather than being silent. `ALTER ...
-RESET` remains for operators.
+Consent may also be given **in band**, so that a server-side consumer recovering
+from an outage needs no privileged data-definition statement in its reconnect
+path. Every sync engine surveyed has such a signal, under names like
+`reset-required`, `must-refetch`, and `CLEAR`. The mechanism is two attaches
+rather than one option:
+
+* A plain attach on an expired subscription **fails**, with an error
+  distinguishable from every other attach failure so a client can branch on it.
+* `SUBSCRIBE ... WITH (RESET)` resets the subscription to the current time and
+  delivers a snapshot there. It errors if the subscription has *not* expired, so
+  it cannot silently fence a live reader.
+
+Two statements rather than one, because of how a consumer knows it received a
+fresh snapshot rather than a continuation. A single reset-if-needed attach cannot
+tell it, and the stream has no channel for the answer: a snapshot is a batch of
+`+1` diffs at the as-of, indistinguishable from genuine insertions at that
+timestamp, and signalling it otherwise would mean either a new column on every
+`SUBSCRIBE` or a session notice, which is advisory and routinely ignored. With
+two attaches the client knows because it *asked*, having branched on the expiry
+error. One extra round trip, only on the rare expiry path, for an unambiguous
+answer.
+
+The opening progress message is a useful cross-check but not a substitute for
+this. `SUBSCRIBE`'s first emitted update is guaranteed to be a progress message
+carrying the as-of, so a client that retained its own last acknowledged position
+can compare the two and detect a gap. But a client that relies on the server to
+hold its position is exactly the one that may not have retained it, so the
+guarantee cannot carry the signal on its own.
+
+`ALTER ... RESET` remains for operators.
 
 ```mermaid
 stateDiagram-v2

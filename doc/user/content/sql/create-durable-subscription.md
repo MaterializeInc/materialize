@@ -151,18 +151,33 @@ When a subscription expires, it is not dropped. It remains visible in
 expired at and how long it had gone without acknowledging, so you can tell an
 expiry apart from a subscription that never existed.
 
-Attempting to subscribe using an expired subscription returns an error. There are
-two ways to start using it again, and both require you to accept that there is a
-gap in the data:
+Attempting to subscribe using an expired subscription returns a distinguishable
+error, so an automated reconnect can branch on it. There are two ways to start
+using the subscription again, and both require you to accept that there is a gap
+in the data:
+
+*   Subscribe `WITH (RESET)`, which resets the subscription to the current time
+    and delivers a snapshot there. Use this in a reconnect path: it needs no
+    privileged statement, and because you asked for it, you know the data you
+    receive is a fresh snapshot rather than a continuation. It returns an error
+    if the subscription has not expired, so it cannot displace a live reader by
+    accident.
 
 *   Run [`ALTER DURABLE SUBSCRIPTION ... RESET`](/sql/alter-durable-subscription/),
     which re-arms it at the current time. You then subscribe with `SNAPSHOT true`
-    to get a usable starting state.
+    to get a usable starting state. This is the operator path.
 
-*   Subscribe with `WITH (RESET IF EXPIRED)`, which resets the subscription in
-    the same statement if it has expired and reports that it did so. This is the
-    option to use in an automated reconnect path, since it needs no separate
-    privileged statement.
+{{< note >}}
+
+Do not try to detect a reset by inspecting the stream. A snapshot arrives as
+ordinary insertions at the resume timestamp, so it cannot be told apart from real
+inserts at that time. Ask for the reset explicitly, and you know what you got.
+
+If you do keep your own record of the last position you acknowledged, you can
+cross-check it: the first message of any subscribe is a progress message carrying
+the timestamp the subscription resumed at.
+
+{{</ note >}}
 
 ### Acknowledging requires progress messages
 
@@ -225,12 +240,17 @@ name. That gives three ways to reconnect:
     acknowledged position, which you can compare against what you hold, followed
     by subsequent changes.
 
-*   **Start over**, with [`ALTER DURABLE SUBSCRIPTION ...
-    RESET`](/sql/alter-durable-subscription/) and then subscribing `WITH
-    (SNAPSHOT true)`. You have lost your local state and want current data.
-    `RESET` moves the position to the current time, so the snapshot is taken
-    there. Reconciling at an old position instead would hand you historical
-    state plus every change since, which is more work than starting fresh.
+*   **Start over**, which applies only to a subscription that has
+    [expired](#expiry). Subscribe `WITH (RESET)`, or run [`ALTER DURABLE
+    SUBSCRIPTION ... RESET`](/sql/alter-durable-subscription/) and then subscribe
+    `WITH (SNAPSHOT true)`. Either moves the position to the current time, so the
+    snapshot is taken there.
+
+A subscription that has *not* expired cannot be fast-forwarded, because doing so
+would discard data it is still holding history for. If you lost your local state
+while the subscription is still live, reconcile instead: you receive the state at
+your acknowledged position and then replay from there, and that replay is bounded
+by `ACKNOWLEDGE WITHIN`.
 
 ### Delivery semantics
 
