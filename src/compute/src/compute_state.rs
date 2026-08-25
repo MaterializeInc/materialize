@@ -1454,6 +1454,19 @@ impl<'a> ActiveComputeState<'a> {
 
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
+        // This runs on every iteration of the worker loop, tens of thousands of times a second on
+        // a busy worker, and the overwhelming majority of those find no pending peek. Returning
+        // before anything is read or allocated keeps that case as cheap as it was before peeks had
+        // budgets, which is also what the kill switch has to restore.
+        //
+        // A `peek_resume_at` left set here cannot strand a peek: with no pending peek there is
+        // nothing to serve, and a resume point names a position in the uuid ordering rather than
+        // an entry, so the sweep that follows the next peek's arrival rotates correctly whether or
+        // not the peek it names still exists.
+        if self.compute_state.pending_peeks.is_empty() {
+            return;
+        }
+
         let mut upper = Antichain::new();
         let mut pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
 
