@@ -13,7 +13,6 @@
 //! Only the worker performs IO on this path. The task walks traces and accumulates rows, and a
 //! walk whose rows outgrow an inline answer stops and hands back rather than writing them.
 
-use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -22,15 +21,14 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_compute_types::dyncfgs::{INDEX_PEEK_PERMITS, INDEX_PEEK_YIELD_GRANULARITY};
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
 use mz_expr::ColumnOrder;
-use mz_expr::row::RowCollection;
 use mz_ore::task::AbortOnDropHandle;
-use prometheus::IntCounter;
 use timely::scheduling::SyncActivator;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
 use tracing::debug;
 
 use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::PeekRowIterationConfig;
+use crate::compute_state::peek_metrics::PeekWalkMetrics;
 use crate::compute_state::peek_scan::{IndexPeekScan, ScanOutcome};
 
 /// The bound on how many promoted peek walks run at once.
@@ -165,7 +163,7 @@ impl OffloadedPeek {
         scan: IndexPeekScan,
         permits: &PeekPermits,
         config: OffloadConfig,
-        walks_offloaded: IntCounter,
+        metrics: PeekWalkMetrics,
         activator: SyncActivator,
     ) -> Self {
         debug_assert!(
@@ -194,9 +192,10 @@ impl OffloadedPeek {
                     () = result_tx.closed() => return,
                 };
 
-                walks_offloaded.inc();
+                metrics.walked_offloaded();
 
-                let Some(outcome) = Self::walk(permit, scan, &config, &order_by, &result_tx).await
+                let Some(outcome) =
+                    Self::walk(permit, scan, &config, &metrics, &order_by, &result_tx).await
                 else {
                     return;
                 };
@@ -237,6 +236,7 @@ impl OffloadedPeek {
         _permit: OwnedSemaphorePermit,
         mut scan: IndexPeekScan,
         config: &OffloadConfig,
+        metrics: &PeekWalkMetrics,
         order_by: &[ColumnOrder],
         result_tx: &oneshot::Sender<(OffloadOutcome, Duration)>,
     ) -> Option<OffloadOutcome> {
@@ -254,21 +254,20 @@ impl OffloadedPeek {
             let mut fuel = config.yield_granularity.get().max(1);
             let row_iteration_limit = config.row_iteration.current_limit();
 
+            // This driver finishes the walk the worker started, so it reports every phase of it,
+            // including the slices that ran on the worker before the promotion. The worker
+            // reported none of them, exactly because it did not finish the walk.
             match scan.step(row_iteration_limit, &mut fuel) {
                 ScanOutcome::Complete(rows) => {
-                    let rows = rows
-                        .into_iter()
-                        .map(|(row, copies)| {
-                            let copies = NonZeroUsize::try_from(copies).expect("fits into usize");
-                            (row, copies)
-                        })
-                        .collect();
-                    let collection = RowCollection::new(rows, order_by);
-                    return Some(OffloadOutcome::Answered(PeekResponse::Rows(vec![
-                        collection,
-                    ])));
+                    let phases = scan.phases();
+                    metrics.observe_error_phase(&phases);
+                    metrics.observe_ok_phase(&phases);
+                    return Some(OffloadOutcome::Answered(
+                        metrics.rows_response(rows, order_by),
+                    ));
                 }
                 ScanOutcome::Failed(error) => {
+                    metrics.observe_error_phase(&scan.phases());
                     return Some(OffloadOutcome::Answered(PeekResponse::Error(error)));
                 }
                 // A suspension holding a full batch is not one this walk can resume. The scan
@@ -277,6 +276,7 @@ impl OffloadedPeek {
                 // this one cannot. Rows accumulated so far are dropped, which is sound because the
                 // stash walks the ok trace again from the trace bundle and re-produces them.
                 ScanOutcome::Suspended if scan.batch_ready() => {
+                    metrics.observe_error_phase(&scan.phases());
                     return Some(OffloadOutcome::NeedsStash);
                 }
                 ScanOutcome::Suspended => tokio::task::yield_now().await,

@@ -53,6 +53,30 @@ pub(super) type RowBatch = Vec<(Row, NonZeroI64)>;
 /// The byte size of a row's count, as an answer built from a [`RowBatch`] stores it.
 const COUNT_BYTE_SIZE: usize = size_of::<NonZeroUsize>();
 
+/// What a walk has spent, in the phases the peek metrics report.
+///
+/// A snapshot rather than a view. Every number is cumulative over the slices the walk was cut
+/// into, wherever those slices ran, so the driver that ends the walk reads a complete account of
+/// it and the driver that promoted it reads nothing.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct WalkPhases {
+    /// Worker time the error walk spent.
+    pub error_scan: Duration,
+    /// Worker time spent opening the ok cursor.
+    pub cursor_setup: Duration,
+    /// Whether the error walk ended without finding an error, which is what makes the two numbers
+    /// above describe a phase that finished rather than one that was cut short.
+    pub error_trace_clean: bool,
+    /// Worker time the ok walk spent, including the time thinning spent sorting.
+    pub row_iteration: Duration,
+    /// Cursor positions the ok walk evaluated.
+    pub rows_processed: usize,
+    /// Worker time thinning spent sorting.
+    pub result_sort: Duration,
+    /// Rows handed to a sort, summed over the times thinning ran.
+    pub rows_sorted: usize,
+}
+
 /// The outcome of a fueled [`PeekScan::step`].
 #[derive(Debug, PartialEq)]
 pub(super) enum ScanOutcome {
@@ -279,30 +303,17 @@ where
         self.oks.rows_processed()
     }
 
-    /// Worker time the error walk spent, summed over the slices it was cut into.
-    pub(super) fn error_scan_time(&self) -> Duration {
-        self.error_scan_time
-    }
-
-    /// Worker time spent opening the ok cursor.
-    pub(super) fn cursor_setup_time(&self) -> Duration {
-        self.cursor_setup_time
-    }
-
-    /// Worker time the ok walk spent, summed over the slices it was cut into. Includes the time
-    /// thinning spent sorting.
-    pub(super) fn row_iteration_time(&self) -> Duration {
-        self.row_iteration_time
-    }
-
-    /// Worker time thinning spent sorting, summed over the times it ran.
-    pub(super) fn result_sort_time(&self) -> Duration {
-        self.result_sort_time
-    }
-
-    /// Rows handed to a sort, summed over the times thinning ran.
-    pub(super) fn rows_sorted(&self) -> usize {
-        self.rows_sorted
+    /// What the walk has spent so far, in the phases the peek metrics report.
+    pub(super) fn phases(&self) -> WalkPhases {
+        WalkPhases {
+            error_scan: self.error_scan_time,
+            cursor_setup: self.cursor_setup_time,
+            error_trace_clean: self.error_trace_clean(),
+            row_iteration: self.row_iteration_time,
+            rows_processed: self.rows_processed(),
+            result_sort: self.result_sort_time,
+            rows_sorted: self.rows_sorted,
+        }
     }
 
     /// Whether the walk over the error trace has ended without finding an error, which is the only

@@ -75,11 +75,14 @@ use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod error_scan;
+mod peek_metrics;
 mod peek_offload;
 mod peek_result_iterator;
 mod peek_scan;
 mod peek_stash;
 
+use self::peek_metrics::IndexPeekMetrics;
+use self::peek_metrics::PeekWalkMetrics;
 pub(crate) use self::peek_offload::PeekPermits;
 use self::peek_offload::{OffloadConfig, OffloadOutcome, OffloadedPeek};
 use self::peek_scan::{IndexPeekScan, PeekScan, ScanOutcome};
@@ -281,6 +284,12 @@ pub struct ComputeState {
     /// process.
     pub peek_permits: Arc<PeekPermits>,
 
+    /// The metrics an index peek walk reports, whichever driver runs it.
+    ///
+    /// Held here rather than assembled per peek, because a promotion clones it into the task and
+    /// the inline driver reads it on every activation of every pending peek.
+    peek_walk_metrics: PeekWalkMetrics,
+
     /// Collections awaiting schedule instruction by the controller.
     ///
     /// Each entry stores a reference to a token that can be dropped to unsuspend the collection's
@@ -321,6 +330,7 @@ impl ComputeState {
     ) -> Self {
         let traces = TraceManager::new(metrics.clone());
         let command_history = ComputeCommandHistory::new(metrics.for_history());
+        let peek_walk_metrics = PeekWalkMetrics::new(&metrics);
 
         Self {
             collections: Default::default(),
@@ -342,6 +352,7 @@ impl ComputeState {
             metrics_registry,
             workers_per_process,
             peek_permits,
+            peek_walk_metrics,
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
@@ -1202,22 +1213,7 @@ impl<'a> ActiveComputeState<'a> {
                         .compute_state
                         .metrics
                         .index_peek_frontier_check_seconds,
-                    error_scan_seconds: &self.compute_state.metrics.index_peek_error_scan_seconds,
-                    cursor_setup_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_cursor_setup_seconds,
-                    row_iteration_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_row_iteration_seconds,
-                    row_iteration_rows: &self.compute_state.metrics.index_peek_row_iteration_rows,
-                    result_sort_seconds: &self.compute_state.metrics.index_peek_result_sort_seconds,
-                    result_sort_rows: &self.compute_state.metrics.index_peek_result_sort_rows,
-                    row_collection_seconds: &self
-                        .compute_state
-                        .metrics
-                        .index_peek_row_collection_seconds,
+                    walk: &self.compute_state.peek_walk_metrics,
                 };
 
                 let status = peek.seek_fulfillment(
@@ -1249,10 +1245,7 @@ impl<'a> ActiveComputeState<'a> {
                             scan,
                             &permits,
                             OffloadConfig::new(&self.compute_state.worker_config),
-                            self.compute_state
-                                .metrics
-                                .index_peek_walks_offloaded
-                                .clone(),
+                            self.compute_state.peek_walk_metrics.clone(),
                             self.timely_worker.sync_activator_for([].into()),
                         );
 
@@ -1837,22 +1830,6 @@ pub struct IndexPeek {
     span: tracing::Span,
 }
 
-/// Histogram metrics for index peek phases.
-///
-/// This struct bundles references to the various histogram metrics used to
-/// instrument the index peek processing pipeline.
-pub(crate) struct IndexPeekMetrics<'a> {
-    pub seek_fulfillment_seconds: &'a prometheus::Histogram,
-    pub frontier_check_seconds: &'a prometheus::Histogram,
-    pub error_scan_seconds: &'a prometheus::Histogram,
-    pub cursor_setup_seconds: &'a prometheus::Histogram,
-    pub row_iteration_seconds: &'a prometheus::Histogram,
-    pub row_iteration_rows: &'a prometheus::Histogram,
-    pub result_sort_seconds: &'a prometheus::Histogram,
-    pub result_sort_rows: &'a prometheus::Histogram,
-    pub row_collection_seconds: &'a prometheus::Histogram,
-}
-
 impl IndexPeek {
     /// Attempts to fulfill the peek and reports success.
     ///
@@ -1945,15 +1922,14 @@ impl IndexPeek {
         let mut fuel = usize::MAX;
         let outcome = scan.step(row_iteration_limit, &mut fuel);
 
-        // Both phases that precede the ok walk are reported only for a peek that reached that
-        // walk, so a peek answered by its error trace reports neither.
-        if scan.error_trace_clean() {
-            metrics
-                .error_scan_seconds
-                .observe(scan.error_scan_time().as_secs_f64());
-            metrics
-                .cursor_setup_seconds
-                .observe(scan.cursor_setup_time().as_secs_f64());
+        // A suspension the offload can resume is the one outcome that leaves the walk unfinished,
+        // so it is the one outcome this driver reports nothing for. Everything else ends the walk
+        // here, and this driver is the one that accounts for it.
+        let promoted = matches!(outcome, ScanOutcome::Suspended) && !scan.batch_ready();
+        let phases = scan.phases();
+        if !promoted {
+            metrics.walk.walked_inline();
+            metrics.walk.observe_error_phase(&phases);
         }
 
         let rows = match outcome {
@@ -1961,8 +1937,8 @@ impl IndexPeek {
             ScanOutcome::Failed(error) => return PeekStatus::Ready(PeekResponse::Error(error)),
             // A scan that suspends without a batch has work left and rows it is still allowed to
             // accumulate, so it is resumed rather than disposed of. Every position it has walked
-            // travels with it, which is what makes the promotion cost one hand-off instead of a
-            // second walk.
+            // travels with it, and so does the account of what those positions cost, which is what
+            // makes the promotion cost one hand-off instead of a second walk.
             ScanOutcome::Suspended if !scan.batch_ready() => return PeekStatus::Promote(scan),
             // Diversion is sound only for a scan whose error walk is over. The stash answers the
             // peek from a walk of the ok trace alone and never reads the error trace, so a peek
@@ -1987,33 +1963,13 @@ impl IndexPeek {
             }
         };
 
-        metrics
-            .row_iteration_seconds
-            .observe(scan.row_iteration_time().as_secs_f64());
-        metrics
-            .row_iteration_rows
-            .observe(f64::cast_lossy(scan.rows_processed()));
-        metrics
-            .result_sort_seconds
-            .observe(scan.result_sort_time().as_secs_f64());
-        metrics
-            .result_sort_rows
-            .observe(f64::cast_lossy(scan.rows_sorted()));
+        metrics.walk.observe_ok_phase(&phases);
 
-        let row_collection_start = Instant::now();
-        let rows = rows
-            .into_iter()
-            .map(|(row, copies)| {
-                let copies = NonZeroUsize::try_from(copies).expect("fits into usize");
-                (row, copies)
-            })
-            .collect();
-        let collection = RowCollection::new(rows, &self.peek.finishing.order_by);
-        metrics
-            .row_collection_seconds
-            .observe(row_collection_start.elapsed().as_secs_f64());
-
-        PeekStatus::Ready(PeekResponse::Rows(vec![collection]))
+        PeekStatus::Ready(
+            metrics
+                .walk
+                .rows_response(rows, &self.peek.finishing.order_by),
+        )
     }
 }
 
@@ -2265,6 +2221,8 @@ pub(crate) mod index_peek_tests {
     use timely::container::PushInto;
     use timely::dataflow::operators::generic::OperatorInfo;
 
+    use crate::metrics::ComputeMetrics;
+    use crate::server::ComputeRuntimeRole;
     use crate::typedefs::{ErrAgent, ErrSpine, RowRowAgent};
 
     use super::error_scan::tests::{
@@ -2375,96 +2333,85 @@ pub(crate) mod index_peek_tests {
         }
     }
 
-    /// The histograms an index peek observes into, owned by the test that reads them back.
+    /// The metrics an index peek observes into, registered into a registry the test owns so it
+    /// can read them back.
     struct TestMetrics {
-        seek_fulfillment_seconds: prometheus::Histogram,
-        frontier_check_seconds: prometheus::Histogram,
-        error_scan_seconds: prometheus::Histogram,
-        cursor_setup_seconds: prometheus::Histogram,
-        row_iteration_seconds: prometheus::Histogram,
-        row_iteration_rows: prometheus::Histogram,
-        result_sort_seconds: prometheus::Histogram,
-        result_sort_rows: prometheus::Histogram,
-        row_collection_seconds: prometheus::Histogram,
-    }
-
-    fn histogram(name: &str) -> prometheus::Histogram {
-        prometheus::Histogram::with_opts(prometheus::HistogramOpts::new(name, name))
-            .expect("valid histogram")
+        metrics: WorkerMetrics,
+        walk: PeekWalkMetrics,
     }
 
     impl TestMetrics {
         fn new() -> Self {
-            Self {
-                seek_fulfillment_seconds: histogram("seek_fulfillment_seconds"),
-                frontier_check_seconds: histogram("frontier_check_seconds"),
-                error_scan_seconds: histogram("error_scan_seconds"),
-                cursor_setup_seconds: histogram("cursor_setup_seconds"),
-                row_iteration_seconds: histogram("row_iteration_seconds"),
-                row_iteration_rows: histogram("row_iteration_rows"),
-                result_sort_seconds: histogram("result_sort_seconds"),
-                result_sort_rows: histogram("result_sort_rows"),
-                row_collection_seconds: histogram("row_collection_seconds"),
-            }
+            let metrics =
+                ComputeMetrics::register_with(&MetricsRegistry::new(), ComputeRuntimeRole::Solo)
+                    .for_worker(0);
+            let walk = PeekWalkMetrics::new(&metrics);
+            Self { metrics, walk }
         }
 
         fn as_metrics(&self) -> IndexPeekMetrics<'_> {
             IndexPeekMetrics {
-                seek_fulfillment_seconds: &self.seek_fulfillment_seconds,
-                frontier_check_seconds: &self.frontier_check_seconds,
-                error_scan_seconds: &self.error_scan_seconds,
-                cursor_setup_seconds: &self.cursor_setup_seconds,
-                row_iteration_seconds: &self.row_iteration_seconds,
-                row_iteration_rows: &self.row_iteration_rows,
-                result_sort_seconds: &self.result_sort_seconds,
-                result_sort_rows: &self.result_sort_rows,
-                row_collection_seconds: &self.row_collection_seconds,
+                seek_fulfillment_seconds: &self.metrics.index_peek_seek_fulfillment_seconds,
+                frontier_check_seconds: &self.metrics.index_peek_frontier_check_seconds,
+                walk: &self.walk,
             }
         }
 
-        /// How often each histogram that `collect_finished_data` can observe into was observed.
+        /// How often each metric that `collect_finished_data` can observe into was observed.
         ///
         /// The two histograms the enclosing `seek_fulfillment` owns are left out, because the
         /// tests that read this call `collect_finished_data` directly.
         fn observations(&self) -> BTreeMap<&'static str, u64> {
+            let metrics = &self.metrics;
             BTreeMap::from([
+                ("walks_inline", metrics.index_peek_walks_inline.get()),
+                ("walks_offloaded", metrics.index_peek_walks_offloaded.get()),
                 (
                     "error_scan_seconds",
-                    self.error_scan_seconds.get_sample_count(),
+                    metrics.index_peek_error_scan_seconds.get_sample_count(),
                 ),
                 (
                     "cursor_setup_seconds",
-                    self.cursor_setup_seconds.get_sample_count(),
+                    metrics.index_peek_cursor_setup_seconds.get_sample_count(),
                 ),
                 (
                     "row_iteration_seconds",
-                    self.row_iteration_seconds.get_sample_count(),
+                    metrics.index_peek_row_iteration_seconds.get_sample_count(),
                 ),
                 (
                     "row_iteration_rows",
-                    self.row_iteration_rows.get_sample_count(),
+                    metrics.index_peek_row_iteration_rows.get_sample_count(),
                 ),
                 (
                     "result_sort_seconds",
-                    self.result_sort_seconds.get_sample_count(),
+                    metrics.index_peek_result_sort_seconds.get_sample_count(),
                 ),
-                ("result_sort_rows", self.result_sort_rows.get_sample_count()),
+                (
+                    "result_sort_rows",
+                    metrics.index_peek_result_sort_rows.get_sample_count(),
+                ),
                 (
                     "row_collection_seconds",
-                    self.row_collection_seconds.get_sample_count(),
+                    metrics.index_peek_row_collection_seconds.get_sample_count(),
                 ),
             ])
         }
     }
 
     /// The observation counts a driver call is expected to leave behind, named so that a failure
-    /// says which histogram moved.
+    /// says which metric moved.
+    ///
+    /// `walks_offloaded` is zero throughout, because these tests exercise the inline driver and a
+    /// walk it promotes is counted by the task that finishes it.
     fn expected_observations(
+        walks_inline: u64,
         error_scan: u64,
         cursor_setup: u64,
         rows: u64,
     ) -> BTreeMap<&'static str, u64> {
         BTreeMap::from([
+            ("walks_inline", walks_inline),
+            ("walks_offloaded", 0),
             ("error_scan_seconds", error_scan),
             ("cursor_setup_seconds", cursor_setup),
             ("row_iteration_seconds", rows),
@@ -2537,7 +2484,7 @@ pub(crate) mod index_peek_tests {
             Answer::from(answer),
             Answer::Ready(PeekResponse::Rows(vec![row_collection(0..6)]))
         );
-        assert_eq!(metrics.observations(), expected_observations(1, 1, 1));
+        assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 1));
     }
 
     /// A peek its error trace answers reports no phase timer at all, because it reached none of
@@ -2558,7 +2505,7 @@ pub(crate) mod index_peek_tests {
             Answer::from(answer),
             Answer::Ready(PeekResponse::Error(expected))
         );
-        assert_eq!(metrics.observations(), expected_observations(0, 0, 0));
+        assert_eq!(metrics.observations(), expected_observations(1, 0, 0, 0));
     }
 
     /// A peek whose accumulated rows fill a batch is diverted to the stash rather than answered
@@ -2579,7 +2526,7 @@ pub(crate) mod index_peek_tests {
         let answer = subject.collect_finished_data(u64::MAX, true, 0, None, &metrics.as_metrics());
 
         assert_eq!(Answer::from(answer), Answer::UsePeekStash);
-        assert_eq!(metrics.observations(), expected_observations(1, 1, 0));
+        assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 0));
     }
 
     /// A peek its ok walk fails is answered with that error, and reports the phases that walk
@@ -2617,6 +2564,6 @@ pub(crate) mod index_peek_tests {
                 ByteSize::b(max_result_size)
             ))))
         );
-        assert_eq!(metrics.observations(), expected_observations(1, 1, 0));
+        assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 0));
     }
 }
