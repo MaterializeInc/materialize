@@ -1476,6 +1476,12 @@ impl<'a> ActiveComputeState<'a> {
         // Returning before the map is walked, ordered, or taken keeps that case as cheap as the
         // kill switch path has to be.
         if self.compute_state.pending_peeks.is_empty() {
+            // A resume point names where in the uuid ordering the next sweep starts, and with
+            // nothing pending there is nothing for it to name. Cancellation and `reconcile` both
+            // empty the map without clearing it, and only a sweep consumes one, so a resume point
+            // left here would outlive every peek it could serve and make each later arrival ask
+            // for an activation with nothing to do.
+            self.compute_state.peek_resume_at = None;
             return;
         }
 
@@ -2422,6 +2428,24 @@ mod peek_sweep_tests {
         sweep(&mut state);
 
         assert_eq!(state.peek_budget.grant(), Some(INLINE_BUDGET));
+    }
+
+    /// An activation that finds nothing pending drops the resume point, which nothing else
+    /// consumes once the peek it names is gone.
+    ///
+    /// Cancellation removes a deferred peek from the map, and `reconcile` empties the map
+    /// wholesale, both without touching the resume point. Left set on a replica whose peeks all
+    /// answer inline, it would make `handle_peek` ask for an extra worker iteration for every peek
+    /// the replica ever serves.
+    #[mz_ore::test(tokio::test)]
+    async fn an_idle_activation_drops_the_resume_point() {
+        let mut state = compute_state_with_offload_on();
+        state.peek_resume_at = Some(Uuid::from_u128(1));
+        assert!(state.pending_peeks.is_empty());
+
+        sweep(&mut state);
+
+        assert_eq!(state.peek_resume_at, None);
     }
 }
 
