@@ -328,12 +328,11 @@ fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> St
     // `count(*) = count(hydrated_at)` trivially true and hand back a compute-only
     // finish for a materialized view whose active worker is still writing.
     //
-    // NOTE: `hydrated_at` is the terminal stamp for an episode. Should the log gain
-    // a separate stamp for the durable write, it must not join this completeness
-    // check, however symmetric that looks. A materialized view being replaced runs
-    // read-only and does not write until cutover, so gating on a write stamp would
-    // never record the hydration that a deployment most wants to measure, and would
-    // wait forever on a replacement that is rolled back.
+    // NOTE: `hydrated_at` is the terminal stamp for a history episode. Nothing
+    // waits for the history row before proceeding. If the log gains a separate
+    // `written_at` stamp, only `hydrated_at` belongs in this completeness check.
+    // A materialized view being replaced can hydrate while it runs read-only, and
+    // may never write if the replacement is rolled back.
     format!(
         "SELECT
             e.object_id,
