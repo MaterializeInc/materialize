@@ -69,9 +69,9 @@ RUN groupadd --system --gid=999 materialize \
     && chown -R materialize /mzdata /scratch /var/run/postgresql /var/lib/nginx /var/log/nginx /run/nginx.pid
 
 # FoundationDB client library, dynamically linked by materialized. Keep this
-# version identical to the COPY in debian-base and distroless-prod-base: all
+# reference identical to the COPY in debian-base and distroless-prod-base: all
 # three share one FoundationDB cluster during a rolling upgrade.
-COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
+COPY --from=foundationdb/foundationdb:7.3.71@sha256:1c988226e25ecd953475d46aef11fa2133e9e5eefda67e0a463196a4caab2d5d /usr/lib/libfdb_c.so /usr/lib/
 
 COPY postgresql.conf pg_hba.conf /etc/postgresql/
 

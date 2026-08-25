@@ -23,4 +23,9 @@ LABEL build.profile=$BUILD_PROFILE
 RUN apt-get update --fix-missing && TZ=UTC DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends eatmydata \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=foundationdb/foundationdb:7.3.71 /usr/lib/libfdb_c.so /usr/lib/
+# FoundationDB client library, dynamically linked by the Rust binaries.
+# NOTE: keep this reference identical to the COPY in distroless-prod-base and
+# materialized-base, and to the `foundationdb` crate's `fdb-7_3` API feature in
+# the root Cargo.toml. All three images share one FoundationDB cluster during a
+# rolling upgrade, so a bump in one that is not matched in the others is a bug.
+COPY --from=foundationdb/foundationdb:7.3.71@sha256:1c988226e25ecd953475d46aef11fa2133e9e5eefda67e0a463196a4caab2d5d /usr/lib/libfdb_c.so /usr/lib/
