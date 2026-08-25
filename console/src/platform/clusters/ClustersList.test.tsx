@@ -939,3 +939,97 @@ describe("ClustersList keyboard navigation", () => {
     ).toHaveLength(2);
   });
 });
+
+describe("ClustersList row identity", () => {
+  /**
+   * A replica appearing or going away shifts the position of every row after
+   * it. Rows are keyed by their id and each one owns state that outlives a
+   * re-render: the open/closed actions menu, and the Alter and Drop dialogs it
+   * opens. Positional ids would leave that state behind on the index while the
+   * cluster under it changed, so a dialog opened for one cluster could submit
+   * against another.
+   *
+   * `alpha` holds the replica that goes away, and the row whose state is under
+   * test sits between two clusters so a shift lands a different cluster on its
+   * index rather than dropping it off the end.
+   */
+  const threeClusters = (alphaReplicas: Replica[]) => [
+    buildCluster({ id: "u1", name: "alpha", replicas: alphaReplicas }),
+    buildCluster({
+      id: "u2",
+      name: "bravo",
+      replicas: [buildReplica({ id: "u20", name: "b-1" })],
+    }),
+    buildCluster({
+      id: "u3",
+      name: "charlie",
+      replicas: [buildReplica({ id: "u30", name: "c-1" })],
+    }),
+  ];
+
+  const alphaPair = () => [
+    buildReplica({ id: "u10", name: "a-1" }),
+    buildReplica({ id: "u11", name: "a-2" }),
+  ];
+
+  /** Pushes a new subscribe snapshot, as the websocket does. */
+  const pushClusters = (clusters: Cluster[]) =>
+    getStore().set(allClusters, mockSubscribeState({ data: clusters }));
+
+  /** The row holding the one open actions menu. */
+  const rowWithOpenMenu = () => {
+    const button = screen.getByRole("button", {
+      name: "More actions",
+      expanded: true,
+    });
+    const row = button.closest("tr");
+    if (!row) throw new Error("open menu is not inside a row");
+    return row;
+  };
+
+  it("keeps an open actions menu with the cluster it was opened for", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(threeClusters(alphaPair()));
+
+    await user.click(within(rowFor("b-1")).getByRole("button"));
+    expect(
+      within(rowWithOpenMenu()).getAllByRole("cell")[COLUMN.cluster],
+    ).toHaveTextContent("bravo");
+
+    // alpha loses a replica, so bravo's row moves up into the index charlie's
+    // row now vacates.
+    pushClusters(threeClusters([buildReplica({ id: "u10", name: "a-1" })]));
+    await waitFor(() => expect(rowOrder()).toEqual(["a-1", "b-1", "c-1"]));
+
+    expect(
+      within(rowWithOpenMenu()).getAllByRole("cell")[COLUMN.cluster],
+    ).toHaveTextContent("bravo");
+  });
+
+  it("keeps an open Drop dialog on the cluster it was opened for", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(threeClusters(alphaPair()));
+
+    await user.click(within(rowFor("b-1")).getByRole("button"));
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Drop cluster" }),
+    );
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/^Drop bravo$/)).toBeInTheDocument();
+
+    pushClusters(threeClusters([buildReplica({ id: "u10", name: "a-1" })]));
+    // An open modal hides the rest of the app from the accessibility tree, so
+    // the rows are unreachable by role while it is up. Counting them in the DOM
+    // is what confirms the shift landed before the dialog is inspected.
+    await waitFor(() =>
+      expect(document.querySelectorAll("tbody tr")).toHaveLength(3),
+    );
+
+    // The dialog reads its subject from the row it belongs to, so a row that
+    // took on another cluster would retitle the dialog under the user and drop
+    // a cluster they never picked.
+    const shifted = screen.getByRole("dialog");
+    expect(within(shifted).getByText(/^Drop bravo$/)).toBeInTheDocument();
+    expect(within(shifted).queryByText(/charlie/)).not.toBeInTheDocument();
+  });
+});

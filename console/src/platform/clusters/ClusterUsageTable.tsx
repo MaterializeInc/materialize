@@ -251,6 +251,8 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   const table = useUniversalTable({
     data: rows,
     columns,
+    getRowId: (row) =>
+      `${row.cluster.id}/${row.replica ? row.replica.id : "no-replica"}`,
     initialSorting: [{ id: "cluster", desc: false }],
     pageSize: 20,
     state: {
