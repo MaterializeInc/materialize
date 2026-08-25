@@ -1486,15 +1486,26 @@ impl<'a> ActiveComputeState<'a> {
         let mut upper = Antichain::new();
         let mut pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
 
-        let mut order: Vec<Uuid> = pending_peeks.keys().copied().collect();
-        if let Some(resume_at) = self.compute_state.peek_resume_at.take() {
-            let resume_from = order.partition_point(|uuid| *uuid < resume_at);
-            order.rotate_left(resume_from);
-        }
+        // Turning the ring costs a vector of the pending uuids and a lookup per peek, where taking
+        // the map in its own order costs neither. Only a sweep that passed a peek over leaves a
+        // resume point, and no peek is ever passed over while the offload is off, so the kill
+        // switch takes the second arm and pays exactly what the worker paid before.
+        match self.compute_state.peek_resume_at.take() {
+            Some(resume_at) => {
+                let mut order: Vec<Uuid> = pending_peeks.keys().copied().collect();
+                let resume_from = order.partition_point(|uuid| *uuid < resume_at);
+                order.rotate_left(resume_from);
 
-        for uuid in order {
-            let peek = pending_peeks.remove(&uuid).expect("taken from this map");
-            self.process_peek(&mut upper, peek);
+                for uuid in order {
+                    let peek = pending_peeks.remove(&uuid).expect("taken from this map");
+                    self.process_peek(&mut upper, peek);
+                }
+            }
+            None => {
+                for (_uuid, peek) in pending_peeks {
+                    self.process_peek(&mut upper, peek);
+                }
+            }
         }
 
         if self.compute_state.peek_resume_at.is_some() {
