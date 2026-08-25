@@ -303,7 +303,8 @@ where
     ///
     /// Fuel is charged per cursor position, not per row returned, so a
     /// selective `map_filter_project` cannot starve the caller of yield
-    /// points. Returning with fuel left over means the cursor is exhausted.
+    /// points. [`Step::OutOfFuel`] is returned only once the budget is spent,
+    /// so a caller that sees it has more of the scan left to drive.
     pub fn step(&mut self, fuel: &mut usize) -> Step {
         if self.exhausted {
             return Step::Done;
