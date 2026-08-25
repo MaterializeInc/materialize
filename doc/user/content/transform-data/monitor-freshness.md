@@ -345,4 +345,11 @@ to itself, and merging only begins above that: 32s and 33s share a bucket, then
 34s and 35s, and so on. The approximation matters for objects that fall minutes
 or hours behind, not for healthy ones.
 
+Lag is also NULL whenever an object has no readable times, which is the case
+while it is still hydrating. Every query above drops those observations with
+`wl.lag IS NOT NULL`, because an unhydrated observation carries no freshness to
+bucket. The percentiles therefore describe only the hydrated part of the window,
+so a window that spans a long hydration, or a restart, summarizes less time than
+its length suggests.
+
 {{< /note >}}
