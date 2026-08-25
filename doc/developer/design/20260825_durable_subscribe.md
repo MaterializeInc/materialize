@@ -89,6 +89,25 @@ bounds how long the window may stay open without progress. A consumer that
 reconnects reads from wherever inside that window it likes, and by default from
 the position the server remembers.
 
+### Why a timestamp is a better resume token than a log position
+
+A Materialize timestamp is a global commit order, not a per-collection sequence
+number, and that is the property that makes this feature worth more than a
+resumable log tail. Two consequences matter.
+
+A single timestamp identifies a consistent cut across *every* collection in the
+timeline, so a consumer reading several collections can assemble a transactional
+snapshot by buffering each stream until its progress message passes `t`. Systems
+built on write-ahead-log positions cannot do this from the positions alone,
+because the positions of concurrent non-conflicting transactions interleave, so
+they need transaction boundaries and synthetic pre-commit watermarks to recover
+an order the timestamp gives for free.
+
+A timestamp is also meaningful to the client. It is comparable against
+`mz_now()`, against other subscriptions, and against the timestamps the client
+already sees in query results, whereas a log position is an opaque token whose
+only defined operation is comparison with another token from the same source.
+
 ### Read holds and read policies
 
 This design leans on a distinction the codebase makes in its mechanisms but has
@@ -321,6 +340,18 @@ to choose a timestamp no earlier than a floor, which conflicts with resolving th
 as-of from `H`. `WITHIN TIMESTAMP ORDER BY` is unaffected and remains available,
 since it only orders rows within a timestamp.
 
+Rejecting the envelopes reads like ruling out the keyed consumer, so it is worth
+saying why it does not. A consumer that maintains its own replica already holds
+the prior value, which is why every sync engine surveyed keeps its own previous
+state rather than asking the upstream for it. The raw diff stream is what those
+consumers want, and it gives them more than a Postgres feed does: every
+retraction carries the **full old row**, which is `REPLICA IDENTITY FULL`
+semantics by construction, with no per-table configuration and no table
+ownership. `WITHIN TIMESTAMP ORDER BY mz_diff` then orders every retraction
+before every addition within a timestamp, which is exactly the ordering an
+insert-or-replace store needs. So the keyed consumer is served by the default
+form, not excluded from it.
+
 ### Snapshot on resume
 
 **`SNAPSHOT` defaults to `false` on the durable form**, inverting the default of
@@ -438,7 +469,15 @@ knowledge of the target's schedule.
 
 The last-acknowledgement wall-clock time is recorded durably alongside `H`,
 which the periodic flush is already writing. Keeping it only in memory would
-grant every subscription a fresh acknowledgement deadline on every environment restart.
+grant every subscription a fresh deadline on every environment restart.
+
+The ceiling on the deadline should be expressed in **hours**, not minutes. A
+minute suits an interactive client, but a server-side consumer's outages are
+deploys, crash loops, and image rollbacks, which are tens-of-minutes events, and
+a ceiling below that turns every such event into a full resync. Relatedly, a long
+*environment* outage should pause the deadline rather than consume it: the
+subscription's client was not given a chance to acknowledge, so expiring it on
+boot would punish it for our downtime.
 
 On expiry the subscription is marked expired durably and only then is the hold
 released. Ordering matters: releasing first and crashing before recording expiry
@@ -453,6 +492,16 @@ lag that killed it. `ALTER DURABLE SUBSCRIPTION <name> RESET` re-arms it at the
 current frontier, preserving identity, ownership, and grants, and making the
 client's consent to a gap explicit. `RESET` on a subscription that has not
 expired is an error, since it would silently fence a live reader.
+
+Consent may also be given **in band**, on the attach itself, as `WITH (RESET IF
+EXPIRED)`, meaning "if this subscription has expired, reset it, snapshot at the
+current time, and tell me you did". Every sync engine surveyed has such a signal, under
+names like `reset-required`, `must-refetch`, and `CLEAR`, because a server-side
+consumer recovering from an outage needs to recover in its reconnect path rather
+than by issuing a privileged data-definition statement. The loud-failure property
+is preserved either way: the default attach still fails, and the reset is
+reported to the client that asked for it rather than being silent. `ALTER ...
+RESET` remains for operators.
 
 ```mermaid
 stateDiagram-v2
@@ -476,10 +525,19 @@ clients that are acknowledging correctly.
 ### Delivery semantics
 
 A durable subscription is **at-least-once**. The client commits, then
-acknowledges, and a failure in between means re-delivery. Consumers must
-deduplicate on the timestamp and row, and must not treat the stream as an event
-log, because a resumed interval may consolidate differently than it did
-originally.
+acknowledges, and a failure in between means re-delivery.
+
+The idempotence rule is per timestamp, not per row: **apply each timestamp
+atomically, record which timestamp you applied, and skip timestamps already
+applied.** Deduplicating on the timestamp and row is not sufficient, because a
+resumed interval may consolidate differently than it did originally, so the same
+logical change can arrive as a different set of `(row, diff)` tuples. It is also
+not necessary, because resume always lands on a timestamp boundary, so
+re-delivery is always of whole timestamps. Every sync engine surveyed already
+works this way, applying one upstream commit atomically and recording the
+resulting version inside the same transaction.
+
+A consumer must therefore not treat the stream as an event log.
 
 This is a deliberate step back from what the manual pattern achieves, and the
 existing user documentation is explicit that writing the data and the position
@@ -592,6 +650,38 @@ socket, add one inbound arm to the subscribe loop's `select!`, and process only
 `connection_error` doubles as the liveness prober, which wants revisiting once a
 real reader exists.
 
+### Testing
+
+Testdrive covers the lifecycle: create, attach, acknowledge, detach, reattach,
+and assert the resumed stream contains neither a snapshot nor a gap. The gap
+assertion is the one that matters, and the `H = ack - 1` boundary is what it
+tests, so it must include an update at exactly the acknowledged timestamp.
+
+A restart test is mandatory, and its purpose is to prove that the hold is
+re-acquired from durable state where a policy would silently ratchet away. Note
+that an earlier draft justified a restart platform check as catching an
+`enable_for_item_parsing` boot failure, which is self-refuting: CI runs new
+feature flags on, so such a check would run with the flag enabled and pass. The
+boot-failure risk is real but is a release-ordering concern, not a testable one.
+
+Then the cases that would otherwise fail silently:
+
+* **An index on the target.** Attach must still resume, since dataflow
+  construction would otherwise import the index and constrain the as-of by its
+  compute `since`. Include this in the earliest test, because it is the normal
+  case for an indexed relation and would break every resume.
+* **Fencing**, with two connections, asserting the first stream errors.
+* **Expiry**, asserting the error names the subscription. The deadline is
+  wall-clock, so drive it with a very short deadline rather than by waiting.
+* **`DROP` of the target without `CASCADE`** fails while a subscription exists.
+* **Rejected surface**: temporal filters, multi-collection `FROM`, joins and
+  aggregations, `ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM`, and `AS OF AT LEAST`.
+* **Acknowledging at or below the current position** is accepted as a no-op.
+* **A consistent cut across two subscriptions**: buffer both to the same
+  timestamp and assert the union matches a `SELECT ... AS OF` at that timestamp.
+  This is the property that makes the single-target restriction tolerable, so it
+  should be asserted rather than assumed.
+
 ### Known quirks and interactions
 
 These are consequences of existing behavior that this design does not fix.
@@ -628,10 +718,44 @@ Documenting them is deliberate; fixing them is separable work.
   documented teardown then produces exactly the "does not exist" ambiguity this
   design rejects for expiry.
 
-* **`ALTER TABLE ... ADD COLUMN`** mints a new `GlobalId` on the same shard, and
-  with `SNAPSHOT = false` there is no boundary at which to signal the arity
-  change. Expiring subscriptions on the target is the chosen behavior; the hold
-  itself survives.
+* **`ALTER TABLE ... ADD COLUMN`** is gated behind `enable_alter_table_add_column`,
+  which defaults to false and is undocumented, so this is a forward-looking note
+  rather than a behavior users can reach. If it is enabled, the statement mints a
+  new `GlobalId` on the same shard while the hold survives via primary links, and
+  a subscription on the target would see its row arity change with no marker
+  saying why. Expiring the subscription is the conservative answer. A better one,
+  should schema change become supported, is to keep the hold and `H` and fail
+  only the in-flight attach, so a reconnect resumes at the same position with the
+  new shape: the arity changes *at a timestamp*, so a boundary does exist even
+  under `SNAPSHOT = false`.
+
+* **Combining several subscriptions is safe but unassisted.** Because a timestamp
+  is a global cut, a consumer reading N collections can buffer each stream until
+  its progress message passes `t` and then apply the union at `t` as a
+  transactionally consistent snapshot. That works today and needs nothing from
+  us, but the consumer pays for it: liveness is the minimum over N, so one
+  `REFRESH` target paces the whole set; expiry is per-subscription, so one
+  expiry breaks the joint cut and recovery is per-collection; and each checkpoint
+  costs N `ACKNOWLEDGE` statements. The recipe should be documented, and it is
+  the argument for the multi-target follow-up.
+
+* **Timelines are not comparable.** Collections in different timelines have
+  incomparable timestamps, so the recipe above is unsound across them. A
+  subscription should reject a target outside the default `EpochMilliseconds`
+  timeline, or the restriction must be documented.
+
+* **There is no mapping from an upstream position to a Materialize timestamp.**
+  A consumer that writes to an upstream database and then needs to know when its
+  own write became visible in Materialize cannot ask. This is invisible if only
+  the read path is modeled, and it is what a sync engine needs to retire an
+  optimistic write. Out of scope here, but it is a hard dependency for that class
+  of consumer and is worth naming so nobody assumes this feature covers it.
+
+* **The WebSocket transport has no batch flow control.** That API supports
+  neither `DECLARE`, `FETCH`, `CLOSE`, nor `COPY`, so a WebSocket reader cannot
+  pull in batches and depends entirely on the inbound-`ACKNOWLEDGE` arm described
+  under "Protocol". For the console, which is the intended first consumer, that
+  arm is not an optimization but the only acknowledgement channel.
 
 * **Rollback ordering.** `item_type()` panics on an unknown `create_sql` prefix,
   and topological sorting parses every item's `create_sql` with `expect`. Both
@@ -763,7 +887,8 @@ generalize to other sinks that track consumer progress.
 * No tracking issue exists yet. One must be filed and linked above before this
   document merges.
 * What are the default flush cadence, the minimum deadline as a multiple of
-  it, and the dyncfg ceiling on the deadline?
+  it, and the dyncfg ceiling on the deadline? The ceiling should be in hours per
+  "Expiry", but the value is undecided.
 * Can the durable attach be made to bypass index import cleanly, or does that
   need a change to dataflow construction? This is the one implementation
   question that could change the shape of the attach path.

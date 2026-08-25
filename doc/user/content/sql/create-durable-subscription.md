@@ -151,10 +151,18 @@ When a subscription expires, it is not dropped. It remains visible in
 expired at and how long it had gone without acknowledging, so you can tell an
 expiry apart from a subscription that never existed.
 
-Attempting to subscribe using an expired subscription returns an error. To start
-using it again, run [`ALTER DURABLE SUBSCRIPTION ... RESET`](/sql/alter-durable-subscription/),
-which re-arms it at the current time. Resetting acknowledges that you are
-accepting a gap in the data and will need a new snapshot.
+Attempting to subscribe using an expired subscription returns an error. There are
+two ways to start using it again, and both require you to accept that there is a
+gap in the data:
+
+*   Run [`ALTER DURABLE SUBSCRIPTION ... RESET`](/sql/alter-durable-subscription/),
+    which re-arms it at the current time. You then subscribe with `SNAPSHOT true`
+    to get a usable starting state.
+
+*   Subscribe with `WITH (RESET IF EXPIRED)`, which resets the subscription in
+    the same statement if it has expired and reports that it did so. This is the
+    option to use in an automated reconnect path, since it needs no separate
+    privileged statement.
 
 ### Acknowledging requires progress messages
 
@@ -231,10 +239,23 @@ it, and then acknowledge. If your application fails between the commit and the
 acknowledgement, Materialize still has the older position, so it re-sends
 updates you already processed.
 
-Your consumer must therefore be idempotent. Deduplicate on the combination of
-`mz_timestamp` and the row, and do not treat the stream as an event log: after a
-resume, the same logical change may arrive consolidated differently than it did
-the first time.
+Your consumer must therefore be idempotent, and the unit of idempotence is the
+**timestamp**, not the row. Apply all the updates at one `mz_timestamp`
+together, record that you applied it, and skip timestamps you have already
+applied. Resuming always starts on a timestamp boundary, so anything re-sent is
+re-sent as whole timestamps.
+
+Do not deduplicate on the combination of `mz_timestamp` and the row. After a
+resume the same logical change may arrive consolidated differently than it did
+the first time, so per-row comparison cannot distinguish a re-delivery from a
+genuine second change. For the same reason, do not treat the stream as an event
+log.
+
+Materialize does not enforce uniqueness, since tables support neither [primary
+keys nor unique constraints](/sql/create-table/#known-limitations). If you apply
+updates into a keyed store, you are responsible for the key being unique in the
+subscribed data. Note that a projection in the `AS SELECT` form can make
+distinct rows identical, which combines their changes.
 
 {{< important >}}
 
@@ -266,10 +287,6 @@ take turns rather than share the work.
 
 Dropping the target object fails while a durable subscription exists on it,
 unless you use `CASCADE`.
-
-Changing the target's columns, for example with `ALTER TABLE ... ADD COLUMN`,
-expires every durable subscription on it. The shape of the stream cannot change
-underneath a reader.
 
 `SELECT` on the target is checked each time you subscribe, not only when you
 create the subscription, so revoking it stops an existing subscription from
