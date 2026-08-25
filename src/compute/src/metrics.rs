@@ -227,7 +227,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_error_scan_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_error_scan_seconds",
-                help: "Time scanning the error trace for errors.",
+                help: "Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_cursor_setup_seconds: registry.register(with_role(metric!(

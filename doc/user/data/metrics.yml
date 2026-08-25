@@ -970,17 +970,17 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_bucket
-  help: Time scanning the error trace for errors.
+  help: Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_count
-  help: Time scanning the error trace for errors.
+  help: Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_sum
-  help: Time scanning the error trace for errors.
+  help: Time scanning the error trace for errors. Sums the worker time of the calls the scan was sliced into, so it excludes the gaps between them. Only scans that find no error are observed.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_frontier_check_seconds_bucket
