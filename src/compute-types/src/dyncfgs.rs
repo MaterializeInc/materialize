@@ -626,10 +626,13 @@ pub const ENABLE_PEEK_ROW_ITERATION_LIMIT: Config<bool> = Config::new(
 );
 
 /// The maximum number of rows a peek may iterate over on each worker.
+///
+/// The count spans a peek's whole walk of its arrangement, rows written to the peek stash
+/// included, because a peek walks its arrangement once and the count travels with that walk.
 pub const PEEK_ROW_ITERATION_LIMIT: Config<usize> = Config::new(
     "compute_peek_row_iteration_limit",
     1000,
-    "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. Does not apply once a peek's results move to the peek stash.",
+    "The maximum number of rows a peek may iterate over on each worker when enable_compute_peek_row_iteration_limit is enabled. The count spans the peek's whole walk, rows written to the peek stash included.",
     ParameterScope::Environment,
 );
 
