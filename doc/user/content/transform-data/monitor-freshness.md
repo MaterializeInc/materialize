@@ -240,26 +240,26 @@ The query returns output like the following:
 ```none
  bucket_seconds | count_of_bucket_values | cumulative_count | cumulative_density
 ----------------+------------------------+------------------+--------------------
-              1 |                   7265 |             7265 | 0.4184425757401221
-              2 |                   1714 |             8979 | 0.5171639212072342
-              3 |                   1361 |            10340 | 0.5955535076604078
-              4 |                   1226 |            11566 | 0.6661674922243981
-              5 |                   1582 |            13148 | 0.7572860269554199
-              6 |                   1253 |            14401 | 0.8294551318972468
-              7 |                   1018 |            15419 | 0.8880889298467919
-              8 |                    455 |            15874 | 0.9142955880658911
-              9 |                    289 |            16163 | 0.9309411358138463
-             10 |                    196 |            16359 | 0.9422301578159198
-             11 |                    124 |            16483 | 0.9493721921437622
+              1 |                  11082 |            11082 |   0.50356704684873
+              2 |                   2368 |            13450 |  0.611169173444813
+              3 |                   1367 |            14817 | 0.6732857727086836
+              4 |                   1382 |            16199 | 0.7360839732812287
+              5 |                   1594 |            17793 | 0.8085154723497069
+              6 |                   1253 |            19046 | 0.8654519016676512
+              7 |                   1018 |            20064 | 0.9117099104830281
+              8 |                    455 |            20519 | 0.9323851501794883
+              9 |                    289 |            20808 |  0.945517335393284
+             10 |                    196 |            21004 | 0.9544235924932976
+             11 |                    124 |            21128 | 0.9600581633116736
 ...
-            100 |                      9 |            17347 | 0.9991360442345352
-            104 |                      2 |            17349 | 0.9992512383365971
-            108 |                      4 |            17353 | 0.9994816265407211
-            112 |                      3 |            17356 |  0.999654417693814
-            116 |                      2 |            17358 | 0.9997696117958761
-            120 |                      2 |            17360 |  0.999884805897938
-            128 |                      1 |            17361 |  0.999942402948969
-            152 |                      1 |            17362 |                  1
+            100 |                      9 |            21992 | 0.9993183986913254
+            104 |                      2 |            21994 | 0.9994092788658154
+            108 |                      4 |            21998 | 0.9995910392147953
+            112 |                      3 |            22001 | 0.9997273594765302
+            116 |                      2 |            22003 | 0.9998182396510201
+            120 |                      2 |            22005 | 0.9999091198255101
+            128 |                      1 |            22006 | 0.9999545599127551
+            152 |                      1 |            22007 |                  1
 (64 rows)
 ```
 
@@ -327,7 +327,7 @@ LIMIT 1;
 ```none
  approximate_p99
 -----------------
-              52
+              46
 (1 row)
 ```
 
@@ -339,19 +339,26 @@ By default these queries aggregate across every object. To scope them to a
 single object, join `mz_catalog.mz_objects` in the `lags` CTE and filter on the
 object name, as in the CCDF section above.
 
-A list of buckets is hard to read at a glance, and plotting it makes the shape
-obvious. The chart below puts the bucket counts on top and the cumulative
-density underneath, sharing one log-scaled lag axis. Counts are themselves on a
-log scale, because the first bucket outweighs the far tail by orders of
-magnitude:
+Reading percentiles off a table works, but a **percentile plot** shows the whole
+distribution at once. Lag goes on a log vertical axis, and the percentile on a
+log-probability horizontal axis, so each additional nine gets the same width. A
+linear percentile axis would crush every nine past the first into the last few
+pixels, which is exactly where the interesting behaviour lives:
 
-![HDR histogram of wallclock lag: bucket counts above, cumulative density
-below, sharing a log-scaled lag axis, with the approximate p99
-marked](/images/monitoring/freshness-hdr-histogram.png)
+![Percentile plot of wallclock lag: lag on a log axis against percentile on a
+log-probability axis, annotated at p90, p99, p99.9 and p99.99, with an SLO
+target line](/images/monitoring/freshness-percentile-plot.png)
 
-Most observations sit in the first few buckets, and a thin tail runs out past
-two minutes. That tail is what the percentile query reports, and what an SLO on
-freshness is really about.
+Read it by picking a percentile along the bottom and reading the lag off the
+left, which is the lookup the p99 query above performs. Each step up is one
+bucket boundary. Where the curve crosses the SLO line is the percentile at which
+the target stops holding, so a curve that crosses early is failing the target
+more often than one that crosses late.
+
+The curve has to stop somewhere: a window of `N` observations cannot express a
+percentile beyond `1 - 1/N`, because past that there is less than one
+observation left to place. That is why the right-hand end is annotated with the
+furthest percentile the window supports rather than running to p100.
 
 {{< note >}}
 
