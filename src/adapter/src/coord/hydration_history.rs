@@ -25,7 +25,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use itertools::Itertools;
 use mz_adapter_types::dyncfgs::{
@@ -35,6 +35,7 @@ use mz_adapter_types::dyncfgs::{
 use mz_catalog::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY};
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
+use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
 use mz_ore::now::EpochMillis;
 use mz_ore::task;
@@ -47,6 +48,7 @@ use tracing::warn;
 use crate::catalog::Catalog;
 use crate::command::ExecuteResponse;
 use crate::coord::{Coordinator, Message};
+use crate::metrics::Metrics;
 use crate::peek_client::CoordinatorClient;
 use crate::session::Session;
 use crate::{AdapterError, PeekClient};
@@ -217,6 +219,7 @@ impl Coordinator {
         let internal_cmd_tx = self.internal_cmd_tx.clone();
 
         let handle = task::spawn(|| "hydration_history_sweep", async move {
+            let started = Instant::now();
             if let Some((cluster_id, replica_id)) = replica {
                 sweep.collect(cluster_id, replica_id).await;
             }
@@ -228,6 +231,10 @@ impl Coordinator {
                 sweep.retain(cluster_id, replica_id).await;
             }
 
+            sweep
+                .metrics
+                .hydration_history_sweep_duration_seconds
+                .observe(started.elapsed().as_secs_f64());
             let _ = internal_cmd_tx.send(Message::HydrationHistorySchedule);
         });
 
@@ -264,6 +271,7 @@ impl Coordinator {
             client,
             history_id: catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY),
             catalog,
+            metrics: self.metrics.clone(),
             wall_time: self.now_datetime(),
             cutoff: mz_ore::now::to_datetime(self.now().saturating_sub(retention_ms)).to_rfc3339(),
         }
@@ -395,6 +403,7 @@ struct Sweep {
     client: PeekClient,
     catalog: Arc<Catalog>,
     history_id: CatalogItemId,
+    metrics: Metrics,
     wall_time: chrono::DateTime<chrono::Utc>,
     /// Rows finishing before this have aged out. Both steps apply it, so a live
     /// log row cannot resurrect an episode retention just retracted.
@@ -407,7 +416,7 @@ impl Sweep {
         let sql = collect_sql(cluster_id, replica_id, &self.cutoff);
         let _ = self
             .run(
-                "collect",
+                "collection",
                 cluster_id,
                 replica_id,
                 MutationKind::Insert,
@@ -420,7 +429,7 @@ impl Sweep {
     async fn retain(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         let sql = retention_sql(&self.cutoff);
         loop {
-            let Some(response) = self
+            let Some(deleted) = self
                 .run(
                     "retention",
                     cluster_id,
@@ -430,12 +439,6 @@ impl Sweep {
                 )
                 .await
             else {
-                break;
-            };
-            let ExecuteResponse::Deleted(deleted) = response else {
-                mz_ore::soft_panic_or_log!(
-                    "hydration history retention returned a non-delete response"
-                );
                 break;
             };
             if deleted < RETENTION_BATCH_SIZE {
@@ -451,6 +454,12 @@ impl Sweep {
     /// write can lose its timestamp race. None of them are actionable, and the
     /// next sweep recomputes from current state, so they are logged and the
     /// sweep continues.
+    ///
+    /// NOTE: A timed-out mutation can still commit. The write is submitted
+    /// before we wait for its answer, and a background write carries no
+    /// connection to cancel it with, so a `timeout` outcome says we stopped
+    /// waiting, not that nothing landed. Rows such a write commits afterwards
+    /// are never counted, which makes `rows_affected` a lower bound.
     async fn run(
         &mut self,
         step: &'static str,
@@ -458,7 +467,7 @@ impl Sweep {
         replica_id: ReplicaId,
         kind: MutationKind,
         sql: &str,
-    ) -> Option<ExecuteResponse> {
+    ) -> Option<usize> {
         let mutation = async {
             let plan = plan_mutation(&self.catalog, self.history_id, kind, sql)?;
             let mut session = Session::dummy();
@@ -476,8 +485,29 @@ impl Sweep {
             Ok::<_, AdapterError>(response)
         };
         match tokio::time::timeout(MUTATION_TIMEOUT, mutation).await {
-            Ok(Ok(response)) => Some(response),
+            Ok(Ok(response)) => {
+                let (rows, action) = match (kind, response) {
+                    (MutationKind::Insert, ExecuteResponse::Inserted(rows)) => (rows, "appended"),
+                    (MutationKind::Update, ExecuteResponse::Updated(rows)) => (rows, "updated"),
+                    (MutationKind::Delete, ExecuteResponse::Deleted(rows)) => (rows, "deleted"),
+                    (_, response) => {
+                        self.observe_mutation(step, "error");
+                        mz_ore::soft_panic_or_log!(
+                            "hydration history {step} returned an unexpected response: {response:?}"
+                        );
+                        return None;
+                    }
+                };
+                self.metrics
+                    .hydration_history_rows_affected
+                    .with_label_values(&[action])
+                    .inc_by(u64::cast_from(rows));
+                let outcome = if rows == 0 { "noop" } else { "success" };
+                self.observe_mutation(step, outcome);
+                Some(rows)
+            }
             Ok(Err(error)) => {
+                self.observe_mutation(step, "error");
                 warn!(%step, %cluster_id, %replica_id, %error, "hydration history step failed");
                 None
             }
@@ -486,7 +516,8 @@ impl Sweep {
             // the replica's clock, so a replica whose clock trails `environmentd`
             // by more than its introspection interval keeps sitting below the
             // target and waits here until this fires, every sweep.
-            Err(_) if step == "collect" => {
+            Err(_) if step == "collection" => {
+                self.observe_mutation(step, "timeout");
                 warn!(
                     %step, %cluster_id, %replica_id,
                     "hydration history step timed out, \
@@ -495,10 +526,18 @@ impl Sweep {
                 None
             }
             Err(_) => {
+                self.observe_mutation(step, "timeout");
                 warn!(%step, %cluster_id, %replica_id, "hydration history step timed out");
                 None
             }
         }
+    }
+
+    fn observe_mutation(&self, operation: &str, outcome: &str) {
+        self.metrics
+            .hydration_history_mutations
+            .with_label_values(&[operation, outcome])
+            .inc();
     }
 }
 
