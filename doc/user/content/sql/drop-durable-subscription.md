@@ -6,6 +6,8 @@ menu:
     parent: 'commands'
 ---
 
+{{< private-preview />}}
+
 `DROP DURABLE SUBSCRIPTION` removes a [durable
 subscription](/sql/create-durable-subscription/) and releases the history it was
 retaining.
@@ -28,14 +30,14 @@ Dropping a durable subscription releases its hold on the target's history
 immediately. Any reader currently streaming from it fails with an error.
 
 The position is gone. Recreating a subscription with the same name gives you a
-new one positioned at the current time, not the one you dropped, so the next
-read needs a snapshot. To keep a subscription's identity and privileges while
+new one positioned at the current time, not the one you dropped, so the next read
+needs `SNAPSHOT true`. To keep a subscription's identity and privileges while
 moving it to the current time, use [`ALTER DURABLE SUBSCRIPTION ...
 RESET`](/sql/alter-durable-subscription/) instead.
 
 Dropping the subscription is also how you stop paying for retained history that
 nobody is reading. A subscription that is merely idle continues to retain
-history until its time to live expires it.
+history until its acknowledgement deadline expires it.
 
 ## Examples
 
@@ -43,7 +45,16 @@ history until its time to live expires it.
 DROP DURABLE SUBSCRIPTION winning_bids_feed;
 ```
 
+## Privileges
+
+The privileges required to execute this statement are:
+
+{{% include-headless "/headless/sql-command-privileges/drop-durable-subscription" %}}
+
 ## Related pages
 
 *   [`CREATE DURABLE SUBSCRIPTION`](/sql/create-durable-subscription/)
 *   [`ALTER DURABLE SUBSCRIPTION`](/sql/alter-durable-subscription/)
+*   [`ACKNOWLEDGE`](/sql/acknowledge/)
+*   [`SUBSCRIBE`](/sql/subscribe/)
+*   [Resuming subscriptions](/transform-data/patterns/durable-subscriptions/)

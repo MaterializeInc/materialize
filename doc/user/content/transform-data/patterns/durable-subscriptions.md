@@ -1,6 +1,6 @@
 ---
-title: "Durable subscriptions"
-description: "How to enable lossless, durable subscriptions to your changing results in Materialize"
+title: "Resuming subscriptions"
+description: "How to resume a subscription after a connection drop without losing or re-snapshotting data"
 menu:
   main:
     parent: 'sql-patterns'
@@ -18,15 +18,14 @@ the network, subscriptions might get disrupted for both expected and unexpected
 reasons. In such cases, it can be useful to have a mechanism to gracefully
 recover data processing.
 
-To avoid the need for re-processing data that was already sent to your external
-application following a connection disruption, you can:
-
-- Adjust the [history retention period](#history-retention-period) for the
-  objects that a subscription depends on, and
-
-- [Access past versions of this
-  data](#enabling-durable-subscriptions-in-your-application) at specific points
-  in time to pick up data processing where you left off.
+To avoid re-processing data that was already sent to your external application
+following a connection disruption, you have two options: let Materialize track
+your position with a [durable
+subscription](/sql/create-durable-subscription/), or track it yourself by
+adjusting the [history retention period](#history-retention-period) and
+[accessing past versions of the
+data](#enabling-durable-subscriptions-in-your-application) at the point you left
+off.
 
 ## Choosing an approach
 
