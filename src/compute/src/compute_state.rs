@@ -1504,7 +1504,7 @@ impl<'a> ActiveComputeState<'a> {
     /// answered or promoted, and neither leaves an activation behind, so a worker with no dataflow
     /// to run would park with peeks waiting on nothing but their turn. Every path that defers a
     /// peek therefore calls this before it hands the worker back.
-    fn request_peek_activation(&mut self) {
+    fn request_peek_activation(&self) {
         match self.timely_worker.sync_activator_for([].into()).activate() {
             Ok(()) => {}
             Err(_) => debug!("unable to wake timely for peeks left waiting on their turn"),
