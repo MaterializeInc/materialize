@@ -1865,9 +1865,10 @@ impl IndexPeek {
             // reachable and owns resuming the scan rather than diverting it.
             //
             // The batch is taken and dropped rather than left to the scan's own drop, because
-            // discarding it is this driver's decision: the stash's own walk supersedes it.
+            // discarding it is this driver's decision: the stash's own walk supersedes it. It is
+            // taken only once diversion is established, so that no path disposes of rows it has
+            // not first earned the right to discard.
             ScanOutcome::Suspended => {
-                let batch = scan.take_batch();
                 if !scan.error_trace_clean() {
                     soft_panic_or_log!(
                         "peek on {} suspended before its error trace was read out",
@@ -1877,7 +1878,7 @@ impl IndexPeek {
                         "peek suspended before its error trace was read out",
                     )));
                 }
-                if batch.is_none() {
+                if scan.take_batch().is_none() {
                     soft_panic_or_log!(
                         "peek on {} suspended with no batch to hand over",
                         self.peek.target.id()
