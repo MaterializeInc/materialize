@@ -2575,6 +2575,25 @@ mod peek_sweep_tests {
             }
             panic!("peeks were still pending after {SWEEP_BOUND} activations");
         }
+
+        /// Runs the runtime until the two substrates have counted `walks` walks between them,
+        /// without sweeping.
+        ///
+        /// Bounded, so a walk that never reaches an outcome fails here rather than hanging the
+        /// suite. No sweep runs, so a promoted walk that finishes here leaves its outcome sitting
+        /// in the channel that carries it back, which the worker has not yet read.
+        async fn drive_until_walks(&self, walks: (u64, u64)) {
+            for _ in 0..SWEEP_BOUND {
+                if self.walks() == walks {
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+            panic!(
+                "the substrates counted {:?} rather than {walks:?} within {SWEEP_BOUND} yields",
+                self.walks()
+            );
+        }
     }
 
     /// A harness with the offload on and every budget at its production default, which is the
@@ -2958,6 +2977,110 @@ mod peek_sweep_tests {
         );
     }
 
+    /// A resume point naming a peek that has since been cancelled still names where the next sweep
+    /// starts.
+    ///
+    /// The peek a caller cancels is disproportionately one that was passed over for want of
+    /// budget, because that is the peek that has been waiting, and cancellation removes it from
+    /// the map without touching the resume point. What the resume point names is a position in the
+    /// uuid ordering rather than a peek, so the sweep resumes at the first surviving peek that
+    /// sorts at or after it and the peeks that were served ahead of it still go last.
+    #[mz_ore::test(tokio::test)]
+    async fn a_resume_point_outliving_its_peek_still_names_where_to_resume() {
+        let keys = wide_ok_rows(SMALL_INDEX_KEYS);
+        let answer = whole_index_answer(&keys);
+
+        let mut harness = with_activation_budget(1);
+        for uuid in [PEEK_B, PEEK_C] {
+            harness.add_pending(
+                index_peek_with_uuid(uuid, None),
+                trace_bundle(&keys, cancelling_errors(0)),
+            );
+        }
+
+        harness.sweep();
+
+        assert_eq!(harness.peek_responses(), vec![(PEEK_B, answer.clone())]);
+        assert_eq!(harness.state.peek_resume_at, Some(PEEK_C));
+
+        harness.active().handle_cancel_peek(PEEK_C);
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_C, PeekResponse::Canceled)]
+        );
+        assert_eq!(
+            harness.state.peek_resume_at,
+            Some(PEEK_C),
+            "cancelling a peek leaves the resume point naming it"
+        );
+
+        // Peeks arrive on both sides of the cancelled one in the uuid ordering.
+        for uuid in [PEEK_A, PEEK_D] {
+            harness.add_pending(
+                index_peek_with_uuid(uuid, None),
+                trace_bundle(&keys, cancelling_errors(0)),
+            );
+        }
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_D, answer)],
+            "the sweep resumes at the first peek sorting after the cancelled one"
+        );
+        assert_eq!(harness.state.peek_resume_at, Some(PEEK_A));
+    }
+
+    /// A resume point sorting past every pending peek starts the next sweep at the first of them,
+    /// which is where a ring wraps to.
+    ///
+    /// This is the end of the ordering, where the rotation is by the whole length of it. Rotating
+    /// a sweep's peeks by their own count leaves them where they were, and where they were is the
+    /// wrap the ring owes the peeks that sort ahead of the resume point.
+    #[mz_ore::test(tokio::test)]
+    async fn a_resume_point_past_every_pending_peek_wraps_to_the_first() {
+        let keys = wide_ok_rows(SMALL_INDEX_KEYS);
+        let answer = whole_index_answer(&keys);
+
+        let mut harness = with_activation_budget(1);
+        for uuid in [PEEK_C, PEEK_D] {
+            harness.add_pending(
+                index_peek_with_uuid(uuid, None),
+                trace_bundle(&keys, cancelling_errors(0)),
+            );
+        }
+
+        harness.sweep();
+
+        assert_eq!(harness.peek_responses(), vec![(PEEK_C, answer.clone())]);
+        assert_eq!(harness.state.peek_resume_at, Some(PEEK_D));
+
+        harness.active().handle_cancel_peek(PEEK_D);
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_D, PeekResponse::Canceled)]
+        );
+
+        // Every peek that survives the cancellation sorts ahead of the resume point.
+        for uuid in [PEEK_A, PEEK_B] {
+            harness.add_pending(
+                index_peek_with_uuid(uuid, None),
+                trace_bundle(&keys, cancelling_errors(0)),
+            );
+        }
+
+        harness.sweep();
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_A, answer)],
+            "a resume point past every pending peek wraps to the first of them"
+        );
+        assert_eq!(harness.state.peek_resume_at, Some(PEEK_B));
+    }
+
     /// A peek deferred as it arrives leaves an activation behind, so a worker with nothing else to
     /// do does not park on it.
     ///
@@ -3018,7 +3141,9 @@ mod peek_sweep_tests {
     /// a walk that never reached an outcome. The cancellation lands before the promoted task has
     /// been polled, because nothing here awaits between the sweep that promoted it and the
     /// cancellation. What a walk that was already running does with a cancellation is pinned by
-    /// `peek_offload::tests::a_walk_cancelled_while_running_reports_no_outcome`.
+    /// `peek_offload::tests::a_walk_cancelled_while_running_reports_no_outcome`, and what one that
+    /// had already reached an outcome does by
+    /// [`a_walk_cancelled_with_its_outcome_in_flight_is_counted`].
     #[mz_ore::test(tokio::test)]
     async fn a_cancelled_promoted_peek_is_answered_once() {
         let keys = wide_ok_rows(WIDE_INDEX_KEYS);
@@ -3053,6 +3178,58 @@ mod peek_sweep_tests {
             harness.walks(),
             (0, 0),
             "a cancelled walk reaches no outcome and counts on neither substrate"
+        );
+    }
+
+    /// Cancelling a promoted peek whose walk has already reached its outcome answers it as
+    /// cancelled and counts the walk as offloaded.
+    ///
+    /// This is the case the walk counters are documented with: a walk is counted where it reached
+    /// an outcome, and a cancellation that lands after that point does not take the count away.
+    /// The window is the one between the task sending its outcome and the worker's next sweep
+    /// reading it, which is as long as the worker takes to come back around, so a replica under
+    /// load spends real time in it. The counters would otherwise have to be read as a lower bound
+    /// on the walks each substrate finished rather than as the count of them.
+    #[mz_ore::test(tokio::test)]
+    async fn a_walk_cancelled_with_its_outcome_in_flight_is_counted() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+
+        let mut harness = at_production_defaults();
+        harness.add_pending(
+            index_peek_with_uuid(PEEK_A, None),
+            trace_bundle(&keys, cancelling_errors(0)),
+        );
+
+        harness.sweep();
+        assert_eq!(harness.pending(PEEK_A), Some("offloaded"));
+
+        // The walk runs to its outcome while no sweep collects it, which leaves the outcome in
+        // flight between the task and the worker.
+        harness.drive_until_walks((0, 1)).await;
+        assert_eq!(
+            harness.peek_responses(),
+            vec![],
+            "no sweep has read the outcome, so the peek is unanswered"
+        );
+
+        harness.active().handle_cancel_peek(PEEK_A);
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_A, PeekResponse::Canceled)],
+            "the cancellation answers the peek rather than the outcome in flight"
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 1),
+            "a walk that reached its outcome stays counted on the substrate that ended it"
+        );
+
+        harness.sweep();
+        assert_eq!(
+            harness.peek_responses(),
+            vec![],
+            "the outcome in flight is dropped with the peek rather than answered after it"
         );
     }
 
