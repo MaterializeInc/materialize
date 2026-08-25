@@ -24,6 +24,7 @@ use mz_compute_client::protocol::response::PeekResponse;
 use mz_expr::ColumnOrder;
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastLossy;
+use mz_ore::metrics::UIntGauge;
 use prometheus::{Histogram, IntCounter};
 
 use crate::compute_state::peek_scan::{RowBatch, WalkPhases};
@@ -45,6 +46,11 @@ pub(super) struct PeekWalkMetrics {
     result_sort_seconds: Histogram,
     result_sort_rows: Histogram,
     row_collection_seconds: Histogram,
+    /// How many promoted walks are waiting for a permit. Reported by the promoted driver alone,
+    /// which is the only one that queues.
+    permit_queue_depth: UIntGauge,
+    /// How long a promoted walk waited for its permit. Reported by the promoted driver alone.
+    permit_wait_seconds: Histogram,
 }
 
 impl PeekWalkMetrics {
@@ -59,6 +65,23 @@ impl PeekWalkMetrics {
             result_sort_seconds: metrics.index_peek_result_sort_seconds.clone(),
             result_sort_rows: metrics.index_peek_result_sort_rows.clone(),
             row_collection_seconds: metrics.index_peek_row_collection_seconds.clone(),
+            permit_queue_depth: metrics.index_peek_permit_queue_depth.clone(),
+            permit_wait_seconds: metrics.index_peek_permit_wait_seconds.clone(),
+        }
+    }
+
+    /// Accounts for a promoted walk joining the queue for a permit.
+    ///
+    /// The queue is the drain-rate signal the permit bound is watched through, and it has no
+    /// second bound, so both numbers have to come from the walks themselves. The returned guard
+    /// leaves the queue however the wait ends, a cancellation and an abort included, which is what
+    /// keeps the depth from drifting up over a process's life.
+    pub(super) fn queued_for_permit(&self) -> PermitWait {
+        self.permit_queue_depth.inc();
+        PermitWait {
+            queue_depth: self.permit_queue_depth.clone(),
+            wait_seconds: self.permit_wait_seconds.clone(),
+            since: Instant::now(),
         }
     }
 
@@ -131,6 +154,33 @@ impl PeekWalkMetrics {
             .observe(start.elapsed().as_secs_f64());
 
         PeekResponse::Rows(vec![collection])
+    }
+}
+
+/// A promoted walk's place in the queue for a permit, for as long as it holds one.
+///
+/// Leaving the queue is a drop rather than a call, so a walk that is cancelled or aborted while it
+/// waits leaves the queue as surely as one that is admitted.
+pub(super) struct PermitWait {
+    queue_depth: UIntGauge,
+    wait_seconds: Histogram,
+    since: Instant,
+}
+
+impl PermitWait {
+    /// Reports the wait of a walk that was admitted.
+    ///
+    /// A walk that leaves the queue any other way reports nothing, so the histogram describes
+    /// waits that ended in a permit rather than waits that ended.
+    pub(super) fn admitted(self) {
+        self.wait_seconds
+            .observe(self.since.elapsed().as_secs_f64());
+    }
+}
+
+impl Drop for PermitWait {
+    fn drop(&mut self) {
+        self.queue_depth.dec();
     }
 }
 

@@ -1278,30 +1278,45 @@ impl<'a> ActiveComputeState<'a> {
                 result
             }),
             PendingPeek::Offloaded(offloaded) => match offloaded.result.try_recv() {
-                Ok((OffloadOutcome::Answered(response), duration)) => {
-                    trace!(?offloaded.peek, ?duration, "finished offloaded index peek walk");
-                    Some(response)
-                }
-                Ok((OffloadOutcome::NeedsStash, duration)) => {
-                    let _span = span!(parent: &offloaded.span, Level::DEBUG, "process_stash_peek")
-                        .entered();
-                    trace!(?offloaded.peek, ?duration, "handing offloaded index peek to the stash");
+                Ok((outcome, duration)) => {
+                    // Both outcomes are timed, because both measure the same thing: how long the
+                    // peek was away from the worker, the wait for a permit included. A walk that
+                    // hands back is the expensive case rather than an aborted one.
+                    self.compute_state
+                        .metrics
+                        .index_peek_offload_seconds
+                        .observe(duration.as_secs_f64());
 
-                    let uuid = offloaded.peek.uuid;
-                    let stash_task = self
-                        .start_stash_upload(offloaded.peek.clone(), offloaded.trace_bundle.clone());
-
-                    match stash_task {
-                        Some(stash_task) => {
-                            self.compute_state
-                                .pending_peeks
-                                .insert(uuid, PendingPeek::Stash(stash_task));
-                            return;
+                    match outcome {
+                        OffloadOutcome::Answered(response) => {
+                            trace!(?offloaded.peek, ?duration, "finished offloaded index peek walk");
+                            Some(response)
                         }
-                        None => Some(PeekResponse::Error(PeekError::unstructured(
-                            "peek result is too large to answer inline and this replica has no \
-                             peek stash location",
-                        ))),
+                        OffloadOutcome::NeedsStash => {
+                            let _span =
+                                span!(parent: &offloaded.span, Level::DEBUG, "process_stash_peek")
+                                    .entered();
+                            trace!(?offloaded.peek, ?duration, "handing offloaded index peek to the stash");
+
+                            let uuid = offloaded.peek.uuid;
+                            let stash_task = self.start_stash_upload(
+                                offloaded.peek.clone(),
+                                offloaded.trace_bundle.clone(),
+                            );
+
+                            match stash_task {
+                                Some(stash_task) => {
+                                    self.compute_state
+                                        .pending_peeks
+                                        .insert(uuid, PendingPeek::Stash(stash_task));
+                                    return;
+                                }
+                                None => Some(PeekResponse::Error(PeekError::unstructured(
+                                    "peek result is too large to answer inline and this replica \
+                                     has no peek stash location",
+                                ))),
+                            }
+                        }
                     }
                 }
                 Err(oneshot::error::TryRecvError::Empty) => None,

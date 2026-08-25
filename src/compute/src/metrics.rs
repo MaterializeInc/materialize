@@ -73,6 +73,9 @@ pub struct ComputeMetrics {
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
     index_peek_walks_total: raw::IntCounterVec,
+    index_peek_permit_queue_depth: UIntGauge,
+    index_peek_permit_wait_seconds: Histogram,
+    index_peek_offload_seconds: Histogram,
 
     // memory usage
     shared_row_heap_capacity_bytes: raw::UIntGaugeVec,
@@ -271,6 +274,20 @@ impl ComputeMetrics {
                 help: "The number of index peek walks, by the substrate they ran on: `inline` on the timely worker, `offloaded` away from it. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.",
                 var_labels: ["substrate"],
             ), role)),
+            index_peek_permit_queue_depth: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_queue_depth",
+                help: "The number of offloaded index peek walks waiting for a permit to run. The queue is a signal rather than a bound: it is drained rather than capped, so sustained growth here is what says the drain rate is too low.",
+            ), role)),
+            index_peek_permit_wait_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_permit_wait_seconds",
+                help: "Time an offloaded index peek walk waited for a permit before it started running. Only walks that were admitted are observed, so a walk cancelled while waiting is absent rather than reported as a long wait.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
+            index_peek_offload_seconds: registry.register(with_role(metric!(
+                name: "mz_index_peek_offload_seconds",
+                help: "Time an offloaded index peek walk spent away from the timely worker, from the promotion to the outcome, including the wait for a permit.",
+                buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
+            ), role)),
             replica_expiration_timestamp_seconds: registry.register(with_role(metric!(
                 name: "mz_dataflow_replica_expiration_timestamp_seconds",
                 help: "The replica expiration timestamp in seconds since epoch.",
@@ -330,6 +347,9 @@ impl ComputeMetrics {
         let index_peek_walks_offloaded = self
             .index_peek_walks_total
             .with_label_values(&["offloaded"]);
+        let index_peek_permit_queue_depth = self.index_peek_permit_queue_depth.clone();
+        let index_peek_permit_wait_seconds = self.index_peek_permit_wait_seconds.clone();
+        let index_peek_offload_seconds = self.index_peek_offload_seconds.clone();
         let replica_expiration_timestamp_seconds = self
             .replica_expiration_timestamp_seconds
             .with_label_values(&[&worker]);
@@ -361,6 +381,9 @@ impl ComputeMetrics {
             index_peek_row_collection_seconds,
             index_peek_walks_inline,
             index_peek_walks_offloaded,
+            index_peek_permit_queue_depth,
+            index_peek_permit_wait_seconds,
+            index_peek_offload_seconds,
             replica_expiration_timestamp_seconds,
             replica_expiration_remaining_seconds,
             shared_row_heap_capacity_bytes,
@@ -419,6 +442,12 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_walks_inline: IntCounter,
     /// Counts index peek walks that ran away from the timely worker.
     pub(crate) index_peek_walks_offloaded: IntCounter,
+    /// How many offloaded index peek walks are waiting for a permit.
+    pub(crate) index_peek_permit_queue_depth: UIntGauge,
+    /// Histogram of how long an offloaded index peek walk waited for its permit.
+    pub(crate) index_peek_permit_wait_seconds: Histogram,
+    /// Histogram of how long an offloaded index peek walk was away from the worker.
+    pub(crate) index_peek_offload_seconds: Histogram,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,
     /// Remaining seconds until replica expiration.

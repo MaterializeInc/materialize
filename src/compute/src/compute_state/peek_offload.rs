@@ -182,6 +182,7 @@ impl OffloadedPeek {
             async move {
                 let start = Instant::now();
 
+                let queued = metrics.queued_for_permit();
                 let permit = tokio::select! {
                     permit = semaphore.acquire_owned() => {
                         permit.expect("peek permits are never closed")
@@ -191,6 +192,7 @@ impl OffloadedPeek {
                     // cursors and the accumulated rows it was holding, and never takes a permit.
                     () = result_tx.closed() => return,
                 };
+                queued.admitted();
 
                 metrics.walked_offloaded();
 

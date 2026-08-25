@@ -997,6 +997,38 @@ metrics:
   help: Time checking trace frontiers.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_offload_seconds_bucket
+  help: Time an offloaded index peek walk spent away from the timely worker, from the promotion to the outcome, including the wait for a permit.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_offload_seconds_count
+  help: Time an offloaded index peek walk spent away from the timely worker, from the promotion to the outcome, including the wait for a permit.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_offload_seconds_sum
+  help: Time an offloaded index peek walk spent away from the timely worker, from the promotion to the outcome, including the wait for a permit.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_queue_depth
+  help: 'The number of offloaded index peek walks waiting for a permit to run. The queue is a signal rather than a bound: it is drained rather than capped, so sustained growth here is what says the drain rate is too low.'
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_bucket
+  help: Time an offloaded index peek walk waited for a permit before it started running. Only walks that were admitted are observed, so a walk cancelled while waiting is absent rather than reported as a long wait.
+  labels:
+  - le
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_count
+  help: Time an offloaded index peek walk waited for a permit before it started running. Only walks that were admitted are observed, so a walk cancelled while waiting is absent rather than reported as a long wait.
+  source: src/compute/src/metrics.rs
+  visibility: internal
+- name: mz_index_peek_permit_wait_seconds_sum
+  help: Time an offloaded index peek walk waited for a permit before it started running. Only walks that were admitted are observed, so a walk cancelled while waiting is absent rather than reported as a long wait.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_result_sort_rows_bucket
   help: Number of intermediate result rows sorted during peek collection, summed across sort operations.
   labels:
