@@ -25,10 +25,12 @@ per subscribe, and on reconnect it re-runs the subscribe from scratch, holding
 the stale snapshot behind a `resubscribing` flag until a new snapshot completes.
 The manual escape is documented in
 `doc/user/content/transform-data/patterns/durable-subscriptions.md`, a shipped
-private-preview feature already titled "Durable subscriptions", which instructs
-users to set a `RETAIN HISTORY` duration, record progress timestamps themselves,
-and resume with `AS OF <last_progress_mz_timestamp - 1>`. Every part of that is
-a responsibility we are asking the client to carry, including the off-by-one.
+private-preview page that instructs users to set a `RETAIN HISTORY` duration,
+record progress timestamps themselves, and resume with `AS OF
+<last_progress_mz_timestamp - 1>`. Every part of that is a responsibility we are
+asking the client to carry, including the off-by-one. That page was titled
+"Durable subscriptions", which this design renames to "Resuming subscriptions" to
+free the name for the object.
 
 A second problem sits underneath the first. `SUBSCRIBE` has no persisted output,
 so it has no reconciliation point of the kind that makes materialized views
@@ -82,8 +84,8 @@ rest on the client's unverifiable claim about what it holds.
 A durable subscription is a named catalog object that holds a read hold on a
 storage collection, and that the consumer advances by acknowledging what it has
 committed. The hold defines a window of readable time, the consumer's
-acknowledgement is what moves the window's lower edge, and a wall-clock time to
-live bounds how long the window may stay open without progress. A consumer that
+acknowledgement is what moves the window's lower edge, and a wall-clock deadline
+bounds how long the window may stay open without progress. A consumer that
 reconnects reads from wherever inside that window it likes, and by default from
 the position the server remembers.
 
@@ -161,7 +163,7 @@ must read with as-of `t - 1`, which requires `since <= t - 1`. Storing the
 acknowledged frontier and converting at every use site invites exactly the
 off-by-one the manual pattern documents, so instead:
 
-**`ACKNOWLEDGE ... AT t` sets `H := t - 1`.** One conversion, in one place, at
+**`ACKNOWLEDGE ... UP TO t` sets `H := t - 1`.** One conversion, in one place, at
 the moment the claim is recorded. Everything downstream, the hold, the default
 as-of, the window bound, and the introspection column, reads `H` directly and
 performs no arithmetic.
@@ -199,7 +201,7 @@ holds on inputs to forwarded collections, allowing their compaction".
 
 Left alone, that defeats the feature. A client that connects once and stays
 connected acknowledges faithfully, its position tracks the write frontier, the
-time to live never fires, and `since` sits at its attach-time as-of forever.
+acknowledgement deadline never fires, and `since` sits at its attach-time as-of forever.
 Retention would be bounded only across reconnections, which is the abnormal
 case.
 
@@ -216,11 +218,22 @@ consumer had seen them. A durable subscription answers exactly that question:
 ### Object model
 
 ```mzsql
-CREATE DURABLE SUBSCRIPTION <name> ON <object> WITH (TTL = <interval>);
-CREATE DURABLE SUBSCRIPTION <name> WITH (TTL = <interval>) AS <select>;
+CREATE DURABLE SUBSCRIPTION <name> ON <object> WITH (ACKNOWLEDGE WITHIN <interval>);
+CREATE DURABLE SUBSCRIPTION <name> WITH (ACKNOWLEDGE WITHIN <interval>) AS <select>;
+ALTER DURABLE SUBSCRIPTION <name> SET (ACKNOWLEDGE WITHIN <interval>);
+ALTER DURABLE SUBSCRIPTION <name> RESET;
+ALTER DURABLE SUBSCRIPTION <name> OWNER TO <role>;
+DROP DURABLE SUBSCRIPTION [IF EXISTS] <name>;
 ```
 
-`TTL` is required. Making it optional would mean a default of unbounded
+The option is spelled to mirror `RETAIN HISTORY FOR '1h'`, the adjacent retention
+control, rather than as a `TTL` acronym. It names the obligation it imposes on
+the reader, which is accurate now that the bound is wall-clock time since the
+last acknowledgement rather than a retention distance. `ALTER ... OWNER TO` falls
+out of routing the object through `Op::UpdateOwner` and needs no separate
+mechanism.
+
+`ACKNOWLEDGE WITHIN` is required. Making it optional would mean a default of unbounded
 retention, which is the failure mode this feature exists to avoid.
 
 The object is a durable `create_sql`-based catalog item. Item kind is derived by
@@ -299,6 +312,15 @@ redundant data; the failure mode of an off-by-one as-of is missing data.
 arithmetic trap, so a batch consumer can drain up to a timestamp, commit,
 acknowledge that same timestamp, and exit.
 
+Three clauses of plain `SUBSCRIBE` are rejected on this form. `ENVELOPE UPSERT`
+and `ENVELOPE DEBEZIUM` cannot be produced correctly when resuming without a
+snapshot, because neither the sink nor the server holds the prior value for a key
+the resumed stream has not seen, and since `SNAPSHOT` defaults to `false` here
+the broken combination would be the default one. `AS OF AT LEAST` asks the system
+to choose a timestamp no earlier than a floor, which conflicts with resolving the
+as-of from `H`. `WITHIN TIMESTAMP ORDER BY` is unaffected and remains available,
+since it only orders rows within a timestamp.
+
 ### Snapshot on resume
 
 **`SNAPSHOT` defaults to `false` on the durable form**, inverting the default of
@@ -330,7 +352,7 @@ That yields three modes, spanning what a resuming client can want:
   meaning: consent to a gap.
 
 Three modes across two statements, with no fourth mechanism. If a client
-reconciles when it meant to restart, the waste is bounded by the time to live.
+reconciles when it meant to restart, the waste is bounded by the deadline.
 
 `WITH (PROGRESS)` is required whenever the client intends to acknowledge. A
 progress message is the only thing that establishes that a timestamp is
@@ -356,7 +378,7 @@ reconnect fail for seconds.
 
 ### Acknowledging
 
-`ACKNOWLEDGE DURABLE SUBSCRIPTION <name> AT <timestamp>` asserts that the client
+`ACKNOWLEDGE DURABLE SUBSCRIPTION <name> UP TO <timestamp>` asserts that the client
 has durably processed every update at times strictly before the given timestamp,
 and sets `H := timestamp - 1`.
 
@@ -370,10 +392,20 @@ The statement needs its own non-DDL durable write path.
 
 `ACKNOWLEDGE` is monotone, idempotent, and non-transactional. It takes effect
 immediately and is not rolled back, because the client really did commit the
-data. Validation requires no stream context, which is what allows it to arrive
-on any connection: the new value must be at or above the current one, and at or
-below the target's write frontier. Ordering against the row stream is
-irrelevant, since an acknowledgement is a claim about the client's own state.
+data. A value at or below the current position is accepted and has no effect
+rather than being rejected, so that a client retrying after an ambiguous failure
+does not have to distinguish "already applied" from "too low". A value beyond
+the target's write frontier is an error, since the client cannot have processed
+what was never sent. Ordering against the row stream is irrelevant, since an
+acknowledgement is a claim about the client's own state, which is also what
+allows the statement to arrive on any connection.
+
+The bound is exclusive, matching `UP TO` on `SUBSCRIBE` rather than introducing a
+third convention. A progress message at `t` states that nothing further will
+arrive strictly before `t`, and `ACKNOWLEDGE ... UP TO t` states that everything
+strictly before `t` is processed, so the number a client reads from the progress
+message is the number it sends back unchanged. Reading `UP TO t` and then
+acknowledging `UP TO t` is likewise symmetric.
 
 The in-memory value is a coalescing buffer. A periodic task writes it durably
 and downgrades the hold. Retained history is therefore the client's true
@@ -391,22 +423,22 @@ At the scale this must support, the flush is the hot path. See "Scale".
 
 ### Expiry
 
-The time to live is measured on the **wall clock**, as time since the last
+The acknowledgement deadline is measured on the **wall clock**, as time since the last
 acknowledgement, not as a distance between `H` and the write frontier.
 
 Anchoring it to the write frontier fails in both directions. A `REFRESH` MV
 rounds its frontiers up to the next refresh, so its lag is at least one refresh
-interval even for a client that acknowledges instantly, and a correct time to
-live would have to be aware of every refresh policy in the object's ancestry,
+interval even for a client that acknowledges instantly, and a correct deadline
+would have to be aware of every refresh policy in the object's ancestry,
 the way replica expiration computes its offset. In the other direction a stalled
 source, a paused source, or a zero-replica cluster freezes the frontier, so a
-frontier-anchored time to live never fires precisely when releasing the hold
+frontier-anchored acknowledgement deadline never fires precisely when releasing the hold
 matters most. A wall clock is uniform across every target type and needs no
 knowledge of the target's schedule.
 
 The last-acknowledgement wall-clock time is recorded durably alongside `H`,
 which the periodic flush is already writing. Keeping it only in memory would
-grant every subscription a fresh time to live on every environment restart.
+grant every subscription a fresh acknowledgement deadline on every environment restart.
 
 On expiry the subscription is marked expired durably and only then is the hold
 released. Ordering matters: releasing first and crashing before recording expiry
@@ -426,7 +458,7 @@ expired is an error, since it would silently fence a live reader.
 stateDiagram-v2
     [*] --> Active: CREATE DURABLE SUBSCRIPTION
     Active --> Active: ACKNOWLEDGE
-    Active --> Expired: no ACKNOWLEDGE within TTL
+    Active --> Expired: no ACKNOWLEDGE within the deadline
     Expired --> Active: ALTER ... RESET
     Active --> [*]: DROP
     Expired --> [*]: DROP
@@ -436,10 +468,10 @@ Expiry is evaluated by the same periodic task that flushes, which already holds
 the state it needs. Evaluating it lazily at attach would need no background task
 but would never release an abandoned subscription's hold.
 
-`CREATE` must reject a time to live below a fixed multiple of the flush cadence.
-The value compared against the time to live is the durable one, which trails the
-client's claim by up to one flush interval, so a time to live near the cadence
-would expire clients that are acknowledging correctly.
+`CREATE` must reject a deadline below a fixed multiple of the flush cadence. The
+value compared against the deadline is the durable one, which trails the client's
+claim by up to one flush interval, so a deadline near the cadence would expire
+clients that are acknowledging correctly.
 
 ### Delivery semantics
 
@@ -570,8 +602,8 @@ Documenting them is deliberate; fixing them is separable work.
   as-of from `least_valid_read()` over their inputs, so one lagging subscriber
   makes a subsequent create backfill the whole retained history. For
   materialized views that as-of is written durably into `create_sql`. Retention
-  is therefore not consumer-local, and the wall-clock time to live is the only
-  thing bounding the blast radius.
+  is therefore not consumer-local, and the wall-clock deadline is the only thing
+  bounding the blast radius.
 
 * **Read-only mode and zero-downtime upgrade.** Every existing read policy is a
   function of the write frontier, which is what makes two generations agree
@@ -579,8 +611,8 @@ Documenting them is deliberate; fixing them is separable work.
   generations could disagree about. Concretely: `SUBSCRIBE` is permitted in
   read-only mode while a new `Plan::Acknowledge` would fall into the planner's
   catch-all and be refused, so clients would attach, stream, and have every
-  acknowledgement rejected until the time to live killed a subscription whose
-  client did nothing wrong. The flush and expiry task must be read-only gated,
+  acknowledgement rejected until the deadline killed a subscription whose client
+  did nothing wrong. The flush and expiry task must be read-only gated,
   like every comparable periodic coordinator task. Note that the obvious gate is
   the wrong one: savepoint mode, which zero-downtime upgrade uses, reports
   itself as not read-only.
@@ -609,7 +641,7 @@ Documenting them is deliberate; fixing them is separable work.
 
 * **Empty and regressing frontiers.** The tree already carries three
   incompatible conventions for the lag of a collection with an empty upper. The
-  wall-clock time to live sidesteps this for expiry, but the introspection lag
+  wall-clock deadline sidesteps this for expiry, but the introspection lag
   column still has to pick one.
 
 * **Stale as-ofs on transaction-managed tables** are supported by design but are
@@ -634,8 +666,8 @@ subscribe transaction, and that the attach reads storage rather than an index.
 Add an index to the target as part of the test, since that is the case that
 would otherwise fail every resume.
 
-It deliberately does not validate the batched flush, the wall-clock time to
-live, or the WebSocket path.
+It deliberately does not validate the batched flush, the wall-clock deadline, or
+the WebSocket path.
 
 A second spike is worth running against the console, the intended first
 consumer, whose reconnect logic this feature replaces: point `SubscribeManager`
@@ -665,7 +697,7 @@ attribute it to, and it leaves the client responsible for remembering a
 timestamp. It remains the right answer for exactly-once consumers, which is why
 it stays documented rather than being replaced.
 
-**A frontier-anchored time to live.** More directly expresses "bound the
+**A frontier-anchored acknowledgement deadline.** More directly expresses "bound the
 retained history", and was the first draft's choice. It requires every consumer
 of a `REFRESH` MV to reason about every refresh policy in the ancestry, and it
 never fires for a frozen frontier, which is when releasing the hold matters
@@ -730,12 +762,12 @@ generalize to other sinks that track consumer progress.
 
 * No tracking issue exists yet. One must be filed and linked above before this
   document merges.
-* What are the default flush cadence, the minimum time to live as a multiple of
-  it, and the dyncfg ceiling on the time to live?
+* What are the default flush cadence, the minimum deadline as a multiple of
+  it, and the dyncfg ceiling on the deadline?
 * Can the durable attach be made to bypass index import cleanly, or does that
   need a change to dataflow construction? This is the one implementation
   question that could change the shape of the attach path.
-* How is the wall-clock time to live evaluated across a long environment
+* How is the wall-clock acknowledgement deadline evaluated across a long environment
   outage? Recording the last-acknowledgement time durably means a multi-hour
   restart expires every subscription on boot, which is defensible but should be
   a deliberate choice.

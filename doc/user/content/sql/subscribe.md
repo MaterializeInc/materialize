@@ -39,10 +39,9 @@ SUBSCRIBE [TO] <object_name | (SELECT ...)>
 ;
 
 SUBSCRIBE USING DURABLE SUBSCRIPTION <name>
-[ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
 [WITHIN TIMESTAMP ORDER BY <column1> [ASC | DESC] [NULLS LAST | NULLS FIRST], ...]
 [WITH (<option_name> [= <option_value>], ...)]
-[AS OF [AT LEAST] <timestamp_expression>]
+[AS OF <timestamp_expression>]
 [UP TO <timestamp_expression>]
 ;
 
@@ -74,7 +73,7 @@ The following options are valid within the `WITH` clause.
 
 | Option name | Value type | Default | Describes                                                                                                                         |
 | ----------- | ---------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `SNAPSHOT`  | `boolean`  | `true`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot). |
+| `SNAPSHOT`  | `boolean`  | `true`, but `false` for `USING DURABLE SUBSCRIPTION`  | Whether to emit a snapshot of the current state of the relation at the start of the operation. See [`SNAPSHOT`](#snapshot). |
 | `PROGRESS`  | `boolean`  | `false` | Whether to include detailed progress information. See [`PROGRESS`](#progress).                                              |
 
 ## Details
@@ -172,7 +171,12 @@ The value in the `UP TO` clause is automatically [cast to `mz_timestamp`](../../
 
 ### Interaction of `AS OF` and `UP TO`
 
-The lower timestamp bound specified by `AS OF` is inclusive, whereas the upper bound specified by `UP TO` is exclusive. Thus, a `SUBSCRIBE` query whose `AS OF` is equal to its `UP TO` will terminate after returning zero rows.
+The lower timestamp bound specified by `AS OF` is inclusive when a snapshot is
+emitted, and **exclusive** under [`WITH (SNAPSHOT = false)`](#snapshot), where
+`SUBSCRIBE` emits only updates at times strictly greater than the `AS OF`
+timestamp. The upper bound specified by `UP TO` is always exclusive. Thus, a
+`SUBSCRIBE` query whose `AS OF` is equal to its `UP TO` will terminate after
+returning zero rows.
 
 A `SUBSCRIBE` whose `UP TO` is less than its `AS OF` timestamp (whether that
 timestamp was specified in an `AS OF` clause or chosen by the system) will
@@ -202,6 +206,11 @@ By default, `SUBSCRIBE` begins by emitting a snapshot of the subscribed relation
 consists of a series of updates at its [`AS OF`](#as-of) timestamp describing the
 contents of the relation. After the snapshot, `SUBSCRIBE` emits further updates as
 they occur.
+
+This default is inverted for `SUBSCRIBE USING DURABLE SUBSCRIPTION`, where
+`SNAPSHOT` defaults to `false`, and a requested snapshot is taken at the
+subscription's acknowledged position rather than at the current time. See
+[`CREATE DURABLE SUBSCRIPTION`](/sql/create-durable-subscription/#snapshots).
 
 For updates in the snapshot, the `mz_timestamp` field will be fast-forwarded to the `AS OF` timestamp.
 For example, an insert that occurred before the `SUBSCRIBE` began would appear in the snapshot.
@@ -595,17 +604,21 @@ Materialize tracks your position for you. You report progress with
 [`ACKNOWLEDGE`](/sql/acknowledge/), Materialize retains exactly the history you
 have not acknowledged, and you resume without supplying a timestamp. `SNAPSHOT`
 defaults to `false` on this form, and a requested snapshot is taken at your
-acknowledged position. Only one reader may use a durable subscription at a time,
-and subscribing again takes over from the previous reader.
+acknowledged position. `ENVELOPE UPSERT`, `ENVELOPE DEBEZIUM`, and `AS OF AT
+LEAST` are not supported on this form. Only one reader may use a durable
+subscription at a time, and subscribing again takes over from the previous
+reader.
 
 Alternatively, you can adjust the [history retention
 period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
 for the objects a subscription depends on, record the progress timestamp in your
 own application, and then use [`AS OF`](#as-of) to pick up where you left off.
-This requires more from your application, but it is the only option that
-supports exactly-once processing.
+This requires more from your application, but recording the position yourself is
+what makes exactly-once processing possible, because you can write it in the same
+transaction as the data. A durable subscription supplies retention; your own
+recorded position supplies exactly-once.
 
-For more information on both, see [durable
+For more information on both, see [resuming
 subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 ## Privileges

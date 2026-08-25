@@ -6,6 +6,7 @@ rows:
   - command: "[`ACKNOWLEDGE`](/sql/acknowledge)"
     object: "Durable Subscription"
     labels:
+      - "other"
       - "output"
   - command: "[`ALTER CLUSTER`](/sql/alter-cluster)"
     object: "Cluster"
