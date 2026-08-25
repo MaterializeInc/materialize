@@ -293,7 +293,429 @@ impl OffloadedPeek {
 
 #[cfg(test)]
 mod tests {
+    use std::num::NonZeroUsize;
+
+    use mz_dyncfg::ConfigUpdates;
+    use mz_ore::metrics::MetricsRegistry;
+    use mz_repr::Row;
+    use timely::WorkerConfig;
+    use timely::communication::Allocator;
+    use timely::worker::Worker as TimelyWorker;
+
+    use crate::compute_state::index_peek_tests::{
+        cancelling_errors, index_peek, ok_row, rows_answer, trace_bundle, trivial_finishing,
+        wide_ok_rows,
+    };
+    use crate::compute_state::peek_scan::PeekScan;
+    use crate::metrics::{ComputeMetrics, WorkerMetrics};
+    use crate::server::ComputeRuntimeRole;
+
     use super::*;
+
+    /// How many times a test lets the runtime run a promoted walk before it declares the walk
+    /// stuck.
+    ///
+    /// A walk over the traces here needs a handful of slices at the granularities these tests
+    /// configure, so a walk that advances finishes far inside this bound, and one that yields
+    /// without advancing fails the test rather than hanging the suite.
+    const DRIVE_BOUND: usize = 200;
+
+    /// How many keys the index a cancellation test walks holds.
+    ///
+    /// Large enough that a walk cut into one-position slices is still under way after the yields
+    /// such a test spends before it cancels.
+    const LONG_WALK_KEYS: u64 = 2_000;
+
+    /// The metrics a promoted walk reports into, registered into a registry the test owns so it
+    /// can read them back.
+    fn worker_metrics() -> WorkerMetrics {
+        ComputeMetrics::register_with(&MetricsRegistry::new(), ComputeRuntimeRole::Solo)
+            .for_worker(0)
+    }
+
+    /// The size the scan accounts a single-column row at.
+    fn row_size() -> usize {
+        ok_row(0).byte_len() + size_of::<NonZeroUsize>()
+    }
+
+    /// Opens a scan of `peek` over `bundle`, the way the peek path opens one.
+    ///
+    /// `stash_threshold_bytes` both makes the peek eligible for the stash and sets the size its
+    /// accumulated rows become a full batch at. `None` is a peek that may not use the stash at
+    /// all, whose accumulated rows therefore never become one.
+    fn open(
+        bundle: &mut TraceBundle,
+        peek: &Peek,
+        stash_threshold_bytes: Option<usize>,
+    ) -> IndexPeekScan {
+        let (oks, errs) = bundle.oks_errs_mut();
+        PeekScan::new(
+            peek,
+            errs,
+            oks,
+            u64::MAX,
+            stash_threshold_bytes.is_some(),
+            stash_threshold_bytes.unwrap_or(usize::MAX),
+        )
+    }
+
+    /// The configuration a promoted walk reads, with the yield granularity set to
+    /// `yield_granularity` so a test can choose how many slices a walk is cut into.
+    fn offload_config(yield_granularity: usize) -> OffloadConfig {
+        let config = mz_dyncfgs::all_dyncfgs();
+        let mut updates = ConfigUpdates::default();
+        updates.add(&INDEX_PEEK_YIELD_GRANULARITY, yield_granularity);
+        updates.apply(&config);
+        OffloadConfig::new(&config)
+    }
+
+    /// A timely worker whose activator a promoted walk wakes when its outcome is ready.
+    ///
+    /// A test holds one for as long as its walk runs, because an activator whose worker is gone
+    /// reports a failure the walk only logs, which would leave the test asserting against a
+    /// weaker path than the one the worker takes.
+    fn worker() -> TimelyWorker {
+        TimelyWorker::new(
+            WorkerConfig::default(),
+            Allocator::Thread(Default::default()),
+            None,
+        )
+    }
+
+    /// What a promoted walk handed back, in a form a test can compare whole.
+    ///
+    /// Mirrors [`OffloadOutcome`], which carries no comparison of its own because nothing on the
+    /// peek path compares one.
+    #[derive(Debug, PartialEq)]
+    enum HandBack {
+        Answered(PeekResponse),
+        NeedsStash,
+    }
+
+    impl From<OffloadOutcome> for HandBack {
+        fn from(outcome: OffloadOutcome) -> Self {
+            match outcome {
+                OffloadOutcome::Answered(response) => HandBack::Answered(response),
+                OffloadOutcome::NeedsStash => HandBack::NeedsStash,
+            }
+        }
+    }
+
+    /// Runs the runtime until `promoted`'s walk hands something back, and reports what.
+    ///
+    /// Bounded, so a walk that yields without ever reaching an outcome fails here rather than
+    /// hanging the suite. That is the failure a scan holding a full batch produces, which is the
+    /// case this driver's batch-ready arm exists to avoid.
+    async fn hand_back(promoted: &mut OffloadedPeek) -> HandBack {
+        for _ in 0..DRIVE_BOUND {
+            match promoted.result.try_recv() {
+                Ok((outcome, _elapsed)) => return HandBack::from(outcome),
+                Err(oneshot::error::TryRecvError::Empty) => tokio::task::yield_now().await,
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    panic!("the promoted walk ended without handing anything back")
+                }
+            }
+        }
+        panic!("the promoted walk handed nothing back within {DRIVE_BOUND} yields");
+    }
+
+    /// Runs the runtime until `condition` holds, where `what` names what the test is waiting for.
+    ///
+    /// Bounded, so a condition that never holds fails here rather than hanging the suite.
+    async fn wait_until(mut condition: impl FnMut() -> bool, what: &str) {
+        for _ in 0..DRIVE_BOUND {
+            if condition() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("{what} did not happen within {DRIVE_BOUND} yields");
+    }
+
+    /// A promoted walk finishes the walk the inline slice started, resuming from the cursor
+    /// positions that slice stopped on, and answers the whole peek.
+    ///
+    /// The counter is asserted rather than inferred from the configuration, because a peek
+    /// answered inline and a peek answered by a promoted task give the same rows.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_walk_finishes_the_answer_the_inline_slice_started() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(2));
+        let mut scan = open(&mut bundle, &peek, None);
+
+        // Two positions leave the walk suspended with nothing to hand over, which is the state
+        // the worker promotes and the only one it promotes.
+        let mut fuel = 2;
+        assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
+        assert!(
+            !scan.batch_ready(),
+            "a scan holding a full batch is diverted rather than promoted"
+        );
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let mut promoted = OffloadedPeek::promote(
+            peek.clone(),
+            bundle,
+            scan,
+            &permits,
+            offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        assert_eq!(
+            hand_back(&mut promoted).await,
+            HandBack::Answered(rows_answer((0..6).map(ok_row))),
+        );
+        assert_eq!(
+            metrics.index_peek_walks_offloaded.get(),
+            1,
+            "the driver that ended the walk counts it"
+        );
+        assert_eq!(
+            metrics.index_peek_walks_inline.get(),
+            0,
+            "the slice that promoted the walk reports nothing"
+        );
+    }
+
+    /// A promoted walk whose accumulated rows grow into a full batch hands the peek back rather
+    /// than stepping a scan that cannot advance.
+    ///
+    /// A scan holding a full batch spends no fuel and moves no cursor when stepped, and this
+    /// driver has nowhere to write the batch, so a driver that treated the suspension as resumable
+    /// would yield forever without ever reaching an outcome. The bound in [`hand_back`] is what
+    /// turns that into a failure rather than a hang.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_walk_that_fills_a_batch_hands_back_rather_than_spinning() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+        // Two rows fit under the threshold and the third crosses it, so the slice below promotes
+        // a scan with room left and the promoted walk is the one that fills the batch.
+        let mut scan = open(&mut bundle, &peek, Some(2 * row_size()));
+
+        let mut fuel = 2;
+        assert_eq!(scan.step(None, &mut fuel), ScanOutcome::Suspended);
+        assert!(
+            !scan.batch_ready(),
+            "the inline slice must promote a scan that still has room"
+        );
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let mut promoted = OffloadedPeek::promote(
+            peek.clone(),
+            bundle,
+            scan,
+            &permits,
+            offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        assert_eq!(hand_back(&mut promoted).await, HandBack::NeedsStash);
+        assert_eq!(
+            metrics.index_peek_walks_offloaded.get(),
+            1,
+            "a hand-back is a terminal outcome of the promoted walk"
+        );
+    }
+
+    /// A walk cancelled while it queues for a permit leaves the queue without ever taking one.
+    ///
+    /// The permit accounts for the batches a running walk retains, so a queued walk that took one
+    /// on its way out would report capacity the process does not have. The queue depth is a gauge
+    /// rather than a counter, so a walk that failed to leave it would drift the depth up over the
+    /// life of a process.
+    #[mz_ore::test(tokio::test)]
+    async fn a_walk_cancelled_while_queued_never_takes_a_permit() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(2));
+        let scan = open(&mut bundle, &peek, None);
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        // The one permit is held here, so the walk below queues rather than running.
+        let semaphore = permits.resize(0);
+        let held = Arc::clone(&semaphore)
+            .try_acquire_owned()
+            .expect("a permit is free");
+
+        let promoted = OffloadedPeek::promote(
+            peek.clone(),
+            bundle,
+            scan,
+            &permits,
+            offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        wait_until(
+            || metrics.index_peek_permit_queue_depth.get() == 1,
+            "the promoted walk joining the queue for a permit",
+        )
+        .await;
+
+        // Cancellation removes the pending peek, and dropping the entry is what ends the walk.
+        drop(promoted);
+
+        wait_until(
+            || metrics.index_peek_permit_queue_depth.get() == 0,
+            "the cancelled walk leaving the queue for a permit",
+        )
+        .await;
+        assert_eq!(
+            metrics.index_peek_permit_wait_seconds.get_sample_count(),
+            0,
+            "a walk cancelled while queued was never admitted"
+        );
+        assert_eq!(
+            metrics.index_peek_walks_offloaded.get(),
+            0,
+            "a cancelled walk reaches no outcome and counts on neither substrate"
+        );
+        assert_eq!(
+            semaphore.available_permits(),
+            0,
+            "the permit this test holds must not be handed back by the cancelled walk"
+        );
+
+        drop(held);
+        assert_eq!(semaphore.available_permits(), 1);
+    }
+
+    /// A walk cancelled while it runs stops at its next slice boundary, reports no outcome, and
+    /// releases the permit that admitted it.
+    ///
+    /// Cancellation drops the receiving end of the result channel and nothing else, so a closed
+    /// channel is the whole signal. The permit travels with the task rather than with the pending
+    /// peek that was removed, which is what makes its release coincide with the release of the
+    /// batches it accounts for.
+    #[mz_ore::test(tokio::test)]
+    async fn a_walk_cancelled_while_running_reports_no_outcome() {
+        let keys = wide_ok_rows(LONG_WALK_KEYS);
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+        let scan = open(&mut bundle, &peek, None);
+
+        let metrics = worker_metrics();
+        let walk_metrics = PeekWalkMetrics::new(&metrics);
+        let permits = PeekPermits::new(1);
+        let semaphore = permits.resize(0);
+        let permit = Arc::clone(&semaphore)
+            .try_acquire_owned()
+            .expect("a permit is free");
+
+        let (result_tx, result_rx) = oneshot::channel();
+        // One position per slice over an index of `LONG_WALK_KEYS` positions, so the walk is
+        // still far from its answer after the yields this test spends before it cancels.
+        let config = offload_config(1);
+        let order_by = peek.finishing.order_by.clone();
+        let walk = mz_ore::task::spawn(|| "peek_offload_test::walk", async move {
+            OffloadedPeek::walk(permit, scan, &config, &walk_metrics, &order_by, &result_tx)
+                .await
+                .is_some()
+        });
+
+        for _ in 0..DRIVE_BOUND {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !walk.is_finished(),
+            "the walk must still be under way when it is cancelled"
+        );
+        assert_eq!(
+            semaphore.available_permits(),
+            0,
+            "a running walk holds the permit that admitted it"
+        );
+
+        drop(result_rx);
+
+        wait_until(|| walk.is_finished(), "the cancelled walk stopping").await;
+        assert_eq!(walk.await, false, "a cancelled walk reports no outcome");
+        assert_eq!(
+            semaphore.available_permits(),
+            1,
+            "a cancelled walk releases the permit that admitted it"
+        );
+        assert_eq!(
+            metrics.index_peek_row_iteration_seconds.get_sample_count(),
+            0,
+            "a walk that never completed reports no ok phase"
+        );
+    }
+
+    /// A promoted walk waits for a permit while another holds it, and runs once it is released.
+    ///
+    /// Excess walks queue rather than running, which is the whole of the concurrency bound. A
+    /// serial test that never has two walks outstanding would exercise a semaphore that is never
+    /// contended.
+    #[mz_ore::test(tokio::test)]
+    async fn a_walk_waits_for_a_permit_another_walk_holds() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(2));
+        let scan = open(&mut bundle, &peek, None);
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let semaphore = permits.resize(0);
+        let held = Arc::clone(&semaphore)
+            .try_acquire_owned()
+            .expect("a permit is free");
+
+        let mut promoted = OffloadedPeek::promote(
+            peek.clone(),
+            bundle,
+            scan,
+            &permits,
+            offload_config(*INDEX_PEEK_YIELD_GRANULARITY.default()),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        // Every chance to run, and it must not answer while the permit is elsewhere.
+        for _ in 0..DRIVE_BOUND {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            promoted.result.try_recv().err(),
+            Some(oneshot::error::TryRecvError::Empty),
+            "a walk that has not been admitted must not answer"
+        );
+        assert_eq!(
+            metrics.index_peek_permit_queue_depth.get(),
+            1,
+            "a walk waiting for a permit is counted in the queue"
+        );
+
+        drop(held);
+
+        assert_eq!(
+            hand_back(&mut promoted).await,
+            HandBack::Answered(rows_answer((0..6).map(ok_row))),
+        );
+        assert_eq!(
+            metrics.index_peek_permit_wait_seconds.get_sample_count(),
+            1,
+            "a wait that ended in a permit is observed"
+        );
+        assert_eq!(
+            metrics.index_peek_permit_queue_depth.get(),
+            0,
+            "an admitted walk leaves the queue"
+        );
+    }
 
     #[mz_ore::test]
     fn permits_resize_around_the_walks_holding_them() {

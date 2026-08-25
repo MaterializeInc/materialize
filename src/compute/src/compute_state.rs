@@ -2458,7 +2458,7 @@ pub(crate) mod index_peek_tests {
     use differential_dataflow::operators::arrange::TraceAgent;
     use differential_dataflow::trace::{Batcher, Builder, Trace};
     use mz_expr::RowSetFinishing;
-    use mz_repr::{Datum, Diff, RelationDesc};
+    use mz_repr::{Datum, Diff, RelationDesc, SqlScalarType};
     use mz_row_spine::{RowRowBatcher, RowRowBuilder, RowRowSpine};
     use mz_timely_util::columnation::ColumnationStack;
     use timely::container::PushInto;
@@ -2553,6 +2553,10 @@ pub(crate) mod index_peek_tests {
     /// one without return rows of the same shape: the cursor's key is one datum, the values are
     /// empty, and a literal constraint contributes a second datum that a join in a dataflow would
     /// have added.
+    ///
+    /// The result description carries that one column, because its arity is what decides whether
+    /// the peek's finishing streams, and a finishing that streams is what makes a peek eligible
+    /// for the peek stash.
     pub(crate) fn index_peek(
         finishing: RowSetFinishing,
         literal_constraints: Option<Vec<Row>>,
@@ -2564,9 +2568,12 @@ pub(crate) mod index_peek_tests {
             .expect("valid plan")
             .into_nontemporal()
             .expect("non-temporal plan");
+        let result_desc = RelationDesc::builder()
+            .with_column("value", SqlScalarType::UInt64.nullable(false))
+            .finish();
         Peek {
             target: PeekTarget::Index { id: TARGET_ID },
-            result_desc: RelationDesc::empty(),
+            result_desc,
             literal_constraints,
             uuid: Uuid::nil(),
             timestamp: PEEK_TIMESTAMP,
@@ -2574,6 +2581,20 @@ pub(crate) mod index_peek_tests {
             map_filter_project,
             otel_ctx: OpenTelemetryContext::empty(),
         }
+    }
+
+    /// The keys of an index holding `count` distinct rows, in the order the ok walk visits them.
+    ///
+    /// The datum is wider than [`ok_row`]'s so that an index can be built with more positions than
+    /// the production inline budget allows a peek to walk on the worker. Sorted here rather than
+    /// assumed, because the trace holds its keys in [`Row`] order and the answer a full walk gives
+    /// is that order.
+    pub(crate) fn wide_ok_rows(count: u64) -> Vec<Row> {
+        let mut keys: Vec<Row> = (0..count)
+            .map(|value| Row::pack_slice(&[Datum::UInt64(value)]))
+            .collect();
+        keys.sort();
+        keys
     }
 
     /// The metrics an index peek observes into, registered into a registry the test owns so it
@@ -2705,13 +2726,19 @@ pub(crate) mod index_peek_tests {
         }
     }
 
-    /// The rows a completed peek over `values` answers with.
-    fn row_collection(values: impl IntoIterator<Item = u8>) -> RowCollection {
-        let rows = values
+    /// The rows a completed peek answers with, each at a multiplicity of one and in the order the
+    /// walk produced them.
+    pub(crate) fn row_collection(rows: impl IntoIterator<Item = Row>) -> RowCollection {
+        let rows = rows
             .into_iter()
-            .map(|value| (ok_row(value), NonZeroUsize::new(1).expect("non-zero")))
+            .map(|row| (row, NonZeroUsize::new(1).expect("non-zero")))
             .collect();
         RowCollection::new(rows, &[])
+    }
+
+    /// The answer a peek gives when its walk completes over `rows`.
+    pub(crate) fn rows_answer(rows: impl IntoIterator<Item = Row>) -> PeekResponse {
+        PeekResponse::Rows(vec![row_collection(rows)])
     }
 
     /// A peek whose scan runs to completion is answered with the rows it accumulated, and reports
@@ -2737,7 +2764,7 @@ pub(crate) mod index_peek_tests {
 
         assert_eq!(
             Answer::from(answer),
-            Answer::Ready(PeekResponse::Rows(vec![row_collection(0..6)]))
+            Answer::Ready(rows_answer((0..6).map(ok_row)))
         );
         assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 1));
     }
@@ -2794,6 +2821,41 @@ pub(crate) mod index_peek_tests {
         );
 
         assert_eq!(Answer::from(answer), Answer::UsePeekStash);
+        assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 0));
+    }
+
+    /// A peek whose walk both fills a batch and runs out of fuel is diverted to the stash rather
+    /// than promoted, and the driver that diverted it accounts for the walk.
+    ///
+    /// This is the livelock the placement policy is built around. A promoted scan holding a full
+    /// batch has nowhere to write it, so stepping it spends no fuel and advances no cursor, and a
+    /// driver that resumed it would yield forever. The two causes of a suspension coincide here,
+    /// which is the case a promotion condition written as "the fuel ran out" would get wrong.
+    #[mz_ore::test]
+    fn a_batch_ready_suspension_is_diverted_rather_than_promoted() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let mut subject = index_peek_over(
+            index_peek(trivial_finishing(), None),
+            &keys,
+            cancelling_errors(0),
+        );
+        let metrics = TestMetrics::new();
+
+        // A threshold of zero bytes is crossed by the first row the ok walk produces. One
+        // position reaches the end of the empty error trace and the second produces that row, so
+        // the scan suspends holding a full batch and out of fuel, with both causes of a
+        // suspension in force at once.
+        let mut fuel = 2;
+        let answer = subject.collect_finished_data(
+            u64::MAX,
+            true,
+            0,
+            None,
+            &mut fuel,
+            &metrics.as_metrics(),
+        );
+        assert_eq!(Answer::from(answer), Answer::UsePeekStash);
+        assert_eq!(fuel, 0, "the slice spent every position it was given");
         assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 0));
     }
 
