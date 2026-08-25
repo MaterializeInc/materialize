@@ -12,11 +12,11 @@ use mz_dyncfg::{ConfigSet, ConfigValHandle};
 
 /// The parameters an [`InlineBudget`] is read from, each as a handle rather than as a value.
 ///
-/// A budget is built for every sweep of the pending peeks, and a sweep runs on every activation of
-/// the worker, so reading the parameters by name would put three lookups against the whole
-/// configuration set on the worker's loop. Handles give the property the parameters are documented
-/// with at a fraction of that cost: a configuration change reaches the next sweep, and so the walks
-/// that sweep grants a slice to, without discarding the positions earlier sweeps walked.
+/// A budget is built on every activation of the worker, so reading the parameters by name would put
+/// three lookups against the whole configuration set on the worker's loop. Handles give the property
+/// the parameters are documented with at a fraction of that cost: a configuration change reaches the
+/// next activation, and so the walks it grants a slice to, without discarding the positions earlier
+/// sweeps walked.
 pub(super) struct InlineBudgetConfig {
     enabled: ConfigValHandle<bool>,
     per_peek: ConfigValHandle<usize>,

@@ -275,7 +275,10 @@ pub(crate) struct ResponseSender {
 }
 
 impl ResponseSender {
-    fn new(inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>, worker_id: usize) -> Self {
+    pub(crate) fn new(
+        inner: mpsc::UnboundedSender<(ComputeResponse, Uuid)>,
+        worker_id: usize,
+    ) -> Self {
         Self {
             inner,
             worker_id,

@@ -294,15 +294,15 @@ pub struct ComputeState {
 
     /// The parameters [`ComputeState::peek_budget`] is refilled from.
     ///
-    /// Held rather than looked up, because a refill happens on every sweep of the pending peeks
-    /// and a sweep runs on every activation of the worker.
+    /// Held rather than looked up, because a refill happens on every activation of the worker.
     peek_budget_config: InlineBudgetConfig,
 
     /// What is left of what this activation may spend walking index peeks on the worker.
     ///
-    /// Refilled at the top of each sweep of the pending peeks. A peek that arrives between two
-    /// sweeps draws from what the last sweep left, so a batch of arriving peeks costs at most one
-    /// more aggregate rather than one inline budget per peek in the batch.
+    /// Refilled at the top of every activation, before the pending peeks are looked at, because a
+    /// peek that arrives outside a sweep is granted out of this budget too. A peek that arrives
+    /// while others are pending draws from what the last sweep left, so a batch of arriving peeks
+    /// costs at most one more aggregate rather than one inline budget per peek in the batch.
     peek_budget: InlineBudget,
 
     /// The pending peek a sweep stopped at for want of budget, and where the next sweep starts.
@@ -1463,23 +1463,24 @@ impl<'a> ActiveComputeState<'a> {
 
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
-        // This runs on every iteration of the worker loop, tens of thousands of times a second on
-        // a busy worker, and the overwhelming majority of those find no pending peek. Returning
-        // before anything is read or allocated keeps that case as cheap as it was before peeks had
-        // budgets, which is also what the kill switch has to restore.
-        //
-        // A `peek_resume_at` left set here cannot strand a peek: with no pending peek there is
-        // nothing to serve, and a resume point names a position in the uuid ordering rather than
-        // an entry, so the sweep that follows the next peek's arrival rotates correctly whether or
-        // not the peek it names still exists.
+        // Refilled ahead of the early return below, because `handle_peek` grants an arriving peek
+        // out of this budget and no sweep runs on that path. A replica whose index peeks all
+        // answer inline never leaves one pending, so a refill that ran only where the sweep finds
+        // work would leave the budget at what the constructor set and nothing would ever be
+        // offloaded. The refill reads the parameters through handles and allocates nothing, which
+        // is what keeps it above the return.
+        self.compute_state.peek_budget = self.compute_state.peek_budget_config.for_activation();
+
+        // What follows runs on every iteration of the worker loop, tens of thousands of times a
+        // second on a busy worker, and the overwhelming majority of those find no pending peek.
+        // Returning before the map is walked, ordered, or taken keeps that case as cheap as the
+        // kill switch path has to be.
         if self.compute_state.pending_peeks.is_empty() {
             return;
         }
 
         let mut upper = Antichain::new();
         let mut pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
-
-        self.compute_state.peek_budget = self.compute_state.peek_budget_config.for_activation();
 
         let mut order: Vec<Uuid> = pending_peeks.keys().copied().collect();
         if let Some(resume_at) = self.compute_state.peek_resume_at.take() {
@@ -2327,6 +2328,100 @@ impl CollectionState {
             "allowing writes for dataflow",
         );
         let _ = self.read_only_tx.send(false);
+    }
+}
+
+/// Tests of the sweep that drives the pending index peeks.
+///
+/// Built over a live [`ComputeState`] and a real timely worker rather than over the budget alone,
+/// because what the sweep is pinned on here is where it arms the budget relative to the return it
+/// takes when nothing is pending.
+#[cfg(test)]
+mod peek_sweep_tests {
+    use mz_compute_types::dyncfgs::{ENABLE_INDEX_PEEK_OFFLOAD, INDEX_PEEK_INLINE_BUDGET};
+    use mz_dyncfg::ConfigUpdates;
+    use mz_persist_client::cache::PersistClientCache;
+    use mz_secrets::InMemorySecretsController;
+    use mz_storage_types::connections::ConnectionContext;
+    use timely::WorkerConfig;
+    use timely::communication::Allocator;
+    use tokio::sync::mpsc;
+
+    use crate::metrics::ComputeMetrics;
+    use crate::server::ComputeRuntimeRole;
+
+    use super::*;
+
+    /// The per-peek budget these tests configure. Distinct from both the unbounded grant and the
+    /// parameter's default, so that an assertion on it says the configured value was read.
+    const INLINE_BUDGET: usize = 12_345;
+
+    /// A compute state as `CreateInstance` leaves one, with the offload configured on.
+    fn compute_state_with_offload_on() -> ComputeState {
+        let metrics_registry = MetricsRegistry::new();
+        let metrics = ComputeMetrics::register_with(&metrics_registry, ComputeRuntimeRole::Solo)
+            .for_worker(0);
+        let context = ComputeInstanceContext {
+            scratch_directory: None,
+            worker_core_affinity: false,
+            connection_context: ConnectionContext::for_tests(Arc::new(
+                InMemorySecretsController::new(),
+            )),
+        };
+
+        let state = ComputeState::new(
+            Arc::new(PersistClientCache::new_no_metrics()),
+            TxnsContext::default(),
+            metrics,
+            Arc::new(TracingHandle::disabled()),
+            context,
+            metrics_registry,
+            1,
+            Arc::new(PeekPermits::new(1)),
+            None,
+        );
+
+        // The worker applies these through `UpdateConfiguration`, which reaches the budget through
+        // the handles it holds rather than through any state the command touches.
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+        updates.add(&INDEX_PEEK_INLINE_BUDGET, INLINE_BUDGET);
+        updates.apply(&state.worker_config);
+
+        state
+    }
+
+    /// Runs one sweep over `state`, as an activation of the worker does.
+    fn sweep(state: &mut ComputeState) {
+        let allocator = Allocator::Thread(Default::default());
+        let mut timely_worker = TimelyWorker::new(WorkerConfig::default(), allocator, None);
+        let (response_tx, _response_rx) = mpsc::unbounded_channel();
+        let mut response_tx = ResponseSender::new(response_tx, 0);
+
+        ActiveComputeState {
+            timely_worker: &mut timely_worker,
+            compute_state: state,
+            response_tx: &mut response_tx,
+        }
+        .process_peeks();
+    }
+
+    /// An activation that finds nothing pending still arms the budget, which is what a peek
+    /// arriving before the next sweep is granted out of.
+    ///
+    /// A replica whose index peeks all answer inline leaves none of them pending, so no sweep of
+    /// its ever visits a peek. Were the budget armed only where the sweep finds work, every peek
+    /// on such a replica would be granted the unbounded fuel the state is constructed with, and
+    /// unbounded fuel cannot suspend, so nothing would be offloaded however the parameters are
+    /// set. That is the case the offload exists for: one expensive lookup among cheap ones.
+    #[mz_ore::test(tokio::test)]
+    async fn an_idle_activation_arms_the_budget() {
+        let mut state = compute_state_with_offload_on();
+        assert!(state.pending_peeks.is_empty());
+
+        sweep(&mut state);
+
+        assert_eq!(state.peek_budget.grant(), Some(INLINE_BUDGET));
     }
 }
 
