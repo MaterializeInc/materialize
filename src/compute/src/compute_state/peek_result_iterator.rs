@@ -49,8 +49,35 @@ struct Literals<Tr: TraceReader<Batch: Navigable>> {
     literals: <BatchCursor<Tr> as Cursor>::KeyContainer,
     /// The range of the literals that are still available.
     range: Range<usize>,
-    /// The current index in the literals.
-    current_index: Option<usize>,
+    /// Where the cursor sits relative to the literal list.
+    position: LiteralPosition,
+}
+
+/// Where a [`Literals`]' cursor sits relative to the literal list.
+///
+/// [`LiteralPosition::Seeking`] and [`LiteralPosition::Exhausted`] are distinct states: the
+/// former still owes rows, the latter is the end of the scan. Collapsing them would make a
+/// deferred initial seek indistinguishable from a finished one, and every literal-constrained
+/// peek would return no rows.
+enum LiteralPosition {
+    /// A seek is outstanding: it has either not started yet, or it ran out of fuel part-way
+    /// through the literal list. The cursor is parked at a position no literal has claimed, so
+    /// no row may be read until the seek completes. [`Literals::range`] holds the literals that
+    /// remain to be tried.
+    Seeking,
+    /// The cursor sits on the key of the literal at this index.
+    At(usize),
+    /// Every literal has been tried; the scan is done.
+    Exhausted,
+}
+
+/// The outcome of a fueled [`Literals::seek_next_literal_key`].
+enum SeekOutcome {
+    /// The seek finished: the cursor sits on a matching literal, or the literals are exhausted.
+    Complete,
+    /// Fuel ran out with literals left to try. Seeking again resumes at the next untried
+    /// literal.
+    OutOfFuel,
 }
 
 impl<Tr> Literals<Tr>
@@ -59,10 +86,11 @@ where
     BatchCursor<Tr>: Cursor<KeyContainer: BatchContainer<Owned: Ord>>,
 {
     /// Construct a new `Literals` from a mutable slice of literals. Sorts contents.
+    ///
+    /// Does not seek the trace cursor. The initial seek runs on the first fueled step instead,
+    /// so that its cost is charged to a budget rather than paid before any budget exists.
     fn new(
         literals: &mut [<<BatchCursor<Tr> as Cursor>::KeyContainer as BatchContainer>::Owned],
-        cursor: &mut TraceCursor<Tr>,
-        storage: &TraceStorage<Tr>,
     ) -> Self {
         // We have to sort the literal constraints because cursor.seek_key can
         // seek only forward.
@@ -73,40 +101,70 @@ where
             container.push_own(constraint)
         }
         let range = 0..container.len();
-        let mut this = Self {
+        Self {
             literals: container,
             range,
-            current_index: None,
-        };
-        this.seek_next_literal_key(cursor, storage);
-        this
+            position: LiteralPosition::Seeking,
+        }
     }
 
-    /// Returns the current literal, if any.
+    /// Returns the current literal, if the cursor sits on one.
+    ///
+    /// Returns `None` while a seek is outstanding and once the literals are exhausted; in
+    /// neither case does the cursor point at a row that belongs to a literal.
     fn peek(&self) -> Option<BatchKey<'_, Tr>> {
-        self.current_index
-            .and_then(|index| self.literals.get(index))
+        match self.position {
+            LiteralPosition::At(index) => self.literals.get(index),
+            LiteralPosition::Seeking | LiteralPosition::Exhausted => None,
+        }
+    }
+
+    /// Returns `true` if a seek has to run before the cursor sits on a matching literal.
+    fn seek_pending(&self) -> bool {
+        matches!(self.position, LiteralPosition::Seeking)
     }
 
     /// Returns `true` if there are no more literals to process.
     fn is_exhausted(&self) -> bool {
-        self.current_index.is_none()
+        matches!(self.position, LiteralPosition::Exhausted)
     }
 
-    /// Seeks the cursor to the next key of a matching literal, if any.
-    fn seek_next_literal_key(&mut self, cursor: &mut TraceCursor<Tr>, storage: &TraceStorage<Tr>) {
-        while let Some(index) = self.range.next() {
+    /// Seeks the cursor to the next key of a matching literal, if any, charging one unit of
+    /// `fuel` per `seek_key` call.
+    ///
+    /// Returns [`SeekOutcome::OutOfFuel`] if literals remain untried when the fuel runs out.
+    /// The walk resumes from that literal on the next call, so a caller must not treat a
+    /// suspended seek as an end of scan.
+    ///
+    /// A literal list whose entries are mostly absent from the trace costs one seek per absent
+    /// literal, which is why the walk is fueled rather than run to completion.
+    fn seek_next_literal_key(
+        &mut self,
+        cursor: &mut TraceCursor<Tr>,
+        storage: &TraceStorage<Tr>,
+        fuel: &mut usize,
+    ) -> SeekOutcome {
+        // Until a literal matches, the cursor is parked on a key no literal claims. Recording
+        // that keeps a suspended seek from being read as "sitting on the previous literal".
+        self.position = LiteralPosition::Seeking;
+        while !self.range.is_empty() {
+            if *fuel == 0 {
+                return SeekOutcome::OutOfFuel;
+            }
+            *fuel -= 1;
+            let index = self.range.next().expect("range is not empty");
             let literal = self.literals.get(index).expect("index out of bounds");
             cursor.seek_key(storage, literal);
             if cursor.get_key(storage).map_or(true, |key| key == literal) {
-                self.current_index = Some(index);
-                return;
+                self.position = LiteralPosition::At(index);
+                return SeekOutcome::Complete;
             }
             // The cursor landed on a record that has a different key,
             // meaning that there is no record whose key would match the
             // current literal.
         }
-        self.current_index = None;
+        self.position = LiteralPosition::Exhausted;
+        SeekOutcome::Complete
     }
 }
 
@@ -134,9 +192,8 @@ where
         row_iteration_limit: Option<usize>,
         rows_iterated: usize,
     ) -> Self {
-        let (mut cursor, storage) = trace_reader.cursor();
-        let literals = literal_constraints
-            .map(|constraints| Literals::new(constraints, &mut cursor, &storage));
+        let (cursor, storage) = trace_reader.cursor();
+        let literals = literal_constraints.map(Literals::new);
 
         Self {
             target_id,
@@ -211,6 +268,16 @@ pub enum Step {
     OutOfFuel,
 }
 
+/// The outcome of a [`PeekResultIterator::step_key`].
+enum KeyStep {
+    /// The cursor sits on a new key, which has at least one value.
+    Advanced,
+    /// No key remains.
+    Exhausted,
+    /// The fuel ran out inside the literal seek. The seek resumes at the next untried literal.
+    OutOfFuel,
+}
+
 impl<Tr> PeekResultIterator<Tr>
 where
     Tr: TraceReader<Batch: Navigable>,
@@ -224,7 +291,8 @@ where
 {
     /// Advances the cursor until it produces a row, the cursor is exhausted,
     /// or `fuel` runs out, whichever comes first. Decrements `fuel` by the
-    /// number of cursor positions visited.
+    /// number of cursor positions visited, a literal seek's `seek_key` calls
+    /// included.
     ///
     /// Fuel is charged per cursor position, not per row returned, so a
     /// selective `map_filter_project` cannot starve the caller of yield
@@ -235,6 +303,23 @@ where
         }
 
         let result = loop {
+            // An outstanding literal seek runs before the per-position charge below. The seek
+            // spends fuel of its own, and charging first would let a caller holding a single
+            // unit spend it here without the seek ever advancing.
+            if let Some(literals) = &mut self.literals
+                && literals.seek_pending()
+            {
+                match literals.seek_next_literal_key(&mut self.cursor, &self.storage, fuel) {
+                    SeekOutcome::Complete => {}
+                    // The seek stopped part-way through the literal list: the cursor is at a
+                    // valid intermediate position and no row came out of it. `Done` would drop
+                    // the rows of the literals not yet tried, and there is no row to hand back,
+                    // so report the budget. The literal list position is retained, so stepping
+                    // again resumes with the next untried literal.
+                    SeekOutcome::OutOfFuel => return Step::OutOfFuel,
+                }
+            }
+
             if *fuel == 0 {
                 return Step::OutOfFuel;
             }
@@ -249,9 +334,10 @@ where
             }
 
             if !self.cursor.val_valid(&self.storage) {
-                let exhausted = self.step_key();
-                if exhausted {
-                    return Step::Done;
+                match self.step_key(fuel) {
+                    KeyStep::Advanced => {}
+                    KeyStep::Exhausted => return Step::Done,
+                    KeyStep::OutOfFuel => return Step::OutOfFuel,
                 }
             }
 
@@ -348,20 +434,22 @@ where
         }
     }
 
-    /// Steps the key forward, respecting literal constraints.
-    ///
-    /// Returns `true` if we are exhausted.
-    fn step_key(&mut self) -> bool {
+    /// Steps the key forward, respecting literal constraints and charging `fuel` for the
+    /// literal seek.
+    fn step_key(&mut self, fuel: &mut usize) -> KeyStep {
         assert!(
             !self.cursor.val_valid(&self.storage),
             "must only step key when the vals for a key are exhausted"
         );
 
         if let Some(literals) = &mut self.literals {
-            literals.seek_next_literal_key(&mut self.cursor, &self.storage);
+            match literals.seek_next_literal_key(&mut self.cursor, &self.storage, fuel) {
+                SeekOutcome::Complete => {}
+                SeekOutcome::OutOfFuel => return KeyStep::OutOfFuel,
+            }
 
             if literals.is_exhausted() {
-                return true;
+                return KeyStep::Exhausted;
             }
         } else {
             self.cursor.step_key(&self.storage);
@@ -369,7 +457,7 @@ where
 
         if !self.cursor.key_valid(&self.storage) {
             // We're exhausted!
-            return true;
+            return KeyStep::Exhausted;
         }
 
         assert!(
@@ -377,6 +465,186 @@ where
             "there must always be at least one val per key"
         );
 
-        false
+        KeyStep::Advanced
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use differential_dataflow::trace::cursor::CursorList;
+    use differential_dataflow::trace::implementations::ord_neu::OrdValBatcher;
+    use differential_dataflow::trace::{Batcher, Builder, Navigable};
+    use mz_repr::{Datum, Row, Timestamp};
+    use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
+    use timely::container::PushInto;
+    use timely::progress::Antichain;
+
+    use super::*;
+
+    type TestTrace = ArcOrdValSpine<Row, Row, Timestamp, Diff>;
+
+    fn row(value: u8) -> Row {
+        Row::pack_slice(&[Datum::UInt8(value)])
+    }
+
+    /// Builds a single-batch trace holding `keys`, and a cursor over it.
+    fn trace(keys: &[Row]) -> (TraceCursor<TestTrace>, TraceStorage<TestTrace>) {
+        let updates: Vec<((Row, Row), Timestamp, Diff)> = keys
+            .iter()
+            .map(|key| ((key.clone(), Row::default()), Timestamp::MIN, Diff::ONE))
+            .collect();
+        let mut batcher = OrdValBatcher::<Row, Row, Timestamp, Diff>::new(None, 0);
+        batcher.push_into(updates);
+        let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
+        let batch = ArcOrdValBuilder::<Row, Row, Timestamp, Diff>::seal(&mut chain, description);
+        let storage = vec![batch];
+        let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
+        (cursor, storage)
+    }
+
+    /// A literal list whose entries are mostly absent from the trace costs one seek per absent
+    /// literal. That walk is fueled: it suspends when the fuel runs out and resumes at the
+    /// literal it stopped on, rather than running the whole list in one call.
+    #[mz_ore::test]
+    fn literal_seek_is_fueled_and_resumable() {
+        // The trace holds the smallest row and the largest literal, so seeking to the match
+        // costs one `seek_key` per literal, all but the last of them a miss.
+        let mut rows: Vec<Row> = (0..=100).map(row).collect();
+        rows.sort();
+        let (absent, literals) = rows.split_first().expect("non-empty");
+        let matching = literals.last().expect("non-empty").clone();
+        let literal_count = literals.len();
+
+        let (mut cursor, storage) = trace(&[absent.clone(), matching.clone()]);
+        let mut constraints = literals.to_vec();
+        let mut subject = Literals::<TestTrace>::new(&mut constraints);
+
+        // Construction does not seek: the cursor still sits on the trace's first key, and the
+        // literals have neither landed on a key nor run out.
+        assert!(subject.seek_pending());
+        assert!(!subject.is_exhausted());
+        assert_eq!(subject.peek(), None);
+        assert_eq!(cursor.get_key(&storage), Some(absent));
+
+        // Five units of fuel buy five seeks and no more.
+        let mut fuel = 5;
+        assert!(matches!(
+            subject.seek_next_literal_key(&mut cursor, &storage, &mut fuel),
+            SeekOutcome::OutOfFuel
+        ));
+        assert_eq!(fuel, 0);
+        assert!(subject.seek_pending());
+        assert!(!subject.is_exhausted());
+        assert_eq!(subject.peek(), None);
+
+        // Resuming in five-unit slices lands on the matching literal after exactly as many
+        // seeks as there are literals. A resume that restarted the walk, or one that skipped
+        // the literal it suspended on, would not add up.
+        let mut seeks = 5;
+        loop {
+            let mut fuel = 5;
+            let outcome = subject.seek_next_literal_key(&mut cursor, &storage, &mut fuel);
+            seeks += 5 - fuel;
+            if let SeekOutcome::Complete = outcome {
+                break;
+            }
+        }
+        assert_eq!(seeks, literal_count);
+        assert_eq!(subject.peek(), Some(&matching));
+        assert!(!subject.is_exhausted());
+
+        // The same seek run with unbounded fuel costs the same, so slicing it neither lost nor
+        // repeated work.
+        let (mut cursor, storage) = trace(&[absent.clone(), matching.clone()]);
+        let mut constraints = literals.to_vec();
+        let mut subject = Literals::<TestTrace>::new(&mut constraints);
+        let mut fuel = usize::MAX;
+        assert!(matches!(
+            subject.seek_next_literal_key(&mut cursor, &storage, &mut fuel),
+            SeekOutcome::Complete
+        ));
+        assert_eq!(usize::MAX - fuel, literal_count);
+        assert_eq!(subject.peek(), Some(&matching));
+
+        // Past the last literal the seek reports exhaustion rather than suspending, even
+        // though it spends no fuel doing so.
+        let mut fuel = 0;
+        assert!(matches!(
+            subject.seek_next_literal_key(&mut cursor, &storage, &mut fuel),
+            SeekOutcome::Complete
+        ));
+        assert!(subject.is_exhausted());
+        assert_eq!(subject.peek(), None);
+    }
+
+    /// Builds an iterator over `keys`, constrained to `constraints`.
+    ///
+    /// Mirrors [`PeekResultIterator::new`], which cannot be used here because it takes a trace
+    /// rather than a cursor over one.
+    fn iterator(keys: &[Row], constraints: &mut [Row]) -> PeekResultIterator<TestTrace> {
+        let (cursor, storage) = trace(keys);
+        // The cursor's key and the literal each contribute one datum; the values are empty.
+        let map_filter_project = mz_expr::MapFilterProject::new(2)
+            .into_plan()
+            .expect("valid plan")
+            .into_nontemporal()
+            .expect("non-temporal plan");
+        PeekResultIterator {
+            target_id: GlobalId::User(1),
+            cursor,
+            storage,
+            map_filter_project,
+            peek_timestamp: Timestamp::MIN,
+            row_builder: Row::default(),
+            datum_vec: DatumVec::new(),
+            literals: Some(Literals::new(constraints)),
+            rows_processed: 0,
+            row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
+            exhausted: false,
+        }
+    }
+
+    /// A literal-constrained scan returns the rows of the literals the trace holds, whether it
+    /// is stepped with unbounded fuel or one unit at a time. Deferring the initial seek out of
+    /// the constructor must not turn "no seek yet" into "no literals left", which would empty
+    /// out every literal-constrained peek.
+    #[mz_ore::test]
+    fn literal_constrained_scan_returns_matching_rows() {
+        let keys: Vec<Row> = (0..=5).map(row).collect();
+        // Two of the three literals are in the trace; the third is past its end.
+        let constraints = vec![row(1), row(4), row(9)];
+        let expected: Vec<(Row, NonZeroI64)> = [1, 4]
+            .into_iter()
+            .map(|value| {
+                let row = Row::pack_slice(&[Datum::UInt8(value), Datum::UInt8(value)]);
+                (row, NonZeroI64::new(1).expect("non-zero"))
+            })
+            .collect();
+
+        let unbounded: Vec<_> = iterator(&keys, &mut constraints.clone())
+            .map(|row| row.expect("no error"))
+            .collect();
+        assert_eq!(unbounded, expected);
+
+        // One unit of fuel per call: every literal seek suspends, so the scan only completes if
+        // each resumption picks up where the last stopped.
+        let mut iterator = iterator(&keys, &mut constraints.clone());
+        let mut fueled = Vec::new();
+        let mut done = false;
+        // Bounded so that a step that spends fuel without advancing fails the test instead of
+        // hanging it.
+        for _ in 0..100 {
+            let mut fuel = 1;
+            match iterator.step(&mut fuel) {
+                Step::Row(row) => fueled.push(row.expect("no error")),
+                Step::OutOfFuel => continue,
+                Step::Done => {
+                    done = true;
+                    break;
+                }
+            }
+        }
+        assert!(done, "scan did not finish");
+        assert_eq!(fueled, expected);
     }
 }
