@@ -959,6 +959,15 @@ impl<'a> ActiveComputeState<'a> {
         }
 
         self.process_peek(&mut Antichain::new(), pending);
+
+        // `process_peek` may leave this peek waiting for budget, and no sweep of the pending peeks
+        // follows on this path. `reconcile` applies the peeks a reconnecting controller re-sends
+        // and then returns into the worker loop, which parks before its next sweep, so a peek
+        // deferred here would wait on an activation that nothing else produces. The park is
+        // unbounded when the maintenance interval is zero, which is a supported setting.
+        if self.compute_state.peek_resume_at.is_some() {
+            self.request_peek_activation();
+        }
     }
 
     fn handle_cancel_peek(&mut self, uuid: Uuid) {
@@ -1462,14 +1471,22 @@ impl<'a> ActiveComputeState<'a> {
             self.process_peek(&mut upper, peek);
         }
 
-        // Nothing else wakes a worker that passed a peek over. The peeks that spent the budget
-        // were answered or promoted, and neither leaves an activation behind, so a worker with no
-        // dataflow to run would park with peeks waiting on nothing but their turn.
         if self.compute_state.peek_resume_at.is_some() {
-            match self.timely_worker.sync_activator_for([].into()).activate() {
-                Ok(()) => {}
-                Err(_) => debug!("unable to wake timely for peeks left waiting on their turn"),
-            }
+            self.request_peek_activation();
+        }
+    }
+
+    /// Asks timely to activate this worker again, so that a peek passed over for want of budget
+    /// gets its turn.
+    ///
+    /// Nothing else wakes a worker that passed a peek over. The peeks that spent the budget were
+    /// answered or promoted, and neither leaves an activation behind, so a worker with no dataflow
+    /// to run would park with peeks waiting on nothing but their turn. Every path that defers a
+    /// peek therefore calls this before it hands the worker back.
+    fn request_peek_activation(&mut self) {
+        match self.timely_worker.sync_activator_for([].into()).activate() {
+            Ok(()) => {}
+            Err(_) => debug!("unable to wake timely for peeks left waiting on their turn"),
         }
     }
 
