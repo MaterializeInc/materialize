@@ -33,12 +33,13 @@ use crate::arrangement::manager::TraceBundle;
 use crate::compute_state::PeekRowIterationConfig;
 use crate::compute_state::peek_scan::{IndexPeekScan, ScanOutcome};
 
-/// The bound on how many promoted peek walks run at once in this process.
+/// The bound on how many promoted peek walks run at once.
 ///
-/// One instance is shared by every worker the process runs, because the resource it protects is
-/// the process's CPU rather than any one worker's. A per-worker bound would admit its count on
-/// each worker and over-admit by the worker count, and a bound sized for the whole replica would
-/// do the same across the processes a replica is spread over.
+/// The resource it protects is CPU rather than any one worker's thread, so one instance covers
+/// every worker that shares it. A per-worker bound would admit its count on each worker and
+/// over-admit by the worker count, and a bound sized for the whole replica would do the same
+/// across the processes a replica is spread over. How far one instance reaches is decided where it
+/// is constructed, and stated there.
 pub struct PeekPermits {
     semaphore: Arc<Semaphore>,
     /// The permits the semaphore holds, changed only under this lock. Without the lock two
@@ -60,7 +61,7 @@ impl PeekPermits {
         }
     }
 
-    /// Resizes the bound to `configured`, where zero asks for the default, and returns the
+    /// Resizes the bound to `configured`, where zero asks for the default, and hands back the
     /// semaphore a walk waits on.
     ///
     /// The count is applied when a walk asks to run rather than when the process starts, so a
@@ -69,7 +70,7 @@ impl PeekPermits {
     /// Lowering it takes back only the permits that are free at this moment. The rest stay with
     /// the walks holding them, which is what keeps a configuration change from interrupting a walk
     /// already under way, and the next call takes back what it can of the remainder.
-    fn queue(&self, configured: usize) -> Arc<Semaphore> {
+    fn resize(&self, configured: usize) -> Arc<Semaphore> {
         let target = if configured == 0 {
             self.default_permits
         } else {
@@ -91,8 +92,11 @@ impl PeekPermits {
 /// The parameters a promoted walk reads, each as a handle rather than a value.
 ///
 /// `UpdateConfiguration` applies to walks that are already under way, so a walk reads what is in
-/// effect at each slice boundary rather than what was in effect when it was promoted. That way a
-/// change reaches it without discarding the cursor positions it has already visited.
+/// effect when it reads rather than what was in effect when it was promoted, and a change reaches
+/// it without discarding the cursor positions it has already visited. The yield granularity and
+/// the row iteration limit are read at every slice boundary. The permit count is read once, on the
+/// worker, because it sizes the bound the walk then queues on rather than anything the walk does
+/// between slices.
 #[derive(Clone, Debug)]
 pub(super) struct OffloadConfig {
     permits: ConfigValHandle<usize>,
@@ -149,7 +153,9 @@ impl OffloadedPeek {
     ///
     /// The scan must not already hold a full batch. Such a scan has nothing left to do here: its
     /// first step reports that it needs the stash, so promoting it costs a permit and a hand-off
-    /// for a peek the worker could have diverted itself.
+    /// for a peek the worker could have diverted itself. The precondition is checked rather than
+    /// assumed, because such a scan holds a permit for the length of a hand-off and produces
+    /// nothing in return.
     ///
     /// `activator` wakes the worker once the outcome is ready, because nothing else the worker
     /// waits on is disturbed by this task finishing.
@@ -162,8 +168,13 @@ impl OffloadedPeek {
         walks_offloaded: IntCounter,
         activator: SyncActivator,
     ) -> Self {
+        debug_assert!(
+            !scan.batch_ready(),
+            "promoted a peek scan that already holds a full batch"
+        );
+
         let (mut result_tx, result_rx) = oneshot::channel();
-        let semaphore = permits.queue(config.permits.get());
+        let semaphore = permits.resize(config.permits.get());
 
         let peek_uuid = peek.uuid;
         let order_by = peek.finishing.order_by.clone();
@@ -283,18 +294,18 @@ mod tests {
         let permits = PeekPermits::new(4);
 
         // Zero asks for the count the process chose.
-        assert_eq!(permits.queue(0).available_permits(), 4);
-        assert_eq!(permits.queue(6).available_permits(), 6);
-        assert_eq!(permits.queue(2).available_permits(), 2);
+        assert_eq!(permits.resize(0).available_permits(), 4);
+        assert_eq!(permits.resize(6).available_permits(), 6);
+        assert_eq!(permits.resize(2).available_permits(), 2);
 
         // A walk already under way keeps its permit through a lower count, so the shrink takes
         // back only what is free right now, and the rest as that walk returns it.
         let held = permits
-            .queue(2)
+            .resize(2)
             .try_acquire_owned()
             .expect("a permit is free");
-        assert_eq!(permits.queue(1).available_permits(), 0);
+        assert_eq!(permits.resize(1).available_permits(), 0);
         drop(held);
-        assert_eq!(permits.queue(1).available_permits(), 1);
+        assert_eq!(permits.resize(1).available_permits(), 1);
     }
 }

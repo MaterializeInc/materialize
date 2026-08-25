@@ -1316,9 +1316,20 @@ impl<'a> ActiveComputeState<'a> {
                 // and the one way it does that is a cancellation that removed this entry, so an
                 // entry that is still here to be polled means the task died. Answering the peek is
                 // what keeps it from waiting forever on a walk nothing is running.
-                Err(oneshot::error::TryRecvError::Closed) => Some(PeekResponse::Error(
-                    PeekError::unstructured("offloaded peek walk failed"),
-                )),
+                //
+                // NOTE: a walk whose task is dropped by a shutting-down tokio runtime reaches here
+                // the same way a panicking one does. The worker is going away too in that case, so
+                // the log line is noise rather than a lost signal, and the alternative of staying
+                // silent would hide a panicked walk in the case that matters.
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    soft_panic_or_log!(
+                        "offloaded walk of peek on {} ended without an outcome",
+                        offloaded.peek.target.id()
+                    );
+                    Some(PeekResponse::Error(PeekError::unstructured(
+                        "offloaded peek walk failed",
+                    )))
+                }
             },
             PendingPeek::Stash(stashing_peek) => {
                 let num_batches = PEEK_STASH_NUM_BATCHES.get(&self.compute_state.worker_config);

@@ -185,6 +185,11 @@ pub async fn serve(
         // A walk that runs on its worker occupies one core, so peek CPU is capped today at one
         // core per worker. Admitting one promoted walk per worker preserves that ceiling once
         // promotion breaks the coupling that enforced it.
+        //
+        // NOTE: this bound covers the workers of one `serve` call, not those of the OS process. A
+        // process that runs a maintenance and an interactive runtime side by side calls `serve`
+        // twice, so those two roles share a persist cache and a metrics registry but not a peek
+        // permit, and the process admits this count once per role.
         peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
         storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
     };
