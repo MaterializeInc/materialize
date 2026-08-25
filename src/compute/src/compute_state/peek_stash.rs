@@ -16,6 +16,7 @@ use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::Schemas;
+use mz_persist_client::batch::BatchBuilder;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
@@ -29,6 +30,7 @@ use uuid::Uuid;
 use crate::arrangement::manager::{PaddedTrace, TraceBundle};
 use crate::compute_state::peek_result_iterator;
 use crate::compute_state::peek_result_iterator::PeekResultIterator;
+use crate::compute_state::peek_scan::RowBatch;
 use crate::typedefs::RowRowAgent;
 
 /// An async task that stashes a peek response in persist and yields a handle to
@@ -133,64 +135,28 @@ impl StashingPeek {
         max_rows: Option<usize>, // The number of rows needed by the RowSetFinishing's offset + limit
         mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, PeekError>>,
     ) -> Result<PeekResponse, String> {
-        let client = persist_clients
-            .open(persist_location)
-            .await
-            .map_err(|e| e.to_string())?;
+        let mut upload = StashUpload::open(
+            persist_clients,
+            persist_location,
+            batch_max_runs,
+            peek_uuid,
+            relation_desc,
+            max_rows,
+        )
+        .await?;
 
-        let shard_id = format!("s{}", peek_uuid);
-        let shard_id = ShardId::try_from(shard_id).expect("can parse");
-        let write_schemas: Schemas<SourceData, ()> = Schemas {
-            id: None,
-            key: Arc::new(relation_desc.clone()),
-            val: Arc::new(UnitSchema),
-        };
-
-        let result_ts = Timestamp::default();
-        let lower = Antichain::from_elem(result_ts);
-        let upper = Antichain::from_elem(result_ts.step_forward());
-
-        // We have to use SourceData, which is a wrapper around a Result<Row,
-        // DataflowError>, because the bare columnar Row encoder doesn't support
-        // encoding rows with zero columns.
-        //
-        // TODO: We _could_ work around the above by teaching the bare columnar
-        // Row encoder about zero-column rows.
-        let mut batch_builder = client
-            .batch_builder::<SourceData, (), Timestamp, i64>(
-                shard_id,
-                write_schemas,
-                lower,
-                Some(batch_max_runs),
-            )
-            .await;
-
-        let mut num_rows: u64 = 0;
-
-        'outer: loop {
+        loop {
             let row = rows_rx.recv().await;
             match row {
-                Some(Ok(rows)) => {
-                    for (row, diff) in rows {
-                        num_rows +=
-                            u64::from(NonZeroU64::try_from(diff).expect("diff fits into u64"));
-                        let diff: i64 = diff.into();
-
-                        batch_builder
-                            .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
-                            .await
-                            .expect("invalid usage");
-
-                        if let Some(max_rows) = max_rows {
-                            if num_rows >= u64::cast_from(max_rows) {
-                                // Drop the receiver so the producer's next
-                                // try_reserve() fails, stopping row production.
-                                drop(rows_rx);
-                                break 'outer;
-                            }
-                        }
+                Some(Ok(rows)) => match upload.push(rows).await {
+                    UploadDemand::Wants => {}
+                    UploadDemand::Satisfied => {
+                        // Drop the receiver so the producer's next
+                        // try_reserve() fails, stopping row production.
+                        drop(rows_rx);
+                        break;
                     }
-                }
+                },
                 Some(Err(err)) => return Ok(PeekResponse::Error(err)),
                 None => {
                     break;
@@ -198,18 +164,7 @@ impl StashingPeek {
             }
         }
 
-        let batch = batch_builder.finish(upper).await.expect("invalid usage");
-
-        let stashed_response = StashedPeekResponse {
-            num_rows_batches: u64::cast_from(num_rows),
-            encoded_size_bytes: batch.encoded_size_bytes(),
-            relation_desc,
-            shard_id,
-            batches: vec![batch.into_transmittable_batch()],
-            inline_rows: vec![RowCollection::new(vec![], &[])],
-        };
-        let result = PeekResponse::Stashed(Box::new(stashed_response));
-        Ok(result)
+        Ok(upload.finish().await)
     }
 
     /// Pumps rows from the [PeekResultIterator] to the async task, via our
@@ -253,5 +208,320 @@ impl StashingPeek {
 
             num_batches -= 1;
         }
+    }
+}
+
+/// Whether a [`StashUpload`] has room for more rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum UploadDemand {
+    /// The upload wants more rows.
+    Wants,
+    /// The upload holds every row the peek's finishing can use. Rows pushed after this are
+    /// discarded, because they sit past the offset plus limit the finishing asks for and no answer
+    /// built from this upload can contain them.
+    Satisfied,
+}
+
+/// A peek's answer on its way to the peek stash, written to persist a batch of rows at a time.
+///
+/// The upload owns the IO the stash needs, so a walk that feeds it performs none: a driver that can
+/// await pushes the rows the walk produced and finishes the upload, and the walk itself neither
+/// opens a client nor writes a byte. That split is what keeps a walk drivable from a timely worker
+/// and from an async task alike.
+///
+/// The rows an upload is given are the rows it writes, in the order it is given them, up to the
+/// point where the peek's finishing has all it can use. An upload dropped without
+/// [`StashUpload::finish`] leaves the parts it has already written to blob storage behind.
+pub(super) struct StashUpload {
+    /// The description the stashed response reports, and the schema the batch is written under.
+    relation_desc: RelationDesc,
+    /// The shard the batch belongs to, derived from the peek's uuid so that a reader holding the
+    /// response can find it.
+    shard_id: ShardId,
+    batch_builder: BatchBuilder<SourceData, (), Timestamp, i64>,
+    /// The upper the batch is finished at, one step beyond the timestamp every row is written at.
+    upper: Antichain<Timestamp>,
+    /// The number of rows the peek's finishing can use, its offset plus its limit, or `None` for a
+    /// finishing that can use every row the peek produces.
+    max_rows: Option<usize>,
+    /// Rows written so far, counting a row with a diff of `n` as `n` rows, which is how the
+    /// finishing counts them.
+    num_rows: u64,
+}
+
+impl StashUpload {
+    /// Opens an upload for the peek `peek_uuid` identifies.
+    ///
+    /// Fails when the stash location does not open, in which case nothing has been written.
+    pub(super) async fn open(
+        persist_clients: &PersistClientCache,
+        persist_location: PersistLocation,
+        batch_max_runs: usize,
+        peek_uuid: Uuid,
+        relation_desc: RelationDesc,
+        max_rows: Option<usize>,
+    ) -> Result<Self, String> {
+        let client = persist_clients
+            .open(persist_location)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let shard_id = format!("s{}", peek_uuid);
+        let shard_id = ShardId::try_from(shard_id).expect("can parse");
+        let write_schemas: Schemas<SourceData, ()> = Schemas {
+            id: None,
+            key: Arc::new(relation_desc.clone()),
+            val: Arc::new(UnitSchema),
+        };
+
+        let result_ts = Timestamp::default();
+        let lower = Antichain::from_elem(result_ts);
+        let upper = Antichain::from_elem(result_ts.step_forward());
+
+        // We have to use SourceData, which is a wrapper around a Result<Row,
+        // DataflowError>, because the bare columnar Row encoder doesn't support
+        // encoding rows with zero columns.
+        //
+        // TODO: We _could_ work around the above by teaching the bare columnar
+        // Row encoder about zero-column rows.
+        let batch_builder = client
+            .batch_builder::<SourceData, (), Timestamp, i64>(
+                shard_id,
+                write_schemas,
+                lower,
+                Some(batch_max_runs),
+            )
+            .await;
+
+        Ok(Self {
+            relation_desc,
+            shard_id,
+            batch_builder,
+            upper,
+            max_rows,
+            num_rows: 0,
+        })
+    }
+
+    /// Writes `rows` to the stash and reports whether the upload wants more.
+    ///
+    /// An upload that reaches what the finishing can use stops there, part-way through `rows` if
+    /// that is where it lands, and discards the rest of them. A driver holding a walk that is still
+    /// producing rows learns from the [`UploadDemand::Satisfied`] this returns that it may stop the
+    /// walk rather than finish it.
+    pub(super) async fn push(&mut self, rows: RowBatch) -> UploadDemand {
+        for (row, diff) in rows {
+            if self.demand() == UploadDemand::Satisfied {
+                break;
+            }
+
+            self.num_rows += u64::from(NonZeroU64::try_from(diff).expect("diff fits into u64"));
+            let diff: i64 = diff.into();
+
+            self.batch_builder
+                .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
+                .await
+                .expect("invalid usage");
+        }
+
+        self.demand()
+    }
+
+    /// Whether the upload still wants rows.
+    pub(super) fn demand(&self) -> UploadDemand {
+        match self.max_rows {
+            Some(max_rows) if self.num_rows >= u64::cast_from(max_rows) => UploadDemand::Satisfied,
+            _ => UploadDemand::Wants,
+        }
+    }
+
+    /// Finishes the batch and builds the response that names it.
+    pub(super) async fn finish(self) -> PeekResponse {
+        let batch = self
+            .batch_builder
+            .finish(self.upper)
+            .await
+            .expect("invalid usage");
+
+        let stashed_response = StashedPeekResponse {
+            num_rows_batches: self.num_rows,
+            encoded_size_bytes: batch.encoded_size_bytes(),
+            relation_desc: self.relation_desc,
+            shard_id: self.shard_id,
+            batches: vec![batch.into_transmittable_batch()],
+            inline_rows: vec![RowCollection::new(vec![], &[])],
+        };
+        PeekResponse::Stashed(Box::new(stashed_response))
+    }
+}
+
+/// Tests of the incremental stash upload, over the persist location a replica would write to.
+#[cfg(test)]
+mod tests {
+    use mz_compute_types::dyncfgs::{
+        PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
+    };
+    use mz_repr::{Datum, SqlScalarType};
+
+    use super::*;
+
+    /// The description of the single-column result every peek here asks for.
+    fn result_desc() -> RelationDesc {
+        RelationDesc::builder()
+            .with_column("value", SqlScalarType::UInt64.nullable(false))
+            .finish()
+    }
+
+    /// A batch of `values`, each carrying `diff` copies of itself.
+    fn batch(values: impl IntoIterator<Item = u64>, diff: i64) -> RowBatch {
+        let diff = NonZeroI64::new(diff).expect("a row carries a non-zero diff");
+        values
+            .into_iter()
+            .map(|value| (Row::pack_slice(&[Datum::UInt64(value)]), diff))
+            .collect()
+    }
+
+    /// An upload of a peek that can use `max_rows` rows, opened against `clients`.
+    async fn open_upload(clients: &PersistClientCache, max_rows: Option<usize>) -> StashUpload {
+        StashUpload::open(
+            clients,
+            PersistLocation::new_in_mem(),
+            *PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.default(),
+            Uuid::new_v4(),
+            result_desc(),
+            max_rows,
+        )
+        .await
+        .expect("the in-memory location opens")
+    }
+
+    /// The values a finished upload holds, in ascending order, each repeated as often as the diff
+    /// it was written with.
+    ///
+    /// A stashed response names a persist batch rather than carrying rows, so what the upload wrote
+    /// is only visible from the batch. Persist consolidates a batch rather than preserving the
+    /// order it was written in, so the values are sorted here and compared as the multiset they
+    /// are.
+    async fn stashed_values(clients: &PersistClientCache, response: PeekResponse) -> Vec<u64> {
+        let PeekResponse::Stashed(stashed) = response else {
+            panic!("an upload finishes into a stashed response, not {response:?}");
+        };
+
+        // Opened out of the cache that opened the upload, because two `PersistLocation`s naming the
+        // same in-memory URI reach the same blob only through one cache.
+        let mut client = clients
+            .open(PersistLocation::new_in_mem())
+            .await
+            .expect("the in-memory location opens");
+
+        let shard_id = stashed.shard_id;
+        let batches = stashed
+            .batches
+            .into_iter()
+            .map(|batch| client.batch_from_transmittable_batch(&shard_id, batch))
+            .collect();
+        let read_schemas: Schemas<SourceData, ()> = Schemas {
+            id: None,
+            key: Arc::new(stashed.relation_desc),
+            val: Arc::new(UnitSchema),
+        };
+        let mut cursor = client
+            .read_batches_consolidated::<_, _, _, i64>(
+                shard_id,
+                Antichain::from_elem(Timestamp::default()),
+                read_schemas,
+                batches,
+                |_stats| true,
+                *PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES.default(),
+            )
+            .await
+            .expect("the batch is readable at the timestamp it was written at");
+
+        let mut values = Vec::new();
+        while let Some(updates) = cursor.next().await {
+            for ((key, _val), _time, diff) in updates {
+                let row = key.0.expect("the peek stash holds no errors");
+                let value = row.unpack_first().unwrap_uint64();
+                let copies = usize::try_from(diff).expect("a stashed row carries a positive diff");
+                values.extend(std::iter::repeat_n(value, copies));
+            }
+        }
+        values.sort();
+
+        // Deleted as the coordinator deletes them once it has read them. A batch dropped without
+        // this leaves its blob keys behind and says so in a warning.
+        for batch in cursor.into_lease() {
+            batch.delete().await;
+        }
+        values
+    }
+
+    /// An upload with no limit to reach holds every row pushed into it, over as many pushes as the
+    /// driver made.
+    #[mz_ore::test(tokio::test)]
+    async fn an_upload_holds_the_rows_pushed_into_it() {
+        let clients = PersistClientCache::new_no_metrics();
+        let mut upload = open_upload(&clients, None).await;
+
+        assert_eq!(upload.push(batch(0..3, 1)).await, UploadDemand::Wants);
+        assert_eq!(upload.push(batch(3..5, 1)).await, UploadDemand::Wants);
+
+        let response = upload.finish().await;
+        let PeekResponse::Stashed(stashed) = &response else {
+            panic!("an upload finishes into a stashed response, not {response:?}");
+        };
+        assert_eq!(
+            stashed.num_rows_batches, 5,
+            "the response counts the rows the upload wrote"
+        );
+        assert_eq!(
+            stashed_values(&clients, response).await,
+            vec![0, 1, 2, 3, 4]
+        );
+    }
+
+    /// An upload counts a row against the limit as often as its diff says the answer holds it,
+    /// rather than once.
+    #[mz_ore::test(tokio::test)]
+    async fn an_upload_counts_a_row_as_often_as_its_diff() {
+        let clients = PersistClientCache::new_no_metrics();
+        let mut upload = open_upload(&clients, Some(4)).await;
+
+        assert_eq!(
+            upload.push(batch(0..2, 3)).await,
+            UploadDemand::Satisfied,
+            "six copies of two rows is past a limit of four"
+        );
+        assert_eq!(
+            stashed_values(&clients, upload.finish().await).await,
+            vec![0, 0, 0, 1, 1, 1],
+            "the row that crossed the limit is written whole"
+        );
+    }
+
+    /// An upload that has all the rows the finishing can use stops there, part-way through the push
+    /// that took it past the limit, and discards what is pushed after.
+    #[mz_ore::test(tokio::test)]
+    async fn an_upload_stops_at_the_rows_the_finishing_can_use() {
+        let clients = PersistClientCache::new_no_metrics();
+        let mut upload = open_upload(&clients, Some(2)).await;
+
+        assert_eq!(
+            upload.demand(),
+            UploadDemand::Wants,
+            "an upload that has written nothing wants rows"
+        );
+        assert_eq!(upload.push(batch(0..4, 1)).await, UploadDemand::Satisfied);
+        assert_eq!(
+            upload.push(batch(4..8, 1)).await,
+            UploadDemand::Satisfied,
+            "a satisfied upload stays satisfied"
+        );
+
+        assert_eq!(
+            stashed_values(&clients, upload.finish().await).await,
+            vec![0, 1],
+            "the rows past the limit are discarded, in the push that crossed it and after it"
+        );
     }
 }
