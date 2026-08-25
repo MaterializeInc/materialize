@@ -345,4 +345,11 @@ to itself, and merging only begins above that: 32s and 33s share a bucket, then
 34s and 35s, and so on. The approximation matters for objects that fall minutes
 or hours behind, not for healthy ones.
 
+The queries also drop rows where `lag` is NULL. A NULL means the object was not
+readable when the observation was taken, usually because it had not finished
+hydrating, so there is no lag to bucket. Dropping those rows is not neutral:
+Materialize treats an unreadable object as lagging more than any finite
+measurement, so an object that spent part of the window unhydrated looks better
+in this distribution than it behaved.
+
 {{< /note >}}
