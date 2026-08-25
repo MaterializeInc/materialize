@@ -31,9 +31,8 @@ role](/security/appendix/appendix-built-in-roles/#system-catalog-roles).
 The Materialize operator Helm chart sets
 `operator.args.statementLoggingMaxSampleRate` to `0.99`, and leaves
 `operator.args.statementLoggingTargetDataRate` unset so that `environmentd`'s
-own default of 2071 bytes per second applies. Both are the values Materialize
-Cloud runs at, so query history in a self-managed deployment behaves the same as
-in Cloud out of the box.
+own default of 2071 bytes per second applies. Statement logging is therefore on
+by default, sampling nearly every statement up to the byte rate below.
 
 The rate that actually applies to a statement is the smaller of two parameters:
 
