@@ -75,12 +75,14 @@ use crate::render::{LinearJoinSpec, StartSignal};
 use crate::server::{ComputeInstanceContext, ResponseSender};
 
 mod error_scan;
+mod peek_budget;
 mod peek_metrics;
 mod peek_offload;
 mod peek_result_iterator;
 mod peek_scan;
 mod peek_stash;
 
+use self::peek_budget::InlineBudget;
 use self::peek_metrics::IndexPeekMetrics;
 use self::peek_metrics::PeekWalkMetrics;
 pub(crate) use self::peek_offload::PeekPermits;
@@ -290,6 +292,22 @@ pub struct ComputeState {
     /// the inline driver reads it on every activation of every pending peek.
     peek_walk_metrics: PeekWalkMetrics,
 
+    /// What is left of what this activation may spend walking index peeks on the worker.
+    ///
+    /// Refilled at the top of each sweep of the pending peeks. A peek that arrives between two
+    /// sweeps draws from what the last sweep left, so a batch of arriving peeks costs at most one
+    /// more aggregate rather than one inline budget per peek in the batch.
+    peek_budget: InlineBudget,
+
+    /// The pending peek a sweep stopped at for want of budget, and where the next sweep starts.
+    ///
+    /// Serving the pending peeks in uuid order alone would let a peek that arrives with a lower
+    /// uuid take the turn of one an earlier sweep passed over. Resuming here makes the sweep a
+    /// ring, so a peek that was passed over is served before the peeks that were served ahead of
+    /// it. A stale entry is harmless: a uuid that has since been answered still names where in the
+    /// ordering to resume.
+    peek_resume_at: Option<Uuid>,
+
     /// Collections awaiting schedule instruction by the controller.
     ///
     /// Each entry stores a reference to a token that can be dropped to unsuspend the collection's
@@ -353,6 +371,9 @@ impl ComputeState {
             workers_per_process,
             peek_permits,
             peek_walk_metrics,
+            // The offload is off until a configuration arrives, and this is what off means.
+            peek_budget: InlineBudget::Unbounded,
+            peek_resume_at: None,
             suspended_collections: Default::default(),
             server_maintenance_interval: Duration::ZERO,
             init_system_time: mz_ore::now::SYSTEM_TIME(),
@@ -1178,10 +1199,28 @@ impl<'a> ActiveComputeState<'a> {
     }
 
     /// Either complete the peek (and send the response) or put it in the pending set.
+    ///
+    /// An index peek walks for as long as this activation's remaining budget allows, and a peek
+    /// that is granted none of it is left pending untouched, to be served first on the next
+    /// activation.
     fn process_peek(&mut self, upper: &mut Antichain<Timestamp>, mut peek: PendingPeek) {
         let response = match &mut peek {
+            PendingPeek::Index(peek) if self.compute_state.peek_budget.grant().is_none() => {
+                // This activation has spent what it may on peeks. Nothing about the peek has
+                // changed, because a scan is opened by the slice that walks it, so passing it over
+                // costs the peek an activation and nothing else.
+                self.compute_state
+                    .peek_resume_at
+                    .get_or_insert(peek.peek.uuid);
+                None
+            }
             PendingPeek::Index(peek) => {
                 let start = Instant::now();
+                let granted = self
+                    .compute_state
+                    .peek_budget
+                    .grant()
+                    .expect("guarded by the preceding arm");
 
                 let row_iteration_limit =
                     peek_row_iteration_limit(&self.compute_state.worker_config);
@@ -1216,14 +1255,21 @@ impl<'a> ActiveComputeState<'a> {
                     walk: &self.compute_state.peek_walk_metrics,
                 };
 
+                let mut fuel = granted;
                 let status = peek.seek_fulfillment(
                     upper,
                     self.compute_state.max_result_size,
                     peek_stash_enabled && peek_stash_eligible,
                     peek_stash_threshold_bytes,
                     row_iteration_limit,
+                    &mut fuel,
                     &metrics,
                 );
+
+                // Charged with what the slice walked rather than with what it was granted, so a
+                // peek that answers in three positions leaves the activation's budget to the peeks
+                // behind it.
+                self.compute_state.peek_budget.charge(granted - fuel);
 
                 self.compute_state
                     .metrics
@@ -1400,9 +1446,30 @@ impl<'a> ActiveComputeState<'a> {
     /// Scan pending peeks and attempt to retire each.
     pub fn process_peeks(&mut self) {
         let mut upper = Antichain::new();
-        let pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
-        for (_uuid, peek) in pending_peeks {
+        let mut pending_peeks = std::mem::take(&mut self.compute_state.pending_peeks);
+
+        self.compute_state.peek_budget =
+            InlineBudget::for_activation(&self.compute_state.worker_config);
+
+        let mut order: Vec<Uuid> = pending_peeks.keys().copied().collect();
+        if let Some(resume_at) = self.compute_state.peek_resume_at.take() {
+            let resume_from = order.partition_point(|uuid| *uuid < resume_at);
+            order.rotate_left(resume_from);
+        }
+
+        for uuid in order {
+            let peek = pending_peeks.remove(&uuid).expect("taken from this map");
             self.process_peek(&mut upper, peek);
+        }
+
+        // Nothing else wakes a worker that passed a peek over. The peeks that spent the budget
+        // were answered or promoted, and neither leaves an activation behind, so a worker with no
+        // dataflow to run would park with peeks waiting on nothing but their turn.
+        if self.compute_state.peek_resume_at.is_some() {
+            match self.timely_worker.sync_activator_for([].into()).activate() {
+                Ok(()) => {}
+                Err(_) => debug!("unable to wake timely for peeks left waiting on their turn"),
+            }
         }
     }
 
@@ -1858,6 +1925,11 @@ impl IndexPeek {
     /// then for any time `t` less or equal to `peek.timestamp` it is
     /// not the case that `upper` is less or equal to that timestamp,
     /// and so the result cannot further evolve.
+    ///
+    /// `fuel` bounds how far the walk may go on this worker, in cursor positions, and is charged
+    /// for the positions it visits. A walk that exhausts it and still has work left is promoted
+    /// rather than continued here. A peek whose frontiers do not yet admit the read spends none of
+    /// it.
     fn seek_fulfillment(
         &mut self,
         upper: &mut Antichain<Timestamp>,
@@ -1865,6 +1937,7 @@ impl IndexPeek {
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
         row_iteration_limit: Option<usize>,
+        fuel: &mut usize,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let method_start = Instant::now();
@@ -1897,6 +1970,7 @@ impl IndexPeek {
             peek_stash_eligible,
             peek_stash_threshold_bytes,
             row_iteration_limit,
+            fuel,
             metrics,
         );
 
@@ -1907,18 +1981,18 @@ impl IndexPeek {
         result
     }
 
-    /// Answers the peek by scanning the traces that fulfil it.
+    /// Answers the peek by scanning the traces that fulfil it, for as long as `fuel` allows.
     ///
-    /// One call drives one scan to an answer and drops it, so nothing survives the call and a
-    /// second call repeats both walks from the start. That is what the peek path asks for: it
-    /// reaches this only once the frontiers admit the read, and every outcome retires the peek
-    /// from the index-peek path, either with a response or by handing it to the stash.
+    /// One call opens one scan and either answers from it or hands it on, so nothing survives the
+    /// call. A scan that runs out of fuel with work left leaves with the [`PeekStatus::Promote`]
+    /// that reports it, which is what keeps the positions it walked from being walked again.
     fn collect_finished_data(
         &mut self,
         max_result_size: u64,
         peek_stash_eligible: bool,
         peek_stash_threshold_bytes: usize,
         row_iteration_limit: Option<usize>,
+        fuel: &mut usize,
         metrics: &IndexPeekMetrics<'_>,
     ) -> PeekStatus {
         let peek = &self.peek;
@@ -1932,10 +2006,7 @@ impl IndexPeek {
             peek_stash_threshold_bytes,
         );
 
-        // No caller supplies a budget, so nothing stops the scan short of an answer but a full
-        // batch, and this driver has nowhere to write one.
-        let mut fuel = usize::MAX;
-        let outcome = scan.step(row_iteration_limit, &mut fuel);
+        let outcome = scan.step(row_iteration_limit, fuel);
 
         // A suspension the offload can resume is the one outcome that leaves the walk unfinished,
         // so it is the one outcome this driver reports nothing for. Everything else ends the walk
@@ -2413,6 +2484,12 @@ pub(crate) mod index_peek_tests {
         }
     }
 
+    /// The fuel the inline driver spends with the offload off, which is the amount that makes a
+    /// walk run to an outcome rather than suspend.
+    fn unbounded_fuel() -> usize {
+        usize::MAX
+    }
+
     /// The observation counts a driver call is expected to leave behind, named so that a failure
     /// says which metric moved.
     ///
@@ -2492,8 +2569,14 @@ pub(crate) mod index_peek_tests {
         );
         let metrics = TestMetrics::new();
 
-        let answer =
-            subject.collect_finished_data(u64::MAX, false, usize::MAX, None, &metrics.as_metrics());
+        let answer = subject.collect_finished_data(
+            u64::MAX,
+            false,
+            usize::MAX,
+            None,
+            &mut unbounded_fuel(),
+            &metrics.as_metrics(),
+        );
 
         assert_eq!(
             Answer::from(answer),
@@ -2513,8 +2596,14 @@ pub(crate) mod index_peek_tests {
         let mut subject = index_peek_over(index_peek(trivial_finishing(), None), &keys, errors);
         let metrics = TestMetrics::new();
 
-        let answer =
-            subject.collect_finished_data(u64::MAX, false, usize::MAX, None, &metrics.as_metrics());
+        let answer = subject.collect_finished_data(
+            u64::MAX,
+            false,
+            usize::MAX,
+            None,
+            &mut unbounded_fuel(),
+            &metrics.as_metrics(),
+        );
 
         assert_eq!(
             Answer::from(answer),
@@ -2538,10 +2627,53 @@ pub(crate) mod index_peek_tests {
 
         // A threshold of zero bytes is crossed by the first row, so the scan fills a batch well
         // before the trace runs out.
-        let answer = subject.collect_finished_data(u64::MAX, true, 0, None, &metrics.as_metrics());
+        let answer = subject.collect_finished_data(
+            u64::MAX,
+            true,
+            0,
+            None,
+            &mut unbounded_fuel(),
+            &metrics.as_metrics(),
+        );
 
         assert_eq!(Answer::from(answer), Answer::UsePeekStash);
         assert_eq!(metrics.observations(), expected_observations(1, 1, 1, 0));
+    }
+
+    /// A peek whose walk outruns the fuel it was granted leaves the worker rather than being
+    /// answered or diverted, and the walk it leaves with reports nothing.
+    ///
+    /// Reporting here as well as in the driver that finishes the walk would count one walk twice,
+    /// on both substrates and in every phase histogram, and the numbers a scan carries are
+    /// cumulative precisely so that the driver which ends it can report all of them.
+    #[mz_ore::test]
+    fn a_scan_that_outruns_its_fuel_leaves_the_worker_reporting_nothing() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let mut subject = index_peek_over(
+            index_peek(trivial_finishing(), None),
+            &keys,
+            cancelling_errors(0),
+        );
+        let metrics = TestMetrics::new();
+
+        // An empty error trace is walked out within a position or two, so this fuel is spent
+        // inside the ok walk with most of the six keys still ahead of it.
+        let mut fuel = 2;
+        let answer = subject.collect_finished_data(
+            u64::MAX,
+            false,
+            usize::MAX,
+            None,
+            &mut fuel,
+            &metrics.as_metrics(),
+        );
+
+        assert_eq!(Answer::from(answer), Answer::Promote);
+        assert_eq!(
+            fuel, 0,
+            "a promoted slice spent every position it was given"
+        );
+        assert_eq!(metrics.observations(), expected_observations(0, 0, 0, 0));
     }
 
     /// A peek its ok walk fails is answered with that error, and reports the phases that walk
@@ -2569,6 +2701,7 @@ pub(crate) mod index_peek_tests {
             false,
             usize::MAX,
             None,
+            &mut unbounded_fuel(),
             &metrics.as_metrics(),
         );
 
