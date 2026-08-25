@@ -1665,13 +1665,6 @@ where
             .schemas
             .last_key_value()
             .expect("all shards have a schema");
-        if *current_id != expected {
-            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
-                schema_id: *current_id,
-                key: K::decode_schema(&current.key),
-                val: V::decode_schema(&current.val),
-            }));
-        }
 
         let current_key = K::decode_schema(&current.key);
         let current_key_dt = EncodedSchemas::decode_data_type(&current.key_data_type);
@@ -1681,13 +1674,29 @@ where
         let key_dt = data_type(key_schema);
         let val_dt = data_type(val_schema);
 
-        // If the schema is exactly the same as the current one, no-op.
+        // If the schema is exactly the same as the current one, no-op. NOTE:
+        // this check has to come before the `expected` one, otherwise the
+        // command is not idempotent: `apply_unbatched_idempotent_cmd` retries
+        // indeterminate errors, so a CaS that committed but lost its response
+        // gets re-run against state that already carries its own evolution.
+        //
+        // Returning Ok when `*current_id != expected` is safe: register_schema
+        // never mints two ids for the same content, so a content match is the
+        // current schema and a stale `expected` just lags the committed retry.
         if current_key == *key_schema
             && current_key_dt == key_dt
             && current_val == *val_schema
             && current_val_dt == val_dt
         {
             return Break(NoOpStateTransition(CaESchema::Ok(*current_id)));
+        }
+
+        if *current_id != expected {
+            return Break(NoOpStateTransition(CaESchema::ExpectedMismatch {
+                schema_id: *current_id,
+                key: current_key,
+                val: current_val,
+            }));
         }
 
         let key_fn = backward_compatible(&current_key_dt, &key_dt);
