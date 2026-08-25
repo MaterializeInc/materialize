@@ -86,6 +86,11 @@ ALTER SYSTEM RESET compute_peek_row_iteration_limit;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_peek_row_iteration_limit;
+----
+COMPLETE 0
+
 statement ok
 SET cluster TO 'quickstart';
 

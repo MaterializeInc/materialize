@@ -275,6 +275,11 @@ ALTER SYSTEM RESET compute_peek_row_iteration_limit;
 ----
 COMPLETE 0
 
+simple conn=mz_system,user=mz_system
+ALTER SYSTEM RESET enable_compute_peek_row_iteration_limit;
+----
+COMPLETE 0
+
 # The Persist fast path does not apply when an index exists.
 
 statement ok
