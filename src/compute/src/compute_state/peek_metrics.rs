@@ -93,10 +93,11 @@ impl PeekWalkMetrics {
         self.walks_inline.inc();
     }
 
-    /// Counts a walk that was promoted and admitted, whatever it goes on to report.
+    /// Counts a walk that a promoted task drove to an outcome, whatever that outcome is.
     ///
-    /// A walk cancelled while queued for a permit counts on neither substrate, since it never ran
-    /// anywhere but on the inline slice that promoted it.
+    /// A walk cancelled while queued for a permit or while running counts on neither substrate,
+    /// which is what makes the two substrates sum to the walks that ended. How many walks were
+    /// admitted is a different question, and one the permit queue's own metrics answer.
     pub(super) fn walked_offloaded(&self) {
         self.walks_offloaded.inc();
     }

@@ -194,13 +194,17 @@ impl OffloadedPeek {
                 };
                 queued.admitted();
 
-                metrics.walked_offloaded();
-
                 let Some(outcome) =
                     Self::walk(permit, scan, &config, &metrics, &order_by, &result_tx).await
                 else {
                     return;
                 };
+
+                // Counted here rather than at the permit, so that the two substrate counters both
+                // count walks that ended. A walk cancelled while running took a permit and never
+                // reaches an outcome, so counting admissions would leave the pair summing to
+                // something other than the walks that ended.
+                metrics.walked_offloaded();
 
                 match result_tx.send((outcome, start.elapsed())) {
                     Ok(()) => {}
