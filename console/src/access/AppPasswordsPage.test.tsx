@@ -30,10 +30,24 @@ const buildToken = (props: Partial<UserApiToken>): UserApiToken => ({
   ...props,
 });
 
-/** Stubs every request the page makes, plus the create endpoint, and returns
- * the body of the last create request. */
+const ROLE = { id: "role-id", key: "Admin", name: "Admin" };
+
+/** Stubs every request the page makes, plus both create endpoints, and returns
+ * the body of the last create request against each. */
 const mockFrontegg = (tokens: UserApiToken[]) => {
-  const createRequest: { body?: Record<string, unknown> } = {};
+  const created: {
+    personal?: Record<string, unknown>;
+    service?: Record<string, unknown>;
+  } = {};
+  const capture =
+    (kind: "personal" | "service") =>
+    async ({ request }: { request: Request }) => {
+      created[kind] = (await request.json()) as Record<string, unknown>;
+      return HttpResponse.json({
+        ...buildToken({ clientId: "22222222-2222-2222-2222-222222222222" }),
+        secret: "33333333-3333-3333-3333-333333333333",
+      });
+    };
   server.use(
     http.get("*/frontegg/identity/resources/users/api-tokens/v1", () =>
       HttpResponse.json(tokens),
@@ -42,20 +56,18 @@ const mockFrontegg = (tokens: UserApiToken[]) => {
       HttpResponse.json([]),
     ),
     http.get("*/frontegg/team/resources/roles/v1", () =>
-      HttpResponse.json({ items: [] }),
+      HttpResponse.json({ items: [ROLE] }),
     ),
     http.post(
       "*/frontegg/identity/resources/users/api-tokens/v1",
-      async ({ request }) => {
-        createRequest.body = (await request.json()) as Record<string, unknown>;
-        return HttpResponse.json({
-          ...buildToken({ clientId: "22222222-2222-2222-2222-222222222222" }),
-          secret: "33333333-3333-3333-3333-333333333333",
-        });
-      },
+      capture("personal"),
+    ),
+    http.post(
+      "*/frontegg/identity/resources/tenants/api-tokens/v1",
+      capture("service"),
     ),
   );
-  return createRequest;
+  return created;
 };
 
 const renderPage = (openNewModal = false) =>
@@ -110,7 +122,7 @@ describe("AppPasswordsPage", () => {
   });
 
   it("defaults new passwords to a 90 day expiration", async () => {
-    const createRequest = mockFrontegg([]);
+    const created = mockFrontegg([]);
     await renderPage(true);
     const user = userEvent.setup();
 
@@ -118,7 +130,7 @@ describe("AppPasswordsPage", () => {
     await user.click(screen.getByRole("button", { name: "Create Password" }));
 
     await waitFor(() =>
-      expect(createRequest.body).toMatchObject({
+      expect(created.personal).toMatchObject({
         description: "New password",
         expiresInMinutes: 90 * 24 * 60,
       }),
@@ -126,7 +138,7 @@ describe("AppPasswordsPage", () => {
   });
 
   it("omits the expiration when no expiration is selected", async () => {
-    const createRequest = mockFrontegg([]);
+    const created = mockFrontegg([]);
     await renderPage(true);
     const user = userEvent.setup();
 
@@ -134,7 +146,31 @@ describe("AppPasswordsPage", () => {
     await user.selectOptions(screen.getByLabelText("Expiration"), "never");
     await user.click(screen.getByRole("button", { name: "Create Password" }));
 
-    await waitFor(() => expect(createRequest.body).toBeDefined());
-    expect(createRequest.body).not.toHaveProperty("expiresInMinutes");
+    await waitFor(() => expect(created.personal).toBeDefined());
+    expect(created.personal).not.toHaveProperty("expiresInMinutes");
+  });
+
+  it("sends the expiration on the service password endpoint too", async () => {
+    const created = mockFrontegg([]);
+    await renderPage(true);
+    const user = userEvent.setup();
+
+    await user.click(await screen.findByRole("radio", { name: /Service/ }));
+    await user.type(screen.getByLabelText("Name"), "Service password");
+    // The User field's label is not wired to its input, so go by position.
+    await user.type(screen.getAllByRole("textbox")[1], "svc");
+    await user.click(screen.getByPlaceholderText("Select..."));
+    await user.click(await screen.findByRole("option", { name: ROLE.name }));
+    await user.selectOptions(screen.getByLabelText("Expiration"), "30d");
+    await user.click(screen.getByRole("button", { name: "Create Password" }));
+
+    await waitFor(() =>
+      expect(created.service).toMatchObject({
+        description: "Service password",
+        metadata: { user: "svc" },
+        roleIds: [ROLE.id],
+        expiresInMinutes: 30 * 24 * 60,
+      }),
+    );
   });
 });

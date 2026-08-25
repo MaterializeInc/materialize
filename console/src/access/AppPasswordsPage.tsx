@@ -92,6 +92,8 @@ type ExpiresInOption = keyof typeof EXPIRES_IN_OPTIONS;
 
 const DEFAULT_EXPIRES_IN: ExpiresInOption = "90d";
 
+const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
+
 const AppPasswordsPage = ({ user }: { user: User }) => {
   const { isOpen, onOpen, onClose } = useDisclosure();
   const location = useLocation();
@@ -275,12 +277,7 @@ const AppPasswordsInner = (props: {
                   <FormLabel htmlFor="expiresIn" fontSize="sm">
                     Expiration
                   </FormLabel>
-                  <Select
-                    {...register("expiresIn")}
-                    id="expiresIn"
-                    aria-label="Expiration"
-                    size="sm"
-                  >
+                  <Select {...register("expiresIn")} id="expiresIn" size="sm">
                     {Object.entries(EXPIRES_IN_OPTIONS).map(
                       ([value, { label }]) => (
                         <option key={value} value={value}>
@@ -396,8 +393,6 @@ const AppPasswordsInner = (props: {
   );
 };
 
-const EXPIRING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
-
 const ExpiresCell = ({ expires }: { expires?: string }) => {
   const { colors } = useTheme<MaterializeTheme>();
 
@@ -412,15 +407,9 @@ const ExpiresCell = ({ expires }: { expires?: string }) => {
       <Text>
         {formatDate(new Date(expires), FRIENDLY_DATETIME_FORMAT_NO_SECONDS)}
       </Text>
-      {msUntilExpiry <= 0 && (
-        <StatusPill status="expired" colorScheme="red" label="Expired" />
-      )}
+      {msUntilExpiry <= 0 && <StatusPill status="expired" colorScheme="red" />}
       {msUntilExpiry > 0 && msUntilExpiry <= EXPIRING_SOON_MS && (
-        <StatusPill
-          status="expiringSoon"
-          colorScheme="yellow"
-          label="Expiring soon"
-        />
+        <StatusPill status="expiring soon" colorScheme="yellow" />
       )}
     </HStack>
   );
