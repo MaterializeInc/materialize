@@ -2475,4 +2475,42 @@ pub(crate) mod index_peek_tests {
         assert_eq!(Answer::from(answer), Answer::UsePeekStash);
         assert_eq!(metrics.observations(), expected_observations(1, 1, 0));
     }
+
+    /// A peek its ok walk fails is answered with that error, and reports the phases that walk
+    /// reached: the error scan and the cursor setup, both of which precede it, and none of the
+    /// histograms an inline answer observes into.
+    ///
+    /// The sqllogictest sweeps compare answers, so they say nothing about which histogram a
+    /// failing peek moved. This is what says that the two timers a clean error walk earns are
+    /// observed on the way to the failure rather than after it.
+    #[mz_ore::test]
+    fn an_ok_phase_failure_reports_the_phases_the_walk_reached() {
+        let keys: Vec<Row> = (0..6).map(ok_row).collect();
+        let mut subject = index_peek_over(
+            index_peek(trivial_finishing(), None),
+            &keys,
+            cancelling_errors(4),
+        );
+        let metrics = TestMetrics::new();
+
+        // A ceiling of one byte is crossed by the first row the ok walk produces, so the peek
+        // fails inside that walk rather than in the error walk before it.
+        let max_result_size = 1;
+        let answer = subject.collect_finished_data(
+            max_result_size,
+            false,
+            usize::MAX,
+            None,
+            &metrics.as_metrics(),
+        );
+
+        assert_eq!(
+            Answer::from(answer),
+            Answer::Ready(PeekResponse::Error(PeekError::unstructured(format!(
+                "result exceeds max size of {}",
+                ByteSize::b(max_result_size)
+            ))))
+        );
+        assert_eq!(metrics.observations(), expected_observations(1, 1, 0));
+    }
 }
