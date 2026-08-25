@@ -592,12 +592,16 @@ mod tests {
         );
     }
 
-    /// A walk cancelled while it queues for a permit leaves the queue without ever taking one.
+    /// A walk cancelled while it queues for a permit observes the cancellation and leaves the
+    /// queue without ever taking one.
     ///
     /// The permit accounts for the batches a running walk retains, so a queued walk that took one
     /// on its way out would report capacity the process does not have. The queue depth is a gauge
     /// rather than a counter, so a walk that failed to leave it would drift the depth up over the
     /// life of a process.
+    ///
+    /// The task's handle is kept for the length of the test, so what ends the walk is the walk
+    /// itself seeing the closed channel rather than an abort.
     #[mz_ore::test(tokio::test)]
     async fn a_walk_cancelled_while_queued_never_takes_a_permit() {
         let keys: Vec<Row> = (0..6).map(ok_row).collect();
@@ -630,8 +634,11 @@ mod tests {
         )
         .await;
 
-        // Cancellation removes the pending peek, and dropping the entry is what ends the walk.
-        drop(promoted);
+        // Only the receiving end of the result channel is dropped, which is the signal a queued
+        // walk has to observe on its own. Dropping the whole entry would abort the task as well,
+        // and an aborted task returns the queue depth to zero whether or not the walk ever looks
+        // at the cancellation.
+        drop(promoted.result);
 
         wait_until(
             || metrics.index_peek_permit_queue_depth.get() == 0,
@@ -720,13 +727,15 @@ mod tests {
         );
     }
 
-    /// A promoted walk waits for a permit while another holds it, and runs once it is released.
+    /// A promoted walk waits while the only permit is held elsewhere, and runs once it is
+    /// released.
     ///
-    /// Excess walks queue rather than running, which is the whole of the concurrency bound. A
-    /// serial test that never has two walks outstanding would exercise a semaphore that is never
-    /// contended.
+    /// Excess walks queue rather than running, which is the whole of the concurrency bound. The
+    /// permit is held by the test rather than by a second walk, so what is pinned is that a walk
+    /// which cannot take one neither answers nor leaves the queue. Two promoted walks contending
+    /// would assert the same thing over a scheduler that runs them one after the other anyway.
     #[mz_ore::test(tokio::test)]
-    async fn a_walk_waits_for_a_permit_another_walk_holds() {
+    async fn a_walk_waits_for_a_permit_held_elsewhere() {
         let keys: Vec<Row> = (0..6).map(ok_row).collect();
         let peek = index_peek(trivial_finishing(), None);
         let mut bundle = trace_bundle(&keys, cancelling_errors(2));

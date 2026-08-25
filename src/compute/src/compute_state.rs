@@ -2955,12 +2955,16 @@ mod peek_sweep_tests {
         );
     }
 
-    /// Cancelling a promoted peek answers it once, as cancelled, and the walk it left behind
-    /// answers nothing of its own.
+    /// Cancelling a promoted peek answers it once, as cancelled, and no later activation answers
+    /// it again.
     ///
-    /// The walk holds the sending end of a channel whose receiver goes with the pending peek that
-    /// was removed, so a walk that reached an outcome after the cancellation has nowhere to put
-    /// it. Later activations must not produce a second response for the same peek.
+    /// This is the worker's half of a cancellation. The entry the cancellation removes owns the
+    /// handle to the walk, so removing it aborts the walk, and what the activations that follow
+    /// have to produce is nothing at all: no second response, and no count on either substrate for
+    /// a walk that never reached an outcome. The cancellation lands before the promoted task has
+    /// been polled, because nothing here awaits between the sweep that promoted it and the
+    /// cancellation. What a walk that was already running does with a cancellation is pinned by
+    /// `peek_offload::tests::a_walk_cancelled_while_running_reports_no_outcome`.
     #[mz_ore::test(tokio::test)]
     async fn a_cancelled_promoted_peek_is_answered_once() {
         let keys = wide_ok_rows(WIDE_INDEX_KEYS);
