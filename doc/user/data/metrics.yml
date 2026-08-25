@@ -956,17 +956,17 @@ metrics:
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_bucket
-  help: Time setting up cursor and literal constraints.
+  help: Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_count
-  help: Time setting up cursor and literal constraints.
+  help: Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_sum
-  help: Time setting up cursor and literal constraints.
+  help: Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_error_scan_seconds_bucket
@@ -1054,17 +1054,17 @@ metrics:
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_bucket
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_count
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_row_iteration_seconds_sum
-  help: Time iterating rows and evaluating MFP.
+  help: Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_seek_fulfillment_seconds_bucket

@@ -67,7 +67,7 @@ enum LiteralPosition {
     Seeking,
     /// The cursor sits on the key of the literal at this index.
     At(usize),
-    /// Every literal has been tried; the scan is done.
+    /// Every literal has been tried. The scan is done.
     Exhausted,
 }
 
@@ -110,7 +110,7 @@ where
 
     /// Returns the current literal, if the cursor sits on one.
     ///
-    /// Returns `None` while a seek is outstanding and once the literals are exhausted; in
+    /// Returns `None` while a seek is outstanding and once the literals are exhausted. In
     /// neither case does the cursor point at a row that belongs to a literal.
     fn peek(&self) -> Option<BatchKey<'_, Tr>> {
         match self.position {
@@ -259,9 +259,14 @@ where
 
 /// The outcome of a single fueled [`PeekResultIterator::step`].
 pub enum Step {
-    /// A result row, or the error that ended the scan.
+    /// A result row, or an error.
+    ///
+    /// Only the row-iteration limit's error ends the scan. An error out of the
+    /// `map_filter_project` does not, so a caller that steps again after one resumes the walk at
+    /// the next value.
     Row(Result<(Row, NonZeroI64), PeekError>),
-    /// The cursor is exhausted. Further steps also return `Done`.
+    /// The cursor is exhausted. Further steps also return `Done`, re-derived from the cursor on
+    /// each call rather than latched, at a cost of one unit of fuel per call.
     Done,
     /// The fuel ran out before a row was found. The iterator resumes exactly where it
     /// stopped. The cursor itself may sit on an arbitrary intermediate key if a literal
@@ -597,7 +602,7 @@ mod tests {
     /// rather than a cursor over one.
     fn iterator(keys: &[Row], constraints: &mut [Row]) -> PeekResultIterator<TestTrace> {
         let (cursor, storage) = trace(keys);
-        // The cursor's key and the literal each contribute one datum; the values are empty.
+        // The cursor's key and the literal each contribute one datum. The values are empty.
         let map_filter_project = mz_expr::MapFilterProject::new(2)
             .into_plan()
             .expect("valid plan")
@@ -627,7 +632,7 @@ mod tests {
         predicate: mz_expr::MirScalarExpr,
     ) -> PeekResultIterator<TestTrace> {
         let (cursor, storage) = trace(keys);
-        // The cursor's key is the only datum; there are no literals and the values are empty.
+        // The cursor's key is the only datum. There are no literals and the values are empty.
         let map_filter_project = mz_expr::MapFilterProject::new(1)
             .filter([predicate])
             .into_plan()
@@ -657,7 +662,7 @@ mod tests {
     fn filtered_scan_charges_fuel_for_rejected_rows() {
         let keys: Vec<Row> = (0..10).map(row).collect();
         let accepted = 9u8;
-        // Keeps only the last key; every earlier key is visited and rejected.
+        // Keeps only the last key. Every earlier key is visited and rejected.
         let predicate = MirScalarExpr::column(0).call_binary(
             MirScalarExpr::literal(Ok(Datum::UInt8(accepted)), ReprScalarType::UInt8),
             mz_expr::func::Gte,
@@ -776,13 +781,13 @@ mod tests {
     }
 
     /// A literal-constrained scan returns the rows of the literals the trace holds, whether it
-    /// is stepped with unbounded fuel or one unit at a time. Deferring the initial seek out of
-    /// the constructor must not turn "no seek yet" into "no literals left", which would empty
-    /// out every literal-constrained peek.
+    /// is stepped with unbounded fuel or one unit at a time. The initial seek runs on the first
+    /// fueled step, so "no seek yet" has to stay distinct from "no literals left". Conflating
+    /// the two would empty out every literal-constrained peek.
     #[mz_ore::test]
     fn literal_constrained_scan_returns_matching_rows() {
         let keys: Vec<Row> = (0..=5).map(row).collect();
-        // Two of the three literals are in the trace; the third is past its end.
+        // Two of the three literals are in the trace. The third is past its end.
         let constraints = vec![row(1), row(4), row(9)];
         let expected: Vec<(Row, NonZeroI64)> = [1, 4]
             .into_iter()

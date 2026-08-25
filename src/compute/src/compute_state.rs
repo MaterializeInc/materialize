@@ -1954,7 +1954,10 @@ impl ErrorScan {
     ///
     /// A terminal outcome does not latch here. [`IndexPeek::step_error_scan`] holds the state that
     /// latches it, so that a caller which steps again gets that outcome back without the walk
-    /// examining the position it stopped on a second time.
+    /// examining the position it stopped on a second time. The latch cannot live in the walk
+    /// itself: a walk that latched its own outcome could not release the `cursor` and `storage`
+    /// it is reading through, short of making both fields `Option`s that every step unwraps, and
+    /// a finished peek would go on pinning error batches it will never read again.
     fn step(
         &mut self,
         peek_timestamp: Timestamp,
@@ -2088,6 +2091,11 @@ impl IndexPeek {
     }
 
     /// Collects data for a known-complete peek from the ok stream.
+    ///
+    /// Call this at most once per readiness. The two phases it drives are not equally
+    /// resumable: the error walk latches its state across calls, while the ok scan rebuilds its
+    /// iterator from the start of the ok trace and accumulates into locals that are dropped when
+    /// the call returns. A second call therefore re-walks the whole ok trace.
     fn collect_finished_data(
         &mut self,
         max_result_size: u64,

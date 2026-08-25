@@ -232,12 +232,12 @@ impl ComputeMetrics {
             ), role)),
             index_peek_cursor_setup_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_cursor_setup_seconds",
-                help: "Time setting up cursor and literal constraints.",
+                help: "Time opening the trace cursor and sorting the literal constraints. Excludes seeking the cursor to the literals, which is part of row iteration.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_row_iteration_seconds",
-                help: "Time iterating rows and evaluating MFP.",
+                help: "Time iterating rows, seeking the cursor to the literal constraints, and evaluating MFP.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_row_iteration_rows: registry.register(with_role(metric!(
