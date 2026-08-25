@@ -4,7 +4,7 @@ description: "Expose a schema-agnostic materialized view so that upstream schema
 mermaid: true
 menu:
   main:
-    parent: 'sql-patterns'
+    parent: 'ingest-patterns'
 ---
 
 When you create a table from a source, its columns are pinned to the upstream
