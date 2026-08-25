@@ -25,6 +25,10 @@ Follow the guide for the platform hosting your Iceberg tables:
 - [AWS S3 Tables](/serve-results/sink/iceberg-aws/)
 - [GCP BigLake](/serve-results/sink/iceberg-gcp/) {{< private-preview-inline />}}
 
+For guidance on reading the resulting tables from a specific query engine, see:
+
+- [Snowflake on AWS S3 Tables](/serve-results/sink/iceberg-aws-snowflake/)
+
 [^1]: [Apache Iceberg](https://iceberg.apache.org/) is an open table format for
 large-scale analytics datasets.
 
