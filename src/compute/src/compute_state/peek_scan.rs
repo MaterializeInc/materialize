@@ -520,8 +520,9 @@ mod tests {
 
     /// A scan over `keys` whose error phase is `error_phase`, bounded by nothing else.
     ///
-    /// Mirrors what [`PeekScan::new`] builds, which cannot be used here because it takes traces
-    /// rather than cursors over them.
+    /// Mirrors what [`PeekScan::new`] builds. Tests use this rather than `new` to hold a second
+    /// cursor layout under test, and to start from an [`ErrorPhase`] that a fresh scan cannot be
+    /// in.
     fn scan(error_phase: ErrorPhase, keys: &[Row]) -> PeekScan<TestTrace> {
         PeekScan {
             peek_timestamp: PEEK_TIMESTAMP,
@@ -818,7 +819,10 @@ mod tests {
         subject.peek_stash_threshold_bytes = 2 * row_size();
 
         let mut collected = RowBatch::new();
-        loop {
+        let mut completed = false;
+        // Bounded so that a regression which restarts the ok walk on every resumption fails here
+        // rather than spinning.
+        for _ in 0..RESUMPTION_BOUND {
             let mut fuel = usize::MAX;
             match subject.step(None, &mut fuel) {
                 ScanOutcome::Suspended => {
@@ -826,11 +830,16 @@ mod tests {
                 }
                 ScanOutcome::Complete(rest) => {
                     collected.extend(rest);
+                    completed = true;
                     break;
                 }
                 ScanOutcome::Failed(error) => panic!("scan failed: {error:?}"),
             }
         }
+        assert!(
+            completed,
+            "scan did not answer within {RESUMPTION_BOUND} resumptions"
+        );
 
         assert_eq!(collected, expected(0..8));
     }
@@ -889,6 +898,10 @@ mod tests {
     ///
     /// This is what makes the eager open of the ok cursor safe. A scan that read an ok row before
     /// its error walk finished could return rows for a peek that owes an error.
+    ///
+    /// The literal seek is deferred out of construction for the same reason, and that property is
+    /// pinned by `peek_result_iterator::tests::literal_seek_is_fueled_and_resumable`, because a
+    /// seek moves the cursor without evaluating a position and so is invisible here.
     #[mz_ore::test]
     fn opening_a_scan_advances_neither_cursor() {
         let keys = rows(0..6);
@@ -972,9 +985,11 @@ mod tests {
         // Every key of the error walk and every position of the ok walk comes out of the one
         // budget the caller supplied. A phase that spent a budget of its own would leave the
         // caller's short of this, while still answering the peek and still costing the same when
-        // sliced.
-        assert!(
-            unsliced_fuel >= error_keys + subject.rows_processed(),
+        // sliced. Each walk also charges for the position on which it discovers it is done, which
+        // is why the total carries one unit per phase beyond the positions that produced work.
+        assert_eq!(
+            unsliced_fuel,
+            error_keys + 1 + subject.rows_processed() + 1,
             "one budget must be charged for the positions of both walks",
         );
 
