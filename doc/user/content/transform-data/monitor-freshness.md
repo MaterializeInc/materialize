@@ -12,7 +12,8 @@ menu:
 [Freshness](/concepts/reaction-time/#freshness) measures the time from when a
 change occurs in an upstream system to when it becomes visible in the results of
 a query. This guide shows how to track freshness for an object over time and how
-to summarize a whole window of freshness observations with a CCDF.
+to summarize a whole window of freshness observations with a CCDF or an HDR
+histogram.
 
 If freshness is worse than expected, see [Freshness
 troubleshooting](/transform-data/freshness-troubleshooting/) to diagnose and
@@ -78,7 +79,10 @@ into a compact summary that answers one question: for a given threshold `X`,
 what fraction of the time was the object's freshness at or above `X`?
 
 This is the compact way to describe a freshness distribution. Instead of staring
-at a time series, you can make statements like "the p99 freshness was 1s".
+at a time series, you can make statements like "freshness stayed under 10
+seconds 99.9% of the time". Reading it the other way round, from a percentile to
+a freshness, needs the [HDR
+histogram](#summarize-freshness-with-an-hdr-histogram) below.
 
 The following query builds a freshness CCDF across every object from the last 24
 hours of history. It reads the fast, indexed
@@ -164,3 +168,225 @@ and the query above already filters them out. If a spurious shelf appears far
 out at roughly `1.76e9` seconds (about 56 years), it comes from unhydrated
 collections reported at the Unix epoch, so filter it out (for example with `AND
 wl.lag < INTERVAL '1 year'`) so it does not distort the fractions.
+
+## Summarize freshness with an HDR histogram
+
+A CCDF answers a question you pose in one direction: you pick a threshold, and
+it tells you what fraction of the time freshness was at or above it. Sometimes
+you want the other direction. You pick a percentile, and it tells you the
+freshness. Answering that requires a distribution over many buckets rather than
+a handful of fixed thresholds.
+
+A **High Dynamic Range (HDR) histogram** provides one. It buckets observations
+so that bucket width grows with magnitude: narrow buckets near zero, wide
+buckets far out. This bounds the *relative* error of every bucket while keeping
+the total number of buckets small, which suits lag measurements, where a
+one-second difference matters at 2s and is noise at 200s. For background on the
+technique and on exact histograms as an alternative, see [Percentile
+calculation](/transform-data/patterns/percentiles/).
+
+The following query buckets the last 24 hours of lag observations and turns the
+bucket counts into a cumulative distribution. Each lag is converted to seconds
+and decomposed into `significand * 2^exponent`. The significand is rounded down
+to a multiple of 1/16 (4 bits of precision), and the value reconstructed to give
+the bucket. The final `SELECT` divides each bucket's cumulative count by
+the total count:
+
+```mzsql
+WITH
+  lags AS (
+      -- Convert each lag to seconds, dropping unhydrated (NULL) observations,
+      -- any non-positive lag, and the epoch shelf described in the CCDF
+      -- section above.
+      SELECT extract(epoch FROM wl.lag) AS lag_seconds
+      FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+      WHERE wl.lag IS NOT NULL
+        AND wl.lag > INTERVAL '0'
+        AND wl.lag < INTERVAL '1 year'
+  ),
+  lag_exponents AS (
+      -- Decompose each lag into significand * 2^exponent.
+      SELECT lag_seconds, floor(log(2, lag_seconds))::int AS exponent
+      FROM lags
+  ),
+  buckets AS (
+      -- Reduce the significand by 4 bits, rounding the value down to the
+      -- nearest multiple of 1/16, then reconstruct it to get the bucket.
+      SELECT
+          trunc(lag_seconds / pow(2.0, exponent) * pow(2.0, 4)) / pow(2.0, 4)
+              * pow(2.0, exponent) AS bucket_seconds
+      FROM lag_exponents
+  ),
+  histogram AS (
+      SELECT bucket_seconds, count(*) AS count_of_bucket_values
+      FROM buckets
+      GROUP BY bucket_seconds
+  )
+SELECT
+    h.bucket_seconds,
+    h.count_of_bucket_values,
+    sum(g.count_of_bucket_values) AS cumulative_count,
+    sum(g.count_of_bucket_values)::float8
+        / (SELECT sum(count_of_bucket_values) FROM histogram)
+        AS cumulative_density
+FROM histogram g, histogram h
+WHERE g.bucket_seconds <= h.bucket_seconds
+GROUP BY h.bucket_seconds, h.count_of_bucket_values
+ORDER BY h.bucket_seconds;
+```
+
+The query returns output like the following:
+
+```none
+ bucket_seconds | count_of_bucket_values | cumulative_count | cumulative_density
+----------------+------------------------+------------------+--------------------
+              1 |                   7265 |             7265 | 0.4184425757401221
+              2 |                   1714 |             8979 | 0.5171639212072342
+              3 |                   1361 |            10340 | 0.5955535076604078
+              4 |                   1226 |            11566 | 0.6661674922243981
+              5 |                   1582 |            13148 | 0.7572860269554199
+              6 |                   1253 |            14401 | 0.8294551318972468
+              7 |                   1018 |            15419 | 0.8880889298467919
+              8 |                    455 |            15874 | 0.9142955880658911
+              9 |                    289 |            16163 | 0.9309411358138463
+             10 |                    196 |            16359 | 0.9422301578159198
+             11 |                    124 |            16483 | 0.9493721921437622
+...
+            100 |                      9 |            17347 | 0.9991360442345352
+            104 |                      2 |            17349 | 0.9992512383365971
+            108 |                      4 |            17353 | 0.9994816265407211
+            112 |                      3 |            17356 |  0.999654417693814
+            116 |                      2 |            17358 | 0.9997696117958761
+            120 |                      2 |            17360 |  0.999884805897938
+            128 |                      1 |            17361 |  0.999942402948969
+            152 |                      1 |            17362 |                  1
+(64 rows)
+```
+
+The bucket widening is visible in the output above. Near 1s every integer gets a
+bucket of its own. Around 100s the buckets step by 4s, and past 128s by 8s. Four
+bits of significand precision hold every bucket to within about 6% of the values
+it contains, so the bucket count stays bounded however far the tail runs.
+
+{{< note >}}
+
+[Percentile calculation](/transform-data/patterns/percentiles/) builds the
+histogram and the distribution as two views, which lets many queries share one
+maintained result. That is not available here: `CREATE VIEW` over an
+`mz_internal` relation is rejected with `cannot create view with unstable
+dependencies`, so the bucketing and the cumulative sum have to live in the same
+query, as above.
+
+{{< /note >}}
+
+To read a percentile, take the lowest bucket whose cumulative density reaches
+it. Wrapping the distribution in one more CTE and filtering on
+`cumulative_density` returns the approximate p99 freshness:
+
+```mzsql
+WITH
+  lags AS (
+      SELECT extract(epoch FROM wl.lag) AS lag_seconds
+      FROM mz_internal.mz_wallclock_global_lag_recent_history wl
+      WHERE wl.lag IS NOT NULL
+        AND wl.lag > INTERVAL '0'
+        AND wl.lag < INTERVAL '1 year'
+  ),
+  lag_exponents AS (
+      SELECT lag_seconds, floor(log(2, lag_seconds))::int AS exponent
+      FROM lags
+  ),
+  buckets AS (
+      SELECT
+          trunc(lag_seconds / pow(2.0, exponent) * pow(2.0, 4)) / pow(2.0, 4)
+              * pow(2.0, exponent) AS bucket_seconds
+      FROM lag_exponents
+  ),
+  histogram AS (
+      SELECT bucket_seconds, count(*) AS count_of_bucket_values
+      FROM buckets
+      GROUP BY bucket_seconds
+  ),
+  distribution AS (
+      SELECT
+          h.bucket_seconds,
+          sum(g.count_of_bucket_values)::float8
+              / (SELECT sum(count_of_bucket_values) FROM histogram)
+              AS cumulative_density
+      FROM histogram g, histogram h
+      WHERE g.bucket_seconds <= h.bucket_seconds
+      GROUP BY h.bucket_seconds
+  )
+SELECT bucket_seconds AS approximate_p99
+FROM distribution
+WHERE cumulative_density >= 0.99
+ORDER BY cumulative_density
+LIMIT 1;
+```
+
+```none
+ approximate_p99
+-----------------
+              52
+(1 row)
+```
+
+The bucket is a lower bound: the true p99 lies between this bucket and the next
+one up. Raising the significand precision from 4 bits narrows that interval at
+the cost of more buckets; lowering it does the reverse.
+
+By default these queries aggregate across every object. To scope them to a
+single object, join `mz_catalog.mz_objects` in the `lags` CTE and filter on the
+object name, as in the CCDF section above.
+
+A list of buckets is hard to read at a glance, and plotting it makes the shape
+obvious. The chart below puts the bucket counts on top and the cumulative
+density underneath, sharing one log-scaled lag axis. Counts are themselves on a
+log scale, because the first bucket outweighs the far tail by orders of
+magnitude:
+
+![HDR histogram of wallclock lag: bucket counts above, cumulative density
+below, sharing a log-scaled lag axis, with the approximate p99
+marked](/images/monitoring/freshness-hdr-histogram.png)
+
+Most observations sit in the first few buckets, and a thin tail runs out past
+two minutes. That tail is what the percentile query reports, and what an SLO on
+freshness is really about.
+
+{{< note >}}
+
+Wallclock lag is reported in whole seconds, always rounded up, so the smallest
+positive lag is 1s and every bucket boundary below 1s is unreachable. Combined
+with 4 bits of significand precision, every integer up to 32s gets a bucket
+to itself, and merging only begins above that: 32s and 33s share a bucket, then
+34s and 35s, and so on. The approximation matters for objects that fall minutes
+or hours behind, not for healthy ones.
+
+{{< /note >}}
+
+{{< note >}}
+
+An HDR histogram over wallclock lag is weighted by time, not by query volume.
+Each row in the underlying relation is one minute-binned observation, so a p99
+computed this way is the 99th percentile of *minutes*, not of reads or of
+upstream writes. An object that is fast whenever it is queried but slow
+overnight will look worse here than it does to your application, and the
+reverse is also possible.
+
+Because each object contributes at most one observation per minute, the 24-hour
+window caps the resolution of a single object's tail at roughly 1440
+observations, so a p99 rests on about 14 of them and a p999 on one. Treat high
+percentiles for one object over one day as indicative rather than precise, and
+prefer the CCDF when you only need to check a fixed SLO threshold.
+
+{{< /note >}}
+
+{{< note >}}
+
+The self-join over `histogram` produces a number of outputs quadratic in its
+input. HDR bucketing keeps the histogram to a few dozen rows even for wide lag
+distributions, so the cost is small here. Do not substitute an exact,
+one-bucket-per-value histogram without reading the warning in [Percentile
+calculation](/transform-data/patterns/percentiles/).
+
+{{< /note >}}
