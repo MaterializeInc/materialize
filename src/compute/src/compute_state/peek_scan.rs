@@ -436,26 +436,33 @@ mod tests {
     use differential_dataflow::trace::cursor::CursorList;
     use differential_dataflow::trace::implementations::ord_neu::OrdValBatcher;
     use differential_dataflow::trace::{Batcher, Builder, Navigable};
-    use mz_expr::ColumnOrder;
-    use mz_repr::Datum;
+    use mz_expr::{ColumnOrder, RowSetFinishing};
+    use mz_ore::num::NonNeg;
     use mz_row_spine::{ArcOrdValBuilder, ArcOrdValSpine};
-    use mz_timely_util::columnation::ColumnationStack;
     use timely::container::PushInto;
     use timely::progress::Antichain;
 
-    use crate::render::errors::DataflowErrorSer;
-    use crate::typedefs::{ErrBatcher, ErrBuilder};
+    use crate::arrangement::manager::{PaddedTrace, TraceBundle};
+    use crate::compute_state::error_scan::tests::PEEK_TIMESTAMP;
+    use crate::compute_state::index_peek_tests::{
+        answering_errors, cancelling_errors, index_peek, ok_row as row, trace_bundle,
+        trivial_finishing,
+    };
+    use crate::typedefs::RowRowAgent;
 
     use super::*;
 
     type TestTrace = ArcOrdValSpine<Row, Row, Timestamp, Diff>;
 
-    /// The time at which the peeks in these tests read.
-    const PEEK_TIMESTAMP: Timestamp = Timestamp::new(1);
+    /// The ok-trace handle a peek reads through, as [`TraceBundle::oks_errs_mut`] hands it out.
+    type OksHandle = PaddedTrace<RowRowAgent<Timestamp, Diff>>;
 
-    fn row(value: u8) -> Row {
-        Row::pack_slice(&[Datum::UInt8(value)])
-    }
+    /// How many times a test resumes a suspended scan before it declares the scan stuck.
+    ///
+    /// Far above what any trace in this module needs, so a scan that resumes where it stopped
+    /// finishes well inside it, and one that restarts a walk on every resumption fails the test
+    /// rather than hanging it.
+    const RESUMPTION_BOUND: usize = 100;
 
     /// The rows `value` values yield, in the order the ok walk produces them.
     fn rows(values: impl IntoIterator<Item = u8>) -> Vec<Row> {
@@ -507,33 +514,8 @@ mod tests {
 
     /// A walk over an error trace holding `keys` errors that each cancel to zero at
     /// [`PEEK_TIMESTAMP`], so the walk examines every one of them and finds no error.
-    ///
-    /// The two updates of a key sit at different times so that they survive consolidation: a key
-    /// whose updates consolidate away is not in the trace at all, and the walk never sees it.
     fn clean_error_scan(keys: usize) -> ErrorScan {
-        let updates: Vec<((DataflowErrorSer, ()), Timestamp, Diff)> = (0..keys)
-            .flat_map(|index| {
-                let error = DataflowErrorSer::from(mz_expr::EvalError::Internal(
-                    format!("error {index}").into(),
-                ));
-                [
-                    ((error.clone(), ()), Timestamp::new(0), Diff::ONE),
-                    ((error, ()), PEEK_TIMESTAMP, Diff::MINUS_ONE),
-                ]
-            })
-            .collect();
-
-        let mut batcher = ErrBatcher::<Timestamp, Diff>::new(None, 0);
-        let mut chunk = ColumnationStack::with_capacity(updates.len());
-        for update in updates {
-            chunk.push_into(update);
-        }
-        batcher.push_into(chunk);
-        let (mut chain, description) = batcher.seal(Antichain::from_elem(Timestamp::MAX));
-        let batch = ErrBuilder::<Timestamp, Diff>::seal(&mut chain, description);
-        let storage = vec![batch];
-        let cursor = CursorList::new(vec![storage[0].cursor()], &storage);
-        ErrorScan::from_cursor(cursor, storage)
+        crate::compute_state::error_scan::tests::error_scan(cancelling_errors(keys), None)
     }
 
     /// A scan over `keys` whose error phase is `error_phase`, bounded by nothing else.
@@ -851,5 +833,292 @@ mod tests {
         }
 
         assert_eq!(collected, expected(0..8));
+    }
+
+    /// Opens a scan of `peek` over `bundle`, the way the peek path opens one: through
+    /// [`PeekScan::new`], from the pair of handles [`TraceBundle::oks_errs_mut`] hands out.
+    fn open(
+        bundle: &mut TraceBundle,
+        peek: &Peek,
+        max_result_size: u64,
+        peek_stash_eligible: bool,
+        peek_stash_threshold_bytes: usize,
+    ) -> PeekScan<OksHandle> {
+        let (oks, errs) = bundle.oks_errs_mut();
+        PeekScan::new(
+            peek,
+            errs,
+            oks,
+            max_result_size,
+            peek_stash_eligible,
+            peek_stash_threshold_bytes,
+        )
+    }
+
+    /// Runs `subject` to an answer in slices of `fuel_per_step` units, taking every batch it
+    /// offers, and returns that answer, the batches taken in order, and the fuel spent in total.
+    ///
+    /// A scan that has a batch to give away is emptied before it is stepped again, so the fuel
+    /// this reports is comparable across runs that cross the stash threshold and runs that do
+    /// not.
+    fn run_sliced(
+        subject: &mut PeekScan<OksHandle>,
+        fuel_per_step: usize,
+        row_iteration_limit: Option<usize>,
+    ) -> (ScanOutcome, RowBatch, usize) {
+        let mut taken = RowBatch::new();
+        let mut spent = 0;
+        for _ in 0..RESUMPTION_BOUND {
+            let mut fuel = fuel_per_step;
+            let outcome = subject.step(row_iteration_limit, &mut fuel);
+            spent += fuel_per_step - fuel;
+            match outcome {
+                ScanOutcome::Suspended => {
+                    if let Some(batch) = subject.take_batch() {
+                        taken.extend(batch);
+                    }
+                }
+                outcome => return (outcome, taken, spent),
+            }
+        }
+        panic!("scan did not answer within {RESUMPTION_BOUND} resumptions");
+    }
+
+    /// Opening a scan opens both cursors and reads through neither: the ok walk has evaluated no
+    /// cursor position, and the error walk has not yet reported the error trace clean.
+    ///
+    /// This is what makes the eager open of the ok cursor safe. A scan that read an ok row before
+    /// its error walk finished could return rows for a peek that owes an error.
+    #[mz_ore::test]
+    fn opening_a_scan_advances_neither_cursor() {
+        let keys = rows(0..6);
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(4));
+
+        let subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+
+        assert_eq!(
+            subject.rows_processed(),
+            0,
+            "the ok cursor must not advance"
+        );
+        assert!(
+            !subject.error_trace_clean(),
+            "the error trace is clean only once the error walk says so",
+        );
+    }
+
+    /// An error the error trace holds answers the peek whether the scan runs in one call or is
+    /// sliced a cursor position at a time, at the same cost either way, and in neither case does
+    /// the scan read a row of the ok trace.
+    #[mz_ore::test]
+    fn an_error_answers_a_sliced_scan_without_reading_an_ok_row() {
+        let keys = rows(0..6);
+        let cancelling_keys = 7;
+        let (errors, error) = answering_errors(cancelling_keys);
+        let peek = index_peek(trivial_finishing(), None);
+
+        let mut bundle = trace_bundle(&keys, errors.clone());
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+        let (unsliced, _, unsliced_fuel) = run_sliced(&mut subject, usize::MAX, None);
+        assert_eq!(unsliced, ScanOutcome::Failed(error.clone()));
+        assert_eq!(
+            subject.rows_processed(),
+            0,
+            "a peek its error trace answers must not read an ok row",
+        );
+        assert_eq!(
+            unsliced_fuel,
+            cancelling_keys + 1,
+            "the error walk is charged for every key it visits, the answering one included",
+        );
+
+        let mut bundle = trace_bundle(&keys, errors);
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+        let (sliced, _, sliced_fuel) = run_sliced(&mut subject, 1, None);
+        assert_eq!(sliced, ScanOutcome::Failed(error.clone()));
+        assert_eq!(
+            subject.rows_processed(),
+            0,
+            "slicing the scan must not let it reach the ok trace",
+        );
+        assert_eq!(
+            sliced_fuel, unsliced_fuel,
+            "slicing the scan must not repeat or skip an error key",
+        );
+
+        // A driver that keeps stepping a scan it has an answer for gets that answer back, not the
+        // ok trace behind it.
+        let mut fuel = usize::MAX;
+        assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Failed(error));
+        assert_eq!(fuel, usize::MAX, "a latched answer spends no fuel");
+        assert_eq!(subject.rows_processed(), 0);
+    }
+
+    /// One budget covers both phases of a scan over a real index: slicing it across the
+    /// error-to-ok boundary changes neither the answer nor the number of cursor positions the
+    /// scan visits. Matching rows alone would not say that, because a scan that re-walks
+    /// positions it has already visited still lands on the right rows.
+    #[mz_ore::test]
+    fn one_budget_spans_both_phases_of_a_scan_over_an_index() {
+        let keys = rows(0..6);
+        let error_keys = 4;
+        let peek = index_peek(trivial_finishing(), None);
+
+        let mut bundle = trace_bundle(&keys, cancelling_errors(error_keys));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+        let (unsliced, _, unsliced_fuel) = run_sliced(&mut subject, usize::MAX, None);
+        assert_eq!(unsliced, ScanOutcome::Complete(expected(0..6)));
+        // Every key of the error walk and every position of the ok walk comes out of the one
+        // budget the caller supplied. A phase that spent a budget of its own would leave the
+        // caller's short of this, while still answering the peek and still costing the same when
+        // sliced.
+        assert!(
+            unsliced_fuel >= error_keys + subject.rows_processed(),
+            "one budget must be charged for the positions of both walks",
+        );
+
+        // Two positions per call, so the scan suspends inside the error walk, at the phase
+        // boundary, and inside the ok walk.
+        let mut bundle = trace_bundle(&keys, cancelling_errors(error_keys));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+        let (sliced, _, sliced_fuel) = run_sliced(&mut subject, 2, None);
+        assert_eq!(sliced, unsliced);
+        assert_eq!(
+            sliced_fuel, unsliced_fuel,
+            "slicing the scan must not repeat or skip cursor positions",
+        );
+    }
+
+    /// The row-iteration limit bounds the peek rather than either walk, so a limit that trips in
+    /// the ok phase counts the error phase's positions too. It trips at the same position whether
+    /// the scan ran in one call or was sliced.
+    #[mz_ore::test]
+    fn the_row_iteration_limit_trips_at_the_same_position_sliced_or_not() {
+        let keys = rows(0..6);
+        let error_keys = 4;
+        // Two rows past what the error walk examines, so the limit trips inside the ok walk.
+        let limit = error_keys + 2;
+        let peek = index_peek(trivial_finishing(), None);
+        let expected_outcome =
+            || ScanOutcome::Failed(PeekError::RowIterationLimitExceeded { limit });
+
+        let mut bundle = trace_bundle(&keys, cancelling_errors(error_keys));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+        let (unsliced, _, unsliced_fuel) = run_sliced(&mut subject, usize::MAX, Some(limit));
+        assert_eq!(unsliced, expected_outcome());
+        assert_eq!(
+            subject.results,
+            expected(0..2),
+            "the ok walk must continue the count the error walk reached",
+        );
+        let unsliced_rows = subject.rows_processed();
+
+        let mut bundle = trace_bundle(&keys, cancelling_errors(error_keys));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+        let (sliced, _, sliced_fuel) = run_sliced(&mut subject, 2, Some(limit));
+        assert_eq!(sliced, expected_outcome());
+        assert_eq!(
+            subject.rows_processed(),
+            unsliced_rows,
+            "slicing the scan must not move the position the limit trips on",
+        );
+        assert_eq!(subject.results, expected(0..2));
+        assert_eq!(sliced_fuel, unsliced_fuel);
+    }
+
+    /// A scan offers no batch before its accumulation crosses the stash threshold, offers one
+    /// once it has, and the batches it gave away followed by the payload of its final
+    /// [`ScanOutcome::Complete`] are the answer the same peek gets from a single unsliced walk,
+    /// in the same order and at the same cost.
+    #[mz_ore::test]
+    fn taken_batches_and_the_final_payload_reassemble_the_unsliced_answer() {
+        let keys = rows(0..8);
+        let error_keys = 3;
+        let peek = index_peek(trivial_finishing(), None);
+
+        // The answer to reassemble towards: one walk, no stash, unbounded fuel.
+        let mut bundle = trace_bundle(&keys, cancelling_errors(error_keys));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+        let (whole, taken, whole_fuel) = run_sliced(&mut subject, usize::MAX, None);
+        assert_eq!(whole, ScanOutcome::Complete(expected(0..8)));
+        assert_eq!(
+            taken,
+            RowBatch::new(),
+            "a peek that cannot use the stash is offered no batch",
+        );
+
+        // The same peek, stash-eligible and sliced two cursor positions at a time.
+        let mut bundle = trace_bundle(&keys, cancelling_errors(error_keys));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, true, 2 * row_size());
+        assert_eq!(
+            subject.take_batch(),
+            None,
+            "a scan that has walked nothing has nothing to offer",
+        );
+
+        let (rest, mut reassembled, sliced_fuel) = run_sliced(&mut subject, 2, None);
+        let ScanOutcome::Complete(tail) = rest else {
+            panic!("the sliced scan did not complete: {rest:?}");
+        };
+        assert!(
+            !reassembled.is_empty(),
+            "the threshold must be crossed at least once for this to test anything",
+        );
+        reassembled.extend(tail);
+        assert_eq!(reassembled, expected(0..8));
+        assert_eq!(
+            sliced_fuel, whole_fuel,
+            "taking batches must not repeat or skip cursor positions",
+        );
+    }
+
+    /// The literal constraints a peek carries reach the ok walk, so a constrained peek is answered
+    /// by a seek to its literals rather than by a scan of the whole index.
+    #[mz_ore::test]
+    fn a_scan_reads_only_the_literals_the_peek_names() {
+        let keys = rows(0..8);
+        let peek = index_peek(trivial_finishing(), Some(rows([2, 5])));
+        let mut bundle = trace_bundle(&keys, cancelling_errors(2));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+
+        let mut fuel = usize::MAX;
+        assert_eq!(
+            subject.step(None, &mut fuel),
+            ScanOutcome::Complete(expected([2, 5])),
+        );
+        assert_eq!(
+            subject.rows_processed(),
+            2,
+            "a constrained peek must evaluate only the positions its literals name",
+        );
+    }
+
+    /// The finishing a peek carries reaches the scan, which stops once it holds every row the
+    /// finishing can use and keeps the rows the finishing's ordering ranks first.
+    #[mz_ore::test]
+    fn a_scan_thins_towards_the_rows_the_peeks_finishing_needs() {
+        let keys = rows(0..10);
+        let finishing = RowSetFinishing {
+            // Descending, so the rows the ordering ranks first are the last the walk reaches. A
+            // scan that thinned without the ordering would keep the first two instead.
+            order_by: vec![ColumnOrder {
+                column: 0,
+                desc: true,
+                nulls_last: true,
+            }],
+            limit: Some(NonNeg::try_from(2).expect("non-negative")),
+            offset: 0,
+            project: vec![0],
+        };
+        let peek = index_peek(finishing, None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(2));
+        let mut subject = open(&mut bundle, &peek, u64::MAX, false, usize::MAX);
+
+        let mut fuel = usize::MAX;
+        assert_eq!(
+            subject.step(None, &mut fuel),
+            ScanOutcome::Complete(expected([9, 8])),
+        );
     }
 }
