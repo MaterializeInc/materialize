@@ -258,6 +258,11 @@ def get_variable_system_parameters(
         VariableSystemParameter(
             "compute_apply_column_demands", "true", ["true", "false"]
         ),
+        # On by default so CI exercises the columnar merge batcher, which is
+        # off in production while it earns trust.
+        VariableSystemParameter(
+            "enable_columnar_merge_batcher", "true", ["true", "false"]
+        ),
         VariableSystemParameter(
             "compute_peek_response_stash_threshold_bytes",
             # 1 MiB, an in-between value

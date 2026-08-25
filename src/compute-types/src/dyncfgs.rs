@@ -48,10 +48,15 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
 /// `true`, arrange operators use `Col2ValPagedBatcher` (in
 /// `mz_timely_util::columnar`) and `RowRowColPagedBuilder` (in
 /// `mz_row_spine`), the columnar-native batcher that the pager can spill
-/// (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). When `false` (the
-/// default), the same arrange sites use the legacy `Col2ValBatcher` /
-/// `RowRowBuilder` (columnation-merger) path. Read at operator construction
-/// time. Flips take effect on dataflows created after the change.
+/// (gated by [`ENABLE_COLUMN_PAGED_BATCHER_SPILL`]). Read at operator
+/// construction time. Flips take effect on dataflows created after the
+/// change.
+///
+/// Takes precedence over [`ENABLE_COLUMNAR_MERGE_BATCHER`]: both select
+/// columnar chains, and this one additionally routes them through the pager.
+/// With both `false` the arrange sites use the columnation
+/// `Col2ValBatcher` / `RowRowBuilder` path. See
+/// `mz_compute::extensions::arrange::ArrangementBatcher` for the resolution.
 ///
 /// Disabled by default while the new path is stabilizing.
 /// `DifferentialJoinHydration*` feature-benchmark scenarios opt in
@@ -59,8 +64,29 @@ pub const ENABLE_ERROR_DISTINCT: Config<bool> = Config::new(
 pub const ENABLE_COLUMN_PAGED_BATCHER: Config<bool> = Config::new(
     "enable_column_paged_batcher",
     false,
-    "Use the columnar-native paged merge batcher at arrange sites. When `false` (default), \
-     arranges fall back to the legacy columnation `Col2ValBatcher` / `RowRowBuilder` path.",
+    "Use the columnar-native paged merge batcher at arrange sites. Takes precedence over \
+     enable_columnar_merge_batcher; with both false, arranges use the columnation \
+     `Col2ValBatcher` / `RowRowBuilder` path.",
+    ParameterScope::Replica,
+);
+
+/// Use the resident columnar merge batcher at arrange sites. When `true`,
+/// arrange operators use `Col2ValColBatcher` (in `mz_timely_util::columnar`)
+/// and `RowRowColPagedBuilder` (in `mz_row_spine`): the same `Column` chains
+/// and the same builder as the paged arm, merged by `ColumnMerger` with no
+/// pager and no spill budget. When `false` (the default), the arrange sites
+/// use the columnation `Col2ValBatcher` / `RowRowBuilder` path. Read at
+/// operator construction time. Flips take effect on dataflows created after
+/// the change.
+///
+/// This is the columnation-versus-columnar axis on its own, so the two paths
+/// can be compared without the pager in the measurement. It is ignored while
+/// [`ENABLE_COLUMN_PAGED_BATCHER`] is `true`.
+pub const ENABLE_COLUMNAR_MERGE_BATCHER: Config<bool> = Config::new(
+    "enable_columnar_merge_batcher",
+    false,
+    "Use the resident columnar merge batcher at arrange sites, instead of the columnation \
+     one. Ignored when enable_column_paged_batcher is true.",
     ParameterScope::Replica,
 );
 
@@ -706,6 +732,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
         .add(&ENABLE_COLUMN_PAGED_BATCHER)
+        .add(&ENABLE_COLUMNAR_MERGE_BATCHER)
         .add(&ENABLE_COLUMN_PAGED_BATCHER_SPILL)
         .add(&COLUMN_PAGED_BATCHER_BUDGET_FRACTION)
         .add(&COLUMN_PAGED_BATCHER_LZ4)
