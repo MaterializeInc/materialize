@@ -28,7 +28,7 @@ use mz_expr::ColumnOrder;
 use mz_ore::task::AbortOnDropHandle;
 use timely::scheduling::SyncActivator;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, oneshot};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::compute_state::PeekRowIterationConfig;
 use crate::compute_state::peek_metrics::PeekWalkMetrics;
@@ -326,7 +326,13 @@ impl OffloadedPeek {
                                 let open = upload.take().expect("opened above");
                                 return Some(stashed_answer(open, RowBatch::new()).await);
                             }
+                            // NOTE: the upload is abandoned here, which leaves the parts already
+                            // written in blob storage, the same way a cancellation does.
                             Err(error) => {
+                                // Persist rejects a batch it was handed wrongly, so this is a
+                                // defect in the upload rather than a blip, and the query's error
+                                // is the only other place it shows.
+                                warn!(%error, "peek stash rejected a batch");
                                 return Some(PeekResponse::Error(PeekError::unstructured(error)));
                             }
                         }
@@ -344,7 +350,14 @@ impl OffloadedPeek {
 async fn stashed_answer(upload: StashUpload, inline_rows: RowBatch) -> PeekResponse {
     match upload.finish(inline_rows).await {
         Ok(response) => response,
-        Err(error) => PeekResponse::Error(PeekError::unstructured(error)),
+        // NOTE: the upload is abandoned here, which leaves the parts already written in blob
+        // storage, the same way a cancellation does.
+        Err(error) => {
+            // Persist rejects a batch it was handed wrongly, so this is a defect in the upload
+            // rather than a blip, and the query's error is the only other place it shows.
+            warn!(%error, "peek stash failed to finish a batch");
+            PeekResponse::Error(PeekError::unstructured(error))
+        }
     }
 }
 
