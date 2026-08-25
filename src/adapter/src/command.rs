@@ -437,7 +437,7 @@ pub enum Command {
     ///   including read-only, a changed target and cancellation, is reported the
     ///   same way in both modes.
     AttemptWrite {
-        attempt: WriteAttempt,
+        attempt: WriteAttemptKind,
         target_id: CatalogItemId,
         target_global_id: GlobalId,
         diffs: Vec<(Row, Diff)>,
@@ -456,7 +456,7 @@ pub enum Command {
 /// Group commit picking the timestamp requires a connection to answer through,
 /// so that combination is only reachable from a session.
 #[derive(Debug)]
-pub enum WriteAttempt {
+pub enum WriteAttemptKind {
     /// A session's write, cancelled with `conn_id` if the connection goes away
     /// before it commits. A `write_ts` of `None` lets group commit pick the
     /// timestamp, which then cannot be reported as passed.

@@ -28,7 +28,7 @@ use tracing::Span;
 use crate::PeekResponseUnary;
 use crate::active_compute_sink::{ActiveComputeSink, ActiveSubscribe, ActiveSubscribeOwner};
 use crate::catalog::Catalog;
-use crate::command::WriteAttempt;
+use crate::command::WriteAttemptKind;
 use crate::coord::Coordinator;
 use crate::coord::appends::{
     InternalWriteResponder, PendingWriteTxn, TableWriteCmd, TimestampedWriteRequest,
@@ -171,7 +171,7 @@ impl Coordinator {
     ///
     pub(crate) fn handle_attempt_write(
         &mut self,
-        attempt: WriteAttempt,
+        attempt: WriteAttemptKind,
         target_id: mz_repr::CatalogItemId,
         target_global_id: GlobalId,
         diffs: Vec<(Row, Diff)>,
@@ -179,13 +179,13 @@ impl Coordinator {
     ) {
         let result = InternalWriteResponder::new(result_tx);
         match &attempt {
-            WriteAttempt::Session { conn_id, .. } => {
+            WriteAttemptKind::Session { conn_id, .. } => {
                 if !self.active_conns.contains_key(conn_id) {
                     result.send(WriteResult::Canceled);
                     return;
                 }
             }
-            WriteAttempt::Background { .. } => {}
+            WriteAttemptKind::Background { .. } => {}
         }
         if self.controller.read_only() {
             result.send(WriteResult::ReadOnly);
@@ -203,8 +203,8 @@ impl Coordinator {
 
         let table_data = TableData::Rows(diffs);
         let timestamped = match &attempt {
-            WriteAttempt::Session { write_ts, .. } => *write_ts,
-            WriteAttempt::Background { write_ts } => Some(*write_ts),
+            WriteAttemptKind::Session { write_ts, .. } => *write_ts,
+            WriteAttemptKind::Background { write_ts } => Some(*write_ts),
         };
         match timestamped {
             Some(target_timestamp) => {
@@ -222,11 +222,11 @@ impl Coordinator {
                     tracing::warn!("group committer task gone, dropping timestamped write");
                 }
             }
-            // Only a session reaches this: `WriteAttempt::Background` always
+            // Only a session reaches this: `WriteAttemptKind::Background` always
             // names a timestamp, and group commit needs a connection to answer
             // through.
             None => {
-                let WriteAttempt::Session { conn_id, .. } = attempt else {
+                let WriteAttemptKind::Session { conn_id, .. } = attempt else {
                     soft_panic_or_log!("background write reached the blind write path");
                     result.send(WriteResult::Indeterminate);
                     return;

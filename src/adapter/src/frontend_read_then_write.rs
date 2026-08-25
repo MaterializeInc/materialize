@@ -156,7 +156,7 @@ use uuid::Uuid;
 
 use crate::active_compute_sink::ActiveSubscribeOwner;
 use crate::catalog::Catalog;
-use crate::command::{Command, ExecuteResponse, WriteAttempt};
+use crate::command::{Command, ExecuteResponse, WriteAttemptKind};
 use crate::coord::appends::WriteResult;
 use crate::coord::read_then_write::{DependencyPolicy, validate_read_then_write_dependencies};
 use crate::coord::timestamp_selection::TimestampProvider;
@@ -1362,7 +1362,7 @@ impl PeekClient {
         attempt_state.mark_write_submitted();
         let result = self
             .call_coordinator(|tx| Command::AttemptWrite {
-                attempt: WriteAttempt::Session {
+                attempt: WriteAttemptKind::Session {
                     conn_id,
                     write_ts: None,
                 },
@@ -1710,11 +1710,11 @@ impl PeekClient {
             let result = self
                 .call_coordinator(|tx| Command::AttemptWrite {
                     attempt: match write_conn_id.clone() {
-                        Some(conn_id) => WriteAttempt::Session {
+                        Some(conn_id) => WriteAttemptKind::Session {
                             conn_id,
                             write_ts: Some(target),
                         },
-                        None => WriteAttempt::Background { write_ts: target },
+                        None => WriteAttemptKind::Background { write_ts: target },
                     },
                     target_id,
                     target_global_id,
