@@ -2888,7 +2888,7 @@ mod peek_sweep_tests {
     /// Charging the grant instead would spend the whole aggregate on the first peek whatever it
     /// walked, which is the difference between an activation serving a burst of point lookups and
     /// serving one of them. Comparing this run against an unbudgeted one would not catch it, since
-    /// both would answer the same rows; the assertion is against the budget this test supplied.
+    /// both would answer the same rows. The assertion is against the budget this test supplied.
     #[mz_ore::test(tokio::test)]
     async fn the_aggregate_is_charged_what_the_slices_walked() {
         let keys = wide_ok_rows(SMALL_INDEX_KEYS);

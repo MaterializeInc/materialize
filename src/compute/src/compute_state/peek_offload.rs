@@ -10,8 +10,9 @@
 //! permit that admitted it, which is what ties the bound on concurrent walks to the memory those
 //! walks retain: every way the task ends, including a panic, drops the two together.
 //!
-//! Only the worker performs IO on this path. The task walks traces and accumulates rows, and a
-//! walk whose rows outgrow an inline answer stops and hands back rather than writing them.
+//! This driver performs no IO of its own. The task walks traces and accumulates rows, and a walk
+//! whose rows outgrow an inline answer stops and hands back rather than writing them, which leaves
+//! the writing to the worker.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -67,7 +68,11 @@ impl PeekPermits {
     ///
     /// Lowering it takes back only the permits that are free at this moment. The rest stay with
     /// the walks holding them, which is what keeps a configuration change from interrupting a walk
-    /// already under way, and the next call takes back what it can of the remainder.
+    /// already under way, and the next call takes back what it can of the remainder. Until it
+    /// does, the count in effect is above the one configured and never below it, so the error a
+    /// lowering leaves behind is only ever a bound too loose. That is what makes applying it this
+    /// way safe: no walk is refused a permit the configuration allows it, and the excess drains as
+    /// the walks holding it finish.
     fn resize(&self, configured: usize) -> Arc<Semaphore> {
         let target = if configured == 0 {
             self.default_permits
