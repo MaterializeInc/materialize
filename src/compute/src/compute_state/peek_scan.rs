@@ -237,9 +237,7 @@ where
         if !self.batch_ready() {
             return None;
         }
-        // The rows leave the scan, and the ceiling bounds what the scan holds.
-        self.total_size = 0;
-        Some(mem::take(&mut self.results))
+        Some(self.take_results())
     }
 
     /// The number of cursor positions the ok walk has evaluated.
@@ -288,6 +286,16 @@ where
     /// a scan holding a full batch stays where it stands until the batch is taken.
     pub(super) fn batch_ready(&self) -> bool {
         self.peek_stash_eligible && self.total_size > self.peek_stash_threshold_bytes
+    }
+
+    /// Takes the accumulated rows and the size accounted to them.
+    ///
+    /// Every path that hands the rows out goes through here, because the size is what the ceiling
+    /// and the stash threshold are read against, and rows that have left the scan are bounded by
+    /// neither.
+    fn take_results(&mut self) -> RowBatch {
+        self.total_size = 0;
+        mem::take(&mut self.results)
     }
 
     /// Advances the walk over the error trace, or reports the outcome it latched.
@@ -354,7 +362,7 @@ where
             let (row, copies) = match self.oks.step(fuel) {
                 Step::Row(Ok(row)) => row,
                 Step::Row(Err(error)) => break ScanOutcome::Failed(error),
-                Step::Done => break ScanOutcome::Complete(mem::take(&mut self.results)),
+                Step::Done => break ScanOutcome::Complete(self.take_results()),
                 Step::OutOfFuel => break ScanOutcome::Suspended,
             };
 
@@ -422,7 +430,7 @@ where
             // Without an ordering, any `max_results` rows answer the peek, so the rows in hand are
             // an answer and the rest of the trace does not have to be walked.
             self.results.truncate(max_results);
-            return Some(ScanOutcome::Complete(mem::take(&mut self.results)));
+            return Some(ScanOutcome::Complete(self.take_results()));
         };
 
         // We can sort `results` and then truncate to `max_results`. This has an effect similar to
@@ -755,6 +763,10 @@ mod tests {
             ScanOutcome::Complete(expected(0..8))
         );
         assert_eq!(subject.take_batch(), None);
+        assert_eq!(
+            subject.total_size, 0,
+            "the size accounted to rows that have left the scan must not stay behind"
+        );
     }
 
     /// A finishing that imposes no ordering is answered by any `max_results` rows, so thinning
@@ -774,6 +786,10 @@ mod tests {
             subject.rows_processed(),
             4,
             "the scan must stop at the threshold rather than walk the trace out"
+        );
+        assert_eq!(
+            subject.total_size, 0,
+            "the size accounted to rows that have left the scan must not stay behind"
         );
     }
 
