@@ -773,6 +773,7 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_index_peek_inline_budget",
     "compute_index_peek_activation_budget",
     "compute_index_peek_yield_granularity",
+    "compute_index_peek_permits",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",
     "compute_peek_stash_num_batches",

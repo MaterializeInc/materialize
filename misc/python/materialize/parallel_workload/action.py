@@ -3018,6 +3018,13 @@ class FlipFlagsAction(Action):
             "1",
             "1000000000",
         ]
+        # The default, which is one permit per worker in the process, a bound
+        # that serializes every promoted walk, and one that never queues.
+        self.flags_with_values["compute_index_peek_permits"] = [
+            "0",
+            "1",
+            "1000",
+        ]
         self.flags_with_values["compute_peek_response_stash_threshold_bytes"] = [
             "0",  # "force enabled"
             "1048576",  # 1 MiB, an in-between value

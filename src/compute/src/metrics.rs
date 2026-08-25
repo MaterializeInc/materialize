@@ -417,12 +417,11 @@ pub struct WorkerMetrics {
     /// and only the latter distinguishes an offload that never engaged from one that engaged
     /// without changing latency.
     ///
-    /// TODO: Drop the `dead_code` allowances on both substrate counters once the peek driver
-    /// increments them.
+    /// TODO: Drop the `dead_code` allowance on the inline counter once the peek driver increments
+    /// it.
     #[allow(dead_code)]
     pub(crate) index_peek_walks_inline: IntCounter,
     /// Counts index peek walks that ran away from the timely worker.
-    #[allow(dead_code)]
     pub(crate) index_peek_walks_offloaded: IntCounter,
     /// The timestamp of replica expiration.
     pub(crate) replica_expiration_timestamp_seconds: UIntGauge,

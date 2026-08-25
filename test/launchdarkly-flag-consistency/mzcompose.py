@@ -210,6 +210,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     compute_flat_map_fuel
     compute_index_peek_activation_budget
     compute_index_peek_inline_budget
+    compute_index_peek_permits
     compute_index_peek_yield_granularity
     compute_logical_backpressure_max_retained_capabilities
     compute_mv_sink_advance_persist_frontiers

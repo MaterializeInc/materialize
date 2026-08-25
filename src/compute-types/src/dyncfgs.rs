@@ -733,6 +733,35 @@ pub const INDEX_PEEK_YIELD_GRANULARITY: Config<usize> = Config::new(
     ParameterScope::Replica,
 );
 
+/// How many promoted index peek scans may run at once in one replica process.
+///
+/// Zero asks for one per timely worker the process runs. A peek that walks on its worker occupies
+/// one core, so peek CPU is capped today at one core per worker by the very coupling promotion
+/// breaks. One permit per worker preserves exactly that ceiling, which is why it is the default
+/// rather than a tuned number.
+///
+/// The count is per process rather than per replica because the semaphore that enforces it lives
+/// in one process. A replica that runs as several processes would admit a replica-total count in
+/// each of them and over-admit by the process count.
+///
+/// It bounds running scans and nothing else. Scans that do not fit queue, which costs queue
+/// entries rather than threads. Queue depth is a signal to alert on rather than a second bound,
+/// because capping it would mean failing peeks.
+///
+/// Read when a scan asks to run rather than captured, so a change reaches every scan not yet
+/// admitted. Lowering the count takes back only the permits that are free at that moment, since a
+/// walk already under way is not interrupted by a configuration change, and the remainder is taken
+/// back as those walks return their permits.
+///
+/// Replica-scoped. It selects no execution path and changes no result, it only bounds how much of
+/// the replica process's own CPU promoted walks may use at once.
+pub const INDEX_PEEK_PERMITS: Config<usize> = Config::new(
+    "compute_index_peek_permits",
+    0,
+    "How many offloaded index peek scans may run at once in one replica process. Zero means one per timely worker the process runs.",
+    ParameterScope::Replica,
+);
+
 /// The collection interval for the Prometheus metrics introspection source.
 ///
 /// Set to zero to disable scraping and retract any existing data.
@@ -824,6 +853,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&INDEX_PEEK_INLINE_BUDGET)
         .add(&INDEX_PEEK_ACTIVATION_BUDGET)
         .add(&INDEX_PEEK_YIELD_GRANULARITY)
+        .add(&INDEX_PEEK_PERMITS)
         .add(&COMPUTE_PROMETHEUS_INTROSPECTION_SCRAPE_INTERVAL)
         .add(&SUBSCRIBE_SNAPSHOT_OPTIMIZATION)
         .add(&MV_SINK_ADVANCE_PERSIST_FRONTIERS)
@@ -856,6 +886,9 @@ mod tests {
         assert!(!*ENABLE_INDEX_PEEK_OFFLOAD.default());
         assert_eq!(*INDEX_PEEK_INLINE_BUDGET.default(), 1024);
         assert_eq!(*INDEX_PEEK_YIELD_GRANULARITY.default(), 10000);
+        // Zero is not "no promoted scan may run", it is "one per worker this process runs", a
+        // count no constant here can express.
+        assert_eq!(*INDEX_PEEK_PERMITS.default(), 0);
         // The aggregate must admit at least one full inline slice, else no peek can finish inline.
         assert!(*INDEX_PEEK_ACTIVATION_BUDGET.default() >= *INDEX_PEEK_INLINE_BUDGET.default());
         // A promoted walk is off the worker's critical path, so its slices answer to cancellation
@@ -888,5 +921,6 @@ mod tests {
             INDEX_PEEK_YIELD_GRANULARITY.scope(),
             ParameterScope::Replica
         );
+        assert_eq!(INDEX_PEEK_PERMITS.scope(), ParameterScope::Replica);
     }
 }

@@ -42,9 +42,8 @@ pub struct StashingPeek {
     /// Iterator for the results. The worker thread has to continually pump
     /// results from this to the `rows_tx` channel.
     peek_iterator: Option<PeekResultIterator<PaddedTrace<RowRowAgent<Timestamp, Diff>>>>,
-    /// We can't give a PeekResultIterator to our async upload task because the
-    /// underlying trace reader is not Send/Sync. So we need to use a channel to
-    /// send result rows from the worker thread to the async background task.
+    /// Carries result rows from the worker thread, which owns the walk, to the async upload task.
+    /// The upload makes progress only while the worker keeps pumping into this.
     rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, PeekError>>>,
     /// The result of the background task, eventually.
     pub result: oneshot::Receiver<(PeekResponse, Duration)>,

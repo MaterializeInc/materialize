@@ -41,7 +41,7 @@ use tracing::{info, trace, warn};
 use uuid::Uuid;
 
 use crate::command_channel;
-use crate::compute_state::{ActiveComputeState, ComputeState, ReportedFrontier};
+use crate::compute_state::{ActiveComputeState, ComputeState, PeekPermits, ReportedFrontier};
 use crate::metrics::{ComputeMetrics, WorkerMetrics};
 
 /// Caller-provided configuration for compute.
@@ -141,6 +141,8 @@ struct Config {
     pub metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     pub workers_per_process: usize,
+    /// Bounds how many promoted peek walks run at once, shared by every worker this server runs.
+    pub peek_permits: Arc<PeekPermits>,
     /// A reader for each storage worker in this process.
     pub storage_log_readers: Arc<Mutex<Vec<Option<StorageTimelyLogReader>>>>,
 }
@@ -180,6 +182,10 @@ pub async fn serve(
         context,
         metrics_registry: metrics_registry.clone(),
         workers_per_process,
+        // A walk that runs on its worker occupies one core, so peek CPU is capped today at one
+        // core per worker. Admitting one promoted walk per worker preserves that ceiling once
+        // promotion breaks the coupling that enforced it.
+        peek_permits: Arc::new(PeekPermits::new(workers_per_process)),
         storage_log_readers: Arc::new(Mutex::new(storage_log_readers)),
     };
     let tokio_executor = tokio::runtime::Handle::current();
@@ -314,6 +320,8 @@ struct Worker<'w> {
     metrics_registry: MetricsRegistry,
     /// The number of timely workers per process.
     workers_per_process: usize,
+    /// Bounds how many promoted peek walks run at once, shared by every worker in this process.
+    peek_permits: Arc<PeekPermits>,
     /// Reader for storage timely logging events.
     storage_log_reader: Option<StorageTimelyLogReader>,
 }
@@ -366,6 +374,7 @@ impl ClusterSpec for Config {
             tracing_handle: Arc::clone(&self.tracing_handle),
             metrics_registry: self.metrics_registry.clone(),
             workers_per_process: self.workers_per_process,
+            peek_permits: Arc::clone(&self.peek_permits),
             storage_log_reader,
         }
         .run()
@@ -504,6 +513,7 @@ impl<'w> Worker<'w> {
                 self.context.clone(),
                 self.metrics_registry.clone(),
                 self.workers_per_process,
+                Arc::clone(&self.peek_permits),
                 self.storage_log_reader.take(),
             ));
         }
