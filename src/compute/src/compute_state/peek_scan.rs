@@ -29,6 +29,20 @@ use timely::order::PartialOrder;
 use super::error_scan::{ErrorScan, ErrorScanStep, ErrsHandle};
 use super::peek_result_iterator::{PeekResultIterator, Step};
 
+// A scan is driven wherever its driver runs, which includes a runtime that may move a task
+// between threads, so the concrete scan an index peek builds has to cross threads. Asserting it
+// here fails the build if a field is added that does not.
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<
+        PeekScan<
+            crate::arrangement::manager::PaddedTrace<
+                crate::typedefs::RowRowAgent<Timestamp, Diff>,
+            >,
+        >,
+    >();
+};
+
 /// Rows a scan hands to its driver, in the order the scan produced them.
 ///
 /// This is the item form [`PeekResultIterator`] yields and the form the peek stash carries, so the
