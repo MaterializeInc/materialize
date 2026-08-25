@@ -10,6 +10,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import React from "react";
+import { useLocation } from "react-router-dom";
 
 import { Cluster, Replica } from "~/api/materialize/cluster/clusterList";
 import { ReplicaUtilization } from "~/api/materialize/cluster/replicaUtilization";
@@ -181,11 +182,16 @@ const COLUMN = {
   actions: 8,
 } as const;
 
+// `queryAllByRole`, not `getAllByRole`: when the search or a filter excludes
+// every replica the table is replaced by a message, so there are no rows at all
+// rather than a header row on its own.
 const bodyRows = () =>
   screen
-    .getAllByRole("row")
+    .queryAllByRole("row")
     // The header row is a row too, and has no data cells.
     .slice(1);
+
+const NO_MATCHES_MESSAGE = "No replicas match the current search and filters";
 
 const rowFor = (rowLabel: string) => {
   const row = screen.getByText(rowLabel).closest("tr");
@@ -213,6 +219,39 @@ const rowOrderAfter = async (
 ) => {
   await sort(user);
   return rowOrder();
+};
+
+/** The toolbar control for the utilization column headed `label`. */
+const filterTrigger = (label: string) =>
+  screen.getByRole("button", { name: new RegExp(`^${label}`) });
+
+/** Opens a control's panel, returning its Apply button once mounted. */
+const openFilter = async (
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+) => {
+  await user.click(filterTrigger(label));
+  return screen.findByRole("button", { name: "Apply" });
+};
+
+/** Opens the control for `label`, sets `comparison` and `percent`, applies. */
+const applyFilter = async (
+  user: ReturnType<typeof userEvent.setup>,
+  label: string,
+  comparison: ">" | "<",
+  percent: string,
+) => {
+  const apply = await openFilter(user, label);
+  await user.selectOptions(
+    screen.getByLabelText(`${label} comparison`),
+    comparison,
+  );
+  await user.clear(screen.getByLabelText(`${label} threshold percentage`));
+  await user.type(
+    screen.getByLabelText(`${label} threshold percentage`),
+    percent,
+  );
+  await user.click(apply);
 };
 
 describe("ClustersList replica rows", () => {
@@ -866,11 +905,14 @@ describe("ClustersList search", () => {
     await expectRowsMatching(user, "100cc", ["beta"]);
   });
 
-  it("shows no rows when nothing matches", async () => {
+  it("replaces the table with a message when nothing matches", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());
 
     await expectRowsMatching(user, "nonesuch", []);
+
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });
 
@@ -887,13 +929,19 @@ describe("ClustersList keyboard navigation", () => {
     const user = userEvent.setup();
     await renderClustersList([singleReplicaCluster()]);
 
-    // The header's system-objects switch and the table's search box precede the
+    // The header's system-objects switch and the table's toolbar precede the
     // rows in document order.
     await user.tab();
     expect(screen.getByLabelText("Show system clusters")).toHaveFocus();
 
     await user.tab();
     expect(screen.getByLabelText("Search clusters...")).toHaveFocus();
+
+    // One control per utilization column, in the order the table shows them.
+    for (const label of ["CPU", "Memory", "Disk", "Heap"]) {
+      await user.tab();
+      expect(filterTrigger(label)).toHaveFocus();
+    }
 
     await user.tab();
     expect(clusterNameLink()).toHaveFocus();
@@ -1031,5 +1079,491 @@ describe("ClustersList row identity", () => {
     const shifted = screen.getByRole("dialog");
     expect(within(shifted).getByText(/^Drop bravo$/)).toBeInTheDocument();
     expect(within(shifted).queryByText(/charlie/)).not.toBeInTheDocument();
+  });
+});
+
+describe("ClustersList CPU filter", () => {
+  /**
+   * Three replicas spread across two clusters, so a threshold has to cut
+   * through both rather than keeping or dropping whole clusters.
+   */
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({ id: "u10", name: "idle", cpuPercent: 0.05 }),
+        buildReplica({ id: "u11", name: "busy", cpuPercent: 0.9 }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "ingest",
+      replicas: [
+        buildReplica({ id: "u20", name: "middling", cpuPercent: 0.5 }),
+      ],
+    }),
+  ];
+
+  const cpuTrigger = () => filterTrigger("CPU");
+
+  const openCpuFilter = (user: ReturnType<typeof userEvent.setup>) =>
+    openFilter(user, "CPU");
+
+  const applyCpuFilter = (
+    user: ReturnType<typeof userEvent.setup>,
+    comparison: ">" | "<",
+    percent: string,
+  ) => applyFilter(user, "CPU", comparison, percent);
+
+  it("renders a control labelled by its column", async () => {
+    await renderClustersList(twoClusters());
+
+    expect(cpuTrigger()).toBeInTheDocument();
+  });
+
+  it("keeps only the replicas above the threshold", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, ">", "40");
+
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+  });
+
+  it("keeps only the replicas below the threshold", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "<", "40");
+
+    expect(rowOrder()).toEqual(["idle"]);
+  });
+
+  it("compares the reading, not its rounded display value", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [
+          // Renders as "80.0%", but sits below a threshold of 80.
+          buildReplica({ id: "u10", name: "just-under", cpuPercent: 0.7996 }),
+          buildReplica({ id: "u11", name: "just-over", cpuPercent: 0.8004 }),
+        ],
+      }),
+    ]);
+
+    await applyCpuFilter(user, ">", "80");
+
+    expect(rowOrder()).toEqual(["just-over"]);
+  });
+
+  it("drops a replica with no CPU sample", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [
+          buildReplica({ id: "u10", name: "sampled", cpuPercent: 0.9 }),
+          buildReplica({ id: "u11", name: "unsampled", cpuPercent: null }),
+        ],
+      }),
+    ]);
+
+    // An unsampled replica sits on neither side of the threshold, so it is out
+    // of a filtered list either way.
+    await applyCpuFilter(user, "<", "50");
+
+    expect(rowOrder()).toEqual([]);
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+  });
+
+  it("drops a cluster with no replicas", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({ id: "u1", name: "empty", replicas: [] }),
+      buildCluster({
+        id: "u2",
+        name: "ingest",
+        replicas: [buildReplica({ id: "u20", name: "busy", cpuPercent: 0.9 })],
+      }),
+    ]);
+
+    await applyCpuFilter(user, ">", "50");
+
+    expect(rowOrder()).toEqual(["busy"]);
+  });
+
+  it("states the applied condition on the control", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, ">", "40");
+
+    // Readable without reopening the panel.
+    expect(
+      screen.getByRole("button", { name: /^CPU > 40%/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("leaves the table alone until Apply is clicked", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await openCpuFilter(user);
+    await user.clear(screen.getByLabelText("CPU threshold percentage"));
+    await user.type(screen.getByLabelText("CPU threshold percentage"), "40");
+
+    // A half-typed threshold would otherwise reorder the table on every
+    // keystroke.
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+  });
+
+  it("keeps the control reachable when the filter empties the table", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, ">", "99");
+
+    // The message replaces the table, not the toolbar: clearing the filter has
+    // to stay possible.
+    expect(screen.getByText(NO_MATCHES_MESSAGE)).toBeInTheDocument();
+    await user.click(cpuTrigger());
+    await user.click(await screen.findByRole("button", { name: "Clear" }));
+
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+  });
+
+  it("restores every row when the filter is cleared", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, ">", "40");
+    await user.click(cpuTrigger());
+    await user.click(await screen.findByRole("button", { name: "Clear" }));
+
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+    expect(cpuTrigger()).toHaveTextContent(/^CPU$/);
+  });
+
+  it("reopens showing the filter in force", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, "<", "40");
+    await openCpuFilter(user);
+
+    expect(screen.getByLabelText("CPU comparison")).toHaveValue("<");
+    expect(screen.getByLabelText("CPU threshold percentage")).toHaveValue("40");
+  });
+
+  it("cannot be applied with an empty threshold", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    const apply = await openCpuFilter(user);
+    await user.clear(screen.getByLabelText("CPU threshold percentage"));
+
+    expect(apply).toBeDisabled();
+  });
+
+  it("narrows the search results rather than replacing them", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    // Searched first, then filtered: closing the panel hands focus back to its
+    // trigger on the next frame, which would swallow keystrokes typed into the
+    // search box in the same tick.
+    await user.type(screen.getByLabelText("Search clusters..."), "compute");
+    await waitFor(() => expect(rowOrder()).toEqual(["idle", "busy"]));
+
+    await applyCpuFilter(user, ">", "40");
+
+    // Both constraints hold: only compute's busy replica clears each.
+    expect(rowOrder()).toEqual(["busy"]);
+  });
+});
+
+describe("ClustersList utilization filters", () => {
+  /**
+   * One control per utilization column, each paired with the reading it filters
+   * on. The label is the table heading verbatim, which is what ties a control
+   * to its column for the user.
+   */
+  const CONTROLS = [
+    ["CPU", (value: number) => ({ cpuPercent: value })],
+    ["Memory", (value: number) => ({ memoryPercent: value })],
+    ["Disk", (value: number) => ({ diskPercent: value })],
+    ["Heap", (value: number) => ({ heapPercent: value })],
+  ] as const;
+
+  it("labels each control with its column heading", async () => {
+    await renderClustersList([buildCluster()]);
+
+    for (const [label] of CONTROLS) {
+      expect(
+        screen.getByRole("columnheader", { name: new RegExp(`^${label}`) }),
+      ).toBeInTheDocument();
+      expect(filterTrigger(label)).toBeInTheDocument();
+    }
+  });
+
+  describe.each(CONTROLS)("the %s control", (label, withValue) => {
+    /**
+     * Two replicas differing only in the reading under test. Every other
+     * reading keeps `buildReplica`'s default, so a control wired to the wrong
+     * column sees one value on both rows and cannot produce this split.
+     */
+    const pair = () =>
+      buildCluster({
+        replicas: [
+          buildReplica({ id: "u10", name: "high", ...withValue(0.9) }),
+          buildReplica({ id: "u11", name: "low", ...withValue(0.05) }),
+        ],
+      });
+
+    it("filters on its own column's reading", async () => {
+      const user = userEvent.setup();
+      await renderClustersList([pair()]);
+
+      await applyFilter(user, label, ">", "50");
+
+      expect(rowOrder()).toEqual(["high"]);
+    });
+
+    it("states the applied condition on its own control only", async () => {
+      const user = userEvent.setup();
+      await renderClustersList([pair()]);
+
+      await applyFilter(user, label, ">", "50");
+
+      expect(filterTrigger(label)).toHaveTextContent(`${label} > 50%`);
+      for (const [other] of CONTROLS.filter(([name]) => name !== label)) {
+        expect(filterTrigger(other)).toHaveTextContent(
+          new RegExp(`^${other}$`),
+        );
+      }
+    });
+
+    it("is cleared without disturbing the other columns", async () => {
+      const user = userEvent.setup();
+      await renderClustersList([pair()]);
+
+      await applyFilter(user, label, ">", "50");
+      await user.click(filterTrigger(label));
+      await user.click(await screen.findByRole("button", { name: "Clear" }));
+
+      expect(rowOrder()).toEqual(["high", "low"]);
+    });
+  });
+
+  it("applies every filter at once", async () => {
+    const user = userEvent.setup();
+    await renderClustersList([
+      buildCluster({
+        replicas: [
+          buildReplica({
+            id: "u10",
+            name: "hot-both",
+            cpuPercent: 0.9,
+            memoryPercent: 0.9,
+          }),
+          buildReplica({
+            id: "u11",
+            name: "hot-cpu-only",
+            cpuPercent: 0.9,
+            memoryPercent: 0.1,
+          }),
+          buildReplica({
+            id: "u12",
+            name: "hot-memory-only",
+            cpuPercent: 0.1,
+            memoryPercent: 0.9,
+          }),
+        ],
+      }),
+    ]);
+
+    await applyFilter(user, "CPU", ">", "50");
+    await applyFilter(user, "Memory", ">", "50");
+
+    // Filters narrow each other rather than replacing one another.
+    expect(rowOrder()).toEqual(["hot-both"]);
+  });
+});
+
+/**
+ * Renders the router's query string, so what the table writes to the URL is
+ * assertable. Only the URL tests mount this: the rendered text would otherwise
+ * be one more place `getByText` could match a cluster or replica name.
+ */
+const RenderWithSearch = ({ children }: { children: React.ReactNode }) => {
+  const { search } = useLocation();
+  return (
+    <>
+      {children}
+      <div data-testid="search">{search}</div>
+    </>
+  );
+};
+
+describe("ClustersList filter URL state", () => {
+  const twoClusters = () => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: [
+        buildReplica({
+          id: "u10",
+          name: "idle",
+          cpuPercent: 0.05,
+          memoryPercent: 0.05,
+        }),
+        buildReplica({
+          id: "u11",
+          name: "busy",
+          cpuPercent: 0.9,
+          memoryPercent: 0.9,
+        }),
+      ],
+    }),
+    buildCluster({
+      id: "u2",
+      name: "ingest",
+      replicas: [
+        buildReplica({
+          id: "u20",
+          name: "middling",
+          cpuPercent: 0.5,
+          memoryPercent: 0.5,
+        }),
+      ],
+    }),
+  ];
+
+  /** Renders the list at `url`, so a bookmarked query string can be replayed. */
+  const renderAt = async (clusters: Cluster[], url = "/") => {
+    getStore().set(allClusters, mockSubscribeState({ data: clusters }));
+    const rendered = renderComponent(
+      <RenderWithSearch>
+        <ClustersListPage />
+      </RenderWithSearch>,
+      { initialRouterEntries: [url] },
+    );
+    await screen.findByRole("table");
+    return rendered;
+  };
+
+  const currentSearch = () =>
+    new URLSearchParams(screen.getByTestId("search").textContent ?? "");
+
+  it("writes an applied filter to the URL", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", ">", "40");
+
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("gt.40"));
+  });
+
+  it("spells the comparison as a word rather than percent-encoding it", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", "<", "40");
+
+    // A raw ">" or "<" would reach the user's bookmark bar as %3E or %3C.
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("lt.40"));
+    expect(screen.getByTestId("search").textContent).not.toContain("%3");
+  });
+
+  it("writes one parameter per filtered column", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", ">", "40");
+    await applyFilter(user, "Memory", "<", "80");
+
+    await waitFor(() => {
+      const params = currentSearch();
+      expect(params.get("cpu")).toBe("gt.40");
+      expect(params.get("memory")).toBe("lt.80");
+    });
+  });
+
+  it("drops a cleared filter from the URL", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters());
+
+    await applyFilter(user, "CPU", ">", "40");
+    await waitFor(() => expect(currentSearch().get("cpu")).toBe("gt.40"));
+
+    await user.click(filterTrigger("CPU"));
+    await user.click(await screen.findByRole("button", { name: "Clear" }));
+
+    await waitFor(() => expect(currentSearch().has("cpu")).toBe(false));
+  });
+
+  it("restores a bookmarked filter, in the rows and on the control", async () => {
+    await renderAt(twoClusters(), "/?cpu=gt.40");
+
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+    expect(filterTrigger("CPU")).toHaveTextContent("CPU > 40%");
+  });
+
+  it("restores a bookmarked filter for every column at once", async () => {
+    await renderAt(twoClusters(), "/?cpu=gt.40&memory=lt.80");
+
+    // busy clears CPU > 40 but not Memory < 80; middling clears both.
+    expect(rowOrder()).toEqual(["middling"]);
+    expect(filterTrigger("CPU")).toHaveTextContent("CPU > 40%");
+    expect(filterTrigger("Memory")).toHaveTextContent("Memory < 80%");
+  });
+
+  it("opens the panel on a bookmarked filter's own values", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoClusters(), "/?cpu=lt.40");
+
+    await openFilter(user, "CPU");
+
+    expect(screen.getByLabelText("CPU comparison")).toHaveValue("<");
+    expect(screen.getByLabelText("CPU threshold percentage")).toHaveValue("40");
+  });
+
+  it("restores a bookmarked search term in the search box", async () => {
+    await renderAt(twoClusters(), "/?q=ingest");
+
+    // The box has to show the term it is filtering by, or the table looks
+    // broken rather than filtered.
+    expect(screen.getByLabelText("Search clusters...")).toHaveValue("ingest");
+    expect(rowOrder()).toEqual(["middling"]);
+  });
+
+  it("keeps a bookmarked sort", async () => {
+    await renderAt(twoClusters(), "/?sort=cpuPercent&dir=desc");
+
+    expect(rowOrder()).toEqual(["busy", "middling", "idle"]);
+  });
+
+  describe.each([
+    ["an unknown comparison", "/?cpu=ge.40"],
+    ["a missing threshold", "/?cpu=gt."],
+    ["a non-numeric threshold", "/?cpu=gt.abc"],
+    ["a bare number", "/?cpu=40"],
+    ["an empty value", "/?cpu="],
+  ])("given %s", (_label, url) => {
+    it("ignores it and leaves the table unfiltered", async () => {
+      await renderAt(twoClusters(), url);
+
+      // A hand-edited or stale link must not strand the user behind a filter
+      // the control cannot show or clear.
+      expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+      expect(filterTrigger("CPU")).toHaveTextContent(/^CPU$/);
+    });
+  });
+
+  it("accepts a fractional threshold", async () => {
+    await renderAt(twoClusters(), "/?cpu=gt.7.5");
+
+    expect(filterTrigger("CPU")).toHaveTextContent("CPU > 7.5%");
+    expect(rowOrder()).toEqual(["busy", "middling"]);
   });
 });

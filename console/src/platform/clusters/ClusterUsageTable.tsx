@@ -8,8 +8,9 @@
 // by the Apache License, Version 2.0.
 
 import { HStack, Text, Tooltip, VStack } from "@chakra-ui/react";
-import { createColumnHelper } from "@tanstack/react-table";
+import { ColumnFiltersState, createColumnHelper } from "@tanstack/react-table";
 import React from "react";
+import { useLocation } from "react-router-dom";
 
 import {
   ClusterWithOwnership,
@@ -25,7 +26,16 @@ import { sortingFunctions } from "~/components/Table/tableColumnBuilders";
 import { TablePagination } from "~/components/Table/TablePagination";
 import { TableSearch } from "~/components/Table/TableSearch";
 import { UniversalTable } from "~/components/Table/UniversalTable";
-import { useUniversalTable } from "~/components/Table/useUniversalTable";
+import {
+  getInitialTableState,
+  useUniversalTable,
+} from "~/components/Table/useUniversalTable";
+import { useSyncObjectToSearchParams } from "~/hooks/useSyncObjectToSearchParams";
+import {
+  EmptyListHeader,
+  EmptyListHeaderContents,
+  EmptyListWrapper,
+} from "~/layouts/listPageComponents";
 import WarningIcon from "~/svg/WarningIcon";
 import { truncateMaxWidth } from "~/theme/components/Table";
 import {
@@ -39,6 +49,13 @@ import {
   ClusterTableMeta,
 } from "./clusterTableCells";
 import { useReplicaUtilization } from "./queries";
+import { UtilizationFilter } from "./UtilizationFilter";
+import {
+  utilizationFilterFn,
+  utilizationFilterFromUrl,
+  utilizationFilterToUrl,
+  UtilizationFilterValue,
+} from "./utilizationFilters";
 
 /**
  * The utilization readings a row displays, as fractions of the replica's
@@ -134,17 +151,63 @@ const latestReplicaStatusAt = (replica: Replica | null) =>
 
 const columnHelper = createColumnHelper<ClusterReplicaRow>();
 
+interface UtilizationColumn {
+  id: string;
+  header: string;
+  urlKey: string;
+  read: (utilization: ReplicaUtilizationValues) => number | null;
+}
+
+/**
+ * The utilization columns, in the order the table shows them. One list defines
+ * both the columns and the toolbar filter controls, so a control cannot end up
+ * labelled differently from the column it filters.
+ */
+const UTILIZATION_COLUMNS: UtilizationColumn[] = [
+  { id: "cpuPercent", header: "CPU", urlKey: "cpu", read: (u) => u.cpuPercent },
+  // NOTE: this is `memory_percent`, RAM against the size's RAM allocation.
+  {
+    id: "memoryPercent",
+    header: "Memory",
+    urlKey: "memory",
+    read: (u) => u.memoryPercent,
+  },
+  // NOTE: the denominator is the size's configured disk allocation, so this is
+  // null, and renders a dash, for any replica on a size that allocates no disk.
+  {
+    id: "diskPercent",
+    header: "Disk",
+    urlKey: "disk",
+    read: (u) => u.diskPercent,
+  },
+  // NOTE: `heap_percent` is RAM plus swap over the heap limit. The heap limit
+  // comes from the orchestrator, not the size catalog, so this is null on any
+  // environment that does not report one.
+  {
+    id: "heapPercent",
+    header: "Heap",
+    urlKey: "heap",
+    read: (u) => u.heapPercent,
+  },
+];
+
+/** The utilization filters a URL asks for, skipping any it cannot parse. */
+const utilizationFiltersFromSearch = (search: string): ColumnFiltersState => {
+  const params = new URLSearchParams(search);
+  return UTILIZATION_COLUMNS.flatMap(({ id, urlKey }) => {
+    const value = utilizationFilterFromUrl(params.get(urlKey));
+    return value ? [{ id, value }] : [];
+  });
+};
+
 /** A utilization column, read from the row's readings by `read`. */
-const percentColumn = (
-  id: string,
-  header: string,
-  read: (utilization: ReplicaUtilizationValues) => number | null,
-) =>
+const percentColumn = ({ id, header, read }: UtilizationColumn) =>
   columnHelper.accessor((row) => read(row.utilization), {
     id,
     header,
     sortingFn: sortingFunctions.numericNullsLast,
     sortDescFirst: true,
+    filterFn: utilizationFilterFn,
     cell: (info) => <ReplicaPercentCell value={info.getValue()} />,
   });
 
@@ -175,16 +238,7 @@ const columns = [
     sortDescFirst: true,
     cell: (info) => info.getValue() ?? "-",
   }),
-  percentColumn("cpuPercent", "CPU", (u) => u.cpuPercent),
-  // NOTE: this is `memory_percent`, RAM against the size's RAM allocation.
-  percentColumn("memoryPercent", "Memory", (u) => u.memoryPercent),
-  // NOTE: the denominator is the size's configured disk allocation, so this is
-  // null, and renders a dash, for any replica on a size that allocates no disk.
-  percentColumn("diskPercent", "Disk", (u) => u.diskPercent),
-  // NOTE: `heap_percent` is RAM plus swap over the heap limit. The heap limit
-  // comes from the orchestrator, not the size catalog, so this is null on any
-  // environment that does not report one.
-  percentColumn("heapPercent", "Heap", (u) => u.heapPercent),
+  ...UTILIZATION_COLUMNS.map(percentColumn),
   columnHelper.accessor((row) => latestReplicaStatusAt(row.replica), {
     // NOTE: deliberately not the cluster's own `latestStatusUpdate`. That comes
     // from the replica status *history*, so it counts replicas that have since
@@ -217,6 +271,8 @@ const columns = [
   }),
 ];
 
+const PAGE_SIZE = 20;
+
 export interface ClusterUsageTableProps {
   clusters: ClusterWithOwnership[];
 }
@@ -228,8 +284,18 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
   const { data: offlineReplicaMap, error: offlineReplicaError } =
     useLatestOfflineReplica();
   const { data: replicaUtilization } = useReplicaUtilization();
+  const location = useLocation();
 
   const meta: ClusterTableMeta = { offlineReplicaMap };
+
+  // Read once, on mount: the URL seeds the table, and from then on the table
+  // drives the URL. Reading it on every render would fight the writer below.
+  const [initialState] = React.useState(() =>
+    getInitialTableState(location.search),
+  );
+  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(
+    () => utilizationFiltersFromSearch(location.search),
+  );
 
   // TanStack recomputes its row models whenever `data` changes identity, so the
   // flattened rows have to outlive the render that built them.
@@ -253,28 +319,99 @@ export const ClusterUsageTable = ({ clusters }: ClusterUsageTableProps) => {
     columns,
     getRowId: (row) =>
       `${row.cluster.id}/${row.replica ? row.replica.id : "no-replica"}`,
-    initialSorting: [{ id: "cluster", desc: false }],
-    pageSize: 20,
+    initialSorting: initialState.sorting ?? [{ id: "cluster", desc: false }],
+    pageSize: PAGE_SIZE,
+    initialState: {
+      globalFilter: initialState.globalFilter,
+      pagination: {
+        pageIndex: initialState.pageIndex ?? 0,
+        pageSize: PAGE_SIZE,
+      },
+    },
     state: {
+      columnFilters,
       columnVisibility: {
         lastStatusChange: !offlineReplicaError,
       },
     },
+    onColumnFiltersChange: setColumnFilters,
     meta,
   });
 
+  const tableState = table.getState();
+
+  // The whole query string is rewritten from this object, so it has to carry
+  // every piece of table state worth bookmarking, not just the filters. Keys
+  // are left out when they hold nothing, to keep a plain visit to the page from
+  // accumulating empty parameters.
+  const urlParams = React.useMemo(() => {
+    const params: Record<string, unknown> = {};
+    for (const { id, urlKey } of UTILIZATION_COLUMNS) {
+      const filter = tableState.columnFilters.find((f) => f.id === id);
+      if (filter) {
+        params[urlKey] = utilizationFilterToUrl(
+          filter.value as UtilizationFilterValue,
+        );
+      }
+    }
+    if (tableState.globalFilter) {
+      params.q = tableState.globalFilter;
+    }
+    const [sort] = tableState.sorting;
+    if (sort) {
+      params.sort = sort.id;
+      params.dir = sort.desc ? "desc" : "asc";
+    }
+    if (tableState.pagination.pageIndex > 0) {
+      params.page = tableState.pagination.pageIndex + 1;
+    }
+    return params;
+  }, [
+    tableState.columnFilters,
+    tableState.globalFilter,
+    tableState.sorting,
+    tableState.pagination.pageIndex,
+  ]);
+  useSyncObjectToSearchParams(urlParams);
+
+  const noMatches = table.getFilteredRowModel().rows.length === 0;
+
   return (
     <VStack spacing={4} align="stretch">
-      <TableSearch
-        onValueChange={table.setGlobalFilter}
-        placeholder="Search clusters..."
-      />
-      <UniversalTable
-        table={table}
-        variant="linkable"
-        data-testid="cluster-table"
-      />
-      <TablePagination table={table} itemLabel="replicas" />
+      <HStack spacing={3} flexWrap="wrap">
+        <TableSearch
+          initialValue={initialState.globalFilter ?? ""}
+          onValueChange={table.setGlobalFilter}
+          placeholder="Search clusters..."
+        />
+        {UTILIZATION_COLUMNS.map(({ id, header }) => {
+          const column = table.getColumn(id);
+          return (
+            column && (
+              <UtilizationFilter key={id} column={column} label={header} />
+            )
+          );
+        })}
+      </HStack>
+      {noMatches ? (
+        <EmptyListWrapper>
+          <EmptyListHeader>
+            <EmptyListHeaderContents
+              title="No replicas match the current search and filters"
+              helpText="Try a different search term, or clear the utilization filters."
+            />
+          </EmptyListHeader>
+        </EmptyListWrapper>
+      ) : (
+        <>
+          <UniversalTable
+            table={table}
+            variant="linkable"
+            data-testid="cluster-table"
+          />
+          <TablePagination table={table} itemLabel="replicas" />
+        </>
+      )}
     </VStack>
   );
 };
