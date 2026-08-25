@@ -90,6 +90,20 @@ enum ErrorPhase {
     Answered(PeekError),
 }
 
+/// The outcome a [`PeekScan`]'s walk over its ok trace latched, once it has one.
+///
+/// Neither outcome leaves the ok cursor at the end of the trace. The unordered truncate in
+/// [`PeekScan::thin`] completes the scan mid-trace, and a failure stops on the position that
+/// produced it. A walk resumed past either would answer the same peek with a different row set,
+/// so the latch answers instead of resuming.
+enum OkWalkEnd {
+    /// The walk produced every row the peek's answer needs. Those rows left with the
+    /// [`ScanOutcome::Complete`] that reported it.
+    Complete,
+    /// The walk failed the peek with this error.
+    Failed(PeekError),
+}
+
 /// An index peek's walk over its error trace and its ok trace.
 ///
 /// The walk suspends between any two cursor positions, and both phases spend the same budget:
@@ -112,6 +126,8 @@ where
     /// The walk over the ok trace, reached only once the error walk reports the error trace
     /// clean. Its cursor is opened with the scan, and nothing advances it before then.
     oks: PeekResultIterator<Tr>,
+    /// The outcome the ok walk latched, `None` while it is still under way.
+    ok_walk_end: Option<OkWalkEnd>,
     /// Rows accumulated since the last batch was taken.
     results: RowBatch,
     /// The byte size of `results`, as an answer built from them would store them.
@@ -192,6 +208,7 @@ where
             target_id: peek.target.id(),
             error_phase: ErrorPhase::Scanning(error_scan),
             oks,
+            ok_walk_end: None,
             results: Vec::new(),
             total_size: 0,
             max_result_size: usize::cast_from(max_result_size),
@@ -216,7 +233,10 @@ where
     /// The count it bounds spans both phases.
     ///
     /// [`ScanOutcome::Suspended`] is not an end of scan: stepping again resumes where this call
-    /// stopped.
+    /// stopped. [`ScanOutcome::Complete`] and [`ScanOutcome::Failed`] are, and the scan latches
+    /// the first one it reaches, so stepping again repeats that outcome rather than walking on. A
+    /// repeated `Complete` carries no rows, because the rows left with the outcome that latched
+    /// it.
     pub(super) fn step(
         &mut self,
         row_iteration_limit: Option<usize>,
@@ -225,8 +245,21 @@ where
         if let Some(outcome) = self.step_error_phase(row_iteration_limit, fuel) {
             return outcome;
         }
+        if let Some(outcome) = self.latched_ok_outcome() {
+            return outcome;
+        }
 
-        self.step_ok_phase(row_iteration_limit, fuel)
+        let outcome = self.step_ok_phase(row_iteration_limit, fuel);
+
+        // Latched here rather than in the arms of the walk, so that every way the walk can end
+        // passes the one place that decides whether the scan is over.
+        match &outcome {
+            ScanOutcome::Suspended => {}
+            ScanOutcome::Complete(_) => self.ok_walk_end = Some(OkWalkEnd::Complete),
+            ScanOutcome::Failed(error) => self.ok_walk_end = Some(OkWalkEnd::Failed(error.clone())),
+        }
+
+        outcome
     }
 
     /// Takes the accumulated rows once they have crossed the stash threshold.
@@ -296,6 +329,19 @@ where
     fn take_results(&mut self) -> RowBatch {
         self.total_size = 0;
         mem::take(&mut self.results)
+    }
+
+    /// The outcome the ok walk latched, or `None` while that walk can still be resumed.
+    ///
+    /// A latched outcome spends no fuel and reads no trace. The `Complete` it reports carries no
+    /// rows, which is what a driver expects of it: the answer is the batches the driver took
+    /// followed by the payload of the `Complete` that ended the walk.
+    fn latched_ok_outcome(&self) -> Option<ScanOutcome> {
+        match &self.ok_walk_end {
+            None => None,
+            Some(OkWalkEnd::Complete) => Some(ScanOutcome::Complete(RowBatch::new())),
+            Some(OkWalkEnd::Failed(error)) => Some(ScanOutcome::Failed(error.clone())),
+        }
     }
 
     /// Advances the walk over the error trace, or reports the outcome it latched.
@@ -555,6 +601,7 @@ mod tests {
             target_id: GlobalId::User(1),
             error_phase,
             oks: ok_iterator(keys),
+            ok_walk_end: None,
             results: Vec::new(),
             total_size: 0,
             max_result_size: usize::MAX,
@@ -747,6 +794,57 @@ mod tests {
         let mut fuel = usize::MAX;
         assert_eq!(subject.step(None, &mut fuel), ScanOutcome::Suspended);
         assert_eq!(subject.results, expected(3..6));
+    }
+
+    /// Both outcomes that end the ok walk latch, and neither of them leaves the cursor at the end
+    /// of the trace, so a scan that resumed from one would answer the same peek with a different
+    /// row set.
+    #[mz_ore::test]
+    fn the_terminal_outcomes_of_the_ok_walk_latch() {
+        let keys = rows(0..10);
+
+        // A finishing without an ordering is answered by the rows in hand, which leaves rows a
+        // resumed walk would go on to produce.
+        let mut subject = scan(ErrorPhase::Clean, &keys);
+        subject.max_results = Some(2);
+
+        let mut fuel = usize::MAX;
+        assert_eq!(
+            subject.step(None, &mut fuel),
+            ScanOutcome::Complete(expected(0..2))
+        );
+        let rows_processed = subject.rows_processed();
+
+        let mut fuel = usize::MAX;
+        assert_eq!(
+            subject.step(None, &mut fuel),
+            ScanOutcome::Complete(RowBatch::new()),
+            "a completed scan must repeat its outcome rather than resume its walk"
+        );
+        assert_eq!(fuel, usize::MAX, "a latched outcome spends no fuel");
+        assert_eq!(subject.rows_processed(), rows_processed);
+
+        // The result-size ceiling fails the peek on the row that crosses it, which is the other
+        // way the walk ends short of the trace's end.
+        let mut subject = scan(ErrorPhase::Clean, &keys);
+        subject.max_result_size = 3 * row_size();
+
+        let mut fuel = usize::MAX;
+        let failure = subject.step(None, &mut fuel);
+        assert!(
+            matches!(failure, ScanOutcome::Failed(_)),
+            "the ceiling must fail the peek: {failure:?}"
+        );
+        let rows_processed = subject.rows_processed();
+
+        let mut fuel = usize::MAX;
+        assert_eq!(
+            subject.step(None, &mut fuel),
+            failure,
+            "a failed scan must repeat its outcome rather than resume its walk"
+        );
+        assert_eq!(fuel, usize::MAX, "a latched outcome spends no fuel");
+        assert_eq!(subject.rows_processed(), rows_processed);
     }
 
     /// A peek that cannot use the stash is never offered a batch, however large its accumulation
