@@ -18,6 +18,8 @@ use differential_dataflow::operators::arrange::{Arranged, TraceAgent};
 use differential_dataflow::trace::implementations::spine_fueled::Spine;
 use differential_dataflow::trace::{Batch, Batcher, Builder, Trace, TraceReader};
 use differential_dataflow::{Collection, Data, ExchangeData, Hashable, VecCollection};
+use mz_compute_types::dyncfgs::{ENABLE_COLUMN_PAGED_BATCHER, ENABLE_COLUMNAR_MERGE_BATCHER};
+use mz_dyncfg::ConfigSet;
 use mz_row_spine::ArcBatch;
 use timely::Container;
 use timely::container::{ContainerBuilder, PushInto};
@@ -33,6 +35,43 @@ use crate::logging::compute::{
 use crate::typedefs::{
     KeyAgent, KeyValAgent, MzArrangeData, MzData, MzTimestamp, RowAgent, RowRowAgent, RowValAgent,
 };
+
+/// Which merge batcher an arrange site should instantiate.
+///
+/// The three parameters `mz_arrange_core` takes are one unit, not three
+/// knobs: the chunker's container and the builder's input are both pinned to
+/// `Batcher::Output`, so the chunker and builder follow from the batcher and
+/// a call site has to spell out a whole arm per variant.
+pub enum ArrangementBatcher {
+    /// `Chunker<ColumnationStack<_>>` + `Col2ValBatcher` + `RowRowBuilder`.
+    /// Chains are columnation stacks.
+    Columnation,
+    /// `ColumnChunker` + `Col2ValColBatcher` + `RowRowColPagedBuilder`.
+    /// Chains are resident `Column`s.
+    Columnar,
+    /// `ColumnChunker` + `Col2ValPagedBatcher` + `RowRowColPagedBuilder`.
+    /// Chains are `Column`s routed through the pager, which may spill them.
+    ColumnarPaged,
+}
+
+impl ArrangementBatcher {
+    /// Resolve the batcher from the replica's config set.
+    ///
+    /// `ENABLE_COLUMN_PAGED_BATCHER` wins over
+    /// `ENABLE_COLUMNAR_MERGE_BATCHER`, because it asks for the same columnar
+    /// chains plus paging. Call this once per arrange site at operator
+    /// construction time, so a dataflow keeps one batcher for its whole life
+    /// even if the flags flip underneath it.
+    pub fn from_config(config: &ConfigSet) -> Self {
+        if ENABLE_COLUMN_PAGED_BATCHER.get(config) {
+            Self::ColumnarPaged
+        } else if ENABLE_COLUMNAR_MERGE_BATCHER.get(config) {
+            Self::Columnar
+        } else {
+            Self::Columnation
+        }
+    }
+}
 
 /// Extension trait to arrange data.
 pub trait MzArrange<'scope>: MzArrangeCore<'scope> {

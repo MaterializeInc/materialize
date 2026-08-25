@@ -57,12 +57,15 @@ mod spines {
     pub type RowRowBatcher<T, R> = KeyValBatcher<Row, Row, T, R>;
     pub type RowRowBuilder<T, R> = ArcBuilder<crate::dictionary::builders::RowRowBuilder<T, R>>;
 
-    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with
-    /// [`Col2ValPagedBatcher`] for the spillable arrange path. Installs a
-    /// dictionary codec at seal time, gathering statistics from the sealed
-    /// `Column` chain, so paged arrangements compress on the same footing as the
-    /// columnation-fed [`RowRowBuilder`].
+    /// `RowRowBuilder` variant that consumes [`Column`] chunks. Pairs with any
+    /// batcher whose chains are `Column`s, spillable
+    /// ([`Col2ValPagedBatcher`]) or resident ([`Col2ValColBatcher`]) alike, so
+    /// the `Paged` in the name records where it started rather than a
+    /// restriction. Installs a dictionary codec at seal time, gathering
+    /// statistics from the sealed `Column` chain, so columnar arrangements
+    /// compress on the same footing as the columnation-fed [`RowRowBuilder`].
     ///
+    /// [`Col2ValColBatcher`]: mz_timely_util::columnar::Col2ValColBatcher
     /// [`Col2ValPagedBatcher`]: mz_timely_util::columnar::Col2ValPagedBatcher
     /// [`Column`]: mz_timely_util::columnar::Column
     pub type RowRowColPagedBuilder<T, R> =
@@ -1198,8 +1201,9 @@ mod dictionary {
             }
         }
 
-        /// Paged counterpart of [`RowRowBuilder`] that consumes [`Column`]
-        /// chunks instead of columnation stacks. Mirrors `RowRowBuilder::seal`:
+        /// Counterpart of [`RowRowBuilder`] that consumes [`Column`] chunks
+        /// instead of columnation stacks, whether or not the batcher that
+        /// produced them pages. Mirrors `RowRowBuilder::seal`:
         /// it gathers key and value statistics from the sealed chain and
         /// installs codecs directly, then drops the per-container stats gatherer.
         pub struct RowRowColPagedBuilder<

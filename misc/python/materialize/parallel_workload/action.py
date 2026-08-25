@@ -3024,6 +3024,7 @@ class FlipFlagsAction(Action):
         self.flags_with_values["enable_coalesce_case_transform"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_compute_sync_mv_sink"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher"] = BOOLEAN_FLAG_VALUES
+        self.flags_with_values["enable_columnar_merge_batcher"] = BOOLEAN_FLAG_VALUES
         self.flags_with_values["enable_column_paged_batcher_spill"] = (
             BOOLEAN_FLAG_VALUES
         )
