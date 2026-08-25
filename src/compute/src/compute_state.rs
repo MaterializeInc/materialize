@@ -214,8 +214,12 @@ mod tests {
         DataflowErrorSer::from(EvalError::Internal(format!("error {index}").into()))
     }
 
-    /// Builds a walk over a single-batch error trace holding `updates`.
-    fn error_scan(updates: Vec<((DataflowErrorSer, ()), Timestamp, Diff)>) -> ErrorScan {
+    /// Builds a walk over a single-batch error trace holding `updates`, bounded by
+    /// `row_iteration_limit`.
+    fn error_scan(
+        updates: Vec<((DataflowErrorSer, ()), Timestamp, Diff)>,
+        row_iteration_limit: Option<usize>,
+    ) -> ErrorScan {
         let mut batcher = ErrBatcher::<Timestamp, Diff>::new(None, 0);
         let mut chunk = ColumnationStack::with_capacity(updates.len());
         for update in updates {
@@ -229,7 +233,7 @@ mod tests {
         ErrorScan {
             cursor,
             storage,
-            row_iteration_tracker: PeekRowIterationTracker::new(None, 0),
+            row_iteration_tracker: PeekRowIterationTracker::new(row_iteration_limit, 0),
             scan_time: Duration::ZERO,
         }
     }
@@ -280,7 +284,7 @@ mod tests {
         // The walk visits every cancelling key and then the key that answers.
         let expected_fuel = errors.len();
 
-        let mut scan = error_scan(updates.clone());
+        let mut scan = error_scan(updates.clone(), None);
         let mut fuel = usize::MAX;
         let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
         assert_eq!(unbudgeted, expected());
@@ -289,7 +293,7 @@ mod tests {
         // One unit of fuel per call: the walk answers only if each resumption picks up where the
         // last stopped, and the fuel it spends in total says it neither repeated nor skipped a
         // key.
-        let mut scan = error_scan(updates);
+        let mut scan = error_scan(updates, None);
         let (sliced, consumed, calls) = run_sliced(&mut scan, 1);
         assert_eq!(sliced, expected());
         assert_eq!(consumed, expected_fuel);
@@ -307,7 +311,7 @@ mod tests {
         // key, which is where it learns the trace is exhausted.
         let expected_fuel = errors.len() + 1;
 
-        let mut scan = error_scan(updates.clone());
+        let mut scan = error_scan(updates.clone(), None);
         let mut fuel = usize::MAX;
         let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
         assert_eq!(
@@ -318,7 +322,7 @@ mod tests {
         );
         assert_eq!(usize::MAX - fuel, expected_fuel);
 
-        let mut scan = error_scan(updates);
+        let mut scan = error_scan(updates, None);
         let (sliced, consumed, calls) = run_sliced(&mut scan, 3);
         assert_eq!(
             sliced,
@@ -327,6 +331,41 @@ mod tests {
             }
         );
         assert_eq!(consumed, expected_fuel);
+        assert!(calls > 1, "the budget did not slice the walk");
+    }
+
+    /// The row-iteration limit bounds the error walk too, not only the ok scan that follows it.
+    /// A walk that trips the limit answers with [`PeekError::RowIterationLimitExceeded`] at the
+    /// key that exceeds it, and it answers at that same key whether it ran in one call or was
+    /// sliced into fueled steps. The count the limit is checked against is a count of keys the
+    /// walk examined, so slicing must move neither the answer nor the key it comes from.
+    #[mz_ore::test]
+    fn error_scan_row_iteration_limit_trips_at_the_same_key_when_sliced() {
+        let errors: Vec<DataflowErrorSer> = (0..64).map(error).collect();
+        let updates: Vec<_> = errors.iter().flat_map(cancelling).collect();
+
+        // Well short of the number of keys, so the limit ends the walk rather than the end of
+        // the trace does.
+        let limit = 20;
+        assert!(limit < errors.len(), "the limit must trip mid-walk");
+        let expected = || ErrorScanStep::Answer(PeekError::RowIterationLimitExceeded { limit });
+        // The walk examines `limit` keys and trips on the one after them. That count is also the
+        // fuel it spends, because both are charged once per cursor position.
+        let expected_fuel = limit + 1;
+
+        let mut scan = error_scan(updates.clone(), Some(limit));
+        let mut fuel = usize::MAX;
+        let unbudgeted = scan.step(PEEK_TIMESTAMP, GlobalId::User(1), &mut fuel);
+        assert_eq!(unbudgeted, expected());
+        assert_eq!(usize::MAX - fuel, expected_fuel);
+
+        let mut scan = error_scan(updates, Some(limit));
+        let (sliced, consumed, calls) = run_sliced(&mut scan, 3);
+        assert_eq!(sliced, expected());
+        assert_eq!(
+            consumed, expected_fuel,
+            "slicing the walk must not move the key the limit trips on"
+        );
         assert!(calls > 1, "the budget did not slice the walk");
     }
 }
