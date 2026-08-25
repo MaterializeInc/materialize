@@ -28,6 +28,34 @@ application following a connection disruption, you can:
   data](#enabling-durable-subscriptions-in-your-application) at specific points
   in time to pick up data processing where you left off.
 
+## Choosing an approach
+
+There are two ways to recover a subscription, and they differ in who keeps track
+of your position.
+
+- A [`CREATE DURABLE SUBSCRIPTION`](/sql/create-durable-subscription/) object
+  makes Materialize keep track. You acknowledge what you have processed,
+  Materialize retains exactly the history you still need, and you resume without
+  supplying a timestamp. Use this when your application has nowhere durable to
+  record a timestamp, such as a browser or an edge function, or when you do not
+  want to guess a history retention period. Delivery is at-least-once, so your
+  consumer must be idempotent.
+
+- The pattern described on the rest of this page makes **your application** keep
+  track. You set a history retention period, record the progress timestamp
+  yourself, and pass it back as `AS OF` when you resume. This is more work, and
+  it requires choosing a retention period up front, but it is the only way to
+  achieve **exactly-once** processing, because it lets you commit the data and
+  the position in a single transaction. See [Note about
+  idempotency](#note-about-idempotency).
+
+The two compose. You can create a durable subscription for its retention
+guarantee while still recording your own position: acknowledge to control how
+much history is kept, and then either pass your own `AS OF` when you resume, or
+omit it and discard every update below your committed timestamp. Filtering
+cannot lose data and costs bandwidth; `AS OF` costs nothing and loses data
+silently if you forget that it is an exclusive bound.
+
 ## History retention period
 
 {{< private-preview />}}

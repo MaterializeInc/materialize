@@ -38,6 +38,14 @@ SUBSCRIBE [TO] <object_name | (SELECT ...)>
 [UP TO <timestamp_expression>]
 ;
 
+SUBSCRIBE USING DURABLE SUBSCRIPTION <name>
+[ENVELOPE UPSERT (KEY (<key1>, ...)) | ENVELOPE DEBEZIUM (KEY (<key1>, ...))]
+[WITHIN TIMESTAMP ORDER BY <column1> [ASC | DESC] [NULLS LAST | NULLS FIRST], ...]
+[WITH (<option_name> [= <option_value>], ...)]
+[AS OF [AT LEAST] <timestamp_expression>]
+[UP TO <timestamp_expression>]
+;
+
 ```
 
 where:
@@ -578,14 +586,26 @@ DROP SOURCE auction CASCADE;
 ### Durable subscriptions
 
 Because `SUBSCRIBE` requests happen over the network, these connections might
-get disrupted for both expected and unexpected reasons. You can adjust the
-[history retention
-period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
-for the objects a subscription depends on, and then use [`AS OF`](#as-of) to
-pick up where you left off on connection drops—this ensures that no data is lost
-in the subscription process, and avoids the need for re-snapshotting the data.
+get disrupted for both expected and unexpected reasons. There are two ways to
+recover without re-snapshotting.
 
-For more information, see [durable
+The `SUBSCRIBE USING DURABLE SUBSCRIPTION <name>` form reads from a [`CREATE
+DURABLE SUBSCRIPTION`](/sql/create-durable-subscription/) object, which means
+Materialize tracks your position for you. You report progress with
+[`ACKNOWLEDGE`](/sql/acknowledge/), Materialize retains exactly the history you
+have not acknowledged, and you resume without supplying a timestamp. `SNAPSHOT`
+defaults to `false` on this form, and a requested snapshot is taken at your
+acknowledged position. Only one reader may use a durable subscription at a time,
+and subscribing again takes over from the previous reader.
+
+Alternatively, you can adjust the [history retention
+period](/transform-data/patterns/durable-subscriptions/#history-retention-period)
+for the objects a subscription depends on, record the progress timestamp in your
+own application, and then use [`AS OF`](#as-of) to pick up where you left off.
+This requires more from your application, but it is the only option that
+supports exactly-once processing.
+
+For more information on both, see [durable
 subscriptions](/transform-data/patterns/durable-subscriptions/).
 
 ## Privileges
