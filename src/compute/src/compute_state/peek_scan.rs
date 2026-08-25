@@ -87,11 +87,10 @@ pub(super) enum ScanOutcome {
     /// rows collects them through [`PeekScan::take_batch`]. A driver that cannot is never handed
     /// rows it would have to drop.
     ///
-    /// The two causes coincide only for a driver that takes every batch it is offered, because
-    /// taking one is what lets the walk go on. A driver that cannot write batches has to ask
-    /// [`PeekScan::batch_ready`] before it steps again: a scan holding a full batch makes no
-    /// progress when stepped, spending no fuel and advancing no cursor, so a driver that steps it
-    /// in a loop spins forever.
+    /// A driver has to take every batch it is offered, because taking one is what lets the walk go
+    /// on: a scan holding a full batch makes no progress when stepped, spending no fuel and
+    /// advancing no cursor, so a driver that steps it again without taking spins forever. A driver
+    /// with nowhere to write a batch therefore cannot carry such a scan to an answer.
     Suspended,
     /// The walk is over. Carries the rows accumulated since the last batch was taken, which
     /// together with the batches already taken are the peek's answer.
@@ -327,8 +326,8 @@ where
     /// Whether the accumulated rows have grown past what this peek may answer with inline, which
     /// is when [`PeekScan::take_batch`] hands them over.
     ///
-    /// This is how a driver tells a [`ScanOutcome::Suspended`] it can resume from one it cannot:
-    /// a scan holding a full batch stays where it stands until the batch is taken.
+    /// A scan whose batch is ready stays where it stands until the batch is taken, so this is also
+    /// whether stepping the scan again can make progress.
     pub(super) fn batch_ready(&self) -> bool {
         self.peek_stash_eligible && self.total_size > self.peek_stash_threshold_bytes
     }
