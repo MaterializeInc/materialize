@@ -1,6 +1,6 @@
 ---
 source: src/timely-util/src/columnar/unload.rs
-revision: a32ac9b3e9
+revision: 24cd10bf65
 ---
 
 # timely-util::columnar::unload

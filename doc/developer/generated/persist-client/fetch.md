@@ -1,6 +1,6 @@
 ---
 source: src/persist-client/src/fetch.rs
-revision: 95baa04a85
+revision: 5a4a36c4fd
 ---
 
 # persist-client::fetch

@@ -1,6 +1,6 @@
 ---
 source: src/sql-parser/src/parser.rs
-revision: 39dcae2fba
+revision: 8be80d79b9
 ---
 
 # mz-sql-parser::parser
@@ -27,3 +27,5 @@ The `Precedence` enum is `pub(crate)` and serves as the single source of truth f
 `parse_cluster_option_name` recognizes `AUTO SCALING STRATEGY` as a cluster option, dispatching to `parse_cluster_option_auto_scaling_strategy`. That method parses a paren-enclosed list of strategy sub-policies; the only supported sub-policy in v1 is `ON HYDRATION (HYDRATION SIZE = '...' [, LINGER DURATION = '...'])`. An empty list `()` disables autoscaling. Each sub-policy may appear at most once; a duplicate `ON HYDRATION` entry is a parse error. The result is a `ClusterOption` with value `WithOptionValue::ClusterAutoScalingStrategyOptionValue`.
 `GRANT/REVOKE ON ALL` parsing recognizes `NETWORK POLICY` as an object type in addition to the other supported types.
 `CREATE METRIC SINK [IF NOT EXISTS] <name> [IN CLUSTER <cluster>] FROM <source> [WITH (PREFIX = ...)]` is parsed by `parse_create_metric_sink`, which is dispatched from `parse_create` when the next two tokens are `METRIC SINK`. The only supported `WITH` option is `PREFIX`, parsed by `parse_create_metric_sink_option`.
+
+`SHOW METRIC SINKS [IN CLUSTER <cluster>]` is handled in `parse_show_objects`: `parse_object_type` recognizes the two-token sequence `METRIC SINKS` and returns `ObjectType::MetricSink`, which is then dispatched to `ShowObjectType::MetricSink { in_cluster }`. `SHOW CREATE METRIC SINK <name>` is handled in `parse_show_create` by matching the three-token sequence `CREATE METRIC SINK` and producing `ShowStatement::ShowCreateMetricSink`.

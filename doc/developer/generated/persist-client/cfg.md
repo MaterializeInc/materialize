@@ -1,12 +1,13 @@
 ---
 source: src/persist-client/src/cfg.rs
-revision: 70f75e4f0e
+revision: 5a4a36c4fd
 ---
 
 # persist-client::cfg
 
 Defines `PersistConfig`, the central configuration struct holding all tunable knobs for persist (blob target size, compaction heuristics, retry parameters, feature flags, etc.).
 Most knobs are backed by `mz_dyncfg::Config` entries collected via `all_dyncfgs` that can be updated at runtime via `ConfigUpdates::apply_from`.
+All persist `Config` entries carry `ParameterScope::Environment`: the same client code runs in both `environmentd` and `clusterd`, sharing durable shard state, so a replica-scoped config would leave `environmentd`'s copy on the old value while replicas advance. New persist configs must also be declared `ParameterScope::Environment`.
 `PersistConfig` derefs to `ConfigSet` for convenient dynamic config access.
 Static fields cover build version, hostname, compaction concurrency/queue limits, writer lease duration, critical downgrade interval, and isolated runtime thread count.
 `RetryParameters` encapsulates initial backoff, multiplier, and clamp for retry loops throughout persist.

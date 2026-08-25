@@ -1,6 +1,6 @@
 ---
 source: src/expr/src/scalar/func.rs
-revision: 32c1e1d399
+revision: de99b82315
 ---
 
 # mz-expr::scalar::func
@@ -25,4 +25,5 @@ Several timestamp/date/interval arithmetic functions have corrected `is_monotone
 `date_bin` computes `origin + floor((source - origin) / stride) * stride`. When `source < origin` and `(source - origin)` is an exact multiple of `stride` (i.e., the source lands exactly on a bin boundary before the origin), the remainder is 0 and no extra stride subtraction is applied, so the result is exactly `source` (the correct bin start). Overflow at the `i64` nanosecond boundary surfaces as `EvalError::DateBinOutOfRange` via `checked_sub`.
 `array_lower` returns the lower bound of the requested dimension (which may differ from 1 for arrays with custom lower bounds); `array_upper` returns the upper bound (`lower_bound + length - 1`), not the raw length.
 `convert_from` rejects NUL bytes in the decoded string: after a successful UTF-8 decode, if the result contains `'\0'`, it returns `EvalError::InvalidByteSequence` with `byte_sequence: "0x00"`, matching PostgreSQL behavior.
+`round_numeric_binary` rescales (right-pads with zeroes) when `a` is finite and the requested scale exceeds `a`'s own scale; special values (infinities, NaN) stay on the rounding path, which propagates them unchanged. The exponent of `a` alone cannot determine which path applies: a value such as `123` has exponent zero, and rescaling an infinity yields NaN rather than the expected value.
 Multiplication and division functions (float32, float64, numeric) carry `is_infinity_monotone = false` in their `#[sqlfunc]` attributes. This signals to the abstract interpreter that monotone endpoint-sampling does not hold when an operand may be infinite, because indeterminate forms such as `inf * 0` and `inf / inf` evaluate to `NaN` rather than a bounded value.
