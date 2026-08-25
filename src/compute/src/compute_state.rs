@@ -2346,8 +2346,10 @@ impl CollectionState {
 mod peek_sweep_tests {
     use mz_compute_types::dyncfgs::{
         ENABLE_INDEX_PEEK_OFFLOAD, INDEX_PEEK_ACTIVATION_BUDGET, INDEX_PEEK_INLINE_BUDGET,
+        PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
     };
     use mz_dyncfg::ConfigUpdates;
+    use mz_persist_client::Schemas;
     use mz_persist_client::cache::PersistClientCache;
     use mz_secrets::InMemorySecretsController;
     use mz_storage_types::connections::ConnectionContext;
@@ -2379,6 +2381,14 @@ mod peek_sweep_tests {
     /// How many keys the index the budget tests peek holds. Small, because what those tests turn
     /// on is how many peeks got a turn rather than how far each one walked.
     const SMALL_INDEX_KEYS: u64 = 6;
+
+    /// How many rows a walk accumulates before its batch is full, in the tests that drive a
+    /// hand-back.
+    ///
+    /// More than the inline slice can accumulate within the production budget and fewer than the
+    /// wide index holds, which is what puts the crossing after the promotion rather than before it
+    /// or never.
+    const HAND_BACK_AT_ROWS: u64 = 1_500;
 
     /// How many activations a test drives before it declares a peek stuck.
     ///
@@ -2537,8 +2547,13 @@ mod peek_sweep_tests {
         /// Runs activations until nothing is pending, and reports the responses they produced.
         ///
         /// Bounded, so a peek that never answers fails here rather than hanging the suite. The
-        /// yield between activations is what lets a promoted walk's task run, which on a
+        /// pause between activations is what lets a promoted walk's task run, which on a
         /// single-threaded runtime happens nowhere else.
+        ///
+        /// The pause is a sleep rather than a yield because a peek taken to the stash waits on an
+        /// upload whose work happens off this runtime. Yielding would spin against that instead of
+        /// letting it finish, which would turn the bound into a measure of how fast the machine
+        /// runs the spin.
         async fn drain(&mut self) -> Vec<(Uuid, PeekResponse)> {
             let mut responses = Vec::new();
             for _ in 0..SWEEP_BOUND {
@@ -2547,7 +2562,7 @@ mod peek_sweep_tests {
                 if self.state.pending_peeks.is_empty() {
                     return responses;
                 }
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(1)).await;
             }
             panic!("peeks were still pending after {SWEEP_BOUND} activations");
         }
@@ -2983,38 +2998,181 @@ mod peek_sweep_tests {
         );
     }
 
-    /// A promoted walk that hands back reaches the worker, which answers the peek rather than
-    /// leaving it pending on a walk that has stopped.
+    /// A harness whose peek of the whole wide index is promoted and whose promoted walk then
+    /// crosses the stash threshold, swept once so that the peek is already promoted.
     ///
-    /// The stash location is cleared between the promotion and the hand-back, so that the hand-back
-    /// takes the arm with nowhere to write the rows. That is the arm a replica configured without
-    /// a stash location takes, and reaching it any other way means driving a real upload to
-    /// persist, which the peek stash owns rather than this driver.
-    #[mz_ore::test(tokio::test)]
-    async fn a_promoted_hand_back_answers_when_there_is_nowhere_to_write() {
-        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
-        let row_size = keys[0].byte_len() + size_of::<NonZeroUsize>();
-        // Above what the inline slice can accumulate within the production budget and below what
-        // the whole index holds, so the walk crosses the threshold after it has been promoted.
-        let threshold = 1_500 * row_size;
+    /// `location` is the replica's peek stash location, which has to be present here whatever the
+    /// hand-back is meant to find: a replica without one makes no scan stash-eligible, so its
+    /// walks never fill a batch and never hand back at all.
+    fn promoted_walk_that_hands_back(keys: &[Row], location: PersistLocation) -> Harness {
         assert!(
-            *INDEX_PEEK_INLINE_BUDGET.default() * row_size < threshold,
-            "the inline slice must promote a scan that still has room"
+            u64::cast_from(*INDEX_PEEK_INLINE_BUDGET.default()) < HAND_BACK_AT_ROWS
+                && HAND_BACK_AT_ROWS < WIDE_INDEX_KEYS,
+            "the walk must cross the stash threshold after it is promoted and before it ends"
         );
+        // The threshold is a size rather than a count, because the size of what a scan has
+        // accumulated is what it compares against.
+        let row_size = keys[0].byte_len() + size_of::<NonZeroUsize>();
+        let threshold = usize::cast_from(HAND_BACK_AT_ROWS) * row_size;
 
         let mut harness = Harness::new(move |updates| {
             updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
             updates.add(&ENABLE_PEEK_RESPONSE_STASH, true);
             updates.add(&PEEK_RESPONSE_STASH_THRESHOLD_BYTES, threshold);
         });
-        harness.state.peek_stash_persist_location = Some(PersistLocation::new_in_mem());
+        harness.state.peek_stash_persist_location = Some(location);
         harness.add_pending(
             index_peek_with_uuid(PEEK_A, None),
-            trace_bundle(&keys, cancelling_errors(0)),
+            trace_bundle(keys, cancelling_errors(0)),
         );
 
         harness.sweep();
-        assert_eq!(harness.pending(PEEK_A), Some("offloaded"));
+        assert_eq!(
+            harness.pending(PEEK_A),
+            Some("offloaded"),
+            "the walk must leave the worker before it crosses the threshold"
+        );
+        harness
+    }
+
+    /// Runs activations until the promoted walk of `PEEK_A` has handed back.
+    ///
+    /// Bounded, so a walk that never hands back fails here rather than hanging the suite. The
+    /// yield between activations is what lets the promoted task run.
+    async fn sweep_until_handed_back(harness: &mut Harness) {
+        for _ in 0..SWEEP_BOUND {
+            if harness.pending(PEEK_A) != Some("offloaded") {
+                return;
+            }
+            tokio::task::yield_now().await;
+            harness.sweep();
+        }
+        panic!("the promoted walk had not handed back after {SWEEP_BOUND} activations");
+    }
+
+    /// The rows a stashed peek response holds, read back out of `location` the way the coordinator
+    /// reads one, in [`Row`] order.
+    ///
+    /// A stashed response names a persist batch rather than carrying the answer, so what the peek
+    /// owes its caller is only visible from the batch. The batch is ordered as persist consolidates
+    /// it rather than as the peek would have answered, and the coordinator orders what it reads
+    /// back, so the rows are sorted here and compared as the set they are.
+    async fn stashed_rows(
+        harness: &Harness,
+        location: &PersistLocation,
+        response: PeekResponse,
+    ) -> Vec<Row> {
+        let PeekResponse::Stashed(stashed) = response else {
+            panic!("a peek taken to the stash answers with a stashed response, not {response:?}");
+        };
+
+        // Opened out of the harness's own cache, because two `PersistLocation`s naming the same
+        // in-memory URI reach the same blob only through the cache that opened them.
+        let mut client = harness
+            .state
+            .persist_clients
+            .open(location.clone())
+            .await
+            .expect("the in-memory location opens");
+
+        let shard_id = stashed.shard_id;
+        let batches = stashed
+            .batches
+            .into_iter()
+            .map(|batch| client.batch_from_transmittable_batch(&shard_id, batch))
+            .collect();
+        let read_schemas: Schemas<SourceData, ()> = Schemas {
+            id: None,
+            key: Arc::new(stashed.relation_desc),
+            val: Arc::new(UnitSchema),
+        };
+        let mut cursor = client
+            .read_batches_consolidated::<_, _, _, i64>(
+                shard_id,
+                Antichain::from_elem(Timestamp::default()),
+                read_schemas,
+                batches,
+                |_stats| true,
+                *PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES.default(),
+            )
+            .await
+            .expect("the batches are readable at the timestamp they were written at");
+
+        let mut rows = Vec::new();
+        while let Some(updates) = cursor.next().await {
+            for ((key, _val), _time, diff) in updates {
+                assert_eq!(diff, 1, "the index holds each key once");
+                rows.push(key.0.expect("the peek stash holds no errors"));
+            }
+        }
+        rows.sort();
+
+        // Deleted as the coordinator deletes them once it has read them. A batch dropped without
+        // this leaves its blob keys behind and says so in a warning.
+        for batch in cursor.into_lease() {
+            batch.delete().await;
+        }
+        rows
+    }
+
+    /// A promoted walk that hands back with a stash location present takes the peek to the stash,
+    /// which answers it with the rows the peek would have answered with inline.
+    ///
+    /// This is the arm every hand-back in production takes, because a replica's stash location is
+    /// set once at instance creation and nothing clears it. The peek has to become pending on the
+    /// stash rather than be answered where the hand-back arrives: the rows are produced by a
+    /// second walk that the worker pumps over the activations that follow, and answering here
+    /// would drop them.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_hand_back_takes_the_peek_to_the_stash() {
+        // The wide keys carry the `UInt64` the peek's result description declares, which is the
+        // schema the stash writes its batch under. The narrow fixture rows do not.
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+        let location = PersistLocation::new_in_mem();
+        let mut harness = promoted_walk_that_hands_back(&keys, location.clone());
+
+        sweep_until_handed_back(&mut harness).await;
+
+        assert_eq!(
+            harness.pending(PEEK_A),
+            Some("stash"),
+            "the hand-back starts a stash upload and leaves the peek waiting on it"
+        );
+        assert_eq!(
+            harness.peek_responses(),
+            vec![],
+            "a peek handed to the stash is not answered where the hand-back arrives"
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 1),
+            "a hand-back is a terminal outcome of the promoted walk"
+        );
+
+        let mut responses = harness.drain().await;
+        assert_eq!(responses.len(), 1, "the stashed peek answers once");
+        let (uuid, response) = responses.pop().expect("length checked");
+        assert_eq!(uuid, PEEK_A);
+        assert_eq!(
+            stashed_rows(&harness, &location, response).await,
+            keys,
+            "the stash holds the rows the peek would have answered with inline"
+        );
+    }
+
+    /// A promoted walk that hands back with nowhere to write the rows answers the peek with an
+    /// error rather than leaving it pending on a walk that has stopped.
+    ///
+    /// This arm is defensive only. Reaching it takes a replica that loses its stash location
+    /// between the promotion and the hand-back, which nothing does, and the location is cleared
+    /// here to stand in for that: `handle_create_instance` sets it and nothing clears it, while a
+    /// replica that never had one makes no scan stash-eligible, so none of its walks fills a batch
+    /// and hands back in the first place. The arm production takes is
+    /// [`a_promoted_hand_back_takes_the_peek_to_the_stash`]'s.
+    #[mz_ore::test(tokio::test)]
+    async fn a_promoted_hand_back_answers_when_there_is_nowhere_to_write() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+        let mut harness = promoted_walk_that_hands_back(&keys, PersistLocation::new_in_mem());
 
         harness.state.peek_stash_persist_location = None;
 
