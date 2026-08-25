@@ -50,7 +50,11 @@ impl InlineBudget {
 
         Self::Bounded {
             per_peek: INDEX_PEEK_INLINE_BUDGET.get(config),
-            remaining: INDEX_PEEK_ACTIVATION_BUDGET.get(config),
+            // An aggregate of zero would pass every peek over on every activation, and the
+            // activation a passed-over peek asks for would arrive to find the same empty budget,
+            // so no peek would ever be answered. One position keeps the parameter monotone down
+            // to its floor instead of wedging at it.
+            remaining: INDEX_PEEK_ACTIVATION_BUDGET.get(config).max(1),
         }
     }
 
@@ -128,6 +132,24 @@ mod tests {
         budget.charge(100);
         assert_eq!(budget.grant(), Some(100));
         budget.charge(100);
+        assert_eq!(budget.grant(), Some(100));
+        budget.charge(100);
+        assert_eq!(budget.grant(), None);
+    }
+
+    /// An aggregate of zero still serves one peek per activation. Without that, every peek would
+    /// be passed over on every activation and none would ever be answered.
+    #[mz_ore::test]
+    fn a_zero_aggregate_still_serves_one_peek() {
+        let config = mz_dyncfgs::all_dyncfgs();
+        let mut updates = ConfigUpdates::default();
+        updates.add(&ENABLE_INDEX_PEEK_OFFLOAD, true);
+        updates.add(&INDEX_PEEK_INLINE_BUDGET, 100);
+        updates.add(&INDEX_PEEK_ACTIVATION_BUDGET, 0);
+        updates.apply(&config);
+
+        let mut budget = InlineBudget::for_activation(&config);
+
         assert_eq!(budget.grant(), Some(100));
         budget.charge(100);
         assert_eq!(budget.grant(), None);
