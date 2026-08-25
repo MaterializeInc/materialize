@@ -1135,9 +1135,13 @@ fn mint_batch_descriptions<'scope>(
                 return Ok(());
             }
 
+            let table_ident = TableIdent::new(
+                NamespaceIdent::new(connection.namespace.clone()),
+                connection.table.clone(),
+            );
             let catalog = connection
                 .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
+                .connect(&storage_configuration, InTask::Yes, Some(&table_ident))
                 .await
                 .with_context(|| {
                     format!(
@@ -1542,9 +1546,11 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
         .build_fallible(move |caps| {
             Box::pin(async move {
                 let [capset]: &mut [_; 1] = caps.try_into().unwrap();
+                let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+                let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
                 let catalog = connection
                     .catalog_connection
-                    .connect(&storage_configuration, InTask::Yes)
+                    .connect(&storage_configuration, InTask::Yes, Some(&table_ident))
                     .await
                     .with_context(|| {
                         format!(
@@ -1555,8 +1561,6 @@ fn write_data_files<'scope, H: EnvelopeHandler + 'static>(
                         )
                     })?;
 
-                let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
-                let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
                 while let Some(_) = table_ready_input.next().await {
                     // Wait for table to be ready
                 }
@@ -2508,9 +2512,11 @@ fn commit_to_iceberg<'scope>(
                 return Ok(());
             }
 
+            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
+            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
             let catalog = connection
                 .catalog_connection
-                .connect(&storage_configuration, InTask::Yes)
+                .connect(&storage_configuration, InTask::Yes, Some(&table_ident))
                 .await
                 .with_context(|| {
                     format!(
@@ -2521,8 +2527,6 @@ fn commit_to_iceberg<'scope>(
 
             let mut write_handle = write_handle.await?;
 
-            let namespace_ident = NamespaceIdent::new(connection.namespace.clone());
-            let table_ident = TableIdent::new(namespace_ident, connection.table.clone());
             while let Some(_) = table_ready_input.next().await {
                 // Wait for table to be ready
             }

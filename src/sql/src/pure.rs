@@ -625,8 +625,10 @@ async fn purify_create_sink(
             // Now that we've validated the sink's storage creds (if they exist)
             // we _could_ use them to build a complete Iceberg client (both catalog and storage).
             // TODO(kynan): Actually use those sink-specific creds here instead of ignoring them.
+            // Purification only proves the catalog is reachable, so it needs no table-scoped
+            // storage credentials.
             let _catalog = connection
-                .connect(storage_configuration, InTask::No)
+                .connect(storage_configuration, InTask::No, None)
                 .await
                 .map_err(|e| IcebergSinkPurificationError::CatalogError(Arc::new(e)))?;
         }

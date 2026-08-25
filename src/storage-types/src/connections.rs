@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
@@ -24,15 +24,17 @@ use aws_sigv4::sign::v4;
 // Aliased to avoid colliding with `mz_ccsr::tls::Identity`.
 use aws_smithy_runtime_api::client::identity::Identity as AwsIdentity;
 use base64::Engine;
-use http::{HeaderName, HeaderValue};
+use http::{HeaderMap, HeaderName, HeaderValue};
 use iceberg::Catalog;
 use iceberg::CatalogBuilder;
+use iceberg::TableIdent;
 use iceberg::io::{
     GCS_CREDENTIALS_JSON, GCS_DISABLE_CONFIG_LOAD, GCS_DISABLE_VM_METADATA, GCS_USER_PROJECT,
-    S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY,
+    S3_ACCESS_KEY_ID, S3_DISABLE_EC2_METADATA, S3_REGION, S3_SECRET_ACCESS_KEY, S3_SESSION_TOKEN,
 };
 use iceberg_catalog_rest::{
-    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator, RestCatalogBuilder,
+    OAuth2TokenProvider, REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE, RequestAuthenticator,
+    RestCatalogBuilder, StorageCredential, TokenProvider,
 };
 use iceberg_storage_opendal::{
     AwsCredential, CustomAwsCredentialLoader, OpenDalStorageFactory, ProvideCredential,
@@ -64,10 +66,11 @@ use rdkafka::config::FromClientConfigAndContext;
 use rdkafka::consumer::{BaseConsumer, Consumer};
 use regex::Regex;
 use reqsign_core::time::Timestamp;
-use reqwest::Request;
+use reqwest::{Request, StatusCode};
 use serde::{Deserialize, Deserializer, Serialize};
 use tokio::net;
 use tokio::runtime::Handle;
+use tokio::sync::Mutex;
 use tokio_postgres::config::SslMode;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -92,15 +95,35 @@ pub mod gcp;
 pub mod inline;
 pub mod string_or_secret;
 
-const REST_CATALOG_PROP_SCOPE: &str = "scope";
-const REST_CATALOG_PROP_CREDENTIAL: &str = "credential";
-/// Overrides the OAuth2 token endpoint. Spelled `uri` because that is the property name the
-/// Iceberg REST clients agree on, even though the SQL option says `URL`.
-const REST_CATALOG_PROP_OAUTH2_SERVER_URI: &str = "oauth2-server-uri";
+/// The OAuth2 form field naming the scopes a token is requested for.
+///
+/// Materialize drives the OAuth2 exchange itself rather than through the `credential`,
+/// `oauth2-server-uri`, and `scope` catalog properties, so that one token object serves both
+/// catalog requests and storage-credential refreshes.
+const OAUTH2_PARAM_SCOPE: &str = "scope";
 /// Requests catalog-vended storage credentials. `iceberg-rust` turns `header.*` catalog
 /// properties into headers on every REST request, the same way the Iceberg Java client
 /// carries this one.
 const REST_CATALOG_PROP_ACCESS_DELEGATION: &str = "header.X-Iceberg-Access-Delegation";
+/// The same header, spelled for requests Materialize issues itself rather than through the
+/// catalog client.
+const ICEBERG_ACCESS_DELEGATION_HEADER: &str = "X-Iceberg-Access-Delegation";
+
+/// Reports when vended S3 credentials expire, as spelled by the Iceberg Java client. Catalogs are
+/// not required to send it.
+const S3_SESSION_TOKEN_EXPIRES_AT_MS: &str = "s3.session-token-expires-at-ms";
+
+/// How far ahead of a reported expiry to re-fetch a vended credential.
+const VENDED_CREDENTIAL_REFRESH_BUFFER: Duration = Duration::from_secs(120);
+
+/// How long to trust a vended credential that reports no expiry.
+///
+/// A catalog that omits [`S3_SESSION_TOKEN_EXPIRES_AT_MS`] leaves nothing to schedule against, and
+/// a credential held past its real lifetime fails every S3 request until the dataflow restarts. So
+/// re-fetch on a short interval instead: each one is a single REST call against a credential the
+/// sink is already using.
+// TODO: make this a dyncfg once we know what expiries real catalogs report.
+const VENDED_CREDENTIAL_DEFAULT_TTL: Duration = Duration::from_secs(300);
 
 /// A credential loader that wraps an aws-sdk-rust credentials provider for use with
 /// iceberg/OpenDAL. This allows us to provide refreshable credentials from the AWS SDK
@@ -153,6 +176,214 @@ impl ProvideCredential for AwsSdkCredentialLoader {
             expires_in,
         }))
     }
+}
+
+#[derive(Debug)]
+struct VendedCredentialLoader {
+    client: reqwest::Client,
+    credential_endpoint: Url,
+    token: Arc<dyn TokenProvider>,
+    cached: Mutex<Option<(AwsCredential, Instant)>>,
+}
+
+impl VendedCredentialLoader {
+    fn new(
+        client: reqwest::Client,
+        credential_endpoint: Url,
+        token: Arc<dyn TokenProvider>,
+    ) -> Self {
+        Self {
+            client,
+            credential_endpoint,
+            token,
+            cached: Mutex::new(None),
+        }
+    }
+}
+
+impl VendedCredentialLoader {
+    /// Fetches a fresh credential from the catalog, paired with the instant at which it should be
+    /// re-fetched.
+    async fn fetch(&self) -> reqsign_core::Result<(AwsCredential, Instant)> {
+        let token = self.token.token().await.map_err(|e| {
+            reqsign_core::Error::credential_invalid(
+                "failed to obtain a catalog token for vended Iceberg storage credentials",
+            )
+            .with_source(e)
+        })?;
+
+        let response = self
+            .client
+            .get(self.credential_endpoint.clone())
+            .bearer_auth(token)
+            .header(
+                ICEBERG_ACCESS_DELEGATION_HEADER,
+                IcebergAccessDelegation::VendedCredentials.as_header_value(),
+            )
+            .send()
+            .await
+            .map_err(|e| {
+                reqsign_core::Error::unexpected(format!(
+                    "failed to request vended Iceberg storage credentials from {}",
+                    self.credential_endpoint
+                ))
+                .with_source(e)
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // A rejected token stays rejected until something re-mints it, and nothing else on
+            // this path does: the REST client's own 401 handling covers catalog requests, not
+            // ours. Drop it so the next attempt fetches a new one.
+            if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+                if let Err(e) = self.token.invalidate().await {
+                    warn!(
+                        error = %e.display_with_causes(),
+                        "failed to invalidate catalog token after {status} from the \
+                         Iceberg credentials endpoint"
+                    );
+                }
+            }
+            // Safe to surface the body: only success responses carry credentials.
+            let body = response.text().await.unwrap_or_default();
+            return Err(reqsign_core::Error::unexpected(format!(
+                "Iceberg catalog returned {status} for vended storage credentials at {}: {body}",
+                self.credential_endpoint
+            )));
+        }
+
+        let response: LoadCredentialsResponse = response.json().await.map_err(|e| {
+            reqsign_core::Error::unexpected(
+                "failed to parse the Iceberg catalog's vended storage credentials",
+            )
+            .with_source(e)
+        })?;
+
+        // `provide_credential` is handed no path, so the longest-prefix match the Iceberg spec
+        // describes is not available to us. This endpoint is scoped to a single table and in
+        // practice returns one credential; if a catalog returns several, the most specific
+        // prefix is the closest thing to a safe default.
+        if response.storage_credentials.len() > 1 {
+            debug!(
+                endpoint = %self.credential_endpoint,
+                count = response.storage_credentials.len(),
+                "Iceberg catalog vended multiple storage credentials; using the longest prefix"
+            );
+        }
+        let credential = response
+            .storage_credentials
+            .into_iter()
+            .max_by_key(|credential| credential.prefix.len())
+            .ok_or_else(|| {
+                reqsign_core::Error::credential_invalid(format!(
+                    "Iceberg catalog vended no storage credentials at {}",
+                    self.credential_endpoint
+                ))
+            })?;
+
+        let missing = |prop: &str| {
+            reqsign_core::Error::credential_invalid(format!(
+                "vended Iceberg storage credential for prefix {} is missing {prop}",
+                credential.prefix
+            ))
+        };
+        let access_key_id = credential
+            .config
+            .get(S3_ACCESS_KEY_ID)
+            .ok_or_else(|| missing(S3_ACCESS_KEY_ID))?
+            .clone();
+        let secret_access_key = credential
+            .config
+            .get(S3_SECRET_ACCESS_KEY)
+            .ok_or_else(|| missing(S3_SECRET_ACCESS_KEY))?
+            .clone();
+
+        let expires_in = credential
+            .config
+            .get(S3_SESSION_TOKEN_EXPIRES_AT_MS)
+            .map(|raw| {
+                let millis = raw.parse::<i64>().map_err(|e| {
+                    reqsign_core::Error::credential_invalid(format!(
+                        "vended Iceberg storage credential for prefix {} has an unparseable \
+                         {S3_SESSION_TOKEN_EXPIRES_AT_MS}",
+                        credential.prefix
+                    ))
+                    .with_source(e)
+                })?;
+                Timestamp::from_millisecond(millis)
+            })
+            .transpose()?;
+
+        Ok((
+            AwsCredential {
+                access_key_id,
+                secret_access_key,
+                session_token: credential.config.get(S3_SESSION_TOKEN).cloned(),
+                expires_in,
+            },
+            refresh_deadline(expires_in),
+        ))
+    }
+}
+
+impl ProvideCredential for VendedCredentialLoader {
+    type Credential = AwsCredential;
+
+    async fn provide_credential(
+        &self,
+        _ctx: &reqsign_core::Context,
+    ) -> reqsign_core::Result<Option<Self::Credential>> {
+        // The lock is deliberately held across the fetch. `create_operator` builds a fresh
+        // OpenDAL `Operator` for every file operation, so reqsign's own credential cache never
+        // outlives a single call and this cache is all that stands between the sink and one
+        // catalog round trip per S3 request. Serializing here means a stale entry costs one
+        // refetch rather than one per in-flight operation.
+        let mut cached = self.cached.lock().await;
+
+        if let Some((credential, refresh_at)) = &*cached
+            && Instant::now() < *refresh_at
+        {
+            return Ok(Some(credential.clone()));
+        }
+
+        let (credential, refresh_at) = self.fetch().await?;
+        *cached = Some((credential.clone(), refresh_at));
+        Ok(Some(credential))
+    }
+}
+
+/// Returns when a vended credential expiring at `expires_in` should be re-fetched.
+///
+/// Refreshes [`VENDED_CREDENTIAL_REFRESH_BUFFER`] early to absorb clock skew and the latency of
+/// the fetch itself. A credential that expires within the buffer, or has expired already, is
+/// re-fetched on the next call.
+fn refresh_deadline(expires_in: Option<Timestamp>) -> Instant {
+    let now = Instant::now();
+    let Some(expires_in) = expires_in else {
+        return now + VENDED_CREDENTIAL_DEFAULT_TTL;
+    };
+    let remaining = expires_in
+        .as_system_time()
+        .duration_since(SystemTime::now())
+        .unwrap_or_default();
+    now + remaining.saturating_sub(VENDED_CREDENTIAL_REFRESH_BUFFER)
+}
+
+/// The `loadCredentials` response envelope. `iceberg-rust` models the credential entries but not
+/// this wrapper, because it only ever reads them out of a `loadTable` response.
+#[derive(Debug, Deserialize)]
+struct LoadCredentialsResponse {
+    #[serde(default, rename = "storage-credentials")]
+    storage_credentials: Vec<StorageCredential>,
+}
+
+/// The part of the Iceberg REST `config` response Materialize reads for itself.
+#[derive(Debug, Default, Deserialize)]
+struct CatalogConfigResponse {
+    #[serde(default)]
+    defaults: BTreeMap<String, String>,
+    #[serde(default)]
+    overrides: BTreeMap<String, String>,
 }
 
 /// Converts an AWS SDK credential expiry into reqsign's [`Timestamp`].
@@ -793,18 +1024,27 @@ impl<C: ConnectionAccess> IcebergCatalogConnection<C> {
 }
 
 impl IcebergCatalogConnection<InlinedConnection> {
+    /// Connects to the catalog.
+    ///
+    /// `table` names the table this handle will be used against. It is needed only to keep
+    /// catalog-vended storage credentials refreshed, which the REST specification scopes to a
+    /// single table. Passing `None` leaves the connection on whatever credentials the catalog
+    /// supplies at `loadTable` time, which expire.
     pub async fn connect(
         &self,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
+        table: Option<&TableIdent>,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         match self.catalog {
             IcebergCatalogImpl::S3TablesRest(ref s3tables) => {
+                // S3 Tables signs every request with SigV4 off a refreshable AWS provider, so it
+                // has no vended credential to keep alive.
                 self.connect_s3tables(s3tables, storage_configuration, in_task)
                     .await
             }
             IcebergCatalogImpl::Rest(ref rest) => {
-                self.connect_rest(rest, storage_configuration, in_task)
+                self.connect_rest(rest, storage_configuration, in_task, table)
                     .await
             }
         }
@@ -972,6 +1212,7 @@ impl IcebergCatalogConnection<InlinedConnection> {
         rest: &RestIcebergCatalog,
         storage_configuration: &StorageConfiguration,
         in_task: InTask,
+        table: Option<&TableIdent>,
     ) -> Result<Arc<dyn Catalog>, anyhow::Error> {
         let mut props = BTreeMap::from([(
             REST_CATALOG_PROP_URI.to_string(),
@@ -981,6 +1222,10 @@ impl IcebergCatalogConnection<InlinedConnection> {
         if let Some(warehouse) = &rest.warehouse {
             props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
         }
+
+        // One client for catalog requests, OAuth token requests, and credential refreshes, so all
+        // three share a connection pool. `iceberg-rust` would otherwise default to its own.
+        let client = reqwest::Client::new();
 
         // Catalog auth is configured through a combination of `props` and `.with_authenticator(...)`,
         // which happen at different stages of the [`RestCatalogBuilder`] -> [`RestCatalog`]
@@ -998,7 +1243,6 @@ impl IcebergCatalogConnection<InlinedConnection> {
                     )
                     .await
                     .map_err(|e| anyhow!("failed to read Iceberg catalog credential: {e}"))?;
-                props.insert(REST_CATALOG_PROP_CREDENTIAL.to_string(), credential);
 
                 if let Some(server_url) = server_url {
                     // The OAuth2 exchange POSTs the catalog credential to this URL, so a URL
@@ -1030,10 +1274,64 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         server_url.clone(),
                     );
                 }
+                // Materialize builds the OAuth2 provider rather than handing `iceberg-rust` a
+                // `credential` prop, so one token object backs both catalog requests and the
+                // vended-credential refresh below. The two configurations are mutually exclusive:
+                // the catalog client rejects a custom authenticator combined with a `credential`
+                // prop, so the props that would drive its own provider are set here instead.
+                let token_endpoint = match server_url {
+                    Some(server_url) => server_url.clone(),
+                    // Matches `iceberg-rust`'s default when no `oauth2-server-uri` is configured.
+                    None => format!(
+                        "{}/v1/oauth/tokens",
+                        self.uri.as_str().trim_end_matches('/')
+                    ),
+                };
+                let (client_id, client_secret) = match credential.split_once(':') {
+                    Some((client_id, client_secret)) => {
+                        (Some(client_id.to_string()), client_secret.to_string())
+                    }
+                    None => (None, credential),
+                };
+                let oauth_params = BTreeMap::from([(
+                    OAUTH2_PARAM_SCOPE.to_string(),
+                    // The default `iceberg-rust` applies when the connection names no scope.
+                    scope.clone().unwrap_or_else(|| "catalog".to_string()),
+                )]);
+                let token: Arc<dyn TokenProvider> = Arc::new(OAuth2TokenProvider::new(
+                    client.clone(),
+                    client_id,
+                    client_secret,
+                    token_endpoint,
+                    // The token request needs none of the catalog's headers, and
+                    // `OAuth2TokenProvider` sets the form content type itself.
+                    HeaderMap::new(),
+                    oauth_params.into_iter().collect(),
+                ));
 
-                if let Some(scope) = scope {
-                    props.insert(REST_CATALOG_PROP_SCOPE.to_string(), scope.clone());
-                }
+                // Installing a loader hands it sole responsibility for S3 credentials: OpenDAL
+                // replaces its whole provider chain, including the static keys parsed out of the
+                // catalog's vended `storage-credentials` props. So only install one when the
+                // connection asked for delegation and we know which table to refresh, and let the
+                // static props serve every other case.
+                let customized_credential_load = match (&rest.access_delegation, table) {
+                    (Some(IcebergAccessDelegation::VendedCredentials), Some(table)) => {
+                        let endpoint = self
+                            .table_credentials_endpoint(
+                                &client,
+                                &token,
+                                rest.warehouse.as_deref(),
+                                table,
+                            )
+                            .await?;
+                        Some(CustomAwsCredentialLoader::new(VendedCredentialLoader::new(
+                            client.clone(),
+                            endpoint,
+                            Arc::clone(&token),
+                        )))
+                    }
+                    _ => None,
+                };
 
                 (
                     OpenDalStorageFactory::S3 {
@@ -1043,9 +1341,9 @@ impl IcebergCatalogConnection<InlinedConnection> {
                         // vends instead, it returns per-table `storage-credentials` that
                         // `iceberg-rust` wires into the same FileIO.
                         // N.B. This is not confirmed to work with other catalog & storage implementations.
-                        customized_credential_load: None,
+                        customized_credential_load,
                     },
-                    None,
+                    Some(iceberg_catalog_rest::BearerTokenAuthenticator::new(token)),
                 )
             }
             IcebergCatalogAuth::Gcp(gcp_connection_reference) => {
@@ -1089,8 +1387,9 @@ impl IcebergCatalogConnection<InlinedConnection> {
             );
         }
 
-        let mut catalog =
-            RestCatalogBuilder::default().with_storage_factory(Arc::new(storage_factory));
+        let mut catalog = RestCatalogBuilder::default()
+            .with_storage_factory(Arc::new(storage_factory))
+            .with_client(client);
         if let Some(auth) = custom_authenticator {
             catalog = catalog.with_authenticator(Arc::new(auth));
         }
@@ -1101,13 +1400,91 @@ impl IcebergCatalogConnection<InlinedConnection> {
         Ok(Arc::new(catalog))
     }
 
+    /// Builds the REST endpoint that vends storage credentials for `table`.
+    ///
+    /// The path carries the catalog's request prefix, which the REST specification has servers
+    /// announce from their `config` endpoint (`catalogs/<name>` for Unity Catalog, absent for
+    /// others). `iceberg-rust` resolves the same value when it builds the catalog but keeps it
+    /// private, so this asks the server for it directly.
+    async fn table_credentials_endpoint(
+        &self,
+        client: &reqwest::Client,
+        token: &Arc<dyn TokenProvider>,
+        warehouse: Option<&str>,
+        table: &TableIdent,
+    ) -> Result<Url, anyhow::Error> {
+        let mut config_endpoint = self.uri.clone();
+        config_endpoint
+            .path_segments_mut()
+            .map_err(|_| anyhow!("Iceberg catalog URI cannot be a base: {}", self.uri))?
+            .pop_if_empty()
+            .extend(["v1", "config"]);
+        if let Some(warehouse) = warehouse {
+            config_endpoint
+                .query_pairs_mut()
+                .append_pair("warehouse", warehouse);
+        }
+
+        let bearer = token
+            .token()
+            .await
+            .map_err(|e| anyhow!("failed to obtain an Iceberg catalog token: {e}"))?;
+        let response = client
+            .get(config_endpoint.clone())
+            .bearer_auth(bearer)
+            .send()
+            .await
+            .with_context(|| {
+                format!("failed to request Iceberg catalog config at {config_endpoint}")
+            })?;
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().await.unwrap_or_default();
+            return Err(anyhow!(
+                "Iceberg catalog returned {status} for its config at {config_endpoint}: {body}"
+            ));
+        }
+        let config: CatalogConfigResponse = response.json().await.with_context(|| {
+            format!("failed to parse Iceberg catalog config from {config_endpoint}")
+        })?;
+
+        // Overrides take precedence over defaults, matching how the catalog client merges them.
+        let prefix = config
+            .overrides
+            .get("prefix")
+            .or_else(|| config.defaults.get("prefix"));
+
+        let mut endpoint = self.uri.clone();
+        {
+            let mut segments = endpoint
+                .path_segments_mut()
+                .map_err(|_| anyhow!("Iceberg catalog URI cannot be a base: {}", self.uri))?;
+            segments.pop_if_empty().push("v1");
+            // A prefix is a path fragment rather than a single segment, so it is split out
+            // instead of pushed whole, which would percent-encode its separators.
+            if let Some(prefix) = prefix {
+                segments.extend(prefix.split('/').filter(|s| !s.is_empty()));
+            }
+            // `to_url_string` joins multi-level namespaces with the unit separator the
+            // specification mandates; pushing it as one segment percent-encodes it to `%1F`.
+            segments
+                .push("namespaces")
+                .push(&table.namespace().to_url_string())
+                .push("tables")
+                .push(&table.name)
+                .push("credentials");
+        }
+        Ok(endpoint)
+    }
+
     async fn validate(
         &self,
         _id: CatalogItemId,
         storage_configuration: &StorageConfiguration,
     ) -> Result<(), ConnectionValidationError> {
+        // Validation only lists namespaces, so it needs no table-scoped credentials.
         let catalog = self
-            .connect(storage_configuration, InTask::No)
+            .connect(storage_configuration, InTask::No, None)
             .await
             .map_err(|e| {
                 ConnectionValidationError::Other(anyhow!("failed to connect to catalog: {e}"))
