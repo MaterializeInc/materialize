@@ -73,6 +73,18 @@ static V154_DEV0: LazyLock<Version> = LazyLock::new(|| Version {
 });
 pub const V161: Version = Version::new(0, 161, 0);
 
+/// Version at which `environmentd` learned
+/// `--orchestrator-kubernetes-priority-class-name`. Older images reject the
+/// unknown argument and fail to start, so the flag is only forwarded at or
+/// above this version.
+static V26_40_0: LazyLock<Version> = LazyLock::new(|| Version {
+    major: 26,
+    minor: 40,
+    patch: 0,
+    pre: Prerelease::new("dev.0").expect("dev.0 is valid prerelease"),
+    build: BuildMetadata::new("").expect("empty string is valid buildmetadata"),
+});
+
 static V26_1_0: LazyLock<Version> = LazyLock::new(|| Version {
     major: 26,
     minor: 1,
@@ -804,6 +816,13 @@ fn create_environmentd_statefulset_object(
             scheduler_name
         ));
     }
+    if mz.meets_minimum_version(&V26_40_0) {
+        if let Some(priority_class_name) = &config.clusterd_priority_class_name {
+            args.push(format!(
+                "--orchestrator-kubernetes-priority-class-name={priority_class_name}"
+            ));
+        }
+    }
     if mz.meets_minimum_version(&V154_DEV0) {
         args.extend(
             mz.spec
@@ -1246,6 +1265,7 @@ fn create_environmentd_statefulset_object(
             ),
             affinity: config.environmentd_affinity.clone(),
             scheduler_name: config.scheduler_name.clone(),
+            priority_class_name: config.environmentd_priority_class_name.clone(),
             service_account_name: Some(mz.service_account_name()),
             volumes: Some(volumes),
             security_context: Some(PodSecurityContext {

@@ -181,6 +181,9 @@ pub struct Args {
     /// Name of a non-default Kubernetes scheduler, if any.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SCHEDULER_NAME")]
     orchestrator_kubernetes_scheduler_name: Option<String>,
+    /// Name of a `PriorityClass` to assign to services, if any.
+    #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_PRIORITY_CLASS_NAME")]
+    orchestrator_kubernetes_priority_class_name: Option<String>,
     /// Annotations to apply to all services created by the Kubernetes orchestrator
     /// in the form `KEY=VALUE`.
     #[structopt(long, env = "ORCHESTRATOR_KUBERNETES_SERVICE_ANNOTATION")]
@@ -822,6 +825,7 @@ fn run(mut args: Args) -> Result<(), anyhow::Error> {
                     .block_on(KubernetesOrchestrator::new(KubernetesOrchestratorConfig {
                         context: args.orchestrator_kubernetes_context.clone(),
                         scheduler_name: args.orchestrator_kubernetes_scheduler_name,
+                        priority_class_name: args.orchestrator_kubernetes_priority_class_name,
                         service_annotations: args
                             .orchestrator_kubernetes_service_annotation
                             .into_iter()

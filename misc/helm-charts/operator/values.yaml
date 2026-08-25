@@ -306,6 +306,10 @@ environmentd:
   # @notationType -- k8s/tolerations
   # @default -- ``{}``
   tolerations: {}
+  # -- PriorityClass to use for environmentd pods spawned by the operator. The
+  # PriorityClass must already exist. Kubernetes rejects a pod that names one
+  # it cannot resolve, so a typo here stops these pods being created at all.
+  priorityClassName:
   # @notationType -- k8s/resources
   defaultResources:
     # -- Default resource limits for environmentd's CPU and memory
@@ -345,6 +349,10 @@ clusterd:
   # @notationType -- k8s/tolerations
   # @default -- ``{}``
   tolerations: {}
+  # -- PriorityClass to use for clusterd pods spawned by the operator. The
+  # PriorityClass must already exist. Kubernetes rejects a pod that names one
+  # it cannot resolve, so a typo here stops these pods being created at all.
+  priorityClassName:
 
 balancerd:
   # -- Flag to indicate whether to create balancerd pods for the environments
