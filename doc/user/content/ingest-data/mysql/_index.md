@@ -33,6 +33,11 @@ gives you the following benefits:
   read-replica to build views on top of your MySQL data that are efficiently
   maintained and always up-to-date.
 
+When a source is created, Materialize parallelizes the initial snapshot
+across the cluster's workers and can split the read of large tables that meet
+certain requirements {{< private-preview-inline />}}. See [Snapshot
+parallelism](/ingest-data/mysql/snapshot-parallelism/).
+
 ## Supported versions and services
 
 {{< note >}}

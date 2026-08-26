@@ -18,6 +18,10 @@ menu:
 
 {{% include-headless "/headless/ingestion/snapshotting-duration" %}}
 
+### Parallelism
+
+{{% include-headless "/headless/ingestion/snapshotting-parallelism" %}}
+
 ## Queries during snapshotting
 
 {{% include-headless "/headless/ingestion/snapshotting-queries" %}}
@@ -27,7 +31,9 @@ menu:
 Snapshotting has the following upstream impacts:
 
 - **Read load.** Snapshotting puts read, CPU, and network load on the upstream
-  system, proportional to the data volume.
+  system. The total load is proportional to the volume of data being
+  snapshotted, while the source cluster's [parallelism](#parallelism) affects
+  the peak load: more workers compress the reads into a shorter window.
 
 - **Change-log retention for CDC database sources.** When ingesting data from
   CDC database sources (PostgreSQL, MySQL, SQL Server), the upstream system must
@@ -41,3 +47,4 @@ Snapshotting has the following upstream impacts:
 
 - [Ingest data](/ingest-data/)
 - [Sources](/concepts/sources/)
+- [Troubleshooting data ingestion](/ingest-data/troubleshooting/)
