@@ -939,6 +939,7 @@ async fn try_commit_batch(
         Err(CommitError::Local(e)) => {
             // Nothing was sent to the catalog, so this commit definitely didn't happen.
             // Next attempt should reload the table and try again from scratch.
+            metrics.commit_failures.inc();
             (
                 table,
                 RetryResult::RetryableErr(anyhow!("Failed to build iceberg table commit: {}", e)),
