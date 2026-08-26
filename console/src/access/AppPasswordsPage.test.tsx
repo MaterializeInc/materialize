@@ -137,6 +137,22 @@ describe("AppPasswordsPage", () => {
     );
   });
 
+  it("posts the selected expiration", async () => {
+    const created = mockFrontegg([]);
+    await renderPage(true);
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByLabelText("Name"), "Long lived");
+    await user.selectOptions(screen.getByLabelText("Expiration"), "365d");
+    await user.click(screen.getByRole("button", { name: "Create Password" }));
+
+    await waitFor(() =>
+      expect(created.personal).toMatchObject({
+        expiresInMinutes: 365 * 24 * 60,
+      }),
+    );
+  });
+
   it("omits the expiration when no expiration is selected", async () => {
     const created = mockFrontegg([]);
     await renderPage(true);
