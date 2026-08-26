@@ -262,14 +262,6 @@ pub const ENABLE_SYNC_MV_SINK: Config<bool> = Config::new(
     ParameterScope::Environment,
 );
 
-/// Whether rendering should use the new MV sink correction buffer implementation.
-pub const ENABLE_CORRECTION_V2: Config<bool> = Config::new(
-    "enable_compute_correction_v2",
-    true,
-    "Whether compute should use the new MV sink correction buffer implementation.",
-    ParameterScope::Environment,
-);
-
 /// The size factor of subsequent chains in the correction V2 buffer.
 pub const CORRECTION_V2_CHAIN_PROPORTIONALITY: Config<f64> = Config::new(
     "compute_correction_v2_chain_proportionality",
@@ -419,15 +411,6 @@ pub const DATAFLOW_MAX_INFLIGHT_BYTES_CC: Config<Option<usize>> = Config::new(
     None,
     "The maximum number of in-flight bytes emitted by persist_sources feeding \
      compute dataflows in cc clusters.",
-    ParameterScope::Replica,
-);
-
-/// The term `n` in the growth rate `1 + 1/(n + 1)` for `ConsolidatingVec`.
-/// The smallest value `0` corresponds to the greatest allowed growth, of doubling.
-pub const CONSOLIDATING_VEC_GROWTH_DAMPENER: Config<usize> = Config::new(
-    "consolidating_vec_growth_dampener",
-    1,
-    "Dampener in growth rate for consolidating vector size",
     ParameterScope::Replica,
 );
 
@@ -688,7 +671,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_ERROR_DISTINCT)
         .add(&ENABLE_MZ_JOIN_CORE)
         .add(&ENABLE_SYNC_MV_SINK)
-        .add(&ENABLE_CORRECTION_V2)
         .add(&CORRECTION_V2_CHAIN_PROPORTIONALITY)
         .add(&CORRECTION_V2_CHUNK_SIZE)
         .add(&ENABLE_COMPUTE_TEMPORAL_BUCKETING)
@@ -715,7 +697,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&COMPUTE_REPLICA_EXPIRATION_OFFSET)
         .add(&COMPUTE_APPLY_COLUMN_DEMANDS)
         .add(&COMPUTE_FLAT_MAP_FUEL)
-        .add(&CONSOLIDATING_VEC_GROWTH_DAMPENER)
         .add(&ENABLE_COMPUTE_RENDER_FUELED_AS_SPECIFIC_COLLECTION)
         .add(&ENABLE_COMPUTE_LOGICAL_BACKPRESSURE)
         .add(&COMPUTE_LOGICAL_BACKPRESSURE_MAX_RETAINED_CAPABILITIES)

@@ -74,7 +74,8 @@ use tracing::trace;
 use crate::compute_state::ComputeState;
 use crate::render::StartSignal;
 use crate::render::errors::DataflowErrorSer;
-use crate::sink::correction::{ChannelLogging, Correction, CorrectionLogger};
+use crate::sink::correction::Correction;
+use crate::sink::correction::logging::{ChannelLogging, CorrectionLogger};
 use crate::sink::materialized_view::{
     BatchDescription, BatchesStream, DescsStream, DesiredStreams, OkErr, PersistApi,
     PersistStreams, SharedSinkFrontier, advance, operator_name, persist_source,

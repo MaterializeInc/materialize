@@ -7,9 +7,9 @@
 // the Business Source License, use of this software will be governed
 // by the Apache License, Version 2.0.
 
-//! Micro-benchmark comparing `CorrectionV1` and `CorrectionV2` on hydration-style
-//! workloads, i.e., workloads where the input catches up with the current time by
-//! passing through many distinct timestamps.
+//! Micro-benchmark for the MV sink `Correction` buffer on hydration-style workloads,
+//! i.e., workloads where the input catches up with the current time by passing through
+//! many distinct timestamps.
 //!
 //! The scenario this models: an MV sink restarts with an old as-of and the desired
 //! input replays through `T` distinct timestamps while persist writes (and thus
@@ -30,8 +30,7 @@ use criterion::measurement::WallTime;
 use criterion::{
     BatchSize, BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main,
 };
-use mz_compute::sink::correction::CorrectionV1;
-use mz_compute::sink::correction_v2::CorrectionV2;
+use mz_compute::sink::correction::Correction;
 use mz_ore::metrics::MetricsRegistry;
 use mz_persist_client::cfg::PersistConfig;
 use mz_persist_client::metrics::{Metrics, SinkMetrics};
@@ -42,77 +41,12 @@ use timely::progress::Antichain;
 const CHAIN_PROPORTIONALITY: f64 = 3.0;
 /// Default value of `compute_correction_v2_chunk_size`.
 const CHUNK_SIZE: usize = 8 * 1024;
-/// Default value of `consolidating_vec_growth_dampener`.
-const GROWTH_DAMPENER: usize = 1;
 
 /// Number of updates inserted per distinct timestamp.
 const UPDATES_PER_TS: u64 = 16;
 
 /// Time offset of far-future retractions in the temporal-filter pattern.
 const TEMPORAL_OFFSET: u64 = 1 << 40;
-
-#[derive(Clone, Copy)]
-enum Version {
-    V1,
-    V2,
-}
-
-impl Version {
-    fn name(self) -> &'static str {
-        match self {
-            Self::V1 => "v1",
-            Self::V2 => "v2",
-        }
-    }
-}
-
-/// Local dispatch over the correction buffer implementations.
-///
-/// The production `Correction` enum only contains v1 and v2, so the bench carries its own.
-enum Corr {
-    V1(CorrectionV1<Row>),
-    V2(CorrectionV2<Row>),
-}
-
-impl Corr {
-    fn insert(&mut self, updates: &mut Vec<(Row, Timestamp, Diff)>) {
-        match self {
-            Self::V1(c) => c.insert(updates),
-            Self::V2(c) => c.insert(updates),
-        }
-    }
-
-    fn insert_negated(&mut self, updates: &mut Vec<(Row, Timestamp, Diff)>) {
-        match self {
-            Self::V1(c) => c.insert_negated(updates),
-            Self::V2(c) => c.insert_negated(updates),
-        }
-    }
-
-    fn updates_before(
-        &mut self,
-        upper: &Antichain<Timestamp>,
-    ) -> Box<dyn Iterator<Item = (Row, Timestamp, Diff)> + '_> {
-        match self {
-            Self::V1(c) => Box::new(c.updates_before(upper)),
-            Self::V2(c) => Box::new(c.updates_before(upper)),
-        }
-    }
-
-    fn advance_since(&mut self, since: Antichain<Timestamp>) {
-        match self {
-            Self::V1(c) => c.advance_since(since),
-            Self::V2(c) => c.advance_since(since),
-        }
-    }
-
-    fn consolidate_at_since(&mut self) {
-        match self {
-            Self::V1(c) => c.consolidate_at_since(),
-            Self::V2(c) => c.consolidate_at_since(),
-        }
-    }
-}
 
 /// The shape of the update stream fed into the correction buffer.
 #[derive(Clone, Copy)]
@@ -145,22 +79,14 @@ fn sink_metrics() -> SinkMetrics {
     metrics.sink.clone()
 }
 
-fn make_correction(version: Version, metrics: &SinkMetrics) -> Corr {
-    let worker_metrics = metrics.for_worker(0);
-    match version {
-        Version::V1 => Corr::V1(CorrectionV1::new(
-            metrics.clone(),
-            worker_metrics,
-            GROWTH_DAMPENER,
-        )),
-        Version::V2 => Corr::V2(CorrectionV2::new(
-            metrics.clone(),
-            worker_metrics,
-            None,
-            CHAIN_PROPORTIONALITY,
-            CHUNK_SIZE,
-        )),
-    }
+fn make_correction(metrics: &SinkMetrics) -> Correction<Row> {
+    Correction::with_params(
+        metrics.clone(),
+        metrics.for_worker(0),
+        None,
+        CHAIN_PROPORTIONALITY,
+        CHUNK_SIZE,
+    )
 }
 
 fn row(key: u64, value: u64) -> Row {
@@ -219,20 +145,28 @@ fn make_batches(num_ts: u64, pattern: Pattern) -> Vec<Vec<(Row, Timestamp, Diff)
 /// Fill a fresh correction buffer with all batches, mimicking desired input that has
 /// run far ahead of persist writes.
 fn filled_correction(
-    version: Version,
     metrics: &SinkMetrics,
     batches: &[Vec<(Row, Timestamp, Diff)>],
-) -> Corr {
-    let mut correction = make_correction(version, metrics);
+) -> Correction<Row> {
+    let mut correction = make_correction(metrics);
     for batch in batches {
         correction.insert(&mut batch.clone());
     }
     correction
 }
 
-impl Corr {
+/// Benchmark helpers modelling the `write_batches` operator's use of the buffer.
+///
+/// A trait rather than an inherent `impl`, because `Correction` is defined in another crate.
+trait WriteSteps {
     /// Emulate one `write_batches` write: read the updates before `upper` and feed back their
     /// negations, like the persist input does.
+    fn write_step(&mut self, upper: &Antichain<Timestamp>) -> usize;
+    /// Read and count the updates before `upper`, without persist feedback.
+    fn read_count(&mut self, upper: &Antichain<Timestamp>) -> usize;
+}
+
+impl WriteSteps for Correction<Row> {
     fn write_step(&mut self, upper: &Antichain<Timestamp>) -> usize {
         let mut written: Vec<_> = self.updates_before(upper).collect();
         let count = written.len();
@@ -240,7 +174,6 @@ impl Corr {
         count
     }
 
-    /// Read and count the updates before `upper`, without persist feedback.
     fn read_count(&mut self, upper: &Antichain<Timestamp>) -> usize {
         self.updates_before(upper).count()
     }
@@ -253,7 +186,7 @@ impl Corr {
 /// updates come back through the persist input and are removed by `insert_negated`. We
 /// model that feedback here, otherwise the buffer re-emits all previous updates on every
 /// step and clone costs drown out the structure-management costs we want to measure.
-fn drain_stepwise(mut correction: Corr, num_ts: u64) -> Corr {
+fn drain_stepwise(mut correction: Correction<Row>, num_ts: u64) -> Correction<Row> {
     for t in 0..num_ts {
         let upper = Antichain::from_elem(Timestamp::from(t + 1));
         let count = correction.write_step(&upper);
@@ -265,7 +198,7 @@ fn drain_stepwise(mut correction: Corr, num_ts: u64) -> Corr {
 
 /// Advance the since across all buffered times at once, then consolidate and drain.
 /// This exercises `Cursor::advance_by` with many distinct times below the since.
-fn advance_jump(mut correction: Corr, num_ts: u64) -> Corr {
+fn advance_jump(mut correction: Correction<Row>, num_ts: u64) -> Correction<Row> {
     correction.advance_since(Antichain::from_elem(Timestamp::from(num_ts)));
     correction.consolidate_at_since();
     let upper = Antichain::from_elem(Timestamp::from(num_ts + 1));
@@ -281,23 +214,21 @@ fn bench_scenario<F>(
     num_ts: u64,
     routine: F,
 ) where
-    F: Fn(Corr, u64) -> Corr,
+    F: Fn(Correction<Row>, u64) -> Correction<Row>,
 {
     let batches = make_batches(num_ts, pattern);
-    for version in [Version::V1, Version::V2] {
-        group.bench_function(BenchmarkId::new(version.name(), num_ts), |b| {
-            b.iter_batched(
-                || filled_correction(version, metrics, &batches),
-                |correction| routine(correction, num_ts),
-                BatchSize::PerIteration,
-            )
-        });
-    }
+    group.bench_function(BenchmarkId::from_parameter(num_ts), |b| {
+        b.iter_batched(
+            || filled_correction(metrics, &batches),
+            |correction| routine(correction, num_ts),
+            BatchSize::PerIteration,
+        )
+    });
 }
 
 /// Configure a benchmark group for short wall-clock time.
 ///
-/// The interesting effects here are order-of-magnitude differences between implementations, so we
+/// The interesting effects here are order-of-magnitude differences across problem sizes, so we
 /// trade statistical rigor for execution speed.
 fn configure(group: &mut BenchmarkGroup<WallTime>) {
     group
@@ -329,20 +260,18 @@ fn bench_correction(c: &mut Criterion) {
         configure(&mut group);
         for num_ts in num_ts_values {
             let batches = make_batches(num_ts, pattern);
-            for version in [Version::V1, Version::V2] {
-                group.bench_function(BenchmarkId::new(version.name(), num_ts), |b| {
-                    b.iter_batched(
-                        || (make_correction(version, &metrics), batches.clone()),
-                        |(mut correction, mut batches)| {
-                            for batch in &mut batches {
-                                correction.insert(batch);
-                            }
-                            correction
-                        },
-                        BatchSize::PerIteration,
-                    )
-                });
-            }
+            group.bench_function(BenchmarkId::from_parameter(num_ts), |b| {
+                b.iter_batched(
+                    || (make_correction(&metrics), batches.clone()),
+                    |(mut correction, mut batches)| {
+                        for batch in &mut batches {
+                            correction.insert(batch);
+                        }
+                        correction
+                    },
+                    BatchSize::PerIteration,
+                )
+            });
         }
         group.finish();
     }
