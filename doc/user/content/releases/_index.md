@@ -20,14 +20,15 @@ both Cloud and Self-Managed. See [Release schedule](/releases/schedule) for deta
 {{</ note >}}
 
 ## v26.39.0
-*Released to Materialize Cloud: 2026-08-27* <br>
-*Released to Materialize Self-Managed: 2026-08-28* <br>
+*Released to Materialize Cloud: 2026-08-26* <br>
+*Released to Materialize Self-Managed: 2026-08-27* <br>
 
 ### Improvements {#v26.39-improvements}
 - **Object dependency graph in the system catalog**: A new `mz_internal.mz_object_graph_edges` view lists the dependency edges between maintained objects, including the edges linking a source to its subsources and tables.
 - **MCP-first connect experience in the Console**: The Console's connect modal is now a drawer with guided setup for MCP clients, external tools such as DBeaver and dbt, and the `psql` terminal command, including inline app password creation.
 
 ### Agent Skills {#v26.39-agent-skills}
+- **mz-ontology-design**: A new skill that structures a Materialize SQL code base as a canonical ontology — a shared `raw` database, a shared `core` database, and one database per use case — with rules for semantic object grain and identity, temporal semantics, and a machine-readable relationship registry.
 - **materialize-debug-freshness**: A new skill that diagnoses why an object is behind wall-clock time, sweeping source and sink status, attributing lag hop by hop, and ranking the dataflows and operators responsible.
 
 ### Bug Fixes {#v26.39-bug-fixes}
