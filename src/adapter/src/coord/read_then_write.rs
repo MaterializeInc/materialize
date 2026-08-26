@@ -260,7 +260,7 @@ impl Coordinator {
 /// Which dependency rules a read-then-write is held to.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DependencyPolicy {
-    /// A user statement, which may only read user tables and views over them.
+    /// A user statement whose relation leaves must be writable user tables.
     UserDml,
     /// Coordinator-authored work, which may read system objects across time domains.
     SystemReads,
@@ -268,8 +268,9 @@ pub(crate) enum DependencyPolicy {
 
 /// Validates all transitive dependencies of a read-then-write selection.
 ///
-/// User DML only accepts objects in the user-table time domain. System reads
-/// accept supported system objects across time domains. Both reject `mz_now()`.
+/// User DML requires every relation leaf to be a writable user table. System
+/// reads accept supported system objects across time domains. Both reject
+/// `mz_now()`.
 ///
 /// The first invalid or temporal dependency encountered short-circuits with the corresponding
 /// error. Traversal is bounded at `max_rw_dependencies` distinct objects, returning
@@ -315,15 +316,25 @@ pub(crate) fn validate_read_then_write_dependencies(
             }
         }
 
-        let ids_to_check = entry.uses();
         let item_type = entry.item().typ();
+        let ids_to_check = match item_type {
+            Func | View | MaterializedView => entry.uses(),
+            _ => BTreeSet::new(),
+        };
+        let is_writable_table = matches!(
+            entry.item(),
+            CatalogItem::Table(objects::Table {
+                data_source: objects::TableDataSource::TableWrites { .. },
+                ..
+            })
+        );
         let valid = match policy {
             DependencyPolicy::UserDml => match item_type {
                 typ @ (Func | View | MaterializedView) => id.is_user() || matches!(typ, Func),
                 Source | Secret | Connection => false,
                 // Cannot select from sinks or indexes.
                 Sink | MetricSink | Index => unreachable!(),
-                Table => id.is_user() && entry.source_export_details().is_none(),
+                Table => id.is_user() && is_writable_table,
                 Type => true,
             },
             DependencyPolicy::SystemReads => {
@@ -344,10 +355,12 @@ pub(crate) fn validate_read_then_write_dependencies(
                 Table => {
                     if !id.is_user() {
                         "system table"
+                    } else if is_writable_table {
+                        "user table"
                     } else if entry.source_export_details().is_some() {
                         "source-export table"
                     } else {
-                        "user table"
+                        "source-backed table"
                     }
                 }
                 View if id.is_user() => "user view",

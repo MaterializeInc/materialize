@@ -108,7 +108,7 @@ IGNORED_ERROR_PATTERNS = [
     r"null character not permitted",
     r"expressions must appear in select list",
     r"expressions must match initial",
-    r"invalid selection: operation may only",
+    r"invalid selection: every relation leaf",
     r"array size exceeds the maximum allowed",
     r"does not allow subqueries",
     r"must use value within",

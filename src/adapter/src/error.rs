@@ -105,9 +105,9 @@ pub enum AdapterError {
     },
     /// The selection value for a table mutation operation refers to an invalid object.
     InvalidTableMutationSelection {
-        /// The full name of the problematic object (e.g. a source or source-export table).
+        /// The full name of the problematic object, such as a source or source-backed table.
         object_name: String,
-        /// Human-readable type of the object (e.g. "source", "source-export table").
+        /// Human-readable type of the object, such as "source-backed table".
         object_type: String,
     },
     /// A read-then-write statement's read set has more transitive dependencies
@@ -580,8 +580,7 @@ impl AdapterError {
                 object_type,
             } => Some(format!(
                 "{object_type} '{}' may not be used in this operation; \
-                     the selection may refer to views and materialized views, but transitive \
-                     dependencies must not include sources or source-export tables",
+                     every relation leaf in the selection must be a writable user table",
                 object_name.quoted()
             )),
             AdapterError::ReadThenWriteDependencyLimitExceeded {
@@ -1270,7 +1269,7 @@ impl fmt::Display for AdapterError {
             AdapterError::InvalidTableMutationSelection { .. } => {
                 write!(
                     f,
-                    "invalid selection: operation may only (transitively) refer to non-source, non-system tables"
+                    "invalid selection: every relation leaf must be a writable user table"
                 )
             }
             AdapterError::ReadThenWriteDependencyLimitExceeded {
