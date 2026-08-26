@@ -251,6 +251,9 @@ impl Coordinator {
     fn new_sweep(&self, catalog: Arc<Catalog>, retention: Duration) -> Sweep {
         let retention_ms = u64::try_from(retention.as_millis()).unwrap_or(u64::MAX);
         let build_version = catalog.state().config().build_info.human_version(None);
+        // Background read-then-write always uses the frontend OCC path. This
+        // shared constructor field only controls session fallback, so the flag
+        // does not gate history collection.
         let client = PeekClient::new(
             CoordinatorClient::Background {
                 tx: self.internal_cmd_tx.clone(),
