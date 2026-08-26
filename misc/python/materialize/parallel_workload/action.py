@@ -262,6 +262,44 @@ class Action:
         share = max(1, MAX_ROWS // exe.db.num_threads)
         return self.rng.randint(1, min(available, share))
 
+    def view_predicate(self, exe: Executor, table: Table) -> str | None:
+        """A predicate over a view, adding a second input to a read-then-write's
+        selection.
+
+        The selection's frontier is the minimum over its inputs, and an UPDATE
+        or DELETE reads its target too, so the table holds it near the wall
+        clock while a REFRESH view is free to sit far ahead. Neither may reach
+        the write timestamp, which comes from the timeline's oracle.
+        `InsertSelectAction` covers the view-only case. None when no view offers
+        a comparable column. Views reaching a source are excluded: the adapter
+        refuses such a selection outright, which would make this vacuous."""
+        views = [
+            view
+            for view in exe.db.views
+            if view.read_then_write_input
+            and (not view.temp or view in exe.temp_objects)
+        ]
+        self.rng.shuffle(views)
+        for view in views:
+            pairs = [
+                (table_column, view_column)
+                for table_column in table.columns
+                for view_column in view.columns
+                # A map has no equality operator, so it cannot drive an IN.
+                if table_column.data_type == view_column.data_type
+                and table_column.data_type != TextTextMap
+            ]
+            if not pairs:
+                continue
+            table_column, view_column = self.rng.choice(pairs)
+            # The alias keeps the inner reference off the outer target, the
+            # LIMIT bounds an expensive view body.
+            return (
+                f"{table_column.name(True)} IN (SELECT rtw_src.{view_column.name(True)}"
+                f" FROM {view} AS rtw_src LIMIT 100)"
+            )
+        return None
+
     def create_system_connection(
         self, exe: Executor, num_attempts: int = 10
     ) -> Connection:
@@ -1171,9 +1209,17 @@ class InsertSelectAction(Action):
         if not tables:
             return False
         table = self.rng.choice(tables)
-        # Reading the insert target itself makes the target a read dependency
-        # too, the most contended shape a read-then-write can have.
-        source = table if self.rng.choice([True, False]) else self.rng.choice(tables)
+        # Reading the insert target itself is the most contended shape a
+        # read-then-write can have. A view is the opposite: the target is
+        # written but not read, so a REFRESH view alone pins the selection's
+        # frontier, see `Action.view_predicate`.
+        sources = tables + [
+            view
+            for view in exe.db.views
+            if view.read_then_write_input
+            and (not view.temp or view in exe.temp_objects)
+        ]
+        source = table if self.rng.choice([True, False]) else self.rng.choice(sources)
 
         column_names = ", ".join(column.name(True) for column in table.columns)
         # The cast is an identity cast: `expression` returns the requested type
@@ -1464,7 +1510,12 @@ class UpdateAction(Action):
             f"{c.name(True)} = {expression(c.data_type, table.columns, self.rng, kind=ExprKind.WRITE)}"
             for c in set_columns
         )
-        query = f"UPDATE {table} SET {set_clause} WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+        predicate = expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)
+        if self.rng.random() < 0.2:
+            view_predicate = self.view_predicate(exe, table)
+            if view_predicate:
+                predicate = f"({predicate}) AND {view_predicate}"
+        query = f"UPDATE {table} SET {set_clause} WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"update{self.stmt_id}", exe)
@@ -1516,7 +1567,8 @@ class DeleteAction(Action):
             "canceling statement due to statement timeout",
             OCC_CONTENTION_EXHAUSTED_ERROR,
         ] + super().errors_to_ignore(exe)
-        if exe.db.scenario == Scenario.Rename:
+        # The predicate can name a view, which DDL drops concurrently.
+        if exe.db.complexity == Complexity.DDL or exe.db.scenario == Scenario.Rename:
             errors += ["does not exist"]
         return errors
 
@@ -1553,7 +1605,14 @@ class DeleteAction(Action):
             query += f" USING {using_table}"
             query += f" WHERE {expression(Boolean, all_columns, self.rng, kind=ExprKind.WRITE)}"
         elif self.rng.random() < 0.95:
-            query += f" WHERE {expression(Boolean, table.columns, self.rng, kind=ExprKind.WRITE)}"
+            predicate = expression(
+                Boolean, table.columns, self.rng, kind=ExprKind.WRITE
+            )
+            if self.rng.random() < 0.2:
+                view_predicate = self.view_predicate(exe, table)
+                if view_predicate:
+                    predicate = f"({predicate}) AND {view_predicate}"
+            query += f" WHERE {predicate}"
         if self.rng.choice([True, False]):
             self.stmt_id += 1
             self.exe_prepared(query, f"delete{self.stmt_id}", exe)
