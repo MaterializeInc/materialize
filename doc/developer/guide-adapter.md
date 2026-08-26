@@ -180,6 +180,21 @@ The current implementation rejects bounded-staleness queries whose timeline
 is not `EpochMilliseconds`, in `determine_timestamp_for_inner`. The freshness
 math is currently scoped to that timeline.
 
+### System-session replanning does not grant authority
+
+Some DDL paths reconstruct and mutate a stored definition by replanning it with
+a system session. The initial authorization check only sees dependencies in the
+submitted statement, so it cannot authorize retained dependencies discovered
+during replanning. Before reading secrets, performing external I/O, or
+persisting the result, authorize the final dependency set against the invoking
+session. Check the final set rather than the union of old and new dependencies,
+so a caller can remove a dependency they are no longer authorized to use.
+
+This rule applies when reconstructing or mutating a definition. Executing a
+fixed connection does not authorize its dependencies separately. For example,
+standalone `VALIDATE CONNECTION` is delegated by `USAGE` on the connection and
+its containing schema, without requiring `USAGE` on referenced secrets.
+
 ### The catalog is the source of truth for state that gets rebuilt from it
 
 If a reconcile or refresh path rebuilds downstream state (for example a

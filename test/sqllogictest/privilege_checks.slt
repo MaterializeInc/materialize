@@ -97,6 +97,70 @@ REVOKE CREATE ON SCHEMA materialize.public FROM joe;
 ----
 COMPLETE 0
 
+# ALTER CONNECTION must authorize secret dependencies retained from the stored
+# definition, not only dependencies named in the ALTER statement.
+
+simple conn=mz_system,user=mz_system
+CREATE SECRET alter_conn_secret AS 'secret';
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+CREATE CONNECTION alter_conn TO CONFLUENT SCHEMA REGISTRY (URL 'https://example.com', USERNAME 'user', PASSWORD SECRET alter_conn_secret) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+ALTER CONNECTION alter_conn OWNER TO joe;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SCHEMA materialize.public TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION alter_conn SET (URL 'https://example.net') WITH (VALIDATE = false);
+----
+db error: ERROR: permission denied for SECRET "materialize.public.alter_conn_secret"
+DETAIL: The 'joe' role needs USAGE privileges on SECRET "materialize.public.alter_conn_secret"
+
+simple conn=mz_system,user=mz_system
+GRANT USAGE ON SECRET alter_conn_secret TO joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION alter_conn SET (URL 'https://example.net') WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SECRET alter_conn_secret FROM joe;
+----
+COMPLETE 0
+
+simple conn=joe,user=joe
+ALTER CONNECTION alter_conn RESET (USERNAME), RESET (PASSWORD) WITH (VALIDATE = false);
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP CONNECTION alter_conn;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+DROP SECRET alter_conn_secret;
+----
+COMPLETE 0
+
+simple conn=mz_system,user=mz_system
+REVOKE USAGE ON SCHEMA materialize.public FROM joe;
+----
+COMPLETE 0
+
 # CREATE DATABASE
 
 simple conn=joe,user=joe
