@@ -1299,6 +1299,24 @@ describe("ClustersList CPU filter", () => {
     expect(percent).toHaveValue("");
   });
 
+  it("reopens on the threshold in force after an abandoned edit", async () => {
+    const user = userEvent.setup();
+    await renderClustersList(twoClusters());
+
+    await applyCpuFilter(user, ">", "40");
+
+    // Blank the threshold, then close without applying.
+    await openFilter(user, "CPU");
+    await user.clear(screen.getByLabelText("CPU threshold percentage"));
+    await user.click(filterTrigger("CPU"));
+
+    // The column is still filtering on 40, so the panel has to say so rather
+    // than carry an edit the user walked away from.
+    const { percent } = await panelValues(user, "CPU");
+    expect(percent).toHaveValue("40");
+    expect(rowOrder()).toEqual(["busy", "middling"]);
+  });
+
   it("reopens showing the filter in force", async () => {
     const user = userEvent.setup();
     await renderClustersList(twoClusters());

@@ -182,6 +182,33 @@ const LateDataTable = ({
   );
 };
 
+/** Panel with draft state of its own, so its lifetime is observable. */
+const DraftFilterPanel = () => {
+  const [draft, setDraft] = React.useState("");
+  return (
+    <input
+      aria-label="draft"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+    />
+  );
+};
+
+const filterableColumns = [
+  columnHelper.accessor("name", {
+    header: "Name",
+    meta: { renderFilter: () => <DraftFilterPanel /> },
+  }),
+];
+
+const FilterableTable = () => {
+  const table = useUniversalTable({
+    data: testData,
+    columns: filterableColumns,
+  });
+  return <UniversalTable table={table} data-testid="test-table" />;
+};
+
 const footerColumns = [
   columnHelper.accessor("name", { header: "Name", footer: "Total" }),
   columnHelper.accessor("replicas", {
@@ -554,6 +581,32 @@ describe("UniversalTable", () => {
       );
 
       expect(screen.getByTestId("page-index")).toHaveTextContent("3");
+    });
+  });
+
+  describe("Column filter panel", () => {
+    const openFilter = (user: ReturnType<typeof userEvent.setup>) =>
+      user.click(screen.getByRole("button", { name: "Filter name" }));
+
+    it("starts a panel fresh on each open", async () => {
+      const user = userEvent.setup();
+      await renderComponent(<FilterableTable />);
+
+      await openFilter(user);
+      await user.type(await screen.findByLabelText("draft"), "abandoned");
+      await openFilter(user);
+
+      // A panel that survived its popover would still be holding an edit the
+      // user typed and walked away from, which then contradicts the filter
+      // actually in force.
+      await openFilter(user);
+      expect(await screen.findByLabelText("draft")).toHaveValue("");
+    });
+
+    it("keeps the panel out of reach while closed", async () => {
+      await renderComponent(<FilterableTable />);
+
+      expect(screen.queryByLabelText("draft")).not.toBeInTheDocument();
     });
   });
 

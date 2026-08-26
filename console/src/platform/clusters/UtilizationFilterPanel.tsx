@@ -59,9 +59,9 @@ export const UtilizationFilterPanel = <TData,>({
     value ? String(value.percent) : "",
   );
 
-  // The popover keeps its content mounted between opens, so a seed taken once
-  // would drift from the filter in force. Following the applied value keeps
-  // Clear, and a filter restored from the URL, visible on the next open.
+  // The panel is remounted on each open, so the seed above is what an opening
+  // panel shows. This covers the filter changing while the panel is already
+  // open, which is what removing the column's chip does.
   React.useEffect(() => {
     setComparison(value?.comparison ?? DEFAULT_COMPARISON);
     setPercent(value ? String(value.percent) : "");
