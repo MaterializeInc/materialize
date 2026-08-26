@@ -16,10 +16,11 @@ use maplit::btreeset;
 use mz_controller_types::ClusterId;
 use mz_expr::CollectionPlan;
 use mz_ore::str::StrExt;
-use mz_repr::CatalogItemId;
 use mz_repr::adt::mz_acl_item::{AclMode, MzAclItem};
 use mz_repr::role_id::RoleId;
+use mz_repr::{CatalogItemId, RelationVersionSelector};
 use mz_sql_parser::ast::{Ident, QualifiedReplica};
+use mz_storage_types::sources::SourceExportDetails;
 use tracing::debug;
 
 use crate::catalog::{
@@ -31,7 +32,8 @@ use crate::names::{
 };
 use crate::plan::{self, PlanKind};
 use crate::plan::{
-    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, UpdatePrivilege,
+    DataSourceDesc, Explainee, MutationKind, Plan, SideEffectingFunc, TableDataSource,
+    UpdatePrivilege,
 };
 use crate::session::metadata::SessionMetadata;
 use crate::session::user::{MZ_SUPPORT_ROLE_ID, MZ_SYSTEM_ROLE_ID, SUPPORT_USER, SYSTEM_USER};
@@ -635,17 +637,147 @@ fn generate_rbac_requirements(
         }
         Plan::CreateTable(plan::CreateTablePlan {
             name,
-            table: _,
+            table,
             if_not_exists: _,
-        }) => RbacRequirements {
-            privileges: vec![(
+        }) => {
+            let mut ownership = Vec::new();
+            let mut privileges = vec![(
                 SystemObjectId::Object(name.qualifiers.clone().into()),
                 AclMode::CREATE,
                 role_id,
-            )],
-            item_usage: &CREATE_ITEM_USAGE,
-            ..Default::default()
-        },
+            )];
+            // `CREATE TABLE ... FROM SOURCE` populates the new table from an
+            // existing ingestion, and the table is owned by whoever creates it.
+            // Without a read check here, `CREATE` on any schema the role
+            // controls is enough to read a source the role cannot read.
+            //
+            // The safe rule is: the role may attach a reference only if it can
+            // already read every column the new table would expose. It can, if
+            // it owns the source, or if it can read an existing export of the
+            // reference that projects at least those columns. When neither
+            // holds, the attach opens a new or wider read path to upstream
+            // data, which is what `ALTER SOURCE ... ADD SUBSOURCE` does, so it
+            // requires ownership of the source.
+            //
+            // Keying on column coverage rather than on the set of exports is
+            // what makes this both not over-strict (a sibling table exporting
+            // the same reference does not lock other roles out) and not
+            // under-strict (an export created with `EXCLUDE COLUMNS` does not
+            // authorize a wider table for the same reference).
+            //
+            // Column *names* are only a proxy for what data a table exposes
+            // where the names come from the upstream schema: postgres, mysql,
+            // sql_server, and multi-output load generators reject
+            // caller-supplied names, so equal names mean the same upstream
+            // column and thus the same data.
+            //
+            // On Kafka the caller picks `FORMAT`/`ENVELOPE`/`INCLUDE` and then
+            // renames the resulting columns, so equal names can hide raw
+            // payload bytes, headers, and partition metadata the covering
+            // export never projected. Kafka references therefore do not take
+            // the coverage path and require ownership instead.
+            //
+            // Single-output load generators also allow caller-supplied names
+            // and let format/envelope reshape the schema, so names are not
+            // authoritative there either. They stay on the coverage path
+            // anyway: the data is synthetic with no credential-gated upstream,
+            // so there is nothing confidential to escalate to, and the subset
+            // check below still prevents widening the projection. Do not extend
+            // this reasoning to a connector that reads a real upstream.
+            if let TableDataSource::DataSource {
+                desc:
+                    DataSourceDesc::IngestionExport {
+                        ingestion_id,
+                        external_reference,
+                        ..
+                    },
+                timeline: _,
+            } = &table.data_source
+            {
+                let role_membership = catalog.collect_role_membership(&role_id);
+                let owns_source =
+                    check_owner_roles(&ObjectId::Item(*ingestion_id), &role_membership, catalog);
+                if !owns_source {
+                    let planned_columns: BTreeSet<_> =
+                        table.desc.latest().iter_names().cloned().collect();
+                    // Exports of this reference that project at least the
+                    // columns the new table would. An export that projects
+                    // fewer (e.g. one created with `EXCLUDE COLUMNS`) does not
+                    // authorize the wider table.
+                    let covering_exports: Vec<_> = catalog
+                        .get_item(ingestion_id)
+                        .used_by()
+                        .iter()
+                        .filter(|id| {
+                            catalog.get_item(id).source_export_details().is_some_and(
+                                |(parent, reference, details, _)| {
+                                    parent == *ingestion_id
+                                        && reference == external_reference
+                                        // Kafka column names are caller-chosen
+                                        // and do not identify the underlying
+                                        // data, so a name match is not a read
+                                        // proxy; require ownership instead.
+                                        && !matches!(details, SourceExportDetails::Kafka(_))
+                                },
+                            )
+                        })
+                        .filter(|id| {
+                            catalog
+                                .get_item(id)
+                                .at_version(RelationVersionSelector::Latest)
+                                .relation_desc()
+                                .is_some_and(|desc| {
+                                    let export_columns: BTreeSet<_> =
+                                        desc.iter_names().cloned().collect();
+                                    planned_columns.is_subset(&export_columns)
+                                })
+                        })
+                        .copied()
+                        .collect();
+                    if covering_exports.is_empty() {
+                        // No existing export covers these columns, so the attach
+                        // opens a new or wider read path to upstream data.
+                        // `ALTER SOURCE ... ADD SUBSOURCE` requires ownership for
+                        // the same reason.
+                        ownership.push(ObjectId::Item(*ingestion_id));
+                    } else {
+                        // Reading the data requires `SELECT` on the source and on
+                        // a covering export, plus `USAGE` on their schemas.
+                        // Prefer a covering export the role can already read so
+                        // the requirement is satisfiable when it should be; when
+                        // none is readable, name one anyway so the denial points
+                        // at a grant that would authorize the attach rather than
+                        // at ownership.
+                        let chosen_export = covering_exports
+                            .iter()
+                            .copied()
+                            .find(|export_id| {
+                                role_holds_privileges(
+                                    catalog,
+                                    &generate_read_privileges(
+                                        catalog,
+                                        [*ingestion_id, *export_id].into_iter(),
+                                        role_id,
+                                    ),
+                                    &role_membership,
+                                )
+                            })
+                            .unwrap_or(covering_exports[0]);
+                        privileges.extend(generate_read_privileges(
+                            catalog,
+                            [*ingestion_id, chosen_export].into_iter(),
+                            role_id,
+                        ));
+                    }
+                }
+            }
+            RbacRequirements {
+                ownership,
+                privileges,
+                item_usage: &CREATE_ITEM_USAGE,
+                ..Default::default()
+            }
+        }
         Plan::CreateView(plan::CreateViewPlan {
             name,
             view: _,
@@ -1763,6 +1895,36 @@ fn generate_required_source_privileges(
 /// that view has all of the privileges required to execute the query within the view.
 ///
 /// For more details see: <https://www.postgresql.org/docs/15/rules-privileges.html>
+/// Reports whether `role_membership` already satisfies every privilege in
+/// `required`. Used to collapse a disjunctive requirement ("read via any one of
+/// these objects") into a concrete decision at requirement-generation time,
+/// which the conjunctive [`RbacRequirements`] cannot express directly.
+fn role_holds_privileges(
+    catalog: &impl SessionCatalog,
+    required: &[(SystemObjectId, AclMode, RoleId)],
+    role_membership: &BTreeSet<RoleId>,
+) -> bool {
+    required.iter().all(|(object_id, acl_mode, _)| {
+        // Users implicitly hold all privileges on their own temp schema, which
+        // may not exist yet. Mirror `check_object_privileges`.
+        if matches!(
+            object_id,
+            SystemObjectId::Object(ObjectId::Schema((_, SchemaSpecifier::Temporary)))
+        ) {
+            return true;
+        }
+        let Some(object_privileges) = catalog.get_privileges(object_id) else {
+            return false;
+        };
+        let held = role_membership
+            .iter()
+            .flat_map(|role_id| object_privileges.get_acl_items_for_grantee(role_id))
+            .map(|mz_acl_item| mz_acl_item.acl_mode)
+            .fold(AclMode::empty(), |accum, acl_mode| accum.union(acl_mode));
+        held.contains(*acl_mode)
+    })
+}
+
 fn generate_read_privileges(
     catalog: &impl SessionCatalog,
     ids: impl Iterator<Item = CatalogItemId>,
