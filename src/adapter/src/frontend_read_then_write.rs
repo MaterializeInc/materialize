@@ -915,7 +915,7 @@ impl PeekClient {
                 real_time_recency_timeout,
                 tx,
             })
-            .await?
+            .await??
         } else {
             None
         };
@@ -971,7 +971,7 @@ impl PeekClient {
                     determination,
                     tx,
                 })
-                .await;
+                .await?;
             session.add_notice(crate::AdapterNotice::QueryTimestamp { explanation });
         }
 
@@ -1371,7 +1371,7 @@ impl PeekClient {
                 diffs,
                 tx,
             })
-            .await;
+            .await?;
 
         // Every outcome here terminates the attempt, so `write_submitted`
         // stays set per its contract.
@@ -1426,7 +1426,7 @@ impl PeekClient {
                 read_holds,
                 tx,
             })
-            .await?;
+            .await??;
 
         Ok(SubscribeHandle {
             rx,
@@ -1707,7 +1707,7 @@ impl PeekClient {
             // in profiles. Every attempt clones every row, and we retry up to
             // `max_occ_retries` times.
             attempt_state.mark_write_submitted();
-            let result = self
+            let result = match self
                 .call_coordinator(|tx| Command::AttemptWrite {
                     attempt: match write_conn_id.clone() {
                         Some(conn_id) => WriteAttemptKind::Session {
@@ -1721,7 +1721,11 @@ impl PeekClient {
                     diffs: state.payload.clone(),
                     tx,
                 })
-                .await;
+                .await
+            {
+                Ok(result) => result,
+                Err(error) => break Err(error),
+            };
 
             match classify_write_result(result, target_id, attempt_state) {
                 WriteOutcome::Committed(timestamp) => {

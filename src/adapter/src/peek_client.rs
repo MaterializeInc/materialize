@@ -109,8 +109,8 @@ impl CoordinatorClient {
     /// coordinator's loop only exits once every client is dropped, so a failed
     /// send there is a real bug. Background work holds no client on purpose, so
     /// losing the race with shutdown is normal and must not crash the process.
-    /// The dropped command's response channel never resolves, which parks the
-    /// caller until its task is cancelled.
+    /// Dropping the command closes its response channel, which the caller handles
+    /// as an error.
     pub(crate) fn send(&self, command: Command) {
         if self.try_send(command) {
             return;
@@ -121,10 +121,6 @@ impl CoordinatorClient {
                 tracing::debug!("dropping background command, coordinator is gone")
             }
         }
-    }
-
-    fn is_background(&self) -> bool {
-        matches!(self, CoordinatorClient::Background { .. })
     }
 
     pub(crate) fn try_send(&self, command: Command) -> bool {
@@ -193,7 +189,8 @@ impl PeekClient {
                     instance_id: compute_instance,
                     tx,
                 })
-                .await?;
+                .await
+                .expect("coordinator unexpectedly dropped compute client response")?;
             self.compute_instances.insert(compute_instance, client);
         }
         Ok(self
@@ -213,7 +210,7 @@ impl PeekClient {
                     timeline: timeline.clone(),
                     tx,
                 })
-                .await?;
+                .await??;
             self.oracles.insert(timeline.clone(), oracle);
         }
         Ok(self.oracles.get_mut(&timeline).expect("ensured above"))
@@ -255,7 +252,8 @@ impl PeekClient {
         let start = std::time::Instant::now();
         let CatalogSnapshot { catalog } = self
             .call_coordinator(|tx| Command::CatalogSnapshot { tx })
-            .await;
+            .await
+            .expect("coordinator unexpectedly dropped catalog snapshot response");
         let metrics = self.coordinator_client.metrics();
         metrics
             .catalog_snapshot_seconds
@@ -269,28 +267,14 @@ impl PeekClient {
         catalog
     }
 
-    pub(crate) async fn call_coordinator<T, F>(&self, f: F) -> T
+    /// Calls the coordinator and returns an error if it drops the response.
+    pub(crate) async fn call_coordinator<T, F>(&self, f: F) -> Result<T, AdapterError>
     where
         F: FnOnce(oneshot::Sender<T>) -> Command,
     {
         let (tx, rx) = oneshot::channel();
         self.coordinator_client.send(f(tx));
-        match rx.await {
-            Ok(response) => response,
-            // A dropped sender means the coordinator never answered. For a
-            // background caller that is shutdown racing us: `send` dropped the
-            // command, and our task is cancelled with the coordinator, so
-            // parking here is bounded.
-            Err(oneshot::error::RecvError { .. }) => {
-                if !self.coordinator_client.is_background() {
-                    // A live coordinator answers every session call, so this is
-                    // a bug. Park rather than panic, since taking the process
-                    // down is worse than one stuck session.
-                    soft_panic_or_log!("coordinator dropped a session's call without answering it");
-                }
-                std::future::pending().await
-            }
-        }
+        Ok(rx.await?)
     }
 
     /// The client for sending commands to the coordinator.
@@ -521,7 +505,7 @@ impl PeekClient {
             watch_set,
             tx,
         })
-        .await?;
+        .await??;
 
         // The peek is registered: the coordinator's `pending_peeks` entry now
         // owns end-of-execution logging. It logs the end on peek completion,
@@ -562,14 +546,15 @@ impl PeekClient {
             // ask it to unregister the peek and retire it with this error. If
             // a concurrent teardown already retired the peek, the end is
             // already logged and the unregistration is a no-op.
-            self.call_coordinator(|tx| Command::UnregisterFrontendPeek {
-                uuid,
-                reason: statement_logging::StatementEndedExecutionReason::Errored {
-                    error: err.to_string(),
-                },
-                tx,
-            })
-            .await;
+            let _ = self
+                .call_coordinator(|tx| Command::UnregisterFrontendPeek {
+                    uuid,
+                    reason: statement_logging::StatementEndedExecutionReason::Errored {
+                        error: err.to_string(),
+                    },
+                    tx,
+                })
+                .await;
             return Err(err);
         }
 

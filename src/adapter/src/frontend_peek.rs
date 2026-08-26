@@ -353,7 +353,7 @@ impl PeekClient {
                             connection_id: *connection_id,
                             tx,
                         })
-                        .await
+                        .await?
                     }
                     SideEffectingFunc::PgCancelBackend {
                         connection_id: None,
@@ -378,7 +378,7 @@ impl PeekClient {
                         conn_id: session.conn_id().clone(),
                         tx,
                     })
-                    .await?;
+                    .await??;
 
                 // We held the target's `ConnectionId` handle from the RBAC
                 // check until the Coordinator executed the function, which
@@ -563,7 +563,7 @@ impl PeekClient {
                 real_time_recency_timeout: *vars.real_time_recency_timeout(),
                 tx,
             })
-            .await?
+            .await??
         } else {
             None
         };
@@ -611,7 +611,7 @@ impl PeekClient {
                         conn_id: session.conn_id().clone(),
                         tx,
                     })
-                    .await;
+                    .await?;
 
                 if let Some(txn_read_holds) = txn_read_holds_opt {
                     let allowed_id_bundle = txn_read_holds.id_bundle();
@@ -695,7 +695,7 @@ impl PeekClient {
                         read_holds: read_holds.clone(),
                         tx,
                     })
-                    .await;
+                    .await?;
                 }
 
                 (determination, read_holds)
@@ -1334,7 +1334,7 @@ impl PeekClient {
                                 watch_set,
                                 tx,
                             })
-                            .await?;
+                            .await??;
                         // On success the peek is registered in `pending_peeks`,
                         // which now owns end-of-execution logging. On error the
                         // coordinator logs nothing (see
@@ -1356,7 +1356,7 @@ impl PeekClient {
                             determination,
                             tx,
                         })
-                        .await;
+                        .await?;
                     session.add_notice(AdapterNotice::QueryTimestamp { explanation });
                 }
 
@@ -1405,7 +1405,7 @@ impl PeekClient {
                         statement_logging_id: logging.id(),
                         tx,
                     })
-                    .await?;
+                    .await??;
                 // On success the `Subscribing` response carries the
                 // coordinator-side logging guard and the protocol layer logs
                 // the end when the subscribe terminates. On error the
@@ -1456,7 +1456,7 @@ impl PeekClient {
                     sink_id,
                     tx,
                 })
-                .await?;
+                .await??;
 
                 // Preflight succeeded, now execute the actual COPY TO dataflow
                 let watch_set = logging.id().map(|logging_id| {
@@ -1482,7 +1482,7 @@ impl PeekClient {
                         watch_set,
                         tx,
                     })
-                    .await?;
+                    .await??;
 
                 Ok(Some(response))
             }

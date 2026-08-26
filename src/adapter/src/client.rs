@@ -1543,7 +1543,7 @@ impl SessionClient {
                     });
             tokio::pin!(register);
             tokio::select! {
-                rx = &mut register => rx,
+                rx = &mut register => rx?,
                 _ = &mut cancel_future => {
                     inner_client.try_send(Command::PrivilegedCancelRequest {
                         conn_id: conn_id.clone(),
