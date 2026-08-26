@@ -111,19 +111,6 @@ fn environment_schedule_offset(environment_id: &str, interval_ms: EpochMillis) -
     hash % interval_ms
 }
 
-/// Returns whether a replica is ready for hydration-history collection.
-///
-/// Subscribe data is sufficient for unmanaged replicas whose status may remain
-/// offline. An online status covers a delayed restart event invalidating the
-/// probe after the replacement subscribe delivered its initial snapshot. A
-/// missing probe preserves operation when introspection subscribes are disabled.
-fn hydration_replica_ready(
-    introspection_subscribe_ready: Option<bool>,
-    replica_status: ClusterStatus,
-) -> bool {
-    introspection_subscribe_ready.unwrap_or(true) || replica_status == ClusterStatus::Online
-}
-
 impl Coordinator {
     /// Schedules the next hydration history sweep.
     ///
@@ -208,29 +195,20 @@ impl Coordinator {
             return;
         }
 
-        // A replica with introspection disabled is skipped: its log arrangements
-        // are installed but never populated, so a subscribe would read a sealed,
-        // empty collection and find nothing, every sweep. When the existing
-        // hydration-times subscribe is installed, its first data is sufficient
-        // for unmanaged replicas. A rolled-up Online status also suffices because
-        // a delayed restart event can invalidate the probe after the replacement
-        // subscribe's initial snapshot. A never-connected managed replica remains
-        // Offline and is skipped rather than parking this single-flight sweep
-        // until MUTATION_TIMEOUT. With no probe, preserve this collector's
-        // behavior independently of enable_introspection_subscribes.
+        let unready_replicas =
+            self.unready_introspection_replicas(IntrospectionType::ComputeHydrationTimes);
+        // Missing or ready subscribes admit the replica. Online status also
+        // admits a replacement invalidated by a delayed restart event.
         let replicas = self
             .catalog()
             .user_cluster_replicas()
             .filter(|replica| replica.config.compute.logging.enabled())
             .filter(|replica| {
-                let subscribe_ready = self.introspection_subscribe_ready(
-                    IntrospectionType::ComputeHydrationTimes,
-                    replica.replica_id,
-                );
-                let replica_status = self
-                    .cluster_replica_statuses
-                    .get_cluster_replica_status(replica.cluster_id, replica.replica_id);
-                hydration_replica_ready(subscribe_ready, replica_status)
+                !unready_replicas.contains(&replica.replica_id)
+                    || self
+                        .cluster_replica_statuses
+                        .get_cluster_replica_status(replica.cluster_id, replica.replica_id)
+                        == ClusterStatus::Online
             })
             .map(|replica| (replica.cluster_id, replica.replica_id))
             .sorted_by_key(|(_, replica_id)| *replica_id)
@@ -273,12 +251,8 @@ impl Coordinator {
             let _ = internal_cmd_tx.send(Message::HydrationHistorySchedule);
         });
 
-        // NOTE: The sweep must not outlive the coordinator. Unlike a session it
-        // holds no `Client`, so nothing stops the coordinator from exiting while
-        // a mutation is in flight, and the runtime teardown that follows drops
-        // the timestamp oracle's worker task. A sweep still running at that
-        // point reads a timestamp from a dead oracle and panics. Parking the
-        // handle here means dropping the coordinator cancels the sweep first.
+        // Keep the sweep coordinator-owned so dropping the coordinator requests
+        // its abort. Fallible coordinator calls make concurrent shutdown safe.
         self.hydration_history_sweep = Some(handle.abort_on_drop());
     }
 
@@ -429,9 +403,8 @@ fn collect_sql(cluster_id: ClusterId, replica_id: ReplicaId, cutoff: &str) -> St
 /// representation needs a second age basis before it can be recorded.
 fn retention_sql(cutoff: &str) -> String {
     // The LIMIT has to sit inside a subquery. A top-level LIMIT lands in the
-    // plan's `RowSetFinishing`, which the OCC path deliberately ignores, so it
-    // would be silently dropped and the delete would be unbounded again. Inside
-    // a derived table it lowers into the relation expression instead.
+    // plan's `RowSetFinishing`, which this OCC stage cannot apply. Inside a
+    // derived table it lowers into the relation expression instead.
     format!(
         "SELECT * FROM (
             SELECT
@@ -492,13 +465,10 @@ impl Sweep {
         }
     }
 
-    /// Runs one mutation, logging rather than propagating failure.
+    /// Runs one mutation, leaving transient failures for the next sweep to retry.
     ///
-    /// Every failure mode here is expected in normal operation: the targeted
-    /// replica can fail or be dropped, a dependency can be replaced, and the
-    /// write can lose its timestamp race. None of them are actionable, and the
-    /// next sweep recomputes from current state, so they are logged and the
-    /// sweep continues.
+    /// Replica loss, dependency replacement, and write races are logged rather
+    /// than propagated because the next sweep recomputes from current state.
     ///
     /// NOTE: A timed-out mutation can still commit. The write is submitted
     /// before we wait for its answer, and a background write carries no
@@ -674,16 +644,6 @@ mod tests {
             Some(replicas[0])
         );
         assert_eq!(next_replica(&[], None), None);
-    }
-
-    #[mz_ore::test]
-    fn replica_readiness_uses_subscribe_data_or_online_status() {
-        let offline = ClusterStatus::Offline(None);
-
-        assert!(hydration_replica_ready(Some(true), offline));
-        assert!(hydration_replica_ready(Some(false), ClusterStatus::Online));
-        assert!(!hydration_replica_ready(Some(false), offline));
-        assert!(hydration_replica_ready(None, offline));
     }
 
     /// Every environment shares one interval, so the grid has to be shifted per

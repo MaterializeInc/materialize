@@ -262,19 +262,14 @@ impl Coordinator {
 pub(crate) enum DependencyPolicy {
     /// A user statement, which may only read user tables and views over them.
     UserDml,
-    /// Coordinator-authored background work, which reads system relations and
-    /// introspection logs by design.
+    /// Coordinator-authored work, which may read system objects across time domains.
     SystemReads,
 }
 
-/// Ensures all objects the selection transitively depends on (seeded by `ids`) are valid for
-/// `ReadThenWrite` operations:
+/// Validates all transitive dependencies of a read-then-write selection.
 ///
-/// - They do not refer to any objects whose notion of time moves differently than that of
-///   user tables. This limitation is meant to ensure no writes occur between this read and the
-///   subsequent write.
-/// - They do not use mz_now(), whose time produced during read will differ from the write
-///   timestamp.
+/// User DML only accepts objects in the user-table time domain. System reads
+/// accept supported system objects across time domains. Both reject `mz_now()`.
 ///
 /// The first invalid or temporal dependency encountered short-circuits with the corresponding
 /// error. Traversal is bounded at `max_rw_dependencies` distinct objects, returning
@@ -297,93 +292,73 @@ pub(crate) fn validate_read_then_write_dependencies(
         enqueue(&mut seen, &mut stack, id, max_rw_dependencies)?;
     }
     while let Some(id) = stack.pop() {
-        let mut ids_to_check = Vec::new();
-        let valid = match catalog.try_get_entry(&id) {
-            Some(entry) => {
-                if let CatalogItem::View(objects::View {
-                    locally_optimized_expr: optimized_expr,
-                    ..
-                })
-                | CatalogItem::MaterializedView(objects::MaterializedView {
-                    locally_optimized_expr: optimized_expr,
-                    ..
-                }) = entry.item()
-                {
-                    if optimized_expr.contains_temporal() {
-                        return Err(AdapterError::Unsupported(
-                            "calls to mz_now in write statements",
-                        ));
-                    }
-                }
-                match entry.item().typ() {
-                    typ @ (Func | View | MaterializedView) => {
-                        ids_to_check.extend(entry.uses());
-                        let valid_id = id.is_user() || matches!(typ, Func);
-                        valid_id
-                    }
-                    Source | Secret | Connection => false,
-                    // Cannot select from sinks or indexes.
-                    Sink | MetricSink | Index => unreachable!(),
-                    Table => {
-                        if !id.is_user() {
-                            // We can't read from non-user tables
-                            false
-                        } else {
-                            // We can't read from tables that are source-exports
-                            entry.source_export_details().is_none()
-                        }
-                    }
-                    Type => true,
-                }
-            }
-            None => false,
+        let Some(entry) = catalog.try_get_entry(&id) else {
+            return Err(AdapterError::InvalidTableMutationSelection {
+                object_name: id.to_string(),
+                object_type: "unknown".to_string(),
+            });
         };
-        // Background maintenance uses coordinator-authored SQL over system
-        // relations and introspection logs. System sources deliberately bypass
-        // the user-DML time-domain restriction above, but user objects remain
-        // rejected. Timeline validation separately requires EpochMilliseconds,
-        // and the `mz_now()` rejection still applies to every view body.
+
+        if let CatalogItem::View(objects::View {
+            locally_optimized_expr: optimized_expr,
+            ..
+        })
+        | CatalogItem::MaterializedView(objects::MaterializedView {
+            locally_optimized_expr: optimized_expr,
+            ..
+        }) = entry.item()
+        {
+            if optimized_expr.contains_temporal() {
+                return Err(AdapterError::Unsupported(
+                    "calls to mz_now in write statements",
+                ));
+            }
+        }
+
+        let ids_to_check = entry.uses();
+        let item_type = entry.item().typ();
         let valid = match policy {
-            DependencyPolicy::UserDml => valid,
-            DependencyPolicy::SystemReads => catalog.try_get_entry(&id).is_some_and(|entry| {
+            DependencyPolicy::UserDml => match item_type {
+                typ @ (Func | View | MaterializedView) => id.is_user() || matches!(typ, Func),
+                Source | Secret | Connection => false,
+                // Cannot select from sinks or indexes.
+                Sink | MetricSink | Index => unreachable!(),
+                Table => id.is_user() && entry.source_export_details().is_none(),
+                Type => true,
+            },
+            DependencyPolicy::SystemReads => {
                 id.is_system()
                     && matches!(
-                        entry.item().typ(),
+                        item_type,
                         Func | View | MaterializedView | Source | Table | Type
                     )
-            }),
+            }
         };
         if !valid {
-            let (object_name, object_type) = match catalog.try_get_entry(&id) {
-                Some(entry) => {
-                    let object_name = catalog.resolve_full_name(entry.name(), None).to_string();
-                    let object_type = match entry.item().typ() {
-                        // We only need the disallowed types here; the allowed types are handled above.
-                        Source => "source",
-                        Secret => "secret",
-                        Connection => "connection",
-                        Table => {
-                            if !id.is_user() {
-                                "system table"
-                            } else if entry.source_export_details().is_some() {
-                                "source-export table"
-                            } else {
-                                "user table"
-                            }
-                        }
-                        View if id.is_user() => "user view",
-                        View => "system view",
-                        MaterializedView if id.is_user() => "user materialized view",
-                        MaterializedView => "system materialized view",
-                        _ => "invalid dependency",
-                    };
-                    (object_name, object_type.to_string())
+            let object_name = catalog.resolve_full_name(entry.name(), None).to_string();
+            let object_type = match item_type {
+                // We only need the disallowed types here; the allowed types are handled above.
+                Source => "source",
+                Secret => "secret",
+                Connection => "connection",
+                Table => {
+                    if !id.is_user() {
+                        "system table"
+                    } else if entry.source_export_details().is_some() {
+                        "source-export table"
+                    } else {
+                        "user table"
+                    }
                 }
-                None => (id.to_string(), "unknown".to_string()),
+                View if id.is_user() => "user view",
+                View => "system view",
+                MaterializedView if id.is_user() => "user materialized view",
+                MaterializedView => "system materialized view",
+                _ => "invalid dependency",
             };
             return Err(AdapterError::InvalidTableMutationSelection {
                 object_name,
-                object_type,
+                object_type: object_type.to_string(),
             });
         }
         for dep in ids_to_check {

@@ -242,15 +242,6 @@ keep the change invisible to session-visible catalog reads (name resolution,
 planning). Otherwise sessions serve stale catalogs where today they would see
 the change.
 
-### Background OCC must stay disjoint from the lock path
-
-The frontend OCC and coordinator lock paths do not synchronize with each other.
-Background maintenance that bypasses the frontend rollout flag must therefore
-target a system table and read only system relations. User DML can neither read
-nor write system relations, so the two paths cannot interleave on a target or
-dependency. A background caller that needs a user relation requires a separate
-contract that establishes every writer uses OCC across the fleet.
-
 ### Group commits and generation handover
 
 At runtime, one group committer per `environmentd` serializes txns-shard operations:

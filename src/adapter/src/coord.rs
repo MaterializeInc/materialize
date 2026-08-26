@@ -2115,8 +2115,7 @@ pub struct Coordinator {
     introspection_subscribes: BTreeMap<GlobalId, IntrospectionSubscribe>,
     /// The last replica visited by the sequential hydration-history sweep.
     hydration_history_replica_cursor: Option<ReplicaId>,
-    /// Hydration-history sweep, while one is in flight. Aborted when we are
-    /// dropped.
+    /// Hydration-history sweep owned by the coordinator while one is in flight.
     hydration_history_sweep: Option<AbortOnDropHandle<()>>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.

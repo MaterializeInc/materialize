@@ -209,8 +209,7 @@ bound is not a nicety. The OCC path refuses a selection larger than
 `max_result_size` before submitting any write, so one unbounded delete over a large
 backlog would fail identically forever and never shrink the table. The bound has to
 sit inside a derived table, because a top-level `LIMIT` lands in the plan's
-`RowSetFinishing`, which the OCC path deliberately discards, and the delete would be
-silently unbounded again.
+`RowSetFinishing`, which this OCC stage cannot apply.
 
 `mz_hydration_history_retention_batch_full_total` increments when the batch deletes
 all 1,000 rows. Repeated increments mean retention may not be keeping up. An operator
@@ -335,12 +334,6 @@ what exercises the hydration, restart, retention, and catalog tests. It stays of
 the sqllogictest runner defaults, against the usual preference for enabling new
 paths in tests: the collector installs subscribes and writes a builtin table, while
 those runs assert on catalog contents and plans.
-
-Background collection always uses frontend OCC, independently of the session
-`frontend_read_then_write` rollout flag. This is safe while the lock path remains
-available because the target is a system table, which user DML can neither read nor
-write. The background OCC entry point enforces that target contract rather than
-relying on each maintenance caller to remember the rollout constraint.
 
 ## Future Work
 
