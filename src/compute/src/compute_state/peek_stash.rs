@@ -13,6 +13,7 @@ use mz_compute_client::protocol::command::Peek;
 use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
+use mz_ore::future::OreFutureExt;
 use mz_ore::task::RuntimeExt;
 use mz_persist_client::Schemas;
 use mz_persist_client::batch::{Batch, BatchBuilder};
@@ -49,11 +50,19 @@ pub(super) enum UploadDemand {
 ///
 /// The rows an upload is given are the rows it writes, in the order it is given them, up to the
 /// point where the peek's finishing has all it can use. An upload that does not reach a reader
-/// deletes what it wrote, whether it is handed to [`StashUpload::discard`], only dropped, or
-/// stopped part-way through finishing.
+/// deletes the parts a finished batch can reach, whether it is handed to [`StashUpload::discard`],
+/// only dropped, or stopped part-way through finishing.
 ///
-/// That guarantee ends where the finished batch does. Once [`StashUpload::finish`] hands back a
-/// response, the parts belong to the response rather than to any upload, and a caller that drops
+/// What a finished batch reaches is not always everything that was written. Persist merges runs
+/// once a builder holds more than `peek_response_stash_batch_max_runs` of them, and a merge writes
+/// a fresh output and drops the inputs it read without entering them into shard state, so nothing
+/// on either side can address them again. Parts flush at `persist_blob_target_size`, so an upload
+/// small enough never to merge deletes all of what it wrote and a large one deletes the output of
+/// its last merge. A reader deleting a response it has finished with reaches exactly the same
+/// parts, so this is a property of the builder rather than of abandonment.
+///
+/// The guarantee also ends where the finished batch does. Once [`StashUpload::finish`] hands back
+/// a response, the parts belong to the response rather than to any upload, and a caller that drops
 /// one leaves them behind. A replica that dies mid-upload leaves them behind too, and
 /// [`StashUpload::abandon`] says so.
 ///
@@ -66,7 +75,8 @@ pub(super) enum UploadDemand {
 ///
 /// Every write reports its failure rather than raising it. The unit that fails is the peek, whose
 /// driver answers it with the error, so a rejected write costs one query its answer instead of
-/// costing the walk that produced it its task.
+/// costing the walk that produced it its task. Cleanup holds itself to the same rule by catching
+/// what persist raises, for the reason [`StashUpload::abandon`] gives.
 pub(super) struct StashUpload {
     /// The description the stashed response reports, and the schema the batch is written under.
     relation_desc: RelationDesc,
@@ -279,7 +289,8 @@ impl StashUpload {
     /// bounds how many abandoned uploads carry a part at once.
     ///
     /// TODO: persist could offer a builder teardown that surrenders the parts already written
-    /// without flushing the buffered one, which would make this cost a delete and nothing else.
+    /// without flushing the buffered one, which would make this cost a delete and nothing else,
+    /// and would remove the reason the finish below has to be caught.
     fn abandon(&mut self) {
         let Some(batch_builder) = self.batch_builder.take() else {
             return;
@@ -301,10 +312,26 @@ impl StashUpload {
         let _handle =
             self.runtime
                 .spawn_named(|| format!("peek_stash::discard({shard_id})"), async move {
-                    match batch_builder.finish(upper).await {
-                        Ok(batch) => batch.delete().await,
-                        Err(error) => {
+                    // A builder whose write was in flight when its walk was aborted holds a part
+                    // that persist has already marked as being waited on, and finishing it panics
+                    // rather than returning. The panic has to be caught here: this replica installs
+                    // a handler that aborts the process for any panic outside a catch, so
+                    // reclaiming one query's blob storage would otherwise cost the whole replica.
+                    // Failing to reclaim is what this path already tolerates elsewhere, which makes
+                    // the leak the right outcome and the abort the wrong one.
+                    let finished = std::panic::AssertUnwindSafe(batch_builder.finish(upper))
+                        .ore_catch_unwind()
+                        .await;
+                    match finished {
+                        Ok(Ok(batch)) => batch.delete().await,
+                        Ok(Err(error)) => {
                             warn!(%shard_id, %error, "peek stash cannot delete an abandoned batch")
+                        }
+                        Err(_panic) => {
+                            warn!(
+                                %shard_id,
+                                "peek stash cannot reclaim an abandoned batch interrupted mid-write"
+                            )
                         }
                     }
                 });
@@ -1022,13 +1049,10 @@ pub(crate) mod tests {
         );
     }
 
-    /// A batch persist rejects is reported rather than raised, and the upload that held it does
-    /// not go on to tear down a builder persist has already taken.
+    /// A batch persist rejects is reported rather than raised.
     ///
     /// A rejected finish leaves the parts behind, which [`StashUpload::finish`] states: persist
-    /// keeps the builder it was asked to finish and hands back no handle to what it holds. The
-    /// upload is dropped here all the same, because a second teardown of a builder that is already
-    /// gone is what the `expect` this arm replaced would have panicked on.
+    /// keeps the builder it was asked to finish and hands back no handle to what it holds.
     #[mz_ore::test(tokio::test)]
     async fn a_rejected_batch_is_reported_rather_than_raised() {
         let clients = PersistClientCache::new_no_metrics();
@@ -1046,10 +1070,5 @@ pub(crate) mod tests {
                 .is_err_and(|error| error.contains("beyond the expected batch upper")),
             "persist must reject the batch and the upload must report it: {rejection:?}",
         );
-
-        // Every chance for a teardown the rejection left behind to run and fail.
-        for _ in 0..BLOB_TURNS {
-            tokio::task::yield_now().await;
-        }
     }
 }

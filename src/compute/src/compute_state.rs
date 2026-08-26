@@ -3330,13 +3330,13 @@ mod peek_sweep_tests {
             .sum()
     }
 
-    /// Cancelling a promoted peek whose walk is feeding the stash answers it once, as cancelled,
-    /// and the walk's own outcome never reaches the caller behind it.
+    /// Cancelling a promoted peek bound for the stash answers it once, as cancelled, and the walk
+    /// behind it produces no second answer.
     ///
-    /// A walk bound for the stash answers with a handle rather than with rows, and the handle is
-    /// built after the cancellation has already removed the peek. A worker that let that outcome
-    /// through would answer the same peek twice, the second time with a handle to a batch its
-    /// cancellation has scheduled for deletion.
+    /// Cancellation both removes the pending peek and aborts the walk, and it is the removal that
+    /// has to be paired with the abort: a cancellation that answered without stopping the walk
+    /// would answer the same peek again, the second time with a handle to a batch nothing will
+    /// read.
     #[mz_ore::test(tokio::test)]
     async fn a_cancelled_stash_bound_peek_is_answered_once() {
         let keys = wide_ok_rows(WIDE_INDEX_KEYS);
