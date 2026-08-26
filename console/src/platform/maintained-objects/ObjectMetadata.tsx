@@ -27,7 +27,15 @@ export const ObjectMetadata = ({ item }: ObjectMetadataProps) => {
 
   return (
     <VStack align="start" spacing={6} width="100%">
-      {isSource && <SourceDiagnostics sourceId={item.id} />}
+      {isSource && (
+        <SourceDiagnostics
+          sourceId={item.id}
+          sourceType={item.sourceType}
+          sourceStatus={item.sourceStatus}
+          lag={item.lag}
+          cluster={item.cluster}
+        />
+      )}
       <ObjectColumnsList
         databaseName={item.databaseName}
         schemaName={item.schemaName}

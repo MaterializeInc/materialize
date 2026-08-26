@@ -63,6 +63,22 @@ export interface MaintainedObjectLag {
   ms: number;
 }
 
+/**
+ * Ingestion state from the hydration-aggregate feed, which joins
+ * `mz_source_statuses` and the snapshot flag. This is what the Status column
+ * shows for a source, in place of replica hydration, which for a source only
+ * tracks whether `rehydration_latency` is set and so reads false throughout the
+ * initial snapshot.
+ */
+export interface MaintainedObjectSourceStatus {
+  /** One of `created`, `starting`, `running`, `paused`, `stalled`, `failed`. */
+  status: string;
+  /** Populated when the source is `stalled` or `failed`. */
+  error: string | null;
+  /** Null while no replica has reported statistics yet. */
+  snapshotCommitted: boolean | null;
+}
+
 export interface MaintainedObjectListItem {
   id: string;
   name: string;
@@ -78,6 +94,8 @@ export interface MaintainedObjectListItem {
   totalReplicas: number;
   /** Null until the lag snapshot arrives. */
   lag: MaintainedObjectLag | null;
+  /** Null for non-sources, and until the hydration snapshot arrives. */
+  sourceStatus: MaintainedObjectSourceStatus | null;
 }
 
 const MAINTAINED_OBJECT_TYPE_SET: ReadonlySet<string> = new Set(
@@ -133,9 +151,9 @@ export interface UseMaintainedObjectsListResult {
 
 /**
  * Composes maintained objects from three live sources: `useAllObjects()` for
- * object metadata, plus SUBSCRIBEs for pMAX lag and hydration aggregate. The
- * table renders as soon as object metadata is ready; lag and hydration cells
- * fill in as their snapshots arrive.
+ * object metadata, plus SUBSCRIBEs for pMAX lag and the hydration aggregate,
+ * which also carries source status. The table renders as soon as object
+ * metadata is ready; lag and status cells fill in as their snapshots arrive.
  */
 export const useMaintainedObjectsList = ({
   lookbackMinutes,
@@ -179,6 +197,13 @@ export const useMaintainedObjectsList = ({
         lag: lagInterval
           ? { value: lagInterval, ms: sumPostgresIntervalMs(lagInterval) }
           : null,
+        sourceStatus: hydrationRow?.sourceStatus
+          ? {
+              status: hydrationRow.sourceStatus,
+              error: hydrationRow.sourceError,
+              snapshotCommitted: hydrationRow.snapshotCommitted,
+            }
+          : null,
       });
     }
     return [...objectsById.values()].sort((a, b) =>
@@ -197,9 +222,18 @@ export const useMaintainedObjectsList = ({
 
 export interface ObjectSourceStatistics {
   messagesReceived: number;
+  bytesReceived: number;
   snapshotRecordsKnown: number;
   snapshotRecordsStaged: number;
   rehydrationLatency: IPostgresInterval | null;
+  /** Latest upstream offset; null for source types without offsets. */
+  offsetKnown: number | null;
+  /** Latest durably ingested offset; null like `offsetKnown`. */
+  offsetCommitted: number | null;
+  /** Keys held in upsert state, summed across subsources. */
+  recordsIndexed: number;
+  /** Bytes of upsert state, summed across subsources. */
+  bytesIndexed: number;
 }
 
 export function useObjectSourceStatistics(sourceId: string) {
@@ -213,9 +247,15 @@ export function useObjectSourceStatistics(sourceId: string) {
       if (!row) return null;
       return {
         messagesReceived: Number(row.messagesReceived ?? 0),
+        bytesReceived: Number(row.bytesReceived ?? 0),
         snapshotRecordsKnown: Number(row.snapshotRecordsKnown ?? 0),
         snapshotRecordsStaged: Number(row.snapshotRecordsStaged ?? 0),
         rehydrationLatency: row.rehydrationLatency as IPostgresInterval | null,
+        offsetKnown: row.offsetKnown === null ? null : Number(row.offsetKnown),
+        offsetCommitted:
+          row.offsetCommitted === null ? null : Number(row.offsetCommitted),
+        recordsIndexed: Number(row.recordsIndexed ?? 0),
+        bytesIndexed: Number(row.bytesIndexed ?? 0),
       };
     },
   });

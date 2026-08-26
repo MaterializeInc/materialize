@@ -10,36 +10,59 @@
 import { Box, Card, Text, useTheme, VStack } from "@chakra-ui/react";
 import React from "react";
 
+import Alert from "~/components/Alert";
+import { useObjectStorageSize } from "~/hooks/useObjectStorageSize";
 import { DetailItem } from "~/platform/connectors/AsideBox";
+import { snapshotEstimateNote } from "~/platform/connectors/utils";
 import { MaterializeTheme } from "~/theme";
-import { sumPostgresIntervalMs } from "~/util";
+import { formatBytesShort } from "~/utils/format";
 
-import { useObjectSourceStatistics } from "./queries";
+import {
+  MaintainedObjectCluster,
+  MaintainedObjectLag,
+  MaintainedObjectSourceStatus,
+  useObjectSourceStatistics,
+} from "./queries";
+import { SourceIngestionHealth } from "./SourceIngestionHealth";
 
 export interface SourceDiagnosticsProps {
   sourceId: string;
+  sourceType: string | null;
+  /** Null until the source status subscribe delivers a row. */
+  sourceStatus: MaintainedObjectSourceStatus | null;
+  /** Null until the lag subscribe delivers a row. */
+  lag: MaintainedObjectLag | null;
+  cluster: MaintainedObjectCluster | null;
 }
 
-export const SourceDiagnostics = ({ sourceId }: SourceDiagnosticsProps) => {
+/**
+ * Diagnosis-first source card: ingestion health verdict, storage footprint,
+ * and, while relevant, status errors and snapshot progress. Steady-state
+ * lifecycle facts live on the source details page instead.
+ */
+export const SourceDiagnostics = ({
+  sourceId,
+  sourceType,
+  sourceStatus,
+  lag,
+  cluster,
+}: SourceDiagnosticsProps) => {
   const { colors } = useTheme<MaterializeTheme>();
   const { data: stats } = useObjectSourceStatistics(sourceId);
+  const { data: storageBytes } = useObjectStorageSize(sourceId);
 
-  if (!stats) return null;
+  const error = sourceStatus?.error;
+  if (!stats && !error) return null;
 
-  const {
-    messagesReceived,
-    snapshotRecordsKnown: snapshotKnown,
-    snapshotRecordsStaged: snapshotStaged,
-    rehydrationLatency,
-  } = stats;
+  // `snapshot_committed` is authoritative. Judging by the staged/known ratio
+  // would report a live source as stuck at 99% forever.
+  const snapshotting = sourceStatus?.snapshotCommitted === false;
+  const snapshotKnown = stats?.snapshotRecordsKnown ?? 0;
+  const snapshotStaged = stats?.snapshotRecordsStaged ?? 0;
   const snapshotPercent =
     snapshotKnown > 0
-      ? Math.round((snapshotStaged / snapshotKnown) * 100)
+      ? Math.min(100, Math.round((snapshotStaged / snapshotKnown) * 100))
       : null;
-  const snapshotComplete = snapshotPercent === null || snapshotPercent === 100;
-  const rehydrationMs = rehydrationLatency
-    ? sumPostgresIntervalMs(rehydrationLatency)
-    : null;
 
   return (
     <Card
@@ -52,34 +75,32 @@ export const SourceDiagnostics = ({ sourceId }: SourceDiagnosticsProps) => {
       <VStack align="start" spacing={3} width="100%">
         <Text textStyle="heading-sm">Source diagnostics</Text>
 
-        <VStack align="stretch" spacing={2} width="100%">
-          <DetailItem
-            label="Rehydration latency"
-            color={
-              rehydrationMs === null
-                ? colors.accent.orange
-                : colors.foreground.primary
-            }
-          >
-            {rehydrationMs !== null
-              ? `${(rehydrationMs / 1000).toFixed(1)}s`
-              : "Still rehydrating..."}
-          </DetailItem>
-          <DetailItem label="Messages received">
-            {messagesReceived.toLocaleString()}
-          </DetailItem>
-          {snapshotComplete ? (
-            <DetailItem label="Snapshot" color={colors.accent.green}>
-              Complete
+        {error && <Alert variant="error" width="100%" message={error} />}
+
+        <SourceIngestionHealth
+          sourceId={sourceId}
+          sourceType={sourceType}
+          sourceStatus={sourceStatus}
+          lag={lag}
+          cluster={cluster}
+        />
+
+        {storageBytes != null && storageBytes > 0 && (
+          <VStack align="stretch" spacing={2} width="100%">
+            <DetailItem label="Storage size">
+              {formatBytesShort(BigInt(Math.round(storageBytes)))}
             </DetailItem>
-          ) : (
-            <>
-              <DetailItem
-                label="Snapshot progress"
-                color={colors.accent.orange}
-              >
-                {`${snapshotPercent}% (${snapshotStaged.toLocaleString()} / ${snapshotKnown.toLocaleString()} records)`}
-              </DetailItem>
+          </VStack>
+        )}
+
+        {snapshotting && (
+          <VStack align="stretch" spacing={2} width="100%">
+            <DetailItem label="Snapshot progress" color={colors.accent.orange}>
+              {snapshotPercent === null
+                ? "In progress"
+                : `${snapshotPercent}% (${snapshotStaged.toLocaleString()} / ${snapshotKnown.toLocaleString()} records)`}
+            </DetailItem>
+            {snapshotPercent !== null && (
               <Box
                 width="100%"
                 height="1.5"
@@ -94,9 +115,12 @@ export const SourceDiagnostics = ({ sourceId }: SourceDiagnosticsProps) => {
                   transition="width 0.3s ease"
                 />
               </Box>
-            </>
-          )}
-        </VStack>
+            )}
+            <Text textStyle="text-small" color={colors.foreground.secondary}>
+              {snapshotEstimateNote(sourceType)}
+            </Text>
+          </VStack>
+        )}
       </VStack>
     </Card>
   );
