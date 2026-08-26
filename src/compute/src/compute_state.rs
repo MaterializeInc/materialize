@@ -2440,6 +2440,26 @@ mod peek_sweep_tests {
             )
         }
 
+        /// The walks the peek stash answered.
+        ///
+        /// A stashed answer and an inline answer carry the same rows, so this is what turns "the
+        /// stash path engaged" from an inference about the configuration into an assertion.
+        fn walks_stashed(&self) -> u64 {
+            self.state.metrics.index_peek_stashed_total.get()
+        }
+
+        /// The cursor positions the ok walks that ended here reported, and how many walks reported
+        /// them.
+        ///
+        /// A walk reports its positions once, wherever it ended, and the count is cumulative over
+        /// every slice it was cut into. A peek answered by two walks of the same trace would
+        /// report twice, or once at twice the positions, and would answer with the same rows
+        /// either way.
+        fn ok_walk_positions(&self) -> (u64, f64) {
+            let rows = &self.state.metrics.index_peek_row_iteration_rows;
+            (rows.get_sample_count(), rows.get_sample_sum())
+        }
+
         /// How long the worker would park before its next activation, as `step_or_park` reads it.
         ///
         /// `None` is an indefinite park, which is what a worker with no dataflow and no pending
@@ -2797,6 +2817,16 @@ mod peek_sweep_tests {
         let (uuid, response) = responses.pop().expect("length checked");
         assert_eq!(uuid, PEEK_A);
         assert_eq!(stashed_rows(&harness, response).await, keys);
+        assert_eq!(
+            harness.walks(),
+            (0, 1),
+            "the promoted driver is the one that writes to the stash, so it ended the walk"
+        );
+        assert_eq!(
+            harness.walks_stashed(),
+            1,
+            "the kill switch does not take the stash away from a peek that needs it"
+        );
     }
 
     /// One activation serves what the per-activation aggregate allows and passes the rest over,
@@ -3266,6 +3296,11 @@ mod peek_sweep_tests {
             "the walk wrote every row it had accumulated when it crossed the threshold"
         );
         assert_eq!(
+            inline_rows(stashed),
+            usize::cast_from(WIDE_INDEX_KEYS - (DIVERT_AT_ROWS + 1)),
+            "the rows the walk still held when the trace ran out ride along with the handle"
+        );
+        assert_eq!(
             stashed_rows(&harness, response).await,
             keys,
             "the stash and the rows beside it are the answer the peek would have given inline"
@@ -3274,6 +3309,66 @@ mod peek_sweep_tests {
             harness.walks(),
             (0, 1),
             "one promoted walk produced the whole answer"
+        );
+        assert_eq!(harness.walks_stashed(), 1, "the stash answered the peek");
+        // The answer alone says nothing here: a walk that gave up at the threshold and started
+        // over would produce these very rows. What says the trace was walked once is the count of
+        // cursor positions the walk that ended reported.
+        assert_eq!(
+            harness.ok_walk_positions(),
+            (1, f64::cast_lossy(keys.len())),
+            "one walk evaluated each cursor position of the index once"
+        );
+    }
+
+    /// The rows a stashed response carries beside its batches.
+    fn inline_rows(stashed: &mz_compute_client::protocol::response::StashedPeekResponse) -> usize {
+        stashed
+            .inline_rows
+            .iter()
+            .map(|rows| rows.clone().into_row_iter().count())
+            .sum()
+    }
+
+    /// Cancelling a promoted peek whose walk is feeding the stash answers it once, as cancelled,
+    /// and the walk's own outcome never reaches the caller behind it.
+    ///
+    /// A walk bound for the stash answers with a handle rather than with rows, and the handle is
+    /// built after the cancellation has already removed the peek. A worker that let that outcome
+    /// through would answer the same peek twice, the second time with a handle to a batch its
+    /// cancellation has scheduled for deletion.
+    #[mz_ore::test(tokio::test)]
+    async fn a_cancelled_stash_bound_peek_is_answered_once() {
+        let keys = wide_ok_rows(WIDE_INDEX_KEYS);
+        let mut harness =
+            promoted_walk_that_crosses_the_threshold(&keys, PersistLocation::new_in_mem());
+
+        harness.active().handle_cancel_peek(PEEK_A);
+
+        assert_eq!(
+            harness.peek_responses(),
+            vec![(PEEK_A, PeekResponse::Canceled)]
+        );
+        assert_eq!(harness.pending(PEEK_A), None);
+
+        for _ in 0..SWEEP_BOUND {
+            tokio::task::yield_now().await;
+            harness.sweep();
+        }
+        assert_eq!(
+            harness.peek_responses(),
+            vec![],
+            "a cancelled peek is answered once and never again"
+        );
+        assert_eq!(
+            harness.walks_stashed(),
+            0,
+            "a cancelled walk answers from no stash"
+        );
+        assert_eq!(
+            harness.walks(),
+            (0, 0),
+            "a cancelled walk reaches no outcome and counts on neither substrate"
         );
     }
 }

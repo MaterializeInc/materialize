@@ -389,9 +389,11 @@ async fn stashed_answer(
 mod tests {
     use std::num::NonZeroUsize;
 
+    use mz_compute_types::dyncfgs::{ENABLE_PEEK_ROW_ITERATION_LIMIT, PEEK_ROW_ITERATION_LIMIT};
     use mz_dyncfg::ConfigUpdates;
     use mz_expr::RowSetFinishing;
     use mz_expr::row::RowCollection;
+    use mz_ore::cast::CastLossy;
     use mz_ore::metrics::MetricsRegistry;
     use mz_ore::num::NonNeg;
     use mz_persist_client::cache::PersistClientCache;
@@ -407,7 +409,7 @@ mod tests {
         wide_ok_rows,
     };
     use crate::compute_state::peek_scan::PeekScan;
-    use crate::compute_state::peek_stash::tests::stashed_rows;
+    use crate::compute_state::peek_stash::tests::{CountedBlob, stashed_rows};
     use crate::metrics::{ComputeMetrics, WorkerMetrics};
     use crate::server::ComputeRuntimeRole;
 
@@ -496,12 +498,36 @@ mod tests {
     /// The configuration a promoted walk reads, with the yield granularity set to
     /// `yield_granularity` so a test can choose how many slices a walk is cut into.
     fn offload_config(yield_granularity: usize) -> OffloadConfig {
+        offload_config_with(yield_granularity, |_updates| ())
+    }
+
+    /// The same, with `configure` applied on top, as `UpdateConfiguration` applies a change.
+    fn offload_config_with(
+        yield_granularity: usize,
+        configure: impl FnOnce(&mut ConfigUpdates),
+    ) -> OffloadConfig {
         let config = mz_dyncfgs::all_dyncfgs();
         let mut updates = ConfigUpdates::default();
         updates.add(&INDEX_PEEK_YIELD_GRANULARITY, yield_granularity);
+        configure(&mut updates);
         updates.apply(&config);
         OffloadConfig::new(&config)
     }
+
+    /// The configuration a walk whose blob traffic a test counts reads.
+    ///
+    /// A builder over the run limit merges its runs, which writes parts of its own and leaves the
+    /// parts it merged from behind, so a test counting what a walk wrote raises the limit past the
+    /// runs the walk produces.
+    fn counted_blob_config(yield_granularity: usize) -> OffloadConfig {
+        offload_config_with(yield_granularity, |updates| {
+            updates.add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, NO_RUN_MERGING);
+        })
+    }
+
+    /// A run limit above the parts any walk here writes, which is at most one per key of the
+    /// longest trace these tests hold.
+    const NO_RUN_MERGING: usize = 8_000;
 
     /// A timely worker whose activator a promoted walk wakes when its outcome is ready.
     ///
@@ -664,6 +690,10 @@ mod tests {
     /// through a batch of their own, and the two halves together are every row the peek owes. The
     /// count of stashed rows is asserted as well, because a driver that wrote the tail to both
     /// halves would still answer with the right set.
+    ///
+    /// What says the trace was walked once is the count of cursor positions the walk reported, not
+    /// the rows it answered with: a second walk of the same trace produces the same rows, so an
+    /// answer-only test passes against the very regression it is meant to catch.
     #[mz_ore::test(tokio::test)]
     async fn a_promoted_walk_writes_full_batches_to_the_stash_and_walks_on() {
         let keys = wide_ok_rows(8);
@@ -706,6 +736,21 @@ mod tests {
             metrics.index_peek_walks_offloaded.get(),
             1,
             "one walk produced the whole answer"
+        );
+        assert_eq!(
+            metrics.index_peek_stashed_total.get(),
+            1,
+            "the walk answered from the stash"
+        );
+        assert_eq!(
+            metrics.index_peek_row_iteration_rows.get_sample_count(),
+            1,
+            "one walk reports one ok phase, whatever it was cut into"
+        );
+        assert_eq!(
+            metrics.index_peek_row_iteration_rows.get_sample_sum(),
+            f64::cast_lossy(keys.len()),
+            "the walk evaluated each cursor position of the trace once"
         );
     }
 
@@ -991,6 +1036,192 @@ mod tests {
             metrics.index_peek_permit_queue_depth.get(),
             0,
             "an admitted walk leaves the queue"
+        );
+    }
+
+    /// A walk that is aborted after its upload has written parts leaves nothing in blob storage.
+    ///
+    /// This is the whole of the cleanup a cancellation gets. Cancelling a peek removes the pending
+    /// entry, which drops the handle to this task and aborts it, and an aborted task is dropped
+    /// rather than polled again, so nothing the walk would have called runs. What deletes the parts
+    /// is `Drop for StashUpload` spawning the deletion onto the runtime the upload captured when it
+    /// opened, and this is the one test that drives an abort into that drop into that spawn.
+    #[mz_ore::test(tokio::test)]
+    async fn an_aborted_walk_deletes_the_parts_its_upload_wrote() {
+        let keys = wide_ok_rows(LONG_WALK_KEYS);
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+        // Crossed by the third row, so the walk opens an upload a few positions in and keeps
+        // feeding it for the rest of a trace it cannot reach the end of before it is aborted.
+        let scan = open(&mut bundle, &peek, Some(2 * wide_row_size()));
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let blob = CountedBlob::new();
+        let promoted = OffloadedPeek::promote(
+            peek.clone(),
+            scan,
+            Some(stash_target(&peek, blob.clients())),
+            &permits,
+            // One position per slice, so the walk is still far from the end of the trace when the
+            // first part reaches blob storage.
+            counted_blob_config(1),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        blob.wait_until_something_is_written("a walk past the stash threshold")
+            .await;
+
+        // Dropping the whole entry is what a cancellation does, and it is the abort rather than
+        // any signal the walk observes.
+        drop(promoted);
+
+        blob.wait_until_nothing_is_left("an aborted walk").await;
+        assert_eq!(
+            blob.deletes_of_nothing(),
+            0,
+            "the deletes must name the keys the upload wrote"
+        );
+        assert_eq!(
+            metrics.index_peek_walks_offloaded.get(),
+            0,
+            "an aborted walk reaches no outcome and counts on neither substrate"
+        );
+        assert_eq!(
+            metrics.index_peek_stashed_total.get(),
+            0,
+            "an aborted walk answers from no stash"
+        );
+    }
+
+    /// A walk that observes its cancellation while feeding an upload gives the upload up, which
+    /// deletes the parts it had written, and reports no outcome.
+    ///
+    /// This is the other half of a cancellation. An abort usually stops the walk first, but a
+    /// cancellation that lands between two slices is seen by the walk itself, and the branch that
+    /// sees it has to give the upload up rather than return past it.
+    ///
+    /// The task's handle is kept for the length of the test, so what ends the walk is the walk
+    /// itself seeing the closed channel rather than an abort.
+    #[mz_ore::test(tokio::test)]
+    async fn a_walk_cancelled_while_uploading_deletes_what_it_wrote() {
+        let keys = wide_ok_rows(LONG_WALK_KEYS);
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+        let scan = open(&mut bundle, &peek, Some(2 * wide_row_size()));
+
+        let metrics = worker_metrics();
+        let walk_metrics = PeekWalkMetrics::new(&metrics);
+        let permits = PeekPermits::new(1);
+        let semaphore = permits.resize(0);
+        let permit = Arc::clone(&semaphore)
+            .try_acquire_owned()
+            .expect("a permit is free");
+
+        let blob = CountedBlob::new();
+        let stash = stash_target(&peek, blob.clients());
+        let (result_tx, result_rx) = oneshot::channel();
+        let config = counted_blob_config(1);
+        let order_by = peek.finishing.order_by.clone();
+        let walk = mz_ore::task::spawn(|| "peek_offload_test::walk", async move {
+            OffloadedPeek::walk(
+                permit,
+                Uuid::nil(),
+                scan,
+                Some(stash),
+                &config,
+                &walk_metrics,
+                &order_by,
+                &result_tx,
+            )
+            .await
+            .is_some()
+        });
+
+        blob.wait_until_something_is_written("a walk past the stash threshold")
+            .await;
+        assert!(
+            !walk.is_finished(),
+            "the walk must still be under way when it is cancelled"
+        );
+
+        drop(result_rx);
+
+        wait_until(|| walk.is_finished(), "the cancelled walk stopping").await;
+        assert_eq!(walk.await, false, "a cancelled walk reports no outcome");
+
+        blob.wait_until_nothing_is_left("a cancelled walk").await;
+        assert_eq!(
+            blob.deletes_of_nothing(),
+            0,
+            "the deletes must name the keys the upload wrote"
+        );
+        assert_eq!(
+            semaphore.available_permits(),
+            1,
+            "a cancelled walk releases the permit that admitted it"
+        );
+    }
+
+    /// A walk that fails after its upload has written parts answers with the failure and deletes
+    /// those parts, because nothing will ever read them.
+    ///
+    /// A failure reachable only once rows are already in the stash is what this driver created:
+    /// the walk that produces the rows is now the walk that writes them, so its own error arm has
+    /// an upload to answer for.
+    #[mz_ore::test(tokio::test)]
+    async fn a_walk_that_fails_after_writing_deletes_what_it_wrote() {
+        let keys = wide_ok_rows(20);
+        let peek = index_peek(trivial_finishing(), None);
+        let mut bundle = trace_bundle(&keys, cancelling_errors(0));
+        // Crossed by the third row, so two batches reach the stash before the limit below trips.
+        let scan = open(&mut bundle, &peek, Some(2 * wide_row_size()));
+
+        // Past the rows two batches hold and short of the trace, so the walk fails with an upload
+        // open and parts written.
+        let limit = 8;
+
+        let metrics = worker_metrics();
+        let worker = worker();
+        let permits = PeekPermits::new(1);
+        let blob = CountedBlob::new();
+        let mut promoted = OffloadedPeek::promote(
+            peek.clone(),
+            scan,
+            Some(stash_target(&peek, blob.clients())),
+            &permits,
+            offload_config_with(1, |updates| {
+                updates.add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, NO_RUN_MERGING);
+                updates.add(&ENABLE_PEEK_ROW_ITERATION_LIMIT, true);
+                updates.add(&PEEK_ROW_ITERATION_LIMIT, limit);
+            }),
+            PeekWalkMetrics::new(&metrics),
+            worker.sync_activator_for([].into()),
+        );
+
+        assert_eq!(
+            answer(&mut promoted).await,
+            PeekResponse::Error(PeekError::RowIterationLimitExceeded { limit }),
+            "the peek is answered with the failure rather than with the rows already written",
+        );
+
+        blob.wait_until_nothing_is_left("a failed walk").await;
+        assert_eq!(
+            blob.deletes_of_nothing(),
+            0,
+            "the deletes must name the keys the upload wrote"
+        );
+        assert_eq!(
+            metrics.index_peek_stashed_total.get(),
+            0,
+            "a walk answered with an error answered from no stash"
+        );
+        assert_eq!(
+            metrics.index_peek_walks_offloaded.get(),
+            1,
+            "a failure is a terminal outcome, so the driver that reached it counts the walk"
         );
     }
 
