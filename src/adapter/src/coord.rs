@@ -200,7 +200,7 @@ use crate::coord::appends::{
 use crate::coord::caught_up::CaughtUpCheckContext;
 use crate::coord::id_bundle::CollectionIdBundle;
 use crate::coord::introspection::IntrospectionSubscribe;
-use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink};
+use crate::coord::metric_sink::{CuratedMetricSink, InstalledMetricSink, PlannedMetricSink};
 use crate::coord::peek::PendingPeek;
 use crate::coord::statement_logging::StatementLogging;
 use crate::coord::timeline::{TimelineContext, TimelineState};
@@ -2159,6 +2159,9 @@ pub struct Coordinator {
     /// Keyed replica-first so a replica's installs form one contiguous range: teardown on replica
     /// drop is the only lookup that is not by exact key.
     metric_sinks: BTreeMap<(ReplicaId, &'static str), InstalledMetricSink>,
+    /// Curated metric-sink plans, cached per definition so each is planned once rather than once
+    /// per replica. See [`Coordinator::plan_metric_sink`].
+    metric_sink_plans: BTreeMap<&'static str, PlannedMetricSink>,
 
     /// Locks that grant access to a specific object, populated lazily as objects are written to.
     write_locks: BTreeMap<CatalogItemId, Arc<tokio::sync::Mutex<()>>>,
@@ -5390,6 +5393,7 @@ pub fn serve(
                     hydration_history_replica_cursor: None,
                     hydration_history_sweep: None,
                     metric_sinks: BTreeMap::new(),
+                    metric_sink_plans: BTreeMap::new(),
                     write_locks: BTreeMap::new(),
                     deferred_write_ops: BTreeMap::new(),
                     pending_writes: Vec::new(),

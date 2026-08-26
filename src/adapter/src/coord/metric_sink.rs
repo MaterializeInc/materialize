@@ -15,6 +15,11 @@
 //! cluster, and is re-created from the static list on every boot. Modelling the curated set this
 //! way keeps it out of the catalog, so adding or removing a definition needs no builtin migration.
 //!
+//! Every replica means every replica of every cluster, user clusters included. Each definition is
+//! therefore a dataflow, with its arrangements, on customer compute, charged to that customer's
+//! cluster, and the cost scales with `CURATED`. `coord::introspection` already accepts this for its
+//! subscribes.
+//!
 //! # Lifecycle
 //!
 //! * After a new replica is created, the coordinator calls `install_metric_sinks` to install every
@@ -30,21 +35,24 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
+use mz_catalog::memory::objects::CatalogItem;
 use mz_cluster_client::ReplicaId;
 use mz_controller_types::ClusterId;
+use mz_ore::collections::CollectionExt;
 use mz_ore::{instrument, soft_panic_or_log};
 use mz_repr::optimize::OverrideFrom;
 use mz_repr::{CatalogItemId, GlobalId, RelationDesc};
 use mz_sql::catalog::SessionCatalog;
 use mz_sql::plan::{
-    HirRelationExpr, Params, Plan, PlanContext, SelectPlan, validate_metric_sink_desc,
+    HirRelationExpr, Params, Plan, SubscribeFrom, SubscribePlan, validate_metric_sink_desc,
     validate_metric_sink_prefix,
 };
 use mz_sql::session::user::{MZ_SYSTEM_ROLE_ID, RoleMetadata};
 use mz_sql::session::vars::ENABLE_METRIC_SINK;
 use tracing::{Span, info};
 
+use crate::catalog::Catalog;
 use crate::coord::{
     Coordinator, Message, MetricSinkFinish, MetricSinkOptimize, MetricSinkStage, PlanValidity,
     StageResult, Staged,
@@ -85,6 +93,18 @@ pub(super) struct InstalledMetricSink {
     cluster_id: ClusterId,
     /// The transient id of the sink's compute export.
     sink_id: GlobalId,
+}
+
+/// A [`CuratedMetricSink`] planned once and shared across the replicas it installs on. See
+/// [`Coordinator::plan_metric_sink`].
+#[derive(Clone, Debug)]
+pub(super) struct PlannedMetricSink {
+    /// The shaped source query.
+    expr: HirRelationExpr,
+    /// The shape `expr` produces.
+    desc: RelationDesc,
+    /// The catalog items the source reads.
+    dependencies: BTreeSet<CatalogItemId>,
 }
 
 impl Coordinator {
@@ -131,7 +151,58 @@ impl Coordinator {
         replica_id: ReplicaId,
         definition: &'static CuratedMetricSink,
     ) {
+        // Cheap duplicate check before planning: if the definition is already installed on this
+        // replica, there is nothing to do. `metric_sink_finish` keeps a backstop for a double
+        // install still in flight (not yet recorded here).
+        if self
+            .metric_sinks
+            .contains_key(&(replica_id, definition.name))
+        {
+            return;
+        }
+
+        let Some(planned) = self.plan_metric_sink(definition) else {
+            return;
+        };
+
         let (_, sink_id) = self.allocate_transient_id();
+        // Logged only once the definition is known good, so an abandoned install leaves no
+        // misleading "installing" line.
+        info!(%sink_id, %replica_id, name = definition.name, "installing metric sink");
+
+        let validity = PlanValidity::new(
+            &self.catalog,
+            planned.dependencies.clone(),
+            Some(cluster_id),
+            Some(replica_id),
+            RoleMetadata::new(MZ_SYSTEM_ROLE_ID),
+        );
+        let stage = MetricSinkStage::Optimize(MetricSinkOptimize {
+            validity,
+            definition,
+            sink_id,
+            expr: planned.expr.clone(),
+            desc: planned.desc.clone(),
+            cluster_id,
+            replica_id,
+        });
+        self.sequence_staged((), Span::current(), stage).await;
+    }
+
+    /// Plans a curated definition once, caching the result in [`Coordinator::metric_sink_plans`].
+    ///
+    /// The plan depends only on the catalog, never on the replica, so it is shared across every
+    /// replica the definition installs on rather than re-planned per replica. Curated sources read
+    /// only builtins (enforced by [`ensure_reads_only_logs`]), which do not change while envd runs,
+    /// so a cached plan stays valid for envd's lifetime. Returns `None` for an invalid definition,
+    /// having soft-panicked.
+    fn plan_metric_sink(
+        &mut self,
+        definition: &'static CuratedMetricSink,
+    ) -> Option<PlannedMetricSink> {
+        if let Some(planned) = self.metric_sink_plans.get(definition.name) {
+            return Some(planned.clone());
+        }
 
         // A user sink's prefix is validated at plan time; a curated one has no such gate, so enforce
         // the same contract here. The prefix keeps published families in the reserved lane and
@@ -147,7 +218,7 @@ impl Coordinator {
                 "invalid curated metric sink prefix (name={}): {err}",
                 definition.name
             );
-            return;
+            return None;
         }
 
         let catalog = self.catalog().for_system_session();
@@ -158,31 +229,28 @@ impl Coordinator {
                     "invalid curated metric sink (name={}): {err}",
                     definition.name
                 );
-                return;
+                return None;
             }
         };
 
-        // Logged only once the definition is known good, so an abandoned install leaves no
-        // misleading "installing" line.
-        info!(%sink_id, %replica_id, name = definition.name, "installing metric sink");
+        // Enforce the introspection-only contract before any optimization work, against what the
+        // definition reads rather than how the optimizer imports it.
+        if let Err(err) = ensure_reads_only_logs(&self.catalog, &dependencies) {
+            soft_panic_or_log!(
+                "invalid curated metric sink (name={}): {err}",
+                definition.name
+            );
+            return None;
+        }
 
-        let validity = PlanValidity::new(
-            &self.catalog,
-            dependencies,
-            Some(cluster_id),
-            Some(replica_id),
-            RoleMetadata::new(MZ_SYSTEM_ROLE_ID),
-        );
-        let stage = MetricSinkStage::Optimize(MetricSinkOptimize {
-            validity,
-            definition,
-            sink_id,
+        let planned = PlannedMetricSink {
             expr,
             desc,
-            cluster_id,
-            replica_id,
-        });
-        self.sequence_staged((), Span::current(), stage).await;
+            dependencies,
+        };
+        self.metric_sink_plans
+            .insert(definition.name, planned.clone());
+        Some(planned)
     }
 
     #[instrument]
@@ -191,7 +259,7 @@ impl Coordinator {
         stage: MetricSinkOptimize,
     ) -> Result<StageResult<Box<MetricSinkStage>>, AdapterError> {
         let MetricSinkOptimize {
-            validity,
+            mut validity,
             definition,
             sink_id,
             expr,
@@ -219,6 +287,7 @@ impl Coordinator {
             optimizer_config,
             self.optimizer_metrics(),
         );
+        let catalog = self.owned_catalog();
 
         let span = Span::current();
         Ok(StageResult::Handle(mz_ore::task::spawn_blocking(
@@ -238,6 +307,13 @@ impl Coordinator {
                     let global_lir_plan = (|| {
                         // MIR ⇒ MIR optimization (global)
                         let global_mir_plan = optimizer.catch_unwind_optimize(metric_sink)?;
+                        // The optimizer imports indexes the SQL never named. Fold them into
+                        // validity so one dropped before the finish stage fails the recheck rather
+                        // than shipping a dataflow that imports a gone collection.
+                        let id_bundle =
+                            dataflow_import_id_bundle(global_mir_plan.df_desc(), cluster_id);
+                        let item_ids = id_bundle.iter().map(|id| catalog.resolve_item_id(&id));
+                        validity.extend_dependencies(&catalog, item_ids);
                         // MIR ⇒ LIR lowering and LIR ⇒ LIR optimization (global)
                         optimizer.catch_unwind_optimize(global_mir_plan)
                     })()
@@ -286,9 +362,9 @@ impl Coordinator {
 
         let id_bundle = dataflow_import_id_bundle(&df_desc, cluster_id);
 
-        // Enforcement site for the introspection-only contract on `CuratedMetricSink::source_sql`.
-        // A storage import means the query reads a catalog-backed relation, which puts envd's write
-        // frontier on the sink's emission path and would pin that storage `since` for the sink's life.
+        // Backstop for the introspection-only contract; the real gate is `ensure_reads_only_logs`
+        // at install time. A log-only source imports only compute collections, so this should never
+        // fire, but a storage import would couple the sink's frontier to envd.
         if !id_bundle.storage_ids.is_empty() {
             soft_panic_or_log!(
                 "curated metric sink reads non-introspection relations (name={}): {:?}",
@@ -316,9 +392,11 @@ impl Coordinator {
             .metric_sinks
             .insert((replica_id, definition.name), install)
         {
-            // Two definitions collide on the registry key. Restore the first and abandon this one:
-            // shipping both would leak the first's collection (now unreachable to
-            // `drop_metric_sinks`) and register a second collector under the same `sink` label.
+            // The key is already taken. `curated_names_are_unique` rules out two definitions
+            // colliding, so the reachable cause is `install_metric_sinks` running twice for one
+            // replica. Restore the first install and abandon this one: shipping both would leak the
+            // first's collection (now unreachable to `drop_metric_sinks`) and register a second
+            // collector under the same `sink` label.
             self.metric_sinks
                 .insert((replica_id, definition.name), previous);
             soft_panic_or_log!(
@@ -371,6 +449,42 @@ fn metric_sinks_on_replica(
         .collect()
 }
 
+/// Enforces the introspection-only contract from [`CuratedMetricSink::source_sql`]: every relation
+/// the definition reads, walking views transitively, must be a log collection. A storage-backed
+/// read would put envd's write frontier on the sink's emission path, the coupling these sinks exist
+/// to avoid.
+///
+/// Checked here against what the definition reads rather than by import kind after optimization: the
+/// import split (storage vs index) depends on which indexes the target cluster happens to have, so
+/// it gives the same definition different verdicts on different clusters.
+fn ensure_reads_only_logs(
+    catalog: &Catalog,
+    dependencies: &BTreeSet<CatalogItemId>,
+) -> Result<(), anyhow::Error> {
+    let mut to_visit: Vec<_> = dependencies.iter().copied().collect();
+    let mut visited = BTreeSet::new();
+    while let Some(id) = to_visit.pop() {
+        if !visited.insert(id) {
+            continue;
+        }
+        let entry = catalog.get_entry(&id);
+        match entry.item() {
+            // The only data leaf allowed.
+            CatalogItem::Log(_) => {}
+            // Allowed only if everything it reads is, so walk its dependencies.
+            CatalogItem::View(_) => to_visit.extend(entry.uses()),
+            // No data dependency; a view over logs still references these.
+            CatalogItem::Type(_) | CatalogItem::Func(_) => {}
+            _ => bail!(
+                "curated metric sink reads {}, which is not an introspection log relation \
+                 (only logs and views over logs are allowed)",
+                catalog.resolve_full_name(entry.name(), None)
+            ),
+        }
+    }
+    Ok(())
+}
+
 impl CuratedMetricSink {
     /// Plans `source_sql` against a session-less catalog, returning the query, its output shape,
     /// and the catalog items it reads.
@@ -378,42 +492,43 @@ impl CuratedMetricSink {
         &self,
         catalog: &dyn SessionCatalog,
     ) -> Result<(HirRelationExpr, RelationDesc, BTreeSet<CatalogItemId>), anyhow::Error> {
-        // A definition is a single statement. Reject the count explicitly rather than let
-        // `into_element` panic on zero or many and escape the caller's soft-fail.
-        let mut parsed = mz_sql::parse::parse(self.source_sql)?;
-        if parsed.len() != 1 {
+        // A definition is a single statement. Reject the count explicitly for a clear error.
+        let statements = mz_sql::parse::parse(self.source_sql)?;
+        if statements.len() != 1 {
             bail!(
                 "source SQL must be exactly one statement, got {}",
-                parsed.len()
+                statements.len()
             );
         }
-        let parsed = parsed.remove(0);
+
+        // A metric sink's source is a continuously maintained dataflow, like a SUBSCRIBE, so plan it
+        // as one. A maintained lifetime folds any finishing into the expression (an ORDER BY over a
+        // maintained collection is dropped, a LIMIT becomes a TopK) rather than leaving it beside the
+        // query, so `MetricSinkFrom::Query` gets a self-contained expression whose arity matches its
+        // `desc`. This mirrors `coord::introspection`, which plans its specs as subscribes too.
+        let subscribe_sql = format!("SUBSCRIBE ({})", self.source_sql);
+        let parsed = mz_sql::parse::parse(&subscribe_sql)?.into_element();
         let (stmt, resolved_ids) = mz_sql::names::resolve(catalog, parsed.ast)?;
-
-        let pcx = PlanContext::zero();
-        let desc = mz_sql::plan::describe(&pcx, catalog, stmt.clone(), &[])?
-            .relation_desc
-            .ok_or_else(|| anyhow!("source SQL does not return rows"))?;
-        validate_metric_sink_desc(&desc)?;
-
-        let (plan, _sql_impl_ids) =
-            mz_sql::plan::plan(Some(&pcx), catalog, stmt, &Params::empty(), &resolved_ids)?;
-        let Plan::Select(SelectPlan {
-            source, finishing, ..
+        let (plan, sql_impl_ids) =
+            mz_sql::plan::plan(None, catalog, stmt, &Params::empty(), &resolved_ids)?;
+        let Plan::Subscribe(SubscribePlan {
+            from: SubscribeFrom::Query { expr, desc },
+            ..
         }) = plan
         else {
-            bail!("source SQL is not a SELECT: {plan:?}");
+            bail!("source SQL must be a single SELECT");
         };
-        // A finishing has no meaning for a continuously-consumed collection, and silently dropping
-        // one would desync `desc` from `source` (the shaping resolves canonical columns by index
-        // into `desc`). Check against `source.arity()`, not `desc.arity()`: a trivial finishing over
-        // a wider source would trim columns yet still pass a `desc.arity()` check.
-        if !finishing.is_trivial(source.arity()) {
-            bail!("source SQL must not use ORDER BY, LIMIT, or OFFSET");
-        }
+        validate_metric_sink_desc(&desc)?;
 
-        let dependencies = resolved_ids.items().copied().collect();
-        Ok((source, desc, dependencies))
+        // Fold in ids from SQL-implemented function bodies. `plan` keeps them out of `resolved_ids`
+        // since a one-shot statement doesn't depend on a function's body, but a metric sink inlines
+        // that body into its dataflow, so the body's reads are real imports the gate must check.
+        let dependencies = resolved_ids
+            .items()
+            .chain(sql_impl_ids.items())
+            .copied()
+            .collect();
+        Ok((expr, desc, dependencies))
     }
 }
 
@@ -451,6 +566,7 @@ impl Staged for MetricSinkStage {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use mz_catalog::memory::objects::CatalogItem;
     use mz_cluster_client::ReplicaId;
     use mz_controller_types::ClusterId;
     use mz_repr::GlobalId;
@@ -458,7 +574,8 @@ mod tests {
 
     use crate::catalog::Catalog;
     use crate::coord::metric_sink::{
-        CURATED, CuratedMetricSink, InstalledMetricSink, metric_sinks_on_replica,
+        CURATED, CuratedMetricSink, InstalledMetricSink, ensure_reads_only_logs,
+        metric_sinks_on_replica,
     };
 
     /// `drop_metric_sinks` relies on this range scan returning exactly one replica's installs, with
@@ -559,13 +676,13 @@ mod tests {
     const VALID_SOURCE: &str = "SELECT 'n'::text AS metric_name, 'gauge'::text AS metric_type, \
         NULL::map[text=>text] AS labels, NULL::double AS value, 'h'::text AS help";
 
-    /// `VALID_SOURCE` with a finishing appended, which `plan_source` must reject.
+    /// `VALID_SOURCE` with an ORDER BY appended. Maintained-lifetime planning folds it away rather
+    /// than rejecting it, since ordering has no meaning for a continuously-consumed collection.
     const ORDERED_SOURCE: &str = "SELECT 'n'::text AS metric_name, 'gauge'::text AS metric_type, \
         NULL::map[text=>text] AS labels, NULL::double AS value, 'h'::text AS help ORDER BY 1";
 
-    /// `plan_source` accepts the canonical column contract and rejects the shapes the shaping and
-    /// the operator cannot consume: missing columns, and a finishing that would desync `desc` from
-    /// `source`.
+    /// `plan_source` accepts the canonical column contract (including a source with a finishing,
+    /// which maintained-lifetime planning folds in) and rejects a source missing the columns.
     #[mz_ore::test(tokio::test)]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
     async fn plan_source_enforces_the_metric_sink_contract() {
@@ -582,11 +699,60 @@ mod tests {
 
             assert!(plan(VALID_SOURCE).is_ok());
 
+            // An ORDER BY is folded away by maintained-lifetime planning, not rejected.
+            assert!(plan(ORDERED_SOURCE).is_ok());
+
             // Missing the canonical columns: rejected by `validate_metric_sink_desc`.
             assert!(plan("SELECT 1 AS foo").is_err());
 
-            // A finishing (ORDER BY/LIMIT/OFFSET) would desync `desc` from `source`.
-            assert!(plan(ORDERED_SOURCE).is_err());
+            // Not exactly one statement: rejected by the explicit count guard.
+            assert!(plan("").is_err());
+            assert!(plan("SELECT 1; SELECT 2").is_err());
+        })
+        .await
+    }
+
+    /// A SQL-implemented builtin hides its reads: `pg_get_viewdef`'s body reads
+    /// `mz_catalog.mz_views`, which the dataflow imports but the statement's resolved ids omit.
+    /// `plan_source` must surface those reads so the gate rejects them.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn ensure_reads_only_logs_sees_sql_impl_function_reads() {
+        Catalog::with_debug(|catalog| async move {
+            let session_catalog = catalog.for_system_session();
+            let (_, _, dependencies) = CuratedMetricSink {
+                name: "test",
+                source_sql: "SELECT pg_get_viewdef('x') AS metric_name, 'gauge'::text AS metric_type, \
+                    NULL::map[text=>text] AS labels, NULL::double AS value, 'h'::text AS help",
+                prefix: "mz_metric_sink_test_",
+            }
+            .plan_source(&session_catalog)
+            .expect("plans against the system catalog");
+            assert!(ensure_reads_only_logs(&catalog, &dependencies).is_err());
+        })
+        .await
+    }
+
+    /// The introspection-only contract: a log dependency is accepted, a storage-backed one is
+    /// rejected. Checked against what the definition reads, so the verdict does not depend on the
+    /// target cluster's index layout.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn ensure_reads_only_logs_accepts_logs_rejects_storage() {
+        Catalog::with_debug(|catalog| async move {
+            let log_id = catalog
+                .entries()
+                .find(|e| matches!(e.item(), CatalogItem::Log(_)))
+                .expect("debug catalog has a builtin log")
+                .id();
+            assert!(ensure_reads_only_logs(&catalog, &BTreeSet::from([log_id])).is_ok());
+
+            let storage_id = catalog
+                .entries()
+                .find(|e| matches!(e.item(), CatalogItem::Table(_) | CatalogItem::Source(_)))
+                .expect("debug catalog has a builtin table or source")
+                .id();
+            assert!(ensure_reads_only_logs(&catalog, &BTreeSet::from([storage_id])).is_err());
         })
         .await
     }
