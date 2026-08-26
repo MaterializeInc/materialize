@@ -1475,11 +1475,9 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             INSERT INTO hydration_history_t SELECT generate_series(1, 100000);
             CREATE INDEX hydration_history_i
                 IN CLUSTER hydration_history ON hydration_history_t (a);
-            -- Fresh user IDs are sequential. This MV gets u3, whose active sink
-            -- worker is 0, while the u4 MV below uses worker 1.
-            CREATE MATERIALIZED VIEW hydration_history_mv_worker0
+            CREATE MATERIALIZED VIEW hydration_history_mv_a
                 IN CLUSTER hydration_history AS SELECT a + 1 AS a FROM hydration_history_t;
-            CREATE MATERIALIZED VIEW hydration_history_mv
+            CREATE MATERIALIZED VIEW hydration_history_mv_b
                 IN CLUSTER hydration_history AS SELECT a + 2 AS a FROM hydration_history_t;
             """))
 
@@ -1494,49 +1492,70 @@ def workflow_hydration_history_survives_restart(c: Composition) -> None:
             len(before) == 1
         ), f"expected exactly one episode, got {before} (empty means it timed out)"
 
-        # The materialized view's episode has to appear too. On this replica only
-        # one of the two workers has a write-inclusive `hydrated_at`.
+        # Discover which MV's persist-sink worker is off worker 0 instead of
+        # predicting it from user-ID allocation and hashing. Enough input data
+        # separates compute completion from the active worker's durable write.
+        deadline = time.time() + 120
+        candidates = []
+        worker_rows = []
+        with c.sql_cursor(reuse_connection=True) as cursor:
+            try:
+                cursor.execute("SET cluster = hydration_history")
+                cursor.execute("SET cluster_replica = r1")
+                while time.time() < deadline:
+                    cursor.execute("""
+                        SELECT
+                            mv.name,
+                            max(h.hydrated_at)::text,
+                            (max(h.hydrated_at)
+                                FILTER (WHERE h.worker_id = 0))::text
+                        FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+                        JOIN mz_internal.mz_object_global_ids AS g
+                          ON g.global_id = h.export_id
+                        JOIN mz_catalog.mz_materialized_views AS mv ON mv.id = g.id
+                        WHERE mv.name IN (
+                            'hydration_history_mv_a',
+                            'hydration_history_mv_b'
+                        )
+                        GROUP BY mv.name
+                        HAVING count(*) = 2
+                           AND count(*) = count(h.hydrated_at)
+                        ORDER BY mv.name
+                        """)
+                    worker_rows = cursor.fetchall()
+                    candidates = [
+                        row
+                        for row in worker_rows
+                        if row[1] is not None and row[2] != row[1]
+                    ]
+                    if candidates:
+                        break
+                    time.sleep(0.5)
+            finally:
+                cursor.execute("RESET cluster_replica")
+                cursor.execute("RESET cluster")
+        assert candidates, (
+            "test fixture did not produce an MV with its persist-sink worker "
+            f"off worker 0: {worker_rows}"
+        )
+        mv_name, latest_worker_finish, worker_zero_finish = candidates[0]
+
+        # The selected MV's history episode must use the all-worker maximum,
+        # not worker 0's earlier compute-only finish.
         deadline = time.time() + 120
         mv_episodes = []
         while time.time() < deadline:
-            mv_episodes = episodes("hydration_history_mv")
+            mv_episodes = episodes(mv_name)
             if mv_episodes:
                 break
             time.sleep(0.5)
         assert (
             len(mv_episodes) == 1
-        ), f"expected one materialized view episode, got {mv_episodes}"
-
-        # Introspection reads must target the replica whose rows the collector
-        # sampled. Restore the reused connection's settings before later queries.
-        with c.sql_cursor(reuse_connection=True) as cursor:
-            try:
-                cursor.execute("SET cluster = hydration_history")
-                cursor.execute("SET cluster_replica = r1")
-                cursor.execute("""
-                    SELECT
-                        max(h.hydrated_at)::text,
-                        (max(h.hydrated_at) FILTER (WHERE h.worker_id = 0))::text
-                    FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
-                    JOIN mz_internal.mz_object_global_ids AS g
-                      ON g.global_id = h.export_id
-                    JOIN mz_catalog.mz_materialized_views AS mv ON mv.id = g.id
-                    WHERE mv.name = 'hydration_history_mv'
-                    """)
-                row = cursor.fetchone()
-                assert row is not None
-                latest_worker_finish, worker_zero_finish = row
-            finally:
-                cursor.execute("RESET cluster_replica")
-                cursor.execute("RESET cluster")
-        assert worker_zero_finish != latest_worker_finish, (
-            "test fixture did not put the persist-sink worker off worker 0: "
-            f"worker 0 finished at {worker_zero_finish}, "
-            f"all workers finished at {latest_worker_finish}"
-        )
+        ), f"expected one materialized view episode for {mv_name}, got {mv_episodes}"
         assert mv_episodes[0][2] == latest_worker_finish, (
             f"durable finish {mv_episodes[0][2]} did not match "
-            f"latest worker finish {latest_worker_finish}"
+            f"latest worker finish {latest_worker_finish}. "
+            f"worker 0 finished at {worker_zero_finish}"
         )
 
         c.kill("materialized")
