@@ -288,9 +288,9 @@ impl StashUpload {
     /// walk's permit is released when the walk returns rather than when this finishes, so nothing
     /// bounds how many abandoned uploads carry a part at once.
     ///
-    /// TODO: persist could offer a builder teardown that surrenders the parts already written
-    /// without flushing the buffered one, which would make this cost a delete and nothing else,
-    /// and would remove the reason the finish below has to be caught.
+    /// TODO(PER-70): persist could offer a builder teardown that surrenders the parts already
+    /// written without flushing the buffered one, which would make this cost a delete and nothing
+    /// else, and would remove the reason the finish below has to be caught.
     fn abandon(&mut self) {
         let Some(batch_builder) = self.batch_builder.take() else {
             return;
@@ -314,11 +314,11 @@ impl StashUpload {
                 .spawn_named(|| format!("peek_stash::discard({shard_id})"), async move {
                     // A builder whose write was in flight when its walk was aborted holds a part
                     // that persist has already marked as being waited on, and finishing it panics
-                    // rather than returning. The panic has to be caught here: this replica installs
-                    // a handler that aborts the process for any panic outside a catch, so
-                    // reclaiming one query's blob storage would otherwise cost the whole replica.
-                    // Failing to reclaim is what this path already tolerates elsewhere, which makes
-                    // the leak the right outcome and the abort the wrong one.
+                    // rather than returning, which PER-70 tracks. The panic has to be caught here:
+                    // this replica installs a handler that aborts the process for any panic outside
+                    // a catch, so reclaiming one query's blob storage would otherwise cost the
+                    // whole replica. Failing to reclaim is what this path already tolerates
+                    // elsewhere, which makes the leak the right outcome and the abort the wrong one.
                     let finished = std::panic::AssertUnwindSafe(batch_builder.finish(upper))
                         .ore_catch_unwind()
                         .await;
