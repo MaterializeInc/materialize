@@ -213,6 +213,11 @@ impl OffloadedPeek {
 
                 match result_tx.send((response, start.elapsed())) {
                     Ok(()) => {}
+                    // TODO: a dropped stashed response leaves its parts in blob storage. The
+                    // upload's own cleanup cannot reach them, because a finished batch belongs to
+                    // the response rather than to the upload, and rebuilding a deletable batch
+                    // from what the response carries needs a `WriteHandle` this task does not
+                    // hold. A reader-side sweep or persist's own garbage collection covers it.
                     Err((_response, elapsed)) => {
                         debug!(duration = ?elapsed, "dropping result for cancelled peek {peek_uuid}")
                     }
@@ -368,8 +373,9 @@ async fn stashed_answer(
 ) -> PeekResponse {
     match upload.finish(inline_rows).await {
         Ok(response) => response,
-        // NOTE: a rejected finish is the one abandonment that leaves the parts behind, because
-        // persist keeps the builder it was asked to finish. `StashUpload::finish` says so.
+        // NOTE: a rejected finish leaves the parts behind, because persist keeps the builder it
+        // was asked to finish. `StashUpload::finish` says so, and says why the case is stated
+        // rather than expected.
         Err(error) => {
             // Persist rejects a batch it was handed wrongly, so this is a defect in the upload
             // rather than a blip, and the query's error is the only other place it shows.

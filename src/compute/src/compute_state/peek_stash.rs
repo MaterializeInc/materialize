@@ -50,8 +50,11 @@ pub(super) enum UploadDemand {
 /// The rows an upload is given are the rows it writes, in the order it is given them, up to the
 /// point where the peek's finishing has all it can use. An upload that does not reach a reader
 /// deletes what it wrote, whether it is handed to [`StashUpload::discard`], only dropped, or
-/// stopped part-way through finishing. A batch persist refuses to finish is the one escape, and
-/// [`StashUpload::finish`] says so; a replica that dies mid-upload is the other, and
+/// stopped part-way through finishing.
+///
+/// That guarantee ends where the finished batch does. Once [`StashUpload::finish`] hands back a
+/// response, the parts belong to the response rather than to any upload, and a caller that drops
+/// one leaves them behind. A replica that dies mid-upload leaves them behind too, and
 /// [`StashUpload::abandon`] says so.
 ///
 /// Nothing here bounds how large a stashed answer grows where the finishing has no limit to reach.
@@ -191,13 +194,15 @@ impl StashUpload {
     /// sound because a peek reaches the stash only with an empty `order_by`.
     ///
     /// Fails where persist rejects the batch, in which case nothing that was written is readable.
-    ///
-    /// A rejection is the one abandonment that leaves the parts behind: persist takes the builder
-    /// to finish it and hands back no handle to what it holds when it refuses, so nothing can
-    /// reach them and they stay in blob storage.
+    /// A rejection takes the parts with it, because persist keeps the builder it was asked to
+    /// finish and hands back no handle to what it holds. Only a batch whose bounds do not admit
+    /// its own updates is refused, which this upload's fixed lower, upper and timestamp cannot
+    /// produce, so the case is stated rather than expected.
     pub(super) async fn finish(mut self, inline_rows: RowBatch) -> Result<PeekResponse, String> {
-        let batch = self.finish_batch().await?.take();
+        let delivered = self.finish_batch().await?;
 
+        // Built before the batch leaves its guard, so that an unwind here still deletes what was
+        // written rather than leaving it for nobody.
         let inline_rows = inline_rows
             .into_iter()
             .map(|(row, copies)| {
@@ -205,6 +210,8 @@ impl StashUpload {
                 (row, copies)
             })
             .collect();
+
+        let batch = delivered.take();
 
         let stashed_response = StashedPeekResponse {
             num_rows_batches: self.num_rows,
