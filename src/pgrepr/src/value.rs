@@ -292,14 +292,14 @@ impl Value {
                     _ => panic!("Value::Map should have type Type::Map. Found {:?}", typ),
                 };
                 buf.try_make_datum(|packer| {
-                    packer.try_push_dict_with(|row| {
+                    packer.push_indexed_dict_with(|builder| {
                         for (k, v) in map {
-                            row.push(Datum::String(buf.push_string(k)));
+                            let key = buf.push_string(k);
                             let datum = match v {
                                 Some(elem) => elem.into_datum(buf, elem_pg_type)?,
                                 None => Datum::Null,
                             };
-                            row.push(datum);
+                            builder.push_entry(key, |row| row.push(datum));
                         }
                         Ok::<_, IntoDatumError>(())
                     })
@@ -828,13 +828,15 @@ impl Value {
                     strconv::parse_map(s, matches!(**value_type, Type::Map { .. }), |elem_text| {
                         elem_text.map(Ok::<_, String>).transpose()
                     })?;
-                packer.push_dict_with(|row| {
+                packer.push_indexed_dict_with(|builder| {
                     for (k, v) in map {
-                        row.push(Datum::String(&k));
-                        match v {
-                            Some(elem) => Value::decode_text_into_row(value_type, &elem, row)?,
-                            None => row.push(Datum::Null),
-                        }
+                        builder.push_entry(&k, |row| match v {
+                            Some(elem) => Value::decode_text_into_row(value_type, &elem, row),
+                            None => {
+                                row.push(Datum::Null);
+                                Ok(())
+                            }
+                        })?;
                     }
                     Ok::<_, Box<dyn Error + Sync + Send>>(())
                 })?;
