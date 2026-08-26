@@ -235,6 +235,11 @@ The correctness argument has two parts: (1) the OCC loop produces the right
 diffs, and (2) the timestamped write mechanism ensures they are applied at the
 right timestamp.
 
+User statements require every relation leaf to be a user table owned by the
+table-write transaction domain. Source-backed tables, including webhook tables,
+receive updates outside that domain, so the target table's oracle cannot make
+their updates atomic with the resulting write.
+
 ### The subscribe produces the right diffs
 
 The subscribe starts at the oracle read timestamp and emits the current state

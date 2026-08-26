@@ -97,7 +97,7 @@ metrics:
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_active_internal_subscribes
-  help: The number of active internal subscribes, which serve frontend-sequenced read-then-write.
+  help: The number of active internal subscribes used by read-then-write operations and background maintenance.
   labels:
   - session_type
   source: src/adapter/src/metrics.rs
@@ -953,6 +953,37 @@ metrics:
   visibility: internal
 - name: mz_group_commit_catalog_upper_seconds_sum
   help: The time it takes to advance the catalog shard upper for a txns-shard write (group commits and table register/forget).
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_mutations_total
+  help: Total hydration-history collection and retention mutations since process start.
+  labels:
+  - operation
+  - outcome
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_retention_batch_full_total
+  help: Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_rows_affected_total
+  help: Total rows changed by hydration-history maintenance since process start.
+  labels:
+  - action
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_sweep_duration_seconds_bucket
+  help: Wall time of a complete hydration-history collection and retention sweep.
+  labels:
+  - le
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_sweep_duration_seconds_count
+  help: Wall time of a complete hydration-history collection and retention sweep.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
+- name: mz_hydration_history_sweep_duration_seconds_sum
+  help: Wall time of a complete hydration-history collection and retention sweep.
   source: src/adapter/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_cursor_setup_seconds_bucket

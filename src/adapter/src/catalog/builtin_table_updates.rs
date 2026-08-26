@@ -51,6 +51,7 @@ use mz_sql::names::SchemaSpecifier;
 use mz_sql_parser::ast::display::AstDisplay;
 use mz_storage_client::client::TableData;
 use smallvec::smallvec;
+use uuid::Uuid;
 
 // DO NOT add any more imports from `crate` outside of `crate::catalog`.
 use crate::active_compute_sink::ActiveSubscribe;
@@ -811,12 +812,13 @@ impl CatalogState {
         &self,
         id: GlobalId,
         subscribe: &ActiveSubscribe,
+        session_uuid: Uuid,
         diff: Diff,
     ) -> BuiltinTableUpdate<&'static BuiltinTable> {
         let mut row = Row::default();
         let mut packer = row.packer();
         packer.push(Datum::String(&id.to_string()));
-        packer.push(Datum::Uuid(subscribe.session_uuid));
+        packer.push(Datum::Uuid(session_uuid));
         packer.push(Datum::String(&subscribe.cluster_id.to_string()));
 
         let start_dt = mz_ore::now::to_datetime(subscribe.start_time);

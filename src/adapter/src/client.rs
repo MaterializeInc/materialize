@@ -63,6 +63,7 @@ use crate::command::{
     SASLChallengeResponse, SASLVerifyProofResponse, SuperuserAttribute,
 };
 use crate::config::{ScopedParameters, ScopedParametersScope, SystemParameterFrontend};
+use crate::coord::read_then_write::DependencyPolicy;
 use crate::coord::{Coordinator, ExecuteContextGuard};
 use crate::error::AdapterError;
 use crate::frontend_read_then_write::{
@@ -72,7 +73,7 @@ use crate::frontend_read_then_write::{
 use crate::metrics::Metrics;
 use crate::optimize::dataflows::{EvalTime, ExprPrepOneShot};
 use crate::optimize::{self, Optimize, OptimizerError};
-use crate::peek_client::{ExecutionLogging, TakeOver};
+use crate::peek_client::{CoordinatorClient, ExecutionLogging, TakeOver};
 use crate::session::{
     EndTransactionAction, PreparedStatement, Session, SessionConfig, StateRevision, TransactionId,
     TransactionStatus,
@@ -313,7 +314,7 @@ impl Client {
         } = response;
 
         let peek_client = PeekClient::new(
-            self.clone(),
+            CoordinatorClient::Session(self.clone()),
             &catalog,
             storage_collections,
             transient_id_gen,
@@ -1542,7 +1543,7 @@ impl SessionClient {
                     });
             tokio::pin!(register);
             tokio::select! {
-                rx = &mut register => rx,
+                rx = &mut register => rx?,
                 _ = &mut cancel_future => {
                     inner_client.try_send(Command::PrivilegedCancelRequest {
                         conn_id: conn_id.clone(),
@@ -1973,7 +1974,7 @@ impl SessionClient {
                         "calls to mz_now in write statements",
                     ));
                 }
-                validate_selection_dependencies(&catalog, &depends_on)?;
+                validate_selection_dependencies(&catalog, &depends_on, DependencyPolicy::UserDml)?;
                 return Err(prohibited_in_transaction(&stmt));
             }
         }

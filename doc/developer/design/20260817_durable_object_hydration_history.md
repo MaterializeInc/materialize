@@ -50,6 +50,11 @@ It installs an internal subscribe on that replica which aggregates every worker'
 completed rows, anti-joins them against the history table, and writes the missing
 ones through the timestamped OCC read-then-write path.
 
+Collection has no explicit batch bound. It returns at most one row per
+not-yet-recorded dataflow, and the OCC path rejects a result that exceeds
+`max_result_size` or `max_query_result_size`. At their 1 GiB defaults that ceiling
+only matters at millions of dataflows per replica.
+
 Two dyncfgs control it. `hydration_history_collection_interval` sets the sweep
 cadence and disables collection at zero, which is the production default.
 `hydration_history_retention_period` bounds how long rows live, defaulting to 30
@@ -148,6 +153,13 @@ sampling race rather than depending on replica configuration for an expected wor
 count. In that case the durable finish can precede the latest worker's finish. This
 is separate from restart behavior, which discards the replica collection as a unit.
 
+The missing worker cannot later change the episode key. Its logging clock stamps
+both the Differential update and `installed_at`, so appearing after the read means
+its installation stamp is later than the visible minimum. A later sweep therefore
+keeps the same `min(installed_at)` and the anti-join matches the row already written.
+The worker can raise `max(hydrated_at)`, but the durable row is not repaired after
+its episode key has been recorded.
+
 Compute is adding an append-only lifecycle log for the same stages, currently
 proposed in #38403: one row per export, worker and event, with a reason and the
 dataflow's as-of. It leaves `mz_compute_hydration_times_per_worker` alone, so
@@ -190,15 +202,19 @@ writes their retractions at the observed frontier. Collection applies the same
 cutoff, so a still-live log row cannot resurrect an episode retention just
 retracted.
 
-Retention deletes successive bounded batches until one is not full. The fixed
-cutoff makes the eligible set finite, and collection refuses to insert rows behind
-that cutoff, so a successful sweep drains the backlog even when more than one batch
-expires at once. The bound is not a nicety. The OCC path refuses a selection larger
-than `max_result_size` before submitting any write, so one unbounded delete over a
-large backlog would fail identically forever and never shrink the table. The bound
-has to sit inside a derived table, because a top-level `LIMIT` lands in the plan's
-`RowSetFinishing`, which the OCC path deliberately discards, and the delete would be
-silently unbounded again.
+Retention deletes one bounded batch per sweep. The fixed cutoff makes the eligible
+set finite, and collection refuses to insert rows behind that cutoff, so later
+sweeps continue draining the same backlog without starving collection. The batch
+bound is not a nicety. The OCC path refuses a selection larger than
+`max_result_size` before submitting any write, so one unbounded delete over a large
+backlog would fail identically forever and never shrink the table. The bound has to
+sit inside a derived table, because a top-level `LIMIT` lands in the plan's
+`RowSetFinishing`, which this OCC stage cannot apply.
+
+`mz_hydration_history_retention_batch_full_total` increments when the batch deletes
+all 1,000 rows. Repeated increments mean retention may not be keeping up. An operator
+can lower `hydration_history_collection_interval` to schedule sweeps more often,
+then compare appended and deleted row rates to confirm the backlog is shrinking.
 
 Retention runs on the catalog server, so it keeps working when there are no user
 replicas at all, and it runs even when that sweep's collection failed. A
@@ -238,6 +254,11 @@ the interval is one fleet-wide setting and an unshifted grid would have every
 environment sweep at the same instant. Using the full id also separates regions and
 ordinals belonging to one organization.
 
+One replica per interval means an environment with `N` eligible replicas revisits
+each one approximately every `N * interval`. Freshness therefore degrades linearly
+with replica count. Lowering the interval improves freshness at the cost of more
+replica dataflow installs.
+
 **Background mutations take no OCC write permit.** The permits are one semaphore
 shared by every read-then-write in the process, not one per table. A session's wait
 is bounded by its statement timeout, a sweep's is not, and a sweep's subscribe has
@@ -250,10 +271,10 @@ nothing else stops it outliving the coordinator, and the teardown that follows d
 the timestamp oracle's worker task. A sweep still running would then read a
 timestamp from a dead oracle and panic, so the coordinator owns the task handle.
 
-**Each mutation's timeout is deliberately generous.** Even a mutation with nothing
-to write waits for its read to linearize, which can take a full
-`default_timestamp_interval`, a parameter with no upper bound. A tighter bound would
-let a large timestamp interval starve retention permanently.
+**Each mutation's timeout is deliberately generous.** Subscribe installation,
+replica-side progress, OCC conflict retries, and the external commit can all wait
+indefinitely. The bound keeps one unavailable replica or service from starving
+retention and every later replica in the single-flight rotation.
 
 Replica drop, cluster drop, dependency replacement, replica failure, and timeout all
 skip the attempt, and a later sweep recomputes from current state. Read-only
@@ -283,17 +304,23 @@ frontier reaches the target. One of the subscribe's inputs is a replica-local
 introspection log whose frontier the *replica* advances from its own clock, rounded
 up to its introspection interval.
 
-So a replica whose clock trails environmentd by more than one introspection
-interval produces a frontier that keeps sitting below the target the oracle hands
-out. The mutation waits, and the sweep's own timeout ends it. The consequence is
-bounded. Nothing wrong is recorded, that replica records nothing at all, and the
-sweep stretches while it waits, which delays others in the rotation. It resolves
-itself when the clocks converge.
+For a non-empty selection, a replica whose clock trails environmentd by more than
+one introspection interval repeatedly loses the same race. Its frontier eventually
+certifies the current target, but by then keepalives or other writes have advanced
+the oracle past it. The committer refuses the stale target, the OCC loop adopts a
+new one, and the replica has to catch up again. The sweep's timeout normally ends
+that loop. A lower `max_occ_retries` can end it first with a contention error.
+
+Nothing wrong is recorded in either case. That replica records nothing at all, and
+the sweep stretches while it retries, which delays others in the rotation. Empty
+selections exit without entering the conflict loop. The condition resolves itself
+when the clocks converge.
 
 Accepted for now: skew between processes is normally milliseconds while the
-tolerance is a whole introspection interval, and the failure mode is waiting rather
-than wrong data. Because the symptom is otherwise hard to attribute, a step that
-times out logs that the replica's introspection frontier may be trailing.
+tolerance is a whole introspection interval, and the failure mode is retrying rather
+than wrong data. Because the symptom is otherwise hard to attribute, both a timeout
+and retry-budget exhaustion log that the replica's introspection frontier may be
+trailing.
 
 ## Rollout
 

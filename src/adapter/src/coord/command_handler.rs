@@ -638,44 +638,25 @@ impl Coordinator {
                     as_of,
                     arity,
                     sink_id,
-                    conn_id,
-                    session_uuid,
+                    owner,
                     start_time,
                     read_holds,
                     tx,
                 } => {
                     self.handle_create_internal_subscribe(
-                        *df_desc,
-                        cluster_id,
-                        replica_id,
-                        depends_on,
-                        as_of,
-                        arity,
-                        sink_id,
-                        conn_id,
-                        session_uuid,
-                        start_time,
-                        read_holds,
-                        tx,
+                        *df_desc, cluster_id, replica_id, depends_on, as_of, arity, sink_id, owner,
+                        start_time, read_holds, tx,
                     )
                     .await;
                 }
                 Command::AttemptWrite {
-                    conn_id,
+                    attempt,
                     target_id,
                     target_global_id,
                     diffs,
-                    write_ts,
                     tx,
                 } => {
-                    self.handle_attempt_write(
-                        conn_id,
-                        target_id,
-                        target_global_id,
-                        diffs,
-                        write_ts,
-                        tx,
-                    );
+                    self.handle_attempt_write(attempt, target_id, target_global_id, diffs, tx);
                 }
                 Command::DropInternalSubscribe { sink_id } => {
                     self.drop_internal_subscribe(sink_id).await;

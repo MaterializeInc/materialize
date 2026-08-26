@@ -1436,6 +1436,162 @@ def workflow_temporary_item_cleanup(c: Composition) -> None:
         pass
 
 
+def workflow_hydration_history_survives_restart(c: Composition) -> None:
+    """`mz_object_hydration_history` rows outlive the process that wrote them.
+
+    Killing the service also restarts clusterd, so the replica hydrates again
+    and legitimately records a *second* episode with a fresh `installed_at`.
+    What must hold is that the pre-restart episode is still there afterwards,
+    unchanged, and that repeated sweeps do not duplicate it. Asserting a total
+    row count of one would instead assert that rehydration goes unrecorded.
+    """
+
+    def episodes(name: str = "hydration_history_i") -> list[list]:
+        return c.sql_query(f"""
+            SELECT h.installed_at::text, h.started_at::text,
+                   h.hydrated_at::text, h.status
+            FROM mz_internal.mz_object_hydration_history AS h
+            JOIN mz_internal.mz_object_global_ids AS g ON g.global_id = h.object_id
+            JOIN mz_catalog.mz_objects AS o ON o.id = g.id
+            WHERE o.name = '{name}'
+            ORDER BY h.installed_at""")
+
+    c.down(destroy_volumes=True)
+    with c.override(
+        Materialized(
+            additional_system_parameter_defaults={
+                "hydration_history_collection_interval": "1s",
+                # Pin retention: CI randomizes it, and a short period would
+                # prune the episode this test restarts around.
+                "hydration_history_retention_period": "30d",
+            },
+            sanity_restart=False,
+        )
+    ):
+        c.up("materialized")
+        c.sql(dedent("""\
+            CREATE CLUSTER hydration_history SIZE 'scale=1,workers=2';
+            CREATE TABLE hydration_history_t (a int);
+            INSERT INTO hydration_history_t SELECT generate_series(1, 100000);
+            CREATE INDEX hydration_history_i
+                IN CLUSTER hydration_history ON hydration_history_t (a);
+            CREATE MATERIALIZED VIEW hydration_history_mv_a
+                IN CLUSTER hydration_history AS SELECT a + 1 AS a FROM hydration_history_t;
+            CREATE MATERIALIZED VIEW hydration_history_mv_b
+                IN CLUSTER hydration_history AS SELECT a + 2 AS a FROM hydration_history_t;
+            """))
+
+        deadline = time.time() + 120
+        before = []
+        while time.time() < deadline:
+            before = episodes()
+            if before:
+                break
+            time.sleep(0.5)
+        assert (
+            len(before) == 1
+        ), f"expected exactly one episode, got {before} (empty means it timed out)"
+
+        # Discover which MV's persist-sink worker is off worker 0 instead of
+        # predicting it from user-ID allocation and hashing. Enough input data
+        # separates compute completion from the active worker's durable write.
+        deadline = time.time() + 120
+        candidates = []
+        worker_rows = []
+        with c.sql_cursor(reuse_connection=True) as cursor:
+            try:
+                cursor.execute("SET cluster = hydration_history")
+                cursor.execute("SET cluster_replica = r1")
+                while time.time() < deadline:
+                    cursor.execute("""
+                        SELECT
+                            mv.name,
+                            max(h.hydrated_at)::text,
+                            (max(h.hydrated_at)
+                                FILTER (WHERE h.worker_id = 0))::text
+                        FROM mz_introspection.mz_compute_hydration_times_per_worker AS h
+                        JOIN mz_internal.mz_object_global_ids AS g
+                          ON g.global_id = h.export_id
+                        JOIN mz_catalog.mz_materialized_views AS mv ON mv.id = g.id
+                        WHERE mv.name IN (
+                            'hydration_history_mv_a',
+                            'hydration_history_mv_b'
+                        )
+                        GROUP BY mv.name
+                        HAVING count(*) = 2
+                           AND count(*) = count(h.hydrated_at)
+                        ORDER BY mv.name
+                        """)
+                    worker_rows = cursor.fetchall()
+                    candidates = [
+                        row
+                        for row in worker_rows
+                        if row[1] is not None and row[2] != row[1]
+                    ]
+                    if candidates:
+                        break
+                    time.sleep(0.5)
+            finally:
+                cursor.execute("RESET cluster_replica")
+                cursor.execute("RESET cluster")
+        assert candidates, (
+            "test fixture did not produce an MV with its persist-sink worker "
+            f"off worker 0: {worker_rows}"
+        )
+        mv_name, latest_worker_finish, worker_zero_finish = candidates[0]
+
+        # The selected MV's history episode must use the all-worker maximum,
+        # not worker 0's earlier compute-only finish.
+        deadline = time.time() + 120
+        mv_episodes = []
+        while time.time() < deadline:
+            mv_episodes = episodes(mv_name)
+            if mv_episodes:
+                break
+            time.sleep(0.5)
+        assert (
+            len(mv_episodes) == 1
+        ), f"expected one materialized view episode for {mv_name}, got {mv_episodes}"
+        assert mv_episodes[0][2] == latest_worker_finish, (
+            f"durable finish {mv_episodes[0][2]} did not match "
+            f"latest worker finish {latest_worker_finish}. "
+            f"worker 0 finished at {worker_zero_finish}"
+        )
+
+        c.kill("materialized")
+        c.up("materialized")
+
+        # The pre-restart episode must remain byte-identical, and restarting the
+        # replica must produce exactly one episode with a fresh installation.
+        deadline = time.time() + 120
+        after = []
+        fresh = []
+        while time.time() < deadline:
+            after = episodes()
+            fresh = [episode for episode in after if episode[0] != before[0][0]]
+            if before[0] in after and len(fresh) == 1:
+                break
+            time.sleep(0.5)
+        assert (
+            before[0] in after
+        ), f"restart lost the pre-restart episode: had {before}, now {after}"
+        assert (
+            len(after) == 2 and len(fresh) == 1
+        ), f"expected one preserved and one fresh episode, got {after}"
+
+        # Let several sweeps run. The pre-restart episode must not be duplicated,
+        # and the post-restart episode must settle at one row too.
+        time.sleep(10)
+        settled = episodes()
+        assert (
+            before[0] in settled
+        ), f"pre-restart episode disappeared: had {before}, now {settled}"
+        assert len(settled) == len(
+            set(tuple(row) for row in settled)
+        ), f"sweeps duplicated a hydration episode: {settled}"
+        assert len(settled) == 2, f"expected two settled episodes, got {settled}"
+
+
 def workflow_default(c: Composition) -> None:
     def process(name: str) -> None:
         if name == "default":
