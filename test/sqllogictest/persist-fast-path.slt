@@ -245,6 +245,17 @@ ALTER SYSTEM RESET enable_compute_peek_response_stash
 COMPLETE 0
 
 # Persist-backed peeks enforce the same row iteration limit.
+#
+# The limit is per worker, so this needs a single-worker cluster to be
+# deterministic. Spread across several workers the same rows are walked a share
+# at a time and no single walk reaches the limit, which also makes a one-shot
+# query disagree with the indexed view --auto-index-selects wraps it in.
+statement ok
+CREATE CLUSTER peek_iteration_limit_cluster SIZE 'scale=1,workers=1'
+
+statement ok
+SET cluster TO 'peek_iteration_limit_cluster'
+
 simple conn=mz_system,user=mz_system
 ALTER SYSTEM SET enable_compute_peek_row_iteration_limit TO true;
 ----
@@ -279,6 +290,9 @@ simple conn=mz_system,user=mz_system
 ALTER SYSTEM RESET enable_compute_peek_row_iteration_limit;
 ----
 COMPLETE 0
+
+statement ok
+RESET cluster
 
 # The Persist fast path does not apply when an index exists.
 
