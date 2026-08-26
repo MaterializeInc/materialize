@@ -168,7 +168,6 @@ impl Coordinator {
     /// valid at and goes straight to the committer, pinned to the `GlobalId`
     /// validated here. `None` is a blind write that rides the next group
     /// commit, whose staging re-checks the target generation.
-    ///
     pub(crate) fn handle_attempt_write(
         &mut self,
         attempt: WriteAttemptKind,
@@ -258,8 +257,6 @@ impl Coordinator {
     }
 }
 
-/// Validates that all dependencies are valid for read-then-write operations.
-///
 /// Which dependency rules a read-then-write is held to.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DependencyPolicy {
