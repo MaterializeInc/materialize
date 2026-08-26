@@ -851,6 +851,7 @@ async fn try_commit_batch(
     catalog: &dyn Catalog,
     conn_namespace: &str,
     conn_table: &str,
+    sink_id: GlobalId,
     sink_version: u64,
     frontier: &Antichain<Timestamp>,
     batch_lower: &Antichain<Timestamp>,
@@ -880,8 +881,9 @@ async fn try_commit_batch(
         Ok(last) => last,
         Err(e) => return (table, RetryResult::RetryableErr(anyhow!(e))),
     };
-    if let Some((last_frontier, last_version)) = last {
-        if last_version == sink_version && last_frontier == *frontier {
+    if let Some((last_frontier, last_id, last_version)) = last {
+        // Just in case the sink was recreated, check both sink ID and version to see if it was us.
+        if last_id == sink_id && last_version == sink_version && last_frontier == *frontier {
             // Our own commit for this batch is already on the table.
             // We must've missed the response.
             info!(
@@ -1016,28 +1018,36 @@ async fn load_or_create_table(
 }
 
 /// Find the most recent Materialize frontier from Iceberg snapshots.
+/// Returns: (frontier, sink id, sink version)
+///
 /// We store the frontier in snapshot metadata to track where we left off after restarts.
 /// Snapshots with operation="replace" (compactions) don't have our metadata and are skipped.
 /// The input slice will be sorted by sequence number in descending order.
 fn retrieve_upper_from_snapshots(
     snapshots: &mut [Arc<Snapshot>],
-) -> anyhow::Result<Option<(Antichain<Timestamp>, u64)>> {
+) -> anyhow::Result<Option<(Antichain<Timestamp>, GlobalId, u64)>> {
     snapshots.sort_by(|a, b| Ord::cmp(&b.sequence_number(), &a.sequence_number()));
 
     for snapshot in snapshots {
         let props = &snapshot.summary().additional_properties;
-        if let (Some(frontier_json), Some(sink_version_str)) =
-            (props.get("mz-frontier"), props.get("mz-sink-version"))
-        {
+        if let (Some(frontier_json), Some(sink_id_str), Some(sink_version_str)) = (
+            props.get("mz-frontier"),
+            props.get("mz-sink-id"),
+            props.get("mz-sink-version"),
+        ) {
             let frontier: Vec<Timestamp> = serde_json::from_str(frontier_json)
                 .context("Failed to deserialize frontier from snapshot properties")?;
             let frontier = Antichain::from_iter(frontier);
+
+            let sink_id = sink_id_str
+                .parse::<GlobalId>()
+                .context("Failed to parse mz-sink-id from snapshot properties")?;
 
             let sink_version = sink_version_str
                 .parse::<u64>()
                 .context("Failed to parse mz-sink-version from snapshot properties")?;
 
-            return Ok(Some((frontier, sink_version)));
+            return Ok(Some((frontier, sink_id, sink_version)));
         }
         if snapshot.summary().operation.as_str() != "replace" {
             // This is a bad heuristic, but we have no real other way to identify compactions
@@ -1222,7 +1232,7 @@ fn mint_batch_descriptions<'scope>(
             let mut snapshots: Vec<_> = table.metadata().snapshots().cloned().collect();
             let resume = retrieve_upper_from_snapshots(&mut snapshots)?;
             let (resume_upper, resume_version) = match resume {
-                Some((f, v)) => (f, v),
+                Some((f, _, v)) => (f, v),
                 None => (Antichain::from_elem(Timestamp::minimum()), 0),
             };
             debug!(
@@ -2731,6 +2741,7 @@ fn commit_to_iceberg<'scope>(
                                     catalog.as_ref(),
                                     &conn_namespace,
                                     &conn_table,
+                                    sink_id,
                                     sink_version,
                                     &frontier,
                                     &batch_lower,
