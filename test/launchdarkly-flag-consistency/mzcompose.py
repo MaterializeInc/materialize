@@ -235,6 +235,7 @@ KNOWN_MISSING_FROM_LD: set[str] = set("""
     enable_0dt_deployment_panic_after_timeout
     enable_adapter_frontend_occ_read_then_write
     enable_alter_table_add_column
+    enable_any_all_null_array_semantics
     enable_auto_scaling_strategy
     enable_background_alter_cluster
     enable_statement_arrival_logging

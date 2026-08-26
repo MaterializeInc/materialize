@@ -430,6 +430,14 @@ fn array_position<'a>(
     // Comparisons use IS NOT DISTINCT FROM semantics, so a NULL search term
     // matches a NULL element rather than yielding NULL. `Datum` equality already
     // treats `Null == Null` as true, so the search loop below handles it.
+    //
+    // NOTE: rejecting a NULL initial position before the search is a deliberate
+    // divergence from PostgreSQL. PostgreSQL validates the initial position only
+    // after a fast path that returns NULL when the search term is NULL and the
+    // array holds no NULL element, so it errors for
+    // `array_position(ARRAY['sun', NULL], NULL, NULL)` but not for
+    // `array_position(ARRAY['sun'], NULL, NULL)`. Making the error depend on the
+    // array contents is not worth reproducing.
     let skip = match initial_pos.0 {
         None => 0,
         Some(None) => return Err(EvalError::MustNotBeNull("initial position".into())),

@@ -2380,6 +2380,16 @@ feature_flags!(
         default: true,
         enable_for_item_parsing: false,
     },
+    {
+        // An escape hatch: the `CASE` guard defeats the batched lowering that shares one
+        // `unnest` across several `ANY`/`ALL` operands, so a query with multiple `ANY`/`ALL`
+        // over a non-constant array plans into more arrangements than before. Turning the flag
+        // off restores the old plans at the cost of the wrong answer for a NULL array.
+        name: enable_any_all_null_array_semantics,
+        desc: "PostgreSQL-compatible NULL semantics for `ANY`/`ALL` over a NULL array or list.",
+        default: true,
+        enable_for_item_parsing: false,
+    },
 );
 
 impl From<&super::SystemVars> for OptimizerFeatures {

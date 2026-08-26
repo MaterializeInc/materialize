@@ -26,6 +26,7 @@ use mz_sql_parser::ident;
 
 use crate::names::{Aug, PartialItemName, ResolvedDataType, ResolvedItemName};
 use crate::plan::{PlanError, StatementContext};
+use crate::session::vars::ENABLE_ANY_ALL_NULL_ARRAY_SEMANTICS;
 use crate::{ORDINALITY_COL_NAME, normalize};
 
 pub(crate) fn transform<N>(scx: &StatementContext, node: &mut N) -> Result<(), PlanError>
@@ -729,16 +730,25 @@ impl<'a> Desugarer<'a> {
         // an empty array. PG yields NULL for the former but the empty-set answer
         // (false for ANY, true for ALL) for the latter, whereas `unnest` maps
         // both to zero rows and so cannot tell them apart.
+        //
+        // The guard is gated because it costs plan quality in value context over a
+        // non-constant array. Several `ANY`/`ALL` operands in one clause used to be
+        // lowered together over a shared `distinct_inner`, but HIR lowering defers a
+        // subquery that sits under an `If`, so each guarded operand now lowers on its
+        // own and duplicates the `unnest`. In filter context, and whenever the array
+        // is constant, the guard folds away and plans are unchanged.
         if let Expr::AnyExpr { left, op, right } | Expr::AllExpr { left, op, right } = expr {
             let binding = ident!("elem");
 
-            // Clone the array expression for the null guard before it is consumed
-            // into the `unnest` call below.
-            let array_is_null = Expr::IsExpr {
-                expr: Box::new((**right).clone()),
-                construct: IsExprConstruct::Null,
-                negated: false,
-            };
+            // Cloned here because `right` is consumed into the `unnest` call below.
+            let array_is_null = self
+                .scx
+                .is_feature_flag_enabled(&ENABLE_ANY_ALL_NULL_ARRAY_SEMANTICS)
+                .then(|| Expr::IsExpr {
+                    expr: Box::new((**right).clone()),
+                    construct: IsExprConstruct::Null,
+                    negated: false,
+                });
 
             let subquery = Query::select(
                 Select::default()
@@ -786,11 +796,14 @@ impl<'a> Desugarer<'a> {
                 _ => unreachable!(),
             };
 
-            *expr = Expr::Case {
-                operand: None,
-                conditions: vec![array_is_null],
-                results: vec![Expr::null()],
-                else_result: Some(Box::new(any_all)),
+            *expr = match array_is_null {
+                Some(array_is_null) => Expr::Case {
+                    operand: None,
+                    conditions: vec![array_is_null],
+                    results: vec![Expr::null()],
+                    else_result: Some(Box::new(any_all)),
+                },
+                None => any_all,
             };
         }
 

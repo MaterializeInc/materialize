@@ -158,6 +158,30 @@ SELECT 33 = ALL(ARRAY[1, NULL])
 ----
 false
 
+# The NULL-array rule is a property of the quantifier, not of `=`.
+query B
+SELECT 33 < ANY(NULL::int[])
+----
+NULL
+
+query B
+SELECT 33 < ALL(NULL::int[])
+----
+NULL
+
+# The cases above all use a constant array, where the NULL guard folds away
+# before execution. Reading the array from a relation instead keeps the guard
+# in the plan, so this exercises the lowered form.
+query IBB
+SELECT i, 1 = ANY(a), 1 = ALL(a)
+FROM (VALUES (1, NULL::int[]), (2, ARRAY[]::int[]), (3, ARRAY[1]), (4, ARRAY[NULL::int])) v (i, a)
+ORDER BY i
+----
+1  NULL  NULL
+2  false  true
+3  true  true
+4  NULL  NULL
+
 query error ARRAY types integer and boolean cannot be matched
 SELECT 123.4 = ANY(ARRAY[1, true, 'hi'::text])
 
@@ -1145,6 +1169,12 @@ SELECT array_position(null::text[], 'abc', null)
 ----
 NULL
 
+# Deliberately different from PostgreSQL, which returns NULL here: it validates
+# the initial position only after a fast path that fires when the search term is
+# NULL and the array holds no NULL element. PostgreSQL therefore errors for
+# `array_position(ARRAY['sun', NULL], null, null)` but not for the query below.
+# Rejecting a NULL initial position regardless of the array contents is the more
+# defensible behavior.
 query error initial position must not be null
 SELECT array_position(ARRAY['sun'], null, null)
 
