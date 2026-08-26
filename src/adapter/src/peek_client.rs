@@ -182,7 +182,7 @@ impl PeekClient {
     pub async fn ensure_compute_instance_client(
         &mut self,
         compute_instance: ComputeInstanceId,
-    ) -> Result<InstanceClient, InstanceMissing> {
+    ) -> Result<InstanceClient, CollectionLookupError> {
         if !self.compute_instances.contains_key(&compute_instance) {
             let client = self
                 .call_coordinator(|tx| Command::GetComputeInstanceClient {
@@ -190,7 +190,7 @@ impl PeekClient {
                     tx,
                 })
                 .await
-                .expect("coordinator unexpectedly dropped compute client response")?;
+                .map_err(|_| CollectionLookupError::InstanceShutDown)??;
             self.compute_instances.insert(compute_instance, client);
         }
         Ok(self
@@ -250,6 +250,9 @@ impl PeekClient {
         // The cache is empty, stale, or its allocation is gone: do the
         // round-trip.
         let start = std::time::Instant::now();
+        // Session clients keep the coordinator loop alive. A dropped response
+        // here therefore indicates an internal lifecycle bug, unlike a
+        // background compute lookup racing coordinator shutdown.
         let CatalogSnapshot { catalog } = self
             .call_coordinator(|tx| Command::CatalogSnapshot { tx })
             .await
@@ -490,7 +493,12 @@ impl PeekClient {
         let client = self
             .ensure_compute_instance_client(compute_instance)
             .await
-            .map_err(AdapterError::concurrent_dependency_drop_from_instance_missing)?;
+            .map_err(|error| {
+                AdapterError::concurrent_dependency_drop_from_collection_lookup_error(
+                    error,
+                    compute_instance,
+                )
+            })?;
 
         // Register coordinator tracking of this peek. This has to complete before issuing the peek.
         //

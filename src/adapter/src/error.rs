@@ -16,7 +16,6 @@ use dec::TryFromDecimalError;
 use itertools::Itertools;
 use mz_catalog::builtin::MZ_CATALOG_SERVER_CLUSTER;
 use mz_compute_client::controller::error as compute_error;
-use mz_compute_client::controller::error::InstanceMissing;
 
 use mz_compute_types::ComputeInstanceId;
 use mz_controller_types::ClusterId;
@@ -1088,13 +1087,6 @@ impl AdapterError {
     // is appropriate, so we want to make the conversion target explicit at the call site.
     // For example, maybe we get an `InstanceMissing` if the user specifies a non-existing cluster,
     // in which case `ConcurrentDependencyDrop` would not be appropriate.
-
-    pub fn concurrent_dependency_drop_from_instance_missing(e: InstanceMissing) -> Self {
-        AdapterError::ConcurrentDependencyDrop {
-            dependency_kind: "cluster",
-            dependency_id: e.0.to_string(),
-        }
-    }
 
     pub fn concurrent_dependency_drop_from_collection_missing(e: CollectionMissing) -> Self {
         AdapterError::ConcurrentDependencyDrop {
