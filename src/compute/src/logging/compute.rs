@@ -911,12 +911,10 @@ struct ExportState {
     operator_hydration: BTreeMap<LirId, bool>,
     /// The as-of the dataflow maintaining this export was installed with.
     ///
-    /// NOTE: a dataflow retained across reconciliation logs no new `Export` event, so this keeps
-    /// the as-of it was originally installed with even though the controller has since re-derived
-    /// one. That is what the export's already-logged stages were measured against, so the rows
-    /// stay internally consistent, but the value is not necessarily the collection's current
-    /// as-of.
-    as_of: Option<Timestamp>,
+    /// A dataflow retained across reconciliation logs no new `Export` event, so this stays the
+    /// install-time value even after the controller re-derives one. That is what the export's
+    /// logged stages were measured against.
+    initial_as_of: Option<Timestamp>,
     /// The lifecycle rows logged for this export so far, keyed by the stage they report.
     ///
     /// The lifecycle relation is append-only for the life of an export, so the rows are kept to
@@ -938,7 +936,11 @@ struct ExportState {
 }
 
 impl ExportState {
-    fn new(dataflow_index: usize, installed_at: Duration, as_of: Option<Timestamp>) -> Self {
+    fn new(
+        dataflow_index: usize,
+        installed_at: Duration,
+        initial_as_of: Option<Timestamp>,
+    ) -> Self {
         Self {
             dataflow_index,
             error_count: Diff::ZERO,
@@ -950,7 +952,7 @@ impl ExportState {
                 hydrated_at: None,
             },
             operator_hydration: BTreeMap::new(),
-            as_of,
+            initial_as_of,
             lifecycle_rows: BTreeMap::new(),
         }
     }
@@ -1319,17 +1321,17 @@ impl DemuxHandler<'_, '_, '_> {
     ) {
         let ts = self.ts();
 
-        let Some((as_of, dataflow_index)) = self
+        let Some((initial_as_of, dataflow_index)) = self
             .state
             .exports
             .get(&export_id)
-            .map(|e| (e.as_of, e.dataflow_index))
+            .map(|e| (e.initial_as_of, e.dataflow_index))
         else {
             error!(%export_id, ?stage, "lifecycle event for unknown export");
             return;
         };
 
-        let details = lifecycle_details(as_of);
+        let details = lifecycle_details(initial_as_of);
         let update = {
             let (key, value) = self.state.pack_lifecycle_update(
                 export_id,

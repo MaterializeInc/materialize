@@ -109,13 +109,13 @@ them.
 `started_at - installed_at` is the queueing interval. Today's `time_ns` conflates
 the two.
 
-The lifecycle is wider than these three stages, and timestamp columns cannot carry
-all of it. Two things get in the way. The stages do not share a grain: `installed`,
-`started` and `snapshot_complete` are per-worker facts, since each worker hydrates its own
-fragment of the dataflow, while whether the output is durable is a property of the
-sink as a whole. And a timestamp column cannot say *why* the next stage has not
-happened, so a NULL cannot tell a replacement materialized view waiting for a
-cutover apart from an index that will never write.
+The lifecycle is wider than these three stages, and timestamp columns cannot carry all
+of it. Two things get in the way. First, some stages are per worker and others are not.
+Each worker computes its own fragment of the dataflow, so `installed`, `started` and
+`snapshot_complete` happen once per worker, while whether the output is durable is a
+property of the sink as a whole. Second, a timestamp column cannot say *why* the next
+stage has not happened, so a NULL cannot tell a replacement materialized view waiting
+for a cutover apart from an index that will never write.
 
 So the lifecycle proper is recorded as an append-only event log, described under
 "The lifecycle event log", and `mz_compute_hydration_times_per_worker` keeps
@@ -191,7 +191,7 @@ reason       text        nullable
 details      jsonb       nullable
 ```
 
-| event | grain | `reason` |
+| event | reported | `reason` |
 | --- | --- | --- |
 | `installed` | per worker | none |
 | `started` | per worker | none |
@@ -227,11 +227,11 @@ Splitting the relation along that seam would be honest about where each fact liv
 worse to use. The identifier a consumer has is the export id, which is what
 `mz_objects.id` holds, while a dataflow id is a replica-local index rather than a
 catalog id, even though it is the same index on every worker of that replica. A
-dataflow-grain relation could not hold hydration or the write stages at all, so the
+relation keyed by dataflow could not hold hydration or the write stages at all, so the
 split would produce two relations rather than one, and the most basic question would
 join through the export-to-dataflow map to answer.
 
-Export grain with `dataflow_id` as a column keeps every row answerable by export id
+Keying by export, with `dataflow_id` as a column, keeps every row answerable by export id
 while making the shared events recognizable as shared: `SELECT DISTINCT dataflow_id,
 event, occurred_at` recovers the dataflow-level facts, and the redundancy is visible
 rather than implied. The column also means the relation carries the export-to-dataflow
@@ -251,7 +251,7 @@ count(*) FILTER (WHERE event = 'hydrated') = count(*) FILTER (WHERE event = 'ins
 ```
 
 is the all-workers-reported test, and the per-object stages are expected exactly once
-(or not at all, for an export that never writes). Which stages have which grain is a
+(or not at all, for an export that never writes). Which stages are reported per worker is a
 fixed property of the vocabulary, not of the object or the cluster, so a consumer
 encodes it once rather than deriving it per query. This is a contract the relation owes
 its readers, not an incidental property.
@@ -618,12 +618,14 @@ history relations on top of these two relations, so what is frozen and what may 
 move needs saying explicitly rather than being inferred from the current
 implementation.
 
-Frozen. These will not change meaning, and nothing below will be removed:
+Stable. We intend these to hold, and will treat breaking one as a change that needs
+coordinating with consumers rather than a detail:
 
 - The six `event` values, and their meanings.
-- Which events have which grain. `installed`, `started` and `snapshot_complete` are per worker.
-  `write_blocked`, `write_unblocked` and `written` are per object, observed by the
-  elected frontier owner. The grain is a property of the event name, fixed for all
+- Which events are per worker and which are per object. `installed`, `started` and
+  `snapshot_complete` are per worker. `write_blocked`, `write_unblocked` and `written`
+  are per object, observed by the
+  elected frontier owner. This is a property of the event name, fixed for all
   objects and all cluster shapes, so a consumer encodes it once rather than deriving
   it per query.
 - `installed` as the all-workers-reported denominator, per "`installed` is the
@@ -945,9 +947,9 @@ named.
   visibility limit.
 - **Log collections** get a start event rather than a filter.
 - **The per-replica relation is follow-up work,** not part of this design.
-- **The lifecycle is an event log, not more timestamp columns.** The stages do not
-  share a grain and a timestamp cannot carry a cause. See "The lifecycle event
-  log".
+- **The lifecycle is an event log, not more timestamp columns.** The stages are not
+  all reported per worker, and a timestamp cannot carry a cause. See "The lifecycle
+  event log".
 - **`mz_compute_hydration_times_per_worker` keeps its meaning.** `hydrated_at`
   reads the output frontier, as it always has, so nothing built on it changes
   value. The log carries the dataflow reading under `snapshot_complete`.
@@ -955,10 +957,10 @@ named.
   against the refresh tests. So `write_blocked` has no `refresh` cause, and
   `written` is clamped to `snapshot_complete` to keep the stages ordered. See "Refresh
   schedules do not block writing".
-- **`worker_id` is not nullable.** A NULL would make the per-object grain visible
+- **`worker_id` is not nullable.** A NULL would make the per-object events visible
   in the row, at the cost of introducing the only NULL `worker_id` in the logging
-  framework. The grain is documented instead, and the column records which worker
-  was elected.
+  framework. Which events are per object is documented instead, and the column
+  records which worker was elected.
 
 ## Open questions
 

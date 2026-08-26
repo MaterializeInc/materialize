@@ -1301,12 +1301,21 @@ impl<'a> ActiveComputeState<'a> {
                     .set_reported_write_frontier(ReportedFrontier::Reported(new_frontier.clone()));
                 collection
                     .set_reported_input_frontier(ReportedFrontier::Reported(new_frontier.clone()));
-                // Only a batch upper measures progress. `DroppedAt` reports the empty antichain,
-                // the maximum of the order, so a subscribe cancelled mid-computation would
-                // otherwise report a complete snapshot at the moment it is dropped. One that runs to
-                // its `up_to` also finishes with an empty upper, but it carries that in a batch and
-                // really did compute through its as-of, so it counts.
-                if matches!(response, SubscribeResponse::Batch(_)) {
+                // Only a non-empty batch upper measures progress here.
+                //
+                // `DroppedAt` carries the empty antichain, so a subscribe cancelled
+                // mid-computation would otherwise report a complete snapshot at the moment it is
+                // dropped. The completion batch carries it too: the sink manufactures an empty
+                // upper once `up_to <= frontier`, which says nothing about the as-of. For
+                // `SUBSCRIBE ... UP TO x AS OF x` the frontier only has to reach x, so x itself
+                // is not computed, and a subscribe that did compute through its as-of has already
+                // reported the stage from an earlier, non-empty upper.
+                //
+                // NOTE: an empty frontier means the opposite in `report_frontiers`, where it comes
+                // from the dataflow's own progress reaching its end and so makes every time
+                // including the as-of final. That is why this check belongs here and not in
+                // `observe_snapshot`.
+                if matches!(response, SubscribeResponse::Batch(_)) && !new_frontier.is_empty() {
                     collection.observe_snapshot(&new_frontier);
                 }
                 collection.set_reported_output_frontier(ReportedFrontier::Reported(new_frontier));
@@ -2248,9 +2257,10 @@ impl CollectionState {
     /// would leave it permanently short of this stage while the durability reading calls it
     /// hydrated. The write stages are gated on this one, so it would also never report a write.
     ///
-    /// It follows that emptiness cannot be used to tell completion from cancellation. A caller
-    /// that can observe a dataflow ending without having computed its as-of must exclude that
-    /// itself, as `process_subscribes` does for `DroppedAt`.
+    /// So emptiness here means "the dataflow's own progress reached its end". A caller whose
+    /// frontier can go empty for any other reason must exclude that itself, which
+    /// `process_subscribes` does: both a cancelled subscribe and a completed one report an empty
+    /// upper that says nothing about whether the as-of was computed.
     ///
     /// An empty as-of never reaches this stage, which is consistent with no dataflow being
     /// created for one.
