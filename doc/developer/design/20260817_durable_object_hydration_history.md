@@ -245,6 +245,11 @@ the interval is one fleet-wide setting and an unshifted grid would have every
 environment sweep at the same instant. Using the full id also separates regions and
 ordinals belonging to one organization.
 
+One replica per interval means an environment with `N` eligible replicas revisits
+each one approximately every `N * interval`. Freshness therefore degrades linearly
+with replica count. Lowering the interval improves freshness at the cost of more
+replica dataflow installs.
+
 **Background mutations take no OCC write permit.** The permits are one semaphore
 shared by every read-then-write in the process, not one per table. A session's wait
 is bounded by its statement timeout, a sweep's is not, and a sweep's subscribe has

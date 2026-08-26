@@ -18,6 +18,10 @@
 //! loser observes the winner's append through its own subscribe and finds
 //! nothing left to write.
 //!
+//! One replica is sampled per interval, so an environment with `N` eligible
+//! replicas revisits each one approximately every `N * interval`. Lowering the
+//! interval improves freshness at the cost of more replica dataflow installs.
+//!
 //! Collection is sampling, not an event log. An episode whose live row is
 //! retracted before its replica's turn in the sweep (a dropped object, or a
 //! replica that restarts first) is not recorded, and cannot be, because
