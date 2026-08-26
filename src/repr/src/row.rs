@@ -4762,6 +4762,91 @@ mod tests {
     }
 
     #[mz_ore::test]
+    fn test_dict_builders_agree() {
+        // The two index builders must emit byte-identical maps: `finish_dict`
+        // (the closure path) and `finish_dict_from_offsets` (the push-time
+        // path). `Row` equality is byte equality, so a mismatch would make the
+        // same logical map compare unequal depending on which code packed it,
+        // breaking joins, dedup, and arrangement keys across paths that use
+        // different builders.
+        let cases: Vec<Vec<(String, String)>> = vec![
+            // Empty, single, and small maps.
+            vec![],
+            vec![("a".into(), "1".into())],
+            (0..3).map(|i| (format!("k{i}"), format!("v{i}"))).collect(),
+            // Straddles all three offset widths: u8, u16, then u32.
+            (0..50)
+                .map(|i| (format!("k{i:02}"), format!("v{i:02}")))
+                .collect(),
+            (0..5).map(|i| (format!("k{i}"), "x".repeat(100))).collect(),
+            (0..5)
+                .map(|i| (format!("k{i}"), "x".repeat(20_000)))
+                .collect(),
+            (0..500)
+                .map(|i| (format!("k{i:03}"), format!("{i}")))
+                .collect(),
+        ];
+
+        for entries in &cases {
+            let mut via_closure = Row::default();
+            via_closure.packer().push_dict_with(|packer| {
+                for (k, v) in entries {
+                    packer.push(Datum::String(k));
+                    packer.push(Datum::String(v));
+                }
+            });
+
+            let mut via_builder = Row::default();
+            via_builder.packer().push_indexed_dict_with(|builder| {
+                for (k, v) in entries {
+                    builder.push_entry(k, |packer| packer.push(Datum::String(v)));
+                }
+            });
+
+            assert_eq!(
+                via_closure.data.as_slice(),
+                via_builder.data.as_slice(),
+                "builders disagree for {} entries",
+                entries.len(),
+            );
+        }
+
+        // Nested maps and lists, built both ways.
+        let mut via_closure = Row::default();
+        via_closure.packer().push_dict_with(|packer| {
+            packer.push(Datum::String("inner"));
+            packer.push_dict_with(|packer| {
+                packer.push(Datum::String("x"));
+                packer.push(Datum::Int64(1));
+            });
+            packer.push(Datum::String("list"));
+            packer.push_list_with(|packer| {
+                packer.push(Datum::Int64(1));
+                packer.push(Datum::Int64(2));
+            });
+        });
+        let mut via_builder = Row::default();
+        via_builder.packer().push_indexed_dict_with(|builder| {
+            builder.push_entry("inner", |packer| {
+                packer.push_indexed_dict_with(|inner| {
+                    inner.push_entry("x", |packer| packer.push(Datum::Int64(1)));
+                })
+            });
+            builder.push_entry("list", |packer| {
+                packer.push_list_with(|packer| {
+                    packer.push(Datum::Int64(1));
+                    packer.push(Datum::Int64(2));
+                })
+            });
+        });
+        assert_eq!(
+            via_closure.data.as_slice(),
+            via_builder.data.as_slice(),
+            "builders disagree for a nested map",
+        );
+    }
+
+    #[mz_ore::test]
     #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decNumberFromInt32` on OS `linux`
     fn test_datum_sizes() {
         let arena = RowArena::new();
