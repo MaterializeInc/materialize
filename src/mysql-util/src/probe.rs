@@ -25,6 +25,10 @@ pub const MAX_KEY_LENGTH: u32 = 768;
 /// Probes a string primary key column. Only supports `utf8mb4_bin` against CHAR/VARCHAR
 /// columns up to 768 characters. Enforcement is deferred to the caller. There may be
 /// other collations we can support, but we should do more validation.
+///
+/// NOTE: The partitioning walk's local bookkeeping scales quadratically with the
+/// number of probes. Local benchmarking of 5k probes over 5k entries was fast
+/// (under a second of CPU), so exceed that budget at your own risk.
 pub struct KeyProber<'a, 't> {
     tx: &'a mut Transaction<'t>,
     /// Quoted `` `schema`.`table` `` for SQL interpolation.

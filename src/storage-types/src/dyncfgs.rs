@@ -255,7 +255,8 @@ pub static MYSQL_SOURCE_SNAPSHOT_PARTITION_PROBED_PREFIXES_PER_BILLION_ROWS: Con
         "mysql_source_snapshot_partition_probed_prefixes_per_billion_rows",
         1_000,
         "Cap on MySQL snapshot PK-prefix partitioning probed prefixes per table, per billion \
-     estimated rows; when exhausted, splitting stops early with coarser partition boundaries.",
+     estimated rows; when exhausted, splitting stops early with coarser partition boundaries. \
+     The per-table budget is additionally hard-capped at 5000.",
         ParameterScope::Replica,
     );
 
