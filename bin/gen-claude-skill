@@ -16,7 +16,7 @@
 #
 # Arguments: OUTPUT_DIR  Directory to output the skill files. The OUTPUT_DIR
 #   directory is cleaned before generation.
-#   Default: .agents/skills/materialize-docs.
+#   Default: .agents/skills/mz-docs.
 #   For publishing to the website,
 #   we will output to doc/user/public/markdown-docs directory.
 #
@@ -30,7 +30,7 @@ cd "$(dirname "$0")/.."
 
 # For publishing to the website, we will output to doc/user/public/markdown-docs
 # directory. The OUTPUT_DIR directory is cleaned before generation.
-OUTPUT_DIR="${1:-.agents/skills/materialize-docs}"
+OUTPUT_DIR="${1:-.agents/skills/mz-docs}"
 
 # Ensure output directory exists
 mkdir -p "$OUTPUT_DIR"
