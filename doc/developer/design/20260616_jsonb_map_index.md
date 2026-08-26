@@ -69,7 +69,16 @@ all of which this change respects:
 3. **`Row` equality is byte equality.** This is the one hard constraint: two
    equal map values *must* encode to identical bytes. The index is a pure,
    deterministic function of the (already sorted) entries, so equal maps still
-   produce equal bytes.
+   produce equal bytes. Both builders emit the same suffix for the same entries,
+   which `test_dict_builders_agree` pins down: a map packed by the closure path
+   must be byte-identical to the same map packed by the push-time path, or rows
+   built through different code paths would stop comparing equal.
+
+One consequence is worth calling out. `RowRef` hashes its raw bytes, so anything
+that places rows by `Row::hashed()` shifts with the new layout. `COPY TO` S3
+assigns rows to output files that way, so a `jsonb` row can land in a different
+file than before. The data is unchanged, only its distribution across files, and
+no correctness depends on the placement.
 
 ## Design
 
@@ -121,6 +130,16 @@ index is never rebuilt or duplicated.
 equality, hashing, and ordering — all iter-based — are unaffected), and the new
 `DatumMap::get()` binary searches the header.
 
+### Key ordering
+
+Ascending keys were already a `DatumMap` contract, but a linear scan tolerated a
+violation: it still found the key. A binary search does not, and silently reports
+a present key as missing. Both builders therefore check the order under soft
+assertions as they pack, so a caller that violates the contract fails where the
+map is built rather than at some later read. `finish_dict` re-reads the preceding
+key to do so, which is why the check is gated. The proto decode path, whose input
+is untrusted, rejects out-of-order keys outright as a decode error.
+
 ### Limits
 
 The index encoding caps a single map at:
@@ -158,27 +177,72 @@ awkward. Reverting is a redeploy.
 
 * Single access: `O(n)` → `O(log n)`.
 * "JSON to columns" (`k` fields): `O(n * k)` → `O(k * log n)` per row.
-* Cost: a `W * (n - 1) + 4`-byte suffix per non-empty map (memory only;
-  appended, no memmove), where `W` is 1, 2, or 4 bytes. A small object's index
-  is `n - 1 + 4` bytes; a 50-key object near 1 KB uses `u16` offsets (~100 bytes
-  vs ~200 with fixed `u32`). On the hot decode/JSON-pack paths the index is built
-  without a re-walk and without a heap allocation for typical objects.
+* Cost: a `W * (n - 1) + 4`-byte suffix per non-empty map, where `W` is 1, 2, or
+  4 bytes. On the hot decode/JSON-pack paths the index is built without a re-walk
+  and without a heap allocation for typical objects.
+
+### Memory cost
+
+The suffix costs roughly `W` bytes per entry, so its share of a `Row` tracks
+`W / average_entry_bytes`: worst for objects with many small entries, negligible
+for objects with few large values. Measured over `Jsonb::from_slice` on
+representative documents:
+
+| Object | JSON | `Row` bytes | Index bytes | Overhead |
+| --- | --- | --- | --- | --- |
+| `{"a":1,"b":2,"c":3}` | 19 B | 42 B | 6 B | +16.7% |
+| 12-key event object | 206 B | 209 B | 15 B | +7.7% |
+| 50 keys, short values | 1001 B | 1011 B | 102 B | +11.2% |
+| 50 keys, 100-byte values | 5601 B | 5611 B | 102 B | +1.9% |
+| 3 nested 3-key objects | 73 B | 150 B | 24 B | +19.0% |
+| 500 keys, integer values | 6891 B | 8511 B | 1002 B | +13.3% |
+
+This is an in-memory cost only. Durable encodings are built from `iter()`, which
+skips the suffix, so persisted bytes are unchanged. The growth lands in
+arrangements, `RowArena`s, and rows in flight. There is no opt-out: the index is
+always written, because a runtime toggle would break byte-canonicality (see
+above). Workloads that store `jsonb` without doing field access therefore pay
+the memory without collecting the win.
 
 The `JsonbToColumns` Feature Benchmark scenario
 (`misc/python/materialize/feature_benchmark/scenarios/benchmark_main.py`) reads
 50 fields back out of a 50-key object per row and aggregates, exercising exactly
 this path. The `jsonb_to_columns` group in `src/repr/benches/row.rs` isolates the
 same workload at the `repr` layer (decode, indexed access, and a linear-scan
-baseline). On a 50-key object × 10k rows it measures indexed access at ~7× the
-linear scan, and decode + access at ~3× the pre-index path; the push-time builder
-removes the decode re-walk (~13% off decode alone). Note the decode cost is
-dominated by re-parsing the JSON text, not by field access — so the index's win
-is largest when access dominates (large objects, many lookups).
+baseline). On a 50-key object × 10k rows it measures indexed access at ~10× the
+linear scan (31.6 ms vs 313.4 ms), and the push-time builder removes the decode
+re-walk (~13% off decode alone).
+
+Both benchmarks measure the case the index is best at. Decode dominates the
+persist path: 64.1 ms of the 98.6 ms `decode_and_access` figure is re-parsing the
+JSON text, so a query scanning `jsonb` straight out of persist sees far less than
+10×. The feature benchmark arranges its table behind an index precisely so the
+parse is paid once and the measurement isolates field access, which is what a
+query reading from an arrangement or a materialized view actually pays. The win
+is largest where access dominates: large objects, many lookups per row, already
+decoded `Row`s.
+
+## Consumers of the index
+
+Every operator that resolves a single key by name uses `DatumMap::get`, so no
+call site pays the memory cost without collecting the benefit:
+
+* `jsonb`: `->`, `->>`, `#>`, `#>>` (`jsonb_get_string`, `jsonb_get_path`, and
+  the two stringifying wrappers), `?` (`jsonb_contains_string`), and the map arm
+  of `@>` (`jsonb_contains_jsonb`).
+* `map`: `->` (`map_get_value`, via `DatumMap::get_typed`), `?`, `?&`, `?|`, and
+  `@>` (`map_contains_map`).
+
+The containment operators go from `O(n * m)` to `O(m * log n)`.
+
+Writers that already iterate entry-by-entry use the push-time builder, so they
+never pay the re-walk: JSON packing, the columnar and proto decode paths, Avro
+map decoding, `text`-to-`map` casts, and the pgwire value paths. The closure-based
+`push_dict_with` (and thus `finish_dict`) remains for callers that push arbitrary
+datums without known entry boundaries.
 
 ## Follow-ups
 
-* The generic `finish_dict` (closure-based `push_dict_with`) still re-walks; if a
-  hot write path is found to use it, give it a push-time builder too.
 * Idea 1 (multi-output `jsonb_access`) for the `k ≈ n` "explode everything"
   case, where a single `O(n)` decode wins.
 * The same index trick could extend to list element access if profiling shows
