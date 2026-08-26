@@ -133,6 +133,7 @@ use std::time::Duration;
 use bytesize::ByteSize;
 use differential_dataflow::consolidation;
 use mz_catalog::memory::error::ErrorKind;
+use mz_catalog::memory::objects::CatalogItem;
 use mz_cluster_client::ReplicaId;
 use mz_compute_types::ComputeInstanceId;
 use mz_expr::Eval;
@@ -704,6 +705,38 @@ impl Drop for SubscribeHandle {
     }
 }
 
+/// Validates that background OCC targets an actual system table.
+fn validate_background_read_then_write_target(
+    catalog: &Catalog,
+    target_id: CatalogItemId,
+) -> Result<(), AdapterError> {
+    let is_system_table = matches!(target_id, CatalogItemId::System(_))
+        && catalog
+            .try_get_entry(&target_id)
+            .is_some_and(|entry| matches!(entry.item(), CatalogItem::Table(_)));
+    if is_system_table {
+        Ok(())
+    } else {
+        Err(AdapterError::Internal(
+            "background read-then-write target is not a system table".into(),
+        ))
+    }
+}
+
+/// Validates that top-level finishing was lowered into the selection.
+fn validate_read_then_write_finishing(
+    finishing: &RowSetFinishing,
+    selection_arity: usize,
+) -> Result<(), AdapterError> {
+    if finishing.is_trivial(selection_arity) {
+        Ok(())
+    } else {
+        Err(AdapterError::Internal(
+            "frontend read-then-write requires trivial row-set finishing".into(),
+        ))
+    }
+}
+
 impl PeekClient {
     /// Execute a read-then-write operation using frontend sequencing.
     ///
@@ -745,6 +778,18 @@ impl PeekClient {
         replica_id: ReplicaId,
         catalog: &Arc<Catalog>,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // Background OCC runs regardless of the session rollout flag. It can
+        // safely coexist with the lock path only on a system table, which user
+        // DML can neither read nor write. Check the item rather than
+        // `CatalogItemId::is_system`, which also includes introspection indexes.
+        if let Err(error) = validate_background_read_then_write_target(catalog, plan.id) {
+            soft_panic_or_log!(
+                "background read-then-write target {} is not a system table",
+                plan.id
+            );
+            return Err(error);
+        }
+
         self.read_then_write(
             session,
             plan,
@@ -770,6 +815,17 @@ impl PeekClient {
         attempt_state: Arc<FrontendWriteAttemptState>,
         caller: RtwCaller,
     ) -> Result<ExecuteResponse, AdapterError> {
+        // The OCC dataflow emits raw diffs and does not apply top-level
+        // finishing. Silently dropping a LIMIT, OFFSET, projection or ordering
+        // can change the rows written, so every caller must lower those into
+        // the selection before reaching this path.
+        if let Err(error) =
+            validate_read_then_write_finishing(&plan.finishing, plan.selection.arity())
+        {
+            soft_panic_or_log!("frontend read-then-write received nontrivial row-set finishing");
+            return Err(error);
+        }
+
         // A transaction that has taken a timestamped read, was opened READ
         // ONLY, or is committed to some other kind of operation cannot take a
         // write. Check up front, mirroring `sequence_insert`: the marker op
@@ -2143,6 +2199,8 @@ fn apply_mutation_to_mir(
 
 #[cfg(test)]
 mod tests {
+    use mz_catalog::builtin::MZ_OBJECT_HYDRATION_HISTORY;
+    use mz_ore::num::NonNeg;
     use mz_repr::adt::numeric;
     use mz_repr::{Datum, IntoRowIterator};
 
@@ -2173,6 +2231,47 @@ mod tests {
                 .push((row(value), Timestamp::new(ts), Diff::from(diff)));
         }
         state
+    }
+
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn background_target_must_be_an_actual_system_table() {
+        Catalog::with_debug(|catalog| async move {
+            let system_table = catalog.resolve_builtin_table(&MZ_OBJECT_HYDRATION_HISTORY);
+            validate_background_read_then_write_target(&catalog, system_table)
+                .expect("builtin table is a valid background target");
+
+            let system_view = catalog
+                .entries()
+                .find(|entry| {
+                    entry.id().is_system() && matches!(entry.item(), CatalogItem::View(_))
+                })
+                .expect("debug catalog has builtin views")
+                .id();
+            validate_background_read_then_write_target(&catalog, system_view)
+                .expect_err("a system ID that is not a table is invalid");
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
+    #[mz_ore::test]
+    fn read_then_write_finishing_must_be_trivial() {
+        let trivial: RowSetFinishing = RowSetFinishing::trivial(2);
+        validate_read_then_write_finishing(&trivial, 2).expect("identity finishing is valid");
+
+        let mut limited = trivial.clone();
+        limited.limit = Some(NonNeg::try_from(1).expect("nonnegative limit"));
+        let mut offset = trivial.clone();
+        offset.offset = 1;
+        let mut projected = trivial;
+        projected.project.reverse();
+
+        for finishing in [limited, offset, projected] {
+            validate_read_then_write_finishing(&finishing, 2)
+                .expect_err("nontrivial finishing must be rejected");
+        }
     }
 
     /// The target is the boundary the write turns on, so the off-by-one is the

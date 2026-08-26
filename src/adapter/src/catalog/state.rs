@@ -3201,6 +3201,105 @@ mod tests {
         .await
     }
 
+    /// Background maintenance may read builtin sources and logs, but admitting
+    /// user objects would let coordinator-authored SQL escape its system-only
+    /// contract.
+    #[mz_ore::test(tokio::test)]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `TLS_client_method`
+    async fn validate_background_read_then_write_dependencies_are_system_only() {
+        use crate::coord::read_then_write::{
+            DependencyPolicy, validate_read_then_write_dependencies,
+        };
+        use crate::error::AdapterError;
+        use mz_sql::names::{DependencyIds, ResolvedIds};
+
+        Catalog::with_debug(|mut catalog| async move {
+            let system_source = catalog
+                .state
+                .entry_by_id
+                .values()
+                .find(|entry| matches!(entry.item(), CatalogItem::Source(_)))
+                .expect("debug catalog has builtin sources")
+                .id();
+            let system_log = catalog
+                .state
+                .entry_by_id
+                .values()
+                .find(|entry| matches!(entry.item(), CatalogItem::Log(_)))
+                .expect("debug catalog has builtin logs")
+                .id();
+            for id in [system_source, system_log] {
+                validate_read_then_write_dependencies(
+                    &catalog,
+                    [id],
+                    usize::MAX,
+                    DependencyPolicy::SystemReads,
+                )
+                .expect("background maintenance may read system relations");
+            }
+
+            const USER_VIEW_ID: u64 = 1 << 40;
+            insert_synthetic_view_chain(&mut catalog, USER_VIEW_ID, 0);
+            validate_read_then_write_dependencies(
+                &catalog,
+                [CatalogItemId::User(USER_VIEW_ID)],
+                usize::MAX,
+                DependencyPolicy::SystemReads,
+            )
+            .expect_err("background maintenance must reject user relations");
+
+            let system_view_id = catalog
+                .state
+                .entry_by_id
+                .values()
+                .filter(|entry| {
+                    entry.id().is_system() && matches!(entry.item(), CatalogItem::View(_))
+                })
+                .map(CatalogEntry::id)
+                .find(|id| {
+                    validate_read_then_write_dependencies(
+                        &catalog,
+                        [*id],
+                        usize::MAX,
+                        DependencyPolicy::SystemReads,
+                    )
+                    .is_ok()
+                })
+                .expect("debug catalog has a valid builtin view");
+            let system_view = catalog
+                .state
+                .entry_by_id
+                .get_mut(&system_view_id)
+                .expect("system view exists");
+            let mut resolved_ids = ResolvedIds::empty();
+            resolved_ids.add_item(CatalogItemId::User(USER_VIEW_ID));
+            match &mut system_view.item {
+                CatalogItem::View(view) => {
+                    // `uses()` unions both fields, so replace both to isolate
+                    // the synthetic transitive dependency.
+                    view.resolved_ids = resolved_ids;
+                    view.dependencies = DependencyIds(BTreeSet::new());
+                }
+                _ => unreachable!("selected entry is a view"),
+            }
+            let error = validate_read_then_write_dependencies(
+                &catalog,
+                [system_view_id],
+                usize::MAX,
+                DependencyPolicy::SystemReads,
+            )
+            .expect_err("a system view must not hide a user dependency");
+            assert!(matches!(
+                error,
+                AdapterError::InvalidTableMutationSelection { object_type, .. }
+                    if object_type == "user view"
+            ));
+
+            catalog.expire().await;
+        })
+        .await
+    }
+
     /// Inserts a synthetic chain of `depth + 1` user views into `catalog` where
     /// view `base + i` reads from `base + i + 1`. Ids start well above any id
     /// the debug catalog assigns so they do not collide with real entries.

@@ -338,13 +338,20 @@ pub(crate) fn validate_read_then_write_dependencies(
             }
             None => false,
         };
-        // Background maintenance uses coordinator-authored SQL. It needs both
-        // system relations and introspection logs, which the catalog represents
-        // as sources, so this deliberately relaxes both restrictions above. The
-        // `mz_now()` rejection still applies to every view body we traverse.
+        // Background maintenance uses coordinator-authored SQL over system
+        // relations and introspection logs. System sources deliberately bypass
+        // the user-DML time-domain restriction above, but user objects remain
+        // rejected. Timeline validation separately requires EpochMilliseconds,
+        // and the `mz_now()` rejection still applies to every view body.
         let valid = match policy {
             DependencyPolicy::UserDml => valid,
-            DependencyPolicy::SystemReads => catalog.try_get_entry(&id).is_some(),
+            DependencyPolicy::SystemReads => catalog.try_get_entry(&id).is_some_and(|entry| {
+                id.is_system()
+                    && matches!(
+                        entry.item().typ(),
+                        Func | View | MaterializedView | Source | Table | Type
+                    )
+            }),
         };
         if !valid {
             let (object_name, object_type) = match catalog.try_get_entry(&id) {
@@ -358,11 +365,15 @@ pub(crate) fn validate_read_then_write_dependencies(
                         Table => {
                             if !id.is_user() {
                                 "system table"
-                            } else {
+                            } else if entry.source_export_details().is_some() {
                                 "source-export table"
+                            } else {
+                                "user table"
                             }
                         }
+                        View if id.is_user() => "user view",
                         View => "system view",
+                        MaterializedView if id.is_user() => "user materialized view",
                         MaterializedView => "system materialized view",
                         _ => "invalid dependency",
                     };
