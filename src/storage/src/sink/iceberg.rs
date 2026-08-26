@@ -902,8 +902,8 @@ async fn try_commit_batch(
                 table,
                 RetryResult::FatalErr(anyhow!(
                     "Iceberg table '{}' has been modified by another writer \
-             with version {}. Current sink version: {}. \
-             Frontiers may be out of sync, aborting to avoid data loss.",
+                    with version {}. Current sink version: {}. \
+                    Frontiers may be out of sync, aborting to avoid data loss.",
                     conn_table,
                     last_version,
                     sink_version,
@@ -917,7 +917,7 @@ async fn try_commit_batch(
                 table,
                 RetryResult::FatalErr(anyhow!(
                     "Iceberg table '{}' has been modified by another writer. \
-             Current frontier: {:?}, last frontier: {:?}.",
+                    Current frontier: {:?}, last frontier: {:?}.",
                     conn_table,
                     frontier,
                     last_frontier,

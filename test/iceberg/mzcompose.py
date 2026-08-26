@@ -15,13 +15,12 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable
 
-from materialize.mzcompose.composition import Composition
-from materialize.mzcompose.composition import Service as UpService
+from materialize.mzcompose.composition import Composition, Service
 from materialize.mzcompose.helpers.iceberg import (
     get_polaris_access_token,
     setup_polaris_for_iceberg,
 )
-from materialize.mzcompose.service import Service
+from materialize.mzcompose.service import Service as ServiceDefinition
 from materialize.mzcompose.services.materialized import Materialized
 from materialize.mzcompose.services.minio import Mc, Minio
 from materialize.mzcompose.services.mz import Mz
@@ -35,7 +34,7 @@ SERVICES = [
     Minio(),
     PolarisBootstrap(),
     Polaris(),
-    Service(
+    ServiceDefinition(
         "polaris-proxy",
         {
             "image": "python:3.11-slim",
@@ -70,13 +69,23 @@ def _setup(
     c.up(
         "postgres",
         "materialized",
-        UpService("polaris-bootstrap", idle=True),
-        UpService("polaris", idle=True),
+        Service("polaris-bootstrap", idle=True),
+        Service("polaris", idle=True),
     )
     _, key = setup_polaris_for_iceberg(
         c, vended=vended, static_credentials=static_credentials
     )
     return key
+
+
+def await_condition(what: str, timeout: float, check: Callable[[], bool]) -> None:
+    """Poll `check` until it returns True, or raise after `timeout` seconds."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if check():
+            return
+        time.sleep(0.5)
+    raise AssertionError(f"timed out waiting for {what}")
 
 
 def workflow_default(c: Composition) -> None:
@@ -423,14 +432,6 @@ def workflow_idempotent_retry(c: Composition) -> None:
         with urllib.request.urlopen(f"{proxy_base}/__control/status") as resp:
             return json.loads(resp.read())
 
-    def await_condition(what: str, timeout: float, check: Callable[[], bool]) -> None:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if check():
-                return
-            time.sleep(0.5)
-        raise AssertionError(f"timed out waiting for {what}")
-
     # Arm the drop only once the sink has a commit through the proxy, so the
     # dropped commit is a steady-state one rather than table bootstrap.
     await_condition(
@@ -518,14 +519,6 @@ def workflow_fenced_writer(c: Composition) -> None:
             if e.code == 404:
                 return None
             raise
-
-    def await_condition(what: str, timeout: float, check: Callable[[], bool]) -> None:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            if check():
-                return
-            time.sleep(0.5)
-        raise AssertionError(f"timed out waiting for {what}")
 
     def first_commit_done() -> bool:
         meta = load_metadata()
