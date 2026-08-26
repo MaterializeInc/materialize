@@ -296,9 +296,10 @@ macro_rules! upsert_source_time_unit {
 }
 upsert_source_time_unit!(GtidPartition, Lsn);
 
-/// Storage's leg of the process-wide chunk spill gate.
+/// Storage's leg of the process-wide chunk spill gate, used by the chunked
+/// upsert-v2 stash flavor.
 ///
-/// The upsert-v2 source stash and feedback arrangement spill through the
+/// In that flavor the source stash and feedback arrangement spill through the
 /// process buffer pool ([`mz_timely_util::columnar::chunk`]): committed chunk
 /// bodies land in the pool once compute's config handler has installed and
 /// budgeted it (storage and compute run in the same `clusterd` process).
@@ -312,6 +313,43 @@ pub mod upsert_stash_spill {
     /// Enable or disable spilling of upsert chunk bodies to the buffer pool.
     pub fn set_enabled(enabled: bool) {
         mz_timely_util::columnar::chunk::set_storage_spill_enabled(enabled);
+    }
+}
+
+/// Pager for the paged upsert-v2 stash flavor.
+///
+/// This draws from the same process-wide [`TieredPolicy`] budget pool as the
+/// compute column-paged batcher — there is one budget and one underlying
+/// `mz_ore::pager` — but whether the stash *uses* it is gated by storage's own
+/// `enable_upsert_paged_spill` flag, independently of compute's
+/// `enable_column_paged_batcher_spill`. The shared pool's budget / backend /
+/// codec are configured by compute's `apply_tiered_config` (storage and compute
+/// run in the same `clusterd` process).
+///
+/// Flipping the flag takes effect on dataflows created after the change: the
+/// paged flavor captures the pager once at operator construction.
+///
+/// [`TieredPolicy`]: mz_timely_util::column_pager::policy::TieredPolicy
+pub mod upsert_stash_pager {
+    use std::sync::{LazyLock, RwLock};
+
+    use mz_timely_util::column_pager::{ColumnPager, shared_pager};
+
+    /// Active pager handed to upsert source-stash batchers. Defaults to
+    /// disabled (every chunk resident) until [`set_enabled`] turns it on.
+    static PAGER: LazyLock<RwLock<ColumnPager>> =
+        LazyLock::new(|| RwLock::new(ColumnPager::disabled()));
+
+    /// Enable or disable the stash's use of the shared column pager. When
+    /// enabled, the stash spills through the shared budget pool; when disabled
+    /// it keeps every chunk resident.
+    pub fn set_enabled(enabled: bool) {
+        *PAGER.write().expect("upsert stash pager poisoned") = shared_pager(enabled);
+    }
+
+    /// The current upsert-stash pager. Cheap: clones the inner `Arc`.
+    pub fn pager() -> ColumnPager {
+        PAGER.read().expect("upsert stash pager poisoned").clone()
     }
 }
 
@@ -604,6 +642,7 @@ pub(crate) fn upsert_v2<'scope, T, FromTime>(
     previous_token: Option<Vec<PressOnDropButton>>,
     source_config: crate::source::SourceExportCreationConfig,
     backpressure_metrics: Option<BackpressureMetrics>,
+    stash_flavor: upsert_continual_feedback_v2::UpsertStashFlavor,
 ) -> (
     VecCollection<'scope, T, Result<Row, DataflowError>, Diff>,
     StreamVec<'scope, T, (Option<GlobalId>, HealthStatusUpdate)>,
@@ -630,10 +669,12 @@ where
     tracing::info!(
         worker_id = %source_config.worker_id,
         source_id = %source_config.id,
+        ?stash_flavor,
         "rendering upsert source (btreemap backend)"
     );
 
     upsert_continual_feedback_v2::upsert_inner(
+        stash_flavor,
         thin_input,
         upsert_envelope.key_indices,
         resume_upper,

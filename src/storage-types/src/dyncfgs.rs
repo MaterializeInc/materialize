@@ -392,21 +392,52 @@ pub const STORAGE_UPSERT_MAX_SNAPSHOT_BATCH_BUFFERING: Config<Option<usize>> = C
     ParameterScope::Replica,
 );
 
-/// Storage's leg of the process-wide chunk spill gate
-/// (`mz_timely_util::columnar::chunk`). The gate is the OR of a compute leg
-/// (`enable_column_paged_batcher_spill`) and this storage leg: chunks spill
-/// while either is set, so this flag cannot veto spilling that the compute
-/// flag has enabled. Spilled chunks draw on the one shared pool budget.
+/// Allow the upsert-v2 stash to spill out of RSS. Off by default; while off,
+/// the stash keeps everything resident.
 ///
-/// Off by default. Enabling it also installs the process buffer pool (via
-/// compute's config handler, which reads this flag from the aggregate dyncfg
-/// set), so storage-only spilling needs no compute-side gate.
+/// The spill mechanism depends on the stash flavor
+/// ([`ENABLE_UPSERT_CHUNKED_STASH`]):
+///
+/// * Chunked: sets storage's leg of the process-wide chunk spill gate
+///   (`mz_timely_util::columnar::chunk`). The gate is the OR of a compute
+///   leg (`enable_column_paged_batcher_spill`) and this storage leg: chunks
+///   spill while either is set, so this flag cannot veto spilling that the
+///   compute flag has enabled. Spilled chunks draw on the one shared pool
+///   budget, and the gate is consulted at every chunk commit, so flips
+///   apply to running dataflows.
+/// * Paged: gates the storage-owned column pager the stash and feedback
+///   arrangement route their chains through, independently of compute's
+///   `enable_column_paged_batcher_spill`. Captured at operator
+///   construction, so flips apply to dataflows created after the change.
+///
+/// Enabling it also installs the process buffer pool (via compute's config
+/// handler, which reads this flag from the aggregate dyncfg set), so
+/// storage-only spilling needs no compute-side gate.
 pub const ENABLE_UPSERT_PAGED_SPILL: Config<bool> = Config::new(
     "enable_upsert_paged_spill",
     false,
-    "Allow upsert-v2 chunks to spill to the shared buffer pool. Sets the storage leg of the \
-     process-wide spill gate, which is the OR of this flag and the compute \
-     `enable_column_paged_batcher_spill`.",
+    "Allow the upsert-v2 stash to spill out of RSS, through the buffer pool (chunked stash \
+     flavor) or the column pager (paged stash flavor).",
+    ParameterScope::Replica,
+);
+
+/// Use the chunked stash flavor for the upsert-v2 operator: differential's
+/// chunk merge batcher for the source stash and a spine of chunk batches for
+/// the feedback arrangement, with a bulk-probe drain. When `false` (the
+/// default), the paged flavor is used: the paged columnar merge batcher and a
+/// `ValRowSpine`, with a cursor-based drain. See
+/// `mz_storage::upsert_continual_feedback_v2::UpsertStashFlavor` for the
+/// comparison.
+///
+/// Read at operator construction time; flips take effect on dataflows created
+/// after the change. Only meaningful when [`ENABLE_UPSERT_V2`] is `true`.
+/// Spilling in either flavor is gated by [`ENABLE_UPSERT_PAGED_SPILL`].
+pub const ENABLE_UPSERT_CHUNKED_STASH: Config<bool> = Config::new(
+    "enable_upsert_chunked_stash",
+    false,
+    "Use the chunk batcher and chunk spine for the upsert-v2 stash and feedback arrangement, \
+     instead of the paged columnar merge batcher and ValRowSpine. Only meaningful when \
+     enable_upsert_v2 is true.",
     ParameterScope::Replica,
 );
 
@@ -533,6 +564,7 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&ENABLE_UPSERT_V2)
         .add(&SUSPENDABLE_SOURCES)
         .add(&ENABLE_UPSERT_PAGED_SPILL)
+        .add(&ENABLE_UPSERT_CHUNKED_STASH)
         .add(&WALLCLOCK_GLOBAL_LAG_HISTOGRAM_RETENTION_INTERVAL)
         .add(&WALLCLOCK_LAG_HISTORY_RETENTION_INTERVAL)
         .add(&crate::sources::sql_server::CDC_CLEANUP_CHANGE_TABLE)
