@@ -221,14 +221,6 @@ impl ActiveSubscribe {
         }
     }
 
-    /// Returns the owning session UUID, if this is a session subscribe.
-    pub fn session_uuid(&self) -> Option<Uuid> {
-        match self.owner {
-            ActiveSubscribeOwner::Session { session_uuid, .. } => Some(session_uuid),
-            ActiveSubscribeOwner::Background => None,
-        }
-    }
-
     /// Initializes the subscription.
     ///
     /// This method must be called exactly once, after constructing an
