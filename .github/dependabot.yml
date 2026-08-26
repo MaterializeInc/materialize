@@ -97,6 +97,7 @@ updates:
     - /misc/images/openssh-static
     - /misc/images/tini-static
     - /misc/images/distroless-prod-base
+    - /misc/dbt-materialize
     - /ci/builder
     - /test
   schedule:
