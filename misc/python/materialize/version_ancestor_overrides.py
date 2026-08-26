@@ -28,8 +28,16 @@ def get_ancestor_overrides_for_performance_regressions(
 
     min_ancestor_mz_version_per_commit = dict()
 
-    if scenario_class_name == "MySqlInitialLoadMultiWorkerSampled":
-        # PR#38094 (storage: Fast approximate snapshot partitioning) increased wallclock by ~30%
+    if scenario_class_name in (
+        "MySqlInitialLoad",
+        "MySqlInitialLoadMultiWorkerSampled",
+        "MySqlInitialLoadMultiWorkerSingleTable",
+    ):
+        # PR#38094 (storage: Fast approximate snapshot partitioning) increased
+        # snapshot wallclock: integer primary keys are no longer partitioned,
+        # so MySqlInitialLoad reads serially, and approximate key probing is
+        # slower than the exact OFFSET sampler on small datasets (~30% on
+        # MySqlInitialLoadMultiWorkerSampled).
         min_ancestor_mz_version_per_commit[
             "de8eac0d1683ffd788dfba6edaa88aef7f0f1740"
         ] = MzVersion.parse_mz("v26.39.0")
