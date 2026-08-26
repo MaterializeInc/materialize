@@ -262,7 +262,8 @@ impl Coordinator {
 pub(crate) enum DependencyPolicy {
     /// A user statement, which may only read user tables and views over them.
     UserDml,
-    /// Coordinator background work, which reads system relations by design.
+    /// Coordinator-authored background work, which reads system relations and
+    /// introspection logs by design.
     SystemReads,
 }
 
@@ -337,9 +338,10 @@ pub(crate) fn validate_read_then_write_dependencies(
             }
             None => false,
         };
-        // Which relations may be read is a user-DML rule. The `mz_now()`
-        // rejection above is not, and still applies to every view body the
-        // traversal reaches.
+        // Background maintenance uses coordinator-authored SQL. It needs both
+        // system relations and introspection logs, which the catalog represents
+        // as sources, so this deliberately relaxes both restrictions above. The
+        // `mz_now()` rejection still applies to every view body we traverse.
         let valid = match policy {
             DependencyPolicy::UserDml => valid,
             DependencyPolicy::SystemReads => catalog.try_get_entry(&id).is_some(),
