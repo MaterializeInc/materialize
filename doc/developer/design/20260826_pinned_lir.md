@@ -1,7 +1,9 @@
-# Resolving customer tradeoffs optimizer changes
+# Pinning LIR plans to offer stable customer experiences
 
 - Associated: [#30233 optimizer release engineering](https://github.com/MaterializeInc/materialize/pull/30233),
 [#8768 optimizer crate](https://github.com/MaterializeInc/database-issues/issues/8768)
+
+F/K/A "the customer trade-off problem"
 
 ## The Problem
 
@@ -12,6 +14,7 @@ To date, we have managed optimizer changes using feature flags (e.g., `enable_ca
 Not every feature can be feature flagged (e.g., changing `MirRelationExpr` to hold `Repr*` types), though, and we do not have much in the way of tooling for feature flags.
 
 It is hard for us to make changes in the optimizer that won't cause some customers to have a bad time---even if some customers have a much better time with those changes.
+(Whence the name, "the customer trade-off problem".)
 We need a way to change the optimizer without disrupting customer workloads.
 
 ## Success Criteria
@@ -45,7 +48,8 @@ It is very important that we solve the "optimizer image" problem (you should be 
 
 - **`optimizer-versions`** Separate optimizer versions, settable per-cluster using a system-level privilege.
 - **`feature-flags`** Feature flag everything, building tooling to support eng, field eng, and customers.
-- **`plan-pinning`** Offer an explicit way to fix a query plan.
+- **`plan-pinning-v1`** Offer an explicit way to fix a query plan in a per-cluster way.
+- **`plan-pinning-v2`** All plans are pinned by default.
 - **`query-hints`** Offer query hints or special syntax to control query plans.
 
 What are the pros and cons of each approach?
@@ -85,10 +89,11 @@ Cons:
   - Who flips the bits? If it's us: high support burden. If it's someone else: what if they break things?
   - Unknown support windows, and we have not historically done a good job managing feature flags.
 
-### `plan-pinning`
+### `plan-pinning-v1`
 
 Pros:
 
+  + Per-cluster control.
   + Ties in neatly with related ideas of "production clusters", guarantees, and auto-scaling.
   + Ties in neatly with related ideas of "DDIR" or some other stable, low-level interface.
   + Offers the most reliable possible experience---a fixed LIR plan would be stable even if bugfixes in MIR cause queries to change.
@@ -96,10 +101,23 @@ Pros:
 Cons:
 
   - Any changes to the plan and you lose your pin. (Mitigation: use MVs on different clusters to separate the units you care about.)
+  - Any changes to other objects on the cluster.
   - LIR is a not currently stored anywhere (but is a stable interface between MIR and rendering). DDIR does not actually exist.
   - Once we are committed, may be hard to back out of. (Mitigation: deploy this is as an unstable feature with a customer partner.)
   - More durable state.
   - Need to manage migrations for LIR. (Mitigation: best effort.)
+
+### `plan-pinning-v2`
+
+Pros:
+
+  + All of the positives of `plan-pinning-v1`.
+  + Defaulting to pinned helps keep operational workloads operational.
+  + Clean factoring of mechanism ("LIR is durable") from tools for its management (`COPY CLUSTER`, `EXPLAIN REPLAN ...`).
+
+Cons:
+
+  - All of the cons of `plan-pinning-v1`, _except_ it's easier to make changes to objects on the cluster.
 
 ### `query-hints`
 
@@ -120,7 +138,7 @@ Cons:
 
 ## Solution Proposal
 
-We propose using **`plan-pinning`**.
+We propose using **`plan-pinning-v2`**.
 The ability to pin plans _exactly_ solves the **`our-bad`** problem.
 It's also superior to the alternatives.
 We see it as superior to **`feature-flags`** because we can work more flexibly (change types!) with less uncertainy (known configs!).
@@ -128,7 +146,9 @@ We see it as superior to **`feature-flags`** because we can work more flexibly (
 We see it as superior to **`query-hints`** because we don't want to add query hints.
 
 A prior version of this design doc and [the prior design doc in #30233](https://github.com/MaterializeInc/materialize/pull/30233) proposed **`optimizer-versions`**.
-Why have we changed our minds?
+A [prior version of this design doc in #35441](https://github.com/MaterializeInc/materialize/pull/35441) proposed **`plan-pinning-v1`**.
+
+### Why did we switch to plan pinning?
 
 `**optimizer-versions**` overfits to particular engineering challenges (wanting to make certain AST changes).
 But recent work on repr types has shown that we can change the tires while the car is moving---we simply have to be careful.
@@ -137,21 +157,18 @@ Refactoring to have a clean optimizer crate is a good idea, but versioning is a 
 
 The balance tips further in **`plan-pinning`**'s favor when we consider that pinned plans are not merely a useful way for customers to have more confidence in Materialize, they are a way to help us identify clusters that are candidates for autoscaling and immediate incident escalation---production clusters.
 
+### Why did we switch to `plan-pinning-v2`?
+
+During broader conversations about the "cluster lifecycle", it became clear that it's much easier to simply treat _all_ plans as durable.
+This obviates questions about freezing/unfreezing clusters and what to do when dependent objects change---we can reuse existing logic around `ALTER`, `DROP`, and `CREATE`.
+During a business logic change blue/green swap, old definitions will be dropped and new plans will be written---but storing LIR plans by default means unchanged objects will keep their plans.
+Treating `COPY CLUSTER` and `EXPLAIN REPLAN` as orthogonal but complementary features makes the design more compelling.
+
 ## Minimal Viable Prototype
 
-We will pin plans at the level of clusters.
-
-Two new DDL commands:
-
-```sql
-ALTER CLUSTER foo FREEZE;
-ALTER CLUSTER foo UNFREEZE;
-```
-
-We will store the LIR for all of the dataflows on `foo`, and automatically use those LIR plans on reboot.
-These plans will be stored in the catalog.
-No changes can be made to `foo`: no new dataflows, no removals.
-It will not be part of this work, but it seems sensible to limit other actions on frozen clusters, e.g., you many only run fast-path `SELECT`s and `SUBSCRIBE`s (with the possible exception of queries that touch introspection sources).
+Clusters will pin LIR plans (`DataflowDescription<LirRelationExpr>`s) by default.
+These plans will be stored in persist shards, referenced in the catalog.
+When a cluster starts up, it will attempt to read existing LIR plans and deploy _those_, rather than recompiling plans.
 
 ### What is the SLA?
 
@@ -160,107 +177,73 @@ At any point, we may simply throw up our hands and replan.
 Users should be notified if pinned plans are replanned, but it should not necessarily rise to the level of pinging an on-call engineer---say, an escalation rather than an incident.
 A possible success metric for plan pinning (beyond e.g., overall usage/number of pinned plans) is how _few_ replans are forced to occur.
 
-### What can change?
+### What happens at an upgrade?
 
-Suppose we have the following dependency diagram, where `S` means "source", `V` means "view", `MV` means "materialized view", and `C` means cluster:
+During a 0dt upgrade, the new environmentd will read the catalog and spin up dataflows for the plans recorded in persist shards.
+This way, the new environment will continue to operate with the existing plans---stability!
+We may need to migrate these plans if, e.g., there was a change in the LIR definition.
+(We use a [schema registry](https://github.com/MaterializeInc/materialize/pull/37814) to track the need for these migrations.)
 
-```mermaid
-flowchart LR
-  subgraph C1
-    S1
-  end
-  subgraph C2
-    MV1
-  end
-  subgraph C3
-    MV2
-  end
+### What happens when business logic changes?
 
-  S1 --> MV1 --> V2 --> MV2
-```
+Whenever a planned object (materialized view; index) changes, it must generally be dropped and then recreated.
+Here, dropping loses the old pinned plan; recreating the object stores a new one.
+There is a challenge, however: what if only a few objects need to change, but other plans should stay the same?
 
-If we freeze `C3`, we certainly can't make changes to `C3`.
-What about `V2` (which is inlined into the definition of `MV2`)?
-What about `MV1` (which is read from persist)?
-What about `S1`?
-We don't need to fix opinions permanently on these questions up front, but we will need to _have_ opinions to start.
+The proposed solution is a `COPY CLUSTER foo TO bar` command that creates a cluster `bar` that is identical to `foo`, i.e., it has the same plans.
+One can then alter objects on `bar`, dropping and recreating only what's needed.
+When `bar` is satisfactory, a blue/green swap deploys the new configuration.
+Such an interactive usage should be permissible, but will not be best practice: one should really use a tool like mzdeploy to do a "slim deployment".
 
-As a first cut, it seems safe to say:
- 1. Frozen clusters block `DROP ... CASCADE` and must be unfrozen first.
- 2. Anything but `V2` may change in business logic; schema alterations have to be additive (cf. `ALTER MATERIALIZED VIEW`).
-That is, we would treat persist as a barrier: a frozen cluster will block changes to things it depends on that are not persisted.
-If `S1` or `MV1` change by altering a computation (but not its type) or by adding a new column, that should be fine (though we may need to generate an intermediate dataflow to project out the new column, since we will not want to change the pinned LIR plan of `MV2`).
+We will need to adapt mzdeploy to use `COPY CLUSTER` for slim deployments.
+We may want to do the same for DBT.
+In either case, we will likely want `COPY CLUSTER` to create a cluster with _no_ replicas.
+This way, the user can arrange objects the way they like and _then_ create replicas---simulating a full hydration, giving them confidence that their definitions fit in the cluster.
+There is some footgun risk here, and we propose that bare uses of `COPY CLUSTER` create replicas, but that slim deployments should run `COPY CLUSTER ... WITH (REPLICATION FACTOR = 0)`, i.e., carefully ensure that no dataflows will actually be created at first, and later running `ALTER CLUSTER` to set a larger replication factor.
 
-It is important for us and for customers to know how things would be replanned if clusters were unfrozen.
-In the long term, we will want to know which plans are pinned and how far those pins have drifted from what we would output.
-It is merely engineering for us to know about drift in cloud---replan, emitting a diff of the new plan and the pinned one to store---but less so in self-managed.
-(These diffs will not address the question of "which MZ changes caused the plan changes", though, and we will only get information at release time.
-A proactive, Mztrail-like thing would help as well.)
-We would want to make `mz-debug` aware of frozen clusters.
-Some kind of `COPY CLUSTER` comand may help users experiment: copy a frozen cluster, unfreeze it, find a new plan you like, freeze _that_, and then green/blue the new one into place.
+### How do users get improvements?
 
-When using DBT, users should receive an error when attempting to make changes to a frozen cluster.
-Whether that error is soft---i.e., the DBT run continues---or not is less clear.
+As the optimizer improves, existing pinned plans may lag behind our best possible performance.
+How do we ensure that users can see the improvements we make?
 
-### Why at the cluster level?
+Users changing business logic will necessarily use the latest version of the optimizer, so new objects will enjoy the benefits.
+We should also support a user-facing `EXPLAIN REPLAN` for individual objects (what would my plan look like now?) and `EXPLAIN REPLAN CLUSTER` (how have my plans "drifted" from what I would get if I replanned today?).
+In an ideal world, we could offer insight into the diffs of the replanned objects.
 
-We propose freezing at the cluster level.
-The environment and organization level is far too coarse.
-The replica and dataflow levels are too fine---freezing these but not the rest of the cluster seems like a recipe for confusion (two replicas on the same cluster with different plans? multiple versions of dependencies?).
+Users may also get improvements when we cannot load the LIR for some reason, e.g., a deliberate backwards incompatible migration, a bug.
 
 ### How does LIR change?
 
-LIR is the interface between the optimizer and rendering.
-While "stable", it's not persisted and has a purely internal contract.
+Several PRs have rearranged MIR and LIR.
+- New structures
+  + [#36544 Defined a stable LIR scalar expression](https://github.com/MaterializeInc/materialize/pull/36544)
+  + [#37410 LIR aggregate expression](https://github.com/MaterializeInc/materialize/pull/37410)
+- New abstractions
+  + [#36647 Abstracted away `Eval` and `Columns` traits for working with scalars](https://github.com/MaterializeInc/materialize/pull/36647)
+  + [#36759 Parameterized MFP infrastructure](https://github.com/MaterializeInc/materialize/pull/36759)
+  + [#37961 Parameterized `UnaryFunc`](https://github.com/MaterializeInc/materialize/pull/37961)
+- New migrations
+  + [#37814 LIR schema registry to support migrations](https://github.com/MaterializeInc/materialize/pull/37814)
 
-LIR has a large surface---`MirScalarExpr` (and with it, `UnaryFunc`, `BinaryFunc`, `VariadicFunc`, and `UnmaterializableFunc`), `AggregateExpr` and `AggregateFunc`, `TableFunc`, `Row`, etc.---and any changes across that surface could cause a pinned plan to no longer be runnable.
-It would be unwise to freeze things as they are in place: there is no support for migrations, and `MirScalarExpr` and the various `*Func` would be locked in time.
-Worse still, several of these `*Func` types reference external types, like `regex::Regex`---if we froze these things, upgrading the `regex` crate would break pinned plans and/or force a migration.
-
-We propose the following shift:
-
- - Generate `Lir` versions of the various `*Func`s. This will require a preparatory PR to improve the associated macros, but should not be too complex (even though it generates a fair bit of code; we can engineer that code to point to common implementations of `eval`, so we won't get major code duplication). We will likely want to fold this in to work that parameterizes type holding `*Func`s to hold _either_ `Sql*Type` or `Repr*Type`.
-   + Some of the `TableFunc`s hold on to types for typechecking, but don't need those types for evaluation. We could leave these and `AggregateFunc`s alone.
-   + Many of the other `*Func`s have functions that use their stored  types in their `eval` method... they _must_ hold `Sql` types.
-     * `UnaryFunc`: `CastArrayToString`, `CastListToString`, `CastRangeToString`, `CastRecordToString`, `CastMapToString`, `CastStringToList`, `CastStringToMap`, `MapBuildFromRecordList`
-     * `VariadicFunc`: `ArrayCreate`, `ArrayToString`, `CaseLiteral`
-
- - Write `LirScalarExpr`, which omits `CallUnmaterializable` (because it should be resolved before LIR).
- - Ensure that we only serialize the MZ-controlled bits. Wherever `Lir*Func` would include an external structure, ensure we store the information that lets us regenerate that structure using `#[serde(default=...)]` (e.g., store the original regex string, not the `regex::Regex` value).
- - Add a version number to top-level `LIR`.
- - Use `serde_reflection` to generate a schema (using `Registry`) that lives in the repo. Any change in LIR serialization will yield a schema change. We can programmatically require migrations/LIR version bumps for certain kinds of schema changes.
-   + We _must_ eventually tolerate schema changes like new LIR operators, new `*Func`s, new fields on existing structures, or pins will break too often.
+We cut things such that MIR and LIR share the `*Func` definitions and other infrastructure, though there is some work towards pulling them further apart (e.g., [#37409 measure how often we need to dip back into MIR to propagate literal constraints in LIR](https://github.com/MaterializeInc/materialize/pull/37409)).
 
 A `DataflowDescription<LIR>` will be stored as JSON in a persist shard pointed to by the catalog.
 Splitting up the LIR in this way means that (a) the catalog doesn't scale (as much) with object plan size and (b) we can parallelize parsing of LIR plans.
 
-## Open questions
-
-### What is the concrete syntax?
-
-We should pick ergonomic, sensible DDL syntax for this.
-How will users interact with it in DBT, etc.?
-
-### How do alterations work?
-
-Consider the dependency diagram above (["What can change?"](#what-can-change)).
-What are the pragmatics of making changes to `S1` and `MV1`?
-These changes could be changes to business logic or the addition of a column.
-
-- What does the workflow look like for changes to business logic upstream? _Should be fine._
-- What about additive schema changes? _Should be fine._
-- What about changes to a hypothetical `MV3` what depends on `MV2`? _Should be fine._
-
-Suppose the logic in `MV2` is broken.
-What is the workflow for fixing that?
-_Any_ change to `MV2` will lead to replanning, and there is no possibility of "spot" fixes.
-How do we communicate to customers that pinning is "best effort"?
-
 ### Where does LIR live in the catalog?
 
-It could go in `CatalogPlans` (all currently keyed by global ID), in `CatalogState` (alongside per-cluster metadata), or as a sidecar (like the `ExpressionCacheHandle`).
-This part of the catalog seems to be in flux, but `CatalogState` seems right---plans for frozen clusters should be stored alongside those clusters.
-That is, whether or not a cluster is frozen is not a boolean---it's an `Option<PersistShard pointer>`, with `Some(...)` holding the name of the shard that holds plans.
+It in `CatalogState` (alongside the `CatalogItem`'s entry), or as a sidecar in `Catalog` itself (like the `ExpressionCacheHandle`).
+This part of the catalog seems to be in flux, but `CatalogState` seems right---pinned plans should be stored with their associated IDs.
+
+Storing a pointer to a persist shard holding the JSON-serialized LIR plan instead of putting the full plan in the catalog itself offers several benefits.
+First, we can decode and migrate plans in parallel.
+Second, we don't need to send a serialized plan to clusters---we can just point them at persist.
+Third, it means that the catalog doesn't scale with object _size_ (though of course it scales with object _count_).
+
+Plans should be written eagerly.
+Migration can occur when we load a plan, but that means writing a new persist shard with the migrated plan.
+
+## Open questions
 
 ### What happens when we move to DDIR?
 
@@ -271,7 +254,15 @@ If we later decide to save the DDIR rather than LIR, that will be as transparent
 
 ### What happens to `EXPLAIN OPTIMIZED PLAN` for pinned LIR plans?
 
+`EXPLAIN OPTIMIZED PLAN` shows MIR by... compiling to MIR.
+But an LIR plan pinned six months ago may have nothing to do with the MIR we get now---and so this `EXPLAIN` is showing the explain of the _replan_, not the original plan.
+(`EXPLAIN PHYSICAL PLAN` is the default, and will not have this problem.)
+
 Right now, I believe only Gábor uses `EXPLAIN OPTIMIZED PLAN`.
 But in the event someone would like to see MIR for a pinner LIR plan, we would simply not have it.
 We _could_ store a cached version, either a text (with fixed options) or as some kind of structure---though our aim was to _not_ have to serialize MIR.
 I think the best approach here is to improve the default LIR-based `EXPLAIN PLAN` enough so that Gábor stops using `EXPLAIN OPTIMIZED PLAN`.
+
+### How does this interact with the expression cache?
+
+We will likely be able to use pinned LIR to deprecate the expression cache, but there should be no interference at first---though we will want to carefully prioritize which we consult (LIR first, then fall back to the cache).
