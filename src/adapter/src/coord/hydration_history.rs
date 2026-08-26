@@ -314,6 +314,13 @@ fn next_replica(
 /// timestamp. A visible unfinished object is skipped and picked up by a later
 /// sweep.
 ///
+/// A worker missing at the read timestamp cannot later change the episode key.
+/// Its logging clock stamps both the Differential update and `installed_at`, so
+/// late visibility means its installation stamp is later than the visible
+/// minimum. The anti-join therefore keeps matching the recorded row. A later
+/// `hydrated_at` can raise the aggregate's maximum, but history is not repaired
+/// after the episode key has been recorded.
+///
 /// The collector deliberately accepts this sampling race rather than depending on
 /// `ReplicaLocation::workers()`. A durable finish can therefore precede the latest
 /// worker's finish. A whole-replica restart resets the collection as a unit.

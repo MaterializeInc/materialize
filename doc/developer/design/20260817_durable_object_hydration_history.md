@@ -148,6 +148,13 @@ sampling race rather than depending on replica configuration for an expected wor
 count. In that case the durable finish can precede the latest worker's finish. This
 is separate from restart behavior, which discards the replica collection as a unit.
 
+The missing worker cannot later change the episode key. Its logging clock stamps
+both the Differential update and `installed_at`, so appearing after the read means
+its installation stamp is later than the visible minimum. A later sweep therefore
+keeps the same `min(installed_at)` and the anti-join matches the row already written.
+The worker can raise `max(hydrated_at)`, but the durable row is not repaired after
+its episode key has been recorded.
+
 Compute is adding an append-only lifecycle log for the same stages, currently
 proposed in #38403: one row per export, worker and event, with a reason and the
 dataflow's as-of. It leaves `mz_compute_hydration_times_per_worker` alone, so
