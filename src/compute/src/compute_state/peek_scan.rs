@@ -156,7 +156,10 @@ where
     results: RowBatch,
     /// The byte size of `results`, as an answer built from them would store them.
     total_size: usize,
-    /// The ceiling on what the scan may hold, above which the peek fails.
+    /// The byte size of the batches already handed to a driver, which `total_size` no longer
+    /// counts. Together the two are the size of the answer the peek is building.
+    handed_off_size: usize,
+    /// The ceiling on the whole answer, above which the peek fails.
     max_result_size: usize,
     /// Whether this peek may divert its rows to the peek stash.
     peek_stash_eligible: bool,
@@ -235,6 +238,7 @@ where
             ok_walk_end: None,
             results: Vec::new(),
             total_size: 0,
+            handed_off_size: 0,
             max_result_size: usize::cast_from(max_result_size),
             peek_stash_eligible,
             peek_stash_threshold_bytes,
@@ -338,6 +342,9 @@ where
     /// and the stash threshold are read against, and rows that have left the scan are bounded by
     /// neither.
     fn take_results(&mut self) -> RowBatch {
+        // Carried rather than dropped, because `max_result_size` bounds the answer the peek
+        // returns and not the prefix the scan happens to be holding.
+        self.handed_off_size = self.handed_off_size.saturating_add(self.total_size);
         self.total_size = 0;
         mem::take(&mut self.results)
     }
@@ -430,10 +437,14 @@ where
                 .saturating_add(COUNT_BYTE_SIZE);
             let batch_ready = self.batch_ready();
 
-            // Rows bound for the stash are answered by a handle rather than by themselves, so the
-            // ceiling on an inline answer does not apply to a prefix that has grown past the
-            // stash threshold.
-            if !batch_ready && self.total_size > self.max_result_size {
+            // Measured against everything the answer will contain, the batches already handed off
+            // included, because a peek bound for the stash returns its rows to the client like any
+            // other. Checking only the retained prefix would stop bounding a stashed answer at
+            // all, since a prefix is handed away and reset well below the ceiling. Failing here
+            // rather than on the way out also spares the replica writing an answer to blob storage
+            // that nothing may read.
+            let answer_size = self.handed_off_size.saturating_add(self.total_size);
+            if answer_size > self.max_result_size {
                 break ScanOutcome::Failed(PeekError::unstructured(format!(
                     "result exceeds max size of {}",
                     ByteSize::b(u64::cast_from(self.max_result_size))
@@ -616,6 +627,7 @@ mod tests {
             ok_walk_end: None,
             results: Vec::new(),
             total_size: 0,
+            handed_off_size: 0,
             max_result_size: usize::MAX,
             peek_stash_eligible: false,
             peek_stash_threshold_bytes: usize::MAX,
@@ -948,24 +960,66 @@ mod tests {
         assert_eq!(subject.results, expected(0..3));
     }
 
-    /// The result-size ceiling bounds an inline answer, which rows bound for the stash are not.
-    /// A scan whose batches are taken therefore walks the whole trace with a ceiling below what it
-    /// produces, rather than failing the peek.
+    /// The result-size ceiling bounds the whole answer, the batches already handed off included,
+    /// so a peek bound for the stash fails on it like any other.
     ///
-    /// Driven with unbounded fuel, so every suspension is a full batch, and a scan that grew its
-    /// prefix past the threshold instead of stopping would fail on the ceiling.
+    /// The ceiling here sits above the stash threshold, so the scan hands off batches and only
+    /// their sum reaches it. A ceiling compared against the retained prefix alone would never be
+    /// reached, because a prefix is handed away and reset well below it, and the peek would return
+    /// an answer of any size at all.
+    ///
+    /// Driven with unbounded fuel, so every suspension is a full batch.
     #[mz_ore::test]
-    fn a_prefix_bound_for_the_stash_is_not_bound_by_the_result_size_ceiling() {
+    fn a_stashed_answer_is_bound_by_the_result_size_ceiling_across_its_batches() {
         let keys = rows(0..8);
         let mut subject = scan(ErrorPhase::Clean, &keys);
-        subject.max_result_size = 3 * row_size();
+        subject.max_result_size = 5 * row_size();
+        subject.peek_stash_eligible = true;
+        subject.peek_stash_threshold_bytes = 2 * row_size();
+
+        let mut collected = RowBatch::new();
+        let mut failure = None;
+        // Bounded so that a regression which restarts the ok walk on every resumption fails here
+        // rather than spinning.
+        for _ in 0..RESUMPTION_BOUND {
+            let mut fuel = usize::MAX;
+            match subject.step(None, &mut fuel) {
+                ScanOutcome::Suspended => {
+                    collected.extend(subject.take_batch().expect("a full batch"));
+                }
+                ScanOutcome::Complete(rest) => {
+                    collected.extend(rest);
+                    break;
+                }
+                ScanOutcome::Failed(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+
+        assert_eq!(
+            failure,
+            Some(PeekError::unstructured(format!(
+                "result exceeds max size of {}",
+                ByteSize::b(u64::cast_from(5 * row_size()))
+            ))),
+            "a stashed answer past the ceiling must fail rather than answer, having collected {collected:?}"
+        );
+    }
+
+    /// A peek whose whole answer stays under the ceiling still reaches the stash, so the bound
+    /// across batches does not cost the stash the results it exists for.
+    #[mz_ore::test]
+    fn a_stashed_answer_under_the_ceiling_still_walks_the_whole_trace() {
+        let keys = rows(0..8);
+        let mut subject = scan(ErrorPhase::Clean, &keys);
+        subject.max_result_size = 100 * row_size();
         subject.peek_stash_eligible = true;
         subject.peek_stash_threshold_bytes = 2 * row_size();
 
         let mut collected = RowBatch::new();
         let mut completed = false;
-        // Bounded so that a regression which restarts the ok walk on every resumption fails here
-        // rather than spinning.
         for _ in 0..RESUMPTION_BOUND {
             let mut fuel = usize::MAX;
             match subject.step(None, &mut fuel) {
