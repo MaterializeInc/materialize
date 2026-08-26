@@ -11,7 +11,7 @@
 //!
 //! The correction buffer lives on a Tokio task, while the introspection loggers are owned by the
 //! Timely thread and are not `Send`. [`ChannelLogging`] bridges the two: the buffer reports size
-//! and chain changes as [`LoggingEvent`]s over a channel, and [`CorrectionLogger`] drains them on
+//! and chain changes as [`LoggingEvent`]s over a channel, and `CorrectionLogger` drains them on
 //! the Timely thread.
 
 use std::fmt;
