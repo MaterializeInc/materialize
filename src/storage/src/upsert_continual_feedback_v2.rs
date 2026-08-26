@@ -548,7 +548,7 @@ where
             // committed back through the feedback loop. This determines:
             //   - Whether rehydration is complete (persist >= resume_upper).
             //   - Which source entries are eligible for processing (their
-            //     time must equal persist_upper so the trace cursor returns
+            //     time must equal persist_upper so the feedback trace holds
             //     the correct prior state).
             //   - How far to compact the persist trace.
             let persist_upper = persist_probe.with_frontier(|f| f.to_owned());
@@ -625,10 +625,12 @@ where
                 // (which readies a complete chunk per `push_into`), so the
                 // chunker holds nothing pending here and we can seal directly.
                 //
-                // NOTE: sealing is not a spilled-body pass-through. The
-                // merge loads every chunk's body to partition it against the
-                // upper and re-commits both sides through the pool codec, so
-                // each seal round-trips the stash through decode and encode.
+                // NOTE: the seal's chain merge loads the bodies of the chunks
+                // it actually merges, while untouched survivors keep their
+                // spilled bodies. The partition against the upper passes
+                // chunks whose resident time bounds fall entirely on one side
+                // through without loading them, so only chunks the upper
+                // splits round-trip the pool codec.
                 // The drain below then loads sealed chunks one at a time, so
                 // a large drain (a frontier advance releasing a snapshot's
                 // worth of stash at once) holds at most one chunk resident
@@ -713,9 +715,9 @@ where
 
 /// Counts from a single call to [`drain_sealed_input`], used to update metrics.
 struct DrainStats {
-    /// Number of entries looked up in the persist trace (cursor seeks).
+    /// Number of eligible entries probed against the feedback trace.
     eligible: u64,
-    /// Number of cursor lookups that found an existing value.
+    /// Number of probed entries for which a prior value was found.
     result_count: u64,
     /// New value written with no prior value (insert).
     inserts: u64,
@@ -1189,6 +1191,41 @@ mod test {
             (Ok(new_val), new_ts(1), Diff::ONE),
         ];
         assert_eq!(actual, expected);
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn drain_crosses_probe_window() {
+        // More distinct keys than one drain probe window holds, all eligible
+        // at the same timestamp. The records fit one sealed chunk (the ship
+        // threshold is ~2 MiB), so the drain must close a probe window
+        // mid-chunk and carry keys correctly across the boundary.
+        const KEYS: i64 = 1500;
+        let actual = upsert_test!(|input, persist, worker| {
+            for k in 0..KEYS {
+                persist.send((Ok(row(k, k)), new_ts(0), Diff::ONE));
+            }
+            persist.advance_to(new_ts(1));
+            worker.step();
+
+            for k in 0..KEYS {
+                input.send(((key(k), Some(Ok(row(k, k + 1))), 1), new_ts(1), Diff::ONE));
+            }
+            input.advance_to(new_ts(2));
+            worker.step();
+            persist.advance_to(new_ts(2));
+            worker.step();
+        });
+
+        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
+        for k in 0..KEYS {
+            expected.push((Ok(row(k, k)), new_ts(1), Diff::MINUS_ONE));
+            expected.push((Ok(row(k, k + 1)), new_ts(1), Diff::ONE));
+        }
+        let mut actual_sorted = actual;
+        actual_sorted.sort();
+        expected.sort();
+        assert_eq!(actual_sorted, expected);
     }
 
     #[mz_ore::test]

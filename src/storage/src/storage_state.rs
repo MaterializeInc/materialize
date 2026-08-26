@@ -862,7 +862,7 @@ impl<'w> Worker<'w> {
 
                     let enabled = ENABLE_UPSERT_PAGED_SPILL
                         .get(self.storage_state.storage_configuration.config_set());
-                    info!(
+                    debug!(
                         worker = self.timely_worker.index(),
                         enabled, "upsert stash spill: applying gate",
                     );
