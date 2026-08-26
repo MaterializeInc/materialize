@@ -460,11 +460,20 @@ impl DataflowBuilder {
     /// Honors [`Self::optimize`] exactly like [`Self::finish`], so the explained
     /// plan is the one that would be shipped. A no-catalog [`DummyHumanizer`]
     /// renders ids as `u123` and columns as `#n` — stable and matching the `.spec`
-    /// MIR vocabulary, with no catalog to thread in.
+    /// MIR vocabulary, with no catalog to thread in. Literals render verbatim,
+    /// independent of the build profile.
     pub fn explain(self) -> anyhow::Result<String> {
         let features = OptimizerFeatures::default();
         let mut lowered = Self::lower(self.mir, self.optimize, &features)?;
-        let config = ExplainConfig::default();
+        // `redacted` is pinned rather than taken from `ExplainConfig::default`, which
+        // derives it from the build's soft-assertion setting: a default-configured
+        // render would anonymize literals in the release-profile driver image and
+        // print them verbatim under `cargo test` or a `PROFILE=dev` local run. A
+        // golden must not depend on how the binary was built.
+        let config = ExplainConfig {
+            redacted: false,
+            ..ExplainConfig::default()
+        };
         let context = ExplainContext {
             config: &config,
             features: &features,
