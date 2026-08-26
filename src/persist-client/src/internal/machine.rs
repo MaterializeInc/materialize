@@ -1842,8 +1842,13 @@ pub mod datadriven {
             .expect("unknown batch")
             .clone();
         let truncated_desc = Description::new(lower, upper, batch.batch.desc.since().clone());
-        let () = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
+        let bounds_truncated = validate_truncate_batch(&batch.batch, &truncated_desc, false, true)?;
         let mut new_hollow_batch = (*batch.batch).clone();
+        if bounds_truncated {
+            for run_meta in &mut new_hollow_batch.run_meta {
+                run_meta.set_bounds_truncated();
+            }
+        }
         new_hollow_batch.desc = truncated_desc;
         let new_batch = IdHollowBatch {
             batch: Arc::new(new_hollow_batch),
@@ -2371,37 +2376,42 @@ pub mod datadriven {
         args: DirectiveArgs<'_>,
     ) -> Result<String, anyhow::Error> {
         let input = args.expect_str("input");
+        let legacy = args.optional("legacy").unwrap_or(false);
         let batch = datadriven
             .batches
             .get(input)
             .expect("unknown batch")
             .clone();
-        let compact_req = datadriven
-            .compactions
-            .get(input)
-            .expect("unknown compact req")
-            .clone();
-        let input_batches = compact_req
-            .inputs
-            .iter()
-            .map(|x| x.id)
-            .collect::<BTreeSet<_>>();
-        let lower_spine_bound = input_batches
-            .first()
-            .map(|id| id.0)
-            .expect("at least one batch must be present");
-        let upper_spine_bound = input_batches
-            .last()
-            .map(|id| id.1)
-            .expect("at least one batch must be present");
-        let id = SpineId(lower_spine_bound, upper_spine_bound);
+        let compaction_input = if legacy {
+            CompactionInput::Legacy
+        } else {
+            let compact_req = datadriven
+                .compactions
+                .get(input)
+                .expect("unknown compact req")
+                .clone();
+            let input_batches = compact_req
+                .inputs
+                .iter()
+                .map(|x| x.id)
+                .collect::<BTreeSet<_>>();
+            let lower_spine_bound = input_batches
+                .first()
+                .map(|id| id.0)
+                .expect("at least one batch must be present");
+            let upper_spine_bound = input_batches
+                .last()
+                .map(|id| id.1)
+                .expect("at least one batch must be present");
+            CompactionInput::IdRange(SpineId(lower_spine_bound, upper_spine_bound))
+        };
         let hollow_batch = (*batch.batch).clone();
 
         let (merge_res, maintenance) = datadriven
             .machine
             .merge_res(&FueledMergeRes {
                 output: hollow_batch,
-                input: CompactionInput::IdRange(id),
+                input: compaction_input,
                 new_active_compaction: None,
             })
             .await;

@@ -1,0 +1,69 @@
+# Copyright Materialize, Inc. and contributors. All rights reserved.
+#
+# Use of this software is governed by the Business Source License
+# included in the LICENSE file.
+#
+# As of the Change Date specified in that file, in accordance with
+# the Business Source License, use of this software will be governed
+# by the Apache License, Version 2.0.
+
+# Regression test for the diff-sum validation on the legacy compaction path,
+# which matches a merge result against the spine by desc alone. When the result
+# covers only a sub-range of a spine batch's parts, validation must skip the
+# comparison if any of those parts is a truncated batch, whose write-time
+# statistics count updates that every read filters out.
+#
+# The sibling case, where the result covers a whole spine batch, is in
+# regression_diffs_sum_truncated.
+
+write-batch output=b0 lower=0 upper=1
+zero 0 1
+----
+parts=1 len=1
+
+compare-and-append input=b0 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v2 [1]
+
+# Written over [0, 3) but registered over [1, 3): the update at 0 stays in the
+# part while every read filters it out.
+write-batch output=b1 lower=0 upper=3
+stale 0 1
+one 1 1
+two 2 1
+----
+parts=1 len=3
+
+truncate-batch-desc input=b1 output=b1trunc lower=1 upper=3
+----
+parts=1 len=3
+
+compare-and-append input=b1trunc writer_id=w11111111-1111-1111-1111-111111111111
+----
+v3 [3]
+
+# Compact b1trunc alone, so the output covers [1, 3) rather than the [0, 3) of
+# the spine batch b0 and b1trunc merge into. The truncated update is dropped,
+# so the output sums to one less than b1trunc's statistics.
+compact output=c0 inputs=(b1trunc) lower=1 upper=3 since=0
+----
+parts=1 len=2
+
+# Give enough fuel to the Spine that b0 and b1trunc merge into one spine batch,
+# so the merge res above lands on a sub-range of its parts rather than on a
+# spine batch of its own.
+write-batch output=b2 lower=3 upper=4
+threeA 3 1
+threeB 3 1
+threeC 3 1
+threeD 3 1
+----
+parts=1 len=4
+
+compare-and-append input=b2 writer_id=w11111111-1111-1111-1111-111111111111
+----
+v4 [4]
+
+apply-merge-res input=c0 legacy=true
+----
+v5 true
