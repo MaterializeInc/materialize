@@ -51,7 +51,7 @@ use mz_repr::adt::numeric::Numeric;
 use mz_repr::adt::range::{Range, RangeBound, RangeInner};
 use mz_repr::adt::timestamp::CheckedTimestamp;
 use mz_repr::role_id::RoleId;
-use mz_repr::{Datum, Row, RowPacker, Timestamp};
+use mz_repr::{Datum, Row, RowPacker, SqlScalarType, Timestamp};
 use mz_row_spine::DatumContainer;
 use mz_storage::fuzz_exports::{UpsertValue, datum_seq_to_upsert_value, upsert_value_to_row};
 use mz_storage_types::errors::{
@@ -272,11 +272,15 @@ fn push_range(packer: &mut RowPacker, u: &mut Unstructured) -> arbitrary::Result
             None
         },
     };
-    let range = Range {
+    let mut range = Range {
         inner: Some(RangeInner { lower, upper }),
     };
-    // `push_range` canonicalizes and may reject (e.g. a degenerate empty range).
+    // Canonicalization may reject the bounds (e.g. a step that overflows int4).
     // On rejection just push a plain scalar so the row is still valid.
+    if range.canonicalize(&SqlScalarType::Int32).is_err() {
+        packer.push(Datum::Int32(lo));
+        return Ok(());
+    }
     if packer.push_range(range).is_err() {
         packer.push(Datum::Int32(lo));
     }

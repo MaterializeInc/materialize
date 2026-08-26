@@ -327,7 +327,11 @@ impl Value {
                     Type::Range { element_type } => &*element_type,
                     _ => panic!("Value::Range should have type Type::Range. Found {:?}", typ),
                 };
-                let range = range.try_into_bounds(|elem| elem.into_datum(buf, elem_pg_type))?;
+                let elem_type = SqlScalarType::try_from(&**elem_pg_type)?;
+                let mut range = range.try_into_bounds(|elem| elem.into_datum(buf, elem_pg_type))?;
+                // A client is free to send a range in whatever form it likes, so
+                // this is where a range built from wire bounds gets canonicalized.
+                range.canonicalize(&elem_type)?;
                 buf.try_make_datum(|packer| packer.push_range(range).map_err(IntoDatumError::from))?
             }
             Value::MzAclItem(mz_acl_item) => Datum::MzAclItem(mz_acl_item),
@@ -868,8 +872,15 @@ impl Value {
                 // TODO: We should be able to push ranges without scratch space, but that requires
                 // a different `push_range` API.
                 let buf = RowArena::new();
-                let range = range
+                let mut range = range
                     .try_into_bounds(|elem| elem.into_datum(&buf, element_type))
+                    .map_err(Box::<dyn Error + Sync + Send>::from)?;
+                // The text form is whatever the client wrote, e.g. `[1,10]` for an
+                // `int4range`, so it has to be canonicalized to `[1,11)` here.
+                let elem_type = SqlScalarType::try_from(&**element_type)
+                    .map_err(Box::<dyn Error + Sync + Send>::from)?;
+                range
+                    .canonicalize(&elem_type)
                     .map_err(Box::<dyn Error + Sync + Send>::from)?;
                 packer
                     .push_range(range)
@@ -1120,10 +1131,42 @@ pub fn values_from_row(row: &RowRef, typ: &SqlRelationType) -> Vec<Option<Value>
 
 #[cfg(test)]
 mod tests {
-    use mz_repr::arb_datum_for_scalar;
+    use mz_repr::{Row, arb_datum_for_scalar};
     use proptest::prelude::*;
 
     use super::*;
+
+    /// A range's text form is whatever the client wrote, so it is canonicalized
+    /// on the way in, and the step's width comes from the declared element type.
+    /// The same inclusive upper bound overflows an `int4range` and is fine in an
+    /// `int8range`.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // numeric/decimal contexts unsupported under miri
+    fn decode_text_range_canonicalizes_at_element_width() {
+        fn decode(elem: Type, text: &str) -> Result<Row, String> {
+            let ty = Type::Range {
+                element_type: Box::new(elem),
+            };
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            Value::decode_text_into_row(&ty, text, &mut packer).map_err(|e| e.to_string())?;
+            drop(packer);
+            Ok(row)
+        }
+
+        let err = decode(Type::Int4, "[1,2147483647]")
+            .expect_err("int4 step at i32::MAX overflows");
+        assert!(err.contains("integer out of range"), "unexpected error: {err}");
+
+        let row = decode(Type::Int8, "[1,2147483647]").expect("int8 step is in range");
+        assert_eq!(row.unpack_first().to_string(), "[1,2147483648)");
+
+        // `[0,0]` steps its upper bound to `1`, `[0,0)` collapses to empty.
+        let row = decode(Type::Int4, "[0,0]").expect("valid range");
+        assert_eq!(row.unpack_first().to_string(), "[0,1)");
+        let row = decode(Type::Int4, "[0,0)").expect("valid range");
+        assert_eq!(row.unpack_first().to_string(), "empty");
+    }
 
     /// Property test: [`Value::binary_encoding_error`] agrees with the actual
     /// behavior of [`Value::encode_binary`] for every `(SqlScalarType, Datum)`

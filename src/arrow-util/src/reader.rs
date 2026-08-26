@@ -492,6 +492,7 @@ fn scalar_type_and_array_to_reader(
             let upper_nulls = upper_array.nulls().cloned();
 
             Ok(ColReader::Range {
+                element_type: (**element_type).clone(),
                 lower: Box::new(lower_reader),
                 lower_nulls,
                 upper: Box::new(upper_reader),
@@ -641,6 +642,9 @@ enum ColReader {
     },
 
     Range {
+        /// Declared element type, which canonicalization needs to size its
+        /// discrete step.
+        element_type: SqlScalarType,
         lower: Box<ColReader>,
         lower_nulls: Option<NullBuffer>,
         upper: Box<ColReader>,
@@ -1112,6 +1116,7 @@ impl ColReader {
                 return Ok(());
             }
             ColReader::Range {
+                element_type,
                 lower,
                 lower_nulls,
                 upper,
@@ -1168,15 +1173,15 @@ impl ColReader {
                     bound: upper_row.as_ref().map(|row| row.unpack_first()),
                 };
 
-                // Use `push_range` (not `push_range_with`) so the range is
-                // canonicalized before being packed. Parquet files authored by
-                // external engines may encode discrete ranges in non-canonical
-                // form (e.g. `[1,10]` for int4range, which MZ stores as
-                // `[1,11)`); without canonicalization those rows would not
-                // compare or hash equal to MZ-constructed values.
-                packer
-                    .push_range(Range::new(Some((lower_bound, upper_bound))))
-                    .context("pack range")?;
+                // Parquet files authored by external engines may encode discrete
+                // ranges in non-canonical form, e.g. `[1,10]` for an int4range,
+                // which MZ stores as `[1,11)`. Without canonicalization those rows
+                // would not compare or hash equal to MZ-constructed values.
+                let mut range = Range::new(Some((lower_bound, upper_bound)));
+                range
+                    .canonicalize(element_type)
+                    .context("canonicalize range")?;
+                packer.push_range(range).context("pack range")?;
 
                 return Ok(());
             }
@@ -1671,8 +1676,8 @@ mod tests {
                     bound: Some(Datum::Int32(1)),
                 },
                 RangeUpperBound {
-                    inclusive: true,
-                    bound: Some(Datum::Int32(10)),
+                    inclusive: false,
+                    bound: Some(Datum::Int32(11)),
                 },
             ))))
             .unwrap();
@@ -1685,8 +1690,8 @@ mod tests {
         want.packer()
             .push_range(Range::new(Some((
                 RangeLowerBound {
-                    inclusive: false,
-                    bound: Some(Datum::Int32(5)),
+                    inclusive: true,
+                    bound: Some(Datum::Int32(6)),
                 },
                 RangeUpperBound {
                     inclusive: false,
@@ -1695,5 +1700,101 @@ mod tests {
             ))))
             .unwrap();
         assert_eq!(got, want, "row 1: (5,15) should canonicalize to [6,15)");
+    }
+
+    /// The step's width comes from the column's declared element type, so an
+    /// inclusive upper bound at `i32::MAX` overflows for an `int4range` where the
+    /// same value in an `int8range` does not.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // unsupported operation: can't call foreign function `decContextDefault` on OS `linux`
+    fn range_step_width_follows_declared_element_type() {
+        use arrow::array::ArrayRef;
+        use arrow::datatypes::DataType;
+        use mz_repr::adt::range::{Range, RangeLowerBound, RangeUpperBound};
+
+        fn read_int_range(
+            element_type: SqlScalarType,
+            arrow_type: DataType,
+            lower: ArrayRef,
+            upper: ArrayRef,
+        ) -> Result<Row, anyhow::Error> {
+            let desc = RelationDesc::builder()
+                .with_column(
+                    "r",
+                    SqlScalarType::Range {
+                        element_type: Box::new(element_type),
+                    }
+                    .nullable(true),
+                )
+                .finish();
+
+            #[allow(clippy::as_conversions)]
+            let range_fields: Vec<(Arc<Field>, ArrayRef)> = vec![
+                (
+                    Arc::new(Field::new("lower", arrow_type.clone(), true)),
+                    lower,
+                ),
+                (Arc::new(Field::new("upper", arrow_type, true)), upper),
+                (
+                    Arc::new(Field::new("lower_inclusive", DataType::Boolean, false)),
+                    Arc::new(BooleanArray::from(vec![true])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("upper_inclusive", DataType::Boolean, false)),
+                    Arc::new(BooleanArray::from(vec![true])) as ArrayRef,
+                ),
+                (
+                    Arc::new(Field::new("empty", DataType::Boolean, false)),
+                    Arc::new(BooleanArray::from(vec![false])) as ArrayRef,
+                ),
+            ];
+            let range_struct = StructArray::from(range_fields);
+            #[allow(clippy::as_conversions)]
+            let batch = StructArray::from(vec![(
+                Arc::new(Field::new("r", range_struct.data_type().clone(), true)),
+                Arc::new(range_struct) as ArrayRef,
+            )]);
+
+            let reader = ArrowReader::new(&desc, batch)?;
+            let mut got = Row::default();
+            reader.read(0, &mut got)?;
+            Ok(got)
+        }
+
+        #[allow(clippy::as_conversions)]
+        let err = read_int_range(
+            SqlScalarType::Int32,
+            DataType::Int32,
+            Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef,
+            Arc::new(Int32Array::from(vec![Some(i32::MAX)])) as ArrayRef,
+        )
+        .expect_err("int4 step at i32::MAX overflows");
+        assert!(
+            format!("{err:#}").contains("integer out of range"),
+            "unexpected error: {err:#}"
+        );
+
+        #[allow(clippy::as_conversions)]
+        let got = read_int_range(
+            SqlScalarType::Int64,
+            DataType::Int64,
+            Arc::new(Int64Array::from(vec![Some(1)])) as ArrayRef,
+            Arc::new(Int64Array::from(vec![Some(i64::from(i32::MAX))])) as ArrayRef,
+        )
+        .expect("int8 step at i32::MAX is in range");
+        let mut want = Row::default();
+        want.packer()
+            .push_range(Range::new(Some((
+                RangeLowerBound {
+                    inclusive: true,
+                    bound: Some(Datum::Int64(1)),
+                },
+                RangeUpperBound {
+                    inclusive: false,
+                    bound: Some(Datum::Int64(i64::from(i32::MAX) + 1)),
+                },
+            ))))
+            .unwrap();
+        assert_eq!(got, want);
     }
 }

@@ -16,6 +16,8 @@ use std::fmt;
 use mz_repr::adt::array::InvalidArrayError;
 use mz_repr::adt::range::InvalidRangeError;
 
+use crate::types::TypeConversionError;
+
 /// Error returned when a decoded text value contains a NUL character, which
 /// PostgreSQL-compatible text values must never contain.
 #[derive(Debug)]
@@ -37,6 +39,9 @@ pub enum IntoDatumError {
     Range(InvalidRangeError),
     /// Invalid array (e.g. wrong cardinality or too many dimensions).
     Array(InvalidArrayError),
+    /// A type with no `SqlScalarType` equivalent (e.g. a range whose element
+    /// type carries an invalid numeric constraint).
+    Type(TypeConversionError),
 }
 
 impl fmt::Display for IntoDatumError {
@@ -44,6 +49,7 @@ impl fmt::Display for IntoDatumError {
         match self {
             IntoDatumError::Range(e) => e.fmt(f),
             IntoDatumError::Array(e) => e.fmt(f),
+            IntoDatumError::Type(e) => e.fmt(f),
         }
     }
 }
@@ -53,6 +59,7 @@ impl Error for IntoDatumError {
         match self {
             IntoDatumError::Range(e) => Some(e),
             IntoDatumError::Array(e) => Some(e),
+            IntoDatumError::Type(e) => Some(e),
         }
     }
 }
@@ -66,5 +73,11 @@ impl From<InvalidRangeError> for IntoDatumError {
 impl From<InvalidArrayError> for IntoDatumError {
     fn from(e: InvalidArrayError) -> Self {
         IntoDatumError::Array(e)
+    }
+}
+
+impl From<TypeConversionError> for IntoDatumError {
+    fn from(e: TypeConversionError) -> Self {
+        IntoDatumError::Type(e)
     }
 }

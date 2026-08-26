@@ -2769,6 +2769,11 @@ impl RowPacker<'_> {
 
     /// Pushes a `Datum::Range` derived from the `Range<Datum<'a>`.
     ///
+    /// The range must already be canonical. Canonicalization needs the range's
+    /// declared element type to size the discrete step, which a `Row` has no
+    /// access to, so it belongs to whoever builds the range out of its bounds.
+    /// Call [`Range::canonicalize`] there.
+    ///
     /// # Panics
     /// - If lower and upper express finite values and they are datums of
     ///   different types.
@@ -2777,13 +2782,13 @@ impl RowPacker<'_> {
     ///   [`RangeBound::new`].
     ///
     /// # Notes
-    /// - This function canonicalizes the range before pushing it to the row.
-    /// - Prefer this function over `push_range_with` because of its
-    ///   canonicaliztion.
     /// - Prefer creating [`RangeBound`]s using [`RangeBound::new`], which
     ///   handles `Datum::Null` in a SQL-friendly way.
-    pub fn push_range<'a>(&mut self, mut range: Range<Datum<'a>>) -> Result<(), InvalidRangeError> {
-        range.canonicalize()?;
+    pub fn push_range<'a>(&mut self, range: Range<Datum<'a>>) -> Result<(), InvalidRangeError> {
+        debug_assert!(
+            range.is_canonical_without_step(),
+            "push_range requires a canonical range, got {range}"
+        );
         match range.inner {
             None => {
                 self.row.data.push(Tag::Range.into());
@@ -2813,9 +2818,9 @@ impl RowPacker<'_> {
     /// Pushes a `DatumRange` built from the specified arguments.
     ///
     /// # Warning
-    /// Unlike `push_range`, `push_range_with` _does not_ canonicalize its
-    /// inputs. Consequentially, this means it's possible to generate ranges
-    /// that will not reflect the proper ordering and equality.
+    /// The bounds must already be canonical, as neither this nor `push_range`
+    /// canonicalizes. Non-canonical bounds do not reflect the proper ordering
+    /// and equality.
     ///
     /// # Panics
     /// - If lower or upper expresses a finite value and does not push exactly
@@ -4334,12 +4339,12 @@ mod tests {
             Datum::JsonNull,
             Datum::Range(Range { inner: None }),
             arena.make_datum(|packer| {
-                packer
-                    .push_range(Range::new(Some((
-                        RangeLowerBound::new(Datum::Int32(-1), true),
-                        RangeUpperBound::new(Datum::Int32(1), true),
-                    ))))
-                    .unwrap();
+                let mut range = Range::new(Some((
+                    RangeLowerBound::new(Datum::Int32(-1), true),
+                    RangeUpperBound::new(Datum::Int32(1), true),
+                )));
+                range.canonicalize(&SqlScalarType::Int32).unwrap();
+                packer.push_range(range).unwrap();
             }),
         ];
         for value in values_of_interest {
