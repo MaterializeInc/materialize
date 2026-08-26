@@ -187,10 +187,8 @@ impl<'scope> SinkRender<'scope> for MetricSinkConnection {
 
         // Report frontier updates to the `ComputeState`. A metric sink writes to the metrics
         // registry rather than to a collection, so its "write" frontier is the input frontier it
-        // has folded through.
-        // Not owned: every worker writes this frontier, so no single copy carries progress,
-        // and it is an input frontier rather than a persist upper. A metric sink therefore reports
-        // no write lifecycle stages.
+        // has folded through, not a persist upper, and every worker writes it. Hence not owned:
+        // no single copy carries progress, and a metric sink reports no write lifecycle stages.
         let collection = compute_state.expect_collection_mut(sink_id);
         collection.set_sink_write_frontier(sink_frontier, false);
 
