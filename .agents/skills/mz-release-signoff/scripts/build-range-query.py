@@ -40,7 +40,7 @@ import argparse
 import sys
 
 RC_JOIN = (
-    'and on(namespace) group by (namespace) '
+    "and on(namespace) group by (namespace) "
     '(v2_mz_compute_cluster_status{{mz_version=~".*-rc[.].*"}})'
 )
 
@@ -53,10 +53,14 @@ def parse_roster(text):
             continue
         parts = line.split(None, 3)
         if len(parts) < 3:
-            raise SystemExit(f"roster line {lineno}: expected `kind tag metric [selector]`, got {raw!r}")
+            raise SystemExit(
+                f"roster line {lineno}: expected `kind tag metric [selector]`, got {raw!r}"
+            )
         kind, tag, metric = parts[0], parts[1], parts[2]
         if kind not in ("c", "g"):
-            raise SystemExit(f"roster line {lineno}: kind must be `c` or `g`, got {kind!r}")
+            raise SystemExit(
+                f"roster line {lineno}: kind must be `c` or `g`, got {kind!r}"
+            )
         yield kind, tag, metric, parts[3] if len(parts) > 3 else ""
 
 
@@ -68,7 +72,11 @@ def aggregate(kind, metric, selector, window, stack, namespaces):
         alternation = "|".join(namespaces)
         selectors.append(f'namespace=~"{alternation}"')
     inner = f"{metric}{{{','.join(selectors)}}}" if selectors else metric
-    fn = f"rate({inner}[{window}])" if kind == "c" else f"avg_over_time({inner}[{window}])"
+    fn = (
+        f"rate({inner}[{window}])"
+        if kind == "c"
+        else f"avg_over_time({inner}[{window}])"
+    )
     if stack == "prod":
         return f"sum({fn})"
     return f"sum({fn} {RC_JOIN.format()})"

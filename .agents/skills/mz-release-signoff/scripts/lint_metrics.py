@@ -112,12 +112,16 @@ def main() -> int:
         print()
 
     if unresolved:
-        print("Metric names in the skill that resolve in neither the catalog nor the allowlist:")
+        print(
+            "Metric names in the skill that resolve in neither the catalog nor the allowlist:"
+        )
         for name in sorted(unresolved):
             print(f"  {name}  ({', '.join(sorted(unresolved[name]))})")
         print()
         print("Either the metric was renamed, in which case fix the reference, or the")
-        print(f"catalog cannot see it, in which case add it to {ALLOWLIST} with a reason.")
+        print(
+            f"catalog cannot see it, in which case add it to {ALLOWLIST} with a reason."
+        )
 
     return 1 if (unresolved or stale) else 0
 

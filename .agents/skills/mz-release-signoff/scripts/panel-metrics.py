@@ -32,7 +32,9 @@ import sys
 # A PromQL metric name, optionally followed by a label selector. Excludes
 # names immediately preceded by a word character so that `foo_bucket` inside
 # an already-matched token is not matched again.
-METRIC = re.compile(r"(?<![\w.])((?:mz_|v2_mz_|container_|kube_|kubelet_|crdb_)[a-z0-9_]+)(\{[^}]*\})?")
+METRIC = re.compile(
+    r"(?<![\w.])((?:mz_|v2_mz_|container_|kube_|kubelet_|crdb_)[a-z0-9_]+)(\{[^}]*\})?"
+)
 
 # PromQL keywords that can precede a brace and would otherwise look like a name.
 NOT_METRICS = {"by", "on", "without", "group_left", "group_right", "ignoring", "offset"}
@@ -53,8 +55,12 @@ def panels(doc):
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("dump", help="JSON file written by get_dashboard_panel_queries")
-    parser.add_argument("--selectors", action="store_true", help="show label selectors too")
-    parser.add_argument("--names-only", action="store_true", help="print bare metric names")
+    parser.add_argument(
+        "--selectors", action="store_true", help="show label selectors too"
+    )
+    parser.add_argument(
+        "--names-only", action="store_true", help="print bare metric names"
+    )
     args = parser.parse_args()
 
     with open(args.dump) as f:
