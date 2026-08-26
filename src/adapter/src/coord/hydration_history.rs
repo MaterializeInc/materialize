@@ -47,7 +47,6 @@ use mz_ore::task;
 use mz_repr::CatalogItemId;
 use mz_sql::plan::{MutationKind, Params, Plan, ReadThenWritePlan};
 use mz_storage_client::controller::IntrospectionType;
-use rand::{Rng, SeedableRng, rngs};
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
@@ -94,6 +93,7 @@ const RETENTION_BATCH_SIZE: usize = 1000;
 /// environment's point in the current period has already passed, the next one is a
 /// full period later.
 fn next_fire_delay(now: EpochMillis, interval_ms: EpochMillis, offset: EpochMillis) -> Duration {
+    debug_assert!(interval_ms > 0);
     let this_period = (now - (now % interval_ms)).saturating_add(offset);
     let next = if this_period > now {
         this_period
@@ -105,10 +105,10 @@ fn next_fire_delay(now: EpochMillis, interval_ms: EpochMillis, offset: EpochMill
 
 /// Stable offset within `interval_ms` for one environment id.
 fn environment_schedule_offset(environment_id: &str, interval_ms: EpochMillis) -> EpochMillis {
-    let seed: [u8; 32] = Sha256::digest(environment_id).into();
-    // `random_range` panics on an empty range, and callers clamp the interval to
-    // at least one millisecond.
-    rngs::SmallRng::from_seed(seed).random_range(0..interval_ms)
+    debug_assert!(interval_ms > 0);
+    let digest = Sha256::digest(environment_id);
+    let hash = u64::from_le_bytes(digest[..8].try_into().expect("SHA-256 digest has 32 bytes"));
+    hash % interval_ms
 }
 
 /// Returns whether a replica is ready for hydration-history collection.
@@ -726,6 +726,8 @@ mod tests {
             "aws-us-west-1-00000000-0000-0000-0000-000000000000-1",
             interval,
         );
+        assert_eq!(one, 30_189);
+        assert_eq!(two, 38_252);
         assert_ne!(one, two);
     }
 
