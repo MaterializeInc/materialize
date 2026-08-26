@@ -1952,7 +1952,7 @@ fn jsonb_contains_string<'a>(a: JsonbRef<'a>, k: &str) -> bool {
     // So, this function only runs for non-null jsonb; a.into_datum() never sees Datum::Null.
     match a.into_datum() {
         Datum::List(list) => list.iter().any(|k2| Datum::from(k) == k2),
-        Datum::Map(dict) => dict.iter().any(|(k2, _v)| k == k2),
+        Datum::Map(dict) => dict.get(k).is_some(),
         Datum::String(string) => string == k,
         _ => false,
     }
@@ -1961,37 +1961,32 @@ fn jsonb_contains_string<'a>(a: JsonbRef<'a>, k: &str) -> bool {
 #[sqlfunc(is_infix_op = true, sqlname = "?", propagates_nulls = true)]
 // Map keys are always text.
 fn map_contains_key<'a>(map: DatumMap<'a>, k: &str) -> bool {
-    map.iter().any(|(k2, _v)| k == k2)
+    map.get(k).is_some()
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "?&")]
 fn map_contains_all_keys<'a>(map: DatumMap<'a>, keys: Array<'a>) -> bool {
     keys.elements()
         .iter()
-        .all(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
+        .all(|key| !key.is_null() && map.get(key.unwrap_str()).is_some())
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "?|", propagates_nulls = true)]
 fn map_contains_any_keys<'a>(map: DatumMap<'a>, keys: Array<'a>) -> bool {
     keys.elements()
         .iter()
-        .any(|key| !key.is_null() && map.iter().any(|(k, _v)| k == key.unwrap_str()))
+        .any(|key| !key.is_null() && map.get(key.unwrap_str()).is_some())
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>", propagates_nulls = true)]
 fn map_contains_map<'a>(map_a: DatumMap<'a>, b: DatumMap<'a>) -> bool {
-    b.iter().all(|(b_key, b_val)| {
-        map_a
-            .iter()
-            .any(|(a_key, a_val)| (a_key == b_key) && (a_val == b_val))
-    })
+    b.iter()
+        .all(|(b_key, b_val)| map_a.get(b_key) == Some(b_val))
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "->", propagates_nulls = true)]
 fn map_get_value<'a, T: FromDatum<'a>>(a: DatumMap<'a, T>, target_key: &str) -> Option<T> {
-    a.typed_iter()
-        .find(|(key, _v)| target_key == *key)
-        .map(|(_k, v)| v)
+    a.get_typed(target_key)
 }
 
 #[sqlfunc(is_infix_op = true, sqlname = "@>")]
@@ -2028,8 +2023,8 @@ fn jsonb_contains_jsonb<'a>(a: JsonbRef<'a>, b: JsonbRef<'a>) -> bool {
                 .iter()
                 .all(|b_elem| a.iter().any(|a_elem| contains(a_elem, b_elem, false))),
             (Datum::Map(a), Datum::Map(b)) => b.iter().all(|(b_key, b_val)| {
-                a.iter()
-                    .any(|(a_key, a_val)| (a_key == b_key) && contains(a_val, b_val, false))
+                a.get(b_key)
+                    .is_some_and(|a_val| contains(a_val, b_val, false))
             }),
 
             // fun special case
