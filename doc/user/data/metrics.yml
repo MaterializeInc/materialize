@@ -1113,18 +1113,22 @@ metrics:
   help: Time in seek_fulfillment method including frontier checks and data collection.
   source: src/compute/src/metrics.rs
   visibility: internal
+- name: mz_index_peek_stashed_total
+  help: The number of index peek walks that answered with a handle to the peek response stash. Always a subset of the `offloaded` substrate of `mz_index_peek_walks_total`, because the driver that writes to the stash is the promoted one. How long such a walk spent writing is not separable from the walk itself, since one loop does both, and `mz_index_peek_offload_seconds` bounds it.
+  source: src/compute/src/metrics.rs
+  visibility: internal
 - name: mz_index_peek_total_seconds_bucket
-  help: 'Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk''s end either promotes it or diverts it to the peek stash. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. Excluding peeks that use the peek response stash.'
+  help: 'Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk''s end promotes it. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. A peek bound for the peek response stash is included, because the slice that promoted it ran here like any other.'
   labels:
   - le
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_count
-  help: 'Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk''s end either promotes it or diverts it to the peek stash. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. Excluding peeks that use the peek response stash.'
+  help: 'Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk''s end promotes it. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. A peek bound for the peek response stash is included, because the slice that promoted it ran here like any other.'
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_total_seconds_sum
-  help: 'Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk''s end either promotes it or diverts it to the peek stash. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. Excluding peeks that use the peek response stash.'
+  help: 'Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk''s end promotes it. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. A peek bound for the peek response stash is included, because the slice that promoted it ran here like any other.'
   source: src/compute/src/metrics.rs
   visibility: internal
 - name: mz_index_peek_walks_total

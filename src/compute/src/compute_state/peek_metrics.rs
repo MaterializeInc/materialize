@@ -39,6 +39,8 @@ pub(super) struct PeekWalkMetrics {
     walks_inline: IntCounter,
     /// Counts walks that ended away from the timely worker.
     walks_offloaded: IntCounter,
+    /// Counts walks that answered from the peek response stash.
+    walks_stashed: IntCounter,
     error_scan_seconds: Histogram,
     cursor_setup_seconds: Histogram,
     row_iteration_seconds: Histogram,
@@ -58,6 +60,7 @@ impl PeekWalkMetrics {
         Self {
             walks_inline: metrics.index_peek_walks_inline.clone(),
             walks_offloaded: metrics.index_peek_walks_offloaded.clone(),
+            walks_stashed: metrics.index_peek_stashed_total.clone(),
             error_scan_seconds: metrics.index_peek_error_scan_seconds.clone(),
             cursor_setup_seconds: metrics.index_peek_cursor_setup_seconds.clone(),
             row_iteration_seconds: metrics.index_peek_row_iteration_seconds.clone(),
@@ -87,8 +90,9 @@ impl PeekWalkMetrics {
 
     /// Counts a walk that the timely worker drove to an outcome.
     ///
-    /// A peek that reaches the peek stash counts here, because the walk that decided that ran on
-    /// the worker. The stash's own walk of the same trace counts on neither substrate.
+    /// A walk that suspends leaves the worker instead of finishing here, so a peek whose answer
+    /// goes to the peek stash never counts here: the driver that writes to the stash is the
+    /// promoted one.
     pub(super) fn walked_inline(&self) {
         self.walks_inline.inc();
     }
@@ -100,6 +104,15 @@ impl PeekWalkMetrics {
     /// admitted is a different question, and one the permit queue's own metrics answer.
     pub(super) fn walked_offloaded(&self) {
         self.walks_offloaded.inc();
+    }
+
+    /// Counts a walk that answered with a handle to the peek response stash.
+    ///
+    /// Counted alongside [`Self::walked_offloaded`] rather than instead of it, so the two
+    /// substrates still sum to the walks that ended while this reports how many of them the stash
+    /// answered.
+    pub(super) fn walked_to_stash(&self) {
+        self.walks_stashed.inc();
     }
 
     /// Reports the phases that precede the walk over the ok trace.

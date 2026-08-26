@@ -207,6 +207,9 @@ impl OffloadedPeek {
                 // reaches an outcome, so counting admissions would leave the pair summing to
                 // something other than the walks that ended.
                 metrics.walked_offloaded();
+                if matches!(response, PeekResponse::Stashed(_)) {
+                    metrics.walked_to_stash();
+                }
 
                 match result_tx.send((response, start.elapsed())) {
                     Ok(()) => {}

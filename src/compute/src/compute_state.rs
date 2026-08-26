@@ -3467,6 +3467,7 @@ pub(crate) mod index_peek_tests {
             BTreeMap::from([
                 ("walks_inline", metrics.index_peek_walks_inline.get()),
                 ("walks_offloaded", metrics.index_peek_walks_offloaded.get()),
+                ("walks_stashed", metrics.index_peek_stashed_total.get()),
                 (
                     "error_scan_seconds",
                     metrics.index_peek_error_scan_seconds.get_sample_count(),
@@ -3519,6 +3520,7 @@ pub(crate) mod index_peek_tests {
         BTreeMap::from([
             ("walks_inline", walks_inline),
             ("walks_offloaded", 0),
+            ("walks_stashed", 0),
             ("error_scan_seconds", error_scan),
             ("cursor_setup_seconds", cursor_setup),
             ("row_iteration_seconds", rows),
@@ -3695,7 +3697,7 @@ pub(crate) mod index_peek_tests {
     }
 
     /// A peek whose walk outruns the fuel it was granted leaves the worker rather than being
-    /// answered or diverted, and the walk it leaves with reports nothing.
+    /// answered, and the walk it leaves with reports nothing.
     ///
     /// Reporting here as well as in the driver that finishes the walk would count one walk twice,
     /// on both substrates and in every phase histogram, and the numbers a scan carries are

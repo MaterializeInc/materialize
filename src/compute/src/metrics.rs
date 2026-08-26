@@ -72,6 +72,7 @@ pub struct ComputeMetrics {
     index_peek_frontier_check_seconds: Histogram,
     index_peek_row_collection_seconds: Histogram,
     index_peek_walks_total: raw::IntCounterVec,
+    index_peek_stashed_total: IntCounter,
     index_peek_permit_queue_depth: UIntGauge,
     index_peek_permit_wait_seconds: Histogram,
     index_peek_offload_seconds: Histogram,
@@ -214,7 +215,7 @@ impl ComputeMetrics {
             ), role)),
             index_peek_total_seconds: registry.register(with_role(metric!(
                 name: "mz_index_peek_total_seconds",
-                help: "Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk's end either promotes it or diverts it to the peek stash. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. Excluding peeks that use the peek response stash.",
+                help: "Time one visit to an index peek spent on the timely worker. Observed per visit rather than per peek, so a peek revisited while the frontiers it reads are behind its timestamp contributes an observation per visit. A walk itself takes at most one of those visits: a suspension that is not the walk's end promotes it. A peek whose walk was offloaded contributes only the inline slice that promoted it, which the inline budget bounds. Its time away from the worker is `mz_index_peek_offload_seconds`. A peek bound for the peek response stash is included, because the slice that promoted it ran here like any other.",
                 buckets: mz_ore::stats::histogram_seconds_buckets(0.000_128, 8.0),
             ), role)),
             index_peek_seek_fulfillment_seconds: registry.register(with_role(metric!(
@@ -266,6 +267,10 @@ impl ComputeMetrics {
                 name: "mz_index_peek_walks_total",
                 help: "The number of index peek walks that reached an outcome, by the substrate they ended on: `inline` on the timely worker, `offloaded` away from it. A walk cancelled before it reaches an outcome is counted on neither. An offloaded walk cancelled after that, while its result is on its way back to the worker, counts as `offloaded`. Reports whether the offload engaged at all, which a latency change on its own cannot distinguish from the offload never having been reached.",
                 var_labels: ["substrate"],
+            ), role)),
+            index_peek_stashed_total: registry.register(with_role(metric!(
+                name: "mz_index_peek_stashed_total",
+                help: "The number of index peek walks that answered with a handle to the peek response stash. Always a subset of the `offloaded` substrate of `mz_index_peek_walks_total`, because the driver that writes to the stash is the promoted one. How long such a walk spent writing is not separable from the walk itself, since one loop does both, and `mz_index_peek_offload_seconds` bounds it.",
             ), role)),
             index_peek_permit_queue_depth: registry.register(with_role(metric!(
                 name: "mz_index_peek_permit_queue_depth",
@@ -339,6 +344,7 @@ impl ComputeMetrics {
         let index_peek_walks_offloaded = self
             .index_peek_walks_total
             .with_label_values(&["offloaded"]);
+        let index_peek_stashed_total = self.index_peek_stashed_total.clone();
         let index_peek_permit_queue_depth = self.index_peek_permit_queue_depth.clone();
         let index_peek_permit_wait_seconds = self.index_peek_permit_wait_seconds.clone();
         let index_peek_offload_seconds = self.index_peek_offload_seconds.clone();
@@ -372,6 +378,7 @@ impl ComputeMetrics {
             index_peek_row_collection_seconds,
             index_peek_walks_inline,
             index_peek_walks_offloaded,
+            index_peek_stashed_total,
             index_peek_permit_queue_depth,
             index_peek_permit_wait_seconds,
             index_peek_offload_seconds,
@@ -431,6 +438,11 @@ pub struct WorkerMetrics {
     pub(crate) index_peek_walks_inline: IntCounter,
     /// Counts index peek walks that ran away from the timely worker.
     pub(crate) index_peek_walks_offloaded: IntCounter,
+    /// Counts index peek walks that answered from the peek response stash.
+    ///
+    /// Resolved when the worker's metrics are built, so it reports zero before the first stashed
+    /// answer rather than being absent. Whether a peek reached the stash has no other signal.
+    pub(crate) index_peek_stashed_total: IntCounter,
     /// How many offloaded index peek walks are waiting for a permit.
     pub(crate) index_peek_permit_queue_depth: UIntGauge,
     /// Histogram of how long an offloaded index peek walk waited for its permit.
