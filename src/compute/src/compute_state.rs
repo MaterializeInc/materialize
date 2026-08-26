@@ -29,8 +29,7 @@ use mz_compute_client::protocol::response::{
 use mz_compute_types::dataflows::DataflowDescription;
 use mz_compute_types::dyncfgs::{
     ENABLE_PEEK_RESPONSE_STASH, ENABLE_PEEK_ROW_ITERATION_LIMIT,
-    PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_THRESHOLD_BYTES,
-    PEEK_ROW_ITERATION_LIMIT, PEEK_STASH_BATCH_SIZE, PEEK_STASH_NUM_BATCHES,
+    PEEK_RESPONSE_STASH_THRESHOLD_BYTES, PEEK_ROW_ITERATION_LIMIT,
 };
 use mz_compute_types::plan::render_plan::RenderPlan;
 use mz_dyncfg::{ConfigSet, ConfigValHandle};
@@ -1372,23 +1371,6 @@ impl<'a> ActiveComputeState<'a> {
                     )))
                 }
             },
-            PendingPeek::Stash(stashing_peek) => {
-                let num_batches = PEEK_STASH_NUM_BATCHES.get(&self.compute_state.worker_config);
-                let batch_size = PEEK_STASH_BATCH_SIZE.get(&self.compute_state.worker_config);
-                stashing_peek.pump_rows(num_batches, batch_size);
-
-                if let Ok((response, duration)) = stashing_peek.result.try_recv() {
-                    self.compute_state
-                        .metrics
-                        .stashed_peek_seconds
-                        .observe(duration.as_secs_f64());
-                    trace!(?stashing_peek.peek, ?duration, "finished stashing peek response in persist");
-
-                    Some(response)
-                } else {
-                    None
-                }
-            }
         };
 
         if let Some(response) = response {
@@ -1398,39 +1380,6 @@ impl<'a> ActiveComputeState<'a> {
             let uuid = peek.peek().uuid;
             self.compute_state.pending_peeks.insert(uuid, peek);
         }
-    }
-
-    /// Starts a peek stash upload for `peek`, which walks the ok trace of `trace_bundle` and
-    /// writes the rows it produces to persist.
-    ///
-    /// The walk starts over: the stash reads the trace bundle itself, so rows a previous walk of
-    /// the same peek accumulated are produced again rather than carried across.
-    ///
-    /// Returns `None` when this replica has no stash location, which a caller must establish
-    /// before it decides to divert a peek here.
-    // A peek whose answer belongs in the stash is written there by the walk that produces it, so
-    // no caller reaches this.
-    #[allow(dead_code)]
-    fn start_stash_upload(
-        &self,
-        peek: Peek,
-        trace_bundle: TraceBundle,
-    ) -> Option<peek_stash::StashingPeek> {
-        let persist_location = self.compute_state.peek_stash_persist_location.clone()?;
-
-        // NOTE: The row iteration limit does not follow a peek into the stash. The stash restarts
-        // the scan and produces in bounded bursts, so a stashed peek may examine any number of
-        // rows.
-        let batch_max_runs =
-            PEEK_RESPONSE_STASH_BATCH_MAX_RUNS.get(&self.compute_state.worker_config);
-
-        Some(peek_stash::StashingPeek::start_upload(
-            Arc::clone(&self.compute_state.persist_clients),
-            &persist_location,
-            peek,
-            trace_bundle,
-            batch_max_runs,
-        ))
     }
 
     /// Scan pending peeks and attempt to retire each.
@@ -1642,12 +1591,6 @@ pub enum PendingPeek {
     Index(IndexPeek),
     /// A peek against a Persist-backed collection.
     Persist(PersistPeek),
-    /// A peek against an index that is being stashed in the peek stash by an
-    /// async background task.
-    // A peek whose answer belongs in the stash is written there by the walk that produces it, so
-    // nothing puts a peek into this state.
-    #[allow(dead_code)]
-    Stash(peek_stash::StashingPeek),
     /// A peek against an index whose walk was promoted off the worker and is running as an async
     /// task.
     Offloaded(OffloadedPeek),
@@ -1773,7 +1716,6 @@ impl PendingPeek {
         match self {
             PendingPeek::Index(p) => &p.span,
             PendingPeek::Persist(p) => &p.span,
-            PendingPeek::Stash(p) => &p.span,
             PendingPeek::Offloaded(p) => &p.span,
         }
     }
@@ -1782,7 +1724,6 @@ impl PendingPeek {
         match self {
             PendingPeek::Index(p) => &p.peek,
             PendingPeek::Persist(p) => &p.peek,
-            PendingPeek::Stash(p) => &p.peek,
             PendingPeek::Offloaded(p) => &p.peek,
         }
     }
@@ -2468,7 +2409,6 @@ mod peek_sweep_tests {
             self.state.pending_peeks.get(&uuid).map(|peek| match peek {
                 PendingPeek::Index(_) => "index",
                 PendingPeek::Persist(_) => "persist",
-                PendingPeek::Stash(_) => "stash",
                 PendingPeek::Offloaded(_) => "offloaded",
             })
         }

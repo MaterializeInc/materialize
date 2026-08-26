@@ -6,213 +6,24 @@
 //! For eligible peeks, we send the result back via the peek stash (aka persist
 //! blob), instead of inline in `ComputeResponse`.
 
-use std::num::{NonZeroI64, NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use mz_compute_client::protocol::command::Peek;
-use mz_compute_client::protocol::response::{PeekError, PeekResponse, StashedPeekResponse};
+use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
-use mz_ore::task::AbortOnDropHandle;
 use mz_persist_client::Schemas;
 use mz_persist_client::batch::BatchBuilder;
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
-use mz_repr::{Diff, RelationDesc, Row, Timestamp};
+use mz_repr::{RelationDesc, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
-use tokio::sync::oneshot;
-use tracing::debug;
 use uuid::Uuid;
 
-use crate::arrangement::manager::{PaddedTrace, TraceBundle};
-use crate::compute_state::peek_result_iterator;
-use crate::compute_state::peek_result_iterator::PeekResultIterator;
 use crate::compute_state::peek_scan::RowBatch;
-use crate::typedefs::RowRowAgent;
-
-/// An async task that stashes a peek response in persist and yields a handle to
-/// the batch in a [PeekResponse::Stashed].
-///
-/// Note that `StashingPeek` intentionally does not implement or derive
-/// `Clone`, as each `StashingPeek` is meant to be dropped after it's
-/// done or no longer needed.
-pub struct StashingPeek {
-    pub peek: Peek,
-    /// Iterator for the results. The worker thread has to continually pump
-    /// results from this to the `rows_tx` channel.
-    peek_iterator: Option<PeekResultIterator<PaddedTrace<RowRowAgent<Timestamp, Diff>>>>,
-    /// Carries result rows from the worker thread, which owns the walk, to the async upload task.
-    /// The upload makes progress only while the worker keeps pumping into this.
-    rows_tx: Option<tokio::sync::mpsc::Sender<Result<Vec<(Row, NonZeroI64)>, PeekError>>>,
-    /// The result of the background task, eventually.
-    pub result: oneshot::Receiver<(PeekResponse, Duration)>,
-    /// The `tracing::Span` tracking this peek's operation
-    pub span: tracing::Span,
-    /// A background task that's responsible for producing the peek results.
-    /// If we're no longer interested in the results, we abort the task.
-    _abort_handle: AbortOnDropHandle<()>,
-}
-
-// A peek whose answer belongs in the stash is written there by the walk that produces it, so
-// nothing opens an upload of its own here.
-#[allow(dead_code)]
-impl StashingPeek {
-    pub fn start_upload(
-        persist_clients: Arc<PersistClientCache>,
-        persist_location: &PersistLocation,
-        mut peek: Peek,
-        mut trace_bundle: TraceBundle,
-        batch_max_runs: usize,
-    ) -> Self {
-        let (rows_tx, rows_rx) = tokio::sync::mpsc::channel(10);
-        let (result_tx, result_rx) = oneshot::channel::<(PeekResponse, Duration)>();
-
-        let persist_clients = Arc::clone(&persist_clients);
-        let persist_location = persist_location.clone();
-
-        let peek_uuid = peek.uuid;
-        let relation_desc = peek.result_desc.clone();
-
-        let oks_handle = trace_bundle.oks_mut();
-
-        let peek_iterator = peek_result_iterator::PeekResultIterator::new(
-            peek.target.id(),
-            peek.map_filter_project.clone(),
-            peek.timestamp,
-            peek.literal_constraints.as_deref_mut(),
-            oks_handle,
-            None,
-            0,
-        );
-
-        let rows_needed_by_finishing = peek.finishing.num_rows_needed();
-
-        let task_handle = mz_ore::task::spawn(
-            || format!("peek_stash::stash_peek_response({peek_uuid})"),
-            async move {
-                let start = Instant::now();
-
-                let result = Self::do_upload(
-                    &persist_clients,
-                    persist_location,
-                    batch_max_runs,
-                    peek.uuid,
-                    relation_desc,
-                    rows_needed_by_finishing,
-                    rows_rx,
-                )
-                .await;
-
-                let result = match result {
-                    Ok(peek_response) => peek_response,
-                    Err(e) => PeekResponse::Error(PeekError::unstructured(e.to_string())),
-                };
-                match result_tx.send((result, start.elapsed())) {
-                    Ok(()) => {}
-                    Err((_result, elapsed)) => {
-                        debug!(duration = ?elapsed, "dropping result for cancelled peek {}", peek_uuid)
-                    }
-                }
-            },
-        );
-
-        Self {
-            peek,
-            peek_iterator: Some(peek_iterator),
-            rows_tx: Some(rows_tx),
-            result: result_rx,
-            span: tracing::Span::current(),
-            _abort_handle: task_handle.abort_on_drop(),
-        }
-    }
-
-    async fn do_upload(
-        persist_clients: &PersistClientCache,
-        persist_location: PersistLocation,
-        batch_max_runs: usize,
-        peek_uuid: Uuid,
-        relation_desc: RelationDesc,
-        max_rows: Option<usize>, // The number of rows needed by the RowSetFinishing's offset + limit
-        mut rows_rx: tokio::sync::mpsc::Receiver<Result<Vec<(Row, NonZeroI64)>, PeekError>>,
-    ) -> Result<PeekResponse, String> {
-        let mut upload = StashUpload::open(
-            persist_clients,
-            persist_location,
-            batch_max_runs,
-            peek_uuid,
-            relation_desc,
-            max_rows,
-        )
-        .await?;
-
-        loop {
-            let row = rows_rx.recv().await;
-            match row {
-                Some(Ok(rows)) => match upload.push(rows).await? {
-                    UploadDemand::Wants => {}
-                    UploadDemand::Satisfied => {
-                        // Drop the receiver so the producer's next
-                        // try_reserve() fails, stopping row production.
-                        drop(rows_rx);
-                        break;
-                    }
-                },
-                Some(Err(err)) => return Ok(PeekResponse::Error(err)),
-                None => {
-                    break;
-                }
-            }
-        }
-
-        upload.finish(RowBatch::new()).await
-    }
-
-    /// Pumps rows from the [PeekResultIterator] to the async task, via our
-    /// `rows_tx`. Will pump at most `batch_size` rows in one batch, and at most
-    /// the given `num_batches` batches.
-    pub fn pump_rows(&mut self, mut num_batches: usize, batch_size: usize) {
-        while num_batches > 0
-            && let Some(row_iter) = self.peek_iterator.as_mut()
-        {
-            // Try to reserve space in the channel before pulling rows from the
-            // iterator.
-            let permit = match self
-                .rows_tx
-                .as_mut()
-                .expect("missing rows_tx")
-                .try_reserve()
-            {
-                Ok(permit) => permit,
-                Err(_) => {
-                    // Channel is full, can't send more rows right now.
-                    break;
-                }
-            };
-
-            let rows: Result<Vec<_>, _> = row_iter.take(batch_size).collect();
-            match rows {
-                Ok(rows) if rows.is_empty() => {
-                    // Iterator is exhausted, we're done
-                    drop(permit);
-                    self.peek_iterator.take();
-                    self.rows_tx.take();
-                    break;
-                }
-                Ok(rows) => {
-                    permit.send(Ok(rows));
-                }
-                Err(e) => {
-                    permit.send(Err(e));
-                }
-            }
-
-            num_batches -= 1;
-        }
-    }
-}
 
 /// Whether a [`StashUpload`] has room for more rows.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -435,10 +246,12 @@ impl StashTarget {
 /// back the same way.
 #[cfg(test)]
 pub(crate) mod tests {
+    use std::num::NonZeroI64;
+
     use mz_compute_types::dyncfgs::{
         PEEK_RESPONSE_STASH_BATCH_MAX_RUNS, PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES,
     };
-    use mz_repr::{Datum, SqlScalarType};
+    use mz_repr::{Datum, Row, SqlScalarType};
 
     use super::*;
 

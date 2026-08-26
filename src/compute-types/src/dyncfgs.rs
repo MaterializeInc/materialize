@@ -600,14 +600,6 @@ pub const PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES: Config<usize> = Config::
     ParameterScope::Environment,
 );
 
-/// The number of batches to pump from the peek result iterator when stashing peek responses.
-pub const PEEK_STASH_NUM_BATCHES: Config<usize> = Config::new(
-    "compute_peek_stash_num_batches",
-    100,
-    "The number of batches to pump from the peek result iterator (in one iteration through the worker loop) when stashing peek responses.",
-    ParameterScope::Environment,
-);
-
 /// The size of each batch, as number of rows, pumped from the peek result
 /// iterator when stashing peek responses.
 pub const PEEK_STASH_BATCH_SIZE: Config<usize> = Config::new(
@@ -857,7 +849,6 @@ pub fn all_dyncfgs(configs: ConfigSet) -> ConfigSet {
         .add(&PEEK_RESPONSE_STASH_BATCH_MAX_RUNS)
         .add(&PEEK_RESPONSE_STASH_READ_BATCH_SIZE_BYTES)
         .add(&PEEK_RESPONSE_STASH_READ_MEMORY_BUDGET_BYTES)
-        .add(&PEEK_STASH_NUM_BATCHES)
         .add(&PEEK_STASH_BATCH_SIZE)
         .add(&ENABLE_PEEK_ROW_ITERATION_LIMIT)
         .add(&PEEK_ROW_ITERATION_LIMIT)
