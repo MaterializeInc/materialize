@@ -3352,7 +3352,6 @@ class FlipFlagsAction(Action):
             "mz_metrics_lgalloc_map_refresh_interval",
             "mz_metrics_lgalloc_refresh_interval",
             "mz_metrics_rusage_refresh_interval",
-            "compute_peek_stash_batch_size",
             "compute_peek_response_stash_batch_max_runs",
             "compute_peek_response_stash_read_batch_size_bytes",
             "compute_peek_response_stash_read_memory_budget_bytes",

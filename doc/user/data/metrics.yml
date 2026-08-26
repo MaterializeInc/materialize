@@ -3622,25 +3622,6 @@ metrics:
   - version
   source: src/environmentd/src/environmentd/main.rs
   visibility: internal
-- name: mz_stashed_peek_seconds_bucket
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - le
-  - worker_id
-  source: src/compute/src/metrics.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_count
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - worker_id
-  source: src/compute/src/metrics.rs
-  visibility: internal
-- name: mz_stashed_peek_seconds_sum
-  help: Time spent reading a peek result and stashing it in the peek result stash (aka. persist blob).
-  labels:
-  - worker_id
-  source: src/compute/src/metrics.rs
-  visibility: internal
 - name: mz_statement_logging_actual_bytes
   help: The total amount of SQL text that was logged by statement logging.
   source: src/adapter/src/metrics.rs

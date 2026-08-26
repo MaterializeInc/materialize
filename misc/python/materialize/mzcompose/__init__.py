@@ -776,7 +776,6 @@ UNINTERESTING_SYSTEM_PARAMETERS = [
     "compute_index_peek_permits",
     "compute_peek_response_stash_read_batch_size_bytes",
     "compute_peek_response_stash_read_memory_budget_bytes",
-    "compute_peek_stash_batch_size",
     "storage_statistics_retention_duration",
     "enable_paused_cluster_readhold_downgrade",
     "kafka_retry_backoff",
