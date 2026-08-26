@@ -95,26 +95,23 @@ This row selects every container in the matched pods, via `container!="POD", con
 
 `Container Max RSS Memory Usage` has two series. The `mz_metrics_libc_ru_maxrss` one, multiplied by 1024 to convert from KiB, refers to a metric that no longer exists; the `mz_metrics_libc_ru_maxrss_bytes` one works.
 
-## Hazards
+## Hazards and invariants
+
+Each entry states a property that holds at any fleet size, followed by the measurement it came from. The property is what survives a release. The measurement is dated, describes whatever fleet existed when it was taken, and is recorded only so the property is not mistaken for a guess.
 
 **`mz_source_progress` is a frontier timestamp, so its rate is a health check, not a throughput.** The metric holds a millisecond epoch, so a healthy advancing frontier yields a rate of exactly 1000 per series. Production canary measured a flat 87000, meaning 87 series advancing at wall-clock rate. A value below the expected multiple of 1000 means some frontiers are stalled, and the multi-hundred-million spikes seen in every upgrade bucket are frontier reinitialization, not progress. Judge this panel by counting series, never by the absolute number.
 
-**Rehydration latency is a last-value gauge.** `mz_storage_upsert_state_rehydration_latency` holds the most recent rehydration's duration and does not decay, so it forms a staircase with one step per upgrade. That makes it one of the most useful release signals on the dashboard, because each step is a direct measurement of the new version rehydrating, but it also means a flat line between upgrades carries no information.
+**Rehydration latency is a last-value gauge.** `mz_storage_upsert_state_rehydration_latency` holds the most recent rehydration's duration and does not decay, so it forms a staircase with one step per upgrade. That makes it the most useful single release signal here, because each step is a direct measurement of the new version rehydrating. A flat line between upgrades carries no information.
+
+**Upsert state is absent from staging.** `mz_source_records_indexed` and `mz_source_bytes_indexed` summed to exactly zero across staging us-east-1 for the whole window, and the RocksDB and rehydration series were missing entirely. The upsert dashboard can only be verified from the production sandbox, which is why the panel instructions emphasize it.
 
 **Staged and committed update rates differ by environment class.** Production canary measured them equal at about 145 per second. Staging measured 9.59 staged against 6.60 committed, a persistent 45% gap that was stable across the boundary. Compare each stack against its own history rather than expecting the two counters to track.
 
-**Upsert state is absent from staging.** `mz_source_records_indexed` and `mz_source_bytes_indexed` summed to exactly zero across staging us-east-1 for the whole window, and the RocksDB and rehydration series were missing entirely. The upsert dashboard cannot be verified from staging, which is why the panel instructions emphasize the production sandbox.
+**Object counts must be aggregated with the inner `group by (id, ...)` guard.** Without it, multi-replica objects are counted once per replica.
+
+**Shard finalization failures should be zero.** Outstanding and pending counts spike at upgrades and then drain.
 
 **The version panel is known broken.** `storage-overview` titles its version panel `Materialize Version (currently broken?)`. Use the compute dashboard's version panel, or the query in the skill's step 1, to establish boundaries.
-
-## Invariants
-
-* `mz_source_progress` is a millisecond frontier timestamp, so each healthy series contributes exactly 1000 to its rate. Read the panel as a series count: a value below the expected multiple of 1000 means stalled frontiers, and the large spikes in every upgrade bucket are frontier reinitialization. The absolute number is meaningless on its own.
-* `mz_storage_upsert_state_rehydration_latency` is a last-value gauge that does not decay, so it forms a staircase with one step per upgrade. Each step is a direct measurement of the new version rehydrating, which makes it the most useful single release signal here. A flat line between upgrades carries no information.
-* Upsert state is absent from staging: records and bytes indexed sum to zero and the RocksDB and rehydration series are missing entirely. The upsert dashboard can only be verified from the production sandbox.
-* Object counts must be aggregated with the inner `group by (id, ...)` guard, or multi-replica objects are counted once per replica.
-* Staged and committed update rates track each other in production but sit persistently apart in staging. Compare each stack against its own history rather than expecting the two counters to match.
-* Shard finalization failures should be zero. Outstanding and pending counts spike at upgrades and then drain.
 
 ## Order of magnitude
 

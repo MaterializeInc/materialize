@@ -124,6 +124,8 @@ The panel titles are cheap and give the row structure. The panel queries are not
 
 Row panels appear in the title list but not in the query list, so the two are offset. Match them by title, not by index.
 
+`scripts/panel-metrics.py` does the slicing. Take the roster from the dashboard, but resolve every name against the metrics catalog for the release under test before trusting it, as described in *When a metric has gone missing* below. A dashboard panel outlives the metric it plots, so the panel list is a superset of what the build actually exports.
+
 ## Step 5: Measure
 
 Batch many metrics into one range query by tagging each aggregate with a synthetic label and combining with `or`. This turns twenty tool calls into one:
@@ -134,6 +136,8 @@ or label_replace(sum(avg_over_time(<gauge>[6h])), "m", "2_name", "", "")
 ```
 
 Prefix the tags so the result order is stable and readable. Use `rate(x[6h])` for counters and `avg_over_time(x[6h])` for gauges, both matching the step so buckets do not overlap.
+
+`scripts/build-range-query.py` writes these expressions from a metric list, because twenty of them by hand is where typos live. It also encodes the one thing that differs between stacks, namely the staging release-candidate join against the pinned production canary namespaces, so the same roster can be run against either without rewriting the selector.
 
 Run each area twice. Once across all clusters, and once restricted to the system clusters, which the panel instructions call out because a system-cluster regression is easy to lose in the noise of user clusters. System clusters are `instance_id=~"s[0-9]+"` for the controller and replica metrics, and `pod=~".*cluster-s[0-9]+-replica-.*"` for the container metrics.
 
@@ -220,13 +224,35 @@ To characterize a new dashboard, or to refresh one, run Steps 1 through 6 agains
 
 * Each metric with its type, the labels that select cluster and replica, and what it means.
 * Which metrics are bimodal, restart-sensitive, or absent when zero.
-* Invariants: relationships that hold at any fleet size, such as one counter equalling the difference of two others, a gauge whose only meaningful aggregate is a series count, or a metric that is structurally absent in one stack.
+* Hazards and invariants, in one section rather than two. Each entry leads with the property that holds at any fleet size, such as one counter equalling the difference of two others, a gauge whose only meaningful aggregate is a series count, or a metric that is structurally absent in one stack, and then gives the measurement it came from. Splitting these across two sections produced near-verbatim duplication in every reference, because almost every hazard is an invariant with a number attached.
 * Label naming inconsistencies, duplicate-series hazards, and any panel expression whose filters are not what they appear to be.
 * Known noise classes, meaning the environments that are unhealthy independently of any release and whose flat contribution can dominate a fleet aggregate.
 
 Record invariants, not levels. A recorded level is stale the week after it is written, because environments are created, deleted, and resized continuously, and a stale reference value is worse than none: it invites a comparison the reader should not make. The comparison that matters is always derived in-run, since the before-window of your own query is the only baseline guaranteed to describe the same fleet as the after-window.
 
 Coarse order-of-magnitude figures are worth keeping for one narrow purpose: catching a mis-scoped selector, for example a missing `container="clusterd"` that inflates a result tenfold. Keep them dated, keep them to one significant figure, and say plainly that they are not for comparison.
+
+## When a metric has gone missing
+
+A reference that names a metric the build no longer exports is worse than no reference, because the sweep reads the empty result as a healthy zero. Two things make this checkable, and both have to be applied to the right version.
+
+`doc/user/data/metrics.yml` is the generated catalog of `metric!` invocations in the Rust tree. It is checked in, so it is tagged along with each release, and the working tree's copy describes `main`, which is ahead of whatever you are verifying. Reading that copy during a sign-off answers a question you did not ask. Read the catalog at the two release tags instead and diff them:
+
+```
+scripts/catalog-diff.sh v26.38.0 v26.39.0-rc.3
+```
+
+That turns "is this empty panel a regression or a rename?" into a lookup. A name in the removed list explains an after-window that went empty, and it is a documentation fix rather than a finding. A name in the added list explains an empty before-window, and comparing across the boundary on it is meaningless.
+
+**Catalog membership is not a string match.** A `metric!` whose name is built with `format!` is catalogued with its placeholders globbed, so `mz_persist_user_bytes` and `mz_persist_compaction_goodbytes` are both covered by the single entry `mz_persist_*_bytes`, and histograms are catalogued as their expanded `_bucket`, `_count`, and `_sum` families rather than under the base name. Grepping the catalog for a literal name will therefore report a live metric as missing. Match against the patterns, as `scripts/lint_metrics.py` does.
+
+**The catalog covers only this repository's Rust tree.** It holds no `v2_mz_*`, which the promsql exporter derives from SQL, no `container_*`, `kube_*`, or `kubelet_*` from cAdvisor and kube-state-metrics, and no cloud-side names such as `mz_envd_up` or `mz_external_*`. Those families are confirmed against Prometheus with `list_prometheus_metric_names`, and they are where the sweep has actually been bitten: the compute dashboard's scratch-disk panels plot `kubelet_volume_stats_used_bytes`, which resolves to five series in a single namespace in both production and staging us-east-1 and none of them a `clusterd` volume, so those panels render blank in both stacks.
+
+The diff survives that blind spot, because both sides share it and a dynamically named metric is missing from both catalogs and so never appears in either list. The diff therefore never reports a rename that did not happen. It can still miss one, so an empty result that the diff does not explain is not yet cleared. Confirm it against Prometheus with `list_prometheus_metric_names` before reporting the metric as zero.
+
+When a name resolves in neither the catalog nor Prometheus, the panel that plots it is dead, and the reference should record that rather than the metric. `git log -S<name> --all -- src/` settles which kind of dead it is, and the two kinds read differently in a report. `mz_query_latency` was real, added in #22049 and deleted in #26647 along with the stash, so the `environmentd-health` panel that still plots its `_bucket` family has been empty since that deletion. `mz_persist_columnar_validation_count` and `mz_txn_placeholder_schema_apply` have never appeared in this repository at all, yet both are live arms of the persist dashboard's `should be small` panel, and the working spelling of the first sits beside it on the same panel as `mz_persist_columnar_op_count` with `op="validation"` and `result="invalid"`.
+
+`ci/test/lint-skill-metrics.sh` guards the other direction, so the references cannot rot silently between releases. It resolves every `mz_*` name in this skill against the working tree's catalog, patterns included, and fails on any that neither resolves nor appears in `scripts/metrics-allowlist.txt`. The allowlist is the point: it carries one line per name the catalog does not cover, with the reason, so adding to it is a deliberate act and a genuinely renamed metric still fails. It also fails on an allowlist entry that has started resolving, so the exemptions cannot outlive their reason. A failure is an instruction to update the skill, never to suppress the lint.
 
 ## Traps
 

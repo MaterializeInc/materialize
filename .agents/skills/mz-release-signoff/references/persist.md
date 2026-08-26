@@ -14,9 +14,9 @@ Persist reports its own build independently of `mz_version`: `mz_persist_metadat
 
 Every one of these is a counter whose rate should be at or near zero. Treat any of them departing from its measured baseline as a finding, because unlike the throughput metrics they have no legitimate reason to grow with load.
 
-`mz_persist_blob_failures`, `mz_persist_consensus_failures`, `mz_persist_state_update_state_slow_path`, `mz_persist_lease_timeout_read`, `mz_persist_compaction_noop`, `mz_persist_compaction_failed`, `mz_persist_compaction_dropped`, `mz_persist_external_blob_delete_noop_count`, `mz_persist_external_failed_count`, `mz_persist_cmd_failed_count`, `mz_persist_pushdown_parts_mismatched_stats_count`, `mz_persist_schema_cache_fetch_state_count`, `mz_persist_shard_unconsolidated_snapshot`, `mz_txn_placeholder_schema_apply`, and `mz_persist_columnar_op_count{op="validation", result="invalid"}`.
+`mz_persist_blob_failures`, `mz_persist_consensus_failures`, `mz_persist_state_update_state_slow_path`, `mz_persist_lease_timeout_read`, `mz_persist_compaction_noop`, `mz_persist_compaction_failed`, `mz_persist_compaction_dropped`, `mz_persist_external_blob_delete_noop_count`, `mz_persist_external_failed_count`, `mz_persist_cmd_failed_count`, `mz_persist_pushdown_parts_mismatched_stats_count`, `mz_persist_schema_cache_fetch_state_count`, `mz_persist_shard_unconsolidated_snapshot`, and `mz_persist_columnar_op_count{op="validation", result="invalid"}`.
 
-The columnar validation series appears twice on the panel, once as `mz_persist_columnar_validation_count{result="invalid"}` and once as `mz_persist_columnar_op_count{op="validation", result="invalid"}`. Only the second resolved in production us-east-1.
+Two of the panel's sixteen arms are dead and are deliberately left out of the list above, because an arm that cannot resolve contributes a permanent zero and makes the panel look healthier than it is. `mz_persist_columnar_validation_count{result="invalid"}` duplicates the columnar validation series that `mz_persist_columnar_op_count{op="validation", result="invalid"}` already carries, and only the second resolves. `mz_txn_placeholder_schema_apply` resolves nowhere. Neither name has ever appeared in the Materialize source tree, in any release from v26.36.0 through v26.39.0-rc.3 or in the history behind them, so both are panel-authored rather than renamed. Sweep the fourteen that resolve and treat the panel's own count as wrong by two.
 
 Worth adding to the sweep even though the panel omits them: `mz_persist_compaction_timed_out`, `mz_persist_s3_operation_timeouts`, `mz_persist_pubsub_client_grpc_error_count`, `mz_txn_op_errored_count`, and `mz_txn_op_retry_count`.
 
@@ -45,28 +45,27 @@ Worth adding to the sweep even though the panel omits them: `mz_persist_compacti
 
 The remaining rows are for drill-down once the sweep flags something: `By Shard` for per-shard state, `Compaction` and `Compaction state` for compaction internals, `GC`, `External`, `Retries`, `Codec`, `Audit`, `Postgres/Consensus`, `PubSub Server` and `PubSub Client`, `Schema/Structured`, `Rehydration`, and `Txns`. Per-shard panels are keyed by `shard` and often by `name`, which is how a source or collection is joined to its shard, for example `mz_persist_shard_update_count{name="$source"}`.
 
-## Hazards
+## Hazards and invariants
+
+Each entry states a property that holds at any fleet size, followed by the measurement it came from. The property is what survives a release. The measurement is dated, describes whatever fleet existed when it was taken, and is recorded only so the property is not mistaken for a guess.
+
+**Every metric in the `should be small` list has no legitimate reason to grow with load.** Any of them departing from zero is a finding rather than a scaling effect.
+
+**CAS mismatch must be normalized by `mz_persist_cmd_started_count`.** The raw rate moves with command volume, which moves with fleet size, while the normalized ratio is stable to three significant figures within a release. That stability is what makes it an unusually sharp instrument.
+
+**Compaction requested minus applied equals the noop plus dropped counts.** If it does not, one of the three is broken.
 
 **The panel named `compaction write amp` is a compression ratio, not an amplification.** It computes `mz_persist_compaction_bytes / mz_persist_compaction_goodbytes`, and production canary measured 0.14 to 0.24. Values below one are the healthy case and mean compaction is compressing. A rise toward one is the bad direction, which is the opposite of what the name suggests.
 
 **`mz_persist_pushdown_parts_faked_*` needs the `or up * 0` guard.** The dashboard writes `rate(...) or (up{...} * 0)` because the metric is absent when nothing is faked, and without the guard the whole ratio goes empty rather than to zero. Imitate this whenever a ratio's numerator can vanish.
 
-**CAS mismatch must be normalized.** The raw rate moves with command volume, which moves with fleet size. Divide by `mz_persist_cmd_started_count` before comparing across a boundary; the normalized ratio is stable to three significant figures within a release, which makes it an unusually sharp instrument.
+**Two writers contend during a zero-downtime upgrade.** CAS mismatch rose roughly six-fold in production canary during each upgrade bucket, from about 0.4 to about 2.5 per second, then returned. This is the two generations writing the same shards and is expected.
 
 **GC and decode move in opposite directions during an upgrade.** `mz_persist_gc_finished` dips, because a restarting process stops collecting, while `mz_persist_decode_seconds` and unindexed read bytes spike, because state is being refetched. Both are upgrade artifacts and neither is a finding.
 
-**Two writers contend during a zero-downtime upgrade.** CAS mismatch rose roughly six-fold in production canary during each upgrade bucket, from about 0.4 to about 2.5 per second, then returned. This is the two generations writing the same shards and is expected.
+**Persist reports its own build independently of `mz_version`.** `mz_persist_metadata_seconds` carries a `version` label, and the `# processes by version` panel counts by it. Use it to confirm a rollout reached the persist clients.
 
-## Invariants
-
-* Every metric in the `should be small` list has no legitimate reason to grow with load, so any of them departing from zero is a finding rather than a scaling effect.
-* CAS mismatch must be normalized by `mz_persist_cmd_started_count`. The raw rate moves with command volume, which moves with fleet size, while the normalized ratio is stable to three significant figures within a release. That stability is what makes it a sharp instrument.
-* Compaction requested minus applied equals the noop plus dropped counts. If it does not, one of the three is broken.
-* The `compaction write amp` panel is a compression ratio and sits below one when healthy. A rise toward one is the bad direction.
-* Two writers contend during a zero-downtime upgrade, so CAS mismatch rises several-fold in the upgrade bucket and returns.
-* GC and decode move in opposite directions during an upgrade. GC dips because a restarting process stops collecting, while decode and unindexed reads spike because state is refetched. Both are artifacts.
-* Persist reports its own build via the `version` label on `mz_persist_metadata_seconds`, independent of `mz_version`. Use it to confirm a rollout reached the persist clients.
-* Counting distinct `shard` labels on `mz_persist_shard_upper` is how the shard count is obtained. There is no shard-count gauge.
+**Counting distinct `shard` labels on `mz_persist_shard_upper` is how the shard count is obtained.** There is no shard-count gauge.
 
 ## Order of magnitude
 

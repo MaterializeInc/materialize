@@ -1,0 +1,52 @@
+# Metric names used by the mz-release-signoff skill that doc/user/data/metrics.yml
+# does not list. One name per line, grouped by why.
+#
+# This file is the point of the lint. A name here is a deliberate exemption with
+# a stated reason. A name that is neither resolvable in the catalog nor listed
+# here fails CI, which is what catches a metric that was renamed or removed.
+#
+# The catalog does cover names built with `format!`, storing them with their
+# placeholders globbed, for example `mz_persist_*_bytes`. The lint matches those
+# patterns, so a dynamically named metric needs no entry here.
+#
+# Before adding a name, establish which group it belongs to. If it belongs to
+# none of them, the reference is wrong and the fix is to correct the reference.
+
+# --- Exported by the promsql exporter from SQL, not registered in Rust ---
+# Every v2_mz_* metric. The lint only considers mz_* names, so the prefix is
+# skipped wholesale and nothing is listed here.
+
+# --- Cloud-side, exported outside this repository ---
+mz_envd_up
+mz_external_envd_up
+mz_external_calls_count
+mz_external_long_lived_connection_count
+mz_cloud_egress_check_reachability_count
+mz_dataflow_initial_output_duration_seconds
+mz_storage_messages_sent_bytes_count
+
+# --- Labels and identifiers that merely look like metric names ---
+mz_version
+mz_cluster
+mz_aws_region
+mz_cloud_stack_name
+mz_context_org_name
+mz_context_org_type
+mz_catalog
+
+# --- Dead dashboard panels, documented as defects rather than as metrics ---
+# Each is named in a reference because a live dashboard panel plots it and so
+# renders empty, which reads as health. The reference records the defect. Remove
+# the entry when the panel is fixed.
+#
+# mz_persist_columnar_validation_count and mz_txn_placeholder_schema_apply are
+# both arms of the persist dashboard's `should be small` panel. Neither name has
+# ever appeared in this repository. The working spelling sits beside the first of
+# them on the same panel, as mz_persist_columnar_op_count with op="validation"
+# and result="invalid".
+#
+# mz_query_latency did exist. It was added in #22049 and deleted in #26647 with
+# the stash, and the environmentd-health panel still plots its _bucket family.
+mz_persist_columnar_validation_count
+mz_txn_placeholder_schema_apply
+mz_query_latency_bucket

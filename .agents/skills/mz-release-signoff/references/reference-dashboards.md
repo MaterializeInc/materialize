@@ -83,30 +83,27 @@ This is the only place hydration progress is broken out per generation, which ma
 
 Three panels hardcode organization ids in `materialize_cloud_organization_id=~"3b1aeb7c-...|b65cc970-..."`, one staging environment and the production analytics canary. These will rot when the canary set changes, and they are not driven by the dashboard variables.
 
-## Hazards
+## Hazards and invariants
+
+Each entry states a property that holds at any fleet size, followed by the measurement it came from. The property is what survives a release. The measurement is dated, describes whatever fleet existed when it was taken, and is recorded only so the property is not mistaken for a guess.
 
 **The egress panels use `^0` as a set-membership filter.** Expressions such as `... * on(node) group_left (workload) (sum by (node, workload) (rate(...)) ^0)` raise the right side to the power zero, which yields 1 for every series that exists and drops nodes where it does not. It is an intersection filter, not arithmetic, so do not simplify it away.
 
-**Downtime panels count samples, not minutes.** See the availability section above.
+**Availability metrics are booleans averaged into percentages.** A single environment failing for one scrape moves the fleet percentage by a fraction of a percent, which is why the numbers read as 99.98 rather than 99. Convert a dip into affected environment-samples before deciding whether it matters.
 
-**Availability metrics are booleans averaged into percentages.** A single environment failing for one scrape moves the fleet percentage by a fraction of a percent, which is why the numbers read as 99.98 rather than 99. Convert to affected-environment-samples before deciding whether a dip matters.
-
-**Balancer errors are not rare.** Production us-east-1 sustained 2.9 to 5.3 errors per second against 5.2 to 21.3 successes, an error fraction around a half, flat across the release boundary. Whatever `status="error"` counts on the balancer, it is a normal part of steady state here, so only a change in the ratio is informative.
+**Downtime panels count samples, not minutes.** They count samples where the metric was zero, so their unit is only minutes if the scrape interval is one minute.
 
 **Crashloop series are absent when there are none.** Both the clusterd and non-clusterd crashloop queries returned no series at all across the whole window in production us-east-1. Absent is the healthy case and must not be reported as "checked and zero" without confirming the metric exists elsewhere.
 
-**`environmentd_needs_update` is the rollout clock.** It sat at zero except for one bucket at 74.4 during the production rollout, and under 1.0 during canary upgrades. If it is non-zero when you start a sign-off, the rollout you are trying to evaluate has not finished.
+**`environmentd_needs_update` is the rollout clock.** It jumps to the fleet size when a deploy starts and returns to zero when it finishes. It sat at zero except for one bucket at 74.4 during the production rollout, and under 1.0 during canary upgrades. If it is non-zero when you begin, the rollout you are evaluating has not completed and nothing else on the dashboard means what you think it does.
 
-## Invariants
+**Balancer errors are not rare.** Production us-east-1 sustained 2.9 to 5.3 errors per second against 5.2 to 21.3 successes, an error fraction around a half, flat across the release boundary. Whatever `status="error"` counts on the balancer, it is a normal part of steady state here, so only a change in the ratio is informative.
 
-* Availability metrics are booleans averaged into percentages, so one environment failing one scrape moves the fleet number by a fraction of a percent. Convert a dip into affected environment-samples before judging it.
-* The downtime panels count samples where the metric was zero, so their unit is only minutes if the scrape interval is one minute.
-* Crashloop series are absent when there are none. Absent is healthy and must not be reported as a checked zero without confirming the metric exists elsewhere.
-* `environmentd_needs_update` is the rollout clock. It jumps to the fleet size when a deploy starts and returns to zero when it finishes. If it is non-zero when you begin, the rollout you are evaluating has not completed and nothing else on the dashboard means what you think it does.
-* Balancer errors are a normal part of steady state here and run at a substantial fraction of successes. Only a change in the ratio is informative.
-* `crdb_dedicated_*` metrics are regional and shared across all environments, so they cannot be attributed to the release.
-* Exit code 166 is treated as an expected termination on this dashboard, in contrast to 137 as an OOM kill on the compute dashboard.
-* `mz_balancer_metadata_seconds` has no useful value of its own. Counting its series gives the balancer count.
+**Exit code 166 is treated as an expected termination on this dashboard,** in contrast to 137 as an OOM kill on the compute dashboard. Do not carry one dashboard's convention into the other.
+
+**`crdb_dedicated_*` metrics are regional and shared across all environments.** They cannot be attributed to the release.
+
+**`mz_balancer_metadata_seconds` has no useful value of its own.** Counting its series gives the balancer count.
 
 ## Order of magnitude
 

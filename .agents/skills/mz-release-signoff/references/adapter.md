@@ -66,26 +66,27 @@ These render empty and are not evidence of a healthy system. Verified against th
 * `Stash (CRDB) Query Latencies` reads `mz_query_latency_bucket`, which no longer exists. The catalog moved off the stash, so the panel has no replacement.
 * `Swap Usage (bytes)` plots `container_spec_swap_limit_bytes` as its limit series. The real name is `container_spec_memory_swap_limit_bytes`. The usage series is fine.
 
-## Hazards
+## Hazards and invariants
+
+Each entry states a property that holds at any fleet size, followed by the measurement it came from. The property is what survives a release. The measurement is dated, describes whatever fleet existed when it was taken, and is recorded only so the property is not mistaken for a guess.
 
 **Two p99 panels are pinned by bucket resolution.** `p99 Slow Coordinator Messages` reported 0.0001276 s across eight days in staging with five-digit stability, and `Coordinator Table Append Latencies` p99 reported 0.12673 s in production with the same rigidity, both while the underlying counters advanced normally. The quantile is landing inside one wide bucket, so interpolation returns the bucket boundary and the panel cannot move. Read `rate(_sum) / rate(_count)` instead for these two, and treat an implausibly constant quantile anywhere as a bucket artifact rather than as stability.
 
-**Snapshot latency is NaN except around restarts.** `mz_catalog_snapshot_latency_seconds` only records at boot, so an average over a steady-state window divides by zero. Non-NaN values in an upgrade bucket are the expected case, not a finding.
+**`v2_mz_envd_up` should equal the environment count.** It is the cheapest liveness check on the dashboard.
 
-**`environmentd` does not swap.** Swap usage measured exactly zero across the whole window in production canary. A non-zero value there is itself the finding.
+**`environmentd` does not swap.** Swap usage measured exactly zero across the whole window in production canary, so a non-zero reading is itself the finding.
 
-**Serializable and strict serializable time-to-first-row are not comparable.** In production canary the p99 ran about 1.2 s for strict serializable and about 6.5 s for serializable over the same window. Compare each against its own history.
+**Catalog collection entries grow monotonically with catalog contents.** A fall needs explaining.
 
-## Invariants
+**Catalog snapshot latency is recorded at boot only.** `mz_catalog_snapshot_latency_seconds` records once at boot, so an average over a steady-state window divides by zero and reads NaN, while an upgrade bucket reads non-NaN. Neither is a finding.
 
-* `v2_mz_envd_up` should equal the environment count. It is the cheapest liveness check on the dashboard.
-* `environmentd` does not swap. A non-zero swap reading is itself the finding.
-* Catalog collection entries grow monotonically with catalog contents. A fall needs explaining.
-* Catalog snapshot latency is recorded at boot only, so it is NaN over a steady-state window and non-NaN in an upgrade bucket. Neither is a finding.
-* Serializable and strict serializable time-to-first-row differ by roughly a factor of five. Never aggregate across the `isolation_level` label, and compare each against its own history.
-* System queries outnumber user queries by an order of magnitude, and by far more in staging, where most environments are idle apart from introspection. Staging user-query numbers are not a workload signal.
-* Coordinator busy time, the `_sum` rate of `mz_slow_message_handling`, is the best single coordinator-load signal, because the message rate alone hides how expensive each message was.
-* `crdb_dedicated_*` metrics describe the whole regional CockroachDB cluster and cannot be attributed to the release under test.
+**Serializable and strict serializable time-to-first-row are not comparable.** In production canary the p99 ran about 1.2 s for strict serializable and about 6.5 s for serializable over the same window, roughly a factor of five. Never aggregate across the `isolation_level` label, and compare each against its own history.
+
+**System queries outnumber user queries by an order of magnitude.** The gap is far larger in staging, where most environments are idle apart from introspection, so staging user-query numbers are not a workload signal.
+
+**Coordinator busy time is the best single coordinator-load signal.** It is the `_sum` rate of `mz_slow_message_handling`. The message rate alone hides how expensive each message was.
+
+**`crdb_dedicated_*` metrics describe the whole regional CockroachDB cluster.** They cannot be attributed to the release under test.
 
 ## Order of magnitude
 

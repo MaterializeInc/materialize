@@ -45,7 +45,7 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 |---|---|---|
 | `mz_compute_controller_replica_count`, `_collection_count`, `_peek_count`, `_subscribe_count` | gauge | Controller-side inventory. Collection count tracks catalog growth, so a slow rise is expected. |
 | `mz_compute_controller_command_queue_size` | gauge | Sustained depth means the controller is not draining. |
-| `mz_compute_controller_response_queue_size` | gauge | Exists directly, but the cluster-level panel instead computes `mz_compute_controller_response_send_count - mz_compute_controller_response_recv_count`. |
+| `mz_compute_controller_response_send_count`, `_recv_count` | counter | Response queue depth, as the difference of the two. There is no depth gauge, because the response channel is an `instrumented_unbounded_channel` (`src/ore/src/channel.rs`), which takes a send and a receive counter and exports nothing else. Contrast `command_queue_size`, a real gauge that the command path increments and decrements directly. |
 | `mz_compute_commands_total`, `mz_compute_responses_total` | counter | Protocol volume. Doubles for one bucket during a zero-downtime upgrade. |
 | `mz_compute_command_message_bytes_total`, `mz_compute_response_message_bytes_total` | counter | Protocol bytes. Worth checking when a change touches command encoding. |
 | `mz_compute_controller_history_command_count`, `_history_dataflow_count` | gauge | Controller-side command history, which should be reduced and not grow without bound. |
@@ -63,28 +63,25 @@ System clusters are `s` followed by digits in either family, and `.*cluster-s[0-
 | `mz_dataflow_replica_expiration_timestamp_seconds`, `_expiration_remaining_seconds` | gauge | Replica expiration. Panels filter `> 0` and `!= 0` because the metric is exported as zero when unset. |
 | `mz_subscribe_snapshots_skipped_total` | counter | Subscribe snapshot optimization hit rate. The panel appends `> 0` to hide inactive replicas. |
 
-## Hazards
+## Hazards and invariants
 
-**Arrangement gauges are bimodal.** `v2_mz_arrangement_record_count` and `v2_mz_arrangement_size_bytes` swing by a factor of three to ten as periodic dataflows rebuild. In August 2026 staging us-east-1 alternated between 0.72e9 and 2.86e9 records with no release involvement. Compare low state against low state.
+Each entry states a property that holds at any fleet size, followed by the measurement it came from. The property is what survives a release. The measurement is dated, describes whatever fleet existed when it was taken, and is recorded only so the property is not mistaken for a guess.
 
-**Peak resident set and swap are restart-sensitive.** Both reset or decay at an upgrade, so a level drop across the boundary is the restart and not the release.
+**OOM kills, dataflow errors, and orphan dataflows are absent rather than zero when healthy.** Production canary returned no series at all for `v2_mz_dataflow_error_count` and `v2_mz_orphan_dataflow_count` across a full week. That is the healthy case, and it is indistinguishable from a renamed metric unless the metric is confirmed to exist elsewhere.
 
-**Working set falls at every upgrade.** In prod canary us-east-1 the sum fell from about 290 GB to about 236 GB at the v26.37.0 rollout with no version change in the code that mattered, purely because arrangements were rebuilt fresh. Judge memory by the slope within a release, not the step across one.
+**`v2_mz_orphan_dataflow_count` above zero is always a bug, never a load effect.**
 
-**Error and orphan gauges are absent when zero.** Prod canary returned no series at all for `v2_mz_dataflow_error_count` and `v2_mz_orphan_dataflow_count` across a full week. That is the healthy case, and it is indistinguishable from a renamed metric unless the metric is confirmed to exist elsewhere.
+**Working set falls at every upgrade.** In production canary us-east-1 the sum fell from about 290 GB to about 236 GB at the v26.37.0 rollout with no change in the code that mattered, purely because arrangements were rebuilt fresh. Judge memory by the slope within a release, not the step across one.
+
+**Arrangement gauges are bimodal.** `v2_mz_arrangement_record_count` and `v2_mz_arrangement_size_bytes` swing by a factor of three to ten as periodic dataflows rebuild. In August 2026 staging us-east-1 alternated between 0.72e9 and 2.86e9 records with no release involvement. Compare low state against low state, because spike heights are not comparable.
+
+**Peak resident set and swap are restart-sensitive.** Both reset or decay at an upgrade, so a level drop across the boundary is the restart and not the release. Peak resident set therefore describes the current generation only.
 
 **Arrangement maintenance ramps after a restart.** Measured at 0.020 s/s one day after an upgrade and 0.030 s/s three days later on the same release, so an apparent increase across a boundary can be nothing more than a difference in age.
 
-## Invariants
+**Compute time and park time are complementary.** A CPU rise with a park fall localizes new work to the dataflow loop, while a CPU rise with park flat points outside it.
 
-These hold at any fleet size, so they survive product change in a way that a recorded level does not.
-
-* OOM kills, dataflow errors, and orphan dataflows are absent rather than zero when healthy. Confirm the metric exists somewhere in the window before reporting zero.
-* `v2_mz_orphan_dataflow_count` above zero is always a bug, never a load effect.
-* Working set falls at every upgrade because arrangements are rebuilt, so judge memory by its slope within a release rather than by the step across the boundary.
-* Arrangement record and size gauges are bimodal, so only their base level is comparable.
-* Peak resident set resets on restart, so it describes the current generation only.
-* Compute time and park time are complementary. A CPU rise with a park fall localizes new work to the dataflow loop, while a CPU rise with park flat points outside it.
+**Response queue depth is a difference of two counters, so it only holds while neither has reset.** Both reset when a pod is replaced, which every upgrade does, and a scrape that catches one reset and not the other yields a wild value. Staging us-east-1 read -761 in one bucket and +5371 in another over a window where every other bucket sat within one of zero. Read a single implausible bucket as a reset artifact, and judge the panel by whether it returns to zero rather than by any one sample.
 
 ## Known noise classes
 
