@@ -2012,18 +2012,6 @@ class MySqlInitialLoad(MySqlCdc):
 
     FIXED_SCALE = True  # TODO: Remove when database-issues#7556 is fixed
 
-    # The parallel snapshot path has a wider memory envelope during the initial
-    # load, so allow a bit more headroom than the base default before flagging a
-    # regression.
-    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        # Primary key splitting supports only string primary keys, so this
-        # BIGINT-keyed snapshot reads serially where older versions split it across
-        # workers. The increased wallclock tolerance covers that lost parallelism.
-        MeasurementType.WALLCLOCK: 0.25,
-        MeasurementType.MEMORY_MZ: 0.30,
-        MeasurementType.MEMORY_CLUSTERD: 0.50,
-    }
-
     def shared(self) -> Action:
         return TdAction(f"""
 $ mysql-connect name=mysql url=mysql://root@mysql password=${{arg.mysql-root-password}}
@@ -2070,12 +2058,6 @@ INSERT INTO pk_table SELECT @i:=@i+1, @i*@i FROM mysql.time_zone t1, mysql.time_
 class MySqlInitialLoadMultiWorkerSampled(MySqlCdc):
     """Measure an 8-worker snapshot across 20 tables with a single-column
     non-integer primary key (a CHAR(26) ULID-like key)."""
-
-    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        MeasurementType.WALLCLOCK: 0.10,
-        MeasurementType.MEMORY_MZ: 0.60,
-        MeasurementType.MEMORY_CLUSTERD: 0.60,
-    }
 
     # Cap scale so each per-table load fits one mysql.time_zone self-join
     # (~3M rows), so a single INSERT per table suffices.
@@ -2169,16 +2151,6 @@ class MySqlInitialLoadMultiWorkerSingleTable(MySqlCdc):
     """Measure an 8-worker snapshot of a single table of n() rows with a
     single-column non-integer primary key (a CHAR(26) ULID-like key). The
     single-table companion to MySqlInitialLoadMultiWorkerSampled."""
-
-    RELATIVE_THRESHOLD: dict[MeasurementType, float] = {
-        # In MySQL, probing primary keys (for approximately even partitions) is
-        # slower on small datasets than using OFFSET (for exactly even
-        # partitions). Measured locally at 2-14% slower by wallclock at
-        # SCALE=6 (1M rows).
-        MeasurementType.WALLCLOCK: 0.25,
-        MeasurementType.MEMORY_MZ: 0.60,
-        MeasurementType.MEMORY_CLUSTERD: 0.60,
-    }
 
     # Cap scale so the load fits one mysql.time_zone self-join (~3M rows), so a
     # single INSERT suffices.
