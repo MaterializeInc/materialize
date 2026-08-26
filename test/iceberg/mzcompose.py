@@ -487,11 +487,13 @@ def workflow_fenced_writer(c: Composition) -> None:
     """Regression test: once a snapshot with a newer mz-sink-version is on the
     table, the running sink must stop committing.
 
-    Currently fails: iceberg-rust's commit path reloads the table and rebases
-    onto the newest snapshot before every attempt, so the fenced sink never
+    Root cause: iceberg-rust's built-in commit path reloads the table and rebases
+    onto the newest snapshot before every attempt, so the fenced-out sink never
     sees a conflict and commits right over the newer writer. Its snapshot then
     becomes the latest one, so even the startup fencing check of a later
-    restart no longer notices the newer writer."""
+    restart no longer notices the newer writer.
+
+    So we can't use iceberg-rust's built-in commit path."""
     key = _setup(c)
 
     c.run_testdrive_files(
