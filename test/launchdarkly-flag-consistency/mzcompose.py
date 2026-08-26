@@ -474,9 +474,11 @@ KNOWN_STALE_LD_FLAGS: set[str] = set("""
     clusterd_malloc_conf
     column_paged_batcher_spill_worker_count
     column_paged_batcher_use_pool
+    consolidating_vec_growth_dampener
     constraint_based_timestamp_selection
     enable_0dt_deployment
     enable_aws_msk_iam_auth
+    enable_compute_correction_v2
     enable_consolidate_after_union_negate
     enable_continual_task_builtins
     enable_continual_task_transform
@@ -548,7 +550,6 @@ INTENTIONAL_LD_OVERRIDES: set[str] = {
     # keep the build green; revisit and either reconcile the default or move the
     # flag to a permanent category above.
     "enable_cast_elimination",
-    "enable_compute_correction_v2",
     "enable_compute_error_distinct",
     "enable_new_outer_join_lowering",
     "enable_variadic_left_join_lowering",
@@ -569,7 +570,6 @@ KNOWN_CROSS_ENV_DIVERGENCES: set[str] = set("""
     enable_cluster_schedule_refresh
     enable_column_paged_batcher
     enable_column_paged_batcher_spill
-    enable_compute_correction_v2
     enable_eager_delta_joins
     enable_index_options
     enable_join_prioritize_arranged
