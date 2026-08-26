@@ -317,10 +317,7 @@ pub(crate) fn validate_read_then_write_dependencies(
         }
 
         let item_type = entry.item().typ();
-        let ids_to_check = match item_type {
-            Func | View | MaterializedView => entry.uses(),
-            _ => BTreeSet::new(),
-        };
+        let ids_to_check = entry.item().query_dependencies();
         let is_writable_table = matches!(
             entry.item(),
             CatalogItem::Table(objects::Table {
