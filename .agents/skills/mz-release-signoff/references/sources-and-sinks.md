@@ -56,7 +56,7 @@ Label naming is not consistent: the rate panels filter `parent_source_id` while 
 | `mz_storage_upsert_deletes_total`, `mz_source_envelope_state_tombstones` | counter, gauge | |
 | `mz_storage_upsert_state_rehydration_latency` | gauge, milliseconds | Last rehydration duration. See hazards. |
 | `mz_storage_upsert_state_rehydration_total`, `_rehydration_updates` | counter | Records and updates replayed. Their ratio exposes retraction-heavy state. |
-| `mz_storage_upsert_state_rocksdb_autospill_in_use` | gauge, one per worker | The percentage panel divides `sum` by `count`, so it reports the fraction of workers spilling. |
+| `mz_storage_upsert_state_rocksdb_autospill_in_use` | removed | Deleted along with the autospill upsert backend, so the percentage panel that divides `sum` by `count` renders empty and reads as no worker spilling. The surviving members of the family are `_rehydration_latency`, `_rehydration_total`, and `_rehydration_updates`. |
 | `mz_storage_upsert_backpressure_emitted_bytes`, `_retired_bytes`, `_last_backpressured_bytes` | counter, gauge | Backpressure. |
 | `mz_storage_upsert_merge_snapshot_latency_bucket` | histogram | |
 | `mz_storage_upsert_merge_snapshot_updates_total`, `_inserts_total`, `_deletes_total` | counter | |

@@ -32,7 +32,7 @@ Worth adding to the sweep even though the panel omits them: `mz_persist_compacti
 | `mz_persist_external_seconds`, `_started_count`, `_succeeded_count`, `_failed_count` | counter | Blob and consensus calls. External time dominates every other timing series. |
 | `mz_persist_external_rtt_latency`, `mz_persist_external_op_latency_bucket` | gauge, histogram | Per-operation latency, split by `op`. |
 | `mz_persist_compaction_seconds`, `_requested`, `_applied`, `_bytes`, `_goodbytes` | counter | Compaction. Requested minus applied equals the noop and dropped counts. |
-| `mz_persist_gc_seconds`, `_started`, `_finished`, `_noop`, `_skipped`, `_merged_reqs` | counter | Garbage collection. |
+| `mz_persist_gc_seconds`, `_started`, `_finished`, `_noop`, `_merged_reqs` | counter | Garbage collection. The already-done case is `_noop`. There is no `mz_persist_gc_skipped`, and `skipped` exists only as `mz_persist_compaction_skipped`. |
 | `mz_persist_retry_retries_count`, `_started_count`, `_finished_count`, `_sleep_seconds` | counter | The panel excludes `op="next_listen_batch"`, which has its own panel because it retries by design. |
 | `mz_persist_shard_upper` | gauge, per shard | Counting distinct `shard` labels gives the shard count. |
 | `mz_persist_read_batch_part_bytes`, `_count` | counter, by `op` | The `op="unindexed"` slice is the `unindexed reads` panel. Rises by roughly 3x during rehydration. |

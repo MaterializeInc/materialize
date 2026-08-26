@@ -24,6 +24,9 @@ ALLOWLIST = SKILL / "scripts" / "metrics-allowlist.txt"
 CATALOG_NAME = re.compile(r"^- name: '?(.+?)'?$")
 BACKTICKED = re.compile(r"`([^`]+)`")
 CANDIDATE = re.compile(r"\b(mz_[a-z0-9_]+)\b")
+FENCED = re.compile(r"^```.*?^```", re.S | re.M)
+# A roster row abbreviates a family as `mz_foo_bar`, `_baz`, `_qux`.
+CONTINUATION = re.compile(r"^_[a-z0-9_]+$")
 
 # Histograms and summaries are catalogued as their expanded families, so a
 # reference naming the base is correct and must resolve through any suffix.
@@ -65,6 +68,24 @@ def resolves(name, exact, globs):
     )
 
 
+def resolve_continuation(continuation, base, exact, globs, allowed):
+    """Resolve `_baz` against the family of a preceding `mz_foo_bar`.
+
+    Which prefix of the base the continuation attaches to is ambiguous: the
+    roster writes both `mz_persist_gc_seconds`, `_started`, which drops one
+    component, and `mz_compute_controller_replica_count`, `_collection_count`,
+    which drops two. Accept the first prefix that resolves, and report the
+    continuation only when no prefix does, which is what a removed metric
+    looks like.
+    """
+    parts = base.split("_")
+    for cut in range(len(parts) - 1, 0, -1):
+        candidate = "_".join(parts[:cut]) + continuation
+        if candidate in allowed or resolves(candidate, exact, globs):
+            return candidate
+    return None
+
+
 def allowlisted():
     names = set()
     for line in ALLOWLIST.read_text().splitlines():
@@ -74,20 +95,62 @@ def allowlisted():
     return names
 
 
+def names_in(token):
+    """Yield every catalogued-namespace metric name inside one code token.
+
+    A wildcard names a family whose stem is not itself catalogued, so it is
+    skipped. The test is per word rather than per token because a fenced block
+    arrives as one token, and a single wildcard inside it must not exempt the
+    whole block.
+    """
+    for word in token.split():
+        if "*" in word:
+            continue
+        for name in CANDIDATE.findall(word):
+            yield name.rstrip("_")
+
+
 def referenced():
-    """Yield (name, file) for every mz_* token inside backticks in the skill."""
+    """Yield (label, target, file) for every metric named in the skill.
+
+    Fenced blocks have to be pulled out before backticks are paired. A fence
+    contains backticks of its own, so pairing sequentially across one flips the
+    parity of every span after it: prose gets captured as code and the real
+    code spans become the separators between matches. Left unhandled, that
+    silently disables the check for every file containing a fence.
+    """
     for path in sorted(SKILL.rglob("*.md")):
-        for token in BACKTICKED.findall(path.read_text()):
-            # A prefix wildcard such as `mz_persist_*` names a family, not a
-            # metric, and its stem is not itself catalogued. Nothing here can
-            # be checked, so skip the whole token.
-            if "*" in token:
-                continue
-            for name in CANDIDATE.findall(token):
-                # Brace expansion such as `mz_foo_{sum,count}` leaves a
-                # trailing underscore. Resolve the base, which the catalog
-                # holds as an expanded family.
-                yield name.rstrip("_"), path
+        text = path.read_text()
+        for block in FENCED.findall(text):
+            for name in names_in(block):
+                yield name, name, path
+        # Continuations abbreviate within a single roster row, so the base is
+        # only sought on the same line. Tracking it across lines attaches a
+        # `_sum` to whatever full name happened to appear in an earlier
+        # paragraph, which manufactures failures rather than finding them.
+        for line in FENCED.sub("\n", text).splitlines():
+            previous = None
+            for span in BACKTICKED.findall(line):
+                stripped = span.strip()
+                # A bare histogram suffix is prose about the parts of a
+                # histogram, as in "the `_sum` rate of `mz_slow_message_handling`",
+                # never a family member abbreviated in a roster row.
+                if stripped in SUFFIXES:
+                    continue
+                if CONTINUATION.match(stripped):
+                    # With no in-scope base on this line the continuation
+                    # belongs to a family the catalog does not hold, such as
+                    # v2_mz_* or container_*, and cannot be checked.
+                    if previous:
+                        yield (
+                            f"{stripped} (after {previous})",
+                            (stripped, previous),
+                            path,
+                        )
+                    continue
+                for name in names_in(span):
+                    yield name, name, path
+                    previous = name
 
 
 def main() -> int:
@@ -99,10 +162,15 @@ def main() -> int:
     allowed = allowlisted()
 
     unresolved = {}
-    for name, path in referenced():
-        if name in allowed or resolves(name, exact, globs):
-            continue
-        unresolved.setdefault(name, set()).add(str(path))
+    for label, target, path in referenced():
+        if isinstance(target, tuple):
+            continuation, base = target
+            if resolve_continuation(continuation, base, exact, globs, allowed):
+                continue
+        else:
+            if target in allowed or resolves(target, exact, globs):
+                continue
+        unresolved.setdefault(label, set()).add(str(path))
 
     stale = sorted(n for n in allowed if resolves(n, exact, globs))
     if stale:
