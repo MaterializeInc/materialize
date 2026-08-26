@@ -219,6 +219,7 @@ impl ReplicaTask {
             let connect_result = ComputeCtpClient::connect_partitioned(
                 self.config.location.ctl_addrs.clone(),
                 version,
+                None,
                 connect_timeout,
                 keepalive_timeout,
                 self.metrics.clone(),
