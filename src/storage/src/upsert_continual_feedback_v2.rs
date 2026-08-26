@@ -425,7 +425,7 @@ pub fn upsert_inner<'scope, T, FromTime>(
     PressOnDropButton,
 )
 where
-    T: Timestamp + TotalOrder + Ord + Sync,
+    T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
     T: columnar::Columnar + Default,
@@ -500,7 +500,7 @@ fn encode_feedback<'scope, T>(
     source_statistics: SourceStatistics,
 ) -> Stream<'scope, T, Column<((UpsertKey, Row), T, Diff)>>
 where
-    T: Timestamp + TotalOrder + Ord + Sync,
+    T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
     T: columnar::Columnar + Default,
@@ -576,7 +576,7 @@ fn build_upsert_operator<'scope, A, T, FromTime>(
 )
 where
     A: UpsertStashArm<T, FromTime::Order>,
-    T: Timestamp + TotalOrder + Ord + Sync,
+    T: Timestamp + TotalOrder + Sync,
     T: Refines<mz_repr::Timestamp> + differential_dataflow::lattice::Lattice,
     T: columnation::Columnation,
     T: columnar::Columnar + Default,
@@ -873,8 +873,10 @@ where
 /// calls through this trait at the few points where the flavors diverge.
 trait UpsertStashArm<T, O>
 where
-    T: Timestamp + Lattice + columnar::Columnar,
-    O: columnar::Columnar,
+    T: Timestamp + Lattice + columnar::Columnar + Default,
+    for<'a> columnar::Ref<'a, T>: Copy + Ord,
+    O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
+    for<'a> columnar::Ref<'a, O>: Ord + Copy,
 {
     /// The feedback arrangement's spine. `'static` because the operator
     /// future owns a trace agent for it.
@@ -886,6 +888,10 @@ where
     /// A new stash batcher for one source dataflow.
     fn new_batcher() -> Self::Batcher;
 
+    /// Push one sorted, consolidated `Column` chunk into the batcher, in the
+    /// batcher's chunk representation.
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>);
+
     /// Consolidate `updates` through `chunker` into `Column` chunks and push
     /// them into `batcher`, emptying `updates` (keeping its capacity). The
     /// chunker readies a fully-consolidated chunk per `push_into`, so the
@@ -894,7 +900,20 @@ where
         updates: &mut Vec<UpsertUpdate<T, O>>,
         chunker: &mut UpsertChunker<T, O>,
         batcher: &mut Self::Batcher,
-    );
+    ) {
+        use timely::container::{ContainerBuilder as _, PushInto as _};
+        if updates.is_empty() {
+            return;
+        }
+        let mut raw: Column<UpsertUpdate<T, O>> = Default::default();
+        for update in updates.drain(..) {
+            raw.push_into(&update);
+        }
+        chunker.push_into(&mut raw);
+        while let Some(chunk) = chunker.extract() {
+            Self::push_chunk(batcher, std::mem::take(chunk));
+        }
+    }
 
     /// Classify one sealed stash against `persist_upper` and emit eligible
     /// output; see [`DrainStats`].
@@ -925,7 +944,7 @@ struct ChunkedArm;
 
 impl<T, O> UpsertStashArm<T, O> for ChunkedArm
 where
-    T: Timestamp + TotalOrder + Lattice + timely::ExchangeData + Clone + Debug + Ord + Sync,
+    T: Timestamp + TotalOrder + Lattice + Sync,
     T: columnation::Columnation + columnar::Columnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
@@ -938,23 +957,8 @@ where
         Batcher::new(None, 0)
     }
 
-    fn flush(
-        updates: &mut Vec<UpsertUpdate<T, O>>,
-        chunker: &mut UpsertChunker<T, O>,
-        batcher: &mut Self::Batcher,
-    ) {
-        use timely::container::{ContainerBuilder as _, PushInto as _};
-        if updates.is_empty() {
-            return;
-        }
-        let mut raw: Column<UpsertUpdate<T, O>> = Default::default();
-        for update in updates.drain(..) {
-            raw.push_into(&update);
-        }
-        chunker.push_into(&mut raw);
-        while let Some(chunk) = chunker.extract() {
-            batcher.push_into(ColumnChunk::from_column(std::mem::take(chunk)));
-        }
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+        batcher.push_into(ColumnChunk::from_column(chunk));
     }
 
     async fn drain(
@@ -988,7 +992,7 @@ struct PagedArm;
 
 impl<T, O> UpsertStashArm<T, O> for PagedArm
 where
-    T: Timestamp + TotalOrder + Lattice + timely::ExchangeData + Clone + Debug + Ord + Sync,
+    T: Timestamp + TotalOrder + Lattice + Sync,
     T: columnation::Columnation + columnar::Columnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     O: columnar::Columnar + Default + Ord + Clone + Send + Sync + 'static,
@@ -1003,23 +1007,8 @@ where
         batcher
     }
 
-    fn flush(
-        updates: &mut Vec<UpsertUpdate<T, O>>,
-        chunker: &mut UpsertChunker<T, O>,
-        batcher: &mut Self::Batcher,
-    ) {
-        use timely::container::{ContainerBuilder as _, PushInto as _};
-        if updates.is_empty() {
-            return;
-        }
-        let mut raw: Column<UpsertUpdate<T, O>> = Default::default();
-        for update in updates.drain(..) {
-            raw.push_into(&update);
-        }
-        chunker.push_into(&mut raw);
-        while let Some(chunk) = chunker.extract() {
-            batcher.push_into(std::mem::take(chunk));
-        }
+    fn push_chunk(batcher: &mut Self::Batcher, chunk: Column<UpsertUpdate<T, O>>) {
+        batcher.push_into(chunk);
     }
 
     async fn drain(
@@ -1043,6 +1032,32 @@ where
             source_id,
         )
         .await
+    }
+}
+
+/// Where a stashed entry's time falls relative to the feedback frontier.
+enum TimeClass {
+    /// `ts < persist_upper`: already persisted, dropped by the drain.
+    AlreadyPersisted,
+    /// `ts == persist_upper`: processed now.
+    Eligible,
+    /// `ts > persist_upper`: re-stashed until persist catches up.
+    Ineligible,
+}
+
+/// Classify `ts` against `persist_upper`: the single spelling of the drain's
+/// eligibility test. The chunked drain's probe-collection pass and its
+/// classification pass, and the paged drain's cursor walk, all call this, so
+/// the probe set and the classification cannot disagree. Under the
+/// operator's total order, `Eligible` means `ts` equals the frontier's one
+/// element.
+fn classify_time<T: PartialOrder>(persist_upper: &Antichain<T>, ts: &T) -> TimeClass {
+    if !persist_upper.less_equal(ts) {
+        TimeClass::AlreadyPersisted
+    } else if persist_upper.less_than(ts) {
+        TimeClass::Ineligible
+    } else {
+        TimeClass::Eligible
     }
 }
 
@@ -1099,7 +1114,7 @@ async fn drain_sealed_input_chunked<T, O>(
     source_id: GlobalId,
 ) -> DrainStats
 where
-    T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
+    T: Timestamp + TotalOrder + Lattice + Sync,
     T: columnation::Columnation + columnar::Columnar + Default,
     for<'a> columnar::Ref<'a, T>: Copy + Ord,
     O: columnar::Columnar,
@@ -1116,7 +1131,7 @@ where
     // copy-out, per probed chunk, inside `extract_into`.
     let batches = trace
         .batches_through(Antichain::new().borrow())
-        .expect("batches_through always succeeds for the empty upper");
+        .expect("complete batch set for the feedback trace; is it closed?");
 
     // Eligible keys are probed against the trace in windows of this many
     // distinct keys, bounding what one pass stages resident: probe hits carry
@@ -1144,7 +1159,7 @@ where
                 for index in start..total {
                     let (key, ts, _diff) = view.get(index);
                     let ts = <T as columnar::Columnar>::into_owned(ts);
-                    if persist_upper.less_equal(&ts) && !persist_upper.less_than(&ts) {
+                    if matches!(classify_time(persist_upper, &ts), TimeClass::Eligible) {
                         if last_probe != Some(key) {
                             if probe_count == PROBE_WINDOW {
                                 end = index;
@@ -1207,18 +1222,18 @@ where
             for index in start..end {
                 let (key, ts, diff) = view.get(index);
                 let ts = <T as columnar::Columnar>::into_owned(ts);
-                if !persist_upper.less_equal(&ts) {
-                    // ts < persist_upper: drop.
-                    continue;
-                }
-                if persist_upper.less_than(&ts) {
-                    // ts > persist_upper: re-stash for later (owned).
-                    ineligible.push((
-                        *key,
-                        ts,
-                        <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-                    ));
-                    continue;
+                match classify_time(persist_upper, &ts) {
+                    TimeClass::AlreadyPersisted => continue,
+                    TimeClass::Ineligible => {
+                        // Re-stash for later (owned).
+                        ineligible.push((
+                            *key,
+                            ts,
+                            <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
+                        ));
+                        continue;
+                    }
+                    TimeClass::Eligible => {}
                 }
 
                 // ts == persist_upper: eligible. The chunk holds one entry per
@@ -1309,7 +1324,7 @@ async fn drain_sealed_input_paged<T, O>(
     source_id: GlobalId,
 ) -> DrainStats
 where
-    T: TotalOrder + Lattice + timely::ExchangeData + Timestamp + Clone + Debug + Ord + Sync,
+    T: Timestamp + TotalOrder + Lattice + Sync,
     T: columnation::Columnation + columnar::Columnar,
     O: columnar::Columnar,
 {
@@ -1341,18 +1356,18 @@ where
     for chunk in &sealed {
         for (key, ts, diff) in chunk.borrow().into_index_iter() {
             let ts = <T as columnar::Columnar>::into_owned(ts);
-            if !persist_upper.less_equal(&ts) {
-                // ts < persist_upper: drop.
-                continue;
-            }
-            if persist_upper.less_than(&ts) {
-                // ts > persist_upper: re-stash for later (owned).
-                ineligible.push((
-                    *key,
-                    ts,
-                    <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
-                ));
-                continue;
+            match classify_time(persist_upper, &ts) {
+                TimeClass::AlreadyPersisted => continue,
+                TimeClass::Ineligible => {
+                    // Re-stash for later (owned).
+                    ineligible.push((
+                        *key,
+                        ts,
+                        <UpsertDiff<O> as columnar::Columnar>::into_owned(diff),
+                    ));
+                    continue;
+                }
+                TimeClass::Eligible => {}
             }
 
             // ts == persist_upper: eligible. Look up the prior value for this
@@ -1716,6 +1731,57 @@ mod test {
             persist.advance_to(new_ts(2));
             worker.step();
         });
+
+        let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
+        for k in 0..KEYS {
+            expected.push((Ok(row(k, k)), new_ts(1), Diff::MINUS_ONE));
+            expected.push((Ok(row(k, k + 1)), new_ts(1), Diff::ONE));
+        }
+        let mut actual_sorted = actual;
+        actual_sorted.sort();
+        expected.sort();
+        assert_eq!(actual_sorted, expected);
+    }
+
+    /// The probe-window scenario with committed chunks forced through a
+    /// private buffer pool, so the chunked flavor's seal and drain read
+    /// spilled bodies back through the pool codec rather than resident
+    /// memory. The override is thread-scoped and `execute_directly` runs the
+    /// worker on this thread, so it reaches the operator's batchers. The
+    /// paged flavor (which the harness also runs) routes through the column
+    /// pager rather than the chunk override, so it stays resident and serves
+    /// as the reference.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn drain_reads_spilled_chunks() {
+        use mz_ore::pool::Pool;
+        use mz_timely_util::columnar::chunk::set_spill_override;
+
+        let pool = Pool::new().expect("pool creation");
+        set_spill_override(Some(pool.clone()));
+
+        const KEYS: i64 = 1500;
+        let actual = upsert_test!(|input, persist, worker| {
+            for k in 0..KEYS {
+                persist.send((Ok(row(k, k)), new_ts(0), Diff::ONE));
+            }
+            persist.advance_to(new_ts(1));
+            worker.step();
+
+            for k in 0..KEYS {
+                input.send(((key(k), Some(Ok(row(k, k + 1))), 1), new_ts(1), Diff::ONE));
+            }
+            input.advance_to(new_ts(2));
+            worker.step();
+            persist.advance_to(new_ts(2));
+            worker.step();
+        });
+
+        set_spill_override(None);
+        assert!(
+            pool.stats().inserts > 0,
+            "chunks should have spilled through the pool"
+        );
 
         let mut expected: Vec<(Result<Row, DataflowError>, _, _)> = Vec::new();
         for k in 0..KEYS {
