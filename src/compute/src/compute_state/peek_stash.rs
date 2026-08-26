@@ -15,7 +15,7 @@ use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
 use mz_ore::task::RuntimeExt;
 use mz_persist_client::Schemas;
-use mz_persist_client::batch::BatchBuilder;
+use mz_persist_client::batch::{Batch, BatchBuilder};
 use mz_persist_client::cache::PersistClientCache;
 use mz_persist_types::codec_impls::UnitSchema;
 use mz_persist_types::{PersistLocation, ShardId};
@@ -23,6 +23,7 @@ use mz_repr::{RelationDesc, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
 use tokio::runtime::Handle;
+use tokio::sync::oneshot;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -47,10 +48,11 @@ pub(super) enum UploadDemand {
 /// and from an async task alike.
 ///
 /// The rows an upload is given are the rows it writes, in the order it is given them, up to the
-/// point where the peek's finishing has all it can use. An upload that is never finished deletes
-/// the parts it has written, whether it is handed to [`StashUpload::discard`] or only dropped, so
-/// abandoning one costs blob storage nothing lasting. [`StashUpload::abandon`] states the one case
-/// that escapes.
+/// point where the peek's finishing has all it can use. An upload that does not reach a reader
+/// deletes what it wrote, whether it is handed to [`StashUpload::discard`], only dropped, or
+/// stopped part-way through finishing. A batch persist refuses to finish is the one escape, and
+/// [`StashUpload::finish`] says so; a replica that dies mid-upload is the other, and
+/// [`StashUpload::abandon`] says so.
 ///
 /// Nothing here bounds how large a stashed answer grows where the finishing has no limit to reach.
 /// `max_result_size` bounds the prefix a single scan retains between batches and never the sum
@@ -190,17 +192,11 @@ impl StashUpload {
     ///
     /// Fails where persist rejects the batch, in which case nothing that was written is readable.
     ///
-    /// A rejection also strands the parts: persist takes the builder to finish it and hands back
-    /// no handle to what it holds when it refuses, so the deletion an abandoned upload does has
-    /// nothing to reach and the parts stay in blob storage.
+    /// A rejection is the one abandonment that leaves the parts behind: persist takes the builder
+    /// to finish it and hands back no handle to what it holds when it refuses, so nothing can
+    /// reach them and they stay in blob storage.
     pub(super) async fn finish(mut self, inline_rows: RowBatch) -> Result<PeekResponse, String> {
-        let batch = self
-            .batch_builder
-            .take()
-            .expect(BUILDER_TAKEN)
-            .finish(self.upper.clone())
-            .await
-            .map_err(|err| err.to_string())?;
+        let batch = self.finish_batch().await?.take();
 
         let inline_rows = inline_rows
             .into_iter()
@@ -221,6 +217,39 @@ impl StashUpload {
         Ok(PeekResponse::Stashed(Box::new(stashed_response)))
     }
 
+    /// Finishes the batch as work of its own, and leaves the upload holding no parts.
+    ///
+    /// Flushing the buffered part and the part uploads still in flight is the longest await an
+    /// upload makes, so it is where a cancellation is most likely to land, and the builder is
+    /// already out of the upload by then. Handing the builder to a task the cancellation does not
+    /// reach is what keeps that window from stranding everything written so far: whoever ends up
+    /// holding the batch nobody will read deletes it.
+    async fn finish_batch(&mut self) -> Result<DeliveredBatch, String> {
+        let batch_builder = self.batch_builder.take().expect(BUILDER_TAKEN);
+        let upper = self.upper.clone();
+        let shard_id = self.shard_id;
+        let runtime = self.runtime.clone();
+
+        let (tx, rx) = oneshot::channel();
+        let _handle =
+            self.runtime
+                .spawn_named(|| format!("peek_stash::finish({shard_id})"), async move {
+                    let delivered = batch_builder
+                        .finish(upper)
+                        .await
+                        .map(|batch| DeliveredBatch::new(batch, runtime, shard_id))
+                        .map_err(|err| err.to_string());
+                    // A send that finds no receiver hands the delivery straight back, and dropping it
+                    // here deletes the batch. An error nobody is left to read is simply dropped.
+                    let _undelivered = tx.send(delivered);
+                });
+
+        // The task is detached rather than held, so it outlives this await and the only way the
+        // channel closes without a delivery is a runtime that is going away.
+        rx.await
+            .map_err(|_| "peek stash lost the task finishing its batch".to_string())?
+    }
+
     /// Deletes the parts this upload has already written, consuming it.
     ///
     /// A driver whose peek will be answered with something other than these rows calls this to say
@@ -234,9 +263,16 @@ impl StashUpload {
     /// none.
     ///
     /// Persist hands back a handle to the parts it has taken only by finishing the batch, so the
-    /// rows still buffered are written out before the delete removes them along with the rest, and
-    /// they stay in memory until it does. That is a part's worth of rows outliving the permit that
-    /// admitted the walk which produced them.
+    /// rows still buffered are written out before the delete removes them again.
+    ///
+    /// That write is not small. A builder flushes only once it holds `persist_blob_target_size`
+    /// bytes, 128 MiB by default, so abandoning an upload can put that much into blob storage for
+    /// no purpose beyond earning the handle that deletes it, and hold it in memory meanwhile. The
+    /// walk's permit is released when the walk returns rather than when this finishes, so nothing
+    /// bounds how many abandoned uploads carry a part at once.
+    ///
+    /// TODO: persist could offer a builder teardown that surrenders the parts already written
+    /// without flushing the buffered one, which would make this cost a delete and nothing else.
     fn abandon(&mut self) {
         let Some(batch_builder) = self.batch_builder.take() else {
             return;
@@ -273,6 +309,60 @@ impl Drop for StashUpload {
     /// [`StashUpload::discard`], which is the only cleanup a walk aborted mid-upload gets.
     fn drop(&mut self) {
         self.abandon();
+    }
+}
+
+/// A finished batch on its way to the response that will name it, deleted from blob storage if it
+/// never arrives.
+///
+/// A batch nobody takes out of a delivery is a batch no reader will ever be told how to find, so
+/// dropping one deletes it. That covers both ways a delivery goes unclaimed, the send that finds
+/// no receiver and the receiver dropped between the send and the take, which is what persist's own
+/// `Drop for Batch` does not: it logs the blob keys it is leaving behind and leaves them.
+struct DeliveredBatch {
+    /// Taken by [`DeliveredBatch::take`], and a `None` says the batch has an owner that will
+    /// answer for it.
+    batch: Option<Batch<SourceData, (), Timestamp, i64>>,
+    runtime: Handle,
+    shard_id: ShardId,
+}
+
+impl DeliveredBatch {
+    fn new(
+        batch: Batch<SourceData, (), Timestamp, i64>,
+        runtime: Handle,
+        shard_id: ShardId,
+    ) -> Self {
+        Self {
+            batch: Some(batch),
+            runtime,
+            shard_id,
+        }
+    }
+
+    /// Claims the batch, consuming the delivery.
+    ///
+    /// The caller owes persist what the delivery owed it: a batch it drops without transmitting or
+    /// deleting is a batch whose blobs stay behind.
+    fn take(mut self) -> Batch<SourceData, (), Timestamp, i64> {
+        self.batch
+            .take()
+            .expect("a delivery holds its batch until it is claimed")
+    }
+}
+
+impl Drop for DeliveredBatch {
+    fn drop(&mut self) {
+        let Some(batch) = self.batch.take() else {
+            return;
+        };
+
+        let shard_id = self.shard_id;
+        let _handle = self
+            .runtime
+            .spawn_named(|| format!("peek_stash::delete({shard_id})"), async move {
+                batch.delete().await
+            });
     }
 }
 

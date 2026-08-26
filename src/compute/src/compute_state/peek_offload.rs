@@ -346,9 +346,7 @@ impl OffloadedPeek {
                                 // defect in the upload rather than a blip, and the query's error
                                 // is the only other place it shows.
                                 warn!(%peek_uuid, %error, "peek stash rejected a batch");
-                                if let Some(upload) = upload.take() {
-                                    upload.discard();
-                                }
+                                upload.take().expect("opened above").discard();
                                 return Some(PeekResponse::Error(PeekError::unstructured(error)));
                             }
                         }
