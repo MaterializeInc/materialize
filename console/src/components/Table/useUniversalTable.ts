@@ -89,7 +89,7 @@ export const useUniversalTable = <TData>(
     resetPageIndex();
   };
 
-  return useReactTable({
+  const table = useReactTable({
     ...tableOptions,
     columns: tableOptions.columns as ColumnDef<TData, unknown>[],
     getCoreRowModel: getCoreRowModel(),
@@ -128,6 +128,31 @@ export const useUniversalTable = <TData>(
     filterFromLeafRows:
       tableOptions.filterFromLeafRows ?? Boolean(tableOptions.getSubRows),
   });
+
+  // TanStack slices the visible page straight from the stored page index, and
+  // auto-reset is off (see above), so an index can outlive the rows it was
+  // valid for: a page restored from a URL, a data set that shrank, a filter
+  // that narrowed. What renders then is a header with no rows beneath it, and
+  // `TablePagination` hides itself once there is only one page, so no control
+  // is left to page back with. Clamp to the last page that exists.
+  //
+  // A layout effect rather than an effect: this runs before the browser paints,
+  // so the page that never existed is not shown on the way to the one that
+  // does.
+  //
+  // NOTE: skipped under `manualPagination`, where the page count comes from the
+  // caller and -1 means "not known yet" rather than "no pages".
+  const pageCount = table.getPageCount();
+  const { pageIndex } = table.getState().pagination;
+  React.useLayoutEffect(() => {
+    if (tableOptions.manualPagination) return;
+    const lastPage = Math.max(0, pageCount - 1);
+    if (pageIndex > lastPage) {
+      table.setPageIndex(lastPage);
+    }
+  }, [table, tableOptions.manualPagination, pageCount, pageIndex]);
+
+  return table;
 };
 
 /**

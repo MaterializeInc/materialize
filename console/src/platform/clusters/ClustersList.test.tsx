@@ -1560,6 +1560,75 @@ describe("ClustersList filter URL state", () => {
     });
   });
 
+  it("clamps a bookmarked page that is past the last page", async () => {
+    await renderAt(twoClusters(), "/?page=2");
+
+    // Three replicas fit on one page, so page 2 does not exist. Slicing from
+    // the stored index would render a header with no rows, and TablePagination
+    // hides itself at one page, leaving nothing to click back with.
+    expect(rowOrder()).toEqual(["idle", "busy", "middling"]);
+  });
+
+  /** 21 replicas: two pages at a page size of 20. */
+  const twoPagesOfReplicas = (count = 21) => [
+    buildCluster({
+      id: "u1",
+      name: "compute",
+      replicas: Array.from({ length: count }, (_, i) =>
+        buildReplica({
+          id: `u${100 + i}`,
+          name: `r-${i}`,
+          // Only the last replica clears a 50% threshold.
+          cpuPercent: i === 20 ? 0.9 : 0.1,
+        }),
+      ),
+    }),
+  ];
+
+  it("clamps the page when the rows shrink underneath it", async () => {
+    const user = userEvent.setup();
+    await renderAt(twoPagesOfReplicas());
+
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(rowOrder()).toEqual(["r-20"]);
+
+    // A subscribe update, not a filter change, so nothing resets the page:
+    // `useUniversalTable` turns off TanStack's automatic reset so a background
+    // refresh cannot yank the user back to page 1.
+    getStore().set(
+      allClusters,
+      mockSubscribeState({ data: twoPagesOfReplicas(3) }),
+    );
+
+    await waitFor(() => expect(rowOrder()).toEqual(["r-0", "r-1", "r-2"]));
+  });
+
+  it("resets the page when a filter shrinks the row count", async () => {
+    const user = userEvent.setup();
+    // 21 replicas: two pages at a page size of 20.
+    await renderAt([
+      buildCluster({
+        id: "u1",
+        name: "compute",
+        replicas: Array.from({ length: 21 }, (_, i) =>
+          buildReplica({
+            id: `u${100 + i}`,
+            name: `r-${i}`,
+            // Only the last replica clears a 50% threshold.
+            cpuPercent: i === 20 ? 0.9 : 0.1,
+          }),
+        ),
+      }),
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    expect(rowOrder()).toEqual(["r-20"]);
+
+    await applyFilter(user, "CPU", ">", "50");
+
+    expect(rowOrder()).toEqual(["r-20"]);
+  });
+
   it("accepts a fractional threshold", async () => {
     await renderAt(twoClusters(), "/?cpu=gt.7.5");
 

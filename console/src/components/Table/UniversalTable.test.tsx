@@ -120,6 +120,36 @@ const PaginatedTable = ({
   );
 };
 
+/** Seeds a page index the caller chooses, as a URL-restored page would. */
+const TableAtPage = ({
+  data = testData,
+  pageSize = 2,
+  pageIndex,
+  manualPagination = false,
+}: {
+  data?: TestCluster[];
+  pageSize?: number;
+  pageIndex: number;
+  manualPagination?: boolean;
+}) => {
+  const table = useUniversalTable({
+    data,
+    columns,
+    pageSize,
+    manualPagination,
+    initialState: { pagination: { pageIndex, pageSize } },
+  });
+  return (
+    <div>
+      <UniversalTable table={table} data-testid="test-table" />
+      <TablePagination table={table} itemLabel="clusters" />
+      <div data-testid="page-index">
+        {table.getState().pagination.pageIndex}
+      </div>
+    </div>
+  );
+};
+
 const footerColumns = [
   columnHelper.accessor("name", { header: "Name", footer: "Total" }),
   columnHelper.accessor("replicas", {
@@ -432,6 +462,43 @@ describe("UniversalTable", () => {
         ).toBeInTheDocument();
       });
       expect(screen.getByText("page 1 of 2")).toBeInTheDocument();
+    });
+
+    // A page index outlives the rows it was valid for whenever it comes from
+    // outside the table: a bookmarked URL, a link shared into a smaller
+    // environment. Slicing from it would render a header with no rows, and
+    // `TablePagination` hides itself at one page, so nothing would be left to
+    // page back with.
+    it("clamps a starting page past the last page", async () => {
+      await renderComponent(<TableAtPage pageIndex={9} pageSize={2} />);
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("2");
+      expect(screen.getByText("page 3 of 3")).toBeInTheDocument();
+      expect(screen.getAllByRole("row")).toHaveLength(2); // 1 header + 1 data
+    });
+
+    it("clamps to the only page when everything fits on it", async () => {
+      await renderComponent(<TableAtPage pageIndex={4} pageSize={10} />);
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("0");
+      expect(screen.getAllByRole("row")).toHaveLength(6); // 1 header + 5 data
+    });
+
+    it("leaves a valid starting page alone", async () => {
+      await renderComponent(<TableAtPage pageIndex={1} pageSize={2} />);
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("1");
+      expect(screen.getByText("page 2 of 3")).toBeInTheDocument();
+    });
+
+    it("leaves the page alone under manual pagination", async () => {
+      // The page count belongs to the caller there, and TanStack reports -1
+      // for "not known yet", which must not read as "no pages".
+      await renderComponent(
+        <TableAtPage pageIndex={3} pageSize={2} manualPagination />,
+      );
+
+      expect(screen.getByTestId("page-index")).toHaveTextContent("3");
     });
   });
 
