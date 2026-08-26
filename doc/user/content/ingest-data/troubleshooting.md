@@ -101,29 +101,38 @@ snapshotting](/ingest-data/#use-a-larger-cluster-for-upsert-source-snapshotting)
 
 ## Is the upstream database overloaded?
 
-Snapshotting puts significant load on the upstream database (see [Impact on
-upstream system](/concepts/snapshotting/#impact-on-upstream-system)).
+Snapshotting can put significant load on the upstream database (see [Impact
+on upstream system](/concepts/snapshotting/#impact-on-upstream-system)).
 
-Check the upstream database when a snapshot progresses more slowly than the
-data volume suggests, when applications sharing the database slow down while
+Check the upstream database when a snapshot progresses more slowly than
+expected, when applications sharing the database slow down while
 it runs, or when the source reports upstream connection errors or timeouts.
 The relevant metrics are in your cloud provider's monitoring console, or in
 OS tools like `iostat` and the database's activity views for self-hosted
 databases. Look for:
 
+- **Read IOPS or throughput** flat at a provisioned cap.
 - **CPU** pinned at the instance's limit for the duration of the snapshot.
-- **Read IOPS or throughput** flat at a provisioned cap while disk queue
-  depth and read latency climb.
 - **Network throughput** at the instance type's cap.
-- **Memory** pressure, or a falling cache hit rate as large scans evict the
-  normal workload's working set.
-- **Connections** near the database's limit. Snapshotting opens connections
-  in proportion to the source cluster's workers.
+- **Connections** near the database's limit. For PostgreSQL and MySQL
+  sources, snapshotting opens connections in proportion to the source
+  cluster's workers.
 
-If the database is overloaded, snapshot during off-peak hours, ingest from a
-read replica, use a smaller source cluster to spread the load over a longer
-window, [limit the volume of data](/ingest-data/#limit-the-volume-of-data)
-you sync, or provision more IOPS, throughput, or instance capacity.
+Also watch disk usage on the upstream database during a long-running
+snapshot: CDC database sources must retain their change log until Materialize
+consumes it (see [Impact on upstream
+system](/concepts/snapshotting/#impact-on-upstream-system)).
+
+If the database is overloaded, you can upsize the source database or cancel
+the snapshot by dropping the source, and retry:
+
+- on a smaller source cluster to spread the load over a longer window.
+- with more IOPS, throughput, or instance capacity provisioned for the
+  database.
+- during off-peak hours when the database is less busy, as recommended in the
+  [ingestion best practices](/ingest-data/#scheduling).
+- with a smaller [volume of data to
+  sync](/ingest-data/#limit-the-volume-of-data).
 
 ## Adding a new subsource to an existing source blocks replication. Should I just create a new source instead?
 

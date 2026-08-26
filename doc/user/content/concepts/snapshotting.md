@@ -31,8 +31,9 @@ menu:
 Snapshotting has the following upstream impacts:
 
 - **Read load.** Snapshotting puts read, CPU, and network load on the upstream
-  system, proportional to the data volume and concentrated in proportion to
-  the source cluster's [parallelism](#parallelism).
+  system. The total load is proportional to the volume of data being
+  snapshotted, while the source cluster's [parallelism](#parallelism) affects
+  the peak load: more workers compress the reads into a shorter window.
 
 - **Change-log retention for CDC database sources.** When ingesting data from
   CDC database sources (PostgreSQL, MySQL, SQL Server), the upstream system must

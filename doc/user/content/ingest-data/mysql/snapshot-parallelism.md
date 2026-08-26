@@ -9,6 +9,8 @@ menu:
     weight: 70
 ---
 
+{{< private-preview />}}
+
 When you create a [MySQL source](/sql/create-source/mysql-v2/), Materialize
 performs an initial, snapshot-based sync of the selected tables before it
 starts ingesting change events from the binlog. For large tables, this
@@ -16,15 +18,16 @@ snapshot dominates the time until the source becomes healthy.
 
 How snapshot work is spread across the workers of a cluster, and what that
 means for the upstream database, is covered in
-[Snapshotting](/concepts/snapshotting/#parallelism). This page covers what is
-specific to MySQL: Materialize can split the read of a **single table**
-across all the workers of the cluster, so that even a source dominated by one
-very large table benefits from a larger cluster.
+[Snapshotting](/concepts/snapshotting/#parallelism). Materialize can split
+the read of a **single table** across all the workers of the cluster, so
+that even a source dominated by one very large table benefits from a larger
+cluster. This page covers what is specific to MySQL: which tables are
+eligible for splitting, and how their reads are partitioned.
 
 ## Which tables are split
 
-The snapshot of an individual table is split across workers when all of the
-following hold:
+Materialize splits the snapshot of an individual table across workers when
+all of the following conditions are met:
 
 - The table has a **single-column primary key**. Composite primary keys are
   not supported.
@@ -39,19 +42,22 @@ following hold:
 How evenly the split lands also depends on the distribution of the key
 values. See [How a table is partitioned](#how-a-table-is-partitioned).
 
-Tables that don't meet these requirements, or whose boundary sampling fails
-for any reason, still snapshot correctly: each is read in full by a single
-worker, and different tables are still read concurrently.
+If a table does not meet these requirements, or if the [boundary
+sampling](#how-a-table-is-partitioned) fails, its snapshot is not split: a
+single worker reads the table in full. Different tables are still read
+concurrently by different workers.
 
 ## How a table is partitioned
 
-Materialize partitions a table by the unique leading characters of its
-primary keys. Before reading the table, it probes the primary key index to
-discover key prefixes and uses the MySQL optimizer's row estimates to gauge
-how many rows fall under each one, extending prefixes until it finds
-boundaries that divide the table into roughly even ranges. The probes are
-inexpensive point lookups, capped in proportion to the table's estimated
-size, so this sampling phase stays negligible next to the snapshot itself.
+Materialize partitions an [eligible](#which-tables-are-split) table using the
+leading characters of its primary key values. Before reading the table,
+Materialize probes the primary key index to discover key prefixes and uses
+the MySQL optimizer's row estimates to gauge how many rows fall under each
+prefix. It extends the prefixes as needed to find boundaries that divide the
+table into roughly even ranges. The probes are inexpensive point lookups,
+capped in proportion to the table's estimated size, so the sampling phase
+stays negligible next to the snapshot itself.
+
 Each worker then reads only its assigned range, within the same consistent
 snapshot of the upstream database, so the result is identical to a
 single-worker snapshot, only faster.
@@ -97,8 +103,6 @@ overloaded?](/ingest-data/troubleshooting/#is-the-upstream-database-overloaded)
 
 ## Observability
 
-The progress of an ongoing snapshot is visible in the
-[`mz_internal.mz_source_statistics`](/reference/system-catalog/mz_internal/#mz_source_statistics)
-system catalog view: `snapshot_records_known` is the estimated total size of
-the snapshot and `snapshot_records_staged` is how much of it has been read so
-far.
+To observe the progress of an ongoing snapshot, see [Monitoring the
+snapshotting
+progress](/ingest-data/monitoring-data-ingestion/#monitoring-the-snapshotting-progress).
