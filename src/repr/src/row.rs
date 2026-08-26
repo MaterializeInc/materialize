@@ -1138,11 +1138,6 @@ enum Tag {
     Null,
     False,
     True,
-    Int16,
-    Int32,
-    Int64,
-    UInt8,
-    UInt32,
     Float32,
     Float64,
     Date,
@@ -1150,6 +1145,10 @@ enum Tag {
     Timestamp,
     TimestampTz,
     Interval,
+    // The length-prefixed tags: for each of the three kinds, four tags ordered by the width of
+    // the length prefix in front of the payload, so a tag's distance from its kind's first tag
+    // selects the width. Each kind has its own `read_datum` arm naming the `Datum` constructor,
+    // since the kind never varies within a column; the width does, so it stays inside the arm.
     BytesTiny,
     BytesShort,
     BytesLong,
@@ -1158,18 +1157,16 @@ enum Tag {
     StringShort,
     StringLong,
     StringHuge,
-    Uuid,
-    Array,
     ListTiny,
     ListShort,
     ListLong,
     ListHuge,
+    Uuid,
+    Array,
     Dict,
     JsonNull,
     Dummy,
     Numeric,
-    UInt16,
-    UInt64,
     MzTimestamp,
     Range,
     MzAclItem,
@@ -1193,60 +1190,63 @@ enum Tag {
     //
     // Separate tags for non-negative and negative numbers are used to avoid having to
     // waste one bit in the actual data space to encode the sign.
+    // A signed family alternates non-negative and negative at each payload width, so a tag
+    // splits into both by arithmetic: the width is its distance from the family's first tag
+    // shifted right by one, and the sign is that distance's low bit. Keeping the two signs
+    // apart would make the width a subtraction from one of two bases, chosen by a compare.
+    //
+    // The family ends at the width where the payload is the whole integer. There the sign is
+    // already the payload's top bit, so one tag serves both and the alternation stops, which is
+    // why the fixed-width tag sits there rather than in a family of its own.
     NonNegativeInt16_0, // i.e., 0
+    NegativeInt16_0,    // i.e., -1
     NonNegativeInt16_8,
-    NonNegativeInt16_16,
+    NegativeInt16_8,
+    Int16,
 
     NonNegativeInt32_0,
+    NegativeInt32_0,
     NonNegativeInt32_8,
+    NegativeInt32_8,
     NonNegativeInt32_16,
+    NegativeInt32_16,
     NonNegativeInt32_24,
-    NonNegativeInt32_32,
+    NegativeInt32_24,
+    Int32,
 
     NonNegativeInt64_0,
-    NonNegativeInt64_8,
-    NonNegativeInt64_16,
-    NonNegativeInt64_24,
-    NonNegativeInt64_32,
-    NonNegativeInt64_40,
-    NonNegativeInt64_48,
-    NonNegativeInt64_56,
-    NonNegativeInt64_64,
-
-    NegativeInt16_0, // i.e., -1
-    NegativeInt16_8,
-    NegativeInt16_16,
-
-    NegativeInt32_0,
-    NegativeInt32_8,
-    NegativeInt32_16,
-    NegativeInt32_24,
-    NegativeInt32_32,
-
     NegativeInt64_0,
+    NonNegativeInt64_8,
     NegativeInt64_8,
+    NonNegativeInt64_16,
     NegativeInt64_16,
+    NonNegativeInt64_24,
     NegativeInt64_24,
+    NonNegativeInt64_32,
     NegativeInt64_32,
+    NonNegativeInt64_40,
     NegativeInt64_40,
+    NonNegativeInt64_48,
     NegativeInt64_48,
+    NonNegativeInt64_56,
     NegativeInt64_56,
-    NegativeInt64_64,
+    Int64,
 
-    // These are like the ones above, but for unsigned types. The
-    // situation is slightly simpler as we don't have negatives.
+    // These are like the ones above, but for unsigned types. The situation is slightly simpler
+    // as we don't have negatives, so the width is the whole distance from the family's first
+    // tag, and the fixed-width tag is again the widest member.
     UInt8_0, // i.e., 0
-    UInt8_8,
+    UInt8,
 
     UInt16_0,
     UInt16_8,
-    UInt16_16,
+    UInt16,
 
     UInt32_0,
     UInt32_8,
     UInt32_16,
     UInt32_24,
-    UInt32_32,
+    UInt32,
 
     UInt64_0,
     UInt64_8,
@@ -1256,40 +1256,86 @@ enum Tag {
     UInt64_40,
     UInt64_48,
     UInt64_56,
-    UInt64_64,
+    UInt64,
 }
 
 impl Tag {
-    fn actual_int_length(self) -> Option<usize> {
-        use Tag::*;
-        let val = match self {
-            NonNegativeInt16_0 | NonNegativeInt32_0 | NonNegativeInt64_0 | UInt8_0 | UInt16_0
-            | UInt32_0 | UInt64_0 => 0,
-            NonNegativeInt16_8 | NonNegativeInt32_8 | NonNegativeInt64_8 | UInt8_8 | UInt16_8
-            | UInt32_8 | UInt64_8 => 1,
-            NonNegativeInt16_16 | NonNegativeInt32_16 | NonNegativeInt64_16 | UInt16_16
-            | UInt32_16 | UInt64_16 => 2,
-            NonNegativeInt32_24 | NonNegativeInt64_24 | UInt32_24 | UInt64_24 => 3,
-            NonNegativeInt32_32 | NonNegativeInt64_32 | UInt32_32 | UInt64_32 => 4,
-            NonNegativeInt64_40 | UInt64_40 => 5,
-            NonNegativeInt64_48 | UInt64_48 => 6,
-            NonNegativeInt64_56 | UInt64_56 => 7,
-            NonNegativeInt64_64 | UInt64_64 => 8,
-            NegativeInt16_0 | NegativeInt32_0 | NegativeInt64_0 => 0,
-            NegativeInt16_8 | NegativeInt32_8 | NegativeInt64_8 => 1,
-            NegativeInt16_16 | NegativeInt32_16 | NegativeInt64_16 => 2,
-            NegativeInt32_24 | NegativeInt64_24 => 3,
-            NegativeInt32_32 | NegativeInt64_32 => 4,
-            NegativeInt64_40 => 5,
-            NegativeInt64_48 => 6,
-            NegativeInt64_56 => 7,
-            NegativeInt64_64 => 8,
-
-            _ => return None,
-        };
-        Some(val)
+    /// The tag's discriminant, usable in const context.
+    #[allow(clippy::as_conversions)]
+    const fn byte(self) -> u8 {
+        self as u8
     }
 }
+
+/// Assert that the listed tags are consecutive, in the order given.
+///
+/// Every family below is addressed by arithmetic rather than by name: `push_datum` writes
+/// `first + n` for a payload of `n` bytes, and `read_signed_varint`/`read_unsigned_varint`
+/// invert that by subtraction. A variant inserted into the middle of a family, or two members
+/// swapped, silently changes how many bytes a tag claims, which corrupts the datum rather than
+/// failing to compile. These assertions turn that into a compile error at the definition.
+macro_rules! assert_consecutive {
+    ($($tag:ident),+ $(,)?) => {
+        const _: () = {
+            let tags: &[u8] = &[$(Tag::$tag.byte()),+];
+            let mut i = 1;
+            while i < tags.len() {
+                assert!(
+                    tags[i] == tags[i - 1] + 1,
+                    concat!("tags are not consecutive: ", stringify!($($tag),+))
+                );
+                i += 1;
+            }
+        };
+    };
+}
+
+assert_consecutive!(BytesTiny, BytesShort, BytesLong, BytesHuge);
+assert_consecutive!(StringTiny, StringShort, StringLong, StringHuge);
+assert_consecutive!(ListTiny, ListShort, ListLong, ListHuge);
+assert_consecutive!(
+    NonNegativeInt16_0,
+    NegativeInt16_0,
+    NonNegativeInt16_8,
+    NegativeInt16_8,
+    Int16,
+);
+assert_consecutive!(
+    NonNegativeInt32_0,
+    NegativeInt32_0,
+    NonNegativeInt32_8,
+    NegativeInt32_8,
+    NonNegativeInt32_16,
+    NegativeInt32_16,
+    NonNegativeInt32_24,
+    NegativeInt32_24,
+    Int32,
+);
+assert_consecutive!(
+    NonNegativeInt64_0,
+    NegativeInt64_0,
+    NonNegativeInt64_8,
+    NegativeInt64_8,
+    NonNegativeInt64_16,
+    NegativeInt64_16,
+    NonNegativeInt64_24,
+    NegativeInt64_24,
+    NonNegativeInt64_32,
+    NegativeInt64_32,
+    NonNegativeInt64_40,
+    NegativeInt64_40,
+    NonNegativeInt64_48,
+    NegativeInt64_48,
+    NonNegativeInt64_56,
+    NegativeInt64_56,
+    Int64,
+);
+assert_consecutive!(UInt8_0, UInt8,);
+assert_consecutive!(UInt16_0, UInt16_8, UInt16,);
+assert_consecutive!(UInt32_0, UInt32_8, UInt32_16, UInt32_24, UInt32,);
+assert_consecutive!(
+    UInt64_0, UInt64_8, UInt64_16, UInt64_24, UInt64_32, UInt64_40, UInt64_48, UInt64_56, UInt64,
+);
 
 // --------------------------------------------------------------------------------
 // reading data
@@ -1305,90 +1351,143 @@ fn read_untagged_bytes<'a>(data: &mut &'a [u8]) -> &'a [u8] {
     bytes
 }
 
-/// Read a data whose length is encoded in the row before its contents.
+/// Read a byte slice preceded by its length, the width of the length prefix given by the tag's
+/// distance from `first`, its kind's `*Tiny` tag.
 ///
-/// Updates `offset` to point to the first byte after the end of the read region.
+/// Each arm reads the prefix at a constant width, which is a plain load; deriving the width and
+/// reading that many bytes measured twice as slow on long payloads.
 ///
-/// # Safety
+/// # Safety of the callers
 ///
-/// This function is safe if the datum's length and contents were previously written by `push_lengthed_bytes`,
-/// and it was only written with a `String` tag if it was indeed UTF-8.
-unsafe fn read_lengthed_datum<'a>(data: &mut &'a [u8], tag: Tag) -> Datum<'a> {
-    let len = match tag {
-        Tag::BytesTiny | Tag::StringTiny | Tag::ListTiny => usize::from(read_byte(data)),
-        Tag::BytesShort | Tag::StringShort | Tag::ListShort => {
-            usize::from(u16::from_le_bytes(read_byte_array(data)))
-        }
-        Tag::BytesLong | Tag::StringLong | Tag::ListLong => {
-            usize::cast_from(u32::from_le_bytes(read_byte_array(data)))
-        }
-        Tag::BytesHuge | Tag::StringHuge | Tag::ListHuge => {
-            usize::cast_from(u64::from_le_bytes(read_byte_array(data)))
-        }
-        _ => unreachable!(),
+/// The contents are whatever `push_lengthed_bytes` wrote, so a caller may treat them as UTF-8
+/// only for a `String` tag.
+#[inline(always)]
+fn read_lengthed_bytes<'a>(data: &mut &'a [u8], tag: Tag, first: Tag) -> &'a [u8] {
+    let len = match u8::from(tag).wrapping_sub(u8::from(first)) {
+        0 => usize::from(read_byte(data)),
+        1 => usize::from(u16::from_le_bytes(read_byte_array(data))),
+        2 => usize::cast_from(u32::from_le_bytes(read_byte_array(data))),
+        _ => usize::cast_from(u64::from_le_bytes(read_byte_array(data))),
     };
     let (bytes, next) = data.split_at(len);
     *data = next;
-    match tag {
-        Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => Datum::Bytes(bytes),
-        Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
-            Datum::String(str::from_utf8_unchecked(bytes))
-        }
-        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => {
-            Datum::List(DatumList::new(bytes))
-        }
-        _ => unreachable!(),
-    }
+    bytes
 }
 
+#[inline(always)]
 fn read_byte(data: &mut &[u8]) -> u8 {
     let byte = data[0];
     *data = &data[1..];
     byte
 }
 
-/// Read `length` bytes from `data` at `offset`, updating the
-/// latter. Extend the resulting buffer to an array of `N` bytes by
-/// inserting `FILL` in the k most significant bytes, where k = N - length.
+/// The payload of a variable-length integer whose datum ends within eight bytes of the end of
+/// `data`, so the wide load in [`read_varint_word`] would run off the end.
 ///
-/// SAFETY:
-///   * length <= N
-///   * offset + length <= data.len()
-fn read_byte_array_sign_extending<const N: usize, const FILL: u8>(
-    data: &mut &[u8],
-    length: usize,
-) -> [u8; N] {
-    let mut raw = [FILL; N];
-    let (prev, next) = data.split_at(length);
-    (raw[..prev.len()]).copy_from_slice(prev);
-    *data = next;
-    raw
-}
-/// Read `length` bytes from `data` at `offset`, updating the
-/// latter. Extend the resulting buffer to a negative `N`-byte
-/// twos complement integer by filling the remaining bits with 1.
-///
-/// SAFETY:
-///   * length <= N
-///   * offset + length <= data.len()
-fn read_byte_array_extending_negative<const N: usize>(data: &mut &[u8], length: usize) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 255>(data, length)
-}
-
-/// Read `length` bytes from `data` at `offset`, updating the
-/// latter. Extend the resulting buffer to a positive or zero `N`-byte
-/// twos complement integer by filling the remaining bits with 0.
-///
-/// SAFETY:
-///   * length <= N
-///   * offset + length <= data.len()
-fn read_byte_array_extending_nonnegative<const N: usize>(
-    data: &mut &[u8],
-    length: usize,
-) -> [u8; N] {
-    read_byte_array_sign_extending::<N, 0>(data, length)
+/// Out of line and cold: this is at most the tail of a row, or of a nested list or map.
+#[cold]
+#[inline(never)]
+fn read_varint_word_tail(data: &[u8], len: usize) -> u64 {
+    #[inline(always)]
+    fn ext<const L: usize>(data: &[u8]) -> u64 {
+        let mut raw = [0; 8];
+        raw[..L].copy_from_slice(&data[..L]);
+        u64::from_le_bytes(raw)
+    }
+    // Each arm reads a constant width, which is a load rather than a `memcpy`. This path serves
+    // the last datum or two of every row, which at low arity is a real share of all datums.
+    match len {
+        0 => 0,
+        1 => u64::from(data[0]),
+        2 => ext::<2>(data),
+        3 => ext::<3>(data),
+        4 => ext::<4>(data),
+        5 => ext::<5>(data),
+        6 => ext::<6>(data),
+        7 => ext::<7>(data),
+        // An eight-byte payload needs eight bytes past the tag, which this path's caller found
+        // wanting, so a valid row cannot reach here.
+        _ => panic!("payload runs past the end of the row"),
+    }
 }
 
+/// Read the `len` payload bytes of a variable-length integer, returning them in the low
+/// `len * 8` bits of a word. Bits above that are zero or belong to whatever follows in the row,
+/// so a caller must mask them off.
+///
+/// Loading a fixed eight bytes is what keeps `len` out of the load, and so off a branch. Those
+/// bytes exist except at the very end of the buffer.
+#[inline(always)]
+fn read_varint_word(data: &mut &[u8], len: usize) -> u64 {
+    let word = match data.first_chunk::<8>() {
+        Some(chunk) => u64::from_le_bytes(*chunk),
+        None => read_varint_word_tail(data, len),
+    };
+    *data = &data[len..];
+    word
+}
+
+/// Mask covering the low `len` bytes of a word.
+///
+/// `len` reaches eight for a 64-bit value that needs every byte, where a shift of 64 would be
+/// undefined, so that case saturates instead.
+#[inline(always)]
+fn payload_mask(len: usize) -> u64 {
+    if len >= 8 {
+        u64::MAX
+    } else {
+        (1u64 << (len * 8)) - 1
+    }
+}
+
+/// The low `N` bytes of `word`, little-endian.
+#[inline(always)]
+fn truncate<const N: usize>(word: u64) -> [u8; N] {
+    word.to_le_bytes()[..N].try_into().expect("N <= 8")
+}
+
+/// Read the payload of a variable-length integer of either sign, extended to `N` bytes.
+///
+/// A signed family alternates the two signs at each payload width, so the tag's distance from
+/// `first` holds the width above its low bit and the sign in it. Both fall out by shifting and
+/// masking, with no compare and nothing to dispatch on: a column's tag varies with the magnitude
+/// and sign of every value, so any branch on it is one the predictor cannot learn.
+///
+/// # Safety
+///
+/// `tag` must belong to the family starting at `first`, and `data` must hold its payload.
+#[inline(always)]
+fn read_signed_varint<const N: usize>(data: &mut &[u8], tag: Tag, first: Tag) -> [u8; N] {
+    let delta = u8::from(tag).wrapping_sub(u8::from(first));
+    let len = usize::from(delta >> 1);
+    // All ones for a negative value, so the bytes above the payload sign-extend, and zero
+    // otherwise. A `len` of zero leaves the whole word filled, which is the -1 the encoder means.
+    let negative = delta & 1 == 1;
+    read_varint_payload(data, len, negative)
+}
+
+/// Read a `len` byte payload and extend it to `N` bytes, with ones above it when `negative`.
+#[inline(always)]
+fn read_varint_payload<const N: usize>(data: &mut &[u8], len: usize, negative: bool) -> [u8; N] {
+    let mask = payload_mask(len);
+    let fill = 0u64.wrapping_sub(u64::from(negative));
+    truncate((read_varint_word(data, len) & mask) | (fill & !mask))
+}
+
+/// Read the payload of an unsigned variable-length integer, zero-extended to `N` bytes.
+///
+/// As [`read_signed_varint`], without the sign.
+///
+/// # Safety
+///
+/// `tag` must belong to the family starting at `first`, and `data` must hold its payload.
+#[inline(always)]
+fn read_unsigned_varint<const N: usize>(data: &mut &[u8], tag: Tag, first: Tag) -> [u8; N] {
+    let len = usize::from(u8::from(tag).wrapping_sub(u8::from(first)));
+    read_varint_payload(data, len, false)
+}
+
+#[inline(always)]
 pub(super) fn read_byte_array<const N: usize>(data: &mut &[u8]) -> [u8; N] {
     let (prev, next) = data.split_first_chunk().unwrap();
     *data = next;
@@ -1426,87 +1525,63 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         Tag::Null => Datum::Null,
         Tag::False => Datum::False,
         Tag::True => Datum::True,
-        Tag::UInt8_0 | Tag::UInt8_8 => {
-            let i = u8::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt8(i)
-        }
-        Tag::Int16 => {
-            let i = i16::from_le_bytes(read_byte_array(data));
-            Datum::Int16(i)
-        }
-        Tag::NonNegativeInt16_0 | Tag::NonNegativeInt16_16 | Tag::NonNegativeInt16_8 => {
-            // SAFETY:`tag.actual_int_length()` is <= 16 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i16::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int16(i)
-        }
-        Tag::UInt16_0 | Tag::UInt16_8 | Tag::UInt16_16 => {
-            let i = u16::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt16(i)
-        }
-        Tag::Int32 => {
-            let i = i32::from_le_bytes(read_byte_array(data));
-            Datum::Int32(i)
-        }
+        Tag::NonNegativeInt16_0
+        | Tag::NegativeInt16_0
+        | Tag::NonNegativeInt16_8
+        | Tag::NegativeInt16_8
+        | Tag::Int16 => Datum::Int16(i16::from_le_bytes(read_signed_varint(
+            data,
+            tag,
+            Tag::NonNegativeInt16_0,
+        ))),
         Tag::NonNegativeInt32_0
-        | Tag::NonNegativeInt32_32
+        | Tag::NegativeInt32_0
         | Tag::NonNegativeInt32_8
+        | Tag::NegativeInt32_8
         | Tag::NonNegativeInt32_16
-        | Tag::NonNegativeInt32_24 => {
-            // SAFETY:`tag.actual_int_length()` is <= 32 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i32::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int32(i)
-        }
-        Tag::UInt32_0 | Tag::UInt32_8 | Tag::UInt32_16 | Tag::UInt32_24 | Tag::UInt32_32 => {
-            let i = u32::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt32(i)
-        }
-        Tag::Int64 => {
-            let i = i64::from_le_bytes(read_byte_array(data));
-            Datum::Int64(i)
-        }
+        | Tag::NegativeInt32_16
+        | Tag::NonNegativeInt32_24
+        | Tag::NegativeInt32_24
+        | Tag::Int32 => Datum::Int32(i32::from_le_bytes(read_signed_varint(
+            data,
+            tag,
+            Tag::NonNegativeInt32_0,
+        ))),
         Tag::NonNegativeInt64_0
-        | Tag::NonNegativeInt64_64
+        | Tag::NegativeInt64_0
         | Tag::NonNegativeInt64_8
+        | Tag::NegativeInt64_8
         | Tag::NonNegativeInt64_16
+        | Tag::NegativeInt64_16
         | Tag::NonNegativeInt64_24
+        | Tag::NegativeInt64_24
         | Tag::NonNegativeInt64_32
+        | Tag::NegativeInt64_32
         | Tag::NonNegativeInt64_40
+        | Tag::NegativeInt64_40
         | Tag::NonNegativeInt64_48
-        | Tag::NonNegativeInt64_56 => {
-            // SAFETY:`tag.actual_int_length()` is <= 64 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-
-            let i = i64::from_le_bytes(read_byte_array_extending_nonnegative(
+        | Tag::NegativeInt64_48
+        | Tag::NonNegativeInt64_56
+        | Tag::NegativeInt64_56
+        | Tag::Int64 => Datum::Int64(i64::from_le_bytes(read_signed_varint(
+            data,
+            tag,
+            Tag::NonNegativeInt64_0,
+        ))),
+        Tag::UInt8_0 | Tag::UInt8 => Datum::UInt8(u8::from_le_bytes(read_unsigned_varint(
+            data,
+            tag,
+            Tag::UInt8_0,
+        ))),
+        Tag::UInt16_0 | Tag::UInt16_8 | Tag::UInt16 => Datum::UInt16(u16::from_le_bytes(
+            read_unsigned_varint(data, tag, Tag::UInt16_0),
+        )),
+        Tag::UInt32_0 | Tag::UInt32_8 | Tag::UInt32_16 | Tag::UInt32_24 | Tag::UInt32 => {
+            Datum::UInt32(u32::from_le_bytes(read_unsigned_varint(
                 data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int64(i)
+                tag,
+                Tag::UInt32_0,
+            )))
         }
         Tag::UInt64_0
         | Tag::UInt64_8
@@ -1516,76 +1591,12 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
         | Tag::UInt64_40
         | Tag::UInt64_48
         | Tag::UInt64_56
-        | Tag::UInt64_64 => {
-            let i = u64::from_le_bytes(read_byte_array_extending_nonnegative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::UInt64(i)
-        }
-        Tag::NegativeInt16_0 | Tag::NegativeInt16_16 | Tag::NegativeInt16_8 => {
-            // SAFETY:`tag.actual_int_length()` is <= 16 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i16::from_le_bytes(read_byte_array_extending_negative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int16(i)
-        }
-        Tag::NegativeInt32_0
-        | Tag::NegativeInt32_32
-        | Tag::NegativeInt32_8
-        | Tag::NegativeInt32_16
-        | Tag::NegativeInt32_24 => {
-            // SAFETY:`tag.actual_int_length()` is <= 32 for these tags,
-            // and `data` is big enough because it was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i32::from_le_bytes(read_byte_array_extending_negative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int32(i)
-        }
-        Tag::NegativeInt64_0
-        | Tag::NegativeInt64_64
-        | Tag::NegativeInt64_8
-        | Tag::NegativeInt64_16
-        | Tag::NegativeInt64_24
-        | Tag::NegativeInt64_32
-        | Tag::NegativeInt64_40
-        | Tag::NegativeInt64_48
-        | Tag::NegativeInt64_56 => {
-            // SAFETY:`tag.actual_int_length()` is <= 64 for these tags,
-            // and `data` is big enough because the row was encoded validly. These assumptions
-            // are checked in debug asserts.
-            let i = i64::from_le_bytes(read_byte_array_extending_negative(
-                data,
-                tag.actual_int_length()
-                    .expect("returns a value for variable-length-encoded integer tags"),
-            ));
-            Datum::Int64(i)
-        }
+        | Tag::UInt64 => Datum::UInt64(u64::from_le_bytes(read_unsigned_varint(
+            data,
+            tag,
+            Tag::UInt64_0,
+        ))),
 
-        Tag::UInt8 => {
-            let i = u8::from_le_bytes(read_byte_array(data));
-            Datum::UInt8(i)
-        }
-        Tag::UInt16 => {
-            let i = u16::from_le_bytes(read_byte_array(data));
-            Datum::UInt16(i)
-        }
-        Tag::UInt32 => {
-            let i = u32::from_le_bytes(read_byte_array(data));
-            Datum::UInt32(i)
-        }
-        Tag::UInt64 => {
-            let i = u64::from_le_bytes(read_byte_array(data));
-            Datum::UInt64(i)
-        }
         Tag::Float32 => {
             let f = f32::from_bits(u32::from_le_bytes(read_byte_array(data)));
             Datum::Float32(OrderedFloat::from(f))
@@ -1646,18 +1657,20 @@ pub unsafe fn read_datum<'a>(data: &mut &'a [u8]) -> Datum<'a> {
                 micros,
             })
         }
-        Tag::BytesTiny
-        | Tag::BytesShort
-        | Tag::BytesLong
-        | Tag::BytesHuge
-        | Tag::StringTiny
-        | Tag::StringShort
-        | Tag::StringLong
-        | Tag::StringHuge
-        | Tag::ListTiny
-        | Tag::ListShort
-        | Tag::ListLong
-        | Tag::ListHuge => read_lengthed_datum(data, tag),
+        Tag::BytesTiny | Tag::BytesShort | Tag::BytesLong | Tag::BytesHuge => {
+            Datum::Bytes(read_lengthed_bytes(data, tag, Tag::BytesTiny))
+        }
+        Tag::StringTiny | Tag::StringShort | Tag::StringLong | Tag::StringHuge => {
+            // SAFETY: the bytes were written from a `str` under a `String` tag.
+            Datum::String(str::from_utf8_unchecked(read_lengthed_bytes(
+                data,
+                tag,
+                Tag::StringTiny,
+            )))
+        }
+        Tag::ListTiny | Tag::ListShort | Tag::ListLong | Tag::ListHuge => Datum::List(
+            DatumList::new(read_lengthed_bytes(data, tag, Tag::ListTiny)),
+        ),
         Tag::Uuid => Datum::Uuid(Uuid::from_bytes(read_byte_array(data))),
         Tag::Array => {
             // See the comment in `Row::push_array` for details on the encoding
@@ -1919,33 +1932,33 @@ where
         Datum::True => data.push(Tag::True.into()),
         Datum::Int16(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt16_0
-            } else {
-                Tag::NonNegativeInt16_0
-            }) + mbs;
+            // The family alternates the signs at each width, so the width is two tags apart and
+            // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
+            // payload carries its own sign. See `read_signed_varint`, which takes this apart.
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(4);
+            let tag = u8::from(Tag::NonNegativeInt16_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int32(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt32_0
-            } else {
-                Tag::NonNegativeInt32_0
-            }) + mbs;
+            // The family alternates the signs at each width, so the width is two tags apart and
+            // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
+            // payload carries its own sign. See `read_signed_varint`, which takes this apart.
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(8);
+            let tag = u8::from(Tag::NonNegativeInt32_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
         }
         Datum::Int64(i) => {
             let mbs = min_bytes_signed(i);
-            let tag = u8::from(if i.is_negative() {
-                Tag::NegativeInt64_0
-            } else {
-                Tag::NonNegativeInt64_0
-            }) + mbs;
+            // The family alternates the signs at each width, so the width is two tags apart and
+            // the sign is the low bit. The clamp folds both signs onto the widest tag, where the
+            // payload carries its own sign. See `read_signed_varint`, which takes this apart.
+            let delta = ((mbs << 1) + u8::from(i.is_negative())).min(16);
+            let tag = u8::from(Tag::NonNegativeInt64_0) + delta;
 
             data.push(tag);
             data.extend_from_slice(&i.to_le_bytes()[0..usize::from(mbs)]);
@@ -3112,7 +3125,9 @@ impl<'a> Iterator for DatumDictIter<'a> {
                 "Dict keys must be strings, got {:?}",
                 key_tag
             );
-            let key = unsafe { read_lengthed_datum(&mut self.data, key_tag).unwrap_str() };
+            let bytes = read_lengthed_bytes(&mut self.data, key_tag, Tag::StringTiny);
+            // SAFETY: the bytes were written from a `str` under a `String` tag.
+            let key = unsafe { str::from_utf8_unchecked(bytes) };
             let val = unsafe { read_datum(&mut self.data) };
 
             // Gate the `prev_key` bookkeeping on the same flag as the assert it feeds, so builds
@@ -3685,6 +3700,130 @@ mod tests {
             let from_bincode: StableRow =
                 bincode::deserialize(&bytes).expect("deserializes from bincode");
             prop_assert_eq!(&stable, &from_bincode);
+        }
+    }
+
+    /// Every width a variable-length integer can take, at both ends of its range and either
+    /// side of each byte boundary, plus the values whose payload is empty.
+    fn varint_edge_cases() -> Vec<Datum<'static>> {
+        let mut datums = vec![
+            Datum::Int16(0),
+            Datum::Int16(-1),
+            Datum::Int16(i16::MIN),
+            Datum::Int16(i16::MAX),
+            Datum::Int32(0),
+            Datum::Int32(-1),
+            Datum::Int32(i32::MIN),
+            Datum::Int32(i32::MAX),
+            Datum::Int64(0),
+            Datum::Int64(-1),
+            Datum::Int64(i64::MIN),
+            Datum::Int64(i64::MAX),
+            Datum::UInt8(0),
+            Datum::UInt8(u8::MAX),
+            Datum::UInt16(0),
+            Datum::UInt16(u16::MAX),
+            Datum::UInt32(0),
+            Datum::UInt32(u32::MAX),
+            Datum::UInt64(0),
+            Datum::UInt64(u64::MAX),
+        ];
+        // One below, at, and one above every point where the payload grows a byte.
+        for bits in 1..64 {
+            let boundary = 1u64 << bits;
+            for delta in [-1i64, 0, 1] {
+                let Some(v) = boundary.checked_add_signed(delta) else {
+                    continue;
+                };
+                datums.push(Datum::UInt64(v));
+                if let Ok(v) = u32::try_from(v) {
+                    datums.push(Datum::UInt32(v));
+                }
+                if let Ok(v) = u16::try_from(v) {
+                    datums.push(Datum::UInt16(v));
+                }
+                if let Ok(v) = u8::try_from(v) {
+                    datums.push(Datum::UInt8(v));
+                }
+                let Ok(v) = i64::try_from(v) else {
+                    continue;
+                };
+                datums.push(Datum::Int64(v));
+                datums.push(Datum::Int64(-v));
+                if let Ok(v) = i32::try_from(v) {
+                    datums.push(Datum::Int32(v));
+                    datums.push(Datum::Int32(-v));
+                }
+                if let Ok(v) = i16::try_from(v) {
+                    datums.push(Datum::Int16(v));
+                    datums.push(Datum::Int16(-v));
+                }
+            }
+        }
+        datums
+    }
+
+    /// Both signed families of a width share one match arm, which recovers the payload width by
+    /// subtracting the family's first tag. A value whose tag falls outside the family it is
+    /// decoded as would read the wrong number of bytes, so check every boundary lands where the
+    /// arithmetic expects.
+    #[mz_ore::test]
+    fn varint_tags_land_in_their_family() {
+        for datum in varint_edge_cases() {
+            let row = Row::pack_slice(&[datum]);
+            let tag = Tag::try_from_primitive(row.data[0]).expect("valid tag");
+            let (first, len, negative, widest) = match datum {
+                Datum::Int16(i) => (Tag::NonNegativeInt16_0, min_bytes_signed(i), i < 0, 2),
+                Datum::Int32(i) => (Tag::NonNegativeInt32_0, min_bytes_signed(i), i < 0, 4),
+                Datum::Int64(i) => (Tag::NonNegativeInt64_0, min_bytes_signed(i), i < 0, 8),
+                Datum::UInt8(u) => (Tag::UInt8_0, min_bytes_unsigned(u), false, 1),
+                Datum::UInt16(u) => (Tag::UInt16_0, min_bytes_unsigned(u), false, 2),
+                Datum::UInt32(u) => (Tag::UInt32_0, min_bytes_unsigned(u), false, 4),
+                Datum::UInt64(u) => (Tag::UInt64_0, min_bytes_unsigned(u), false, 8),
+                other => panic!("not a variable-length integer: {other:?}"),
+            };
+            let delta = u8::from(tag) - u8::from(first);
+            let signed = matches!(datum, Datum::Int16(_) | Datum::Int32(_) | Datum::Int64(_));
+            if signed {
+                // Interleaved: the width sits above the low bit, the sign in it. At the widest
+                // width the alternation stops, one tag serving both signs.
+                assert_eq!(delta >> 1, len, "wrong payload width in tag for {datum:?}");
+                let sign_bit = if len == widest { 0 } else { u8::from(negative) };
+                assert_eq!(delta & 1, sign_bit, "wrong sign in tag for {datum:?}");
+            } else {
+                assert_eq!(delta, len, "wrong payload width in tag for {datum:?}");
+            }
+            assert_eq!(row.unpack_first(), datum, "did not round-trip: {datum:?}");
+        }
+    }
+
+    /// The wide load in `read_varint_word` reads eight bytes whatever the payload's width, so
+    /// the datums at the end of a row, where those bytes do not exist, take the tail path.
+    #[mz_ore::test]
+    fn varint_at_end_of_row_reads_exact_width() {
+        for datum in varint_edge_cases() {
+            // Alone in a row, and behind padding long enough to push the fast path back in.
+            for prefix in [None, Some(Datum::String("0123456789abcdef"))] {
+                let row = match prefix {
+                    Some(p) => Row::pack_slice(&[p, datum]),
+                    None => Row::pack_slice(&[datum]),
+                };
+                assert_eq!(
+                    row.iter().last(),
+                    Some(datum),
+                    "did not round-trip at end of row: {datum:?}"
+                );
+            }
+            // And nested, where the list's slice ends before the row's data does.
+            let mut row = Row::default();
+            let mut packer = row.packer();
+            packer.push_list_with(|packer| packer.push(datum));
+            packer.push(Datum::Int64(1));
+            let list = match row.unpack_first() {
+                Datum::List(list) => list,
+                other => panic!("expected a list, got {other:?}"),
+            };
+            assert_eq!(list.iter().next(), Some(datum), "did not round-trip nested");
         }
     }
 
