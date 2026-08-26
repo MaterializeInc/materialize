@@ -15,7 +15,7 @@ use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Write;
 use std::io::{Read as _, Write as _};
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -51,7 +51,7 @@ use mz_ore::{assert_err, assert_ok, task};
 use mz_pgrepr::UInt8;
 use mz_repr::UNKNOWN_COLUMN_NAME;
 use mz_sql::session::user::{ANALYTICS_USER, HTTP_DEFAULT_USER, SYSTEM_USER};
-use openssl::ssl::{SslConnectorBuilder, SslVerifyMode};
+use openssl::ssl::{SslConnector, SslConnectorBuilder, SslMethod, SslVerifyMode};
 use openssl::x509::X509;
 use postgres::config::SslMode;
 use postgres_array::Array;
@@ -7576,35 +7576,53 @@ async fn test_http2_tls() {
         .start()
         .await;
 
-    let https_url = Url::parse(&format!("https://{}/api/sql", server.http_local_addr())).unwrap();
+    let addr = server.http_local_addr();
+    assert_eq!(
+        alpn_selected(addr, b"\x02h2\x08http/1.1").await.as_deref(),
+        Some(&b"h2"[..])
+    );
+    assert_eq!(
+        alpn_selected(addr, b"\x08http/1.1").await.as_deref(),
+        Some(&b"http/1.1"[..])
+    );
+
+    // reqwest's native-tls backend does not offer ALPN, so it is served over
+    // HTTP/1.1 exactly as before.
+    let https_url = Url::parse(&format!("https://{addr}/api/sql")).unwrap();
     let json: serde_json::Value = serde_json::from_str(r#"{ "query": "SELECT 42;" }"#).unwrap();
     let ca_cert = reqwest::Certificate::from_pem(&ca.cert.to_pem().unwrap()).unwrap();
-
-    // A client that supports HTTP/2 negotiates it via ALPN.
-    let client = reqwest::Client::builder()
-        .add_root_certificate(ca_cert.clone())
-        .build()
-        .unwrap();
-    let response = client
-        .post(https_url.clone())
-        .json(&json)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.version(), reqwest::Version::HTTP_2);
-    assert!(response.status().is_success());
-    assert_contains!(response.text().await.unwrap(), "42");
-
-    // An HTTP/1.1-only client is still served.
     let client = reqwest::Client::builder()
         .add_root_certificate(ca_cert)
-        .http1_only()
         .build()
         .unwrap();
     let response = client.post(https_url).json(&json).send().await.unwrap();
     assert_eq!(response.version(), reqwest::Version::HTTP_11);
     assert!(response.status().is_success());
     assert_contains!(response.text().await.unwrap(), "42");
+}
+
+/// Returns the protocol the TLS server at `addr` selects for a client offering
+/// `alpn`, in OpenSSL wire format (length-prefixed protocol names).
+async fn alpn_selected(addr: SocketAddr, alpn: &'static [u8]) -> Option<Vec<u8>> {
+    // The handshake is blocking, and the server shares this runtime.
+    mz_ore::task::spawn_blocking(
+        || "alpn_probe",
+        move || {
+            let mut connector = SslConnector::builder(SslMethod::tls()).unwrap();
+            connector.set_verify(SslVerifyMode::NONE);
+            connector.set_alpn_protos(alpn).unwrap();
+            let stream = connector
+                .build()
+                .configure()
+                .unwrap()
+                .verify_hostname(false)
+                .use_server_name_indication(false)
+                .connect("", std::net::TcpStream::connect(addr).unwrap())
+                .unwrap();
+            stream.ssl().selected_alpn_protocol().map(<[u8]>::to_vec)
+        },
+    )
+    .await
 }
 
 // Test that plaintext listeners serve both HTTP/1.1 and HTTP/2 (h2c via
