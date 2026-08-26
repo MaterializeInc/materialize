@@ -265,9 +265,13 @@ impl OffloadedPeek {
             // mechanism of its own. The permit goes with this task rather than with the entry that
             // was removed, so it is still accounting for these batches right up to here.
             //
-            // NOTE: parts of an upload written before this point stay in blob storage. Deleting
-            // them is work this driver does not do.
+            // Removing the entry also aborts this task, so a cancellation usually stops the walk
+            // before it gets here and the upload is given up by its drop instead. Both reach the
+            // same deletion, which is why this one can be written as an ordinary return.
             if result_tx.is_closed() {
+                if let Some(upload) = upload.take() {
+                    upload.discard();
+                }
                 return None;
             }
 
@@ -289,11 +293,13 @@ impl OffloadedPeek {
                         Some(upload) => stashed_answer(peek_uuid, upload, rows).await,
                     });
                 }
-                // NOTE: a walk that fails after it has written to the stash abandons the upload,
-                // which leaves the parts already written in blob storage, the same way a
-                // cancellation does.
                 ScanOutcome::Failed(error) => {
                     metrics.observe_error_phase(&scan.phases());
+                    // The peek is answered with the error rather than with the rows written so
+                    // far, so nothing will ever read them.
+                    if let Some(upload) = upload.take() {
+                        upload.discard();
+                    }
                     return Some(PeekResponse::Error(error));
                 }
                 ScanOutcome::Suspended => {
@@ -335,13 +341,14 @@ impl OffloadedPeek {
                                     stashed_answer(peek_uuid, open, RowBatch::new()).await,
                                 );
                             }
-                            // NOTE: the upload is abandoned here, which leaves the parts already
-                            // written in blob storage, the same way a cancellation does.
                             Err(error) => {
                                 // Persist rejects a batch it was handed wrongly, so this is a
                                 // defect in the upload rather than a blip, and the query's error
                                 // is the only other place it shows.
                                 warn!(%peek_uuid, %error, "peek stash rejected a batch");
+                                if let Some(upload) = upload.take() {
+                                    upload.discard();
+                                }
                                 return Some(PeekResponse::Error(PeekError::unstructured(error)));
                             }
                         }
@@ -363,8 +370,8 @@ async fn stashed_answer(
 ) -> PeekResponse {
     match upload.finish(inline_rows).await {
         Ok(response) => response,
-        // NOTE: the upload is abandoned here, which leaves the parts already written in blob
-        // storage, the same way a cancellation does.
+        // NOTE: a rejected finish is the one abandonment that leaves the parts behind, because
+        // persist keeps the builder it was asked to finish. `StashUpload::finish` says so.
         Err(error) => {
             // Persist rejects a batch it was handed wrongly, so this is a defect in the upload
             // rather than a blip, and the query's error is the only other place it shows.

@@ -13,6 +13,7 @@ use mz_compute_client::protocol::command::Peek;
 use mz_compute_client::protocol::response::{PeekResponse, StashedPeekResponse};
 use mz_expr::row::RowCollection;
 use mz_ore::cast::CastFrom;
+use mz_ore::task::RuntimeExt;
 use mz_persist_client::Schemas;
 use mz_persist_client::batch::BatchBuilder;
 use mz_persist_client::cache::PersistClientCache;
@@ -21,6 +22,8 @@ use mz_persist_types::{PersistLocation, ShardId};
 use mz_repr::{RelationDesc, Timestamp};
 use mz_storage_types::sources::SourceData;
 use timely::progress::Antichain;
+use tokio::runtime::Handle;
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::compute_state::peek_scan::RowBatch;
@@ -44,8 +47,17 @@ pub(super) enum UploadDemand {
 /// and from an async task alike.
 ///
 /// The rows an upload is given are the rows it writes, in the order it is given them, up to the
-/// point where the peek's finishing has all it can use. An upload dropped without
-/// [`StashUpload::finish`] leaves the parts it has already written to blob storage behind.
+/// point where the peek's finishing has all it can use. An upload that is never finished deletes
+/// the parts it has written, whether it is handed to [`StashUpload::discard`] or only dropped, so
+/// abandoning one costs blob storage nothing lasting. [`StashUpload::abandon`] states the one case
+/// that escapes.
+///
+/// Nothing here bounds how large a stashed answer grows where the finishing has no limit to reach.
+/// `max_result_size` bounds the prefix a single scan retains between batches and never the sum
+/// across them, so an upload writes as many rows as the walk feeding it produces. What keeps a
+/// reader from having to hold all of them at once is the reader's own budget, the dyncfgs
+/// `peek_stash_read_batch_size_bytes` and `peek_stash_read_memory_budget_bytes`, and nothing on
+/// this side.
 ///
 /// Every write reports its failure rather than raising it. The unit that fails is the peek, whose
 /// driver answers it with the error, so a rejected write costs one query its answer instead of
@@ -56,7 +68,10 @@ pub(super) struct StashUpload {
     /// The shard the batch belongs to, derived from the peek's uuid so that a reader holding the
     /// response can find it.
     shard_id: ShardId,
-    batch_builder: BatchBuilder<SourceData, (), Timestamp, i64>,
+    /// The parts persist has taken so far. Taken by whichever of [`StashUpload::finish`] and
+    /// [`StashUpload::abandon`] gets there first, and a `None` says the parts are accounted for
+    /// and nothing is left to delete.
+    batch_builder: Option<BatchBuilder<SourceData, (), Timestamp, i64>>,
     /// The upper the batch is finished at, one step beyond the timestamp every row is written at.
     upper: Antichain<Timestamp>,
     /// The number of rows the peek's finishing can use, its offset plus its limit, or `None` for a
@@ -65,7 +80,14 @@ pub(super) struct StashUpload {
     /// Rows written so far, counting a row with a diff of `n` as `n` rows, which is how the
     /// finishing counts them.
     num_rows: u64,
+    /// The runtime an abandoned upload's deletion is spawned on, held rather than taken from the
+    /// ambient context because [`StashUpload::abandon`] runs where there may be none.
+    runtime: Handle,
 }
+
+/// What a [`StashUpload`] whose builder is already gone would be: an upload past the one call that
+/// consumes it, which no caller holds.
+const BUILDER_TAKEN: &str = "an upload holds its builder until it is finished or abandoned";
 
 impl StashUpload {
     /// Opens an upload for the peek `peek_uuid` identifies.
@@ -114,10 +136,11 @@ impl StashUpload {
         Ok(Self {
             relation_desc,
             shard_id,
-            batch_builder,
+            batch_builder: Some(batch_builder),
             upper,
             max_rows,
             num_rows: 0,
+            runtime: Handle::current(),
         })
     }
 
@@ -140,6 +163,8 @@ impl StashUpload {
             let diff: i64 = diff.into();
 
             self.batch_builder
+                .as_mut()
+                .expect(BUILDER_TAKEN)
                 .add(&SourceData(Ok(row)), &(), &Timestamp::default(), &diff)
                 .await
                 .map_err(|err| err.to_string())?;
@@ -164,10 +189,16 @@ impl StashUpload {
     /// sound because a peek reaches the stash only with an empty `order_by`.
     ///
     /// Fails where persist rejects the batch, in which case nothing that was written is readable.
-    pub(super) async fn finish(self, inline_rows: RowBatch) -> Result<PeekResponse, String> {
+    ///
+    /// A rejection also strands the parts: persist takes the builder to finish it and hands back
+    /// no handle to what it holds when it refuses, so the deletion an abandoned upload does has
+    /// nothing to reach and the parts stay in blob storage.
+    pub(super) async fn finish(mut self, inline_rows: RowBatch) -> Result<PeekResponse, String> {
         let batch = self
             .batch_builder
-            .finish(self.upper)
+            .take()
+            .expect(BUILDER_TAKEN)
+            .finish(self.upper.clone())
             .await
             .map_err(|err| err.to_string())?;
 
@@ -182,12 +213,66 @@ impl StashUpload {
         let stashed_response = StashedPeekResponse {
             num_rows_batches: self.num_rows,
             encoded_size_bytes: batch.encoded_size_bytes(),
-            relation_desc: self.relation_desc,
+            relation_desc: self.relation_desc.clone(),
             shard_id: self.shard_id,
             batches: vec![batch.into_transmittable_batch()],
             inline_rows: vec![RowCollection::new(inline_rows, &[])],
         };
         Ok(PeekResponse::Stashed(Box::new(stashed_response)))
+    }
+
+    /// Deletes the parts this upload has already written, consuming it.
+    ///
+    /// A driver whose peek will be answered with something other than these rows calls this to say
+    /// so. The deletion is scheduled rather than performed here, so this returns before blob
+    /// storage has caught up and reports nothing about how it went.
+    pub(super) fn discard(mut self) {
+        self.abandon();
+    }
+
+    /// Schedules the deletion of whatever parts the upload still holds, and leaves it holding
+    /// none.
+    ///
+    /// Persist hands back a handle to the parts it has taken only by finishing the batch, so the
+    /// rows still buffered are written out before the delete removes them along with the rest, and
+    /// they stay in memory until it does. That is a part's worth of rows outliving the permit that
+    /// admitted the walk which produced them.
+    fn abandon(&mut self) {
+        let Some(batch_builder) = self.batch_builder.take() else {
+            return;
+        };
+
+        let upper = self.upper.clone();
+        let shard_id = self.shard_id;
+
+        // Scheduled rather than awaited because the caller that matters most cannot await at all.
+        // Cancelling a peek aborts the walk driving it, and an aborted task is dropped rather than
+        // polled again, so the deletion reaches blob storage only as work that does not belong to
+        // that task. Entering the runtime explicitly is what lets this run from a `Drop`, which is
+        // not guaranteed to run inside a runtime context.
+        //
+        // NOTE: this reaches only an upload that a live replica gives up on. A replica that dies
+        // mid-upload, or one whose runtime is already shutting down, leaves the parts in blob
+        // storage, and reclaiming those needs a reader-side sweep or persist's own garbage
+        // collection.
+        let _handle =
+            self.runtime
+                .spawn_named(|| format!("peek_stash::discard({shard_id})"), async move {
+                    match batch_builder.finish(upper).await {
+                        Ok(batch) => batch.delete().await,
+                        Err(error) => {
+                            warn!(%shard_id, %error, "peek stash cannot delete an abandoned batch")
+                        }
+                    }
+                });
+    }
+}
+
+impl Drop for StashUpload {
+    /// Deletes the parts of an upload that ends without [`StashUpload::finish`] or
+    /// [`StashUpload::discard`], which is the only cleanup a walk aborted mid-upload gets.
+    fn drop(&mut self) {
+        self.abandon();
     }
 }
 
