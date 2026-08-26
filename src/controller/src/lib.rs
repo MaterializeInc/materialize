@@ -51,6 +51,7 @@ use mz_persist_client::PersistLocation;
 use mz_persist_client::cache::PersistClientCache;
 use mz_repr::{Datum, GlobalId, Row, Timestamp};
 use mz_service::secrets::SecretsReaderCliArgs;
+use mz_service::transport::tls::ClusterTlsContext;
 use mz_storage_client::controller::{
     IntrospectionType, StorageController, StorageMetadata, StorageTxn,
 };
@@ -101,6 +102,8 @@ pub struct ControllerConfig {
     pub persist_pubsub_url: String,
     /// Arguments for secrets readers.
     pub secrets_args: SecretsReaderCliArgs,
+    /// TLS context for cluster transport connections, if cluster transport TLS is enabled.
+    pub cluster_tls: Option<Arc<ClusterTlsContext>>,
     /// The connection context, to thread through to clusterd, with cli flags.
     pub connection_context: ConnectionContext,
     /// Locator for HTTP addresses of cluster replicas, used to proxy HTTP
@@ -179,6 +182,8 @@ pub struct Controller {
 
     /// Arguments for secrets readers.
     secrets_args: SecretsReaderCliArgs,
+    /// TLS context for cluster transport connections, if cluster transport TLS is enabled.
+    cluster_tls: Option<Arc<ClusterTlsContext>>,
 
     /// A map associating a global ID to the set of all the unfulfilled watch
     /// set ids that include it.
@@ -297,6 +302,7 @@ impl Controller {
             now: _,
             persist_pubsub_url: _,
             secrets_args: _,
+            cluster_tls: _,
             unfulfilled_watch_sets_by_object: _,
             unfulfilled_watch_sets,
             watch_set_id_gen: _,
@@ -749,6 +755,7 @@ impl Controller {
             now: config.now,
             persist_pubsub_url: config.persist_pubsub_url,
             secrets_args: config.secrets_args,
+            cluster_tls: config.cluster_tls,
             unfulfilled_watch_sets_by_object: BTreeMap::new(),
             unfulfilled_watch_sets: BTreeMap::new(),
             watch_set_id_gen: Gen::default(),

@@ -20,6 +20,9 @@ use mz_ore::assert_none;
 use mz_ore::netio::Listener;
 use mz_ore::retry::Retry;
 use mz_service::client::GenericClient;
+use mz_service::transport::tls::{
+    CertificateAuthority, ClientTlsConfig, ServerTlsConfig, TlsCredentials,
+};
 use mz_service::transport::{self, Message, NoopMetrics};
 use semver::Version;
 use tokio::io::AsyncWriteExt;
@@ -52,12 +55,20 @@ fn setup() -> turmoil::Sim<'static> {
 async fn connect_ctp<Out: Message, In: Message>(
     address: &str,
     version: Version,
+    tls: Option<ClientTlsConfig>,
     timeout: Duration,
     metrics: impl transport::Metrics<Out, In>,
 ) -> transport::Client<Out, In> {
     Retry::default()
         .retry_async(|_| {
-            transport::Client::connect(address, version.clone(), timeout, timeout, metrics.clone())
+            transport::Client::connect(
+                address,
+                version.clone(),
+                tls.clone(),
+                timeout,
+                timeout,
+                metrics.clone(),
+            )
         })
         .await
         .expect("retries forever")
@@ -74,6 +85,7 @@ async fn connect_ctp_error<Out: Message, In: Message>(
             let result = transport::Client::<(), ()>::connect(
                 address,
                 version.clone(),
+                None,
                 TIMEOUT,
                 TIMEOUT,
                 NoopMetrics,
@@ -83,6 +95,40 @@ async fn connect_ctp_error<Out: Message, In: Message>(
             if error.to_string() == expected_error {
                 Ok(())
             } else {
+                Err(error)
+            }
+        })
+        .await
+}
+
+/// Helper for connecting to a CTP server (optionally with TLS) that retries until it encounters
+/// an error containing one of the expected substrings.
+///
+/// TLS failure modes surface as different errors depending on which side aborts first and how
+/// far the handshake progressed, so callers pass all acceptable variants.
+async fn connect_ctp_error_contains(
+    address: &str,
+    version: Version,
+    tls: Option<ClientTlsConfig>,
+    expected_errors: &[&str],
+) -> anyhow::Result<()> {
+    Retry::default()
+        .retry_async(async |_| {
+            let result = transport::Client::<(), ()>::connect(
+                address,
+                version.clone(),
+                tls.clone(),
+                TIMEOUT,
+                TIMEOUT,
+                NoopMetrics,
+            )
+            .await;
+            let error = result.expect_err("connection must fail");
+            let error_string = format!("{error:#}");
+            if expected_errors.iter().any(|e| error_string.contains(e)) {
+                Ok(())
+            } else {
+                info!("connect failed with unexpected error: {error_string}");
                 Err(error)
             }
         })
@@ -106,6 +152,7 @@ fn test_bidirectional_communication() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
+                None,
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 NoopMetrics,
@@ -125,7 +172,8 @@ fn test_bidirectional_communication() {
     });
 
     sim.client("client", async move {
-        let mut client = connect_ctp("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+        let mut client =
+            connect_ctp("turmoil:server:7777", VERSION, None, TIMEOUT, NoopMetrics).await;
 
         client.send(1).await?;
         client.send(2).await?;
@@ -161,6 +209,7 @@ fn test_server_error() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
+                None,
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 NoopMetrics,
@@ -175,7 +224,8 @@ fn test_server_error() {
 
     sim.client("client", async move {
         let mut client =
-            connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, ()>("turmoil:server:7777", VERSION, None, TIMEOUT, NoopMetrics)
+                .await;
 
         client.send(1).await?;
 
@@ -242,6 +292,7 @@ fn test_handshake_version_mismatch() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 SERVER_VERSION,
                 Some("server".into()),
+                None,
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 NoopMetrics,
@@ -285,6 +336,7 @@ fn test_handshake_fqdn_mismatch() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("wrong.server".into()),
+                None,
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 NoopMetrics,
@@ -328,6 +380,7 @@ fn test_idle_timeout() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
+                None,
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 NoopMetrics,
@@ -342,7 +395,8 @@ fn test_idle_timeout() {
 
     sim.client("client", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, None, TIMEOUT, NoopMetrics)
+                .await;
 
         client.recv().await?;
         ready_tx.send(1).unwrap();
@@ -382,6 +436,7 @@ fn test_keepalive() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
+                None,
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 NoopMetrics,
@@ -397,7 +452,8 @@ fn test_keepalive() {
 
     sim.client("client", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, None, TIMEOUT, NoopMetrics)
+                .await;
 
         client.recv().await?;
 
@@ -421,6 +477,7 @@ fn test_connection_cancelation() {
             "turmoil:0.0.0.0:7777".parse().unwrap(),
             VERSION,
             Some("server".into()),
+            None,
             TIMEOUT,
             OneOutputHandler::new,
             NoopMetrics,
@@ -434,7 +491,8 @@ fn test_connection_cancelation() {
 
     sim.client("client1", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, None, TIMEOUT, NoopMetrics)
+                .await;
 
         client.recv().await?;
         ready_tx.send(1).unwrap();
@@ -456,7 +514,8 @@ fn test_connection_cancelation() {
 
     sim.client("client2", async move {
         let mut client =
-            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, TIMEOUT, NoopMetrics).await;
+            connect_ctp::<i32, i32>("turmoil:server:7777", VERSION, None, TIMEOUT, NoopMetrics)
+                .await;
 
         client.recv().await?;
 
@@ -511,6 +570,7 @@ fn test_metrics() {
                 "turmoil:0.0.0.0:7777".parse().unwrap(),
                 VERSION,
                 Some("server".into()),
+                None,
                 TIMEOUT,
                 move || handler.lock().unwrap().take().unwrap(),
                 metrics.clone(),
@@ -534,8 +594,14 @@ fn test_metrics() {
     sim.client("client", async move {
         let metrics = Metrics::default();
 
-        let mut client =
-            connect_ctp("turmoil:server:7777", VERSION, TIMEOUT, metrics.clone()).await;
+        let mut client = connect_ctp(
+            "turmoil:server:7777",
+            VERSION,
+            None,
+            TIMEOUT,
+            metrics.clone(),
+        )
+        .await;
 
         client.send("short".into()).await?;
         assert_eq!(
@@ -551,6 +617,756 @@ fn test_metrics() {
         assert_eq!(metrics.messages_sent.load(Ordering::SeqCst), 1);
         assert_eq!(metrics.messages_received.load(Ordering::SeqCst), 1);
 
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+/// The identity issued to CTP servers in TLS tests.
+const SERVER_IDENTITY: &str = "replica.ctp.test";
+/// The identity issued to CTP clients in TLS tests.
+const CLIENT_IDENTITY: &str = "controller.ctp.test";
+/// Certificate validity for TLS tests.
+const CERT_VALIDITY: Duration = Duration::from_secs(60 * 60);
+
+/// Endpoint TLS configs for one CA domain: client and server identities issued by the same CA,
+/// each side expecting the other's identity.
+fn tls_configs() -> (ClientTlsConfig, ServerTlsConfig) {
+    let ca = CertificateAuthority::generate("ctp-test-ca").unwrap();
+    tls_configs_for_ca(&ca)
+}
+
+fn tls_configs_for_ca(ca: &CertificateAuthority) -> (ClientTlsConfig, ServerTlsConfig) {
+    let client = client_tls_config(ca, CLIENT_IDENTITY, SERVER_IDENTITY);
+    let server = server_tls_config(ca, SERVER_IDENTITY, CLIENT_IDENTITY);
+    (client, server)
+}
+
+fn client_tls_config(
+    ca: &CertificateAuthority,
+    own_identity: &str,
+    server_identity: &str,
+) -> ClientTlsConfig {
+    let issued = ca.issue(own_identity, CERT_VALIDITY).unwrap();
+    let credentials = TlsCredentials {
+        ca_cert_pem: ca.cert_pem().into(),
+        cert_pem: issued.cert_pem,
+        key_pem: issued.key_pem,
+    };
+    ClientTlsConfig::new(&credentials, server_identity).unwrap()
+}
+
+fn server_tls_config(
+    ca: &CertificateAuthority,
+    own_identity: &str,
+    client_identity: &str,
+) -> ServerTlsConfig {
+    let issued = ca.issue(own_identity, CERT_VALIDITY).unwrap();
+    let credentials = TlsCredentials {
+        ca_cert_pem: ca.cert_pem().into(),
+        cert_pem: issued.cert_pem,
+        key_pem: issued.key_pem,
+    };
+    ServerTlsConfig::new(&credentials, client_identity).unwrap()
+}
+
+/// Spawn a CTP server whose handler factory tolerates any number of connection attempts, for
+/// tests where every connection is expected to fail before reaching the handler.
+///
+/// Rejection is asserted client side: if a connection unexpectedly establishes, the client's
+/// `connect` succeeds and its `expect_err` fails the test.
+///
+/// Must be called from within the simulated host's async context.
+fn spawn_rejecting_server(tls: Option<ServerTlsConfig>) {
+    let (in_tx, _in_rx) = mpsc::unbounded_channel::<i32>();
+
+    mz_ore::task::spawn(
+        || "serve",
+        transport::serve::<i32, i32, _>(
+            "turmoil:0.0.0.0:7777".parse().unwrap(),
+            VERSION,
+            Some("server".into()),
+            tls,
+            TIMEOUT,
+            move || ChannelHandler::new(in_tx.clone(), mpsc::unbounded_channel().1),
+            NoopMetrics,
+        ),
+    );
+}
+
+/// Spawn a TLS-enabled CTP server with a `ChannelHandler`, returning the channel ends.
+///
+/// Must be called from within the simulated host's async context.
+fn spawn_tls_server<In: Message, Out: Message>(
+    tls: ServerTlsConfig,
+) -> (mpsc::UnboundedSender<Out>, mpsc::UnboundedReceiver<In>) {
+    let (in_tx, in_rx) = mpsc::unbounded_channel();
+    let (out_tx, out_rx) = mpsc::unbounded_channel();
+    let handler = ChannelHandler::new(in_tx, out_rx);
+    let handler = Arc::new(Mutex::new(Some(handler)));
+
+    mz_ore::task::spawn(
+        || "serve",
+        transport::serve(
+            "turmoil:0.0.0.0:7777".parse().unwrap(),
+            VERSION,
+            Some("server".into()),
+            Some(tls),
+            TIMEOUT,
+            move || handler.lock().unwrap().take().unwrap(),
+            NoopMetrics,
+        ),
+    );
+
+    (out_tx, in_rx)
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_bidirectional_communication() {
+    let mut sim = setup();
+
+    let (client_tls, server_tls) = tls_configs();
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            let (out_tx, mut in_rx) = spawn_tls_server(server_tls);
+
+            out_tx.send("a".to_string())?;
+            out_tx.send("b".to_string())?;
+
+            assert_eq!(in_rx.recv().await, Some(1));
+            assert_eq!(in_rx.recv().await, Some(2));
+
+            out_tx.send("done".to_string())?;
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        let mut client = connect_ctp(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        client.send(1).await?;
+        client.send(2).await?;
+
+        assert_eq!(client.recv().await?, Some("a".to_string()));
+        assert_eq!(client.recv().await?, Some("b".to_string()));
+        assert_eq!(client.recv().await?, Some("done".to_string()));
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_large_message() {
+    let mut sim = setup();
+
+    let (client_tls, server_tls) = tls_configs();
+
+    // Larger than a single TLS record (16 KiB), to exercise record chunking.
+    let payload = "x".repeat(1 << 20);
+    let expected = payload.clone();
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        let payload = payload.clone();
+        async {
+            let (out_tx, mut in_rx) = spawn_tls_server::<String, String>(server_tls);
+
+            out_tx.send(payload.clone())?;
+            assert_eq!(in_rx.recv().await, Some(payload));
+
+            // Confirm the received echo, so the client can terminate.
+            out_tx.send("ok".into())?;
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        let mut client = connect_ctp::<String, String>(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        let received = client.recv().await?.unwrap();
+        assert_eq!(received.len(), expected.len());
+        assert_eq!(received, expected);
+        client.send(received).await?;
+
+        // Wait for the server to confirm the echo.
+        assert_eq!(client.recv().await?, Some("ok".to_string()));
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_keepalive() {
+    let mut sim = setup();
+
+    let (client_tls, server_tls) = tls_configs();
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            let (out_tx, _in_rx) = spawn_tls_server::<i32, i32>(server_tls);
+
+            // Idle time that would time out the connections without keepalives.
+            tokio::time::sleep(TIMEOUT + Duration::from_secs(1)).await;
+
+            out_tx.send(1)?;
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        let mut client = connect_ctp::<i32, i32>(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        client.recv().await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_untrusted_server_rejected() {
+    let mut sim = setup();
+
+    // The server's certificate chains to a different CA than the client trusts.
+    let client_ca = CertificateAuthority::generate("client-ca").unwrap();
+    let server_ca = CertificateAuthority::generate("server-ca").unwrap();
+    let client_tls = client_tls_config(&client_ca, CLIENT_IDENTITY, SERVER_IDENTITY);
+    let server_tls = server_tls_config(&server_ca, SERVER_IDENTITY, CLIENT_IDENTITY);
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            let (_out_tx, mut in_rx) = spawn_tls_server::<i32, i32>(server_tls);
+
+            // No connection must ever be established.
+            assert_none!(in_rx.recv().await);
+            Ok(())
+        }
+    });
+
+    sim.client("client", async move {
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            &["invalid peer certificate"],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_wrong_server_identity_rejected() {
+    let mut sim = setup();
+
+    // Both certificates chain to the same CA, but the server's certificate carries an identity
+    // other than the one the client expects.
+    let ca = CertificateAuthority::generate("ctp-test-ca").unwrap();
+    let client_tls = client_tls_config(&ca, CLIENT_IDENTITY, SERVER_IDENTITY);
+    let server_tls = server_tls_config(&ca, "imposter.ctp.test", CLIENT_IDENTITY);
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            let (_out_tx, mut in_rx) = spawn_tls_server::<i32, i32>(server_tls);
+
+            assert_none!(in_rx.recv().await);
+            Ok(())
+        }
+    });
+
+    sim.client("client", async move {
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            &["invalid peer certificate"],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_untrusted_client_rejected() {
+    let mut sim = setup();
+
+    // The client's certificate chains to a different CA than the server trusts.
+    let client_ca = CertificateAuthority::generate("client-ca").unwrap();
+    let server_ca = CertificateAuthority::generate("server-ca").unwrap();
+    let client_tls = client_tls_config(&client_ca, CLIENT_IDENTITY, SERVER_IDENTITY);
+    // The client must still trust the server's CA, so the handshake proceeds far enough for the
+    // server to see (and reject) the client certificate.
+    let client_tls_trusting_server = {
+        let issued = client_ca.issue(CLIENT_IDENTITY, CERT_VALIDITY).unwrap();
+        let credentials = TlsCredentials {
+            ca_cert_pem: server_ca.cert_pem().into(),
+            cert_pem: issued.cert_pem,
+            key_pem: issued.key_pem,
+        };
+        ClientTlsConfig::new(&credentials, SERVER_IDENTITY).unwrap()
+    };
+    drop(client_tls);
+    let server_tls = server_tls_config(&server_ca, SERVER_IDENTITY, CLIENT_IDENTITY);
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            spawn_rejecting_server(Some(server_tls));
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls_trusting_server),
+            &[
+                "alert",
+                "unexpected end of file",
+                "close_notify",
+                "Connection reset",
+            ],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_wrong_client_identity_rejected() {
+    let mut sim = setup();
+
+    // The client's certificate chains to the trusted CA but carries an identity other than the
+    // one the server expects. The chain verifies in the TLS handshake, so the rejection comes
+    // from the server's identity check afterwards.
+    let ca = CertificateAuthority::generate("ctp-test-ca").unwrap();
+    let client_tls = client_tls_config(&ca, "imposter.ctp.test", SERVER_IDENTITY);
+    let server_tls = server_tls_config(&ca, SERVER_IDENTITY, CLIENT_IDENTITY);
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            spawn_rejecting_server(Some(server_tls));
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            &[
+                "alert",
+                "unexpected end of file",
+                "close_notify",
+                "Connection reset",
+            ],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_plaintext_client_rejected() {
+    let mut sim = setup();
+
+    let (client_tls, server_tls) = tls_configs();
+    drop(client_tls);
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            spawn_rejecting_server(Some(server_tls));
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        // A plaintext client's CTP magic is not a TLS ClientHello. The server aborts, and the
+        // client sees either the server's TLS alert bytes (which fail the magic check) or a
+        // closed connection.
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            None,
+            &[
+                "invalid protocol magic",
+                "unexpected end of file",
+                "Connection reset",
+            ],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_client_plaintext_server_rejected() {
+    let mut sim = setup();
+
+    let (client_tls, server_tls) = tls_configs();
+    drop(server_tls);
+
+    sim.host("server", move || async {
+        spawn_rejecting_server(None);
+        future::pending().await
+    });
+
+    sim.client("client", async move {
+        // A plaintext server's CTP magic is not a TLS ServerHello.
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            &[
+                "corrupt",
+                "invalid",
+                "unexpected end of file",
+                "Connection reset",
+            ],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_ca_pem_roundtrip() {
+    let mut sim = setup();
+
+    // A CA reconstructed from its persisted PEMs must be interchangeable with the original:
+    // certificates it issues must chain to the original CA certificate, and vice versa. This is
+    // the property that lets a controller persist its CA and reissue after a restart.
+    let ca = CertificateAuthority::generate("ctp-test-ca").unwrap();
+    let ca_key = mz_ore::secure::SecureString::from(ca.key_pem().unsecure().to_string());
+    let restored = CertificateAuthority::from_pem("ctp-test-ca", ca.cert_pem(), ca_key).unwrap();
+    assert_eq!(ca.cert_pem(), restored.cert_pem());
+
+    // The server's certificate comes from the restored CA, while both sides trust the original
+    // CA certificate. The client's certificate comes from the original CA.
+    let server_tls = server_tls_config(&restored, SERVER_IDENTITY, CLIENT_IDENTITY);
+    let client_tls = client_tls_config(&ca, CLIENT_IDENTITY, SERVER_IDENTITY);
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            let (out_tx, _in_rx) = spawn_tls_server::<i32, i32>(server_tls);
+            out_tx.send(1)?;
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        let mut client = connect_ctp::<i32, i32>(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        assert_eq!(client.recv().await?, Some(1));
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_ca_reconstruction_name_mismatch_fails_closed() {
+    let mut sim = setup();
+
+    // Reconstructing a CA under the wrong common name must fail closed: certificates it issues
+    // carry the wrong issuer name and cannot verify against the original CA certificate.
+    let ca = CertificateAuthority::generate("ctp-test-ca").unwrap();
+    let ca_key = mz_ore::secure::SecureString::from(ca.key_pem().unsecure().to_string());
+    let misnamed = CertificateAuthority::from_pem("wrong-name", ca.cert_pem(), ca_key).unwrap();
+
+    // The server's certificate comes from the misnamed CA. Both sides trust the original CA
+    // certificate, so the client must reject the server.
+    let server_tls = server_tls_config(&misnamed, SERVER_IDENTITY, CLIENT_IDENTITY);
+    let client_tls = client_tls_config(&ca, CLIENT_IDENTITY, SERVER_IDENTITY);
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            spawn_rejecting_server(Some(server_tls));
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            &["invalid peer certificate"],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_expired_certificate_rejected() {
+    let mut sim = setup();
+
+    // The server's certificate expires immediately (zero validity). Certificate validity is
+    // checked against the real clock, which turmoil does not virtualize, so really wait for the
+    // certificate to lapse. X.509 validity has second granularity, so sleeping a bit over one
+    // second guarantees the handshake happens after `not_after`.
+    let ca = CertificateAuthority::generate("ctp-test-ca").unwrap();
+    let server_tls = {
+        let issued = ca.issue(SERVER_IDENTITY, Duration::ZERO).unwrap();
+        let credentials = TlsCredentials {
+            ca_cert_pem: ca.cert_pem().into(),
+            cert_pem: issued.cert_pem,
+            key_pem: issued.key_pem,
+        };
+        ServerTlsConfig::new(&credentials, CLIENT_IDENTITY).unwrap()
+    };
+    let client_tls = client_tls_config(&ca, CLIENT_IDENTITY, SERVER_IDENTITY);
+    std::thread::sleep(Duration::from_millis(1100));
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            spawn_rejecting_server(Some(server_tls));
+            future::pending().await
+        }
+    });
+
+    sim.client("client", async move {
+        connect_ctp_error_contains(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            &["invalid peer certificate"],
+        )
+        .await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_connection_cancelation() {
+    let mut sim = setup();
+
+    // Use a high connection timeout to avoid that the connection is severed by the timeout, which
+    // isn't what we want to test here.
+    const TIMEOUT: Duration = Duration::from_secs(60 * 60);
+
+    let (client_tls, server_tls) = tls_configs();
+    let client2_tls = client_tls.clone();
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            transport::serve(
+                "turmoil:0.0.0.0:7777".parse().unwrap(),
+                VERSION,
+                Some("server".into()),
+                Some(server_tls),
+                TIMEOUT,
+                OneOutputHandler::new,
+                NoopMetrics,
+            )
+            .await?;
+
+            Ok(())
+        }
+    });
+
+    let (ready_tx, mut ready_rx) = oneshot::channel();
+
+    sim.client("client1", async move {
+        let mut client = connect_ctp::<i32, i32>(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        client.recv().await?;
+        ready_tx.send(1).unwrap();
+
+        // Connection canceled. Under TLS the cancelation surfaces as an EOF, with or without a
+        // close_notify from the server.
+        let error = client.recv().await.expect_err("connection must fail");
+        let error = format!("{error:#}");
+        assert!(
+            error.contains("unexpected end of file") || error.contains("close_notify"),
+            "unexpected error: {error}"
+        );
+
+        Ok(())
+    });
+
+    // Wait until the first client is connected, then spawn a second one to force the first
+    // connection to be canceled.
+    while ready_rx.try_recv().is_err() {
+        sim.step().unwrap();
+    }
+
+    sim.client("client2", async move {
+        let mut client = connect_ctp::<i32, i32>(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client2_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        client.recv().await?;
+
+        Ok(())
+    });
+
+    sim.run().unwrap();
+}
+
+#[test] // allow(test-attribute)
+#[cfg_attr(miri, ignore)] // too slow
+fn test_tls_unauthenticated_peer_does_not_displace() {
+    let mut sim = setup();
+
+    let (client_tls, server_tls) = tls_configs();
+
+    sim.host("server", move || {
+        let server_tls = server_tls.clone();
+        async {
+            let (out_tx, mut in_rx) = spawn_tls_server::<i32, i32>(server_tls);
+
+            out_tx.send(1)?;
+            // The authenticated client's connection must survive the attacker's attempt: this
+            // message arrives on the original connection. A displacement would panic the server
+            // instead, since the one-shot handler factory cannot serve a second connection.
+            assert_eq!(in_rx.recv().await, Some(42));
+
+            // Confirm, so the client can terminate.
+            out_tx.send(2)?;
+            future::pending().await
+        }
+    });
+
+    let (connected_tx, connected_rx) = oneshot::channel();
+    let (attacked_tx, attacked_rx) = oneshot::channel();
+
+    sim.client("client", async move {
+        let mut client = connect_ctp::<i32, i32>(
+            "turmoil:server:7777",
+            VERSION,
+            Some(client_tls),
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+
+        assert_eq!(client.recv().await?, Some(1));
+        connected_tx.send(()).unwrap();
+
+        // Wait for the attacker to have been rejected, then prove the connection still works.
+        attacked_rx.await?;
+        client.send(42).await?;
+        assert_eq!(client.recv().await?, Some(2));
+
+        Ok(())
+    });
+
+    sim.client("attacker", async move {
+        connected_rx.await?;
+
+        // An unauthenticated (plaintext) peer completes the TCP connect, but fails the TLS
+        // handshake and must not displace the established connection.
+        let result = transport::Client::<i32, i32>::connect(
+            "turmoil:server:7777",
+            VERSION,
+            None,
+            TIMEOUT,
+            TIMEOUT,
+            NoopMetrics,
+        )
+        .await;
+        assert!(result.is_err(), "unauthenticated connect must fail");
+
+        attacked_tx.send(()).unwrap();
         Ok(())
     });
 

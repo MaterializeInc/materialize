@@ -16,7 +16,9 @@ use std::task::{Context, Poll};
 use std::time::UNIX_EPOCH;
 
 use mz_ore::metric;
-use mz_ore::metrics::{DeleteOnDropGauge, MetricsRegistry, UIntGaugeVec};
+use mz_ore::metrics::{
+    DeleteOnDropCounter, DeleteOnDropGauge, IntCounterVec, MetricsRegistry, UIntGaugeVec,
+};
 use prometheus::core::AtomicU64;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tracing::error;
@@ -31,6 +33,8 @@ pub trait Metrics<Out, In>: Clone + Send + 'static {
     fn message_sent(&mut self, msg: &Out);
     /// Callback reporting messages received.
     fn message_received(&mut self, msg: &In);
+    /// Callback reporting a failed TLS handshake on the server side.
+    fn tls_handshake_failure(&mut self) {}
 }
 
 /// No-op [`Metrics`] implementation that ignores all events.
@@ -47,6 +51,7 @@ impl<Out, In> Metrics<Out, In> for NoopMetrics {
 /// Metrics for a cluster (CTP) server.
 pub struct ClusterServerMetrics {
     last_command_received: UIntGaugeVec,
+    tls_handshake_failures: IntCounterVec,
 }
 
 impl ClusterServerMetrics {
@@ -60,6 +65,14 @@ impl ClusterServerMetrics {
                        detect controller connections that are no longer reachable.",
                 var_labels: ["server_name"],
             )),
+            tls_handshake_failures: registry.register(metric!(
+                name: "mz_cluster_server_tls_handshake_failures_total",
+                help: "The number of connection attempts that failed the TLS handshake, \
+                       including client identity verification. A nonzero rate means some peer \
+                       is reaching the server port without valid credentials, or the \
+                       controller's and the server's credentials have diverged.",
+                var_labels: ["server_name"],
+            )),
         }
     }
 
@@ -69,6 +82,9 @@ impl ClusterServerMetrics {
             last_command_received: self
                 .last_command_received
                 .get_delete_on_drop_metric(vec![name]),
+            tls_handshake_failures: self
+                .tls_handshake_failures
+                .get_delete_on_drop_metric(vec![name]),
         }
     }
 }
@@ -77,6 +93,7 @@ impl ClusterServerMetrics {
 #[derive(Clone, Debug)]
 pub struct PerClusterServerMetrics {
     last_command_received: DeleteOnDropGauge<AtomicU64, Vec<&'static str>>,
+    tls_handshake_failures: DeleteOnDropCounter<AtomicU64, Vec<&'static str>>,
 }
 
 impl<Out, In> Metrics<Out, In> for PerClusterServerMetrics {
@@ -99,6 +116,10 @@ impl<Out, In> Metrics<Out, In> for PerClusterServerMetrics {
 
     fn message_sent(&mut self, _msg: &Out) {}
     fn message_received(&mut self, _msg: &In) {}
+
+    fn tls_handshake_failure(&mut self) {
+        self.tls_handshake_failures.inc();
+    }
 }
 
 /// [`AsyncRead`] wrapper that transparently logs `bytes_received` metrics.

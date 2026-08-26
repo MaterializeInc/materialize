@@ -29,6 +29,7 @@ use mz_repr::{GlobalId, Timestamp};
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
+use mz_service::transport::tls::ClientTlsConfig;
 use mz_storage_client::client::{
     RunIngestionCommand, RunSinkCommand, Status, StatusUpdate, StorageCommand, StorageResponse,
 };
@@ -800,6 +801,8 @@ pub(super) struct ReplicaConfig {
     pub build_info: &'static BuildInfo,
     pub location: ClusterReplicaLocation,
     pub grpc_client: GrpcClientParameters,
+    /// TLS config for connecting to the replica, if cluster transport TLS is enabled.
+    pub tls: Option<ClientTlsConfig>,
 }
 
 /// State maintained about individual replicas.
@@ -918,6 +921,7 @@ impl ReplicaTask {
             let connect_result = StorageCtpClient::connect_partitioned(
                 self.config.location.ctl_addrs.clone(),
                 version,
+                self.config.tls.clone(),
                 connect_timeout,
                 keepalive_timeout,
                 self.metrics.clone(),

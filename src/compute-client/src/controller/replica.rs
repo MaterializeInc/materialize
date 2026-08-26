@@ -24,6 +24,7 @@ use mz_ore::task::AbortOnDropHandle;
 use mz_service::client::{GenericClient, Partitioned};
 use mz_service::params::GrpcClientParameters;
 use mz_service::transport;
+use mz_service::transport::tls::ClientTlsConfig;
 use tokio::select;
 use tokio::sync::mpsc::error::SendError;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -47,6 +48,8 @@ pub(super) struct ReplicaConfig {
     pub location: ClusterReplicaLocation,
     pub logging: LoggingConfig,
     pub grpc_client: GrpcClientParameters,
+    /// TLS config for connecting to the replica, if cluster transport TLS is enabled.
+    pub tls: Option<ClientTlsConfig>,
     /// The offset to use for replica expiration, if any.
     pub expiration_offset: Option<Duration>,
     /// Whether arrangements on this replica use dictionary compression, captured at creation.
@@ -219,6 +222,7 @@ impl ReplicaTask {
             let connect_result = ComputeCtpClient::connect_partitioned(
                 self.config.location.ctl_addrs.clone(),
                 version,
+                self.config.tls.clone(),
                 connect_timeout,
                 keepalive_timeout,
                 self.metrics.clone(),
