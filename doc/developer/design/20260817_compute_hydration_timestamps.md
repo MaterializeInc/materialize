@@ -247,7 +247,8 @@ logs unconditionally when the export is created: the count of `installed` events
 number of workers reporting on that export, so
 
 ```sql
-count(*) FILTER (WHERE event = 'hydrated') = count(*) FILTER (WHERE event = 'installed')
+count(*) FILTER (WHERE event = 'snapshot_complete')
+    = count(*) FILTER (WHERE event = 'installed')
 ```
 
 is the all-workers-reported test, and the per-object stages are expected exactly once
@@ -298,7 +299,8 @@ left as a statement about the output rather than about the writer.
 **`write_blocked` is logged on entry, not on exit.** Carrying the cause on
 `write_unblocked` reads more naturally, but then the cause is only observable once
 the block has ended. If it never ends, which is the state an operator is debugging,
-there is no row at all. Logging entry makes "which objects are hydrated but not
+there is no row at all. Logging entry makes "which objects have a complete snapshot
+but are not
 writing, and why" a query over present rows rather than an inference from absence.
 
 Entry means entry into a state where the block matters, which is after hydration.
@@ -306,7 +308,7 @@ Before it, the sink has produced nothing and read-only mode is holding nothing
 back. Every collection starts read-only and is released by the controller, so
 reporting a block from installation would put a `write_blocked` and a
 `write_unblocked` on essentially every materialized view, both before `snapshot_complete`,
-making `write_unblocked - hydrated` negative rather than zero. Gating on hydration
+making `write_unblocked - snapshot_complete` negative rather than zero. Gating on it
 means the pair appears only when something really was held back, and the intervals
 in the list above are all non-negative by construction.
 
@@ -316,7 +318,8 @@ frontier is initialized to the as-of, so for a plain read-write materialized vie
 the first write is minted at hydration and a separate "write started" stamp would
 carry no information. What does vary is when writing became *permitted*. Naming it
 that way gives each interval exactly one cause: `started - installed` is queueing,
-`hydrated - started` is compute, and `write_unblocked - hydrated` is blocked time.
+`snapshot_complete - started` is compute, and `write_unblocked - snapshot_complete` is
+blocked time.
 In the common case the blocked pair is absent rather than zero: the controller
 allows writes in the same turn it ships the dataflow, so a collection is normally
 already permitted to write by the time it hydrates, and neither event is logged.
@@ -326,7 +329,7 @@ already permitted to write by the time it hydrates, and neither event is logged.
 documented by example rather than by schema. What people filter and group on stays
 typed, and only the look-at-one-row detail goes in the json. What `details` carries
 is the dataflow's as-of, which every stage is defined relative to: without it
-`hydrated - started` cannot distinguish a genuinely fast hydration from one whose
+`snapshot_complete - started` cannot distinguish a genuinely fast computation from one whose
 as-of was already recent, and a replacement materialized view with a far behind
 as-of is a completely different amount of work at the same duration. That does not
 earn a column and is worth having in the row. Invariant tests must assert on
@@ -865,7 +868,7 @@ The prototype is the compute and catalog change itself, exercised through
 testdrive against a targeted replica. The validating query selects from
 `mz_compute_hydration_times_per_worker` on a cluster with a hydration
 concurrency limit and a handful of indexes, showing objects moving from waiting,
-to hydrating, to hydrated, with the queueing interval visible separately from the
+to computing, to snapshot complete, with the queueing interval visible separately from the
 hydration interval. A second run after an environmentd restart shows identical
 values, which is the property the design turns on. A third check confirms
 `mz_compute_hydration_times` and `mz_compute_hydration_statuses` are byte for byte

@@ -2292,7 +2292,8 @@ impl CollectionState {
     /// operationally meaningful question, but the interval it implies is. The as-of is bounded to
     /// one step below the upper for a non-empty storage export
     /// (`as_of_selection::apply_downstream_storage_constraints`), so for a shard that already holds
-    /// data the predicate is true from installation and `written` lands with `hydrated` on a
+    /// data the predicate is true from installation and `written` lands with `snapshot_complete`
+    /// on a
     /// restarted or scaled-out replica, and with `write_unblocked` at a cutover.
     ///
     /// TODO: attributing the write to this replica needs a signal from its own append path, since

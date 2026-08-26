@@ -1285,7 +1285,7 @@ impl DemuxHandler<'_, '_, '_> {
 
         // The lifecycle log needs the same back-fill. A `Schedule` that arrives after hydration is
         // absorbed by the guard in `handle_hydration_start`, so this is the only chance to report
-        // the stage, and without it the export would report `hydrated` with no `started`.
+        // the stage, and without it the export would report `snapshot_complete` with no `started`.
         //
         // Stamp it from `installed_at`, not from the current event time, for the same reason the
         // timestamps above do. A dataflow that hydrated before it was ever scheduled did not
