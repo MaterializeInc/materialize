@@ -32,6 +32,7 @@ pub struct Metrics {
     pub arrangement_sizes_collection_time_seconds: Histogram,
     pub arrangement_sizes_rows_written: IntCounter,
     pub hydration_history_mutations: IntCounterVec,
+    pub hydration_history_retention_batch_full: IntCounter,
     pub hydration_history_rows_affected: IntCounterVec,
     pub hydration_history_sweep_duration_seconds: Histogram,
     pub subscribe_outputs: IntCounterVec,
@@ -146,6 +147,10 @@ impl Metrics {
                 name: "mz_hydration_history_mutations_total",
                 help: "Total hydration-history collection and retention mutations since process start.",
                 var_labels: ["operation", "outcome"],
+            )),
+            hydration_history_retention_batch_full: registry.register(metric!(
+                name: "mz_hydration_history_retention_batch_full_total",
+                help: "Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.",
             )),
             hydration_history_rows_affected: registry.register(metric!(
                 name: "mz_hydration_history_rows_affected_total",

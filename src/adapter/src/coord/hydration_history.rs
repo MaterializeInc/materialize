@@ -83,8 +83,8 @@ const MUTATION_TIMEOUT: Duration = Duration::from_secs(300);
 /// Retention has to be bounded: the OCC path refuses a selection larger than
 /// `max_result_size` before submitting any write, so an unbounded delete over a
 /// large backlog would fail identically on every sweep and never shrink the
-/// table. Retention repeats bounded batches until it drains the fixed-cutoff
-/// backlog.
+/// table. Retention repeats bounded batches across sweeps until it drains the
+/// fixed-cutoff backlog.
 const RETENTION_BATCH_SIZE: usize = 1000;
 
 /// Milliseconds until the next fire on this environment's own grid.
@@ -441,25 +441,23 @@ impl Sweep {
             .await;
     }
 
-    /// Retracts aged-out rows in bounded batches.
+    /// Retracts one bounded batch of aged-out rows.
     async fn retain(&mut self, cluster_id: ClusterId, replica_id: ReplicaId) {
         let sql = retention_sql(&self.cutoff);
-        loop {
-            let Some(deleted) = self
-                .run(
-                    "retention",
-                    cluster_id,
-                    replica_id,
-                    MutationKind::Delete,
-                    &sql,
-                )
-                .await
-            else {
-                break;
-            };
-            if deleted < RETENTION_BATCH_SIZE {
-                break;
-            }
+        let Some(deleted) = self
+            .run(
+                "retention",
+                cluster_id,
+                replica_id,
+                MutationKind::Delete,
+                &sql,
+            )
+            .await
+        else {
+            return;
+        };
+        if deleted == RETENTION_BATCH_SIZE {
+            self.metrics.hydration_history_retention_batch_full.inc();
         }
     }
 

@@ -962,6 +962,10 @@ metrics:
   - outcome
   source: src/adapter/src/metrics.rs
   visibility: internal
+- name: mz_hydration_history_retention_batch_full_total
+  help: Total hydration-history sweeps whose retention batch was full. Repeated increments mean retention may not be keeping up with its schedule.
+  source: src/adapter/src/metrics.rs
+  visibility: internal
 - name: mz_hydration_history_rows_affected_total
   help: Total rows changed by hydration-history maintenance since process start.
   labels:
