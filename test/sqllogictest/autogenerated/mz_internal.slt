@@ -836,6 +836,7 @@ mz_notices_redacted
 mz_object_arrangement_size_history
 mz_object_arrangement_sizes
 mz_object_dependencies
+mz_object_dependencies_raw
 mz_object_fully_qualified_names
 mz_object_global_ids
 mz_object_graph_edges

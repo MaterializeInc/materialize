@@ -17,6 +17,7 @@ use mz_repr::adt::numeric::{self, Numeric, NumericMaxScale};
 use mz_repr::role_id::RoleId;
 use mz_repr::{ArrayRustType, Datum, Row, RowPacker, SqlColumnType, SqlScalarType, strconv};
 use mz_sql_parser::ast::display::AstDisplay;
+use mz_sql_parser::ast::item_refs::collect_item_references;
 use mz_sql_parser::ast::{
     AstInfo, AvroSchema, ConnectionOption, ConnectionOptionName, CreateConnectionType,
     CreateSinkConnection, CreateSubsourceOptionName, Format, FormatSpecifier,
@@ -808,6 +809,72 @@ fn parse_catalog_create_sql<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
 
         let info = info.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
         Ok(info)
+    };
+
+    let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
+    let jsonb = Jsonb::from_serde_json(val).expect("valid JSONB");
+    Ok(jsonb)
+}
+
+/// Extracts the catalog item references from a catalog `create_sql` string.
+///
+/// Returns a JSONB object with these fields, each sorted and deduplicated:
+///
+/// - `ids`: array of catalog id strings from `[<id> AS <name>]` references in
+///   any position (relations, column and cast types, subsource parents,
+///   connections, secrets).
+/// - `funcs`: array of `{"schema": <text|null>, "name": <text>}` objects for
+///   function references, which print as plain names in stored SQL. The
+///   schema is null for an unqualified name, which well-formed stored SQL
+///   never contains.
+/// - `types`: array in the same shape for name-based type references.
+///   Expected empty in stored SQL, where types print as id references.
+/// - `relations`: array of dotted name strings for name-based relation
+///   references. Expected empty in stored SQL. Emitted so that a statement
+///   violating that expectation is observable rather than silently missing
+///   its dependency edges.
+///
+/// NOTE: a type written `T[]` is not reported. It resolves to the array type
+/// paired with `T` rather than to `T`, and that pairing is recorded in the
+/// element type's catalog details, which this function cannot read. Stored SQL
+/// prints resolved types as id references, so the spelling does not arise
+/// there; emitting `T` would fabricate an edge to the wrong type.
+#[sqlfunc]
+fn parse_catalog_item_references<'a>(a: &'a str) -> Result<Jsonb, EvalError> {
+    fn qualified(name: &UnresolvedItemName) -> serde_json::Value {
+        match &name.0[..] {
+            [.., schema, item] => json!({"schema": schema.as_str(), "name": item.as_str()}),
+            [item] => json!({"schema": serde_json::Value::Null, "name": item.as_str()}),
+            [] => json!({"schema": serde_json::Value::Null, "name": ""}),
+        }
+    }
+
+    // `UnresolvedItemName`'s `Display` quotes identifiers that need it. These
+    // names are joined against catalog name columns, which hold unquoted text,
+    // so build the dotted form from the raw parts.
+    fn dotted(name: &UnresolvedItemName) -> String {
+        name.0
+            .iter()
+            .map(|part| part.as_str())
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    let parse = || -> Result<serde_json::Value, String> {
+        let mut stmts = mz_sql_parser::parser::parse_statements(a)
+            .map_err(|e| format!("failed to parse create_sql: {e}"))?;
+        let stmt = match stmts.len() {
+            1 => stmts.remove(0).ast,
+            n => return Err(format!("expected a single statement, found {n}")),
+        };
+
+        let refs = collect_item_references(&stmt);
+        Ok(json!({
+            "ids": refs.ids.iter().collect::<Vec<_>>(),
+            "funcs": refs.named_funcs.iter().map(|f| qualified(f)).collect::<Vec<_>>(),
+            "types": refs.named_types.iter().map(|t| qualified(t)).collect::<Vec<_>>(),
+            "relations": refs.named_relations.iter().map(dotted).collect::<Vec<_>>(),
+        }))
     };
 
     let val = parse().map_err(|e| EvalError::InvalidCatalogJson(e.into()))?;
@@ -2325,6 +2392,69 @@ mod tests {
                  FROM SOURCE src (REFERENCE = \"topic\")"
             ),
             Err("unresolved item name".to_string())
+        );
+    }
+
+    // --- parse_catalog_item_references ----------------------------------------
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn item_references_view() {
+        let sql = "CREATE VIEW \"materialize\".\"public\".\"v\" AS \
+             SELECT \"pg_catalog\".\"abs\"(\"a\"::[s20 AS \"pg_catalog\".\"int4\"]) \
+             FROM [u1 AS \"materialize\".\"public\".\"t\"]";
+        let out = as_serde(super::parse_catalog_item_references(sql).expect("ok"));
+        assert_eq!(
+            out,
+            json!({
+                "ids": ["s20", "u1"],
+                "funcs": [{"schema": "pg_catalog", "name": "abs"}],
+                "types": [],
+                "relations": [],
+            })
+        );
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn item_references_connection() {
+        let sql = "CREATE CONNECTION \"materialize\".\"public\".\"kc\" TO KAFKA (\
+             BROKER 'kafka:9092', \
+             SSH TUNNEL [u5 AS \"materialize\".\"public\".\"ssh\"], \
+             SASL PASSWORD = SECRET [u7 AS \"materialize\".\"public\".\"pw\"])";
+        let out = as_serde(super::parse_catalog_item_references(sql).expect("ok"));
+        assert_eq!(out["ids"], json!(["u5", "u7"]));
+        assert_eq!(out["funcs"], json!([]));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn item_references_cte_shadowing() {
+        let sql = "CREATE VIEW \"materialize\".\"public\".\"v\" AS \
+             WITH \"c\" AS (SELECT * FROM [u1 AS \"materialize\".\"public\".\"t\"]) \
+             SELECT * FROM \"c\"";
+        let out = as_serde(super::parse_catalog_item_references(sql).expect("ok"));
+        assert_eq!(out["ids"], json!(["u1"]));
+        assert_eq!(out["relations"], json!([]));
+    }
+
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)] // error: unsupported operation: can't call foreign function `rust_psm_stack_pointer` on OS `linux`
+    fn item_references_name_based_relation_surfaces() {
+        // Stored SQL always prints relations as id references. A name-based
+        // relation must surface in "relations" rather than vanish.
+        let sql = "CREATE VIEW \"materialize\".\"public\".\"v\" AS \
+             SELECT * FROM \"mz_catalog\".\"mz_tables\"";
+        let out = as_serde(super::parse_catalog_item_references(sql).expect("ok"));
+        assert_eq!(out["relations"], json!(["mz_catalog.mz_tables"]));
+    }
+
+    #[mz_ore::test]
+    fn item_references_parse_error() {
+        let err = super::parse_catalog_item_references("NOT SQL").unwrap_err();
+        assert!(
+            matches!(err, EvalError::InvalidCatalogJson(msg) if msg.contains("failed to parse")),
+            "wrong error variant/message"
         );
     }
 }

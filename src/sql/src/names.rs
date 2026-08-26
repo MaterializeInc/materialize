@@ -40,7 +40,7 @@ use crate::ast::{
     RawDataType, RawItemName, Statement, UnresolvedItemName, UnresolvedObjectName,
 };
 use crate::catalog::{
-    CatalogError, CatalogItem, CatalogItemType, CatalogType, CatalogTypeDetails, SessionCatalog,
+    CatalogError, CatalogItem, CatalogItemType, CatalogTypeDetails, SessionCatalog,
 };
 use crate::normalize;
 use crate::plan::PlanError;
@@ -1355,10 +1355,21 @@ impl<'a> NameResolver<'a> {
     }
 
     fn resolve_data_type(&mut self, data_type: RawDataType) -> Result<ResolvedDataType, PlanError> {
+        self.resolve_data_type_inner(data_type, true)
+    }
+
+    fn resolve_data_type_inner(
+        &mut self,
+        data_type: RawDataType,
+        should_insert_id: bool,
+    ) -> Result<ResolvedDataType, PlanError> {
         match data_type {
             RawDataType::Array(elem_type) => {
                 let name = elem_type.to_string();
-                match self.resolve_data_type(*elem_type)? {
+                // `T[]` recursively resolves to its element type, but we
+                // only want to insert its array type `_T` and not its element
+                // type `T`. Thus we set `should_insert_id` to `false`.
+                match self.resolve_data_type_inner(*elem_type, false)? {
                     ResolvedDataType::AnonymousList(_) | ResolvedDataType::AnonymousMap { .. } => {
                         sql_bail!("type \"{}[]\" does not exist", name)
                     }
@@ -1384,6 +1395,11 @@ impl<'a> NameResolver<'a> {
                                 );
                             }
                         };
+
+                        // We don't need to check `should_insert_id` here since we're
+                        // guaranteed to insert just one array item type for an
+                        // array. For multi-dimensional arrays, the parser always
+                        // collapses it into a 1D array.
                         self.ids.insert(array_item.id(), BTreeSet::new());
                         Ok(ResolvedDataType::Named {
                             id: array_item.id(),
@@ -1397,15 +1413,15 @@ impl<'a> NameResolver<'a> {
                 }
             }
             RawDataType::List(elem_type) => {
-                let elem_type = self.resolve_data_type(*elem_type)?;
+                let elem_type = self.resolve_data_type_inner(*elem_type, should_insert_id)?;
                 Ok(ResolvedDataType::AnonymousList(Box::new(elem_type)))
             }
             RawDataType::Map {
                 key_type,
                 value_type,
             } => {
-                let key_type = self.resolve_data_type(*key_type)?;
-                let value_type = self.resolve_data_type(*value_type)?;
+                let key_type = self.resolve_data_type_inner(*key_type, should_insert_id)?;
+                let value_type = self.resolve_data_type_inner(*value_type, should_insert_id)?;
                 Ok(ResolvedDataType::AnonymousMap {
                     key_type: Box::new(key_type),
                     value_type: Box::new(value_type),
@@ -1433,17 +1449,8 @@ impl<'a> NameResolver<'a> {
                         (full_name, item)
                     }
                 };
-                self.ids.insert(item.id(), BTreeSet::new());
-                // If this is a named array type, then make sure to include the element reference
-                // in the resolved IDs. This helps ensure that named array types are resolved the
-                // same as an array type with the same element type. For example, `int4[]` and
-                // `_int4` should have the same set of resolved IDs.
-                if let Some(CatalogTypeDetails {
-                    typ: CatalogType::Array { element_reference },
-                    ..
-                }) = item.type_details()
-                {
-                    self.ids.insert(*element_reference, BTreeSet::new());
+                if should_insert_id {
+                    self.ids.insert(item.id(), BTreeSet::new());
                 }
                 Ok(ResolvedDataType::Named {
                     id: item.id(),

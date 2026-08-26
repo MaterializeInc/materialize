@@ -637,8 +637,8 @@ has no replicas — needs operator action."
 
 ## `mz_object_dependencies`
 
-The `mz_object_dependencies` table describes the dependency structure between
-all database objects in the system.
+The `mz_object_dependencies` materialized view describes the dependency
+structure between all database objects in the system.
 
 <!-- RELATION_SPEC mz_internal.mz_object_dependencies -->
 | Field                   | Type         | Meaning                                                                                       |
@@ -1559,6 +1559,7 @@ The `mz_webhook_sources` table contains a row for each webhook source in the sys
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_shards -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_storage_usage_by_shard -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_type_pg_metadata -->
+<!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_dependencies_raw -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_object_oid_alias -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_objects_id_namespace_types -->
 <!-- RELATION_SPEC_UNDOCUMENTED mz_internal.mz_console_cluster_utilization_overview -->

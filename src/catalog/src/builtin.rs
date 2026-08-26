@@ -783,6 +783,20 @@ impl Fingerprint for SqlRelationType {
     }
 }
 
+/// Asserts that `name` is safe to embed unquoted inside a `'...'`-quoted SQL literal
+/// or inside a `"..."`-quoted SQL identifier. Generated builtin relations
+/// (`make_mz_indexes`, `make_mz_object_dependencies_raw`, ...) concatenate builtin names
+/// into SQL fragments, so a quote or backslash would produce malformed SQL. Builtin
+/// names should always be plain ASCII identifiers.
+pub(super) fn assert_safe_builtin_name(name: &str, kind: &str) {
+    assert!(
+        !name.contains('\'') && !name.contains('"') && !name.contains('\\'),
+        "builtin {kind} name {name:?} contains an unsupported character; \
+         generated builtin relations reconstruct SQL via string \
+         concatenation and assume names contain no quotes or backslashes"
+    );
+}
+
 pub(super) const PUBLIC_SELECT: MzAclItem = MzAclItem {
     grantee: RoleId::Public,
     grantor: MZ_SYSTEM_ROLE_ID,
@@ -1120,7 +1134,9 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
         Builtin::MaterializedView(&MZ_KAFKA_SINKS),
         Builtin::MaterializedView(&MZ_KAFKA_CONNECTIONS),
         Builtin::MaterializedView(&MZ_KAFKA_SOURCES),
-        Builtin::Table(&MZ_OBJECT_DEPENDENCIES),
+        // mz_object_dependencies_raw is generated dynamically below with inlined
+        // builtin VALUES and inserted directly before this entry.
+        Builtin::MaterializedView(&MZ_OBJECT_DEPENDENCIES),
         Builtin::MaterializedView(&MZ_ICEBERG_SINKS),
         Builtin::MaterializedView(&MZ_DATABASES),
         Builtin::MaterializedView(&MZ_SCHEMAS),
@@ -1534,6 +1550,49 @@ pub static BUILTINS_STATIC: LazyLock<Vec<Builtin<NameReference>>> = LazyLock::ne
             .position(|b| matches!(b, Builtin::Table(t) if t.name == "mz_index_columns"))
             .expect("mz_index_columns must be present in builtin_items");
         builtin_items.insert(insert_pos, Builtin::MaterializedView(mz_indexes_ref));
+    }
+
+    // Generate mz_object_dependencies_raw with every builtin's dependency
+    // edges inlined as VALUES. The edges are compile-time knowledge, so they
+    // have to be baked into SQL; keeping them in a view leaves
+    // mz_object_dependencies' own definition, and therefore its fingerprint,
+    // fixed across releases.
+    //
+    // Must happen AFTER the make_mz_sources/make_mz_indexes blocks above, so
+    // the generator sees those materialized views' references. Must happen
+    // BEFORE ontology::generate_views and builtin::builtins below, so that
+    // the ontology views carry mz_object_dependencies' entity metadata and
+    // the mz_builtin_* reporter views list it. Those generated views carry
+    // dependency edges of their own (type casts, make_mz_aclitem calls,
+    // mz_ontology_properties reads catalog relations), so the generator
+    // previews them here to collect those edges. The preview runs without
+    // mz_object_dependencies_raw present, which only affects the views'
+    // VALUES contents, not their reference sets, so the collected edges match
+    // the final views. test_mz_object_dependencies_raw_sql_is_stable asserts
+    // that equivalence.
+    //
+    // Inserted directly before mz_object_dependencies, which reads it, since
+    // BUILTINS_STATIC must list dependencies before their dependents.
+    {
+        let ontology_preview = ontology::generate_views(&builtin_items);
+        let reporter_preview: Vec<_> = builtin::builtins(&builtin_items).collect();
+        let generator_input: Vec<_> = builtin_types
+            .iter()
+            .chain(builtin_funcs.iter())
+            .chain(reporter_preview.iter())
+            .chain(builtin_items.iter())
+            .chain(ontology_preview.iter())
+            .cloned()
+            .collect();
+        let mz_object_dependencies_raw =
+            mz_internal::make_mz_object_dependencies_raw(&generator_input);
+        let mz_object_dependencies_raw_ref: &'static BuiltinView =
+            Box::leak(Box::new(mz_object_dependencies_raw));
+        let insert_pos = builtin_items
+            .iter()
+            .position(|b| b.name() == "mz_object_dependencies")
+            .expect("mz_object_dependencies must be present in builtin_items");
+        builtin_items.insert(insert_pos, Builtin::View(mz_object_dependencies_raw_ref));
     }
 
     // Generate ontology views by enumerating existing builtins.
@@ -2302,6 +2361,40 @@ mod tests {
             fp_base,
             Fingerprint::fingerprint(&&mv_extra_log),
             "mz_indexes fingerprint must change when a builtin log is added"
+        );
+    }
+
+    /// Verifies that regenerating `mz_object_dependencies_raw` from the final
+    /// `BUILTINS_STATIC` reproduces the SQL that static init generated from a
+    /// preview of the ontology and reporter views.
+    ///
+    /// Static init has to generate the view before those views exist, so it
+    /// previews them. The preview differs from the final views in its VALUES
+    /// contents but not in its item references, which is what the generator
+    /// reads. This test is what holds that equivalence.
+    #[mz_ore::test]
+    #[cfg_attr(miri, ignore)]
+    fn test_mz_object_dependencies_raw_sql_is_stable() {
+        let without_self: Vec<Builtin<NameReference>> = BUILTINS_STATIC
+            .iter()
+            .filter(|b| !matches!(b, Builtin::View(v) if v.name == "mz_object_dependencies_raw"))
+            .cloned()
+            .collect();
+
+        let regenerated = mz_internal::make_mz_object_dependencies_raw(&without_self);
+
+        let from_static = BUILTINS_STATIC
+            .iter()
+            .find_map(|b| match b {
+                Builtin::View(v) if v.name == "mz_object_dependencies_raw" => Some(*v),
+                _ => None,
+            })
+            .expect("mz_object_dependencies_raw must be present in BUILTINS_STATIC");
+
+        assert_eq!(
+            regenerated.sql, from_static.sql,
+            "regenerating mz_object_dependencies_raw from the final builtin \
+             list must reproduce the SQL generated during static init"
         );
     }
 }
