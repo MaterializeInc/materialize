@@ -528,19 +528,6 @@ impl Coordinator {
             .map(|s| s.replica_id.to_string())
             .collect()
     }
-
-    /// Returns replicas whose installed subscribe has not delivered data.
-    pub(super) fn unready_introspection_replicas(
-        &self,
-        introspection_type: IntrospectionType,
-    ) -> BTreeSet<ReplicaId> {
-        self.introspection_subscribes
-            .values()
-            .filter(|s| s.spec.introspection_type == introspection_type)
-            .filter(|s| s.first_data_at.is_none())
-            .map(|s| s.replica_id)
-            .collect()
-    }
 }
 
 impl Staged for IntrospectionSubscribeStage {

@@ -38,7 +38,7 @@ use mz_adapter_types::dyncfgs::{
 };
 use mz_catalog::builtin::{MZ_CATALOG_SERVER_CLUSTER, MZ_OBJECT_HYDRATION_HISTORY};
 use mz_cluster_client::ReplicaId;
-use mz_controller::clusters::ClusterStatus;
+use mz_controller::clusters::{ClusterStatus, ReplicaLocation};
 use mz_controller_types::ClusterId;
 use mz_ore::cast::CastFrom;
 use mz_ore::collections::CollectionExt;
@@ -46,7 +46,6 @@ use mz_ore::now::EpochMillis;
 use mz_ore::task;
 use mz_repr::CatalogItemId;
 use mz_sql::plan::{MutationKind, Params, Plan, ReadThenWritePlan};
-use mz_storage_client::controller::IntrospectionType;
 use sha2::{Digest, Sha256};
 use tracing::warn;
 
@@ -195,20 +194,19 @@ impl Coordinator {
             return;
         }
 
-        let unready_replicas =
-            self.unready_introspection_replicas(IntrospectionType::ComputeHydrationTimes);
-        // Missing or ready subscribes admit the replica. Online status also
-        // admits a replacement invalidated by a delayed restart event.
         let replicas = self
             .catalog()
             .user_cluster_replicas()
             .filter(|replica| replica.config.compute.logging.enabled())
-            .filter(|replica| {
-                !unready_replicas.contains(&replica.replica_id)
-                    || self
-                        .cluster_replica_statuses
+            .filter(|replica| match &replica.config.location {
+                ReplicaLocation::Managed(_) => {
+                    self.cluster_replica_statuses
                         .get_cluster_replica_status(replica.cluster_id, replica.replica_id)
                         == ClusterStatus::Online
+                }
+                // Unmanaged replicas have no orchestrator status and are only
+                // used by tests. Their bounded mutation determines readiness.
+                ReplicaLocation::Unmanaged(_) => true,
             })
             .map(|replica| (replica.cluster_id, replica.replica_id))
             .sorted_by_key(|(_, replica_id)| *replica_id)
